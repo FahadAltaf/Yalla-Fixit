@@ -1,0 +1,251 @@
+🧠 GENERAL ENGINEERING RULES
+
+Always write production-ready code
+
+Prefer clarity > cleverness
+
+Never introduce unnecessary abstractions
+
+Follow Next.js App Router conventions strictly
+
+Do not break existing functionality
+
+Do not remove SEO-related logic unless explicitly asked
+
+🌐 SEO (MANDATORY FOR ALL PROJECTS)
+Metadata
+
+Every public page MUST define:
+
+title
+description
+openGraph
+twitter
+
+alternates.canonical
+
+Use generateMetadata() where dynamic content exists
+
+Titles must be unique per page
+
+Descriptions must be human-readable, not keyword spam
+
+Indexing Rules
+
+Auth, dashboard, admin, internal tools:
+
+robots: { index: false, follow: false }
+
+Public pages:
+
+index: true, follow: true
+
+Sitemap & Robots
+
+Always assume:
+
+app/sitemap.ts
+
+app/robots.ts
+
+Exclude:
+
+/api
+
+/dashboard
+
+/auth
+
+/admin
+
+Canonical URLs
+
+Every indexable page MUST define a canonical URL
+
+Never allow duplicate content paths
+
+⚛️ NEXT.JS (APP ROUTER ONLY)
+
+Always use App Router, never Pages Router
+
+Prefer Server Components by default
+
+Use Client Components ONLY when:
+
+hooks are required
+
+browser-only APIs are needed
+
+Use:
+
+loading.tsx
+
+error.tsx
+
+not-found.tsx where appropriate
+
+Use generateStaticParams() for SEO-friendly dynamic routes when possible
+
+🎨 UI / COMPONENT RULES (VERY IMPORTANT)
+shadcn/ui
+
+ONLY use shadcn/ui components
+
+NEVER introduce custom UI libraries
+
+NEVER create custom buttons, inputs, modals, or dialogs
+
+Always compose from:
+
+Button
+
+Card
+
+Input
+
+Textarea
+
+Dialog
+
+Sheet
+
+Tabs
+
+Accordion
+
+DropdownMenu
+
+Table
+
+Form
+
+TailwindCSS
+
+Use Tailwind utility classes only
+
+Do NOT create custom CSS unless absolutely required
+
+Respect existing design tokens
+
+Maintain spacing consistency
+
+🧾 FORMS & VALIDATION (STRICT)
+
+ALL forms MUST use:
+
+react-hook-form
+
+zod
+
+Validation logic MUST live in Zod schemas
+
+Never validate manually with if/else
+
+Reuse schemas between frontend & backend when possible
+
+Example expectation:
+
+const schema = z.object({
+email: z.string().email(),
+password: z.string().min(8),
+});
+
+🧩 DATA & TYPES
+
+Prefer Zod over plain TypeScript interfaces for runtime safety
+
+Infer types from schemas:
+
+type FormData = z.infer<typeof schema>;
+
+Avoid any
+
+Avoid overly broad types
+
+🔐 API & SERVER ACTIONS
+
+Validate all inputs using Zod
+
+Never trust client data
+
+Handle errors explicitly
+
+Return meaningful error messages
+
+Use server actions when possible instead of REST
+
+📦 PROJECT INITIALIZATION (SHADCN PRESET)
+
+This project is initialized using:
+
+npx shadcn@latest create --preset "https://ui.shadcn.com/init?base=radix&style=nova&baseColor=neutral&theme=teal&iconLibrary=hugeicons&font=inter&menuAccent=subtle&menuColor=default&radius=default&template=next"
+
+Rules:
+
+Respect existing theme, radius, and color tokens
+
+Do NOT override shadcn theme variables
+
+Do NOT introduce new color systems
+
+Continue using Inter font
+
+Continue using Radix-based shadcn components
+
+🧪 PERFORMANCE & QUALITY
+
+Avoid unnecessary re-renders
+
+Prefer server-side rendering for SEO
+
+Avoid large client bundles
+
+Use dynamic imports when needed
+
+Keep components small and reusable
+
+🚫 STRICTLY FORBIDDEN
+
+❌ Adding non-shadcn UI libraries
+
+❌ Skipping metadata
+
+❌ Creating pages without SEO
+
+❌ Using inline styles
+
+❌ Ignoring Zod
+
+❌ Generic titles like “Dashboard | App”
+
+❌ Hardcoding URLs
+
+🧠 AI BEHAVIOR EXPECTATION
+
+When modifying code:
+
+Analyze existing structure
+
+Follow SEO rules first
+
+Follow shadcn patterns
+
+Use Zod for validation
+
+Keep code clean and readable
+
+Never remove SEO accidentally
+
+✅ FINAL GOAL
+
+Produce:
+
+SEO-optimized
+
+Accessible
+
+Maintainable
+
+Scalable
+
+Production-grade code

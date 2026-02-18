@@ -1,0 +1,9 @@
+{
+    "name": "YALLA FIXIT",
+    "short_name": "Kaizen",
+    "description": "Transform your business with continuous improvement strategies",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#ffffff",
+    "theme_color": "#0f766e"
+}

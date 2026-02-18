@@ -1,0 +1,180 @@
+---
+alwaysApply: true
+---
+
+# Engineering Rules – SEO First (Universal)
+
+## Project Stack Assumptions
+
+- Next.js (App Router, latest)
+- TypeScript
+- TailwindCSS
+- shadcn/ui (Radix-based)
+- Zod for validation
+
+---
+
+## GLOBAL ENGINEERING PRINCIPLES
+
+- Always write production-grade, scalable code
+- Prefer clarity over cleverness
+- Never break existing behavior
+- Never remove SEO metadata unless explicitly instructed
+- Follow Next.js App Router conventions strictly
+
+---
+
+## SEO (MANDATORY FOR ALL PROJECTS)
+
+### Page Metadata
+
+Every public page MUST define:
+
+- title
+- description
+- openGraph
+- twitter
+- alternates.canonical
+
+Rules:
+
+- Titles must be unique per page
+- Titles length: 50–60 characters
+- Descriptions length: 140–160 characters
+- Content must be human-readable (no keyword stuffing)
+
+Use `generateMetadata()` for:
+
+- Dynamic routes
+- CMS-based content
+- Blog / guides / docs
+
+---
+
+### Indexing Rules
+
+- Public pages:
+  - index: true
+  - follow: true
+- Private pages (auth, dashboard, admin):
+  - index: false
+  - follow: false
+
+---
+
+### Sitemap & Robots
+
+Assume:
+
+- app/sitemap.ts
+- app/robots.ts
+
+Rules:
+
+- Sitemap must include only indexable pages
+- Exclude:
+  - /api
+  - /auth
+  - /dashboard
+  - /admin
+- Robots must reference sitemap.xml
+
+---
+
+### Canonical URLs
+
+- Every indexable page MUST define a canonical URL
+- Avoid duplicate content paths
+
+---
+
+## NEXT.JS APP ROUTER RULES
+
+- Always use App Router
+- Server Components by default
+- Client Components only when necessary
+- Use:
+  - loading.tsx
+  - error.tsx
+  - not-found.tsx
+
+Use `generateStaticParams()` when SEO benefits from SSG.
+
+---
+
+## UI RULES (SHADCN ONLY)
+
+- ONLY use shadcn/ui components
+- Never introduce external UI libraries
+- Never create custom buttons, inputs, modals, or dialogs
+- Compose UI strictly from shadcn primitives
+
+---
+
+## TAILWIND RULES
+
+- Use Tailwind utilities only
+- Do not introduce custom color systems
+- Respect existing design tokens
+- Maintain consistent spacing & typography
+
+---
+
+## FORMS & VALIDATION (STRICT)
+
+- All forms MUST use:
+  - react-hook-form
+  - zod
+- Validation logic MUST live in Zod schemas
+- Never validate manually
+- Infer TypeScript types from Zod schemas
+
+---
+
+## DATA SAFETY & TYPES
+
+- Prefer Zod over interfaces
+- Avoid `any`
+- Avoid overly generic types
+- Validate all external inputs
+
+---
+
+## API & SERVER ACTIONS
+
+- Validate all inputs with Zod
+- Never trust client input
+- Handle errors explicitly
+- Prefer Server Actions over REST where applicable
+
+---
+
+## PERFORMANCE & QUALITY
+
+- Optimize for Core Web Vitals
+- Prefer SSR/SSG for SEO
+- Avoid large client bundles
+- Use dynamic imports when necessary
+
+---
+
+## FORBIDDEN ACTIONS
+
+- Adding non-shadcn UI libraries
+- Skipping SEO metadata
+- Creating pages without canonical URLs
+- Indexing private pages
+- Inline styles
+- Ignoring Zod
+
+---
+
+## AI EXPECTATION
+
+Before modifying code:
+
+1. Understand existing architecture
+2. Follow SEO rules first
+3. Follow shadcn conventions
+4. Apply Zod validation
+5. Ensure code is production-ready
