@@ -85,6 +85,25 @@ export enum ResourceType {
   ROLES = "roles",
   PERMISSIONS = "permissions",
   SETTINGS = "settings",
+  // Extensions
+  EXTENSIONS = "extensions",
+}
+
+export interface Attachment {
+  "$file_id": string;
+  File_Name: string;
+}
+
+export interface ServiceAppointment {
+  id: string;
+  name: string;
+  address: string;
+  contact_id: string;
+  contact_name: string;
+  summary: string;
+  type: string;
+  status: string;
+  attachments?: Attachment[];
 }
 
 export enum ActionType {

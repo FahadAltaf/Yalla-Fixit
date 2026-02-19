@@ -1,11 +1,18 @@
-import { ActionType, MenuItem, MenuSection, ResourceType, User, UserRoles } from "@/types/types";
+import {
+  ActionType,
+  MenuItem,
+  MenuSection,
+  ResourceType,
+  User,
+  UserRoles,
+} from "@/types/types";
 import {
   LayoutDashboard,
+  Puzzle,
   Settings,
   Shield,
   User as UserIcon,
   UserCog,
-  Bot,
 } from "lucide-react";
 
 // hasViewPermission and filter functions unchanged
@@ -62,6 +69,13 @@ export const baseSectionsItems: MenuItem[] = [
     icon: <LayoutDashboard className="size-4 text-primary" />,
     isActive: false,
     resource: ResourceType.DASHBOARD,
+  },
+  {
+    title: "Extensions",
+    url: "/extensions",
+    icon: <Puzzle className="size-4 text-primary" />,
+    isActive: false,
+    resource: ResourceType.EXTENSIONS,
   },
 ] as MenuItem[];
 
