@@ -13,7 +13,7 @@ export async function GET(req: NextRequest) {
       `https://fsm.zoho.com/fsm/v1/files?file_id=${encodeURIComponent(fileId)}`,
       {
         headers: {
-          Authorization: `Zoho-oauthtoken ${process.env.ZOHO_ACCESS_TOKEN}`,
+          Authorization: `Zoho-oauthtoken 1000.bddb3d750c92fb62e1d2a11818ba3807.f07effe66b329f23938550eb5d073c0f`,
         },
       }
     );

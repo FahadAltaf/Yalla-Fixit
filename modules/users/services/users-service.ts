@@ -9,8 +9,6 @@ import {
   UPDATE_USER,
 } from "./users-graphql";
 import { executeGraphQLBackend } from "@/lib/graphql-server";
-import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
-import { deleteAuthUserById } from "@/modules/auth/auth-actions";
 import { User } from "@/types/types";
 
 export const usersService = {
