@@ -17,7 +17,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import Link from "next/link";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ExtensionsPageClient } from "./bulk-download";
-import QuotationTemplates from "./quotation-templates";
+import { QuotationTemplatesPage } from "./quotation-templates/index";
 
 export default function Extensions() {
   const [activeSection, setActiveSection] = useState("Bulk Download");
@@ -37,7 +37,7 @@ export default function Extensions() {
       case "Bulk Download":
         return <ExtensionsPageClient />;
       case "Quotation Templates":
-        return <QuotationTemplates />;
+        return <QuotationTemplatesPage />;
       default:
         return null;
     }

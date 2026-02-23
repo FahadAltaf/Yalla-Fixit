@@ -39,6 +39,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
+import { EmptyState } from "@/components/ui/empty-state";
 
 const SEARCH_ENDPOINT =
   "https://primary-production-6170.up.railway.app/webhook/a62d1e0d-1808-48cc-a3f7-754c02d8d10b";
@@ -277,6 +278,7 @@ export function ExtensionsPageClient() {
           className="sm:max-w-md"
           onPointerDownOutside={(e) => isDownloading && e.preventDefault()}
           onEscapeKeyDown={(e) => isDownloading && e.preventDefault()}
+          showCloseButton={false}
         >
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -338,21 +340,6 @@ export function ExtensionsPageClient() {
                     </span>
                   </div>
 
-                  {/* Success/Failed mini-badges */}
-                  {/* <div className="flex gap-2">
-                    {downloadState.completed > 0 && (
-                      <Badge variant="default" className="gap-1 text-xs">
-                        <CheckCircle2 className="size-3" />
-                        {downloadState.completed} done
-                      </Badge>
-                    )}
-                    {downloadState.failed > 0 && (
-                      <Badge variant="destructive" className="gap-1 text-xs">
-                        <AlertCircle className="size-3" />
-                        {downloadState.failed} failed
-                      </Badge>
-                    )}
-                  </div> */}
 
                   {/* Currently downloading filenames */}
                   {downloadState.currentFiles.length > 0 &&
@@ -408,7 +395,7 @@ export function ExtensionsPageClient() {
             className="flex flex-col gap-3 sm:flex-row sm:items-end"
           >
             <div className="flex-1 space-y-2">
-              <Label htmlFor="appointment-name">Service Appointment Name</Label>
+              {/* <Label htmlFor="appointment-name">Service Appointment Name</Label> */}
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
                 <Input
@@ -442,17 +429,18 @@ export function ExtensionsPageClient() {
 
           {/* Error state */}
           {searchError && (
-            <Alert variant="destructive">
-              <AlertCircle className="size-4" />
-              <AlertTitle>Appointment not found</AlertTitle>
-              <AlertDescription>
-                No appointment found. Please check the name and try again.
-              </AlertDescription>
-            </Alert>
+            <div className="">
+           <EmptyState
+            title="Appointment not found"
+            description="The appointment you are looking for does not exist. Please check the name and try again."
+            icon={<AlertCircle className="" />}
+            // action={{ label: "Try again", onClick: () => setSearchError(null), variant: "default" }}
+           />
+           </div>
           )}
 
           {/* Loading skeleton */}
-          {isSearching && (
+          {isSearching && !searchError && (
             <Card className="border-dashed">
               <CardHeader>
                 <Skeleton className="h-5 w-48" />
@@ -466,6 +454,13 @@ export function ExtensionsPageClient() {
                 ))}
               </CardContent>
             </Card>
+          )}
+          {!appointment && !searchError && !isSearching && (
+            <EmptyState
+            title="Search for an appointment"
+            description="Enter the name of the appointment you are looking for and click the search button."
+            icon={<Search className="" />}
+           />
           )}
 
           {/* Appointment details */}
