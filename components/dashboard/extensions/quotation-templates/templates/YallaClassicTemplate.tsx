@@ -1,11 +1,14 @@
 import React from "react";
 import { QuotationData, calculateTotals } from "../quotation-templates";
+import yallaFixit from "@/public/yalla-fixit.png";
+import Image from "next/image";
 
 interface Props {
   data: QuotationData;
+  hideDiscount?: boolean;
 }
 
-export function YallaClassicTemplate({ data }: Props) {
+export function YallaClassicTemplate({ data, hideDiscount = false }: Props) {
   const { subTotal, discount, taxAmount, grandTotal, avgTax } = calculateTotals(data);
 
   return (
@@ -15,7 +18,7 @@ export function YallaClassicTemplate({ data }: Props) {
         width: "794px",
         minHeight: "1123px",
         backgroundColor: "#ffffff",
-        fontFamily: "'Segoe UI', system-ui, sans-serif",
+        // fontFamily: "'Segoe UI', system-ui, sans-serif",
         fontSize: "13px",
         color: "#1a1a2e",
         padding: "48px 56px",
@@ -24,12 +27,13 @@ export function YallaClassicTemplate({ data }: Props) {
       }}
     >
       {/* ── Header ── */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "36px" }}>
+      <div style={{ display: "flex", justifyContent: "", alignItems: "center",gap: "10px", marginBottom: "36px" }}>
+      <Image src={yallaFixit} width={100} height={100} alt="Yalla Fixit" style={{ width: "100px", height: "100px" }} />
         <div>
-          <div style={{ fontSize: "22px", fontWeight: 800, color: "#1a56db", letterSpacing: "-0.5px" }}>
+          <div style={{ fontSize: "22px", fontWeight: 800, letterSpacing: "-0.5px" }}>
             {data.companyName}
           </div>
-          <div style={{ color: "#64748b", marginTop: "4px", lineHeight: 1.6, fontSize: "12px" }}>
+          <div style={{  marginTop: "4px", lineHeight: 1.6, fontSize: "12px" }}>
             {data.companyAddress}
             {data.companyWebsite && <><br />{data.companyWebsite}</>}
           </div>
@@ -43,16 +47,16 @@ export function YallaClassicTemplate({ data }: Props) {
       {/* ── Customer + Service Address ── */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px", marginBottom: "28px" }}>
         <div>
-          <div style={{ fontWeight: 700, fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.08em", color: "#1a56db", marginBottom: "8px" }}>
+          <div style={{ fontWeight: 700, fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.08em",  marginBottom: "8px" }}>
             Customer
           </div>
-          <div style={{ fontWeight: 600, color: "#1e293b" }}>{data.customerName}</div>
-          {data.customerContact && <div style={{ color: "#475569", marginTop: "2px" }}>{data.customerContact}</div>}
-          {data.customerPhone && <div style={{ color: "#475569" }}>{data.customerPhone}</div>}
-          {data.customerEmail && <div style={{ color: "#475569" }}>{data.customerEmail}</div>}
+          <div style={{ fontWeight: 600  }}>{data.customerName}</div>
+          {data.customerContact && <div style={{ marginTop: "2px" }}>{data.customerContact}</div>}
+          {data.customerPhone && <div style={{  }}>{data.customerPhone}</div>}
+          {data.customerEmail && <div style={{  }}>{data.customerEmail}</div>}
         </div>
             <div style={{ textAlign: "right" }}>
-            <div style={{ fontWeight: 700, fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.08em", color: "#1a56db", marginBottom: "8px" }}>
+            <div style={{ fontWeight: 700, fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.08em",  marginBottom: "8px" }}>
 
             Quotation
           </div>
@@ -63,7 +67,7 @@ export function YallaClassicTemplate({ data }: Props) {
         </div>
         {data.serviceAddress && (
           <div>
-            <div style={{ fontWeight: 700, fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.08em", color: "#1a56db", marginBottom: "8px" }}>
+            <div style={{ fontWeight: 700, fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.08em",  marginBottom: "8px" }}>
               Service Address
             </div>
             <div style={{ color: "#475569", lineHeight: 1.6 }}>{data.serviceAddress}</div>
@@ -74,12 +78,15 @@ export function YallaClassicTemplate({ data }: Props) {
       {/* ── Line Items Table ── */}
       <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: "8px" }}>
         <thead>
-          <tr style={{ background: "#1a56db" }}>
+          <tr style={{ background: "black" }}>
             {["Service & Part", "Qty", "Unit", "List Price", "Tax", "Amount"].map((h, i) => (
               <th
                 key={h}
                 style={{
-                  padding: "10px 12px",
+                  // padding: "10px 12px",
+                  padding: "10px",
+                  paddingLeft: "12px",
+                  paddingRight: "12px",
                   color: "#ffffff",
                   fontWeight: 700,
                   fontSize: "11px",
@@ -89,7 +96,7 @@ export function YallaClassicTemplate({ data }: Props) {
                   whiteSpace: "nowrap",
                 }}
               >
-                {h}
+                <span style={{  }}>{h}</span>
               </th>
             ))}
           </tr>
@@ -118,9 +125,9 @@ export function YallaClassicTemplate({ data }: Props) {
                 <td style={{ padding: "12px", textAlign: "right", verticalAlign: "top", color: "#64748b" }}>{item.unit}</td>
                 <td style={{ padding: "12px", textAlign: "right", verticalAlign: "top" }}>AED {item.unitPrice.toFixed(2)}</td>
                 <td style={{ padding: "12px", textAlign: "right", verticalAlign: "top", color: "#64748b", fontSize: "11px" }}>
-                  Std [{item.taxRate}%]
+                  Vat [{item.taxRate}%]
                 </td>
-                <td style={{ padding: "12px", textAlign: "right", fontWeight: 600, verticalAlign: "top", color: "#1a56db" }}>
+                <td style={{ padding: "12px", textAlign: "right", fontWeight: 600, verticalAlign: "top", color: "black" }}>
                   AED {lineGross.toFixed(2)}
                 </td>
               </tr>
@@ -133,18 +140,28 @@ export function YallaClassicTemplate({ data }: Props) {
       <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "32px" }}>
         <div style={{ minWidth: "260px" }}>
           {[
-            { label: "Sub Total", value: subTotal, muted: false },
-            { label: "Discount", value: discount, muted: true },
-            { label: `Tax Amount (${avgTax.toFixed(0)}%)`, value: taxAmount, muted: true },
-          ].map(({ label, value, muted }) => (
-            <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: "1px solid #f1f5f9" }}>
-              <span style={{ color: muted ? "#64748b" : "#1e293b", fontSize: "12px" }}>{label}</span>
-              <span style={{ color: muted ? "#64748b" : "#1e293b", fontSize: "12px" }}>AED {value.toFixed(2)}</span>
-            </div>
-          ))}
+            { key: "subTotal", label: "Sub Total", value: subTotal, muted: false },
+            { key: "discount", label: "Discount", value: discount, muted: true },
+            { key: "taxAmount", label: `Tax Amount (${avgTax.toFixed(0)}%)`, value: taxAmount, muted: true },
+          ]
+            .filter((row) => !(hideDiscount && row.key === "discount"))
+            .map(({ key, label, value, muted }) => (
+              <div
+                key={key}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  padding: "5px 0",
+                  borderBottom: "1px solid #f1f5f9",
+                }}
+              >
+                <span style={{ color: muted ? "#64748b" : "#1e293b", fontSize: "12px" }}>{label}</span>
+                <span style={{ color: muted ? "#64748b" : "#1e293b", fontSize: "12px" }}>AED {value.toFixed(2)}</span>
+              </div>
+            ))}
           <div style={{
             display: "flex", justifyContent: "space-between", padding: "10px 12px",
-            background: "#1a56db", borderRadius: "6px", marginTop: "8px"
+            background: "black", borderRadius: "6px", marginTop: "8px"
           }}>
             <span style={{ color: "#ffffff", fontWeight: 700, fontSize: "13px" }}>Grand Total</span>
             <span style={{ color: "#ffffff", fontWeight: 700, fontSize: "13px" }}>AED {grandTotal.toFixed(2)}</span>
@@ -154,7 +171,7 @@ export function YallaClassicTemplate({ data }: Props) {
 
       {/* ── Terms ── */}
       <div style={{ borderTop: "2px solid #e2e8f0", paddingTop: "20px" }}>
-        <div style={{ fontWeight: 700, fontSize: "12px", textTransform: "uppercase", letterSpacing: "0.08em", color: "#1a56db", marginBottom: "10px" }}>
+        <div style={{ fontWeight: 700, fontSize: "12px", textTransform: "uppercase", letterSpacing: "0.08em",  marginBottom: "10px" }}>
           Terms and Conditions
         </div>
         {[
@@ -171,7 +188,7 @@ export function YallaClassicTemplate({ data }: Props) {
           "Work will be scheduled during weekdays only, Monday to Saturday, during working hours (9:00 am to 6:00 pm). If work outside of these hours or on non-working days is required, additional charges for overtime pay will apply"
         ].map((t, i) => (
           <div key={i} style={{ display: "flex", gap: "8px", marginBottom: "5px" }}>
-            <span style={{ color: "#1a56db", fontWeight: 700, fontSize: "11px", minWidth: "16px" }}>{i + 1}.</span>
+            <span style={{  fontWeight: 700, fontSize: "11px", minWidth: "16px" }}>{i + 1}.</span>
             <span style={{ color: "#64748b", fontSize: "11px", lineHeight: 1.6 }}>{t}</span>
           </div>
         ))}
@@ -183,9 +200,9 @@ export function YallaClassicTemplate({ data }: Props) {
         borderTop: "1px solid #e2e8f0", paddingTop: "12px",
         display: "flex", justifyContent: "space-between", alignItems: "center"
       }}>
-        <span style={{ color: "#94a3b8", fontSize: "11px" }}>{data.companyName}</span>
+        <span style={{  fontSize: "11px" }}>{data.companyName}</span>
         {data.companyPhone && (
-          <span style={{ color: "#94a3b8", fontSize: "11px" }}>Support: {data.companyPhone}</span>
+          <span style={{  fontSize: "11px" }}>Support: {data.companyPhone}</span>
         )}
       </div>
     </div>

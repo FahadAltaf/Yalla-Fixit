@@ -118,7 +118,7 @@ async function generatePDFBlob(
       background: "#ffffff",
       logging: false,
       width: 794,
-      height: tempDiv.scrollHeight,
+      height: tempDiv.scrollHeight - 50,
     //   windowWidth: 794,
     //   scrollX: 0,
     //   scrollY: 0,
@@ -335,8 +335,8 @@ export function QuotationPreviewModal({ open, onClose, template, data }: Props) 
           <Separator orientation="vertical" />
 
           {/* ── Right: info + email panel ── */}
-          <div className="w-[380px] flex flex-col shrink-0">
-            <Tabs defaultValue="email" className="flex flex-col flex-1 overflow-hidden">
+          <div className="w-[380px] flex flex-col shrink-0 overflow-y-auto">
+            <Tabs defaultValue="email" className="flex flex-col flex-1">
               <TabsList className="mx-4 mt-4 shrink-0">
                 <TabsTrigger value="preview" className="flex-1 gap-2 text-xs">
                   <Eye className="size-3" /> Preview Info
@@ -347,7 +347,7 @@ export function QuotationPreviewModal({ open, onClose, template, data }: Props) 
               </TabsList>
 
               {/* Preview info */}
-              <TabsContent value="preview" className="flex-1 overflow-hidden m-0">
+              <TabsContent value="preview" className="flex-1 m-0">
                 <ScrollArea className="h-full px-4 py-4">
                   <div className="space-y-4">
                     <div>

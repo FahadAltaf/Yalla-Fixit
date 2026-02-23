@@ -7,7 +7,7 @@ import { ChevronRightIcon, SearchIcon } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { MenuSection, User } from "@/types/types";
 import { getNavData } from "./menu-items";
-
+import Image from "next/image";
 import { Input } from "@/components/ui/input";
 import {
   Collapsible,
@@ -32,8 +32,8 @@ import {
   SidebarProvider,
 } from "@/components/ui/sidebar";
 
-import LogoSvg from "@/assets/svg/logo";
 import DashboardHeader from "./dashboatd-header";
+import CompanyLogo from "@/public/site-logo.webp";
 
 const SidebarGroupedMenuItems = ({ section }: { section: MenuSection }) => {
   const pathname = usePathname();
@@ -129,12 +129,12 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
               <SidebarMenuItem>
                 <SidebarMenuButton
                   size="lg"
-                  className="gap-2.5 !bg-transparent [&>svg]:size-8"
+                  className="gap-2.5 !bg-transparent [&>svg]:size-8 flex items-center justify-center"
                   asChild
                 >
                   <Link href="/">
-                    <LogoSvg className="[&_rect]:fill-sidebar [&_rect:first-child]:fill-primary" />
-                    <span className="text-xl font-semibold">YALLA FIXIT</span>
+                  <Image src={CompanyLogo} alt="Company Logo" width={140} height={140} className="w-[140px] h-auto" unoptimized />
+
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>

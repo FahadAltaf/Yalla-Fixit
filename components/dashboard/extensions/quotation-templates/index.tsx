@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 
 import {
@@ -13,7 +13,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Label } from "@/components/ui/label";
+import { createRoot } from "react-dom/client";
+import html2canvas from "html2canvas";
+import { jsPDF } from "jspdf";
+import { ModernBoldTemplate } from "./templates/ModernBoldTemplate";
+import { MinimalCleanTemplate } from "./templates/MinimalCleanTemplate";
 import {
   Select,
   SelectContent,
@@ -21,89 +25,47 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Search,
   FileText,
   Sparkles,
-  ChevronRight,
   LayoutTemplate,
+  Mail,
+  Download,
+  Printer,
+  MoreVertical,
 } from "lucide-react";
 
 import {
   QUOTATION_TEMPLATES,
   DEFAULT_QUOTATION_DATA,
-  QuotationTemplate,
   QuotationData,
 } from "./quotation-templates";
 import { QuotationPreviewModal } from "./quotation-preview-modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
-
-// ─── Mock "search" results for quotation data ──────────────────────────────
-// Replace with real API calls when ready
-const MOCK_QUOTATIONS: Record<string, QuotationData> = {
-  "17087": DEFAULT_QUOTATION_DATA,
-  "17088": {
-    ...DEFAULT_QUOTATION_DATA,
-    quotationNumber: "17088 IR 01",
-    customerName: "GRAND ARENA LLC",
-    customerContact: "Ali Hassan",
-    customerPhone: "0509999999",
-    customerEmail: "ali.hassan@grandarena.ae",
-    serviceAddress: "Sheikh Zayed Road, Dubai, UAE",
-    lineItems: [
-      {
-        description: "Flooring Repair & Replacement",
-        details: "Removal of damaged vinyl tiles and replacement with new 3mm vinyl. Includes surface preparation.",
-        quantity: 20,
-        unit: "sqm",
-        unitPrice: 85,
-        taxRate: 5,
-      },
-      {
-        description: "Painting — Interior Walls",
-        details: "Two coats of premium emulsion paint on interior walls. Color as per client specification.",
-        quantity: 150,
-        unit: "sqm",
-        unitPrice: 12,
-        taxRate: 5,
-      },
-    ],
-    discountAmount: 200,
-  },
-  "17090": {
-    ...DEFAULT_QUOTATION_DATA,
-    quotationNumber: "17090 IR 02",
-    customerName: "HORIZON FACILITIES MANAGEMENT LLC",
-    customerContact: "Rania Mousa",
-    customerPhone: "0551234567",
-    customerEmail: "rania.mousa@horizonfm.ae",
-    serviceAddress: "Business Bay Tower 4, Dubai, UAE",
-    lineItems: [
-      {
-        description: "AC Duct Cleaning",
-        details: "Full duct cleaning service for central AC units. Sanitization and filter replacement included.",
-        quantity: 6,
-        unit: "units",
-        unitPrice: 350,
-        taxRate: 5,
-      },
-    ],
-    discountAmount: 0,
-  },
-};
+import { YallaClassicTemplate } from "./templates/YallaClassicTemplate";
 
 export function QuotationTemplatesPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<QuotationData | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
-  const [filterTag, setFilterTag] = useState<string>("all");
 
-  // Modal state
-  const [selectedTemplate, setSelectedTemplate] = useState<QuotationTemplate | null>(null);
+  // Modal state (used for advanced actions like email/PDF)
   const [isModalOpen, setIsModalOpen] = useState(false);
+
+  // Template preview state (for now only Yalla Classic, with/without discount)
+  const [discountMode, setDiscountMode] = useState<"with" | "without">("with");
+  const yallaClassicTemplate =
+    QUOTATION_TEMPLATES.find((t) => t.id === "yalla-classic") ?? QUOTATION_TEMPLATES[0];
+    const [isGenerating, setIsGenerating] = useState(false);
 
   // ── Search handler ──────────────────────────────────────────────────────
   const handleSearch = async () => {
@@ -116,27 +78,37 @@ export function QuotationTemplatesPage() {
     setIsSearching(true);
     setHasSearched(false);
 
-    // Simulate API delay
-    await new Promise((r) => setTimeout(r, 800));
+    try {
+      const response = await fetch("/api/get-estimate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ id: q }),
+      });
 
-    // Find mock match
-    const key = Object.keys(MOCK_QUOTATIONS).find(
-      (k) =>
-        k.includes(q) ||
-        MOCK_QUOTATIONS[k].customerName.toLowerCase().includes(q.toLowerCase()) ||
-        MOCK_QUOTATIONS[k].quotationNumber.toLowerCase().includes(q.toLowerCase())
-    );
+      if (!response.ok) {
+        throw new Error("Failed to fetch estimate");
+      }
 
-    if (key) {
-      setSearchResults(MOCK_QUOTATIONS[key]);
-      toast.success("Quotation data loaded!");
-    } else {
+      const json: { success: boolean; quotation?: QuotationData } =
+        await response.json();
+
+      if (json.success && json.quotation) {
+        setSearchResults(json.quotation);
+        toast.success("Quotation data loaded!");
+      } else {
+        setSearchResults(null);
+        toast.error("No quotation found for this ID.");
+      }
+    } catch (error) {
+      console.error("Search error:", error);
       setSearchResults(null);
-    //   toast.info("No quotation found — you can still use a template with default data.");
+      toast.error("Failed to load quotation. Please try again.");
+    } finally {
+      setHasSearched(true);
+      setIsSearching(false);
     }
-
-    setHasSearched(true);
-    setIsSearching(false);
   };
 
   const handleSubmit: React.FormEventHandler<HTMLFormElement> = (e) => {
@@ -144,18 +116,147 @@ export function QuotationTemplatesPage() {
     void handleSearch();
   };
 
-  // ── Filter templates ────────────────────────────────────────────────────
-  const filteredTemplates = useMemo(() => {
-    if (filterTag === "all") return QUOTATION_TEMPLATES;
-    return QUOTATION_TEMPLATES.filter(
-      (t) => t.tag.toLowerCase() === filterTag.toLowerCase()
-    );
-  }, [filterTag]);
+  interface PDFGeneratorOptions {
+    scale?: number;          // html2canvas scale — higher = sharper but bigger file (default: 2)
+    imageFormat?: "JPEG" | "PNG"; // JPEG = smaller file, PNG = lossless (default: JPEG)
+    imageQuality?: number;   // 0–1, only applies to JPEG (default: 0.92)
+  }
 
-  const openTemplate = (template: QuotationTemplate) => {
-    setSelectedTemplate(template);
-    setIsModalOpen(true);
-  };
+  // ─── PDF Generator ────────────────────────────────────────────────────────────
+// Renders template into a hidden off-screen div at FULL SIZE (794px).
+// Uses React 18 createRoot API — no deprecated ReactDOM.render.
+async function generatePDFBlob(
+    templateId: string,
+    data: QuotationData,
+    options: PDFGeneratorOptions = {}
+  ): Promise<Blob> {
+    const {
+      scale = 2,
+      imageFormat = "JPEG",
+      imageQuality = 0.92,
+    } = options;
+  
+    // Off-screen container — position absolute so browser still performs layout
+    const tempDiv = document.createElement("div");
+    tempDiv.style.cssText = `
+      position: absolute;
+      left: -9999px;
+      top: 0;
+      width: 794px;
+      background: #ffffff;
+    `;
+    document.body.appendChild(tempDiv);
+  
+    // React 18: createRoot instead of deprecated ReactDOM.render
+    const root = createRoot(tempDiv);
+  
+    try {
+      // Pick the right template
+      let TemplateEl: React.ReactElement;
+      switch (templateId) {
+        case "modern-bold":
+          TemplateEl = <ModernBoldTemplate data={data} />;
+          break;
+        case "minimal-clean":
+          TemplateEl = <MinimalCleanTemplate data={data} />;
+          break;
+        default:
+          TemplateEl = <YallaClassicTemplate data={data} />;
+      }
+  
+      // Render and wait for React to flush + fonts/layout to settle
+      await new Promise<void>((resolve) => {
+        root.render(TemplateEl);
+        // React 18 renders asynchronously — small timeout lets it fully paint
+        setTimeout(resolve, 250);
+      });
+  
+      // Use scrollHeight to capture FULL content height (not viewport-clipped)
+      const canvas = await html2canvas(tempDiv, {
+        useCORS: true,
+        allowTaint: true,
+        background: "#ffffff",
+        logging: false,
+        width: 794,
+        height: tempDiv.scrollHeight - 50,
+      //   windowWidth: 794,
+      //   scrollX: 0,
+      //   scrollY: 0,
+        // ✅ Fix: html2canvas uses `scale` as a number passed via options cast
+        // Some versions type it differently — cast to any to avoid TS(2353)
+        ...({ scale } as object),
+      });
+  
+      const imgData = canvas.toDataURL(
+        `image/${imageFormat.toLowerCase()}`,
+        imageQuality
+      );
+  
+      // A4 portrait
+      const PAGE_W_MM = 210;
+      const PAGE_H_MM = 297;
+  
+      const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  
+      const imgWidthMm = PAGE_W_MM;
+      const imgHeightMm = (canvas.height * imgWidthMm) / canvas.width;
+      console.log("🚀 ~ generatePDFBlob ~ imgHeightMm:", imgHeightMm)
+      let heightLeft = imgHeightMm;
+      let position = 0;
+  
+      // First page
+      pdf.addImage(imgData, imageFormat, 0, position, imgWidthMm, imgHeightMm );
+      console.log("🚀 ~ generatePDFBlob ~ heightLeft:", heightLeft)
+      heightLeft -= PAGE_H_MM;
+  
+      // Additional pages
+      while (heightLeft > 0) {
+        position = heightLeft - imgHeightMm;
+        pdf.addPage();
+        pdf.addImage(imgData, imageFormat, 0, position, imgWidthMm, imgHeightMm);
+        console.log("🚀 ~ generatePDFBlob ~ heightLeft:", heightLeft)
+        heightLeft -= PAGE_H_MM;
+      }
+  
+      return pdf.output("blob");
+    } finally {
+      // Always clean up — unmount React tree then remove DOM node
+      root.unmount();
+      if (document.body.contains(tempDiv)) {
+        document.body.removeChild(tempDiv);
+      }
+    }
+  }
+  
+  const toastId = 'dashboard-quotation-templates-download-pdf';
+
+    // ── Download handler ──────────────────────────────────────────────────
+    const handleDownloadPDF = async () => {
+        setIsGenerating(true);
+        toast.loading("Generating PDF...", { id: toastId });
+        try {
+          const blob = await generatePDFBlob(yallaClassicTemplate.id, activeData, {
+            scale: 2,
+            imageFormat: "JPEG",
+            imageQuality: 0.92,
+          });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          const safeName = activeData.quotationNumber.replace(/[\s/\\:*?"<>|]/g, "_");
+          a.download = `Quotation_${safeName}.pdf`;
+          a.click();
+          URL.revokeObjectURL(url);
+        
+        } catch (err) {
+          console.error(err);
+          toast.error("Failed to generate PDF. Please try again.");
+        } finally {
+          setIsGenerating(false);
+          toast.dismiss(toastId);
+          toast.success("PDF downloaded successfully!");
+        }
+      };
 
   const activeData = searchResults ?? DEFAULT_QUOTATION_DATA;
 
@@ -264,125 +365,134 @@ export function QuotationTemplatesPage() {
       {/* <Separator /> */}
 
       {/* ── Templates section ── */}
-{hasSearched && searchResults && (
-    <>
-      <div className="space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold flex items-center gap-2">
-              <Sparkles className="size-4 text-amber-500" />
-              Choose a Template
-            </h2>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Select a design to preview and send
-            </p>
+      {hasSearched && searchResults && yallaClassicTemplate && (
+        <div className="space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold flex items-center gap-2">
+                <Sparkles className="size-4 text-amber-500" />
+                Template Preview
+              </h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Switch between quotation template modes and use quick actions.
+              </p>
+            </div>
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
+              <div className="flex items-center gap-2">
+                {/* <Label className="text-xs text-muted-foreground">Mode:</Label> */}
+                <Select
+                  value={discountMode}
+                  onValueChange={(value) =>
+                    setDiscountMode(value as "with" | "without")
+                  }
+                >
+                  <SelectTrigger className="w-[220px] h-8 text-xs">
+                    <SelectValue placeholder="Select quotation template mode" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="with">
+                      Quotation template with discount
+                    </SelectItem>
+                    <SelectItem value="without">
+                      Quotation template without discount
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Label className="text-xs text-muted-foreground">Filter:</Label>
-            <Select value={filterTag} onValueChange={setFilterTag}>
-              <SelectTrigger className="w-[140px] h-8 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Templates</SelectItem>
-                <SelectItem value="Professional">Professional</SelectItem>
-                <SelectItem value="Modern">Modern</SelectItem>
-                <SelectItem value="Minimal">Minimal</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredTemplates.map((template) => (
-            <TemplateCard
-              key={template.id}
-              template={template}
-              onSelect={() => openTemplate(template)}
-            />
-          ))}
+          <div className="border rounded-lg overflow-hidden bg-slate-100">
+            <div className="flex items-center justify-between px-4 py-2 border-b bg-white">
+              <div className="flex items-center gap-2">
+                <LayoutTemplate className="size-4 text-muted-foreground" />
+                <div className="flex flex-col">
+                  <span className="text-sm font-medium">
+                    {yallaClassicTemplate.name}
+                  </span>
+                  <span className="text-[11px] text-muted-foreground">
+                    {discountMode === "with"
+                      ? "Showing totals with discount row"
+                      : "Showing totals without discount row"}
+                  </span>
+                </div>
+                <Badge variant="outline" className="ml-2 text-[10px]">
+                  {yallaClassicTemplate.tag}
+                </Badge>
+              </div>
+
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1 text-xs"
+                  >
+                    <MoreVertical className="size-3.5" />
+                    Actions
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-44">
+                  <DropdownMenuItem
+                    className="text-xs"
+                    onClick={() => setIsModalOpen(true)}
+                  >
+                    <Mail className="mr-2 size-3.5" />
+                    Send email
+                  </DropdownMenuItem>
+                  {/* <DropdownMenuItem
+                    className="text-xs"
+                    onClick={() => window.print()}
+                  >
+                    <Printer className="mr-2 size-3.5" />
+                    Print
+                  </DropdownMenuItem> */}
+                  <DropdownMenuItem
+                    className="text-xs"
+                    onClick={handleDownloadPDF}
+                    disabled={isGenerating}
+                  >
+                    <Download className="mr-2 size-3.5" />
+                    Download PDF
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+
+            <div className="bg-slate-100 overflow-auto flex items-start justify-center p-6">
+              <div style={{ width: 794 * 0.68 }}>
+                <div
+                  style={{
+                    transform: "scale(0.68)",
+                    transformOrigin: "top left",
+                    width: 794,
+                    pointerEvents: "none",
+                    userSelect: "none",
+                    marginBottom: "-570px",
+                  }}
+                >
+                  <div className="shadow-2xl ring-1 ring-black/5 rounded overflow-hidden bg-white">
+                    <YallaClassicTemplate
+                      data={activeData}
+                      hideDiscount={discountMode === "without"}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
-      </div>
- 
-      {/* ── Preview Modal ── */}
-      {selectedTemplate && (
+      )}
+
+      {hasSearched && searchResults && yallaClassicTemplate && (
         <QuotationPreviewModal
           open={isModalOpen}
           onClose={() => setIsModalOpen(false)}
-          template={selectedTemplate}
+          template={yallaClassicTemplate}
           data={activeData}
         />
       )}
-      </>
-      )}
     </CardContent>
-    </Card>
-  );
-}
-
-// ─── Template Card ────────────────────────────────────────────────────────────
-
-function TemplateCard({
-  template,
-  onSelect,
-}: {
-  template: QuotationTemplate;
-  onSelect: () => void;
-}) {
-  return (
-    <Card
-      className="group cursor-pointer hover:shadow-lg transition-all duration-200 hover:-translate-y-0.5 overflow-hidden py-0"
-      onClick={onSelect}
-    >
-      {/* Preview area */}
-      <div className={`h-36 bg-gradient-to-br ${template.previewBg} relative overflow-hidden`}>
-        {/* Decorative mock lines */}
-        <div className="absolute inset-4 space-y-2 opacity-60">
-          <div className="flex justify-between">
-            <div className="h-3 w-24 rounded" style={{ background: template.color, opacity: 0.8 }} />
-            <div className="h-3 w-16 rounded bg-slate-300" />
-          </div>
-          <div className="h-1 w-full rounded bg-slate-200" />
-          <div className="mt-3 space-y-1.5">
-            {[80, 60, 70].map((w, i) => (
-              <div key={i} className="h-2 rounded bg-slate-200" style={{ width: `${w}%` }} />
-            ))}
-          </div>
-          <div className="mt-2 h-8 rounded" style={{ background: template.color, opacity: 0.2 }} />
-          <div className="flex justify-end">
-            <div className="h-4 w-24 rounded" style={{ background: template.color, opacity: 0.5 }} />
-          </div>
-        </div>
-
-        {/* Badge */}
-        <div className="absolute top-3 right-3">
-          <Badge
-            className="text-xs font-semibold shadow-sm"
-            style={{ background: template.color, color: "#ffffff", border: "none" }}
-          >
-            {template.tag}
-          </Badge>
-        </div>
-      </div>
-
-      <CardContent className="p-4">
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <h3 className="font-semibold text-sm truncate">{template.name}</h3>
-            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
-              {template.description}
-            </p>
-          </div>
-          <ChevronRight className="size-4 text-muted-foreground shrink-0 mt-0.5 group-hover:translate-x-0.5 transition-transform" />
-        </div>
-
-        <div className="mt-3 flex gap-2">
-          <Button size="sm" className="flex-1 text-xs h-8 gap-1.5" onClick={onSelect}>
-            <FileText className="size-3" />
-            Use Template
-          </Button>
-        </div>
-      </CardContent>
     </Card>
   );
 }

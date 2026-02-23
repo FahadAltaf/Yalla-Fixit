@@ -11,6 +11,10 @@ import { toast } from "sonner";
 import { useState } from "react";
 import { AuthServiceError, signInWithOAuth } from "@/modules/auth/services/auth-service";
 import { Loader2 } from "lucide-react";
+import LoginImage from "@/public/yalla-login-image.png";
+import siteLogo  from '@/public/site-logo.webp'
+import Image from "next/image";
+
 
 const Login2 = () => {
   const [isSocialLoading, setIsSocialLoading] = useState<string | null>(null);
@@ -53,16 +57,15 @@ const Login2 = () => {
       <div className="max-lg:hidden lg:col-span-3 xl:col-span-4">
         <div className="bg-muted relative z-1 flex h-full items-center justify-center px-6">
           <div className="outline-border relative shrink rounded-[20px] p-2.5 outline-2 -outline-offset-[2px]">
-            <img
-              src="https://cdn.shadcnstudio.com/ss-assets/blocks/marketing/auth/image-1.png"
-              className="max-h-111 w-full rounded-lg object-contain dark:hidden"
-              alt="Dashboards"
+            <Image
+                src={LoginImage}
+              className="max-h-111 w-full rounded-lg object-contain dark:hidden h-auto"
+              width={1000}
+              height={1000}
+              unoptimized
+              alt="Yalla Login Image"
             />
-            <img
-              src="https://cdn.shadcnstudio.com/ss-assets/blocks/marketing/auth/image-1-dark.png"
-              className="hidden max-h-111 w-full rounded-lg object-contain dark:inline-block"
-              alt="Dashboards"
-            />
+           
 
             <BorderBeam duration={8} borderWidth={2} size={100} />
           </div>
@@ -76,13 +79,7 @@ const Login2 = () => {
       {/* 2 Form */}
       <div className="flex h-full flex-col items-center justify-center py-10 sm:px-5 lg:col-span-3 xl:col-span-2">
         <div className="w-full max-w-md px-6">
-          {/* <a
-            href="#"
-            className="text-muted-foreground group mb-12 flex items-center gap-2 sm:mb-16 lg:mb-24"
-          >
-            <ChevronLeftIcon className="transition-transform duration-200 group-hover:-translate-x-0.5" />
-            <p>Back to the website</p>
-          </a> */}
+        
 
           <div className="flex flex-col gap-6">
             <Logo className="gap-3" />
@@ -90,14 +87,14 @@ const Login2 = () => {
             <div>
               <h2 className="mb-1.5 text-2xl font-semibold">Welcome back! </h2>
               <p className="text-muted-foreground">
-                Please sign in to your YALLA FIXIT account
+                Please sign in to your account
               </p>
             </div>
 
             {/* Form */}
             <LoginForm />
 
-            <div className="space-y-4">
+            {/* <div className="space-y-4">
               <p className="text-muted-foreground text-center">
                 New on our platform?{" "}
                 <Link href="/auth/signup" className="text-foreground hover:underline">
@@ -119,7 +116,7 @@ const Login2 = () => {
                   "Sign in with google"
                 )}
               </Button>
-            </div>
+            </div> */}
           </div>
         </div>
       </div>

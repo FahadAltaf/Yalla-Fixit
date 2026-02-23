@@ -57,9 +57,9 @@ export function AppearanceSettings({ settings }: { settings?: Settings }) {
       value: "#EF4444",
     },
     {
-      name: "Rose Pink",
-      style: { backgroundColor: "#EC4899", borderColor: "#EC4899" },
-      value: "#EC4899",
+      name: "Yalla Red",
+      style: { backgroundColor: "#AA272C", borderColor: "#AA272C" },
+      value: "#AA272C",
     },
     {
       name: "Deep Indigo",

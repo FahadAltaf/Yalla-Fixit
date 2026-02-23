@@ -15,7 +15,7 @@ export function ModernBoldTemplate({ data }: Props) {
         width: "794px",
         minHeight: "1123px",
         backgroundColor: "#ffffff",
-        fontFamily: "'Georgia', serif",
+        // fontFamily: "'Georgia', serif",
         fontSize: "13px",
         color: "#0f172a",
         boxSizing: "border-box",

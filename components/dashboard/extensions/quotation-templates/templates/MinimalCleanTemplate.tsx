@@ -15,7 +15,7 @@ export function MinimalCleanTemplate({ data }: Props) {
         width: "794px",
         minHeight: "1123px",
         backgroundColor: "#fafafa",
-        fontFamily: "'Helvetica Neue', Helvetica, sans-serif",
+        // fontFamily: "'Helvetica Neue', Helvetica, sans-serif",
         fontSize: "13px",
         color: "#18181b",
         padding: "60px 64px",

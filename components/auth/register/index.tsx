@@ -8,6 +8,8 @@ import AuthFullBackgroundShape from '@/assets/svg/auth-full-background-shape'
 import Logo from '@/components/ui/logo'
 import RegisterForm from './register-form'
 import Link from 'next/link'
+import Image from "next/image";
+import LoginImage from "@/public/yalla-login-image.png";
 
 const Register = () => {
   return (
@@ -16,16 +18,15 @@ const Register = () => {
       <div className='max-lg:hidden lg:col-span-3 xl:col-span-4'>
         <div className='bg-muted relative z-1 flex h-full items-center justify-center px-6'>
           <div className='outline-border relative shrink rounded-[20px] p-2.5 outline-2 -outline-offset-[2px]'>
-            <img
-              src='https://cdn.shadcnstudio.com/ss-assets/blocks/marketing/auth/image-1.png'
-              className='max-h-111 w-full rounded-lg object-contain dark:hidden'
-              alt='Dashboards'
+          <Image
+                src={LoginImage}
+              className="max-h-111 w-full rounded-lg object-contain dark:hidden h-auto"
+              width={1000}
+              height={1000}
+              unoptimized
+              alt="Yalla Login Image"
             />
-            <img
-              src='https://cdn.shadcnstudio.com/ss-assets/blocks/marketing/auth/image-1-dark.png'
-              className='hidden max-h-111 w-full rounded-lg object-contain dark:inline-block'
-              alt='Dashboards'
-            />
+           
 
             <BorderBeam duration={8} borderWidth={2} size={100} />
           </div>
