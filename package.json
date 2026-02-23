@@ -6,7 +6,8 @@
     "dev": "next dev -p 3032",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "generate-audio": "ts-node --project tsconfig.scripts.json scripts/generate-audio-files.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.10",
@@ -56,6 +57,7 @@
     "zod": "^4.2.1"
   },
   "devDependencies": {
+    "ts-node": "^10.9.2",
     "@tailwindcss/postcss": "^4",
     "@types/file-saver": "^2.0.7",
     "@types/node": "^20.19.27",

@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 
 import { siteConfig } from "@/lib/site-config";
-import { ExtensionsPageClient } from "@/components/extensions/extensions-page";
+import { ExtensionsPageClient } from "@/components/dashboard/extensions/bulk-download";
+import Extensions from "@/components/dashboard/extensions";
 
 const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
 const title = "Extensions | Service Appointment Lookup";
@@ -32,6 +33,6 @@ export const metadata: Metadata = {
 };
 
 export default function ExtensionsPage() {
-  return <ExtensionsPageClient />;
+  return <Extensions />;
 }
 

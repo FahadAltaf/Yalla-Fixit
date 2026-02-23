@@ -134,4 +134,6 @@ export interface Settings {
   logo_setting?: string;
   type?: UserRoles;
   user_id?: User;
+  oauth_access_token?: string;
+  oauth_token_refreshed_at?: string;
 }

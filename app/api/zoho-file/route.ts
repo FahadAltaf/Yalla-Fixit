@@ -3,9 +3,10 @@ import { NextRequest, NextResponse } from "next/server";
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const fileId = searchParams.get("file_id");
+  const token = searchParams.get("token");
 
-  if (!fileId) {
-    return NextResponse.json({ error: "file_id is required" }, { status: 400 });
+  if (!fileId || !token) {
+    return NextResponse.json({ error: "file_id and token are required" }, { status: 400 });
   }
 
   try {
@@ -13,7 +14,7 @@ export async function GET(req: NextRequest) {
       `https://fsm.zoho.com/fsm/v1/files?file_id=${encodeURIComponent(fileId)}`,
       {
         headers: {
-          Authorization: `Zoho-oauthtoken 1000.bddb3d750c92fb62e1d2a11818ba3807.f07effe66b329f23938550eb5d073c0f`,
+          Authorization: `Zoho-oauthtoken ${token}`,
         },
       }
     );
