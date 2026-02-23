@@ -192,29 +192,30 @@ async function generatePDFBlob(
         imageQuality
       );
   
-      // A4 portrait
+      // Portrait with increased page height (wider than A4 so more content per page)
       const PAGE_W_MM = 210;
-      const PAGE_H_MM = 297;
-  
-      const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+      const PAGE_H_MM = 310;
+
+      const pdf = new jsPDF({
+        orientation: "portrait",
+        unit: "mm",
+        format: [PAGE_W_MM, PAGE_H_MM],
+      });
   
       const imgWidthMm = PAGE_W_MM;
       const imgHeightMm = (canvas.height * imgWidthMm) / canvas.width;
-      console.log("🚀 ~ generatePDFBlob ~ imgHeightMm:", imgHeightMm)
       let heightLeft = imgHeightMm;
       let position = 0;
-  
+
       // First page
-      pdf.addImage(imgData, imageFormat, 0, position, imgWidthMm, imgHeightMm );
-      console.log("🚀 ~ generatePDFBlob ~ heightLeft:", heightLeft)
+      pdf.addImage(imgData, imageFormat, 0, position, imgWidthMm, imgHeightMm);
       heightLeft -= PAGE_H_MM;
   
-      // Additional pages
+      // Additional pages (same custom height)
       while (heightLeft > 0) {
         position = heightLeft - imgHeightMm;
-        pdf.addPage();
+        pdf.addPage([PAGE_W_MM, PAGE_H_MM], "portrait");
         pdf.addImage(imgData, imageFormat, 0, position, imgWidthMm, imgHeightMm);
-        console.log("🚀 ~ generatePDFBlob ~ heightLeft:", heightLeft)
         heightLeft -= PAGE_H_MM;
       }
   

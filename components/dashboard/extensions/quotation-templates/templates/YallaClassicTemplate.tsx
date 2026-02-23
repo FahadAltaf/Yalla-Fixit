@@ -28,7 +28,8 @@ export function YallaClassicTemplate({ data, hideDiscount = false }: Props) {
     >
       {/* ── Header ── */}
       <div style={{ display: "flex", justifyContent: "", alignItems: "center",gap: "10px", marginBottom: "36px" }}>
-      <Image src={yallaFixit} width={100} height={100} alt="Yalla Fixit" style={{ width: "100px", height: "100px" }} />
+      {/* <Image src={yallaFixit} width={100} height={100} alt="Yalla Fixit" style={{ width: "100px", height: "100px", objectFit: "contain", objectPosition: "left" }} /> */}
+       <img src={yallaFixit.src} alt="Yalla Fixit" style={{ width: "100px", height: "100px", objectFit: "contain", objectPosition: "left" }} />
         <div>
           <div style={{ fontSize: "22px", fontWeight: 800, letterSpacing: "-0.5px" }}>
             {data.companyName}
