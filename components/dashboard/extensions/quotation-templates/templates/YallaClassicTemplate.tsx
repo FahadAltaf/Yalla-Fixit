@@ -1,15 +1,34 @@
-import React from "react";
 import { QuotationData, calculateTotals } from "../quotation-templates";
 import yallaFixit from "@/public/yalla-fixit.png";
-import Image from "next/image";
 
 interface Props {
   data: QuotationData;
   hideDiscount?: boolean;
+  /** When true, applies PDF-specific layout tweaks (e.g. header offset). Only set when rendering for PDF download. */
+  forPDF?: boolean;
 }
 
-export function YallaClassicTemplate({ data, hideDiscount = false }: Props) {
-  const { subTotal, discount, taxAmount, grandTotal, avgTax } = calculateTotals(data);
+export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = false }: Props) {
+  const calculated = calculateTotals(data);
+  const subTotal = data.subTotal || calculated.subTotal;
+  const discount =
+    data.discountAmount ??
+    data.lineItems?.reduce((sum, item) => sum + (item.discountAmount || 0), 0) ??
+    calculated.discount;
+  const taxAmount = data.taxAmount || calculated.taxAmount;
+  const grandTotal = data.grandTotal || calculated.grandTotal;
+  const avgTax = calculated.avgTax;
+
+  // Parse Terms & Conditions from API:
+  // - Strip leading "Notes:" label
+  // - Split into items on newlines that start with "1-", "2-", etc.
+  const termsLines = data.termsAndConditions
+    ? data.termsAndConditions
+        .replace(/^Notes:\s*/i, "")
+        .split(/\r?\n(?=\d+-)/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : null;
 
   return (
     <div
@@ -18,57 +37,63 @@ export function YallaClassicTemplate({ data, hideDiscount = false }: Props) {
         width: "794px",
         minHeight: "1123px",
         backgroundColor: "#ffffff",
-        // fontFamily: "'Segoe UI', system-ui, sans-serif",
         fontSize: "13px",
         color: "#1a1a2e",
-        padding: "48px 56px",
+        padding: "48px 20px",
+        ...(forPDF ? { paddingTop: "0px", paddingBottom:'0px' } : { paddingTop: "48px" }),
+
         boxSizing: "border-box",
         position: "relative",
       }}
     >
       {/* ── Header ── */}
-      <div style={{ display: "flex", justifyContent: "", alignItems: "center",gap: "10px", marginBottom: "36px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+      <div style={{ display: "flex", justifyContent: "", alignItems: "flex-start",gap: "10px", marginBottom: "36px" }}>
       {/* <Image src={yallaFixit} width={100} height={100} alt="Yalla Fixit" style={{ width: "100px", height: "100px", objectFit: "contain", objectPosition: "left" }} /> */}
-       <img src={yallaFixit.src} alt="Yalla Fixit" style={{ width: "100px", height: "100px", objectFit: "contain", objectPosition: "left" }} />
-        <div>
-          <div style={{ fontSize: "22px", fontWeight: 800, letterSpacing: "-0.5px" }}>
+       <img src={yallaFixit.src} alt="Yalla Fixit" style={{ width: "70px", height: "70px", objectFit: "contain", objectPosition: "left" }} />
+        <div style={forPDF ? { position: "relative", top: "-8px" } : undefined}>
+          <div style={{ fontSize: "18px", fontWeight: 700, letterSpacing: "-0.5px" }}>
             {data.companyName}
           </div>
-          <div style={{  marginTop: "4px", lineHeight: 1.6, fontSize: "12px" }}>
-            {data.companyAddress}
-            {data.companyWebsite && <><br />{data.companyWebsite}</>}
+          <div style={{   lineHeight: 1.6, fontSize: "11px" }}>
+          Office 102, Building 6, Gold & Diamond Park,
+          Dubai,
+             <><br /><a href="https://www.yallafixit.ae" target="_blank" rel="noopener noreferrer">https://www.yallafixit.ae</a></>
+
           </div>
         </div>
     
       </div>
-
-      {/* ── Divider ── */}
-      <div style={{ height: "2px", background: "linear-gradient(90deg, #1a56db 0%, #e2e8f0 100%)", marginBottom: "28px" }} />
-
-      {/* ── Customer + Service Address ── */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px", marginBottom: "28px" }}>
-        <div>
-          <div style={{ fontWeight: 700, fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.08em",  marginBottom: "8px" }}>
-            Customer
-          </div>
-          <div style={{ fontWeight: 600  }}>{data.customerName}</div>
-          {data.customerContact && <div style={{ marginTop: "2px" }}>{data.customerContact}</div>}
-          {data.customerPhone && <div style={{  }}>{data.customerPhone}</div>}
-          {data.customerEmail && <div style={{  }}>{data.customerEmail}</div>}
-        </div>
-            <div style={{ textAlign: "right" }}>
-            <div style={{ fontWeight: 700, fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.08em",  marginBottom: "8px" }}>
+      <div style={{ textAlign: "right" }}>
+            <div style={{ fontWeight: 700, fontSize: "14px",    marginBottom: "4px" }}>
 
             Quotation
           </div>
           <div style={{ fontWeight: 700, fontSize: "14px", color: "#1e293b", marginTop: "6px" }}>
             {data.quotationNumber}
           </div>
-          <div style={{ color: "#64748b", fontSize: "12px", marginTop: "2px" }}>{data.quotationDate}</div>
+          <div style={{ color: "#64748b", fontSize: "11px", marginTop: "2px" }}>{data.quotationDate}</div>
         </div>
+        </div>
+      {/* ── Divider ── */}
+      {/* <div style={{ height: "2px", background: "linear-gradient(90deg, #1a56db 0%, #e2e8f0 100%)", marginBottom: "28px" }} /> */}
+
+      {/* ── Customer + Service Address ── */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px", marginBottom: "28px" }}>
+        <div>
+          <div style={{ fontWeight: 800, fontSize: "14px",    marginBottom: "4px" }}>
+            Customer
+          </div>
+          <div style={{ fontWeight: 600  }}>{data.customerCompanyName}</div>
+          {data.customerContact && <div style={{ marginTop: "2px" }}>{data.customerContact}</div>}
+          {data.customerPhone && <div style={{  }}>{data.customerPhone}</div>}
+            {data.customerEmail && <div style={{  }}>{data.customerEmail}</div>}
+            {data.customerId && <div style={{  }}>{data.customerId}</div>}
+        </div>
+       
         {data.serviceAddress && (
           <div>
-            <div style={{ fontWeight: 700, fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.08em",  marginBottom: "8px" }}>
+            <div style={{ fontWeight: 700, fontSize: "14px",    marginBottom: "4px" }}>
               Service Address
             </div>
             <div style={{ color: "#475569", lineHeight: 1.6 }}>{data.serviceAddress}</div>
@@ -80,18 +105,19 @@ export function YallaClassicTemplate({ data, hideDiscount = false }: Props) {
       <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: "8px" }}>
         <thead>
           <tr style={{ background: "black" }}>
-            {["Service & Part", "Qty", "Unit", "List Price", "Tax", "Amount"].map((h, i) => (
+            {(hideDiscount
+              ? ["Service & Part", "Qty", "Unit", "List Price", "Amount"]
+              : ["Service & Part", "Qty", "Unit", "List Price", "Discount", "Amount"]
+            ).map((h, i) => (
               <th
                 key={h}
                 style={{
-                  // padding: "10px 12px",
-                  padding: "10px",
-                  paddingLeft: "12px",
-                  paddingRight: "12px",
+                  ...(forPDF
+                    ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
+                    : { padding: "10px 12px" }),
                   color: "#ffffff",
                   fontWeight: 700,
                   fontSize: "11px",
-                  textTransform: "uppercase",
                   letterSpacing: "0.05em",
                   textAlign: i === 0 ? "left" : "right",
                   whiteSpace: "nowrap",
@@ -106,30 +132,48 @@ export function YallaClassicTemplate({ data, hideDiscount = false }: Props) {
           {data.lineItems.map((item, idx) => {
             const lineTotal = item.quantity * item.unitPrice;
             const lineTax = (lineTotal * item.taxRate) / 100;
-            const lineGross = lineTotal + lineTax;
+            const lineItemAmount = (item.unitPrice * item.quantity) - item?.discountAmount ;
+            const lineGross =
+              typeof item.lineAmount === "number"
+                ? item.lineAmount
+                : lineTotal + lineTax;
             return (
               <tr
                 key={idx}
                 style={{ background: idx % 2 === 0 ? "#f8fafc" : "#ffffff", borderBottom: "1px solid #e2e8f0" }}
               >
-                <td style={{ padding: "12px", verticalAlign: "top" }}>
-                  <div style={{ fontWeight: 600, color: "#1e293b", marginBottom: "4px" }}>
+                <td style={{     ...(forPDF
+                    ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
+                    : { padding: "12px" }), verticalAlign: "top" }}>
+                  <div style={{ fontWeight: 600, color: "#1e293b", marginBottom: "4px", fontSize: "11px",  }}>
                     {item.description}
                   </div>
                   {item.details && (
-                    <div style={{ color: "#64748b", fontSize: "11px", lineHeight: 1.6 }}>
+                    <div style={{ color: "#64748b", fontSize: "11px" }}>
                       {item.details}
                     </div>
                   )}
                 </td>
-                <td style={{ padding: "12px", textAlign: "right", fontWeight: 500, verticalAlign: "top" }}>{item.quantity}</td>
-                <td style={{ padding: "12px", textAlign: "right", verticalAlign: "top", color: "#64748b" }}>{item.unit}</td>
-                <td style={{ padding: "12px", textAlign: "right", verticalAlign: "top" }}>AED {item.unitPrice.toFixed(2)}</td>
-                <td style={{ padding: "12px", textAlign: "right", verticalAlign: "top", color: "#64748b", fontSize: "11px" }}>
-                  Vat [{item.taxRate}%]
-                </td>
-                <td style={{ padding: "12px", textAlign: "right", fontWeight: 600, verticalAlign: "top", color: "black" }}>
-                  AED {lineGross.toFixed(2)}
+                <td style={{fontSize: "11px",     ...(forPDF
+                    ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
+                    : { padding: "12px" }), textAlign: "right", fontWeight: 500, verticalAlign: "top" }}>{item.quantity}</td>
+                <td style={{fontSize: "11px",     ...(forPDF
+                    ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
+                    : { padding: "12px" }), textAlign: "right", verticalAlign: "top", color: "#64748b" }}>{item.unit}</td>
+                <td style={{fontSize: "11px", width:"100px",     ...(forPDF
+                    ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
+                    : { padding: "12px" }), textAlign: "right", verticalAlign: "top" }}>AED {item.unitPrice.toFixed(2)}</td>
+                {!hideDiscount && (
+                  <td style={{fontSize: "11px",width:"86px",      ...(forPDF
+                      ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
+                      : { padding: "12px" }), textAlign: "right", verticalAlign: "top", color: "#64748b" }}>
+                    AED {item?.discountAmount?.toFixed(2)}
+                  </td>
+                )}
+                <td style={{fontSize: "11px", width:"100px",     ...(forPDF
+                    ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
+                    : { padding: "12px" }), textAlign: "right", fontWeight: 600, verticalAlign: "top", color: "black" }}>
+                  AED {lineItemAmount.toFixed(2)}
                 </td>
               </tr>
             );
@@ -138,12 +182,17 @@ export function YallaClassicTemplate({ data, hideDiscount = false }: Props) {
       </table>
 
       {/* ── Totals ── */}
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "32px" }}>
+      <div id="totals-block" style={{ display: "flex", justifyContent: "flex-end", marginBottom: "32px" }}>
         <div style={{ minWidth: "260px" }}>
           {[
-            { key: "subTotal", label: "Sub Total", value: subTotal, muted: false },
-            { key: "discount", label: "Discount", value: discount, muted: true },
-            { key: "taxAmount", label: `Tax Amount (${avgTax.toFixed(0)}%)`, value: taxAmount, muted: true },
+            { key: "subTotal", label: "Sub Total", value: data?.lineItems.reduce((sum, item) => sum + (item.unitPrice * item.quantity || 0), 0), muted: false },
+            { key: "discount", label: "Discount", value: data?.lineItems.reduce((sum, item) => sum + (item.discountAmount || 0), 0), muted: true },
+            {
+              key: "taxAmount",
+              label: data.taxAmount != null ? "Tax Amount (5%)" : `Tax Amount (${avgTax.toFixed(0)}%)`,
+              value: taxAmount ,
+              muted: true,
+            },
           ]
             .filter((row) => !(hideDiscount && row.key === "discount"))
             .map(({ key, label, value, muted }) => (
@@ -152,16 +201,21 @@ export function YallaClassicTemplate({ data, hideDiscount = false }: Props) {
                 style={{
                   display: "flex",
                   justifyContent: "space-between",
-                  padding: "5px 0",
+                  ...(forPDF
+                    ? { paddingBottom: "10px" }
+                    : { padding: "5px 0px" }),
                   borderBottom: "1px solid #f1f5f9",
                 }}
               >
-                <span style={{ color: muted ? "#64748b" : "#1e293b", fontSize: "12px" }}>{label}</span>
-                <span style={{ color: muted ? "#64748b" : "#1e293b", fontSize: "12px" }}>AED {value.toFixed(2)}</span>
+                <span style={{ color: muted ? "#64748b" : "#1e293b", fontSize: "11px" }}>{label}</span>
+                <span style={{ color: muted ? "#64748b" : "#1e293b", fontSize: "11px" }}>AED {typeof value === "number" ? value.toFixed(2) : value}</span>
               </div>
             ))}
           <div style={{
-            display: "flex", justifyContent: "space-between", padding: "10px 12px",
+            display: "flex", justifyContent: "space-between",
+            ...(forPDF
+              ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
+              : { padding: "10px 12px" }),
             background: "black", borderRadius: "6px", marginTop: "8px"
           }}>
             <span style={{ color: "#ffffff", fontWeight: 700, fontSize: "13px" }}>Grand Total</span>
@@ -171,41 +225,38 @@ export function YallaClassicTemplate({ data, hideDiscount = false }: Props) {
       </div>
 
       {/* ── Terms ── */}
-      <div style={{ borderTop: "2px solid #e2e8f0", paddingTop: "20px" }}>
-        <div style={{ fontWeight: 700, fontSize: "12px", textTransform: "uppercase", letterSpacing: "0.08em",  marginBottom: "10px" }}>
+      <div  id="terms-block" style={{ paddingTop: "40px" }}>
+        <div style={{ fontWeight: 700, fontSize: "11px", textTransform: "uppercase",  marginBottom: "10px" }}>
           Terms and Conditions
         </div>
-        {[
-          "This quotation is valid for 7 calendar days from the date of issuance. Approval received after this period may require areevaluation of the terms, total price, and duration of the work.",
-          "Client approval confirmation and advance payment are mandatory prior to work commencement. Official approval must be provided via email or through an official LPO.",
-          "Payment Terms: 100% advance. Accepted payment methods include cash, cheque, bank transfer, or payment link (proof of payment required). All payments are non-refundable. In case of cancellation, a refund may be issued in the form of a credit note, provided the work schedule is canceled at least 48 hours in advance and no materials have been purchased.",
-          "Until full payment is made, Yalla Fix It retains ownership of all materials, equipment, and goods supplied for the project. The client agrees that Yalla Fix It reserves the right to reclaim these materials if the full payment is not received by the agreed payment date.",
-          "Access, entry permits, necessary NOC, security deposit, etc., must be provided by the client. Any associated costs for professional certifications required for workers or third-party certifications are not included unless specifically mentioned. If any certification is needed, it will be subject to a separate quotation. Yalla Fix It will not be held liable for any delays or penalties resulting from non-compliance with local laws or regulations by the client.",
-          "Work will be executed as per the scope outlined in this quotation. Any additional work beyond the scope may result in a revised quotation.Changes in quantity may lead to adjustments in the given unit rates. If the quantity on-site is found to be higher than the quoted amount,Yalla Fix It reserves the right to revise the quotation with the updated quantity, which may lead to changes in the total cost of the quote.Yalla Fix It is not liable for any defects in electromechanical items that are not directly part of the scope of work, whether such defects occur coincidentally or as a result of the functioning of other parts during the execution of the work.",
-          "Duration of work is estimated as follows: 7 working days for fabrication, and 3 days for delivery and installation. The estimated timeline assumes continuous access to the site with no restrictions. Timelines begin upon sample approval and receipt of advance payment. Any delay in access or additional restrictions may impact the project timeline. No delay penalties will apply.",
-          "Six-month workmanship warranty is provided where applicable, covering proven defects in workmanship if found within six months of completion. (Workmanship warranty does not apply to any cleaning-related scope of work.) Material warranty will follow the specific terms of the manufacturer. Any claims or replacements are the client’s responsibility and must be coordinated directly with the manufacturer’s agent.",
-          "Yalla Fix It shall take all necessary precautions to avoid damage to the client's property during the performance of services. However, Yalla Fix It shall not be held liable for any incidental damage caused due to pre-existing conditions, hidden defects, or the client's failure to maintain their property as per standard maintenance practices. The client shall hold adequate insurance for property protection in case of any accidental damage. Yalla Fix It is covered by worker’s compensation insurance for personnel involved in the project. Yalla Fix It’s liability shall not exceed the total amount of the quotation. In no event shall Yalla Fix It be liable for any indirect, incidental, special, or consequential damages, including but not limited to loss of profits, loss of use, or any damage arising from delays or defects not directly related to the scope of work. The client acknowledges and agrees that this limitation of liability is a fundamental term of the agreement.",
-          "Electricity and water supply must be provided by the client with no additional charge. If water and electricity need to be outsourced, additional fees will apply, and the project timeline may be affected.",
-          "Work will be scheduled during weekdays only, Monday to Saturday, during working hours (9:00 am to 6:00 pm). If work outside of these hours or on non-working days is required, additional charges for overtime pay will apply"
-        ].map((t, i) => (
-          <div key={i} style={{ display: "flex", gap: "8px", marginBottom: "5px" }}>
-            <span style={{  fontWeight: 700, fontSize: "11px", minWidth: "16px" }}>{i + 1}.</span>
-            <span style={{ color: "#64748b", fontSize: "11px", lineHeight: 1.6 }}>{t}</span>
-          </div>
-        ))}
-      </div>
-
-      {/* ── Footer ── */}
-      <div style={{
-        position: "absolute", bottom: "10px", left: "56px", right: "56px",
-        borderTop: "1px solid #e2e8f0", paddingTop: "12px",
-        display: "flex", justifyContent: "space-between", alignItems: "center"
-      }}>
-        <span style={{  fontSize: "11px" }}>{data.companyName}</span>
-        {data.companyPhone && (
-          <span style={{  fontSize: "11px" }}>Support: {data.companyPhone}</span>
+        {termsLines && termsLines.length > 0 && (
+          termsLines.map((line, i) => (
+            <div key={i} style={{ display: "flex", gap: "8px", marginBottom: "5px" }}>
+              <span style={{  fontSize: "9px"}}>{line}</span>
+            </div>
+          ))
         )}
       </div>
+
+      {/* ── Bank Details & Support ── */}
+      <div id="bank-details-block" style={{  paddingTop: "20px",}}>
+        <div style={{ fontWeight: 700, fontSize: "11px", textTransform: "uppercase"}}>
+          Bank Details & Support
+        </div>
+        <div style={{  fontSize: "10px", lineHeight: 1.7 }}>
+          <p style={{ marginBottom: "10px" }}>For any questions contact <strong style={{ color: "#1e293b" }}>800-PERFECT</strong></p>
+          <div style={{ display: "grid", gap: "4px" }}>
+            <div><strong style={{ color: "#1e293b" }}>ACCOUNT NAME:</strong> YALLA FIX IT ONE PERSON COMPANY LLC</div>
+            <div><strong style={{ color: "#1e293b" }}>BANK NAME:</strong> ABU DHABI COMMERCIAL BANK</div>
+            <div><strong style={{ color: "#1e293b" }}>CID NUMBER:</strong> 11214542</div>
+            <div><strong style={{ color: "#1e293b" }}>ACCOUNT NUMBER:</strong> 11214542920001</div>
+            <div><strong style={{ color: "#1e293b" }}>IBAN NUMBER:</strong> AE360030011214542920001</div>
+            <div><strong style={{ color: "#1e293b" }}>BRANCH:</strong> SHEIKH ZAYED ROAD</div>
+            <div className="mb-2"><strong style={{ color: "#1e293b" }}>SWIFT CODE:</strong> ADCBAEAA</div>
+          </div>
+        </div>
+      </div>
+
     </div>
   );
 }

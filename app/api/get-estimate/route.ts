@@ -9,8 +9,7 @@ const SUPABASE_FUNCTION_URL =
 
 // NOTE: This is a publishable key provided explicitly in the spec.
 const SUPABASE_PUBLISHABLE_KEY =
-  process.env.NEXT_PUBLIC_SUPABASE_EDGE_KEY ??
-  "sb_publishable_mLzJL084J23o1UZloyJoWA_TetNZ3Mf";
+  process.env.SUPABASE_ANON_KEY!;
 
 function mapToQuotationData(payload: any): QuotationData {
   const estimate = payload?.estimate?.data?.[0];
@@ -26,20 +25,18 @@ function mapToQuotationData(payload: any): QuotationData {
     estimate.Billing_Address?.Billing_Street_1 ??
     "";
 
-  const customerName =
-    estimate.Company?.name ??
-    estimate.Contact?.name ??
-    "";
+  const customerCompanyName =
+    estimate.Company?.name || "";
 
   const customerContact = estimate.Contact?.name ?? null;
   const customerPhone = estimate.Phone ?? null;
   const customerEmail = estimate.Email ?? null;
 
   const serviceAddress =
-    estimate.Service_Address?.Service_Address_Name ??
-    estimate.Service_Address?.Service_Street_1 ??
+    
+    `${estimate.Service_Address?.Service_Street_1} ${estimate.Service_Address?.Service_Street_2} ${estimate.Service_Address?.Service_City + ","} ${estimate.Service_Address?.Service_Country}` ||
     null;
-
+const customerId = payload?.contact?.data?.[0]?.Customer_Id__C ?? null;
   const quotationNumber = estimate.Name ?? "";
 
   const quotationDateRaw =
@@ -77,15 +74,34 @@ function mapToQuotationData(payload: any): QuotationData {
       typeof item.Tax?.Tax_Percentage === "number"
         ? item.Tax.Tax_Percentage
         : 0,
+    lineAmount:
+      typeof item.Line_Item_Amount === "number"
+        ? item.Line_Item_Amount
+        : undefined,
+    discountAmount:
+      typeof item.Discount === "number"
+        ? item.Discount
+        : undefined,
   }));
 
   const discountAmount =
     typeof estimate.Discount === "number" ? estimate.Discount : 0;
 
-  const notes: string | undefined =
-    estimate.Summary ??
-    estimate.Terms_And_Conditions?.value ??
-    undefined;
+  const subTotal =
+    typeof estimate.Sub_Total === "number" ? estimate.Sub_Total : undefined;
+  const taxAmount =
+    typeof estimate.Tax_Amount === "number" ? estimate.Tax_Amount : undefined;
+  const grandTotal =
+    typeof estimate.Grand_Total === "number"
+      ? estimate.Grand_Total
+      : undefined;
+
+  const termsAndConditions =
+    typeof estimate.Terms_And_Conditions?.value === "string"
+      ? estimate.Terms_And_Conditions.value
+      : undefined;
+
+  const notes: string | undefined = estimate.Summary ?? undefined;
 
   const quotation: QuotationData = {
     companyName,
@@ -93,8 +109,8 @@ function mapToQuotationData(payload: any): QuotationData {
     companyWebsite: undefined,
     companyPhone: undefined,
     companyLogo: undefined,
-
-    customerName,
+    customerId,
+    customerCompanyName,
     customerContact: customerContact ?? undefined,
     customerPhone: customerPhone ?? undefined,
     customerEmail: customerEmail ?? undefined,
@@ -104,10 +120,13 @@ function mapToQuotationData(payload: any): QuotationData {
     quotationNumber,
     quotationDate,
     validityDays,
-
     lineItems,
 
     discountAmount,
+    subTotal,
+    taxAmount,
+    grandTotal,
+    termsAndConditions,
     notes,
   };
 
@@ -117,11 +136,11 @@ function mapToQuotationData(payload: any): QuotationData {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-    const id = body?.id;
+    const name = body?.name;
 
-    if (!id || typeof id !== "string") {
+    if (!name || typeof name !== "string") {
       return NextResponse.json(
-        { success: false, error: "Missing or invalid id" },
+        { success: false, error: "Missing or invalid name" },
         { status: 400 }
       );
     }
@@ -133,7 +152,7 @@ export async function POST(req: NextRequest) {
         apikey: SUPABASE_PUBLISHABLE_KEY,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ id }),
+      body: JSON.stringify({ name }),
     });
 
     if (!res.ok) {

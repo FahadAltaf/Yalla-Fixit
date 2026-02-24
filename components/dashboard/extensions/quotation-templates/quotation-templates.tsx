@@ -7,8 +7,11 @@ export interface QuotationLineItem {
     unit: string;
     unitPrice: number;
     taxRate: number; // percent e.g. 5
-  }
-  
+    /** Line total including tax (from API Line_Item_Amount). When set, template uses this instead of calculating. */
+    lineAmount?: number;
+    discountAmount: number;
+    }
+
   export interface QuotationData {
     // Company (sender)
     companyName: string;
@@ -16,26 +19,36 @@ export interface QuotationLineItem {
     companyWebsite?: string;
     companyPhone?: string;
     companyLogo?: string; // base64 or url
-  
+    customerId?: string;
+
     // Customer
-    customerName: string;
+    customerCompanyName: string;
     customerContact?: string;
     customerPhone?: string;
     customerEmail?: string;
-  
+
     // Service
     serviceAddress?: string;
-  
+
     // Quotation meta
     quotationNumber: string;
     quotationDate: string;
     validityDays?: number;
-  
+
     // Line items
     lineItems: QuotationLineItem[];
-  
-    // Financials (auto-calculated if not overridden)
+
+    // Financials (from API when available; otherwise calculated)
     discountAmount?: number;
+    /** Sub total from API (estimate.Sub_Total) */
+    subTotal?: number;
+    /** Tax amount from API (estimate.Tax_Amount) */
+    taxAmount?: number;
+    /** Grand total from API (estimate.Grand_Total) */
+    grandTotal?: number;
+    /** Terms and conditions text from API (Terms_And_Conditions.value) */
+    termsAndConditions?: string;
+
     notes?: string;
   }
   
@@ -77,44 +90,7 @@ export interface QuotationLineItem {
     },
   ];
   
-  // ─── Default/Sample Data ──────────────────────────────────────────────────
-  
-  export const DEFAULT_QUOTATION_DATA: QuotationData = {
-    companyName: "Yalla Fix It",
-    companyAddress: "Office 102, Building 6, Gold & Diamond Park, Dubai",
-    companyWebsite: "https://www.yallafixit.ae/",
-    companyPhone: "800-PERFECT",
-  
-    customerName: "PADDLE LAND SPORTS AND AMUSEMENT PARK TRACKS LLC",
-    customerContact: "HUSSAIN BADRI",
-    customerPhone: "0501723525",
-    customerEmail: "hussain.badri@padelae.com",
-  
-    serviceAddress: "MAG Warehouse 701 & 702 Al Quoz Industrial Area 2, Dubai, United Arab Emirates",
-  
-    quotationNumber: "17087 IR 01",
-    quotationDate: new Date().toLocaleDateString("en-GB", {
-      year: "numeric",
-      month: "short",
-      day: "2-digit",
-    }),
-    validityDays: 7,
-  
-    lineItems: [
-      {
-        description: "Replacement of Table Underneath Support",
-        details:
-          "Replacement of existing underneath table support (50x50 cm) due to insufficient thickness. Upgraded to 12mm thick MDF. Includes dismantling, removal, cutting, installation, and final inspection.",
-        quantity: 4,
-        unit: "NOs",
-        unitPrice: 175,
-        taxRate: 5,
-      },
-    ],
-  
-    discountAmount: 665,
-    notes: "Payment: 100% advance. Valid for 7 days from date of issuance.",
-  };
+
   
   // ─── Financial Calculations ───────────────────────────────────────────────
   
