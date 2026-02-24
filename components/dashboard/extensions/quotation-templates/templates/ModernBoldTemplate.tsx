@@ -83,7 +83,7 @@ export function ModernBoldTemplate({ data }: Props) {
             <div style={{ fontWeight: 700, fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.1em", color: "#0f766e", marginBottom: "8px" }}>
               Billed To
             </div>
-            <div style={{ fontWeight: 700, color: "#0f172a", lineHeight: 1.4 }}>{data.customerName}</div>
+            <div style={{ fontWeight: 700, color: "#0f172a", lineHeight: 1.4 }}>{data.customerCompanyName}</div>
             {data.customerContact && <div style={{ color: "#475569", marginTop: "4px" }}>{data.customerContact}</div>}
             {data.customerPhone && <div style={{ color: "#475569" }}>{data.customerPhone}</div>}
             {data.customerEmail && <div style={{ color: "#475569" }}>{data.customerEmail}</div>}

@@ -356,7 +356,7 @@ export function QuotationPreviewModal({ open, onClose, template, data }: Props) 
                     </div>
                     <div>
                       <Label className="text-xs text-muted-foreground uppercase tracking-wide">Customer</Label>
-                      <p className="font-semibold mt-1 text-sm">{data.customerName}</p>
+                      <p className="font-semibold mt-1 text-sm">{data.customerCompanyName}</p>
                       {data.customerEmail && (
                         <p className="text-xs text-muted-foreground">{data.customerEmail}</p>
                       )}

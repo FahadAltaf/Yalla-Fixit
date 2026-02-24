@@ -363,7 +363,7 @@ async function generatePDFBlob(
           {hasSearched && !searchResults && (
             <EmptyState
             title="No quotation found"
-            description="The quotation you are looking for does not exist. Please check the number or customer name and try again."
+            description="The quotation you are looking for does not exist. Please check the name and try again."
             icon={<FileText className="" />}
             // action={{ label: "Try again", onClick: () => setSearchError(null), variant: "default" }}
            />

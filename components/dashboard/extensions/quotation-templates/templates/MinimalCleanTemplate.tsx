@@ -67,7 +67,7 @@ export function MinimalCleanTemplate({ data }: Props) {
         <div style={{ fontSize: "10px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "#a1a1aa", marginBottom: "8px" }}>
           Prepared for
         </div>
-        <div style={{ fontWeight: 700, fontSize: "15px", color: "#18181b" }}>{data.customerName}</div>
+        <div style={{ fontWeight: 700, fontSize: "15px", color: "#18181b" }}>{data.customerCompanyName}</div>
         <div style={{ display: "flex", gap: "20px", marginTop: "6px", flexWrap: "wrap" }}>
           {data.customerContact && <span style={{ color: "#71717a", fontSize: "12px" }}>👤 {data.customerContact}</span>}
           {data.customerPhone && <span style={{ color: "#71717a", fontSize: "12px" }}>📞 {data.customerPhone}</span>}
