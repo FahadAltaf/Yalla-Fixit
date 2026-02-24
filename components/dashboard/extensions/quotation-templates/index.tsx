@@ -43,6 +43,7 @@ import {
 import {
   QUOTATION_TEMPLATES,
   QuotationData,
+  calculateTotals,
 } from "./quotation-templates";
 import { QuotationPreviewModal } from "./quotation-preview-modal";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -344,19 +345,26 @@ async function generatePDFBlob(
             </Card>
           )}
           
-         {/* Loaded data summary  */}
+          {/* Loaded data summary */}
           {hasSearched && searchResults && (
             <div className="mt-4 flex items-center gap-3 p-3 bg-primary/5 rounded-lg border border-primary/20">
               <FileText className="size-5 text-primary shrink-0" />
               <div className="min-w-0">
-                <p className="text-sm font-semibold">
-                  {searchResults.quotationNumber}
+                <p className="text-sm font-semibold truncate">
+                  {searchResults.quotationNumber} · {searchResults.customerCompanyName}
                 </p>
                 <p className="text-xs text-muted-foreground truncate">
-                  {searchResults.customerCompanyName} · {searchResults.quotationDate}
+                  {searchResults.serviceAddress ?? "No service address"} ·{" "}
+                  {searchResults.quotationDate}
                 </p>
               </div>
-              <Badge variant="default" className="ml-auto shrink-0">Loaded</Badge>
+              <Badge variant="default" className="ml-auto shrink-0">
+                AED{" "}
+                {(
+                  searchResults.grandTotal ??
+                  calculateTotals(searchResults).grandTotal
+                ).toFixed(2)}
+              </Badge>
             </div>
           )}
 
