@@ -464,15 +464,15 @@ async function generatePDFBlob(
           <div className="border rounded-lg overflow-hidden bg-slate-100">
          
             <div className="bg-slate-100 overflow-auto flex items-start justify-center p-6">
-              <div style={{ width: 794 * 0.68 }}>
+              <div style={{ width: 794 * 0.95 }}>
                 <div
                   style={{
-                    transform: "scale(0.68)",
+                    transform: "scale(0.95)",
                     transformOrigin: "top left",
                     width: 794,
                     pointerEvents: "none",
                     userSelect: "none",
-                    marginBottom: "-500px",
+                    // marginBottom: "-500px",
                   }}
                 >
                   {

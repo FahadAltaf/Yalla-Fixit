@@ -32,10 +32,15 @@ function mapToQuotationData(payload: any): QuotationData {
   const customerPhone = estimate.Phone ?? null;
   const customerEmail = estimate.Email ?? null;
 
+  const serviceAddressParts = [
+    estimate.Service_Address?.Service_Street_1,
+    estimate.Service_Address?.Service_Street_2,
+    estimate.Service_Address?.Service_City,
+    estimate.Service_Address?.Service_Country,
+  ].filter((part) => typeof part === "string" && part.trim().length > 0);
+
   const serviceAddress =
-    
-    `${estimate.Service_Address?.Service_Street_1} ${estimate.Service_Address?.Service_Street_2} ${estimate.Service_Address?.Service_City + ","} ${estimate.Service_Address?.Service_Country}` ||
-    null;
+    serviceAddressParts.length > 0 ? serviceAddressParts.join(", ") : null;
 const customerId = payload?.contact?.data?.[0]?.Customer_Id__C ?? null;
   const quotationNumber = estimate.Name ?? "";
 
