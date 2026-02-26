@@ -191,6 +191,7 @@ function buildQuotationEmailHtml({
   customMessage,
   approveUrl,
   rejectUrl,
+  includeApprovalSection,
 }: {
   data: QuotationData;
   customMessage: string;
@@ -347,6 +348,7 @@ function buildQuotationEmailHtml({
      
 
         <!-- CTA Buttons with Icons -->
+        ${includeApprovalSection ? `
         <table width="100%" cellpadding="0" cellspacing="0">
           <tr>
             <td style="padding-right:8px; width:50%;">
@@ -361,7 +363,7 @@ function buildQuotationEmailHtml({
             </td>
           </tr>
         </table>
-
+        ` : ""}
       </div>
 
       <!-- Professional Footer -->
