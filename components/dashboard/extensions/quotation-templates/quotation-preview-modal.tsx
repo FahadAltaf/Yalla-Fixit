@@ -191,7 +191,6 @@ function buildQuotationEmailHtml({
   customMessage,
   approveUrl,
   rejectUrl,
-  includeApprovalSection,
 }: {
   data: QuotationData;
   customMessage: string;
@@ -200,10 +199,7 @@ function buildQuotationEmailHtml({
   includeApprovalSection: boolean;
 }) {
   const {
-    companyName,
-    companyAddress,
-    companyWebsite,
-    companyPhone,
+
     customerCompanyName,
     customerContact,
     quotationNumber,
@@ -226,181 +222,164 @@ function buildQuotationEmailHtml({
     const discountAmount = lineItems.reduce((sum, item) => sum + (item.discountAmount || 0), 0);
 
 
-  return `
-<!DOCTYPE html>
+ return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Quotation ${escapeHtml(quotationNumber)}</title>
+  <title>Quotation ${quotationNumber}</title>
 </head>
-<body style="margin:0; padding:0; background-color:#ececec; font-family:'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;">
+<body style="margin:0; padding:0; background-color:#f4f7fb; font-family:'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;">
 
   <div style="max-width:640px; margin:0 auto; padding:48px 16px;">
 
-    <!-- Brand Bar -->
-    <div style="text-align:center; margin-bottom:24px;">
-      <p style="margin:0; font-size:15px; font-weight:800; color:#1a1a1a; letter-spacing:1px; text-transform:uppercase;">YALLA FIXIT</p>
-      <p style="margin:2px 0 0; font-size:11px; color:#999999; letter-spacing:0.5px;">
-        Office 102, Building 6, Gold & Diamond Park, Dubai
-      </p>
-    </div>
+   
+    <!-- Main Card -->
+    <div style="background:#ffffff; border-radius:16px; overflow:hidden; box-shadow:0 12px 30px rgba(0,0,0,0.08); border:1px solid #e8eef4;">
 
-    <!-- Card -->
-    <div style="background:#ffffff; border-radius:10px; overflow:hidden; box-shadow:0 2px 16px rgba(0,0,0,0.08); border:1px solid #e0e0e0;">
-
-      <!-- Dark Header -->
-      <div style="background:#1a1a1a; padding:26px 36px 24px;">
+      <!-- Premium Header with Gradient -->
+      <div style="background:linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%); padding:28px 36px;">
         <table width="100%" cellpadding="0" cellspacing="0">
           <tr>
             <td valign="middle">
-              <p style="margin:0 0 4px; font-size:10px; font-weight:700; color:rgba(255,255,255,0.45); letter-spacing:2.5px; text-transform:uppercase;">Quotation</p>
-              <h1 style="margin:0; font-size:24px; font-weight:800; color:#ffffff; letter-spacing:-0.3px;">${escapeHtml(quotationNumber)}</h1>
+              <div style="background:rgba(255,255,255,0.1); display:inline-block; padding:4px 12px; border-radius:30px; margin-bottom:8px;">
+                <p style="margin:0; font-size:10px; font-weight:700; color:rgba(255,255,255,0.7); letter-spacing:2px; text-transform:uppercase;">📄 QUOTATION</p>
+              </div>
+              <h1 style="margin:0; font-size:28px; font-weight:800; color:#ffffff; letter-spacing:-0.5px;">${quotationNumber}</h1>
             </td>
             <td valign="middle" style="text-align:right;">
-              <p style="margin:0 0 3px; font-size:11px; color:rgba(255,255,255,0.45); letter-spacing:0.5px;">Issued on</p>
-              <p style="margin:0; font-size:14px; font-weight:600; color:#ffffff;">${escapeHtml(quotationDate)}</p>
+              <p style="margin:0 0 5px; font-size:11px; color:rgba(255,255,255,0.5); letter-spacing:0.5px;">Issue Date</p>
+              <p style="margin:0; font-size:16px; font-weight:600; color:#ffffff;">${quotationDate}</p>
+              ${data.validityDays ? `<p style="margin:5px 0 0; font-size:11px; color:rgba(255,255,255,0.5);">Valid for ${data.validityDays} days</p>` : ""}
             </td>
           </tr>
         </table>
       </div>
 
       <!-- Body -->
-      <div style="padding:32px 36px;">
+      <div style="padding:36px;">
 
-        <!-- Greeting / Message -->
-        <p style="margin:0 0 28px; font-size:14px; line-height:1.8; color:#555555;">
-          ${
-            formattedMessage
-              ? formattedMessage
-              : `Dear <strong style="color:#111111;">${escapeHtml(customerContact || customerCompanyName)}</strong>,<br/>
-                 Please find quotation <strong style="color:#111111;">${escapeHtml(quotationNumber)}</strong> from
-                 <strong style="color:#111111;">${escapeHtml(companyName)}</strong> attached for your review.
-                 We look forward to hearing from you.`
-          }
-        </p>
+        <!-- Personalized Greeting -->
+        <div style="background:#f8faff; border-radius:12px; padding:20px; margin:0 0 28px; border-left:4px solid #1a1a1a;">
+          <p style="margin:0; font-size:15px; line-height:1.6; color:#444444;">
+          ${formattedMessage}
+          </p>
+        </div>
 
-        <!-- Info Boxes -->
+        <!-- Enhanced Info Cards -->
         <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 28px;">
           <tr>
             <!-- Billed To -->
-            <td valign="top" width="49%" style="background:#f7f7f7; border-radius:7px; padding:16px 18px; border:1px solid #ebebeb;">
-              <p style="margin:0 0 7px; font-size:10px; font-weight:800; color:#bbbbbb; letter-spacing:2px; text-transform:uppercase;">Billed To</p>
-              <p style="margin:0 0 2px; font-size:13px; font-weight:700; color:#111111;">${escapeHtml(customerCompanyName)}</p>
-              ${customerContact ? `<p style="margin:0; font-size:12px; color:#777777;">${escapeHtml(customerContact)}</p>` : ""}
+            <td valign="top" width="48%" style="background:#f9f9f9; border-radius:12px; padding:20px; border:1px solid #eaeef2;">
+              <div style="margin-bottom:12px;">
+                <span style="background:#1a1a1a; color:#ffffff; font-size:10px; font-weight:700; padding:4px 10px; border-radius:20px; letter-spacing:1px;">BILLED TO</span>
+              </div>
+              <p style="margin:0 0 4px; font-size:16px; font-weight:700; color:#111111;">${customerCompanyName}</p>
+              <p style="margin:0; font-size:13px; color:#666666;">
+                <span style="opacity:0.7;">👤</span> ${customerContact}
+              </p>
             </td>
-            <td width="2%"></td>
-            <!-- Job Details -->
-            <td valign="top" width="49%" style="background:#f7f7f7; border-radius:7px; padding:16px 18px; border:1px solid #ebebeb;">
-              <p style="margin:0 0 7px; font-size:10px; font-weight:800; color:#bbbbbb; letter-spacing:2px; text-transform:uppercase;">Service Location</p>
-          
-              ${
-                serviceAddress
-                  ? `<p style="margin:0 0 2px; font-size:13px; font-weight:700; color:#111111;">${escapeHtml(serviceAddress)}</strong>
-                    </p>`
-                  : ""
-              }
+            <td width="4%"></td>
+            <!-- Service Location -->
+            <td valign="top" width="48%" style="background:#f9f9f9; border-radius:12px; padding:20px; border:1px solid #eaeef2;">
+              <div style="margin-bottom:12px;">
+                <span style="background:#1a1a1a; color:#ffffff; font-size:10px; font-weight:700; padding:4px 10px; border-radius:20px; letter-spacing:1px;">SERVICE LOCATION</span>
+              </div>
+              <p style="margin:0; font-size:15px; font-weight:600; color:#111111; line-height:1.5;">
+                ${serviceAddress}
+              </p>
             </td>
           </tr>
         </table>
 
-        <!-- Divider -->
-        <div style="height:1px; background:#f0f0f0; margin:0 0 24px;"></div>
+       
 
         <!-- Price Summary Label -->
-        <p style="margin:0 0 12px; font-size:10px; font-weight:800; color:#bbbbbb; letter-spacing:2px; text-transform:uppercase;">Price Summary</p>
+        <p style="margin:0 0 15px; font-size:12px; font-weight:800; color:#999999; letter-spacing:2px; text-transform:uppercase;">
+          ⚡ PRICE SUMMARY
+        </p>
 
-        <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 8px;">
+        <!-- Enhanced Price Breakdown -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 12px;">
 
           <!-- Subtotal -->
-          ${
-            subtotal !== null
-              ? `<tr>
-                  <td style="padding:10px 0; font-size:13px; color:#666666; border-bottom:1px solid #f3f3f3;">Subtotal</td>
-                  <td style="padding:10px 0; font-size:13px; color:#333333; font-weight:500; text-align:right; border-bottom:1px solid #f3f3f3;">${formatCurrency(subtotal)}</td>
-                </tr>`
-              : ""
-          }
+          <tr>
+            <td style="padding:12px 0; font-size:14px; color:#666666;">Subtotal</td>
+            <td style="padding:12px 0; font-size:14px; color:#333333; font-weight:500; text-align:right;">${subtotal.toFixed(2)}</td>
+          </tr>
 
-          <!-- Discount -->
-          ${
-            discountAmount !== undefined && discountAmount > 0
-              ? `<tr>
-                  <td style="padding:10px 0; font-size:13px; color:#666666; border-bottom:1px solid #f3f3f3;">
-                    Discount
-                    <span style="display:inline-block; margin-left:7px; background:#eeeeee; color:#666666; font-size:10px; font-weight:800; padding:2px 7px; border-radius:3px; letter-spacing:1px; text-transform:uppercase;">
-                      Applied
-                    </span>
-                  </td>
-                  <td style="padding:10px 0; font-size:13px; color:#333333; font-weight:500; text-align:right; border-bottom:1px solid #f3f3f3;">- ${formatCurrency(discountAmount)}</td>
-                </tr>`
-              : ""
-          }
+          <!-- Discount (Remove if no discount) -->
+          <tr>
+            <td style="padding:12px 0; font-size:14px; color:#666666;">
+              Discount
+              <span style="display:inline-block; margin-left:10px; background:#e8f0fe; color:#1a5c9e; font-size:10px; font-weight:800; padding:3px 8px; border-radius:20px;">
+                SAVED
+              </span>
+            </td>
+            <td style="padding:12px 0; font-size:14px; color:#e53e3e; font-weight:500; text-align:right;">- ${discountAmount.toFixed(2)}</td>
+          </tr>
 
           <!-- Tax -->
-          ${
-            taxAmount !== undefined
-              ? `<tr>
-                  <td style="padding:10px 0; font-size:13px; color:#666666;">Tax / VAT</td>
-                  <td style="padding:10px 0; font-size:13px; color:#333333; font-weight:500; text-align:right;">+ ${formatCurrency(taxAmount)}</td>
-                </tr>`
-              : ""
-          }
+          <tr>
+            <td style="padding:12px 0; font-size:14px; color:#666666;">VAT (5%)</td>
+            <td style="padding:12px 0; font-size:14px; color:#333333; font-weight:500; text-align:right;">+ ${taxAmount?.toFixed(2) ?? 0}</td>
+          </tr>
 
         </table>
 
-        <!-- Grand Total Box -->
-        <div style="background:#1a1a1a; border-radius:7px; padding:16px 22px; margin:0 0 28px;">
+        <!-- Grand Total Box with Gradient -->
+        <div style="background:linear-gradient(135deg, #1a1a1a 0%, #2a2a2a 100%); border-radius:12px; padding:20px 24px; margin:20px 0 28px;">
           <table width="100%" cellpadding="0" cellspacing="0">
             <tr>
               <td>
-                <p style="margin:0; font-size:11px; font-weight:700; color:rgba(255,255,255,0.5); letter-spacing:1.5px; text-transform:uppercase;">Grand Total</p>
+                <p style="margin:0; font-size:12px; font-weight:700; color:rgba(255,255,255,0.6); letter-spacing:1.5px; text-transform:uppercase;">Total Amount</p>
+                <p style="margin:5px 0 0; font-size:14px; color:rgba(255,255,255,0.4);">Including all charges</p>
               </td>
               <td style="text-align:right;">
-                <p style="margin:0; font-size:22px; font-weight:800; color:#ffffff; letter-spacing:-0.5px;">
-                  ${grandTotal !== undefined ? formatCurrency(grandTotal) : "—"}
+                <p style="margin:0; font-size:32px; font-weight:800; color:#ffffff; letter-spacing:-1px;">
+                  ${grandTotal?.toFixed(2) ?? 0}
                 </p>
               </td>
             </tr>
           </table>
         </div>
 
-    
-        <!-- CTA Buttons -->
-        ${
-          includeApprovalSection
-            ? `<table width="100%" cellpadding="0" cellspacing="0">
-                <tr>
-                  <td style="padding-right:7px; width:50%;">
-                    <a href="${approveUrl}" style="display:block; padding:13px 0; border-radius:6px; background:#1a1a1a; color:#ffffff; font-size:13px; font-weight:700; text-decoration:none; text-align:center; letter-spacing:0.5px;">
-                      ✓ &nbsp; Approve Quotation
-                    </a>
-                  </td>
-                  <td style="padding-left:7px; width:50%;">
-                    <a href="${rejectUrl}" style="display:block; padding:12px 0; border-radius:6px; background:#ffffff; color:#444444; font-size:13px; font-weight:600; text-decoration:none; text-align:center; letter-spacing:0.5px; border:1.5px solid #d8d8d8;">
-                      ✕ &nbsp; Reject Quotation
-                    </a>
-                  </td>
-                </tr>
-              </table>`
-            : ""
-        }
+     
+
+        <!-- CTA Buttons with Icons -->
+        <table width="100%" cellpadding="0" cellspacing="0">
+          <tr>
+            <td style="padding-right:8px; width:50%;">
+              <a href="${approveUrl}" style="display:block; padding:15px 0; border-radius:10px; background:#1a1a1a; color:#ffffff; font-size:14px; font-weight:700; text-decoration:none; text-align:center; letter-spacing:0.5px; box-shadow:0 4px 12px rgba(0,0,0,0.15);">
+                ✅ &nbsp; APPROVE QUOTATION
+              </a>
+            </td>
+            <td style="padding-left:8px; width:50%;">
+                <a href="${rejectUrl}" style="display:block; padding:14px 0; border-radius:10px; background:#ffffff; color:#666666; font-size:14px; font-weight:600; text-decoration:none; text-align:center; letter-spacing:0.5px; border:2px solid #e0e5e9;">
+                ❌ &nbsp; REJECT QUOTATION
+              </a>
+            </td>
+          </tr>
+        </table>
 
       </div>
 
-      <!-- Footer -->
-      <div style="padding:16px 36px; border-top:1px solid #f0f0f0; background:#fafafa;">
+      <!-- Professional Footer -->
+      <div style="padding:24px 36px; border-top:1px solid #eef2f5; background:#fafcfd;">
         <table width="100%" cellpadding="0" cellspacing="0">
           <tr>
             <td>
-              <p style="margin:0 0 1px; font-size:12px; font-weight:700; color:#333333;">Yalla FIxit</p>
-              <p style="margin:0; font-size:11px; color:#bbbbbb;">
-                ${companyAddress ? escapeHtml(companyAddress) : ""}
-                ${companyPhone ? ` &nbsp;·&nbsp; ${escapeHtml(companyPhone)}` : ""}
+              <p style="margin:0 0 5px; font-size:14px; font-weight:700; color:#1a1a1a;">YALLA FIXIT</p>
+              <p style="margin:0; font-size:11px; color:#aaaaaa;">
+                ⚡ Premium Maintenance Services
               </p>
             </td>
-            <td style="text-align:right; white-space:nowrap;">
-             Office 102, Building 6, Gold & Diamond Park, Dubai
+            <td style="text-align:right;">
+              <p style="margin:0; font-size:11px; color:#888888; line-height:1.6;">
+                Office 102, Building 6<br>
+                Gold & Diamond Park, Dubai, UAE
+              </p>
+          
             </td>
           </tr>
         </table>
@@ -408,16 +387,12 @@ function buildQuotationEmailHtml({
 
     </div>
 
-    <!-- Bottom Note -->
-    <p style="text-align:center; margin:20px 0 0; font-size:11px; color:#bbbbbb; letter-spacing:0.3px;">
-      This is an automated email · Please do not reply directly
-    </p>
+   
 
   </div>
 
 </body>
-</html>
-  `;
+</html>`
 }
 
 // ─── Modal Component ──────────────────────────────────────────────────────────
