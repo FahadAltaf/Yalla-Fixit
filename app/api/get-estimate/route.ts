@@ -17,6 +17,14 @@ function mapToQuotationData(payload: any): QuotationData {
     throw new Error("No estimate data found");
   }
 
+  // Try to capture Zoho FSM estimate record id (field name may vary slightly).
+  const zohoEstimateId: string | null =
+    typeof estimate.id === "string"
+      ? estimate.id
+      : typeof estimate.ID === "string"
+      ? estimate.ID
+      : null;
+
   const companyName =
     estimate.Territory?.name ?? "Yalla Fix It";
 
@@ -133,6 +141,7 @@ const customerId = payload?.contact?.data?.[0]?.Customer_Id__C ?? null;
     grandTotal,
     termsAndConditions,
     notes,
+    zohoEstimateId: zohoEstimateId ?? undefined,
   };
 
   return quotation;
@@ -192,10 +201,29 @@ export async function POST(req: NextRequest) {
 
     const quotation = mapToQuotationData(payload);
 
+    // Surface basic lifecycle information so clients can decide
+    // whether this estimate should still be actionable.
+    const rawEstimate = payload?.estimate?.data?.[0] ?? null;
+    const estimateStatus: string | null =
+      rawEstimate && typeof rawEstimate.Status === "string"
+        ? rawEstimate.Status
+        : null;
+    const lifecycle = rawEstimate
+      ? {
+          Approved_Time: rawEstimate.Approved_Time ?? null,
+          Rejected_Time: rawEstimate.Rejected_Time ?? null,
+          Cancelled_Time: rawEstimate.Cancelled_Time ?? null,
+          Closed_Time: rawEstimate.Closed_Time ?? null,
+          Expired_Time: rawEstimate.Expired_Time ?? null,
+        }
+      : null;
+
     return NextResponse.json(
       {
         success: true,
         quotation,
+        estimateStatus,
+        lifecycle,
       },
       { status: 200 }
     );

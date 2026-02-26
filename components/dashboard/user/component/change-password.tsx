@@ -152,7 +152,7 @@ export default function ChangePassword({
                   </div>
                 )}
 
-                <DialogFooter className="border-t px-0 pt-4">
+<DialogFooter className=" -mx-6 -mb-6">
                   <Button
                     type="button"
                     variant="outline"

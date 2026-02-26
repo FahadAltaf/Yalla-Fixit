@@ -29,7 +29,7 @@ export default function Settings() {
   const data = {
     nav: [
       { name: "Profile", icon: User },
-      { name: "Organization", icon: Building },
+      // { name: "Organization", icon: Building },
       { name: "Appearance", icon: Paintbrush },
     ],
   };
@@ -39,8 +39,8 @@ export default function Settings() {
     switch (activeSection) {
       case "Profile":
         return <ProfileSettings />;
-      case "Organization":
-        return settings ? <OrganizationSettings settings={settings} /> : null;
+      // case "Organization":
+      //   return settings ? <OrganizationSettings settings={settings} /> : null;
       case "Appearance":
         return settings ? <AppearanceSettings settings={settings} /> : null;
     

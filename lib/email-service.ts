@@ -1,26 +1,33 @@
 
-import { Resend } from 'resend';
-
-const resend = new Resend(process.env.NEXT_PUBLIC_RESEND_API_KEY!);
-
 interface EmailOptions {
-  to: string;
+  to: string | string[];
   subject: string;
   html: string;
+  cc?: string[];
+  attachment?: {
+    filename: string;
+    content: string; // base64-encoded
+    contentType: string;
+  };
 }
 
 export const emailService = {
-  sendEmail: async ({ to, subject, html }: EmailOptions) => {
+  sendEmail: async ({ to, subject, html, cc, attachment }: EmailOptions) => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/send-email`, {
-          method: 'POST',
-          body: JSON.stringify({ to, subject, html }),
-        });
-        const data = await response.json();
-        return data;
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_APP_URL}/api/send-email`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ to, subject, html, cc, attachment }),
+        }
+      );
+      const data = await response.json();
+      return data;
     } catch (error) {
-      console.log("🚀 ~ error:", error)
-      
+      console.log("🚀 ~ error:", error);
     }
   },
 

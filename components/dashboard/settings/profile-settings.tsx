@@ -16,6 +16,8 @@ import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 import { saveFile } from "@/lib/supabase/actions/save-file";
 import { AvatarCropper } from "@/components/ui/avatar-cropper";
+import { User } from "lucide-react";
+import { DialogTitle } from "@/components/ui/dialog";
 
 export type UserProfile = {
   first_name: string;
@@ -104,8 +106,8 @@ export function ProfileSettings() {
     <Card className="w-full flex-1  relative top-px right-px gap-6">
       <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex  gap-1 flex-col">
-          <CardTitle className=" ">Profile Settings</CardTitle>
-          <CardDescription>
+        <CardTitle className="flex items-center gap-2">
+        <User className="size-5 text-primary" />     Profile Settings</CardTitle>     <CardDescription>
             Update your personal details and profile picture
           </CardDescription>
         </div>
@@ -138,12 +140,7 @@ export function ProfileSettings() {
 
         {/* Name Fields in Responsive Row */}
         <div className="space-y-4">
-          <div className="space-y-1">
-            <Label className="text-base font-medium">Full Name</Label>
-            <p className="text-sm text-muted-foreground">
-              Your first and last name as you&apos;d like it to appear
-            </p>
-          </div>
+         
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="first-name">First Name</Label>
@@ -178,12 +175,7 @@ export function ProfileSettings() {
 
         {/* Email Field */}
         <div className="space-y-4">
-          <div className="space-y-1">
-            <Label className="text-base font-medium">Email Address</Label>
-            <p className="text-sm text-muted-foreground">
-              Your email address is used for signing in
-            </p>
-          </div>
+      
           <div className="space-y-2">
             <Label htmlFor="email">Email</Label>
             <Input

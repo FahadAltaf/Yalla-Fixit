@@ -498,6 +498,7 @@ async function generatePDFBlob(
           onClose={() => setIsModalOpen(false)}
           template={yallaClassicTemplate}
           data={activeData}
+          discountMode={discountMode}
         />
       )}
     </CardContent>

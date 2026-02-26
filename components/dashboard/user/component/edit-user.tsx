@@ -224,8 +224,8 @@ export default function EditUser({
                   )}
                 />
 
-                <DialogFooter className="border-t px-0 pt-4">
-                  <Button
+<DialogFooter className=" -mx-6 -mb-6">
+<Button
                     type="button"
                     variant="outline"
                     onClick={() => onOpenChange?.(false)}

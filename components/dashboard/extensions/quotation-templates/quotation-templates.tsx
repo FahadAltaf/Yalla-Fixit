@@ -34,6 +34,8 @@ export interface QuotationLineItem {
     quotationNumber: string;
     quotationDate: string;
     validityDays?: number;
+    /** Zoho FSM estimate record id used for transitions (when available). */
+    zohoEstimateId?: string;
 
     // Line items
     lineItems: QuotationLineItem[];
