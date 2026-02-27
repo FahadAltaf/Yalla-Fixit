@@ -255,7 +255,7 @@ export function QuotationTemplatesPage() {
 
               {currentStatus && currentStatus.toLowerCase() !== "new" && (
                 <Alert className="border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-50">
-                  <div className="flex items-start gap-2">
+                  <div className="flex items-center gap-2">
                     <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
                     <div>
                       <AlertTitle className="text-xs font-medium">
