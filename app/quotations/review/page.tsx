@@ -138,11 +138,11 @@ export default  function ReviewQuotationPage() {
         <CardHeader className="space-y-1">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <CardTitle className=" flex items-center gap-2">
+              <CardTitle className=" flex items-center gap-2 sm:text-lg">
                 <FileText className="h-4 w-4 text-primary" />
                 Review your quotation
               </CardTitle>
-              <CardDescription>
+              <CardDescription className="sm:text-sm">
                 Check the summary below, then choose to approve or reject this
                 quotation.
               </CardDescription>
