@@ -13,11 +13,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { createRoot } from "react-dom/client";
-import html2canvas from "html2canvas";
-import { jsPDF } from "jspdf";
-import { ModernBoldTemplate } from "./templates/ModernBoldTemplate";
-import { MinimalCleanTemplate } from "./templates/MinimalCleanTemplate";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   Select,
   SelectContent,
@@ -38,6 +34,7 @@ import {
   Mail,
   Download,
   MoreVertical,
+  AlertTriangle,
 } from "lucide-react";
 
 import {
@@ -49,12 +46,14 @@ import { QuotationPreviewModal } from "./quotation-preview-modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { YallaClassicTemplate } from "./templates/YallaClassicTemplate";
+import { generateQuotationPDFBlob } from "./pdf-utils";
 
 export function QuotationTemplatesPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<QuotationData | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
+  const [currentStatus, setCurrentStatus] = useState<string | null>(null);
 
   // Modal state (used for advanced actions like email/PDF)
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -89,19 +88,25 @@ export function QuotationTemplatesPage() {
         throw new Error("Failed to fetch estimate");
       }
 
-      const json: { success: boolean; quotation?: QuotationData } =
-        await response.json();
+      const json: {
+        success: boolean;
+        quotation?: QuotationData;
+        currentStatus?: string | null;
+      } = await response.json();
 
       if (json.success && json.quotation) {
         setSearchResults(json.quotation);
+        setCurrentStatus(json.currentStatus ?? null);
         toast.success("Quotation data loaded!");
       } else {
         setSearchResults(null);
+        setCurrentStatus(null);
         toast.error("No quotation found for this ID.");
       }
     } catch (error) {
       console.error("Search error:", error);
       setSearchResults(null);
+      setCurrentStatus(null);
       toast.error("Failed to load quotation. Please try again.");
     } finally {
       setHasSearched(true);
@@ -114,165 +119,45 @@ export function QuotationTemplatesPage() {
     void handleSearch();
   };
 
-  interface PDFGeneratorOptions {
-    scale?: number;          // html2canvas scale — higher = sharper but bigger file (default: 2)
-    imageFormat?: "JPEG" | "PNG"; // JPEG = smaller file, PNG = lossless (default: JPEG)
-    imageQuality?: number;   // 0–1, only applies to JPEG (default: 0.92)
-  }
-
-  // ─── PDF Generator ────────────────────────────────────────────────────────────
-// Renders template into a hidden off-screen div at FULL SIZE (794px).
-// Uses React 18 createRoot API — no deprecated ReactDOM.render.
-async function generatePDFBlob(
-  templateId: string,
-  data: QuotationData,
-  options: PDFGeneratorOptions = {}
-): Promise<Blob> {
-  const { scale = 2, imageFormat = "JPEG", imageQuality = 0.92 } = options;
-
-  const tempDiv = document.createElement("div");
-  tempDiv.style.cssText = `
-    position: absolute;
-    left: -9999px;
-    top: 0;
-    width: 794px;
-    background: #ffffff;
-  `;
-  document.body.appendChild(tempDiv);
-
-  const root = createRoot(tempDiv);
-
-  try {
-    let TemplateEl: React.ReactElement;
-    switch (templateId) {
-      case "modern-bold": TemplateEl = <ModernBoldTemplate data={data} />; break;
-      case "minimal-clean": TemplateEl = <MinimalCleanTemplate data={data} />; break;
-      default: TemplateEl = <YallaClassicTemplate data={data} forPDF                       hideDiscount={discountMode === "without"}
-      />;
-    }
-
-    await new Promise<void>((resolve) => {
-      root.render(TemplateEl);
-      setTimeout(resolve, 300);
-    });
-
-    const fullHeight = tempDiv.scrollHeight;
-
-    // Capture the FULL content as one canvas at high scale
-    const canvas = await html2canvas(tempDiv, {
-      useCORS: true,
-      allowTaint: true,
-      background: "#ffffff",
-      logging: false,
-      width: 794,
-      height: fullHeight,
-      ...({ scale } as object),
-    });
-
-    // ── PDF page dimensions ─────────────────────────────────────────────
-    const PAGE_W_MM = 210;
-    const PAGE_H_MM = 297;
-    const MARGIN_MM = 8; // top & bottom margin on every page
-    const CONTENT_H_MM = PAGE_H_MM - MARGIN_MM * 2; // 273mm of usable space
-
-    // Canvas pixels per mm
-    const PX_PER_MM = canvas.width / PAGE_W_MM;
-
-    // Usable content height in canvas pixels
-    const CONTENT_H_PX = CONTENT_H_MM * PX_PER_MM;
-
-    const pdf = new jsPDF({
-      orientation: "portrait",
-      unit: "mm",
-      format: [PAGE_W_MM, PAGE_H_MM],
-    });
-
-    let sourceY = 0; // current Y position in the source canvas
-    let isFirstPage = true;
-
-    while (sourceY < canvas.height - 2 * PX_PER_MM) { // stop if < 2px left
-      if (!isFirstPage) {
-        pdf.addPage([PAGE_W_MM, PAGE_H_MM], "portrait");
-      }
-
-      // How many pixels to slice from the canvas for this page
-      const sliceH = Math.min(CONTENT_H_PX, canvas.height - sourceY);
-
-      // Create a temporary canvas for just this page's slice
-      const pageCanvas = document.createElement("canvas");
-      pageCanvas.width = canvas.width;
-      pageCanvas.height = sliceH;
-
-      const ctx = pageCanvas.getContext("2d")!;
-      // Draw the slice onto the page canvas
-      ctx.drawImage(
-        canvas,
-        0, sourceY,           // source x, y
-        canvas.width, sliceH, // source width, height
-        0, 0,                 // dest x, y
-        canvas.width, sliceH  // dest width, height
-      );
-
-      const pageImgData = pageCanvas.toDataURL(`image/${imageFormat.toLowerCase()}`, imageQuality);
-
-      // Render the slice at MARGIN_MM from top, full width, proportional height
-      const sliceHeightMm = (sliceH / canvas.width) * PAGE_W_MM;
-
-      pdf.addImage(
-        pageImgData,
-        imageFormat,
-        0,           // x: left edge
-        MARGIN_MM,   // y: top margin — consistent on every page ✅
-        PAGE_W_MM,   // width: full page width
-        sliceHeightMm // height: proportional to slice
-      );
-
-      sourceY += sliceH;
-      isFirstPage = false;
-    }
-
-    return pdf.output("blob");
-
-  } finally {
-    root.unmount();
-    if (document.body.contains(tempDiv)) {
-      document.body.removeChild(tempDiv);
-    }
-  }
-}
-  const toastId = 'dashboard-quotation-templates-download-pdf';
-
+  const toastId = "dashboard-quotation-templates-download-pdf";
     // ── Download handler ──────────────────────────────────────────────────
     const handleDownloadPDF = async () => {
       if (!activeData) {
         toast.error("No quotation data found. Please search for a quotation first.");
         return;
       }
-        setIsGenerating(true);
-        toast.loading("Generating PDF...", { id: toastId });
-        try {
-          const blob = await generatePDFBlob(yallaClassicTemplate.id, activeData, {
+      setIsGenerating(true);
+      toast.loading("Generating PDF...", { id: toastId });
+      try {
+        const blob = await generateQuotationPDFBlob(
+          yallaClassicTemplate.id,
+          activeData,
+          {
             scale: 2,
             imageFormat: "JPEG",
             imageQuality: 0.92,
-          });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          const safeName = activeData?.quotationNumber.replace(/[\s/\\:*?"<>|]/g, "_");
-          a.download = `Quotation_${safeName}.pdf`;
-          a.click();
-          URL.revokeObjectURL(url);
-        
-        } catch (err) {
-          console.error(err);
-          toast.error("Failed to generate PDF. Please try again.");
-        } finally {
-          setIsGenerating(false);
-          toast.dismiss(toastId);
-          toast.success("PDF downloaded successfully!");
-        }
-      };
+          },
+          discountMode
+        );
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        const safeName = activeData?.quotationNumber.replace(
+          /[\s/\\:*?"<>|]/g,
+          "_"
+        );
+        a.download = `Quotation_${safeName}.pdf`;
+        a.click();
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        console.error(err);
+        toast.error("Failed to generate PDF. Please try again.");
+      } finally {
+        setIsGenerating(false);
+        toast.dismiss(toastId);
+        toast.success("PDF downloaded successfully!");
+      }
+    };
 
   const activeData = searchResults ?? null;
 
@@ -347,24 +232,46 @@ async function generatePDFBlob(
           
           {/* Loaded data summary */}
           {hasSearched && searchResults && (
-            <div className="mt-4 flex items-center gap-3 p-3 bg-primary/5 rounded-lg border border-primary/20">
-              <FileText className="size-5 text-primary shrink-0" />
-              <div className="min-w-0">
-                <p className="text-sm font-semibold truncate">
-                  {searchResults.quotationNumber} · {searchResults.customerCompanyName}
-                </p>
-                <p className="text-xs text-muted-foreground truncate">
-                  {searchResults.serviceAddress ?? "No service address"} ·{" "}
-                  {searchResults.quotationDate}
-                </p>
+            <div className="mt-4 space-y-4">
+              <div className="flex items-center gap-3 p-3 bg-primary/5 rounded-lg border border-primary/20">
+                <FileText className="size-5 text-primary shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold truncate">
+                    {searchResults.quotationNumber} · {searchResults.customerCompanyName}
+                  </p>
+                  <p className="text-xs text-muted-foreground truncate">
+                    {searchResults.serviceAddress ?? "No service address"} ·{" "}
+                    {searchResults.quotationDate}
+                  </p>
+                </div>
+                <Badge variant="default" className="ml-auto shrink-0">
+                  AED{" "}
+                  {(
+                    searchResults.grandTotal ??
+                    calculateTotals(searchResults).grandTotal
+                  ).toFixed(2)}
+                </Badge>
               </div>
-              <Badge variant="default" className="ml-auto shrink-0">
-                AED{" "}
-                {(
-                  searchResults.grandTotal ??
-                  calculateTotals(searchResults).grandTotal
-                ).toFixed(2)}
-              </Badge>
+
+              {currentStatus && currentStatus.toLowerCase() !== "new" && (
+                <Alert className="border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-50">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                    <div>
+                      <AlertTitle className="text-xs font-medium">
+                        Quotation status: {currentStatus}
+                      </AlertTitle>
+                      <AlertDescription className="text-[11px]">
+                        {currentStatus.toLowerCase() === "approved"
+                          ? "This quotation has already been approved by the customer."
+                          : currentStatus.toLowerCase() === "rejected"
+                          ? "This quotation has been rejected by the customer. "
+                          : currentStatus.toLowerCase() === "waiting for approval" ? "This quotation is waiting for approval by the customer." : "This quotation is no longer in New status in Zoho FSM. You can still view and share the quotation from here."}
+                      </AlertDescription>
+                    </div>
+                  </div>
+                </Alert>
+              )}
             </div>
           )}
 
@@ -438,7 +345,9 @@ async function generatePDFBlob(
                     onClick={() => setIsModalOpen(true)}
                   >
                     <Mail className="mr-2 size-3.5" />
-                    Send email
+                    {
+                      currentStatus && currentStatus.toLowerCase() !== "new" ? "Resend email" : "Send email"
+                    }
                   </DropdownMenuItem>
                   {/* <DropdownMenuItem
                     className="text-xs"
@@ -499,6 +408,8 @@ async function generatePDFBlob(
           template={yallaClassicTemplate}
           data={activeData}
           discountMode={discountMode}
+          shouldMarkAsSent={currentStatus === "New"}
+          setCurrentStatus = {setCurrentStatus}
         />
       )}
     </CardContent>

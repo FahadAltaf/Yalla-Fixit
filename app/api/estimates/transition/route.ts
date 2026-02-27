@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const EDGE_URL = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/zoho-fsm-estimate-transitions`;
-const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const EDGE_URL = `${process.env.SUPABASE_URL}/functions/v1/zoho-fsm-estimate-transitions`;
+const ANON_KEY = process.env.SUPABASE_ANON_KEY!;
 
 // POST /api/estimates/transition
-// Body: { record_id: string, action: "approve" | "reject" }
+// Body: { record_id: string, action: "approve" | "reject" | "mark_as_sent" }
 export async function POST(req: NextRequest) {
   try {
     const { record_id, action } = await req.json();
@@ -16,9 +16,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (!["approve", "reject"].includes(action)) {
+    if (!["approve", "reject", "mark_as_sent"].includes(action)) {
       return NextResponse.json(
-        { success: false, error: 'action must be "approve" or "reject".' },
+        {
+          success: false,
+          error: 'action must be "approve", "reject", or "mark_as_sent".',
+        },
         { status: 400 }
       );
     }

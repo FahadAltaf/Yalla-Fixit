@@ -5,7 +5,7 @@ import {
 } from "@/components/dashboard/extensions/quotation-templates/quotation-templates";
 
 const SUPABASE_FUNCTION_URL =
-  "https://sxzpigyphjotuubxpooj.supabase.co/functions/v1/get-estimate";
+  `${process.env.SUPABASE_URL}/functions/v1/get-estimate`;
 
 // NOTE: This is a publishable key provided explicitly in the spec.
 const SUPABASE_PUBLISHABLE_KEY =
@@ -201,6 +201,14 @@ export async function POST(req: NextRequest) {
 
     const quotation = mapToQuotationData(payload);
 
+    // Surface Zoho FSM current status and available transitions so that
+    // clients (dashboard, approval flows, etc.) can react appropriately.
+    const currentStatus: string | null =
+      typeof payload?.current_status === "string"
+        ? payload.current_status
+        : null;
+
+ 
     // Surface basic lifecycle information so clients can decide
     // whether this estimate should still be actionable.
     const rawEstimate = payload?.estimate?.data?.[0] ?? null;
@@ -224,6 +232,7 @@ export async function POST(req: NextRequest) {
         quotation,
         estimateStatus,
         lifecycle,
+        currentStatus,
       },
       { status: 200 }
     );

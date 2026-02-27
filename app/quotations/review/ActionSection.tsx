@@ -5,20 +5,25 @@ import { toast } from "sonner";
 import { AlertCircle, CheckCircle2, XCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dialog";
 
 type Action = "approve" | "reject";
 
 interface Props {
   estimateId?: string;
   quotationNumber: string;
+  currentStatus: string | null;
+  setCurrentStatus: (status: string) => void;
 }
 
-export function ActionSection({ estimateId, quotationNumber }: Props) {
+export function ActionSection({ estimateId, quotationNumber, setCurrentStatus }: Props) {
   const [isLoading, setIsLoading] = useState<Action | null>(null);
   const [lastAction, setLastAction] = useState<Action | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<Action | null>(null);
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
 
-  const handleAction = async (action: Action) => {
+  const performAction = async (action: Action) => {
     if (!estimateId) {
       toast.error("This quotation cannot be updated in Zoho (missing estimate id).");
       return;
@@ -48,6 +53,7 @@ export function ActionSection({ estimateId, quotationNumber }: Props) {
       }
 
       setLastAction(action);
+      setCurrentStatus(action === "approve" ? "Approved" : "Rejected");
       toast.success(
         action === "approve"
           ? `Quotation ${quotationNumber} approved successfully.`
@@ -62,8 +68,12 @@ export function ActionSection({ estimateId, quotationNumber }: Props) {
     }
   };
 
-  // const disabled = !estimateId || !!isLoading;
-  const disabled = true;
+  const handleAction = (action: Action) => {
+    setConfirmAction(action);
+    setIsDialogOpen(true);
+  };
+
+  const disabled = !estimateId || !!isLoading;
 
   return (
     <section className="space-y-4 rounded-lg border bg-slate-50 px-4 py-3">
@@ -78,7 +88,7 @@ export function ActionSection({ estimateId, quotationNumber }: Props) {
           <Button
             size="sm"
             disabled={disabled}
-            onClick={() => void handleAction("approve")}
+            onClick={() => handleAction("approve")}
           >
             {isLoading === "approve" ? "Approving…" : "Approve"}
           </Button>
@@ -86,7 +96,7 @@ export function ActionSection({ estimateId, quotationNumber }: Props) {
             size="sm"
             variant="outline"
             disabled={disabled}
-            onClick={() => void handleAction("reject")}
+            onClick={() => handleAction("reject")}
           >
             {isLoading === "reject" ? "Rejecting…" : "Reject"}
           </Button>
@@ -123,6 +133,30 @@ export function ActionSection({ estimateId, quotationNumber }: Props) {
           You can still review the details in the email/PDF, but approve/reject must be handled manually in Zoho.
         </p>
       )}
+
+      <ConfirmationAlertDialog
+        isOpen={isDialogOpen}
+        onOpenChange={setIsDialogOpen}
+        title={
+          confirmAction === "approve"
+            ? "Confirm approval"
+            : "Confirm rejection"
+        }
+        description={
+          confirmAction === "approve"
+            ? "Are you sure you want to approve this quotation in Zoho FSM?"
+            : "Are you sure you want to reject this quotation in Zoho FSM?"
+        }
+        confirmText={confirmAction === "approve" ? "Approve" : "Reject"}
+        cancelText="Cancel"
+        loading={!!isLoading}
+        variant={confirmAction === "reject" ? "destructive" : "default"}
+        onConfirm={async () => {
+          if (!confirmAction) return;
+          await performAction(confirmAction);
+          setIsDialogOpen(false);
+        }}
+      />
     </section>
   );
 }
