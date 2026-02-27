@@ -334,6 +334,9 @@ export function QuotationTemplatesPage() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-44">
+                  {
+                    currentStatus && currentStatus.toLowerCase() !== "rejected" && (
+                  
                   <DropdownMenuItem
                     className="text-xs"
                     onClick={() => setIsModalOpen(true)}
@@ -343,6 +346,7 @@ export function QuotationTemplatesPage() {
                       currentStatus && currentStatus.toLowerCase() !== "new" ? "Resend email" : "Send email"
                     }
                   </DropdownMenuItem>
+)}
                   {/* <DropdownMenuItem
                     className="text-xs"
                     onClick={() => window.print()}
