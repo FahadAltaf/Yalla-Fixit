@@ -261,13 +261,7 @@ export function QuotationTemplatesPage() {
                       <AlertTitle className="text-xs font-medium">
                         Quotation status: {currentStatus}
                       </AlertTitle>
-                      <AlertDescription className="text-[11px]">
-                        {currentStatus.toLowerCase() === "approved"
-                          ? "This quotation has already been approved by the customer."
-                          : currentStatus.toLowerCase() === "rejected"
-                          ? "This quotation has been rejected by the customer. "
-                          : currentStatus.toLowerCase() === "waiting for approval" ? "This quotation is waiting for approval by the customer." : "This quotation is no longer in New status in Zoho FSM. You can still view and share the quotation from here."}
-                      </AlertDescription>
+                     
                     </div>
                   </div>
                 </Alert>
