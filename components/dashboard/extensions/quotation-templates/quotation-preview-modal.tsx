@@ -186,6 +186,7 @@ function escapeHtml(text: string) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
 }
+
 function buildQuotationEmailHtml({
   data,
   customMessage,

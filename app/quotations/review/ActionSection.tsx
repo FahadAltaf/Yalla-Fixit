@@ -71,7 +71,7 @@ export function ActionSection({ estimateId, quotationNumber }: Props) {
         <div>
           <p className="text-sm font-medium text-slate-900">Approve or reject this quotation</p>
           <p className="text-xs text-slate-600">
-            Your choice is recorded directly in Zoho FSM using the official estimate transition API.
+            Your choice will be saved in our system. 
           </p>
         </div>
         <div className="flex gap-2">
