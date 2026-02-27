@@ -27,7 +27,6 @@ import {
   Users,
   User,
   MessageCircle,
-  RefreshCcw,
 } from "lucide-react";
 
 import { QuotationData, QuotationTemplate } from "./quotation-templates";
@@ -35,7 +34,6 @@ import { YallaClassicTemplate } from "./templates/YallaClassicTemplate";
 import { ModernBoldTemplate } from "./templates/ModernBoldTemplate";
 import { MinimalCleanTemplate } from "./templates/MinimalCleanTemplate";
 import { emailService } from "@/lib/email-service";
-import { formatCurrency } from "@/utils/format-currentcy";
 
 interface Props {
   open: boolean;
@@ -601,9 +599,9 @@ export function QuotationPreviewModal({ open, onClose, template, data, discountM
               )}                </div>
 
                 </div>
-                <Button className="w-full" onClick={() => setSendStatus("idle")}>
-                  <RefreshCcw className="size-4" />
-                  Send Again
+                <Button className="w-full" onClick={() => onClose()}>
+                  <X className="size-4" />
+                  Close
               </Button>
 
                 </div>
