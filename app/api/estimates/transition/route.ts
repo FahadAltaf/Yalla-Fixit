@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
         "Content-Type": "application/json",
         Authorization: `Bearer ${ANON_KEY}`,
       },
-      body: JSON.stringify({ record_id, action }),
+      body: JSON.stringify({ record_id, action, ...(action === "reject" ? { notes: "Rejected by Customer" } : {}) }),
     });
 
     const data = await res.json();
