@@ -3,10 +3,28 @@ import { NextRequest, NextResponse } from "next/server";
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const fileId = searchParams.get("file_id");
-  const token = searchParams.get("token");
 
-  if (!fileId || !token) {
-    return NextResponse.json({ error: "file_id and token are required" }, { status: 400 });
+  const supabase = await createServerClientForApi();
+  const { data: settings, error: settingsError } = await supabase
+  .from("settings")
+  .select("oauth_access_token")
+  .eq("id", 1)
+  .single();
+
+  
+  if (settingsError || !settings?.oauth_access_token) {
+    return {
+      error: new Response(
+        JSON.stringify({ error: "Failed to fetch access token", details: settingsError }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      ),
+    };
+  }
+
+
+
+  if (!fileId) {
+    return NextResponse.json({ error: "file_id is required" }, { status: 400 });
   }
 
   try {
@@ -14,7 +32,7 @@ export async function GET(req: NextRequest) {
       `https://fsm.zoho.com/fsm/v1/files?file_id=${encodeURIComponent(fileId)}`,
       {
         headers: {
-          Authorization: `Zoho-oauthtoken ${token}`,
+          Authorization: `Zoho-oauthtoken ${settings?.oauth_access_token}`,
         },
       }
     );
