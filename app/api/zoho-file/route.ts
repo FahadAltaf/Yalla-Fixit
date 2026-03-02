@@ -14,12 +14,10 @@ export async function GET(req: NextRequest) {
 
   
   if (settingsError || !settings?.oauth_access_token) {
-    return {
-      error: new Response(
-        JSON.stringify({ error: "Failed to fetch access token", details: settingsError }),
-        { status: 500, headers: { "Content-Type": "application/json" } }
-      ),
-    };
+    return new Response(
+      JSON.stringify({ error: "Failed to fetch access token", details: settingsError }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    );
   }
 
   if (!fileId) {
