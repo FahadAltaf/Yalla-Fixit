@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createServerClientForApi } from "@/lib/supabase/supabase-server-client";
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -16,12 +17,10 @@ export async function GET(req: NextRequest) {
     return {
       error: new Response(
         JSON.stringify({ error: "Failed to fetch access token", details: settingsError }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 500, headers: { "Content-Type": "application/json" } }
       ),
     };
   }
-
-
 
   if (!fileId) {
     return NextResponse.json({ error: "file_id is required" }, { status: 400 });
