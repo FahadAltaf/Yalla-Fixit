@@ -139,13 +139,13 @@ export function ActionSection({ estimateId, quotationNumber, setCurrentStatus }:
         onOpenChange={setIsDialogOpen}
         title={
           confirmAction === "approve"
-            ? "Confirm approval"
-            : "Confirm rejection"
+            ? "Confirm Approval"
+            : "Confirm Rejection"
         }
         description={
           confirmAction === "approve"
-            ? "Are you sure you want to approve this quotation in Zoho FSM?"
-            : "Are you sure you want to reject this quotation in Zoho FSM?"
+            ? "Are you sure you want to approve this quotation. This action cannot be undone."
+            : "Are you sure you want to reject this quotation. This action cannot be undone."
         }
         confirmText={confirmAction === "approve" ? "Approve" : "Reject"}
         cancelText="Cancel"
