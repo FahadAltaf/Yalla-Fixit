@@ -6,7 +6,7 @@ import { AlertCircle, FileText, AlertTriangle, CheckCircle2, XCircle, Clock } fr
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { QuotationData } from "@/components/dashboard/extensions/quotation-templates/quotation-templates";
-import { formatCurrency } from "@/utils/format-currentcy";
+import { formatCurrencyAED } from "@/utils/format-currency";
 import { ActionSection } from "./ActionSection";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -409,7 +409,7 @@ export default  function ReviewQuotationPage() {
                     {item.details ? ` ${item.details}` : ""}
                   </p>
                   <p className="whitespace-nowrap font-medium">
-                    AED {(item.unitPrice * item.quantity).toFixed(2)}
+                    {formatCurrencyAED(item.unitPrice * item.quantity)}
                   </p>
                 </div>
               ))}
@@ -430,14 +430,14 @@ export default  function ReviewQuotationPage() {
                 <div className="text-right space-y-0.5">
                   <p className="text-[11px] text-slate-500">
                     Includes estimated tax / VAT of{" "}
-                    AED {(quotation.taxAmount ?? 0).toFixed(2)} and discount of AED {(quotation.lineItems.reduce((sum, item) => {
+                    {formatCurrencyAED(quotation.taxAmount ?? 0)} and discount of {formatCurrencyAED(quotation.lineItems.reduce((sum, item) => {
     const lineTotal = item.quantity * item.unitPrice;
     const lineDiscount =
       item.discountType === "Percent"
         ? ((item.discountAmount || 0) / 100) * lineTotal
         : item.discountAmount || 0;
     return sum + lineDiscount;
-  }, 0) ?? 0).toFixed(2)}
+  }, 0) ?? 0)}
                   </p>
                 </div>
               )}
@@ -446,7 +446,7 @@ export default  function ReviewQuotationPage() {
                   Grand total
                 </p>
                 <p className="text-lg font-semibold text-slate-900">
-                  AED {(quotation.grandTotal ?? 0).toFixed(2)}
+                  {formatCurrencyAED(quotation.grandTotal ?? 0)}
                 </p>
               </div>
             </div>

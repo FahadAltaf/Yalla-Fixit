@@ -1,5 +1,6 @@
 import { QuotationData, calculateTotals } from "../quotation-templates";
 import yallaFixit from "@/public/yalla-fixit.png";
+import { formatCurrencyAED } from "@/utils/format-currency";
 
 interface Props {
   data: QuotationData;
@@ -168,18 +169,18 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
                     : { padding: "12px" }), textAlign: "right", verticalAlign: "top", color: "#64748b" }}>{item.unit}</td>
                 <td style={{fontSize: "11px", width:"100px",     ...(forPDF
                     ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
-                    : { padding: "12px" }), textAlign: "right", verticalAlign: "top" }}>AED {item.unitPrice.toFixed(2)}</td>
+                    : { padding: "12px" }), textAlign: "right", verticalAlign: "top" }}>{formatCurrencyAED(item.unitPrice)}</td>
                 {!hideDiscount && (
                   <td style={{fontSize: "11px",width:"86px",      ...(forPDF
                       ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
                       : { padding: "12px" }), textAlign: "right", verticalAlign: "top", color: "#64748b" }}>
-                    {item?.discountType === 'Currency' ? `AED ${item?.discountAmount?.toFixed(2)}` : `${item?.discountAmount?.toFixed(0)}%`}
+                    {item?.discountType === 'Currency' ? `${formatCurrencyAED(item?.discountAmount)}` : `${item?.discountAmount?.toFixed(0)}%`}
                   </td>
                 )}
                 <td style={{fontSize: "11px", width:"100px",     ...(forPDF
                     ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
                     : { padding: "12px" }), textAlign: "right", fontWeight: 600, verticalAlign: "top", color: "black" }}>
-                  AED {lineItemAmount.toFixed(2)}
+                  {formatCurrencyAED(lineItemAmount)}
                 </td>
               </tr>
             );
@@ -215,7 +216,7 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
                 }}
               >
                 <span style={{ color: muted ? "#64748b" : "#1e293b", fontSize: "11px" }}>{label}</span>
-                <span style={{ color: muted ? "#64748b" : "#1e293b", fontSize: "11px" }}>AED {typeof value === "number" ? value.toFixed(2) : value}</span>
+                <span style={{ color: muted ? "#64748b" : "#1e293b", fontSize: "11px" }}>{formatCurrencyAED(typeof value === "number" ? value : value)}</span>
               </div>
             ))}
           <div style={{
@@ -226,7 +227,7 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
             background: "black", borderRadius: "6px", marginTop: "8px"
           }}>
             <span style={{ color: "#ffffff", fontWeight: 700, fontSize: "13px" }}>Grand Total</span>
-            <span style={{ color: "#ffffff", fontWeight: 700, fontSize: "13px" }}>AED {grandTotal.toFixed(2)}</span>
+            <span style={{ color: "#ffffff", fontWeight: 700, fontSize: "13px" }}>{formatCurrencyAED(grandTotal)}</span>
           </div>
         </div>
       </div>
