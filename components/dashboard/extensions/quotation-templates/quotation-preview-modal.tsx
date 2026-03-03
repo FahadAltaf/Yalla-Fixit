@@ -216,7 +216,6 @@ export function QuotationPreviewModal({
     /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 
 
-
   // ── Email helpers ─────────────────────────────────────────────────────
   const addCcEmail = () => {
     const email = ccEmail.trim().toLowerCase();
@@ -375,7 +374,7 @@ export function QuotationPreviewModal({
     
       {sendStatus === "sent" ? (
             /* ── Success ── */
-            <div className="space-y-4 py-2">
+            <div className="space-y-4 pt-2">
             {/* Status icon */}
             <div className="flex justify-center">
                 <div className="flex flex-col items-center gap-2">
@@ -406,7 +405,13 @@ export function QuotationPreviewModal({
               )}                </div>
 
                 </div>
-                <Button className="w-full" onClick={() => onClose()}>
+                <Button className="w-full" onClick={() => {
+                  
+                  onClose();
+                  setTimeout(() => {
+                    setSendStatus("idle");
+                  }, 500);
+                }}>
                   <X className="size-4" />
                   Close
               </Button>

@@ -57,156 +57,172 @@ export function buildQuotationEmailHtml({
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Quotation ${quotationNumber}</title>
 </head>
-<body style="margin:0; padding:0; background-color:#f4f7fb; font-family:'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;">
+<body style="margin:0; padding:0; background-color:#f4f4f5; font-family:'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;">
 
-  <div style="max-width:640px; margin:0 auto; padding:48px 16px;">
+  <div style="max-width:640px; margin:0 auto; padding:32px 16px;">
 
-    <!-- Main Card -->
-    <div style="background:#ffffff; border-radius:16px; overflow:hidden; box-shadow:0 12px 30px rgba(0,0,0,0.08); border:1px solid #e8eef4;">
+    <!-- Shell -->
+    <div style="background:#ffffff; border-radius:12px; border:1px solid #e5e7eb; overflow:hidden;">
 
-      <!-- Premium Header with Gradient -->
-      <div style="background:linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%); padding:28px 36px;">
-        <table width="100%" cellpadding="0" cellspacing="0">
+      <!-- Header -->
+      <div style="padding:20px 24px; border-bottom:1px solid #e5e7eb; background:#0b0b0b; color:#ffffff;">
+        <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
           <tr>
-            <td valign="middle">
-              <div style="background:rgba(255,255,255,0.1); display:inline-block; padding:4px 12px; border-radius:30px; margin-bottom:8px;">
-                <p style="margin:0; font-size:10px; font-weight:700; color:rgba(255,255,255,0.7); letter-spacing:2px; text-transform:uppercase;">📄 QUOTATION</p>
+            <td valign="top" style="padding:0; text-align:left;">
+              <div style="font-size:11px; letter-spacing:0.18em; text-transform:uppercase; opacity:0.7; margin-bottom:4px;">
+                Quotation
               </div>
-              <h1 style="margin:0; font-size:28px; font-weight:800; color:#ffffff; letter-spacing:-0.5px;">${quotationNumber}</h1>
+              <div style="font-size:20px; font-weight:700; letter-spacing:-0.03em;">
+                ${quotationNumber}
+              </div>
             </td>
-            <td valign="middle" style="text-align:right;">
-              <p style="margin:0 0 5px; font-size:11px; color:rgba(255,255,255,0.5); letter-spacing:0.5px;">Issue Date</p>
-              <p style="margin:0; font-size:16px; font-weight:600; color:#ffffff;">${quotationDate}</p>
-              ${data.validityDays ? `<p style="margin:5px 0 0; font-size:11px; color:rgba(255,255,255,0.5);">Valid for ${data.validityDays} days</p>` : ""}
+            <td valign="top" style="padding:0; text-align:right;">
+              <div style="font-size:11px; opacity:0.7; margin-bottom:2px;">
+                Date
+              </div>
+              <div style="font-size:13px; font-weight:600;">
+                ${quotationDate}
+              </div>
+              ${
+                data.validityDays
+                  ? `<div style="font-size:11px; margin-top:4px; opacity:0.7;">Valid for ${data.validityDays} days</div>`
+                  : ""
+              }
             </td>
           </tr>
         </table>
       </div>
 
       <!-- Body -->
-      <div style="padding:36px;">
+      <div style="padding:24px 24px 20px; color:#020617; font-size:13px; line-height:1.6;">
 
-        <!-- Personalized Greeting -->
-        <div style="background:#f8faff; border-radius:12px; padding:20px; margin:0 0 28px; border-left:4px solid #1a1a1a;">
-          <p style="margin:0; font-size:15px; line-height:1.6; color:#444444;">
-          ${formattedMessage}
-          </p>
+        <!-- Greeting / Message -->
+        ${
+          formattedMessage
+            ? `<div style="margin-bottom:20px;">
+             
+                <div style="padding:12px 14px; border-radius:8px; border:1px solid #e5e7eb; background:#f9fafb; color:#111827; font-size:13px;">
+                  ${formattedMessage}
+                </div>
+              </div>`
+            : ""
+        }
+
+        <!-- Customer + Service Address -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse; margin-bottom:20px;">
+          <tr>
+            <td valign="top" style="padding:0; width:50%;">
+              <div style="font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.16em; color:#6b7280; margin-bottom:4px;">
+                Customer
+              </div>
+              <div style="font-size:13px; font-weight:600; color:#020617; margin-bottom:2px;">
+                ${customerCompanyName}
+              </div>
+              ${
+                customerContact
+                  ? `<div style="font-size:12px; color:#4b5563; margin-bottom:1px;">${customerContact}</div>`
+                  : ""
+              }
+            </td>
+            <td valign="top" style="padding:0; width:50%;">
+              ${
+                serviceAddress
+                  ? `<div style="font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.16em; color:#6b7280; margin-bottom:4px; text-align:left;">
+                      Service Address
+                    </div>
+                    <div style="font-size:13px; color:#4b5563;">
+                      ${serviceAddress}
+                    </div>`
+                  : ""
+              }
+            </td>
+          </tr>
+        </table>
+
+        <!-- Price Summary -->
+        <div style="margin-top:4px; margin-bottom:12px; font-size:11px; font-weight:600; letter-spacing:0.18em; text-transform:uppercase; color:#9ca3af;">
+          Price summary
         </div>
 
-        <!-- Enhanced Info Cards -->
-        <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 28px;">
+        <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse; margin-bottom:8px;">
           <tr>
-            <!-- Billed To -->
-            <td valign="top" width="48%" style="background:#f9f9f9; border-radius:12px; padding:20px; border:1px solid #eaeef2;">
-              <div style="margin-bottom:12px;">
-                <span style="background:#1a1a1a; color:#ffffff; font-size:10px; font-weight:700; padding:4px 10px; border-radius:20px; letter-spacing:1px;">BILLED TO</span>
-              </div>
-              <p style="margin:0 0 4px; font-size:16px; font-weight:700; color:#111111;">${customerCompanyName}</p>
-              <p style="margin:0; font-size:13px; color:#666666;">
-                <span style="opacity:0.7;">👤</span> ${customerContact}
-              </p>
+            <td style="padding:6px 0; font-size:13px; color:#4b5563;">
+              Subtotal
             </td>
-            <td width="4%"></td>
-            <!-- Service Location -->
-            <td valign="top" width="48%" style="background:#f9f9f9; border-radius:12px; padding:20px; border:1px solid #eaeef2;">
-              <div style="margin-bottom:12px;">
-                <span style="background:#1a1a1a; color:#ffffff; font-size:10px; font-weight:700; padding:4px 10px; border-radius:20px; letter-spacing:1px;">SERVICE LOCATION</span>
-              </div>
-              <p style="margin:0; font-size:15px; font-weight:600; color:#111111; line-height:1.5;">
-                ${serviceAddress}
-              </p>
+            <td style="padding:6px 0; font-size:13px; color:#111827; text-align:right;">
+              ${subtotal.toFixed(2)}
             </td>
           </tr>
-        </table>
-
-        <!-- Price Summary Label -->
-        <p style="margin:0 0 15px; font-size:12px; font-weight:800; color:#999999; letter-spacing:2px; text-transform:uppercase;">
-          ⚡ PRICE SUMMARY
-        </p>
-
-        <!-- Enhanced Price Breakdown -->
-        <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 12px;">
-
-          <!-- Subtotal -->
           <tr>
-            <td style="padding:12px 0; font-size:14px; color:#666666;">Subtotal</td>
-            <td style="padding:12px 0; font-size:14px; color:#333333; font-weight:500; text-align:right;">${subtotal.toFixed(2)}</td>
-          </tr>
-
-          <!-- Discount (Remove if no discount) -->
-          <tr>
-            <td style="padding:12px 0; font-size:14px; color:#666666;">
+            <td style="padding:6px 0; font-size:13px; color:#4b5563;">
               Discount
-              <span style="display:inline-block; margin-left:10px; background:#e8f0fe; color:#1a5c9e; font-size:10px; font-weight:800; padding:3px 8px; border-radius:20px;">
-                SAVED
-              </span>
             </td>
-            <td style="padding:12px 0; font-size:14px; color:#e53e3e; font-weight:500; text-align:right;">- ${discountAmount.toFixed(2)}</td>
+            <td style="padding:6px 0; font-size:13px; color:#b91c1c; text-align:right;">
+              - ${discountAmount.toFixed(2)}
+            </td>
           </tr>
-
-          <!-- Tax -->
           <tr>
-            <td style="padding:12px 0; font-size:14px; color:#666666;">VAT (5%)</td>
-            <td style="padding:12px 0; font-size:14px; color:#333333; font-weight:500; text-align:right;">+ ${taxAmount?.toFixed(2) ?? 0}</td>
+            <td style="padding:6px 0; font-size:13px; color:#4b5563;">
+              VAT (5%)
+            </td>
+            <td style="padding:6px 0; font-size:13px; color:#111827; text-align:right;">
+              + ${taxAmount?.toFixed(2) ?? 0}
+            </td>
           </tr>
-
         </table>
 
-        <!-- Grand Total Box with Gradient -->
-        <div style="background:linear-gradient(135deg, #1a1a1a 0%, #2a2a2a 100%); border-radius:12px; padding:20px 24px; margin:20px 0 28px;">
-          <table width="100%" cellpadding="0" cellspacing="0">
+        <!-- Grand Total -->
+        <div style="margin-top:8px; margin-bottom:20px; padding:12px 14px; border-radius:8px; background:#020617; color:#f9fafb;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
             <tr>
-              <td>
-                <p style="margin:0; font-size:12px; font-weight:700; color:rgba(255,255,255,0.6); letter-spacing:1.5px; text-transform:uppercase;">Total Amount</p>
-                <p style="margin:5px 0 0; font-size:14px; color:rgba(255,255,255,0.4);">Including all charges</p>
+              <td style="font-size:12px; text-transform:uppercase; letter-spacing:0.16em; opacity:0.7;">
+                Grand total
               </td>
-              <td style="text-align:right;">
-                <p style="margin:0; font-size:32px; font-weight:800; color:#ffffff; letter-spacing:-1px;">
-                  ${grandTotal?.toFixed(2) ?? 0}
-                </p>
+              <td style="font-size:18px; font-weight:700; text-align:right;">
+                ${grandTotal?.toFixed(2) ?? 0}
               </td>
             </tr>
           </table>
         </div>
 
-        <!-- CTA Buttons with Icons -->
+        <!-- Actions -->
         ${
           includeApprovalSection
-            ? `
-        <table width="100%" cellpadding="0" cellspacing="0">
-          <tr>
-            <td style="padding-right:8px; width:50%;">
-              <a href="${approveUrl}" style="display:block; padding:15px 0; border-radius:10px; background:#1a1a1a; color:#ffffff; font-size:14px; font-weight:700; text-decoration:none; text-align:center; letter-spacing:0.5px; box-shadow:0 4px 12px rgba(0,0,0,0.15);">
-                ✅ &nbsp; APPROVE QUOTATION
-              </a>
-            </td>
-            <td style="padding-left:8px; width:50%;">
-                <a href="${rejectUrl}" style="display:block; padding:14px 0; border-radius:10px; background:#ffffff; color:#666666; font-size:14px; font-weight:600; text-decoration:none; text-align:center; letter-spacing:0.5px; border:2px solid #e0e5e9;">
-                ❌ &nbsp; REJECT QUOTATION
-              </a>
-            </td>
-          </tr>
-        </table>
-        `
+            ? `<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse; margin-bottom:6px;">
+                <tr>
+                  <td style="padding-right:6px; width:50%;">
+                    <a
+                      href="${approveUrl}"
+                      style="display:block; width:100%; text-align:center; padding:11px 0; border-radius:6px; background:#020617; color:#f9fafb; font-size:13px; font-weight:600; text-decoration:none; letter-spacing:0.06em; text-transform:uppercase;"
+                    >
+                      Approve
+                    </a>
+                  </td>
+                  <td style="padding-left:6px; width:50%;">
+                    <a
+                      href="${rejectUrl}"
+                      style="display:block; width:100%; text-align:center; padding:11px 0; border-radius:6px; background:#ffffff; color:#111827; font-size:13px; font-weight:500; text-decoration:none; letter-spacing:0.06em; text-transform:uppercase; border:1px solid #d1d5db;"
+                    >
+                      Reject
+                    </a>
+                  </td>
+                </tr>
+              </table>`
             : ""
         }
+
       </div>
 
-      <!-- Professional Footer -->
-      <div style="padding:24px 36px; border-top:1px solid #eef2f5; background:#fafcfd;">
-        <table width="100%" cellpadding="0" cellspacing="0">
+      <!-- Footer -->
+      <div style="padding:14px 24px 18px; border-top:1px solid #e5e7eb; background:#f9fafb; font-size:11px; color:#6b7280;">
+        <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
           <tr>
-            <td>
-              <p style="margin:0 0 5px; font-size:14px; font-weight:700; color:#1a1a1a;">YALLA FIXIT</p>
-              <p style="margin:0; font-size:11px; color:#aaaaaa;">
-                ⚡ Premium Maintenance Services
-              </p>
+            <td style="padding:0; text-align:left; font-weight:600; color:#020617;">
+              YALLA FIXIT
             </td>
-            <td style="text-align:right;">
-              <p style="margin:0; font-size:11px; color:#888888; line-height:1.6;">
-                Office 102, Building 6<br>
-                Gold & Diamond Park, Dubai, UAE
-              </p>
+            <td style="padding:0; text-align:right; line-height:1.5;">
+              Office 102, Building 6<br/>
+              Gold & Diamond Park, Dubai, UAE
             </td>
           </tr>
         </table>

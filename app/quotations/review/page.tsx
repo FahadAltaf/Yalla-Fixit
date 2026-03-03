@@ -423,14 +423,7 @@ export default  function ReviewQuotationPage() {
             <Separator className="my-2" />
 
             <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
-                  Grand total
-                </p>
-                <p className="text-lg font-semibold text-slate-900">
-                  {formatCurrency(quotation.grandTotal ?? 0)}
-                </p>
-              </div>
+            
               {quotation.taxAmount != null && (
                 <div className="text-right space-y-0.5">
                   <p className="text-[11px] text-slate-500">
@@ -439,6 +432,14 @@ export default  function ReviewQuotationPage() {
                   </p>
                 </div>
               )}
+                <div className="space-y-0.5 text-right">
+                <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
+                  Grand total
+                </p>
+                <p className="text-lg font-semibold text-slate-900">
+                  {formatCurrency(quotation.grandTotal ?? 0)}
+                </p>
+              </div>
             </div>
           </section>
 
