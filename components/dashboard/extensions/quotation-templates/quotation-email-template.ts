@@ -135,9 +135,9 @@ export function buildQuotationEmailHtml({
                   ? `<div style="font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.16em; color:#6b7280; margin-bottom:4px; text-align:left;">
                       Service Address
                     </div>
-                      <div style="font-size:13px; font-weight:600; color:#020617; margin-bottom:2px;">
+                    ${ companyAddress ? `<div style="font-size:13px; font-weight:600; color:#020617; margin-bottom:2px;">
                         ${companyAddress}
-              </div>
+                      </div>` : "" }
                     <div style="font-size:13px; color:#4b5563;">
                       ${serviceAddress}
                     </div>`
@@ -158,7 +158,7 @@ export function buildQuotationEmailHtml({
               Subtotal
             </td>
             <td style="padding:6px 0; font-size:13px; color:#111827; text-align:right;">
-              ${subtotal.toFixed(2)}
+           AED ${subtotal.toFixed(2)}
             </td>
           </tr>
           <tr>
@@ -166,7 +166,7 @@ export function buildQuotationEmailHtml({
               Discount
             </td>
             <td style="padding:6px 0; font-size:13px; color:#b91c1c; text-align:right;">
-              - ${discountAmount.toFixed(2)}
+              - AED ${discountAmount.toFixed(2)}
             </td>
           </tr>
           <tr>
@@ -174,7 +174,7 @@ export function buildQuotationEmailHtml({
               VAT (5%)
             </td>
             <td style="padding:6px 0; font-size:13px; color:#111827; text-align:right;">
-              + ${taxAmount?.toFixed(2) ?? 0}
+              + AED ${taxAmount?.toFixed(2) ?? 0}
             </td>
           </tr>
         </table>
@@ -187,7 +187,7 @@ export function buildQuotationEmailHtml({
                 Grand total
               </td>
               <td style="font-size:18px; font-weight:700; text-align:right;">
-                ${grandTotal?.toFixed(2) ?? 0}
+                AED ${grandTotal?.toFixed(2) ?? 0}
               </td>
             </tr>
           </table>
