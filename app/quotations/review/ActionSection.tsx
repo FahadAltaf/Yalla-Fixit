@@ -53,7 +53,7 @@ export function ActionSection({ estimateId, quotationNumber, setCurrentStatus }:
       }
 
       setLastAction(action);
-      setCurrentStatus(action === "approve" ? "Approved" : "Rejected");
+      setCurrentStatus(action === "approve" ? "Approved2" : "Rejected2");
       toast.success(
         action === "approve"
           ? `Quotation ${quotationNumber} approved successfully.`

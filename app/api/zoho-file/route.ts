@@ -12,7 +12,6 @@ export async function GET(req: NextRequest) {
   .eq("id", 1)
   .single();
 
-  
   if (settingsError || !settings?.oauth_access_token) {
     return new Response(
       JSON.stringify({ error: "Failed to fetch access token", details: settingsError }),

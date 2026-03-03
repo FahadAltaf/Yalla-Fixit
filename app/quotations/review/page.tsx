@@ -84,39 +84,61 @@ async function fetchQuotation(
 
 
 // ─── Status Config ────────────────────────────────────────────
-const STATUS_CONFIG: Record<string, {
-  title: string;
-  description: string;
-  icon: React.ReactNode;
-  iconBg: string;
-}> = {
+const STATUS_CONFIG: Record<
+  string,
+  {
+    title: string;
+    description: string;
+    icon: React.ReactNode;
+    iconBg: string;
+  }
+> = {
   approved: {
     title: "Quotation Already Approved",
-    description: "This estimate has already been approved. Please contact Yalla Fixit if you need a new quotation.",
+    description:
+      "This estimate has already been approved. For any questions or changes, please contact the Yalla Fixit team.",
+    icon: <CheckCircle2 size={32} className="text-green-600" />,
+    iconBg: "bg-green-100",
+  },
+  approved2: {
+    title: "Quotation Approved",
+    description:
+      "This estimate has been approved. For any questions or changes, please contact the Yalla Fixit team.",
     icon: <CheckCircle2 size={32} className="text-green-600" />,
     iconBg: "bg-green-100",
   },
   rejected: {
     title: "Quotation Already Rejected",
-    description: "This estimate has already been rejected. Please contact Yalla Fixit if you need a new quotation.",
+    description:
+      "This estimate has already been rejected. If this is unexpected, please contact the Yalla Fixit team.",
+    icon: <XCircle size={32} className="text-red-600" />,
+    iconBg: "bg-red-100",
+  },
+  rejected2: {
+    title: "Quotation Rejected",
+    description:
+      "This estimate has been rejected. If this was done in error, please reach out to the Yalla Fixit team.",
     icon: <XCircle size={32} className="text-red-600" />,
     iconBg: "bg-red-100",
   },
   cancelled: {
     title: "Quotation Cancelled",
-    description: "This estimate has already been cancelled. Please contact Yalla Fixit if you need a new quotation.",
+    description:
+      "This estimate has been cancelled. If you have any questions about this cancellation, please contact the Yalla Fixit team.",
     icon: <AlertTriangle size={32} className="text-yellow-600" />,
     iconBg: "bg-yellow-100",
   },
   closed: {
     title: "Quotation Closed",
-    description: "This estimate has already been closed. Please contact Yalla Fixit if you need a new quotation.",
+    description:
+      "This estimate has been closed and is no longer active. If you have any questions, please contact the Yalla Fixit team.",
     icon: <AlertCircle size={32} className="text-gray-600" />,
     iconBg: "bg-gray-100",
   },
   expired: {
     title: "Quotation Expired",
-    description: "This estimate has expired. Please contact Yalla Fixit if you need a new quotation.",
+    description:
+      "This estimate has expired. To discuss next steps, please contact the Yalla Fixit team.",
     icon: <Clock size={32} className="text-orange-600" />,
     iconBg: "bg-orange-100",
   },
@@ -290,26 +312,7 @@ export default  function ReviewQuotationPage() {
             <div className="text-xs text-slate-500">
               {quotation.quotationDate}
             </div>
-            {quotation.validityDays != null && (
-              <div className="text-[11px] text-slate-500">
-                Valid for {quotation.validityDays} day
-                {quotation.validityDays === 1 ? "" : "s"} from issue
-              </div>
-            )}
-            {currentStatus && currentStatus.toLowerCase() !== "new" && (
-              <div className="mt-2 inline-flex items-center gap-1 rounded-full bg-slate-900 text-slate-50 px-2 py-0.5 text-[10px] font-medium">
-                {currentStatus.toLowerCase() === "approved" && (
-                  <CheckCircle2 className="h-3 w-3" />
-                )}
-                {currentStatus.toLowerCase() === "rejected" && (
-                  <XCircle className="h-3 w-3" />
-                )}
-                {currentStatus.toLowerCase() === "cancelled" && (
-                  <AlertTriangle className="h-3 w-3" />
-                )}
-                <span>{currentStatus}</span>
-              </div>
-            )}
+            
           </div>
         </div>
 
