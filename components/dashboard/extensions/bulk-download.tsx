@@ -184,27 +184,77 @@ export function ExtensionsPageClient() {
       const JSZip = (await import("jszip")).default;
       const zip = new JSZip();
 
+      const MAX_DOWNLOAD_RETRIES = 3;
+      const RETRY_BASE_DELAY_MS = 500;
+
+      const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+      const fetchWithRetry = async (url: string, fileName: string) => {
+        let lastError: unknown;
+
+        for (let attempt = 1; attempt <= MAX_DOWNLOAD_RETRIES; attempt++) {
+          try {
+            const response = await fetch(url);
+
+            if (!response.ok) {
+              throw new Error(
+                `Failed to download ${fileName} (attempt ${attempt}/${MAX_DOWNLOAD_RETRIES}, status ${response.status})`
+              );
+            }
+
+            return await response.arrayBuffer();
+          } catch (error) {
+            lastError = error;
+            console.error(`Error downloading ${fileName} on attempt ${attempt}:`, error);
+
+            if (attempt < MAX_DOWNLOAD_RETRIES) {
+              const backoff = RETRY_BASE_DELAY_MS * attempt;
+              await delay(backoff);
+            }
+          }
+        }
+
+        throw lastError;
+      };
+
+      // Ensure each file in the ZIP has a unique name so nothing gets overwritten.
+      const usedFileNames = new Map<string, number>();
+
+      const getUniqueFileName = (originalName: string) => {
+        const count = usedFileNames.get(originalName) ?? 0;
+        usedFileNames.set(originalName, count + 1);
+
+        if (count === 0) return originalName;
+
+        const dotIndex = originalName.lastIndexOf(".");
+        const base =
+          dotIndex === -1 ? originalName : originalName.substring(0, dotIndex);
+        const ext = dotIndex === -1 ? "" : originalName.substring(dotIndex);
+
+        return `${base} (${count + 1})${ext}`;
+      };
+
       const fetchOne = async (attachment: Attachment, index: number) => {
         await semaphore.acquire();
 
-        const fileName = attachment.File_Name || `attachment-${index + 1}`;
+        const rawName = attachment.File_Name || `attachment-${index + 1}`;
+        const uniqueFileName = getUniqueFileName(rawName);
 
         // Track "currently downloading" filenames for UI
         setDownloadState((prev) => ({
           ...prev,
-          currentFiles: [...prev.currentFiles.slice(-4), fileName],
+          currentFiles: [...prev.currentFiles.slice(-4), uniqueFileName],
         }));
 
         try {
           const fileId = attachment["$file_id"];
-          const response = await fetch(
-            `/api/zoho-file?file_id=${encodeURIComponent(fileId)}&token=${settings?.oauth_access_token}`
-          );
+          const url = `/api/zoho-file?file_id=${encodeURIComponent(
+            fileId
+          )}&token=${settings?.oauth_access_token}`;
 
-          if (!response.ok) throw new Error(`Failed to download ${fileName}`);
+          const buffer = await fetchWithRetry(url, uniqueFileName);
 
-          const buffer = await response.arrayBuffer();
-          zip.file(fileName, buffer);
+          zip.file(uniqueFileName, buffer);
           successCount++;
 
           setDownloadState((prev) => ({
@@ -212,7 +262,7 @@ export function ExtensionsPageClient() {
             completed: prev.completed + 1,
           }));
         } catch (err) {
-          console.error("Failed to download attachment:", err);
+          console.error("Failed to download attachment after retries:", err);
           failedFiles.push(attachment);
 
           setDownloadState((prev) => ({
@@ -243,7 +293,7 @@ export function ExtensionsPageClient() {
       setDownloadState((prev) => ({
         ...prev,
         status: "finished",
-        completed: attachments.length,
+        completed: successCount,
         currentFiles: [],
       }));
 
