@@ -31,6 +31,7 @@ export function buildQuotationEmailHtml({
     grandTotal,
     taxAmount,
     lineItems,
+    companyAddress,
   } = data;
 
   const formattedMessage = customMessage
@@ -45,10 +46,14 @@ export function buildQuotationEmailHtml({
     (sum, item) => sum + (item.unitPrice * item.quantity || 0),
     0
   );
-  const discountAmount = lineItems.reduce(
-    (sum, item) => sum + (item.discountAmount || 0),
-    0
-  );
+  const discountAmount = lineItems.reduce((sum, item) => {
+    const lineTotal = item.unitPrice * item.quantity;
+    const lineDiscount =
+      item.discountType === "Percent"
+        ? ((item.discountAmount || 0) / 100) * lineTotal
+        : item.discountAmount || 0;
+    return sum + lineDiscount;
+  }, 0);
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -130,6 +135,9 @@ export function buildQuotationEmailHtml({
                   ? `<div style="font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.16em; color:#6b7280; margin-bottom:4px; text-align:left;">
                       Service Address
                     </div>
+                      <div style="font-size:13px; font-weight:600; color:#020617; margin-bottom:2px;">
+                        ${companyAddress}
+              </div>
                     <div style="font-size:13px; color:#4b5563;">
                       ${serviceAddress}
                     </div>`

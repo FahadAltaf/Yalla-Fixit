@@ -10,11 +10,16 @@ interface Props {
 
 export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = false }: Props) {
   const calculated = calculateTotals(data);
-  const subTotal = data.subTotal || calculated.subTotal;
-  const discount =
-    data.discountAmount ??
-    data.lineItems?.reduce((sum, item) => sum + (item.discountAmount || 0), 0) ??
-    calculated.discount;
+  const subTotal = calculated.subTotal;
+  const discount = data.lineItems.reduce((sum, item) => {
+    const lineTotal = item.quantity * item.unitPrice;
+    const lineDiscount =
+      item.discountType === "Percent"
+        ? ((item.discountAmount || 0) / 100) * lineTotal
+        : item.discountAmount || 0;
+    return sum + lineDiscount;
+  }, 0);
+  const totalAfterDiscount = subTotal - discount;
   const taxAmount = data.taxAmount || calculated.taxAmount;
   const grandTotal = data.grandTotal || calculated.grandTotal;
   const avgTax = calculated.avgTax;
@@ -96,6 +101,7 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
             <div style={{ fontWeight: 700, fontSize: "14px",    marginBottom: "4px" }}>
               Service Address
             </div>
+           {data.companyAddress && <div style={{ fontWeight: 600  }}>{data.companyAddress}</div>}
             <div style={{ color: "#475569", lineHeight: 1.6 }}>{data.serviceAddress}</div>
           </div>
         )}
@@ -131,12 +137,12 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
         <tbody>
           {data.lineItems.map((item, idx) => {
             const lineTotal = item.quantity * item.unitPrice;
-            const lineTax = (lineTotal * item.taxRate) / 100;
-            const lineItemAmount = (item.unitPrice * item.quantity) - item?.discountAmount ;
-            const lineGross =
-              typeof item.lineAmount === "number"
-                ? item.lineAmount
-                : lineTotal + lineTax;
+            const lineDiscount =
+              item.discountType === "Percent"
+                ? ((item.discountAmount || 0) / 100) * lineTotal
+                : item.discountAmount || 0;
+            const lineItemAmount = lineTotal - lineDiscount;
+           
             return (
               <tr
                 key={idx}
@@ -145,11 +151,11 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
                 <td style={{     ...(forPDF
                     ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
                     : { padding: "12px" }), verticalAlign: "top" }}>
-                  <div style={{ fontWeight: 600, color: "#1e293b", marginBottom: "4px", fontSize: "11px",  }}>
+                  <div style={{ fontWeight: 600, color: "#1e293b", marginBottom: "4px", fontSize: "11px"}}>
                     {item.description}
                   </div>
                   {item.details && (
-                    <div style={{ color: "#64748b", fontSize: "11px" }}>
+                    <div style={{ color: "#64748b", fontSize: "11px", whiteSpace: 'pre-line' }}>
                       {item.details}
                     </div>
                   )}
@@ -167,7 +173,7 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
                   <td style={{fontSize: "11px",width:"86px",      ...(forPDF
                       ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
                       : { padding: "12px" }), textAlign: "right", verticalAlign: "top", color: "#64748b" }}>
-                    AED {item?.discountAmount?.toFixed(2)}
+                    {item?.discountType === 'Currency' ? `AED ${item?.discountAmount?.toFixed(2)}` : `${item?.discountAmount?.toFixed(0)}%`}
                   </td>
                 )}
                 <td style={{fontSize: "11px", width:"100px",     ...(forPDF
@@ -185,8 +191,9 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
       <div id="totals-block" style={{ display: "flex", justifyContent: "flex-end", marginBottom: "32px" }}>
         <div style={{ minWidth: "260px" }}>
           {[
-            { key: "subTotal", label: "Sub Total", value: data?.lineItems.reduce((sum, item) => sum + (item.unitPrice * item.quantity || 0), 0), muted: false },
-            { key: "discount", label: "Discount", value: data?.lineItems.reduce((sum, item) => sum + (item.discountAmount || 0), 0), muted: true },
+            { key: "subTotal", label: "Sub Total", value: subTotal, muted: false },
+            { key: "discount", label: "Discount", value: discount, muted: true },
+            { key: "totalAfterDiscount", label: "Total After Discount", value: totalAfterDiscount, muted: true },
             {
               key: "taxAmount",
               label: data.taxAmount != null ? "Tax Amount (5%)" : `Tax Amount (${avgTax.toFixed(0)}%)`,
@@ -194,7 +201,7 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
               muted: true,
             },
           ]
-            .filter((row) => !(hideDiscount && row.key === "discount"))
+            .filter((row) => !(hideDiscount && (row.key === "discount" || row.key === "totalAfterDiscount")))
             .map(({ key, label, value, muted }) => (
               <div
                 key={key}

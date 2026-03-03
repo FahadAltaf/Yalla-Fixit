@@ -30,7 +30,6 @@ function mapToQuotationData(payload: any): QuotationData {
 
   const companyAddress =
     estimate.Billing_Address?.Billing_Address_Name ??
-    estimate.Billing_Address?.Billing_Street_1 ??
     "";
 
   const customerCompanyName =
@@ -95,6 +94,7 @@ const customerId = payload?.contact?.data?.[0]?.Customer_Id__C ?? null;
       typeof item.Discount === "number"
         ? item.Discount
         : undefined,
+        discountType : item.Discount_Type ?? undefined,
   }));
 
   const discountAmount =

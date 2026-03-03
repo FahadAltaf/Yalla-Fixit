@@ -10,6 +10,7 @@ export interface QuotationLineItem {
     /** Line total including tax (from API Line_Item_Amount). When set, template uses this instead of calculating. */
     lineAmount?: number;
     discountAmount: number;
+    discountType?: 'Currency' | 'Percent';
     }
 
   export interface QuotationData {
@@ -101,7 +102,15 @@ export interface QuotationLineItem {
       (sum, item) => sum + item.quantity * item.unitPrice,
       0
     );
-    const discount = data.discountAmount ?? 0;
+    const totalLineDiscount = data.lineItems.reduce((sum, item) => {
+      const lineBase = item.quantity * item.unitPrice;
+      const discountValue =
+        item.discountType === "Percent"
+          ? ((item.discountAmount || 0) / 100) * lineBase
+          : item.discountAmount || 0;
+      return sum + discountValue;
+    }, 0);
+    const discount = data.discountAmount ?? totalLineDiscount;
     const taxableAmount = subTotal - discount;
     // average tax rate across items (simplified)
     const avgTax =
