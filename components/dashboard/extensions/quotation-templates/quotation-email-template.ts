@@ -1,3 +1,4 @@
+import { formatCurrencyAED } from "@/utils/format-currency";
 import { QuotationData } from "./quotation-templates";
 
 function escapeHtml(text: string) {
@@ -158,7 +159,7 @@ export function buildQuotationEmailHtml({
               Subtotal
             </td>
             <td style="padding:6px 0; font-size:13px; color:#111827; text-align:right;">
-           AED ${subtotal.toFixed(2)}
+           ${formatCurrencyAED(subtotal)}
             </td>
           </tr>
           <tr>
@@ -166,7 +167,7 @@ export function buildQuotationEmailHtml({
               Discount
             </td>
             <td style="padding:6px 0; font-size:13px; color:#b91c1c; text-align:right;">
-              - AED ${discountAmount.toFixed(2)}
+              - ${formatCurrencyAED(discountAmount)}
             </td>
           </tr>
           <tr>
@@ -174,7 +175,7 @@ export function buildQuotationEmailHtml({
               VAT (5%)
             </td>
             <td style="padding:6px 0; font-size:13px; color:#111827; text-align:right;">
-              + AED ${taxAmount?.toFixed(2) ?? 0}
+              + ${formatCurrencyAED(taxAmount ?? 0)}
             </td>
           </tr>
         </table>
@@ -187,7 +188,7 @@ export function buildQuotationEmailHtml({
                 Grand total
               </td>
               <td style="font-size:18px; font-weight:700; text-align:right;">
-                AED ${grandTotal?.toFixed(2) ?? 0}
+                ${formatCurrencyAED(grandTotal ?? 0)}
               </td>
             </tr>
           </table>
