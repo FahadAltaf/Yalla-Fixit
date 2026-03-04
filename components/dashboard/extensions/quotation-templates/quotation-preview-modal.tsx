@@ -287,7 +287,7 @@ export function QuotationPreviewModal({
         includeApprovalSection: true,
       });
 
-      // Send to primary customer with approve/reject section
+      // Send to primary customer; CC recipients on the same email (API cc field)
       await emailService.sendEmail({
         to: primary,
         subject: emailSubject,
@@ -306,9 +306,9 @@ export function QuotationPreviewModal({
         });
 
         await emailService.sendEmail({
-          to: ccEmails,
           subject: emailSubject,
           html: htmlForCc,
+          cc: ccEmails,
           attachment,
         });
       }

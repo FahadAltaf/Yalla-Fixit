@@ -1,6 +1,6 @@
 
 interface EmailOptions {
-  to: string | string[];
+  to?: string | string[];
   subject: string;
   html: string;
   cc?: string[];

@@ -7,9 +7,10 @@ interface Props {
   hideDiscount?: boolean;
   /** When true, applies PDF-specific layout tweaks (e.g. header offset). Only set when rendering for PDF download. */
   forPDF?: boolean;
+  type?: "normal" | "review";
 }
 
-export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = false }: Props) {
+export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = false, type = "normal" }: Props) {
   const calculated = calculateTotals(data);
   const subTotal = calculated.subTotal;
   const discount = data.lineItems.reduce((sum, item) => {
@@ -46,7 +47,7 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
         fontSize: "13px",
         color: "#1a1a2e",
         padding: "48px 20px",
-        ...(forPDF ? { paddingTop: "0px", paddingBottom:'0px' } : { paddingTop: "48px" }),
+        ...(forPDF ? { paddingTop: "0px", paddingBottom:'0px' } : type === "review" ? { paddingTop: "20px", paddingBottom: '20px'  } : { paddingTop: "48px" }),
 
         boxSizing: "border-box",
         position: "relative",

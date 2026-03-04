@@ -1,19 +1,14 @@
 "use client";
 
-import { AlertCircle, FileText, AlertTriangle, CheckCircle2, XCircle, Clock } from "lucide-react";
+import { AlertCircle, AlertTriangle, CheckCircle2, XCircle, Clock } from "lucide-react";
 
-
-import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
 import { QuotationData } from "@/components/dashboard/extensions/quotation-templates/quotation-templates";
-import { formatCurrencyAED } from "@/utils/format-currency";
+import { YallaClassicTemplate } from "@/components/dashboard/extensions/quotation-templates/templates/YallaClassicTemplate";
 import { ActionSection } from "./ActionSection";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import Loader from "@/components/ui/loader";
 import { EmptyState } from "@/components/ui/empty-state";
-import yallaFixit from "@/public/yalla-fixit.png";
-import Image from "next/image";
 
 
 
@@ -274,194 +269,26 @@ export default  function ReviewQuotationPage() {
 
   return (
     <EstimateStatusGuard currentStatus={currentStatus}>
-
-    <main className="min-h-screen bg-slate-100 flex items-center justify-center px-4 py-10">
-      <div className="w-full max-w-3xl bg-white shadow-lg border border-slate-200 rounded-lg overflow-hidden">
-        {/* Header – mirrors YallaClassicTemplate structure */}
-        <div className="flex items-start justify-between px-6 pt-6 pb-4 border-b border-slate-100">
-          <div className="flex items-center gap-3">
-          <Image src={yallaFixit} alt="Yalla Fixit" width={70} height={70} />
-
-            <div>
-              <div className="text-base font-semibold tracking-tight text-slate-900">
-                {quotation.companyName}
-              </div>
-              <div className="mt-1 text-xs text-slate-600 space-y-0.5">
-                <p>Office 102, Building 6, Gold &amp; Diamond Park, Dubai</p>
-                <p>
-                  <a
-                    href="https://www.yallafixit.ae"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-primary underline-offset-2 hover:underline"
-                  >
-                    https://www.yallafixit.ae
-                  </a>
-                </p>
-              </div>
+      <main className="min-h-screen bg-slate-100 flex items-center justify-center px-4 py-10">
+        <div className="flex flex-col items-center gap-4">
+          {/* Approve / Reject actions at the top */}
+          <div className="w-full flex justify-center">
+            <div className="w-full max-w-[794px]">
+              <ActionSection
+                estimateId={quotation.zohoEstimateId}
+                quotationNumber={quotation.quotationNumber}
+                currentStatus={currentStatus}
+                setCurrentStatus={setCurrentStatus}
+              />
             </div>
           </div>
 
-          <div className="text-right space-y-1">
-            <div className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">
-              Quotation
-            </div>
-            <div className="text-lg font-semibold text-slate-900">
-              {quotation.quotationNumber}
-            </div>
-            <div className="text-xs text-slate-500">
-              {quotation.quotationDate}
-            </div>
-            
+          {/* Exact quotation design using YallaClassicTemplate */}
+          <div className="overflow-x-auto">
+            <YallaClassicTemplate data={quotation} type="review" />
           </div>
         </div>
-
-        {/* Body – customer + service info + summary */}
-        <div className="px-6 py-5 space-y-6">
-          {/* From / Billed to / Service location */}
-          <section className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="space-y-0.5">
-                <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
-                  From
-                </p>
-                <p className="text-sm font-semibold text-slate-900">
-                  {quotation.companyName}
-                </p>
-                <p className="text-xs text-slate-500 max-w-md">
-                  Office 102, Building 6, Gold &amp; Diamond Park, Dubai
-                </p>
-              </div>
-              <div className="text-right space-y-0.5">
-                <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
-                  Issued on
-                </p>
-                <p className="text-sm font-semibold text-slate-900">
-                  {quotation.quotationDate}
-                </p>
-              </div>
-            </div>
-
-            <Separator className="my-2" />
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1">
-                <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
-                  Billed to
-                </p>
-                <p className="text-sm font-semibold text-slate-900">
-                  {quotation.customerCompanyName}
-                </p>
-                {quotation.customerContact && (
-                  <p className="text-xs text-slate-600">
-                    {quotation.customerContact}
-                  </p>
-                )}
-                {quotation.customerEmail && (
-                  <p className="text-xs text-slate-500">
-                    {quotation.customerEmail}
-                  </p>
-                )}
-                {quotation.customerPhone && (
-                  <p className="text-xs text-slate-500">
-                    {quotation.customerPhone}
-                  </p>
-                )}
-              </div>
-
-              {quotation.serviceAddress && (
-                <div className="space-y-1">
-                  <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
-                    Service address
-                  </p>
-                  {quotation.companyAddress && (
-                <p className="text-sm font-semibold text-slate-900">
-                      {quotation.companyAddress}
-                    </p>
-                  )}
-                  <p className="text-xs text-slate-600">
-                    {quotation.serviceAddress}
-                  </p>
-                </div>
-              )}
-            </div>
-          </section>
-
-          {/* Summary block – mirrors totals section style */}
-          <section className="space-y-3 rounded-lg border border-slate-200 bg-white px-4 py-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <FileText className="h-4 w-4 text-slate-500" />
-                <p className="text-sm font-semibold text-slate-900">
-                  Quotation summary ({quotation.lineItems.length} {quotation.lineItems.length === 1 ? "item" : "items"})
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-1.5 text-xs text-slate-600">
-              {quotation.lineItems.slice(0, 3).map((item, index) => (
-                <div
-                  key={`${item.description}-${index}`}
-                  className="flex items-center justify-between gap-2"
-                >
-                  <p className="truncate max-w-[70%]" title={item.details}>
-                    {item.description}
-                    {item.details ? ` ${item.details}` : ""}
-                  </p>
-                  <p className="whitespace-nowrap font-medium">
-                    {formatCurrencyAED(item.unitPrice * item.quantity)}
-                  </p>
-                </div>
-              ))}
-              {quotation.lineItems.length > 3 && (
-                <p className="text-[11px] text-slate-500">
-                  + {quotation.lineItems.length - 3} more line
-                  {quotation.lineItems.length - 3 === 1 ? "" : "s"} in this
-                  quotation
-                </p>
-              )}
-            </div>
-
-            <Separator className="my-2" />
-
-            <div className="flex items-center justify-between">
-            
-              {quotation.taxAmount != null && (
-                <div className="text-right space-y-0.5">
-                  <p className="text-[11px] text-slate-500">
-                    Includes estimated tax / VAT of{" "}
-                    {formatCurrencyAED(quotation.taxAmount ?? 0)} and discount of {formatCurrencyAED(quotation.lineItems.reduce((sum, item) => {
-    const lineTotal = item.quantity * item.unitPrice;
-    const lineDiscount =
-      item.discountType === "Percent"
-        ? ((item.discountAmount || 0) / 100) * lineTotal
-        : item.discountAmount || 0;
-    return sum + lineDiscount;
-  }, 0) ?? 0)}
-                  </p>
-                </div>
-              )}
-                <div className="space-y-0.5 text-right">
-                <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
-                  Grand total
-                </p>
-                <p className="text-lg font-semibold text-slate-900">
-                  {formatCurrencyAED(quotation.grandTotal ?? 0)}
-                </p>
-              </div>
-            </div>
-          </section>
-
-          {/* Approve / Reject actions (logic preserved) */}
-          <ActionSection
-            estimateId={quotation.zohoEstimateId}
-            quotationNumber={quotation.quotationNumber}
-            currentStatus={currentStatus}
-            setCurrentStatus={setCurrentStatus}
-          />
-        </div>
-      </div>
-    </main>
+      </main>
     </EstimateStatusGuard>
   );
 }

@@ -17,14 +17,17 @@ export async function POST(request: NextRequest) {
         ]
       : undefined;
 
-    const data = await resend.emails.send({
+    const emailOptions = {
+      ...(to && (cc && cc?.length > 0 || !cc) ? { to } : {}),
+      ...(!to && (cc && cc?.length > 0 ) ? { to: cc[0] } : {}),
+      ...(cc && cc.length > 0 ? { cc } : {}),
       from: process.env.NEXT_PUBLIC_EMAIL_FROM!,
-      to,
       subject,
       html,
-      cc,
       attachments,
-    });
+    };
+
+    const data = await resend.emails.send(emailOptions as any);
     return NextResponse.json({ data });
   } catch (error) {
     console.error('Error sending email:', error);

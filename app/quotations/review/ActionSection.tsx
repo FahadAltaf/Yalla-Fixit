@@ -76,7 +76,7 @@ export function ActionSection({ estimateId, quotationNumber, setCurrentStatus }:
   const disabled = !estimateId || !!isLoading;
 
   return (
-    <section className="space-y-4 rounded-lg border bg-slate-50 px-4 py-3">
+    <section className="space-y-4 rounded-lg border bg-white px-4 py-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <p className="text-sm font-medium text-slate-900">Approve or reject this quotation</p>
