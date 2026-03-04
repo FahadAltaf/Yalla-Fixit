@@ -59,7 +59,7 @@ export function QuotationTemplatesPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   // Template preview state (for now only Yalla Classic, with/without discount)
-  const [discountMode, setDiscountMode] = useState<"with" | "without">("with");
+  const [discountMode, setDiscountMode] = useState<"with" | "without" | "with-total">("with");
   const yallaClassicTemplate =
     QUOTATION_TEMPLATES.find((t) => t.id === "yalla-classic") ?? QUOTATION_TEMPLATES[0];
     const [isGenerating, setIsGenerating] = useState(false);
@@ -76,7 +76,7 @@ export function QuotationTemplatesPage() {
     setHasSearched(false);
 
     try {
-      const response = await fetch("/api/get-estimate", {
+      const response = await fetch("/api/estimates", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -137,7 +137,7 @@ export function QuotationTemplatesPage() {
             imageFormat: "JPEG",
             imageQuality: 0.92,
           },
-          discountMode
+          discountMode  
         );
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
@@ -307,18 +307,21 @@ export function QuotationTemplatesPage() {
                 <Select
                   value={discountMode}
                   onValueChange={(value) =>
-                    setDiscountMode(value as "with" | "without")
+                    setDiscountMode(value as "with" | "without" | "with-total")
                   }
                 >
                   <SelectTrigger className="w-max h-8 text-xs">
                     <SelectValue placeholder="Select quotation template mode" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="with-total">
+                      Discount Template By Total
+                    </SelectItem>
                     <SelectItem value="with">
-                      Quotation template with discount
+                      Discount Template By Line Items
                     </SelectItem>
                     <SelectItem value="without">
-                      Quotation template without discount
+                     Without Discount Template
                     </SelectItem>
                   </SelectContent>
                 </Select>
@@ -385,6 +388,7 @@ export function QuotationTemplatesPage() {
                         <YallaClassicTemplate
                           data={activeData}
                           hideDiscount={discountMode === "without"}
+                          discountMode ={discountMode}
                         />
                       </div>
                     )

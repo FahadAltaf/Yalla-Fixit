@@ -18,7 +18,7 @@ export async function generateQuotationPDFBlob(
   templateId: string,
   data: QuotationData,
   options: PDFGeneratorOptions = {},
-  discountMode: "with" | "without" = "with"
+  discountMode: "with" | "without" | "with-total" = "with"
 ): Promise<Blob> {
   const { scale = 2, imageFormat = "JPEG", imageQuality = 0.92 } = options;
 

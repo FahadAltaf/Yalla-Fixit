@@ -8,12 +8,13 @@ interface Props {
   /** When true, applies PDF-specific layout tweaks (e.g. header offset). Only set when rendering for PDF download. */
   forPDF?: boolean;
   type?: "normal" | "review";
+  discountMode?: string;
 }
 
-export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = false, type = "normal" }: Props) {
+export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = false, type = "normal", discountMode }: Props) {
   const calculated = calculateTotals(data);
   const subTotal = calculated.subTotal;
-  const discount = data.lineItems.reduce((sum, item) => {
+  const discount =discountMode === 'with-total' ? data.totalDiscountType === 'Percentage' ? ((Number(data.totalDiscount) || 0) / 100) * subTotal : Number(data.totalDiscount) || 0 : data.lineItems.reduce((sum, item) => {
     const lineTotal = item.quantity * item.unitPrice;
     const lineDiscount =
       item.discountType === "Percent"
@@ -103,7 +104,7 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
             <div style={{ fontWeight: 700, fontSize: "14px",    marginBottom: "4px" }}>
               Service Address
             </div>
-           {data.companyAddress && <div style={{ fontWeight: 600  }}>{data.companyAddress}</div>}
+           {/* {data.companyAddress && <div style={{ fontWeight: 600  }}>{data.companyAddress}</div>} */}
             <div style={{ color: "#475569", lineHeight: 1.6 }}>{data.serviceAddress}</div>
           </div>
         )}
@@ -113,9 +114,9 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
       <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: "8px" }}>
         <thead>
           <tr style={{ background: "black" }}>
-            {(hideDiscount
-              ? ["Service & Part", "Qty", "Unit", "List Price", "Amount"]
-              : ["Service & Part", "Qty", "Unit", "List Price", "Discount", "Amount"]
+            {(hideDiscount || discountMode === "with-total"
+              ? ["SR #","Service & Part", "Qty", "Unit", "List Price", "Amount"]
+              : ["SR #","Service & Part", "Qty", "Unit", "List Price", "Discount", "Amount"]
             ).map((h, i) => (
               <th
                 key={h}
@@ -127,7 +128,7 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
                   fontWeight: 700,
                   fontSize: "11px",
                   letterSpacing: "0.05em",
-                  textAlign: i === 0 ? "left" : "right",
+                  textAlign: i === 0 || i=== 1 ? "left" : "right",
                   whiteSpace: "nowrap",
                 }}
               >
@@ -150,6 +151,9 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
                 key={idx}
                 style={{ background: idx % 2 === 0 ? "#f8fafc" : "#ffffff", borderBottom: "1px solid #e2e8f0" }}
               >
+                <td style={{fontSize: "11px",     ...(forPDF
+                    ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
+                    : { padding: "12px" }), textAlign: "left", verticalAlign: "top", color: "#64748b" }}>{idx + 1}</td>
                 <td style={{     ...(forPDF
                     ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
                     : { padding: "12px" }), verticalAlign: "top" }}>
@@ -171,7 +175,7 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
                 <td style={{fontSize: "11px", width:"100px",     ...(forPDF
                     ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
                     : { padding: "12px" }), textAlign: "right", verticalAlign: "top" }}>{formatCurrencyAED(item.unitPrice)}</td>
-                {!hideDiscount && (
+                {(discountMode === "with") && (
                   <td style={{fontSize: "11px",width:"86px",      ...(forPDF
                       ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
                       : { padding: "12px" }), textAlign: "right", verticalAlign: "top", color: "#64748b" }}>
@@ -194,7 +198,7 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
         <div style={{ minWidth: "260px" }}>
           {[
             { key: "subTotal", label: "Sub Total", value: subTotal, muted: false },
-            { key: "discount", label: "Discount", value: discount, muted: true },
+            { key: "discount", label: discountMode === 'with-total' ? data.totalDiscountType === 'Percentage' ? `Discount (${data.totalDiscount}%)` : `Discount` : "Discount", value: discount, muted: true },
             { key: "totalAfterDiscount", label: "Total After Discount", value: totalAfterDiscount, muted: true },
             {
               key: "taxAmount",

@@ -133,8 +133,9 @@ const customerId = payload?.contact?.data?.[0]?.Customer_Id__C ?? null;
     quotationNumber,
     quotationDate,
     validityDays,
+    totalDiscount: estimate.Discount_value__C ,
+    totalDiscountType: estimate.DiscountType__C,
     lineItems,
-
     discountAmount,
     subTotal,
     taxAmount,

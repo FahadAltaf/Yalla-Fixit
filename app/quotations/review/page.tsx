@@ -20,7 +20,7 @@ async function fetchQuotation(
   currentStatus: string | null;
 }> {
   try {
-    const res = await fetch(`/api/get-estimate`, {
+    const res = await fetch(`/api/estimates`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -137,10 +137,17 @@ const STATUS_CONFIG: Record<
     icon: <Clock size={32} className="text-orange-600" />,
     iconBg: "bg-orange-100",
   },
+  new: {
+    title: "Quotation Error",
+    description:
+      "An error occurred while loading this quotation. Please contact Yalla Fixit support.",
+    icon: <AlertCircle size={32} className="text-red-600" />,
+    iconBg: "bg-red-100",
+  }
 };
 
 // Active statuses where approve/reject UI should be shown
-const ACTIVE_STATUSES = ["new", "waiting for approval"];
+const ACTIVE_STATUSES = ["waiting for approval"];
 
 // Fallback for unknown statuses
 const DEFAULT_CONFIG = {
@@ -221,6 +228,7 @@ function EstimateStatusGuard({
 export default  function ReviewQuotationPage() {
   const searchParams = useSearchParams();
   const quotationNumber = searchParams?.get("quotationNumber");
+  const discountMode = searchParams?.get("mode");
   const [quotation, setQuotation] = useState<QuotationData | null>(null);
   const [currentStatus, setCurrentStatus] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -285,7 +293,7 @@ export default  function ReviewQuotationPage() {
 
           {/* Exact quotation design using YallaClassicTemplate */}
           <div className="overflow-x-auto">
-            <YallaClassicTemplate data={quotation} type="review" />
+            <YallaClassicTemplate data={quotation} type="review" discountMode={discountMode ?? "with"} />
           </div>
         </div>
       </main>

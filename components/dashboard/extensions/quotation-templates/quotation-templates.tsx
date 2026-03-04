@@ -21,6 +21,8 @@ export interface QuotationLineItem {
     companyPhone?: string;
     companyLogo?: string; // base64 or url
     customerId?: string;
+    totalDiscount: string;
+    totalDiscountType: string;
 
     // Customer
     customerCompanyName: string;

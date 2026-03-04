@@ -103,7 +103,7 @@ export default function Extensions() {
               </Tabs>
             </div>
 
-            <ScrollArea className="h-[calc(100vh-118px)] sm:h-[calc(100vh-118px)] overflow-y-auto ">
+            <ScrollArea className="h-[calc(100vh-110px)] sm:h-[calc(100vh-11Opx)] overflow-y-auto ">
               <div className="flex flex-col gap-4 md:pl-4 pr-0 pt-0 pb-0 ">
                 {renderSettingsContent()}
               </div>

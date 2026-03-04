@@ -41,7 +41,7 @@ interface Props {
   onClose: () => void;
   template: QuotationTemplate;
   data: QuotationData;
-  discountMode: "with" | "without";
+  discountMode: "with" | "without" | "with-total";
   /**
    * When false, the Zoho FSM "mark as sent" transition will not be
    * triggered after sending the email. This is useful when the
@@ -68,7 +68,7 @@ async function generatePDFBlob(
   templateId: string,
   data: QuotationData,
   options: PDFGeneratorOptions = {},
-  discountMode: "with" | "without" = "with"
+  discountMode: "with" | "without" | "with-total" = "with"
 ): Promise<Blob> {
   const { scale = 2, imageFormat = "JPEG", imageQuality = 0.92 } = options;
 
@@ -276,8 +276,8 @@ export function QuotationPreviewModal({
       const appUrl =
         process.env.NEXT_PUBLIC_APP_URL || "https://yourwebsite.com";
       const quotationParam = encodeURIComponent(data.quotationNumber);
-      const approveUrl = `${appUrl}/quotations/review?quotationNumber=${quotationParam}&intent=approve`;
-      const rejectUrl = `${appUrl}/quotations/review?quotationNumber=${quotationParam}&intent=reject`;
+      const approveUrl = `${appUrl}/quotations/review?quotationNumber=${quotationParam}&intent=approve&mode=${discountMode}`;
+      const rejectUrl = `${appUrl}/quotations/review?quotationNumber=${quotationParam}&intent=reject&mode=${discountMode}`;
 
       const htmlForCustomer = buildQuotationEmailHtml({
         data,
@@ -285,6 +285,7 @@ export function QuotationPreviewModal({
         approveUrl,
         rejectUrl,
         includeApprovalSection: true,
+        discountMode
       });
 
       // Send to primary customer; CC recipients on the same email (API cc field)
@@ -303,6 +304,7 @@ export function QuotationPreviewModal({
           approveUrl,
           rejectUrl,
           includeApprovalSection: false,
+          discountMode
         });
 
         await emailService.sendEmail({

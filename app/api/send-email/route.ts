@@ -17,10 +17,22 @@ export async function POST(request: NextRequest) {
         ]
       : undefined;
 
+    let primaryTo = to as string | undefined;
+    let ccList = cc as string[] | undefined;
+
+    if (ccList && ccList.length === 1) {
+      if (!primaryTo) {
+        primaryTo = ccList[0];
+      }
+      ccList = undefined;
+    } else if (ccList && ccList.length > 1 && !primaryTo) {
+      primaryTo = ccList[0];
+      ccList = ccList.slice(1);
+    }
+
     const emailOptions = {
-      ...(to && (cc && cc?.length > 0 || !cc) ? { to } : {}),
-      ...(!to && (cc && cc?.length > 0 ) ? { to: cc[0] } : {}),
-      ...(cc && cc.length > 0 ? { cc } : {}),
+      ...(primaryTo ? { to: primaryTo } : {}),
+      ...(ccList && ccList.length > 0 ? { cc: ccList } : {}),
       from: process.env.NEXT_PUBLIC_EMAIL_FROM!,
       subject,
       html,
