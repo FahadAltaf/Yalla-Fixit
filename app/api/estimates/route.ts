@@ -129,6 +129,8 @@ const customerId = payload?.contact?.data?.[0]?.Customer_Id__C ?? null;
     customerEmail: customerEmail ?? undefined,
 
     serviceAddress: serviceAddress ?? undefined,
+    ownerName: estimate.Owner?.name ?? undefined,
+    ownerEmail: estimate.Owner?.email ?? undefined,
 
     quotationNumber,
     quotationDate,

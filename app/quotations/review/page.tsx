@@ -287,6 +287,10 @@ export default function ReviewQuotationPage() {
                 quotationNumber={quotation.quotationNumber}
                 currentStatus={currentStatus}
                 setCurrentStatus={setCurrentStatus}
+                ownerEmail={quotation.ownerEmail}
+                ownerName={quotation.ownerName}
+                customerName={quotation.customerContact || quotation.customerCompanyName}
+                customerEmail={quotation.customerEmail}
               />
             </div>
           </div>

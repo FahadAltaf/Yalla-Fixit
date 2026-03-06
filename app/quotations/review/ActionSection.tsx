@@ -6,6 +6,19 @@ import { AlertCircle, CheckCircle2, XCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { emailService } from "@/lib/email-service";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Loader2 } from "lucide-react";
 
 type Action = "approve" | "reject";
 
@@ -14,23 +27,152 @@ interface Props {
   quotationNumber: string;
   currentStatus: string | null;
   setCurrentStatus: (status: string) => void;
+  ownerEmail?: string;
+  ownerName?: string;
+  customerName?: string;
+  customerEmail?: string;
 }
 
-export function ActionSection({ estimateId, quotationNumber, setCurrentStatus }: Props) {
+export function ActionSection({
+  estimateId,
+  quotationNumber,
+  setCurrentStatus,
+  ownerEmail,
+  ownerName,
+  customerName,
+  customerEmail,
+}: Props) {
   const [isLoading, setIsLoading] = useState<Action | null>(null);
   const [lastAction, setLastAction] = useState<Action | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [confirmAction, setConfirmAction] = useState<Action | null>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [feedback, setFeedback] = useState("");
+  const [isRejectDialogOpen, setIsRejectDialogOpen] = useState(false);
+
+
+
+  const sendOwnerEmail = async (action: Action) => {
+    if (!ownerEmail) return;
+
+    const note = action === "reject" && feedback.trim() ? `${feedback.trim()}` : "";
+    const subject =
+      action === "approve"
+        ? `Quotation ${quotationNumber} approved by customer`
+        : `Quotation ${quotationNumber} rejected by customer`;
+
+    const greetingName = ownerName || "Team";
+    console.log("🚀 ~ sendOwnerEmail ~ greetingName:", ownerName, ownerEmail)
+
+    const statusText = action === "approve" ? "approved" : "rejected";
+
+    const html = `<!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Quotation ${quotationNumber} ${statusText} by customer</title>
+      </head>
+      <body style="margin:0; padding:0; background-color:#f4f4f5;">
+        <table
+          width="100%"
+          cellpadding="0"
+          cellspacing="0"
+          role="presentation"
+          style="background-color:#f4f4f5; padding:24px 0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;"
+        >
+          <tr>
+            <td align="center">
+              <table
+                width="100%"
+                cellpadding="0"
+                cellspacing="0"
+                role="presentation"
+                style="max-width:640px; margin:0 auto; padding:0 16px;"
+              >
+                <tr>
+                  <td>
+                    <table
+                      width="100%"
+                      cellpadding="0"
+                      cellspacing="0"
+                      role="presentation"
+                      style="background:#ffffff; border-radius:12px; border:1px solid #e5e7eb; overflow:hidden;"
+                    >
+                    
+
+                      <!-- Body -->
+                      <tr>
+                        <td style="padding:20px 24px; font-size:13px; line-height:1.6; color:#020617;">
+                          <p style="margin:0 0 12px;">Hi ${greetingName},</p>
+                          <p style="margin:0 0 12px;">
+                            The customer has <strong>${statusText}</strong> quotation
+                            <strong>${quotationNumber}</strong>.
+                          </p>
+
+                          ${note || customerName || customerEmail
+        ? `<div style="margin:16px 0; padding:12px 14px; border-radius:8px; border:1px solid #e5e7eb; background:#f9fafb; color:#111827; font-size:13px;">
+                                  ${note
+          ? `<p style="margin:0 0 8px;">
+                                          <strong>Note:</strong> ${note}
+                                        </p>`
+          : ""
+        }
+                                  ${customerName || customerEmail
+          ? `<p style="margin:0;">
+                                          <strong>Customer:</strong>
+                                          ${[customerName, customerEmail]
+            .filter(Boolean)
+            .join(" / ")}
+                                        </p>`
+          : ""
+        }
+
+          
+                                </div>`
+        : ""
+      }
+
+                          <p style="margin-top:16px; margin-bottom:0;">
+                            Best regards,<br />Yalla Fixit
+                          </p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </body>
+    </html>`;
+
+    try {
+      await emailService.sendEmail({
+        to: ownerEmail,
+        subject,
+        html,
+      });
+    } catch (err) {
+      console.error("Failed to send owner notification email", err);
+      toast.error(
+        "Quotation updated, but we could not notify the owner by email."
+      );
+    }
+  };
 
   const performAction = async (action: Action) => {
     if (!estimateId) {
-      toast.error("This quotation cannot be updated in Zoho (missing estimate id).");
+      toast.error(
+        "This quotation cannot be updated in Zoho (missing estimate id)."
+      );
       return;
     }
 
     setIsLoading(action);
     setError(null);
+
+    const note = action === "reject" && feedback.trim() ? `${feedback.trim()}` : `Accepted by ${customerName}`;
 
     try {
       const res = await fetch("/api/estimates/transition", {
@@ -41,13 +183,16 @@ export function ActionSection({ estimateId, quotationNumber, setCurrentStatus }:
         body: JSON.stringify({
           record_id: estimateId,
           action,
+          notes: note,
         }),
       });
 
       const json = await res.json().catch(() => null);
 
       if (!res.ok || !json?.success) {
-        setError("We couldn't update this quotation in Zoho. Please try again or contact support.");
+        setError(
+          "We couldn't update this quotation in Zoho. Please try again or contact support."
+        );
         toast.error("Failed to update quotation in Zoho.");
         return;
       }
@@ -59,9 +204,13 @@ export function ActionSection({ estimateId, quotationNumber, setCurrentStatus }:
           ? `Quotation ${quotationNumber} approved successfully.`
           : `Quotation ${quotationNumber} rejected successfully.`
       );
+
+      await sendOwnerEmail(action);
     } catch (err) {
       console.error(err);
-      setError("Unexpected error while talking to Zoho. Please try again.");
+      setError(
+        "Unexpected error while talking to Zoho. Please try again."
+      );
       toast.error("Something went wrong. Please try again.");
     } finally {
       setIsLoading(null);
@@ -69,25 +218,32 @@ export function ActionSection({ estimateId, quotationNumber, setCurrentStatus }:
   };
 
   const handleAction = (action: Action) => {
-    setConfirmAction(action);
+    if (action === "reject") {
+      setIsRejectDialogOpen(true);
+      return;
+    }
     setIsDialogOpen(true);
   };
 
-  const disabled = !estimateId || !!isLoading;
+  const disabledApprove = !estimateId || !!isLoading;
+  const disabledReject = !estimateId || !!isLoading;
 
   return (
     <section className="space-y-4 rounded-lg border bg-white px-4 py-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <p className="text-sm font-medium text-slate-900">Approve or reject this quotation</p>
+          <p className="text-sm font-medium text-slate-900">
+            Approve or reject this quotation
+          </p>
           <p className="text-xs text-slate-600">
-            Your choice will be saved in our system. 
+            Your choice will be saved in our system and reflected in
+            Zoho FSM.
           </p>
         </div>
         <div className="flex gap-2">
           <Button
             size="sm"
-            disabled={disabled}
+            disabled={disabledApprove}
             onClick={() => handleAction("approve")}
           >
             {isLoading === "approve" ? "Approving…" : "Approve"}
@@ -95,7 +251,7 @@ export function ActionSection({ estimateId, quotationNumber, setCurrentStatus }:
           <Button
             size="sm"
             variant="outline"
-            disabled={disabled}
+            disabled={disabledReject}
             onClick={() => handleAction("reject")}
           >
             {isLoading === "reject" ? "Rejecting…" : "Reject"}
@@ -129,34 +285,76 @@ export function ActionSection({ estimateId, quotationNumber, setCurrentStatus }:
 
       {!estimateId && (
         <p className="text-[11px] text-slate-500">
-          This quotation was loaded successfully, but it does not include a Zoho estimate id.
-          You can still review the details in the email/PDF, but approve/reject must be handled manually in Zoho.
+          This quotation was loaded successfully, but it does not
+          include a Zoho estimate id. You can still review the details
+          in the email/PDF, but approve/reject must be handled manually
+          in Zoho.
         </p>
       )}
 
       <ConfirmationAlertDialog
         isOpen={isDialogOpen}
         onOpenChange={setIsDialogOpen}
-        title={
-          confirmAction === "approve"
-            ? "Confirm Approval"
-            : "Confirm Rejection"
-        }
-        description={
-          confirmAction === "approve"
-            ? "Are you sure you want to approve this quotation. This action cannot be undone."
-            : "Are you sure you want to reject this quotation. This action cannot be undone."
-        }
-        confirmText={confirmAction === "approve" ? "Approve" : "Reject"}
+        title="Confirm Approval"
+        description="Are you sure you want to approve this quotation? This action cannot be undone."
+        confirmText="Approve"
         cancelText="Cancel"
-        loading={!!isLoading}
-        variant={confirmAction === "reject" ? "destructive" : "default"}
+        loading={isLoading === "approve"}
         onConfirm={async () => {
-          if (!confirmAction) return;
-          await performAction(confirmAction);
+          await performAction("approve");
           setIsDialogOpen(false);
         }}
       />
+
+      <AlertDialog open={isRejectDialogOpen} onOpenChange={setIsRejectDialogOpen}>
+        <AlertDialogContent className="max-w-md!">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Reject this quotation</AlertDialogTitle>
+            <AlertDialogDescription>
+              Please share a short reason for rejecting this quotation. This will be sent to the Yalla Fixit team for better handling.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          <div className="space-y-2 pt-2">
+            <p className="text-xs font-medium text-slate-800">
+              Reason for rejection
+            </p>
+            <Textarea
+              value={feedback}
+              onChange={(e) => setFeedback(e.target.value)}
+              placeholder="Example: Price is above budget, scope not aligned, or timing does not work."
+              className="text-xs"
+            />
+            <p className="text-[11px] text-slate-500">
+              This note will be stored with the quotation and shared with the team.
+            </p>
+          </div>
+
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isLoading === "reject"}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={isLoading === "reject"}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={async (e) => {
+                e.preventDefault();
+                if (!feedback.trim()) {
+                  toast.error("Please provide a short reason before rejecting this quotation.");
+                  return;
+                }
+                await performAction("reject");
+                setIsRejectDialogOpen(false);
+              }}
+            >
+              {isLoading === "reject" && (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              )}
+              Reject quotation
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   );
 }

@@ -4,10 +4,10 @@ const EDGE_URL = `${process.env.SUPABASE_URL}/functions/v1/zoho-fsm-estimate-tra
 const ANON_KEY = process.env.SUPABASE_ANON_KEY!;
 
 // POST /api/estimates/transition
-// Body: { record_id: string, action: "approve" | "reject" | "mark_as_sent" }
+// Body: { record_id: string, action: "approve" | "reject" | "mark_as_sent", notes?: string }
 export async function POST(req: NextRequest) {
   try {
-    const { record_id, action } = await req.json();
+    const { record_id, action, notes } = await req.json();
 
     if (!record_id) {
       return NextResponse.json(
@@ -26,13 +26,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const payload: Record<string, unknown> = {
+      record_id,
+      action,
+    };
+
+    if (typeof notes === "string" && notes.trim()) {
+      payload.notes = notes.trim();
+    }
+
     const res = await fetch(EDGE_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${ANON_KEY}`,
       },
-      body: JSON.stringify({ record_id, action, ...(action === "reject" ? { notes: "Rejected by Customer" } : {}) }),
+      body: JSON.stringify(payload),
     });
 
     const data = await res.json();
