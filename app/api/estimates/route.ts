@@ -152,12 +152,26 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
     const name = body?.name;
+    const id = body?.id;
 
-    if (!name || typeof name !== "string") {
+    if (!name && !id ) {
       return NextResponse.json(
-        { success: false, error: "Missing or invalid name" },
+        { success: false, error: "Missing or invalid name or id" },
         { status: 400 }
       );
+    }
+    let reqPayload: any = {};
+
+    if(id) {
+      reqPayload = {
+        ...reqPayload,
+        id: id,
+      };
+    } else {
+      reqPayload = {
+        ...reqPayload,
+        name: name,
+      };
     }
 
     const res = await fetch(SUPABASE_FUNCTION_URL, {
@@ -167,7 +181,7 @@ export async function POST(req: NextRequest) {
         apikey: SUPABASE_PUBLISHABLE_KEY,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify(reqPayload),
     });
 
     if (!res.ok) {

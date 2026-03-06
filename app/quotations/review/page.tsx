@@ -13,7 +13,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 
 
 async function fetchQuotation(
-  quotationNumber: string
+  estimateId: string
 ): Promise<{
   quotation: QuotationData | null;
   isActionable: boolean;
@@ -25,7 +25,7 @@ async function fetchQuotation(
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ name: quotationNumber }),
+      body: JSON.stringify({ id: estimateId }),
       cache: "no-store",
     });
 
@@ -225,40 +225,40 @@ function EstimateStatusGuard({
   );
 }
 
-export default  function ReviewQuotationPage() {
+export default function ReviewQuotationPage() {
   const searchParams = useSearchParams();
-  const quotationNumber = searchParams?.get("quotationNumber");
+  const estimateId = searchParams?.get("id");
   const discountMode = searchParams?.get("mode");
   const [quotation, setQuotation] = useState<QuotationData | null>(null);
   const [currentStatus, setCurrentStatus] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
 
-  
+
 
   useEffect(() => {
     const fetchData = async () => {
-      if (!quotationNumber) {
+      if (!estimateId) {
         setIsLoading(false);
         return;
       };
       setIsLoading(true);
-      const { quotation, currentStatus } = await fetchQuotation(quotationNumber);
+      const { quotation, currentStatus } = await fetchQuotation(estimateId);
       setQuotation(quotation);
       setCurrentStatus(currentStatus);
       setIsLoading(false);
     };
     void fetchData();
-  }, [quotationNumber]);
+  }, [estimateId]);
 
   if (isLoading) {
-    return <div className="flex items-center justify-center py-8 h-[calc(100vh)]"><Loader/></div>;
+    return <div className="flex items-center justify-center py-8 h-[calc(100vh)]"><Loader /></div>;
   }
 
-  if (!quotationNumber) {
+  if (!estimateId) {
     return (
       <main className="min-h-screen flex items-center justify-center px-4 py-10">
-       <EmptyState title="Invalid quotation link" description="The quotation reference is missing from this link. Please use the original email button again or contact Yalla Fixit support." icon={<AlertCircle className="" />} />
+        <EmptyState title="Invalid quotation link" description="The quotation reference is missing from this link. Please use the original email button again or contact Yalla Fixit support." icon={<AlertCircle className="" />} />
       </main>
     );
   }
@@ -267,7 +267,7 @@ export default  function ReviewQuotationPage() {
   if (!quotation) {
     return (
       <main className="min-h-screen flex items-center justify-center px-4 py-10">
-      <EmptyState title="We could not load this quotation" description="The quotation may have expired, been updated, or the link is no longer valid. Please reach out to Yalla Fixit so we can resend an updated quotation." icon={<AlertCircle className="" />} />
+        <EmptyState title="We could not load this quotation" description="The quotation may have expired, been updated, or the link is no longer valid. Please reach out to Yalla Fixit so we can resend an updated quotation." icon={<AlertCircle className="" />} />
       </main>
     );
   }

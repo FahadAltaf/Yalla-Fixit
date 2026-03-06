@@ -34,7 +34,6 @@ export function buildQuotationEmailHtml({
     grandTotal,
     taxAmount,
     lineItems,
-    companyAddress,
   } = data;
 
   const formattedMessage = customMessage
@@ -138,9 +137,7 @@ export function buildQuotationEmailHtml({
                   ? `<div style="font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.16em; color:#6b7280; margin-bottom:4px; text-align:left;">
                       Service Address
                     </div>
-                    ${ companyAddress ? `<div style="font-size:13px; font-weight:600; color:#020617; margin-bottom:2px;">
-                        ${companyAddress}
-                      </div>` : "" }
+                  
                     <div style="font-size:13px; color:#4b5563;">
                       ${serviceAddress}
                     </div>`

@@ -49,7 +49,7 @@ interface Props {
    * resend the email from the dashboard.
    */
   shouldMarkAsSent?: boolean;
-  setCurrentStatus: (status: string) => void; 
+  setCurrentStatus: (status: string) => void;
 }
 
 type SendStatus = "idle" | "sending" | "sent" | "error";
@@ -61,7 +61,7 @@ interface PDFGeneratorOptions {
   imageQuality?: number;   // 0–1, only applies to JPEG (default: 0.92)
 }
 
-  // ─── PDF Generator ────────────────────────────────────────────────────────────
+// ─── PDF Generator ────────────────────────────────────────────────────────────
 // Renders template into a hidden off-screen div at FULL SIZE (794px).
 // Uses React 18 createRoot API — no deprecated ReactDOM.render.
 async function generatePDFBlob(
@@ -89,7 +89,7 @@ async function generatePDFBlob(
     switch (templateId) {
       case "modern-bold": TemplateEl = <ModernBoldTemplate data={data} />; break;
       case "minimal-clean": TemplateEl = <MinimalCleanTemplate data={data} />; break;
-      default: TemplateEl = <YallaClassicTemplate data={data} forPDF                       hideDiscount={discountMode === "without"}
+      default: TemplateEl = <YallaClassicTemplate data={data} forPDF hideDiscount={discountMode === "without"}
       />;
     }
 
@@ -200,10 +200,8 @@ export function QuotationPreviewModal({
     `Quotation ${data.quotationNumber} — ${data.companyName}`
   );
   const [emailMessage, setEmailMessage] = useState(
-    `Dear ${
-      data.customerContact || data.customerCompanyName || "Customer"
-    },\n\nPlease find quotation ${data.quotationNumber} from ${
-      data.companyName
+    `Dear ${data.customerContact || data.customerCompanyName || "Customer"
+    },\n\nPlease find quotation ${data.quotationNumber} from ${data.companyName
     } attached for your review.`
   );
   const [sendStatus, setSendStatus] = useState<SendStatus>("idle");
@@ -275,9 +273,9 @@ export function QuotationPreviewModal({
 
       const appUrl =
         process.env.NEXT_PUBLIC_APP_URL || "https://yourwebsite.com";
-      const quotationParam = encodeURIComponent(data.quotationNumber);
-      const approveUrl = `${appUrl}/quotations/review?quotationNumber=${quotationParam}&intent=approve&mode=${discountMode}`;
-      const rejectUrl = `${appUrl}/quotations/review?quotationNumber=${quotationParam}&intent=reject&mode=${discountMode}`;
+      const estimateId = encodeURIComponent(data.zohoEstimateId ?? "");
+      const approveUrl = `${appUrl}/quotations/review?id=${estimateId}&intent=approve&mode=${discountMode}`;
+      const rejectUrl = `${appUrl}/quotations/review?id=${estimateId}&intent=reject&mode=${discountMode}`;
 
       const htmlForCustomer = buildQuotationEmailHtml({
         data,
@@ -327,10 +325,9 @@ export function QuotationPreviewModal({
         });
         setCurrentStatus("Waiting For Approval");
       }
-      
+
       toast.success(
-        `Quotation email sent to ${primary}${
-          ccEmails.length ? ` (CC: ${ccEmails.join(", ")})` : ""
+        `Quotation email sent to ${primary}${ccEmails.length ? ` (CC: ${ccEmails.join(", ")})` : ""
         }.`
       );
     } catch (error) {
@@ -352,208 +349,208 @@ export function QuotationPreviewModal({
   // ─────────────────────────────────────────────────────────────────────
   return (
     <Dialog open={open} onOpenChange={handleDialogOpenChange}>
-    <DialogContent className={sendStatus === "sent" ? "sm:max-w-md" : "flex flex-col gap-0 overflow-y-visible p-0 sm:max-w-lg [&>button:last-child]:top-3.5"}>
-      {
-        sendStatus !== "sent" ? (
-          <DialogHeader className="contents space-y-0 text-left">
-            <DialogTitle className="border-b px-6 py-4 text-base flex items-center gap-2">
-              <Send className="h-4 w-4 text-primary" />
-              Send Quotation Email
-            </DialogTitle>
-          </DialogHeader>
-        ): (
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Send className="size-4 text-primary" />
-              Quotation Email Sent!
-            </DialogTitle>
-            {/* <DialogDescription>
+      <DialogContent className={sendStatus === "sent" ? "sm:max-w-md" : "flex flex-col gap-0 overflow-y-visible p-0 sm:max-w-lg [&>button:last-child]:top-3.5"}>
+        {
+          sendStatus !== "sent" ? (
+            <DialogHeader className="contents space-y-0 text-left">
+              <DialogTitle className="border-b px-6 py-4 text-base flex items-center gap-2">
+                <Send className="h-4 w-4 text-primary" />
+                Send Quotation Email
+              </DialogTitle>
+            </DialogHeader>
+          ) : (
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Send className="size-4 text-primary" />
+                Quotation Email Sent!
+              </DialogTitle>
+              {/* <DialogDescription>
               Quotation email sent to {totalRecipientCount} recipient{totalRecipientCount !== 1 ? "s" : ""}.
             </DialogDescription> */}
-          </DialogHeader>
-        )
-      }
-    
-      {sendStatus === "sent" ? (
-            /* ── Success ── */
-            <div className="space-y-4 pt-2">
+            </DialogHeader>
+          )
+        }
+
+        {sendStatus === "sent" ? (
+          /* ── Success ── */
+          <div className="space-y-4 pt-2">
             {/* Status icon */}
             <div className="flex justify-center">
-                <div className="flex flex-col items-center gap-2">
-                  <CheckCircle2 className="size-14 text-green-500 animate-in zoom-in-50 duration-300" />
-                  <p className="font-semibold text-base">Sent Successfully!</p>
+              <div className="flex flex-col items-center gap-2">
+                <CheckCircle2 className="size-14 text-green-500 animate-in zoom-in-50 duration-300" />
+                <p className="font-semibold text-base">Sent Successfully!</p>
                 <p className="text-sm text-muted-foreground">
                   Quotation delivered to{" "}
                   <span className="font-medium text-foreground">
                     {totalRecipientCount} recipient{totalRecipientCount !== 1 ? "s" : ""}
                   </span>
                 </p>
-  {/* Recipients summary badges */}
-  {(primaryRecipient || ccEmails.length > 0) && (
-                <div className="flex flex-wrap justify-center gap-1.5 max-w-xs animate-in fade-in-0 duration-500 delay-200">
-                  {primaryRecipient && (
-                    <Badge variant="secondary" className="text-xs gap-1">
-                      <Mail className="size-3" />
-                      {primaryRecipient}
-                    </Badge>
-                  )}
-                  {ccEmails.map((email) => (
-                    <Badge key={email} variant="outline" className="text-xs gap-1">
-                      <Mail className="size-3" />
-                      {email}
-                    </Badge>
-                  ))}
-                </div>
-              )}                </div>
-
-                </div>
-                <Button className="w-full" onClick={() => {
-                  
-                  onClose();
-                  setTimeout(() => {
-                    setSendStatus("idle");
-                  }, 500);
-                }}>
-                  <X className="size-4" />
-                  Close
-              </Button>
-
-                </div>
-                
-          ) : (
-            <div className="overflow-y-auto max-h-[85vh] px-6 pt-4 pb-6">
-
-                  <div className="space-y-5  pb-4">
-                    {/* Customer email */}
-                    <div className="space-y-2">
-                      <Label className="flex items-center gap-2 text-sm">
-                        <User className="size-3.5 text-primary" /> Customer Email
-                      </Label>
-                      <div className="flex gap-2">
-                        <Input
-                          placeholder="customer@example.com"
-                          value={customerEmail}
-                          onChange={(e) => setCustomerEmail(e.target.value)}
-                          className="text-sm"
-                        />
-                      </div>
-                      {!data.customerEmail && (
-                        <p className="text-[11px] text-muted-foreground">
-                          No customer email found in quotation. Please enter it
-                          to send the quotation.
-                        </p>
-                      )}
-                    </div>
-
-
-                {/* CC emails */}
-                <div className="space-y-2">
-                  <Label className="flex items-center gap-2 text-sm">
-                    <Users className="size-3.5 text-primary" /> CC Emails (optional)
-                  </Label>
-                  <div className="flex gap-2">
-                    <Input
-                      placeholder="cc@example.com"
-                      value={ccEmail}
-                      onChange={(e) => setCcEmail(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && addCcEmail()}
-                      className="text-sm"
-                    />
-                    <Button
-                      type="button"
-                      size="icon"
-                      variant="outline"
-                      onClick={addCcEmail}
-                    >
-                      <Plus className="size-4" />
-                    </Button>
-                  </div>
-                  {ccEmails.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {ccEmails.map((email) => (
-                        <Badge
-                          key={email}
-                          variant="secondary"
-                          className="gap-1 pr-1"
-                        >
-                          {email}
-                          <button
-                            type="button"
-                            onClick={() => removeCcEmail(email)}
-                            className="ml-1 hover:text-destructive"
-                          >
-                            <X className="size-3" />
-                          </button>
-                        </Badge>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-
-                    {/* Subject + Message */}
-                      <div className="space-y-2">
-                      <Label className="flex items-center gap-2 text-sm">
-                        <Mail className="size-3.5 text-primary" /> Subject
-                      </Label>                        <Input
-                          value={emailSubject}
-                          onChange={(e) => setEmailSubject(e.target.value)}
-                          className="text-sm"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                      <Label className="flex items-center gap-2 text-sm">
-                        <MessageCircle className="size-3.5 text-primary" /> Customer Message (optional)
-                      </Label>
-                        <textarea
-                          value={emailMessage}
-                          onChange={(e) => setEmailMessage(e.target.value)}
-                          rows={5}
-                          className="w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                        />
-                    </div>
-
-               
-                  </div>
-<div className="pb-4">
-{primaryRecipient && (
-                  <Alert>
-                    <Mail className="size-4" />
-                    <AlertDescription className="text-xs">
-                      Sending to{" "}
-                      <span className="font-medium">
+                {/* Recipients summary badges */}
+                {(primaryRecipient || ccEmails.length > 0) && (
+                  <div className="flex flex-wrap justify-center gap-1.5 max-w-xs animate-in fade-in-0 duration-500 delay-200">
+                    {primaryRecipient && (
+                      <Badge variant="secondary" className="text-xs gap-1">
+                        <Mail className="size-3" />
                         {primaryRecipient}
-                        {ccEmails.length
-                          ? ` (CC: ${ccEmails.join(", ")})`
-                          : ""}
-                      </span>
-                    </AlertDescription>
-                  </Alert>
-                )}
-
-                    {sendStatus === "error" && (
-                      <Alert variant="destructive">
-                        <AlertDescription>
-                          Failed to send. Please try again.
-                        </AlertDescription>
-                      </Alert>
+                      </Badge>
                     )}
-          </div> 
+                    {ccEmails.map((email) => (
+                      <Badge key={email} variant="outline" className="text-xs gap-1">
+                        <Mail className="size-3" />
+                        {email}
+                      </Badge>
+                    ))}
+                  </div>
+                )}                </div>
 
-         <DialogFooter className=" -mx-6 -mb-6">
-         <Button
-                             type="button"
-                             variant="outline"
-                             onClick={() => onClose()}
-                           >
-                             Cancel
-                           </Button>
-                           <Button type="button" disabled={sendStatus === "sending"} onClick={handleSendEmail}>
-                             {sendStatus === "sending" ? "Sending..." : "Send Email"}
-                           </Button>
-                         </DialogFooter>
             </div>
+            <Button className="w-full" onClick={() => {
+
+              onClose();
+              setTimeout(() => {
+                setSendStatus("idle");
+              }, 500);
+            }}>
+              <X className="size-4" />
+              Close
+            </Button>
+
+          </div>
+
+        ) : (
+          <div className="overflow-y-auto max-h-[85vh] px-6 pt-4 pb-6">
+
+            <div className="space-y-5  pb-4">
+              {/* Customer email */}
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2 text-sm">
+                  <User className="size-3.5 text-primary" /> Customer Email
+                </Label>
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="customer@example.com"
+                    value={customerEmail}
+                    onChange={(e) => setCustomerEmail(e.target.value)}
+                    className="text-sm"
+                  />
+                </div>
+                {!data.customerEmail && (
+                  <p className="text-[11px] text-muted-foreground">
+                    No customer email found in quotation. Please enter it
+                    to send the quotation.
+                  </p>
+                )}
+              </div>
+
+
+              {/* CC emails */}
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2 text-sm">
+                  <Users className="size-3.5 text-primary" /> CC Emails (optional)
+                </Label>
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="cc@example.com"
+                    value={ccEmail}
+                    onChange={(e) => setCcEmail(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && addCcEmail()}
+                    className="text-sm"
+                  />
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="outline"
+                    onClick={addCcEmail}
+                  >
+                    <Plus className="size-4" />
+                  </Button>
+                </div>
+                {ccEmails.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {ccEmails.map((email) => (
+                      <Badge
+                        key={email}
+                        variant="secondary"
+                        className="gap-1 pr-1"
+                      >
+                        {email}
+                        <button
+                          type="button"
+                          onClick={() => removeCcEmail(email)}
+                          className="ml-1 hover:text-destructive"
+                        >
+                          <X className="size-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+
+              {/* Subject + Message */}
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2 text-sm">
+                  <Mail className="size-3.5 text-primary" /> Subject
+                </Label>                        <Input
+                  value={emailSubject}
+                  onChange={(e) => setEmailSubject(e.target.value)}
+                  className="text-sm"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2 text-sm">
+                  <MessageCircle className="size-3.5 text-primary" /> Customer Message (optional)
+                </Label>
+                <textarea
+                  value={emailMessage}
+                  onChange={(e) => setEmailMessage(e.target.value)}
+                  rows={5}
+                  className="w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+              </div>
+
+
+            </div>
+            <div className="pb-4">
+              {primaryRecipient && (
+                <Alert>
+                  <Mail className="size-4" />
+                  <AlertDescription className="text-xs">
+                    Sending to{" "}
+                    <span className="font-medium">
+                      {primaryRecipient}
+                      {ccEmails.length
+                        ? ` (CC: ${ccEmails.join(", ")})`
+                        : ""}
+                    </span>
+                  </AlertDescription>
+                </Alert>
               )}
+
+              {sendStatus === "error" && (
+                <Alert variant="destructive">
+                  <AlertDescription>
+                    Failed to send. Please try again.
+                  </AlertDescription>
+                </Alert>
+              )}
+            </div>
+
+            <DialogFooter className=" -mx-6 -mb-6">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onClose()}
+              >
+                Cancel
+              </Button>
+              <Button type="button" disabled={sendStatus === "sending"} onClick={handleSendEmail}>
+                {sendStatus === "sending" ? "Sending..." : "Send Email"}
+              </Button>
+            </DialogFooter>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { EyeIcon, EyeOffIcon} from "lucide-react";
+import { EyeIcon, EyeOffIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -49,22 +49,17 @@ const ResetPasswordForm = ({
       try {
         // Wait a bit for Supabase to process the redirect
         await new Promise((resolve) => setTimeout(resolve, 500));
-console.log("🚀 ~ checkSession ~ window.location.hash:", window.location)
         // Method 1: Check for hash fragment (access_token in URL)
         if (window.location.hash) {
           const hashParams = new URLSearchParams(
             window.location.hash.substring(1)
           );
           const accessToken = hashParams.get("access_token");
-          console.log("🚀 ~ checkSession ~ accessToken:", accessToken)
           const refreshToken = hashParams.get("refresh_token");
-          console.log("🚀 ~ checkSession ~ refreshToken:", refreshToken)
           const type = hashParams.get("type");
-          console.log("🚀 ~ checkSession ~ type:", type)
 
           if (type === "recovery" && accessToken) {
             const result = await setSession(accessToken, refreshToken || "");
-            console.log("🚀 ~ checkSession ~ result:", result)
             if (result && "type" in result && result.type === "error") {
               console.error(
                 "Session set error:",
@@ -73,7 +68,7 @@ console.log("🚀 ~ checkSession ~ window.location.hash:", window.location)
               setIsValidSession(false);
               toast.error(
                 (result as AuthServiceError).message ||
-                  "Invalid or expired reset link. Please request a new one."
+                "Invalid or expired reset link. Please request a new one."
               );
               return;
             }
@@ -93,14 +88,11 @@ console.log("🚀 ~ checkSession ~ window.location.hash:", window.location)
 
         // Method 2: Check for query parameters (token_hash and type)
         const tokenHash = searchParams.get("token_hash");
-        console.log("🚀 ~ checkSession ~ tokenHash:", tokenHash)
         const type = searchParams.get("type");
-        console.log("🚀 ~ checkSession ~ type:", type)
 
         if (type === "recovery" && tokenHash) {
           // Exchange the token_hash for a session
           const result = await verifyRecoveryOtp(tokenHash);
-          console.log("🚀 ~ checkSession ~ result:", result)
           if (result && "type" in result && result.type === "error") {
             console.error(
               "Token verification error:",
@@ -109,12 +101,11 @@ console.log("🚀 ~ checkSession ~ window.location.hash:", window.location)
             setIsValidSession(false);
             toast.error(
               (result as AuthServiceError).message ||
-                "Invalid or expired reset link. Please request a new one."
+              "Invalid or expired reset link. Please request a new one."
             );
             return;
           }
           const data = result as { session: { access_token: string } | null };
-          console.log("🚀 ~ checkSession ~ data:", data)
           // if (data?.session) {
           //   setIsValidSession(true);
           //   // Clean URL
