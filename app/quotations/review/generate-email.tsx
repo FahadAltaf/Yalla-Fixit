@@ -123,10 +123,9 @@ export function generateQuotationEmail(data: QuotationEmailData): string {
                         <td style="vertical-align:top;">
                           <div style="font-size:18px;font-weight:700;letter-spacing:-0.5px;">${data.companyName ?? "Yalla Fixit"}</div>
                           <div style="line-height:1.6;font-size:11px;color:#374151;">
-                            Office 102, Building 6, Gold &amp; Diamond Park,<br />
-                            Dubai,<br />
+                            Office 102, Building 6, Gold &amp; Diamond Park Dubai, UAE,<br />
                             <a href="https://www.yallafixit.ae" target="_blank" rel="noopener noreferrer" style="color:#1d4ed8;">https://www.yallafixit.ae</a>
-                          </div>
+                          </div>  
                         </td>
                       </tr>
                     </table>
@@ -134,8 +133,8 @@ export function generateQuotationEmail(data: QuotationEmailData): string {
 
                   <!-- Quotation Number + Badge -->
                   <td style="text-align:right;vertical-align:top;">
-                    <div style="font-weight:700;font-size:14px;margin-bottom:4px;">Quotation</div>
-                    <div style="font-weight:700;font-size:14px;color:#1e293b;margin-top:6px;">${data.quotationNumber ?? "—"}</div>
+                    <div style="font-weight:700;font-size:14px;margin-bottom:3px;">Quotation</div>
+                    <div style="font-weight:700;font-size:14px;color:#1e293b;margin-top:0px;">${data.quotationNumber ?? "—"}</div>
                     <div style="color:#64748b;font-size:11px;margin-top:2px;">${data.quotationDate ?? "—"}</div>
                    
                   </td>

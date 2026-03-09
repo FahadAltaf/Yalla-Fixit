@@ -29,11 +29,12 @@ export function buildQuotationEmailHtml({
     customerCompanyName,
     customerContact,
     quotationNumber,
-    quotationDate,
     serviceAddress,
     grandTotal,
     taxAmount,
     lineItems,
+    customerEmail,
+    customerPhone,
   } = data;
 
   const formattedMessage = customMessage
@@ -64,7 +65,7 @@ export function buildQuotationEmailHtml({
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Quotation ${quotationNumber}</title>
 </head>
-<body style="margin:0; padding:0; background-color:#f4f4f5; font-family:'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;">
+<body style="margin:0; padding:0; background-color:#f4f4f5;">
 
   <div style="max-width:640px; margin:0 auto; padding:32px 16px;">
 
@@ -72,33 +73,40 @@ export function buildQuotationEmailHtml({
     <div style="background:#ffffff; border-radius:12px; border:1px solid #e5e7eb; overflow:hidden;">
 
       <!-- Header -->
-      <div style="padding:20px 24px; border-bottom:1px solid #e5e7eb; background:#0b0b0b; color:#ffffff;">
-        <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
-          <tr>
-            <td valign="top" style="padding:0; text-align:left;">
-              <div style="font-size:11px; letter-spacing:0.18em; text-transform:uppercase; opacity:0.7; margin-bottom:4px;">
-                Quotation
-              </div>
-              <div style="font-size:20px; font-weight:700; letter-spacing:-0.03em;">
-                ${quotationNumber}
-              </div>
-            </td>
-            <td valign="top" style="padding:0; text-align:right;">
-              <div style="font-size:11px; opacity:0.7; margin-bottom:2px;">
-                Date
-              </div>
-              <div style="font-size:13px; font-weight:600;">
-                ${quotationDate}
-              </div>
-              ${
-                data.validityDays
-                  ? `<div style="font-size:11px; margin-top:4px; opacity:0.7;">Valid for ${data.validityDays} days</div>`
-                  : ""
-              }
-            </td>
-          </tr>
-        </table>
-      </div>
+       <div style="padding:32px 32px 0 32px;">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <!-- Logo + Company -->
+                  <td style="vertical-align:top;">
+                    <table cellpadding="0" cellspacing="0">
+                      <tr>
+                        <td style="padding-right:10px;vertical-align:top;">
+                          <img src="https://portal.yallafixit.ae/yalla-fixit.png" alt="Yalla Fixit" width="70" height="70" style="display:block;object-fit:contain;" />
+                        </td>
+                        <td style="vertical-align:top;">
+                          <div style="font-size:18px;font-weight:700;letter-spacing:-0.5px;">Yalla Fixit</div>
+                          <div style="line-height:1.6;font-size:11px;color:#374151;">
+                            Office 102, Building 6, Gold &amp; Diamond Park Dubai, UAE,<br />
+                            <a href="https://www.yallafixit.ae" target="_blank" rel="noopener noreferrer" style="color:#1d4ed8;">https://www.yallafixit.ae</a>
+                          </div>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+
+                  <!-- Quotation Number + Badge -->
+                  <td style="text-align:right;vertical-align:top;">
+                    <div style="font-weight:700;font-size:14px;margin-bottom:3px;">Quotation</div>
+                    <div style="font-weight:700;font-size:14px;color:#1e293b;margin-top:0px;">${data.quotationNumber ?? "—"}</div>
+                    <div style="color:#64748b;font-size:11px;margin-top:2px;">${data.quotationDate ?? "—"}</div>
+                   
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Divider -->
+              <div style="height:1px;background:#e2e8f0;margin:24px 0 0;"></div>
+            </div>
 
       <!-- Body -->
       <div style="padding:24px 24px 20px; color:#020617; font-size:13px; line-height:1.6;">
@@ -119,7 +127,7 @@ export function buildQuotationEmailHtml({
         <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse; margin-bottom:20px;">
           <tr>
             <td valign="top" style="padding:0; width:50%;">
-              <div style="font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.16em; color:#6b7280; margin-bottom:4px;">
+              <div style="font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.16em; color:#3c4048; margin-bottom:4px;">
                 Customer
               </div>
               <div style="font-size:13px; font-weight:600; color:#020617; margin-bottom:2px;">
@@ -130,11 +138,21 @@ export function buildQuotationEmailHtml({
                   ? `<div style="font-size:12px; color:#4b5563; margin-bottom:1px;">${customerContact}</div>`
                   : ""
               }
+                    ${
+                customerEmail
+                  ? `<div style="font-size:12px; color:#4b5563; margin-bottom:1px;">${customerEmail}</div>`
+                  : ""
+              }
+                    ${
+                customerPhone
+                  ? `<div style="font-size:12px; color:#4b5563; margin-bottom:1px;">${customerPhone}</div>`
+                  : ""
+              }
             </td>
             <td valign="top" style="padding:0; width:50%;">
               ${
                 serviceAddress
-                  ? `<div style="font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.16em; color:#6b7280; margin-bottom:4px; text-align:left;">
+                  ? `<div style="font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.16em; color:#3c4048; margin-bottom:4px; text-align:left;">
                       Service Address
                     </div>
                   
@@ -148,7 +166,7 @@ export function buildQuotationEmailHtml({
         </table>
 
         <!-- Price Summary -->
-        <div style="margin-top:4px; margin-bottom:12px; font-size:11px; font-weight:600; letter-spacing:0.18em; text-transform:uppercase; color:#9ca3af;">
+        <div style="margin-top:4px; margin-bottom:8px; font-size:12px; font-weight:600; letter-spacing:0.18em; text-transform:uppercase;  color:#3c4048">
           Price summary
         </div>
 
@@ -222,7 +240,7 @@ export function buildQuotationEmailHtml({
       </div>
 
       <!-- Footer -->
-      <div style="padding:14px 24px 18px; border-top:1px solid #e5e7eb; background:#f9fafb; font-size:11px; color:#6b7280;">
+      <div style="padding:14px 24px 18px; border-top:1px solid #e5e7eb; background:#f9fafb; font-size:11px; color:#3c4048;">
         <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
           <tr>
             <td style="padding:0; text-align:left; font-weight:600; color:#020617;">
@@ -230,7 +248,7 @@ export function buildQuotationEmailHtml({
             </td>
             <td style="padding:0; text-align:right; line-height:1.5;">
               Office 102, Building 6<br/>
-              Gold & Diamond Park, Dubai, UAE
+              Gold & Diamond Park Dubai, UAE
             </td>
           </tr>
         </table>
