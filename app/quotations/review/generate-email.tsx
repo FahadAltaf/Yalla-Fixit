@@ -1,215 +1,211 @@
-export const generateQuotationEmail = ({
-    quotationNumber,
-    statusText,        // "accepted" or "rejected"
-    greetingName,
-    customerName,
-    customerEmail,
-    note,
-}: {
-    quotationNumber: string;
-    statusText: string;
-    greetingName: string;
-    customerName: string;
-    customerEmail: string;
-    note: string;
-}) => {
+export interface QuotationEmailData {
+  status: "sent" | "accepted" | "rejected";
+  companyName?: string;
+  quotationNumber?: string;
+  quotationDate?: string;
+  validUntil?: string;
+  ownerName?: string;
+  customerName?: string;
 
-    const isAccepted = statusText?.toLowerCase() === "accepted";
+  serviceType?: string;
 
-    const statusColor = isAccepted ? "#059669" : "#dc2626";
-    const badgeBg = isAccepted ? "#dcfce7" : "#fee2e2";
-    const badgeColor = isAccepted ? "#15803d" : "#991b1b";
-    const linkColor = isAccepted ? "#059669" : "#dc2626";
-    const noteHeaderBg = isAccepted ? "#fef9c3" : "#fee2e2";
-    const noteBorder = isAccepted ? "#fde68a" : "#fecaca";
-    const noteBodyBg = isAccepted ? "#fffbeb" : "#fff5f5";
-    const noteTitleClr = isAccepted ? "#92400e" : "#991b1b";
-    const ctaText = isAccepted ? "View Quotation &rarr;" : "Revise Quotation &rarr;";
-    const bodyMessage = isAccepted
-        ? `Please proceed with scheduling and job assignment at your earliest convenience.`
-        : `Please follow up with the customer to understand their concerns.`;
+  notes?: string;
+  rejectionReason?: string;
+  logoUrl?: string; // swap with your actual hosted logo URL
+}
 
-
-    const noteBlock = (note || customerName || customerEmail) ? `
-      <table width="100%" cellpadding="0" cellspacing="0" role="presentation"
-        style="background:${noteBodyBg};border-radius:10px;border:1px solid ${noteBorder};margin:0 0 20px;overflow:hidden;">
-        <tr>
-          <td style="padding:14px 16px;border-bottom:1px solid ${noteBorder};background:${noteHeaderBg};">
-            <span style="font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:${noteTitleClr};">
-              &#128172; Customer Note
-            </span>
-          </td>
-        </tr>
-        <tr>
-          <td style="padding:14px 16px;">
-            ${note ? `<p style="margin:0 0 10px;font-size:13px;color:#374151;font-style:italic;line-height:1.6;">"${note}"</p>` : ""}
-           
-          </td>
-        </tr>
-      </table>` : "";
-
-    const html = `<!DOCTYPE html>
-  <html lang="en">
-    <head>
-      <meta charset="UTF-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <title>Quotation ${quotationNumber} ${statusText} by customer</title>
-      <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
-    </head>
-    <body style="margin:0;padding:0;background-color:#eef0f4;">
-  
-      <!-- Preview text -->
-      <div style="display:none;max-height:0;overflow:hidden;font-size:1px;color:#eef0f4;">
-        Customer ${customerName || ""} has ${statusText} Quotation ${quotationNumber} · Yalla Fixit · Dubai
-      </div>
-  
-      <table width="100%" cellpadding="0" cellspacing="0" role="presentation"
-        style="background:#eef0f4;padding:32px 16px;font-family:'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-       
-  
-                <!-- Header — Logo -->
-                <tr>
-                  <td style="padding:24px 28px 0;border-bottom:1px solid #f3f4f6;">
-                    <table width="100%" cellpadding="0" cellspacing="0" role="presentation"><tr>
-                      <td valign="middle">
-                        <table cellpadding="0" cellspacing="0" role="presentation"><tr>
-                          <td style="background:#0f172a;border-radius:10px;width:44px;height:44px;text-align:center;vertical-align:middle;">
-                            <span style="font-size:20px;line-height:44px;display:block;">&#128295;</span>
-                          </td>
-                          <td style="padding-left:12px;vertical-align:middle;">
-                            <div style="font-size:17px;font-weight:700;color:#0f172a;letter-spacing:-0.5px;">Yalla Fixit</div>
-                            <div style="font-size:11px;color:#9ca3af;margin-top:1px;">Maintenance &amp; Repairs &middot; Dubai</div>
-                          </td>
-                        </tr></table>
-                      </td>
-                      <td valign="middle" style="text-align:right;">
-                        <div style="font-size:11px;color:#9ca3af;line-height:1.8;">
-                          Office 102, Building 6<br/>
-                          Gold &amp; Diamond Park, Dubai<br/>
-                          <a href="https://www.yallafixit.ae"
-                            style="color:${linkColor};text-decoration:none;font-weight:500;">
-                            yallafixit.ae
-                          </a>
-                        </div>
-                      </td>
-                    </tr></table>
-                    <div style="height:20px;"></div>
-                  </td>
-                </tr>
-  
-                <!-- Body -->
-                <tr>
-                  <td style="padding:24px 28px;font-size:14px;line-height:1.7;color:#374151;">
-  
-                    <p style="margin:0 0 16px;">
-                      Hi <strong style="color:#0f172a;">${greetingName}</strong>,
-                    </p>
-                    <p style="margin:0 0 20px;">
-                      The customer has
-                      <strong style="color:${statusColor};">${statusText}</strong>
-                      quotation
-                      <strong style="color:#0f172a;font-family:'DM Mono',monospace;font-size:13px;">${quotationNumber}</strong>.
-                      ${bodyMessage}
-                    </p>
-  
-                    <!-- Quotation summary row -->
-                    <table width="100%" cellpadding="0" cellspacing="0" role="presentation"
-                      style="background:#f8fafc;border-radius:10px;border:1px solid #e5e7eb;margin:0 0 20px;overflow:hidden;">
-                      <tr>
-                        <td style="padding:14px 16px;border-bottom:1px solid #e5e7eb;background:#f1f5f9;">
-                          <span style="font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#64748b;">
-                            Quotation Details
-                          </span>
-                        </td>
-                      </tr>
-                      <tr>
-                        <td style="padding:16px;">
-                          <table width="100%" cellpadding="0" cellspacing="0" role="presentation">
-                            <tr>
-                              <td style="padding:5px 0;font-size:13px;color:#6b7280;width:40%;">Quotation No.</td>
-                              <td style="padding:5px 0;font-size:13px;color:#0f172a;font-weight:600;font-family:'DM Mono',monospace;">
-                                ${quotationNumber}
-                              </td>
-                            </tr>
-                            <tr>
-                              <td style="padding:5px 0;font-size:13px;color:#6b7280;">Status</td>
-                              <td style="padding:5px 0;">
-                                <span style="background:${badgeBg};color:${badgeColor};font-size:11px;font-weight:600;padding:3px 10px;border-radius:20px;letter-spacing:0.3px;">
-                                  ${statusText.charAt(0).toUpperCase() + statusText.slice(1)}
-                                </span>
-                              </td>
-                            </tr>
-                          </table>
-                        </td>
-                      </tr>
-                    </table>
-  
-                    <!-- Note / Customer block -->
-                    ${noteBlock}
-  
-                    <p style="margin:0;font-size:14px;color:#374151;">
-                      Best regards,<br/>
-                      <strong style="color:#0f172a;">The Yalla Fixit Team</strong>
-                    </p>
-  
-                  </td>
-                </tr>
-  
-                <!-- CTA Button -->
-                <tr>
-                  <td style="padding:0 28px 28px;">
-                    <table cellpadding="0" cellspacing="0" role="presentation">
-                      <tr>
-                        <td style="background:#0f172a;border-radius:8px;text-align:center;">
-                          <a href="https://www.yallafixit.ae"
-                            style="display:inline-block;padding:12px 28px;font-size:13px;font-weight:600;color:#ffffff;text-decoration:none;letter-spacing:0.3px;">
-                            ${ctaText}
-                          </a>
-                        </td>
-                      </tr>
-                    </table>
-                  </td>
-                </tr>
-  
-              </table>
-            </td></tr>
-  
-            <!-- Footer -->
-            <tr>
-              <td style="padding:20px 0 8px;text-align:center;">
-                <p style="margin:0 0 6px;font-size:11px;color:#9ca3af;">
-                  This is an automated notification from Yalla Fixit's quotation management system.
-                </p>
-                <p style="margin:0;font-size:11px;color:#9ca3af;">
-                  &copy; ${new Date().getFullYear()} Yalla Fixit LLC &middot; Office 102, Building 6, Gold &amp; Diamond Park, Dubai, UAE
-                </p>
-                <p style="margin:8px 0 0;font-size:11px;">
-                  <a href="https://www.yallafixit.ae" style="color:${linkColor};text-decoration:none;">yallafixit.ae</a>
-                  &nbsp;&middot;&nbsp;
-                  <a href="mailto:support@yallafixit.ae" style="color:${linkColor};text-decoration:none;">support@yallafixit.ae</a>
-                </p>
-              </td>
-            </tr>
-  
-          </table>
-        </td></tr>
-      </table>
-  
-    </body>
-  </html>`;
-
-    return html;
+const STATUS_CONFIG = {
+  sent: {
+    label: "QUOTATION SENT",
+    badgeBg: "#dbeafe",
+    badgeText: "#1d4ed8",
+    badgeBorder: "#bfdbfe",
+    greeting:
+      "Please find your detailed quotation below. Kindly review and confirm at your earliest convenience.",
+    banner: "",
+  },
+  accepted: {
+    label: "APPROVED BY CUSTOMER",
+    badgeBg: "#dcfce7",
+    badgeText: "#15803d",
+    badgeBorder: "#bbf7d0",
+    greeting:
+      "This quotation has been approved by the customer. Please review the details below and proceed to the next steps.",
+    banner: `
+      <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:14px 16px;margin-bottom:20px;font-size:11px;color:#15803d;display:flex;align-items:center;gap:10px;">
+        <div>
+          <strong>Quotation Approved by Customer</strong><br />
+          The customer has confirmed their approval of this quotation. Please coordinate the service and any required arrangements.
+        </div>
+      </div>`,
+  },
+  rejected: {
+    label: "REJECTED BY CUSTOMER",
+    badgeBg: "#fee2e2",
+    badgeText: "#b91c1c",
+    badgeBorder: "#fecaca",
+    greeting:
+      "The customer has rejected this quotation. Please review the feedback below and follow up with the customer if needed.",
+    banner: "",
+  },
+  pending: {
+    label: "PENDING REVIEW",
+    icon: "&#8987;",
+    badgeBg: "#fef3c7",
+    badgeText: "#b45309",
+    badgeBorder: "#fde68a",
+    greeting:
+      "Thank you for your quotation request. Our team is currently reviewing the details and will get back to you shortly.",
+    banner: "",
+  },
 };
 
-// ─────────────────────────────────────────────
-//  USAGE EXAMPLE
-// ─────────────────────────────────────────────
-// const emailHtml = generateQuotationEmail({
-//   quotationNumber: "QT-2024-00847",
-//   statusText:      "accepted",          // or "rejected"
-//   greetingName:    "Sarah",
-//   customerName:    "Ahmed Al-Rashidi",
-//   customerEmail:   "ahmed@email.com",
-//   note:            "Please schedule for Saturday morning.",
-// });
+export function generateQuotationEmail(data: QuotationEmailData): string {
+  const cfg = STATUS_CONFIG[data.status];
+  const logoUrl = data.logoUrl ?? "https://portal.yallafixit.ae/yalla-fixit.png";
 
+  const rejectionBanner =
+    data.status === "rejected" && data.rejectionReason
+      ? `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:12px 16px;margin-bottom:20px;font-size:11px;color:#991b1b;">
+           <strong>Reason for Decline:</strong> ${data.rejectionReason}
+         </div>`
+      : "";
+
+
+
+  const infoRow = (label: string, value: string, highlight = false) =>
+    `<tr>
+      <td style="padding:9px 0;border-bottom:1px solid #f1f5f9;font-size:11px;color:#64748b;min-width:150px;">${label}</td>
+      <td style="padding:9px 0;border-bottom:1px solid #f1f5f9;font-size:12px;font-weight:${highlight ? 700 : 500};color:${highlight ? "#0f172a" : "#1e293b"};text-align:right;">${value}</td>
+    </tr>`;
+
+  const quotationDetails = `
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px 20px;margin-bottom:20px;">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;margin-bottom:10px;">Quotation Details</div>
+      <table style="width:100%;border-collapse:collapse;">
+        ${infoRow("Quotation Number", data.quotationNumber ?? "—", true)}
+        ${infoRow("Customer Name", data.customerName ?? "—", true)}
+        ${infoRow("Quotation Date", data.quotationDate ?? "—")}
+
+      </table>
+    </div>`;
+
+
+
+
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quotation ${data.quotationNumber ?? ""} — ${cfg.label}</title>
+</head>
+<body style="margin:0;padding:0;background:#f1f5f9;">
+
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;padding:32px 0;">
+    <tr>
+      <td align="center">
+        <table width="660" cellpadding="0" cellspacing="0" style="background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);font-size:13px;color:#1a1a2e;">
+
+          <!-- ── HEADER ── -->
+          <tr>
+            <td style="padding:32px 32px 0 32px;">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <!-- Logo + Company -->
+                  <td style="vertical-align:top;">
+                    <table cellpadding="0" cellspacing="0">
+                      <tr>
+                        <td style="padding-right:10px;vertical-align:top;">
+                          <img src="${logoUrl}" alt="${data.companyName ?? "Yalla Fixit"}" width="70" height="70" style="display:block;object-fit:contain;" />
+                        </td>
+                        <td style="vertical-align:top;">
+                          <div style="font-size:18px;font-weight:700;letter-spacing:-0.5px;">${data.companyName ?? "Yalla Fixit"}</div>
+                          <div style="line-height:1.6;font-size:11px;color:#374151;">
+                            Office 102, Building 6, Gold &amp; Diamond Park,<br />
+                            Dubai,<br />
+                            <a href="https://www.yallafixit.ae" target="_blank" rel="noopener noreferrer" style="color:#1d4ed8;">https://www.yallafixit.ae</a>
+                          </div>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+
+                  <!-- Quotation Number + Badge -->
+                  <td style="text-align:right;vertical-align:top;">
+                    <div style="font-weight:700;font-size:14px;margin-bottom:4px;">Quotation</div>
+                    <div style="font-weight:700;font-size:14px;color:#1e293b;margin-top:6px;">${data.quotationNumber ?? "—"}</div>
+                    <div style="color:#64748b;font-size:11px;margin-top:2px;">${data.quotationDate ?? "—"}</div>
+                   
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Divider -->
+              <div style="height:1px;background:#e2e8f0;margin:24px 0 24px;"></div>
+            </td>
+          </tr>
+
+          <!-- ── BODY ── -->
+          <tr>
+            <td style="padding:0 32px 28px;">
+
+              <!-- Greeting -->
+              <p style="font-size:12px;color:#374151;margin-bottom:20px;line-height:1.8;">
+                Dear <strong>${data.ownerName ?? "Yalla Fixit Team"}</strong>,<br />
+                ${cfg.greeting}
+              </p>
+
+              <!-- Status banners -->
+              ${rejectionBanner}
+              ${cfg.banner}
+
+              <!-- Quotation Details Card -->
+              ${quotationDetails}
+
+           
+            </td>
+          </tr>
+
+       
+
+        </table>
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>`;
+}
+
+
+// ── USAGE EXAMPLE ─────────────────────────────────────────────────────────────
+//
+// import { generateQuotationEmail } from "./quotationEmailTemplate";
+//
+// const html = generateQuotationEmail({
+//   status: "accepted",
+//   companyName: "Yalla Fixit",
+//   quotationNumber: "QT-2025-0042",
+//   quotationDate: "09 Mar 2025",
+//   validUntil: "09 Apr 2025",
+//   customerName: "Ahmed Al Mansouri",
+//   customerEmail: "ahmed@example.com",
+//   customerPhone: "+971 50 123 4567",
+//   serviceAddress: "Villa 12, Jumeirah 3, Dubai",
+//   serviceType: "AC Maintenance",
+//   assignedTech: "Mohammed Hassan",
+//   priority: "High",
+//   grandTotal: 580.75,
+//   notes: "Please ensure parking access is available.",
+//   logoUrl: "https://yourdomain.com/yalla-fixit.png",
+// });
+//
+// // Then pass `html` to your email sender (Nodemailer, Resend, SendGrid, etc.)
+// await resend.emails.send({
+//   from: "noreply@yallafixit.ae",
+//   to: "ahmed@example.com",
+//   subject: `Quotation QT-2025-0042 — Accepted`,
+//   html,
+// });

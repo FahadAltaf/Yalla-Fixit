@@ -233,9 +233,6 @@ export default function ReviewQuotationPage() {
   const [currentStatus, setCurrentStatus] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-
-
-
   useEffect(() => {
     const fetchData = async () => {
       if (!estimateId) {
@@ -263,7 +260,6 @@ export default function ReviewQuotationPage() {
     );
   }
 
-
   if (!quotation) {
     return (
       <main className="min-h-screen flex items-center justify-center px-4 py-10">
@@ -272,13 +268,11 @@ export default function ReviewQuotationPage() {
     );
   }
 
-
-
-
   return (
     <EstimateStatusGuard currentStatus={currentStatus}>
       <main className="min-h-screen bg-slate-100 flex items-center justify-center px-4 py-10">
         <div className="flex flex-col items-center gap-4">
+
           {/* Approve / Reject actions at the top */}
           <div className="w-full flex justify-center">
             <div className="w-full max-w-[794px]">
@@ -291,6 +285,7 @@ export default function ReviewQuotationPage() {
                 ownerName={quotation.ownerName}
                 customerName={quotation.customerContact || quotation.customerCompanyName}
                 customerEmail={quotation.customerEmail}
+                quotationDate={quotation.quotationDate}
               />
             </div>
           </div>

@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { AlertCircle, CheckCircle2, XCircle } from "lucide-react";
-
 import { Button } from "@/components/ui/button";
 import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
@@ -19,6 +18,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Loader2 } from "lucide-react";
+import { generateQuotationEmail } from "./generate-email";
 
 type Action = "approve" | "reject";
 
@@ -31,16 +31,17 @@ interface Props {
   ownerName?: string;
   customerName?: string;
   customerEmail?: string;
+  quotationDate?: string;
 }
 
 export function ActionSection({
   estimateId,
   quotationNumber,
-  setCurrentStatus,
   ownerEmail,
-  ownerName,
   customerName,
-  customerEmail,
+  setCurrentStatus,
+  ownerName,
+  quotationDate
 }: Props) {
   const [isLoading, setIsLoading] = useState<Action | null>(null);
   const [lastAction, setLastAction] = useState<Action | null>(null);
@@ -60,92 +61,20 @@ export function ActionSection({
         ? `Quotation ${quotationNumber} approved by customer`
         : `Quotation ${quotationNumber} rejected by customer`;
 
-    const greetingName = ownerName || "Team";
-    console.log("🚀 ~ sendOwnerEmail ~ greetingName:", ownerName, ownerEmail)
 
-    const statusText = action === "approve" ? "approved" : "rejected";
+    const html = generateQuotationEmail({
+      status: action === "approve" ? "accepted" : "rejected",
+      companyName: "Yalla Fixit",
+      quotationNumber: quotationNumber,
+      quotationDate,
+      validUntil: new Date(new Date().setDate(new Date().getDate() + 30)).toLocaleDateString(),
+      ownerName: ownerName ?? undefined,
+      customerName: customerName,
+      notes: note,
+      rejectionReason: action === "reject" ? feedback.trim() : undefined,
+      logoUrl: "https://portal.yallafixit.ae/yalla-fixit.png",
+    });
 
-    const html = `<!DOCTYPE html>
-    <html lang="en">
-      <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Quotation ${quotationNumber} ${statusText} by customer</title>
-      </head>
-      <body style="margin:0; padding:0; background-color:#f4f4f5;">
-        <table
-          width="100%"
-          cellpadding="0"
-          cellspacing="0"
-          role="presentation"
-          style="background-color:#f4f4f5; padding:24px 0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;"
-        >
-          <tr>
-            <td align="center">
-              <table
-                width="100%"
-                cellpadding="0"
-                cellspacing="0"
-                role="presentation"
-                style="max-width:640px; margin:0 auto; padding:0 16px;"
-              >
-                <tr>
-                  <td>
-                    <table
-                      width="100%"
-                      cellpadding="0"
-                      cellspacing="0"
-                      role="presentation"
-                      style="background:#ffffff; border-radius:12px; border:1px solid #e5e7eb; overflow:hidden;"
-                    >
-                    
-
-                      <!-- Body -->
-                      <tr>
-                        <td style="padding:20px 24px; font-size:13px; line-height:1.6; color:#020617;">
-                          <p style="margin:0 0 12px;">Hi ${greetingName},</p>
-                          <p style="margin:0 0 12px;">
-                            The customer has <strong>${statusText}</strong> quotation
-                            <strong>${quotationNumber}</strong>.
-                          </p>
-
-                          ${note || customerName || customerEmail
-        ? `<div style="margin:16px 0; padding:12px 14px; border-radius:8px; border:1px solid #e5e7eb; background:#f9fafb; color:#111827; font-size:13px;">
-                                  ${note
-          ? `<p style="margin:0 0 8px;">
-                                          <strong>Note:</strong> ${note}
-                                        </p>`
-          : ""
-        }
-                                  ${customerName || customerEmail
-          ? `<p style="margin:0;">
-                                          <strong>Customer:</strong>
-                                          ${[customerName, customerEmail]
-            .filter(Boolean)
-            .join(" / ")}
-                                        </p>`
-          : ""
-        }
-
-          
-                                </div>`
-        : ""
-      }
-
-                          <p style="margin-top:16px; margin-bottom:0;">
-                            Best regards,<br />Yalla Fixit
-                          </p>
-                        </td>
-                      </tr>
-                    </table>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-        </table>
-      </body>
-    </html>`;
 
     try {
       await emailService.sendEmail({
