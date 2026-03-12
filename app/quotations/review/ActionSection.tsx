@@ -165,8 +165,7 @@ export function ActionSection({
             Approve or reject this quotation
           </p>
           <p className="text-xs text-slate-600">
-            Your choice will be saved in our system and reflected in
-            Zoho FSM.
+            Your choice will be saved in our system
           </p>
         </div>
         <div className="flex gap-2">

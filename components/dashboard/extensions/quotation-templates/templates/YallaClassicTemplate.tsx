@@ -14,7 +14,7 @@ interface Props {
 export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = false, type = "normal", discountMode }: Props) {
   const calculated = calculateTotals(data);
   const subTotal = calculated.subTotal;
-  const discount =discountMode === 'with-total' ? data.totalDiscountType === 'Percentage' ? ((Number(data.totalDiscount) || 0) / 100) * subTotal : Number(data.totalDiscount) || 0 : data.lineItems.reduce((sum, item) => {
+  const discount = discountMode === 'with-total' ? data.totalDiscountType === 'Percentage' ? ((Number(data.totalDiscount) || 0) / 100) * subTotal : Number(data.totalDiscount) || 0 : data.lineItems.reduce((sum, item) => {
     const lineTotal = item.quantity * item.unitPrice;
     const lineDiscount =
       item.discountType === "Percent"
@@ -32,10 +32,10 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
   // - Split into items on newlines that start with "1-", "2-", etc.
   const termsLines = data.termsAndConditions
     ? data.termsAndConditions
-        .replace(/^Notes:\s*/i, "")
-        .split(/\r?\n(?=\d+-)/)
-        .map((s) => s.trim())
-        .filter(Boolean)
+      .replace(/^Notes:\s*/i, "")
+      .split(/\r?\n(?=\d+-)/)
+      .map((s) => s.trim())
+      .filter(Boolean)
     : null;
 
   return (
@@ -48,7 +48,7 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
         fontSize: "13px",
         color: "#1a1a2e",
         padding: "48px 20px",
-        ...(forPDF ? { paddingTop: "0px", paddingBottom:'0px' } : type === "review" ? { paddingTop: "20px", paddingBottom: '20px'  } : { paddingTop: "48px" }),
+        ...(forPDF ? { paddingTop: "0px", paddingBottom: '0px' } : type === "review" ? { paddingTop: "20px", paddingBottom: '20px' } : { paddingTop: "48px" }),
 
         boxSizing: "border-box",
         position: "relative",
@@ -56,24 +56,24 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
     >
       {/* ── Header ── */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-      <div style={{ display: "flex", justifyContent: "", alignItems: "flex-start",gap: "10px", marginBottom: "36px" }}>
-      {/* <Image src={yallaFixit} width={100} height={100} alt="Yalla Fixit" style={{ width: "100px", height: "100px", objectFit: "contain", objectPosition: "left" }} /> */}
-       <img src={yallaFixit.src} alt="Yalla Fixit" style={{ width: "70px", height: "70px", objectFit: "contain", objectPosition: "left" }} />
-        <div style={forPDF ? { position: "relative", top: "-8px" } : undefined}>
-          <div style={{ fontSize: "18px", fontWeight: 700, letterSpacing: "-0.5px" }}>
-            {data.companyName}
-          </div>
-          <div style={{   lineHeight: 1.6, fontSize: "11px" }}>
-          Office 102, Building 6, Gold & Diamond Park,
-          Dubai,
-             <><br /><a href="https://www.yallafixit.ae" target="_blank" rel="noopener noreferrer">https://www.yallafixit.ae</a></>
+        <div style={{ display: "flex", justifyContent: "", alignItems: "flex-start", gap: "10px", marginBottom: "36px" }}>
+          {/* <Image src={yallaFixit} width={100} height={100} alt="Yalla Fixit" style={{ width: "100px", height: "100px", objectFit: "contain", objectPosition: "left" }} /> */}
+          <img src={yallaFixit.src} alt="Yalla Fixit" style={{ width: "70px", height: "70px", objectFit: "contain", objectPosition: "left" }} />
+          <div style={forPDF ? { position: "relative", top: "-8px" } : undefined}>
+            <div style={{ fontSize: "18px", fontWeight: 700, letterSpacing: "-0.5px" }}>
+              {data.companyName}
+            </div>
+            <div style={{ lineHeight: 1.6, fontSize: "11px" }}>
+              Office 102, Building 6, Gold & Diamond Park,
+              Dubai,
+              <><br /><a href="https://www.yallafixit.ae" target="_blank" rel="noopener noreferrer">https://www.yallafixit.ae</a></>
 
+            </div>
           </div>
+
         </div>
-    
-      </div>
-      <div style={{ textAlign: "right" }}>
-            <div style={{ fontWeight: 700, fontSize: "14px",    marginBottom: "4px" }}>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontWeight: 700, fontSize: "14px", marginBottom: "4px" }}>
 
             Quotation
           </div>
@@ -82,29 +82,29 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
           </div>
           <div style={{ color: "#64748b", fontSize: "11px", marginTop: "2px" }}>{data.quotationDate}</div>
         </div>
-        </div>
+      </div>
       {/* ── Divider ── */}
       {/* <div style={{ height: "2px", background: "linear-gradient(90deg, #1a56db 0%, #e2e8f0 100%)", marginBottom: "28px" }} /> */}
 
       {/* ── Customer + Service Address ── */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px", marginBottom: "28px" }}>
         <div>
-          <div style={{ fontWeight: 800, fontSize: "14px",    marginBottom: "4px" }}>
+          <div style={{ fontWeight: 800, fontSize: "14px", marginBottom: "4px" }}>
             Customer
           </div>
-          <div style={{ fontWeight: 600  }}>{data.customerCompanyName}</div>
+          <div style={{ fontWeight: 600 }}>{data.customerCompanyName}</div>
           {data.customerContact && <div style={{ marginTop: "2px" }}>{data.customerContact}</div>}
-          {data.customerPhone && <div style={{  }}>{data.customerPhone}</div>}
-            {data.customerEmail && <div style={{  }}>{data.customerEmail}</div>}
-            {data.customerId && <div style={{  }}>{data.customerId}</div>}
+          {data.customerPhone && <div style={{}}>{data.customerPhone}</div>}
+          {data.customerEmail && <div style={{}}>{data.customerEmail}</div>}
+          {data.customerId && <div style={{}}>{data.customerId}</div>}
         </div>
-       
+
         {data.serviceAddress && (
           <div>
-            <div style={{ fontWeight: 700, fontSize: "14px",    marginBottom: "4px" }}>
+            <div style={{ fontWeight: 700, fontSize: "14px", marginBottom: "4px" }}>
               Service Address
             </div>
-           {/* {data.companyAddress && <div style={{ fontWeight: 600  }}>{data.companyAddress}</div>} */}
+            {/* {data.companyAddress && <div style={{ fontWeight: 600  }}>{data.companyAddress}</div>} */}
             <div style={{ color: "#475569", lineHeight: 1.6 }}>{data.serviceAddress}</div>
           </div>
         )}
@@ -115,8 +115,8 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
         <thead>
           <tr style={{ background: "black" }}>
             {(hideDiscount || discountMode === "with-total"
-              ? ["SR #","Service & Part", "Qty", "Unit", "List Price", "Amount"]
-              : ["SR #","Service & Part", "Qty", "Unit", "List Price", "Discount", "Amount"]
+              ? ["SR #", "Service & Part", "Qty", "Unit", "List Price", "Amount"]
+              : ["SR #", "Service & Part", "Qty", "Unit", "List Price", "Discount", "Amount"]
             ).map((h, i) => (
               <th
                 key={h}
@@ -128,11 +128,11 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
                   fontWeight: 700,
                   fontSize: "11px",
                   letterSpacing: "0.05em",
-                  textAlign: i === 0 || i=== 1 ? "left" : "right",
+                  textAlign: i === 0 || i === 1 ? "left" : "right",
                   whiteSpace: "nowrap",
                 }}
               >
-                <span style={{  }}>{h}</span>
+                <span style={{}}>{h}</span>
               </th>
             ))}
           </tr>
@@ -145,19 +145,23 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
                 ? ((item.discountAmount || 0) / 100) * lineTotal
                 : item.discountAmount || 0;
             const lineItemAmount = lineTotal - lineDiscount;
-           
+
             return (
               <tr
                 key={idx}
                 style={{ background: idx % 2 === 0 ? "#f8fafc" : "#ffffff", borderBottom: "1px solid #e2e8f0" }}
               >
-                <td style={{fontSize: "11px",     ...(forPDF
+                <td style={{
+                  fontSize: "11px", ...(forPDF
                     ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
-                    : { padding: "12px" }), textAlign: "left", verticalAlign: "top", color: "#64748b" }}>{idx + 1}</td>
-                <td style={{     ...(forPDF
+                    : { padding: "12px" }), textAlign: "left", verticalAlign: "top", color: "#64748b"
+                }}>{idx + 1}</td>
+                <td style={{
+                  ...(forPDF
                     ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
-                    : { padding: "12px" }), verticalAlign: "top" }}>
-                  <div style={{ fontWeight: 600, color: "#1e293b", marginBottom: "4px", fontSize: "11px"}}>
+                    : { padding: "12px" }), verticalAlign: "top"
+                }}>
+                  <div style={{ fontWeight: 600, color: "#1e293b", marginBottom: "4px", fontSize: "11px" }}>
                     {item.description}
                   </div>
                   {item.details && (
@@ -166,25 +170,35 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
                     </div>
                   )}
                 </td>
-                <td style={{fontSize: "11px",     ...(forPDF
+                <td style={{
+                  fontSize: "11px", ...(forPDF
                     ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
-                    : { padding: "12px" }), textAlign: "right", fontWeight: 500, verticalAlign: "top" }}>{item.quantity}</td>
-                <td style={{fontSize: "11px",     ...(forPDF
+                    : { padding: "12px" }), textAlign: "right", fontWeight: 500, verticalAlign: "top"
+                }}>{item.quantity}</td>
+                <td style={{
+                  fontSize: "11px", ...(forPDF
                     ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
-                    : { padding: "12px" }), textAlign: "right", verticalAlign: "top", color: "#64748b" }}>{item.unit}</td>
-                <td style={{fontSize: "11px", width:"100px",     ...(forPDF
+                    : { padding: "12px" }), textAlign: "right", verticalAlign: "top", color: "#64748b"
+                }}>{item.unit}</td>
+                <td style={{
+                  fontSize: "11px", width: "100px", ...(forPDF
                     ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
-                    : { padding: "12px" }), textAlign: "right", verticalAlign: "top" }}>{formatCurrencyAED(item.unitPrice)}</td>
+                    : { padding: "12px" }), textAlign: "right", verticalAlign: "top"
+                }}>{formatCurrencyAED(item.unitPrice)}</td>
                 {(discountMode === "with") && (
-                  <td style={{fontSize: "11px",width:"86px",      ...(forPDF
+                  <td style={{
+                    fontSize: "11px", width: "86px", ...(forPDF
                       ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
-                      : { padding: "12px" }), textAlign: "right", verticalAlign: "top", color: "#64748b" }}>
+                      : { padding: "12px" }), textAlign: "right", verticalAlign: "top", color: "#64748b"
+                  }}>
                     {item?.discountType === 'Currency' ? `${formatCurrencyAED(item?.discountAmount)}` : `${item?.discountAmount?.toFixed(0)}%`}
                   </td>
                 )}
-                <td style={{fontSize: "11px", width:"100px",     ...(forPDF
+                <td style={{
+                  fontSize: "11px", width: "100px", ...(forPDF
                     ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
-                    : { padding: "12px" }), textAlign: "right", fontWeight: 600, verticalAlign: "top", color: "black" }}>
+                    : { padding: "12px" }), textAlign: "right", fontWeight: 600, verticalAlign: "top", color: "black"
+                }}>
                   {formatCurrencyAED(lineItemAmount)}
                 </td>
               </tr>
@@ -203,7 +217,7 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
             {
               key: "taxAmount",
               label: data.taxAmount != null ? "Tax Amount (5%)" : `Tax Amount (${avgTax.toFixed(0)}%)`,
-              value: taxAmount ,
+              value: taxAmount,
               muted: true,
             },
           ]
@@ -238,25 +252,25 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
       </div>
 
       {/* ── Terms ── */}
-      <div  id="terms-block" style={{ paddingTop: "40px" }}>
-        <div style={{ fontWeight: 700, fontSize: "11px", textTransform: "uppercase",  marginBottom: "10px" }}>
+      <div id="terms-block" style={{ paddingTop: "40px" }}>
+        <div style={{ fontWeight: 700, fontSize: "11px", textTransform: "uppercase", marginBottom: "10px" }}>
           Terms and Conditions
         </div>
         {termsLines && termsLines.length > 0 && (
           termsLines.map((line, i) => (
             <div key={i} style={{ display: "flex", gap: "8px", marginBottom: "5px" }}>
-              <span style={{  fontSize: "9px"}}>{line}</span>
+              <span style={{ fontSize: "9px" }}>{line}</span>
             </div>
           ))
         )}
       </div>
 
       {/* ── Bank Details & Support ── */}
-      <div id="bank-details-block" style={{  paddingTop: "20px",}}>
-        <div style={{ fontWeight: 700, fontSize: "11px", textTransform: "uppercase"}}>
+      <div id="bank-details-block" style={{ paddingTop: "20px", }}>
+        <div style={{ fontWeight: 700, fontSize: "11px", textTransform: "uppercase" }}>
           Bank Details & Support
         </div>
-        <div style={{  fontSize: "10px", lineHeight: 1.7 }}>
+        <div style={{ fontSize: "10px", lineHeight: 1.7 }}>
           <p style={{ marginBottom: "10px" }}>For any questions contact <strong style={{ color: "#1e293b" }}>800-PERFECT</strong></p>
           <div style={{ display: "grid", gap: "4px" }}>
             <div><strong style={{ color: "#1e293b" }}>ACCOUNT NAME:</strong> YALLA FIX IT ONE PERSON COMPANY LLC</div>

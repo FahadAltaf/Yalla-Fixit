@@ -90,6 +90,7 @@ async function generatePDFBlob(
       case "modern-bold": TemplateEl = <ModernBoldTemplate data={data} />; break;
       case "minimal-clean": TemplateEl = <MinimalCleanTemplate data={data} />; break;
       default: TemplateEl = <YallaClassicTemplate data={data} forPDF hideDiscount={discountMode === "without"}
+        discountMode={discountMode}
       />;
     }
 

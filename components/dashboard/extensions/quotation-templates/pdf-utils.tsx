@@ -49,6 +49,7 @@ export async function generateQuotationPDFBlob(
             data={data}
             forPDF
             hideDiscount={discountMode === "without"}
+            discountMode={discountMode}
           />
         );
     }
