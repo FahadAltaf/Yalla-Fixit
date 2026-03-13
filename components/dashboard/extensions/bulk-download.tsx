@@ -29,7 +29,7 @@ import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dial
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 
 const SEARCH_ENDPOINT =
-  "https://primary-production-6170.up.railway.app/webhook/a62d1e0d-1808-48cc-a3f7-754c02d8d10b";
+  "https://sxzpigyphjotuubxpooj.supabase.co/functions/v1/zoho-fsm-appointments";
 
 const CONCURRENT_DOWNLOADS = 6;
 
@@ -38,31 +38,31 @@ const CONCURRENT_DOWNLOADS = 6;
 type DownloadStatus = "idle" | "downloading" | "zipping" | "finished" | "error";
 
 interface DownloadState {
-  status:       DownloadStatus;
-  completed:    number;
-  failed:       number;
-  total:        number;
+  status: DownloadStatus;
+  completed: number;
+  failed: number;
+  total: number;
   currentFiles: string[];
 }
 
 // Shape returned by edge function / bulk-download route
 interface WOAppointment {
-  id:          string;
-  name:        string;
+  id: string;
+  name: string;
   attachments: Attachment[];
 }
 
 interface WorkOrderInfo {
-  id:                 string;
-  name:               string;
-  status:             string;
-  summary:            string;
-  contact_name:       string;
-  type:               string;
-  address:            string;
+  id: string;
+  name: string;
+  status: string;
+  summary: string;
+  contact_name: string;
+  type: string;
+  address: string;
   total_appointments: number;
-  total_attachments:  number;
-  appointments:       WOAppointment[];
+  total_attachments: number;
+  appointments: WOAppointment[];
 }
 
 const initialDownloadState: DownloadState = {
@@ -91,20 +91,20 @@ function createSemaphore(limit: number) {
 export function ExtensionsPageClient() {
 
   // ── By Appointment state ──
-  const [query, setQuery]             = useState("");
+  const [query, setQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [appointment, setAppointment] = useState<ServiceAppointment | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
 
   // ── By Work Order state ──
-  const [woQuery, setWoQuery]               = useState("");
-  const [isWoSearching, setIsWoSearching]   = useState(false);
-  const [workOrderInfo, setWorkOrderInfo]   = useState<WorkOrderInfo | null>(null);
-  const [woSearchError, setWoSearchError]   = useState<string | null>(null);
+  const [woQuery, setWoQuery] = useState("");
+  const [isWoSearching, setIsWoSearching] = useState(false);
+  const [workOrderInfo, setWorkOrderInfo] = useState<WorkOrderInfo | null>(null);
+  const [woSearchError, setWoSearchError] = useState<string | null>(null);
 
   // ── Shared download dialog state ──
   const [downloadState, setDownloadState] = useState<DownloadState>(initialDownloadState);
-  const [isDialogOpen, setIsDialogOpen]   = useState(false);
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [confirmContext, setConfirmContext] = useState<"appointment" | "workorder" | null>(null);
 
@@ -120,7 +120,7 @@ export function ExtensionsPageClient() {
   const statusVariant = useMemo(() => {
     if (!appointment?.status) return "default" as const;
     const n = appointment.status.toLowerCase();
-    if (n === "completed")   return "success" as const;
+    if (n === "completed") return "success" as const;
     if (n === "in progress") return "warning" as const;
     return "destructive" as const;
   }, [appointment?.status]);
@@ -129,7 +129,7 @@ export function ExtensionsPageClient() {
   const woStatusVariant = useMemo(() => {
     if (!workOrderInfo?.status) return "default" as const;
     const n = workOrderInfo.status.toLowerCase();
-    if (n === "completed")   return "default" as const;
+    if (n === "completed") return "default" as const;
     if (n === "in progress") return "outline" as const;
     return "destructive" as const;
   }, [workOrderInfo?.status]);
@@ -145,25 +145,25 @@ export function ExtensionsPageClient() {
     setDownloadState({ status: "downloading", completed: 0, failed: 0, total: files.length, currentFiles: [] });
     setIsDialogOpen(true);
 
-    const semaphore  = createSemaphore(CONCURRENT_DOWNLOADS);
-    let   successCount = 0;
+    const semaphore = createSemaphore(CONCURRENT_DOWNLOADS);
+    let successCount = 0;
     const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
     try {
       const JSZip = (await import("jszip")).default;
-      const zip   = new JSZip();
+      const zip = new JSZip();
 
       // Track used names per folder to avoid duplicates
       const usedNames = new Map<string, Map<string, number>>();
       const getUniqueName = (folder: string, raw: string): string => {
         if (!usedNames.has(folder)) usedNames.set(folder, new Map());
         const folderMap = usedNames.get(folder)!;
-        const count     = folderMap.get(raw) ?? 0;
+        const count = folderMap.get(raw) ?? 0;
         folderMap.set(raw, count + 1);
         if (count === 0) return raw;
-        const dot  = raw.lastIndexOf(".");
+        const dot = raw.lastIndexOf(".");
         const base = dot === -1 ? raw : raw.slice(0, dot);
-        const ext  = dot === -1 ? "" : raw.slice(dot);
+        const ext = dot === -1 ? "" : raw.slice(dot);
         return `${base} (${count + 1})${ext}`;
       };
 
@@ -186,10 +186,10 @@ export function ExtensionsPageClient() {
         files.map(async ({ attachment, folder }) => {
           await semaphore.acquire();
 
-          const rawName  = attachment.File_Name || `attachment_${attachment?.$file_id}`;
+          const rawName = attachment.File_Name || `attachment_${attachment?.$file_id}`;
           const fileName = getUniqueName(folder, rawName);
           // Full path in ZIP: "folder/fileName" or just "fileName" if no folder
-          const zipPath  = folder ? `${folder}/${fileName}` : fileName;
+          const zipPath = folder ? `${folder}/${fileName}` : fileName;
 
           setDownloadState((p) => ({
             ...p,
@@ -198,7 +198,7 @@ export function ExtensionsPageClient() {
 
           try {
             const fileId = attachment["$file_id"];
-            const url    = `/api/zoho-file?file_id=${encodeURIComponent(fileId)}&token=${settings?.oauth_access_token}`;
+            const url = `/api/zoho-file?file_id=${encodeURIComponent(fileId)}&token=${settings?.oauth_access_token}`;
             const buffer = await fetchWithRetry(url);
             zip.file(zipPath, buffer);
             successCount++;
@@ -253,7 +253,7 @@ export function ExtensionsPageClient() {
     setAppointment(null);
 
     try {
-      const res  = await fetch(SEARCH_ENDPOINT, {
+      const res = await fetch(SEARCH_ENDPOINT, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
@@ -369,7 +369,7 @@ export function ExtensionsPageClient() {
         confirmText="Continue download"
         cancelText="Cancel"
         onConfirm={handleConfirmDownload}
-        // icon={<AlertCircle className="text-amber-500" />}
+      // icon={<AlertCircle className="text-amber-500" />}
       />
       {/* ── Download Progress Dialog ── */}
       <Dialog open={isDialogOpen} onOpenChange={handleCloseDialog}>
@@ -382,16 +382,16 @@ export function ExtensionsPageClient() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <FileArchive className="size-5 text-primary" />
-              {downloadState.status === "finished"  ? "Download Complete"
-               : downloadState.status === "error"   ? "Download Failed"
-               : downloadState.status === "zipping" ? "Creating ZIP"
-               : "Downloading Files"}
+              {downloadState.status === "finished" ? "Download Complete"
+                : downloadState.status === "error" ? "Download Failed"
+                  : downloadState.status === "zipping" ? "Creating ZIP"
+                    : "Downloading Files"}
             </DialogTitle>
             <DialogDescription>
               {downloadState.status === "downloading" && `Downloading ${downloadState.total} file(s) with ${CONCURRENT_DOWNLOADS} parallel threads`}
-              {downloadState.status === "zipping"     && "Compressing all files into a ZIP archive…"}
-              {downloadState.status === "finished"    && `Successfully packaged ${downloadState.completed} file${downloadState.completed === 1 ? "" : "s"}`}
-              {downloadState.status === "error"       && "Something went wrong during the download."}
+              {downloadState.status === "zipping" && "Compressing all files into a ZIP archive…"}
+              {downloadState.status === "finished" && `Successfully packaged ${downloadState.completed} file${downloadState.completed === 1 ? "" : "s"}`}
+              {downloadState.status === "error" && "Something went wrong during the download."}
             </DialogDescription>
           </DialogHeader>
 
@@ -538,7 +538,7 @@ export function ExtensionsPageClient() {
                 <Card className="border-border/60 shadow-sm">
                   <CardHeader className="pb-2">
                     <div className="flex items-center justify-between">
-                    <CardTitle className="text-base flex items-center gap-2">
+                      <CardTitle className="text-base flex items-center gap-2">
                         <Briefcase className="size-4 text-primary" />
                         Appointment Details
                       </CardTitle>                      <Badge
@@ -551,12 +551,12 @@ export function ExtensionsPageClient() {
                   </CardHeader>
                   <CardContent className="space-y-5">
                     <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-                      <FieldRow label="ID"           value={appointment.id} />
-                      <FieldRow label="Name"         value={appointment.name} />
+                      <FieldRow label="ID" value={appointment.id} />
+                      <FieldRow label="Name" value={appointment.name} />
                       <FieldRow label="Contact Name" value={appointment.contact_name} />
-                      <FieldRow label="Type"         value={appointment.type} />
-                      <FieldRow label="Address"      value={appointment.address} />
-                      <FieldRow label="Summary"      value={appointment.summary} />
+                      <FieldRow label="Type" value={appointment.type} />
+                      <FieldRow label="Address" value={appointment.address} />
+                      <FieldRow label="Summary" value={appointment.summary} />
                     </div>
                     <Separator />
                     <div className="space-y-3">
@@ -679,13 +679,13 @@ export function ExtensionsPageClient() {
                       <FieldRow label="Status"  value={workOrderInfo.status} />
                       <FieldRow label="Summary" value={workOrderInfo.summary} />
                     </div> */}
-                       <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-                      <FieldRow label="ID"           value={workOrderInfo.id} />
-                      <FieldRow label="Name"         value={workOrderInfo.name} />
+                    <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+                      <FieldRow label="ID" value={workOrderInfo.id} />
+                      <FieldRow label="Name" value={workOrderInfo.name} />
                       <FieldRow label="Contact Name" value={workOrderInfo.contact_name} />
-                      <FieldRow label="Type"         value={workOrderInfo.type} />
-                      <FieldRow label="Address"      value={workOrderInfo.address} />
-                      <FieldRow label="Summary"      value={workOrderInfo.summary} />
+                      <FieldRow label="Type" value={workOrderInfo.type} />
+                      <FieldRow label="Address" value={workOrderInfo.address} />
+                      <FieldRow label="Summary" value={workOrderInfo.summary} />
                     </div>
 
                     <Separator />
