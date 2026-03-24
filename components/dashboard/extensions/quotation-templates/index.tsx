@@ -371,7 +371,7 @@ export function QuotationTemplatesPage() {
             <div className="border rounded-lg overflow-hidden bg-slate-100">
 
               <div className="bg-slate-100 overflow-auto flex items-start justify-center p-6">
-                <div style={{ width: 794 * 0.95 }}>
+                {/* <div style={{ width: 794 * 0.95 }}>
                   <div
                     style={{
                       transform: "scale(0.95)",
@@ -382,19 +382,19 @@ export function QuotationTemplatesPage() {
                       // marginBottom: "-500px",
                     }}
                   >
-                    {
-                      activeData && (
-                        <div className="shadow-2xl ring-1 ring-black/5 rounded overflow-hidden bg-white">
-                          <YallaClassicTemplate
-                            data={activeData}
-                            hideDiscount={discountMode === "without"}
-                            discountMode={discountMode}
-                          />
-                        </div>
-                      )
-                    }
+                    { */}
+                {activeData && (
+                  <div className="shadow-2xl ring-1 ring-black/5 rounded overflow-hidden bg-white">
+                    <YallaClassicTemplate
+                      data={activeData}
+                      hideDiscount={discountMode === "without"}
+                      discountMode={discountMode}
+                    />
                   </div>
-                </div>
+                )
+                }
+                {/* </div> */}
+                {/* </div> */}
               </div>
             </div>
           </div>
