@@ -4,12 +4,10 @@ import {
   QuotationLineItem,
 } from "@/components/dashboard/extensions/quotation-templates/quotation-templates";
 
-const SUPABASE_FUNCTION_URL =
-  `${process.env.SUPABASE_URL}/functions/v1/get-estimate`;
+const SUPABASE_FUNCTION_URL = `${process.env.SUPABASE_URL}/functions/v1/get-estimate`;
 
 // NOTE: This is a publishable key provided explicitly in the spec.
-const SUPABASE_PUBLISHABLE_KEY =
-  process.env.SUPABASE_ANON_KEY!;
+const SUPABASE_PUBLISHABLE_KEY = process.env.SUPABASE_ANON_KEY!;
 
 function mapToQuotationData(payload: any): QuotationData {
   const estimate = payload?.estimate?.data?.[0];
@@ -22,18 +20,14 @@ function mapToQuotationData(payload: any): QuotationData {
     typeof estimate.id === "string"
       ? estimate.id
       : typeof estimate.ID === "string"
-      ? estimate.ID
-      : null;
+        ? estimate.ID
+        : null;
 
-  const companyName =
-    estimate.Territory?.name ?? "Yalla Fix It";
+  const companyName = estimate.Territory?.name ?? "Yalla Fix It";
 
-  const companyAddress =
-    estimate.Billing_Address?.Billing_Address_Name ??
-    "";
+  const companyAddress = estimate.Billing_Address?.Billing_Address_Name ?? "";
 
-  const customerCompanyName =
-    estimate.Company?.name || "";
+  const customerCompanyName = estimate.Company?.name || "";
 
   const customerContact = estimate.Contact?.name ?? null;
   const customerPhone = estimate.Phone ?? null;
@@ -48,7 +42,7 @@ function mapToQuotationData(payload: any): QuotationData {
 
   const serviceAddress =
     serviceAddressParts.length > 0 ? serviceAddressParts.join(", ") : null;
-const customerId = payload?.contact?.data?.[0]?.Customer_Id__C ?? null;
+  const customerId = payload?.contact?.data?.[0]?.Customer_Id__C ?? null;
   const quotationNumber = estimate.Name ?? "";
 
   const quotationDateRaw =
@@ -71,7 +65,15 @@ const customerId = payload?.contact?.data?.[0]?.Customer_Id__C ?? null;
 
   const serviceLineItems: any[] = estimate.Service_Line_Items ?? [];
 
-  const lineItems: QuotationLineItem[] = serviceLineItems.map((item) => ({
+  const sortedServiceLineItems = [...serviceLineItems].sort((a, b) => {
+    const aSequence =
+      typeof a?.Sequence === "number" ? a.Sequence : Number.MAX_SAFE_INTEGER;
+    const bSequence =
+      typeof b?.Sequence === "number" ? b.Sequence : Number.MAX_SAFE_INTEGER;
+    return aSequence - bSequence;
+  });
+
+  const lineItems: QuotationLineItem[] = sortedServiceLineItems.map((item) => ({
     description: item.Service?.name ?? item.Name ?? "Service",
     details: item.Description ?? undefined,
     quantity: typeof item.Quantity === "number" ? item.Quantity : 1,
@@ -80,8 +82,8 @@ const customerId = payload?.contact?.data?.[0]?.Customer_Id__C ?? null;
       typeof item.List_Price === "number"
         ? item.List_Price
         : typeof item.Amount === "number"
-        ? item.Amount
-        : 0,
+          ? item.Amount
+          : 0,
     taxRate:
       typeof item.Tax?.Tax_Percentage === "number"
         ? item.Tax.Tax_Percentage
@@ -91,10 +93,8 @@ const customerId = payload?.contact?.data?.[0]?.Customer_Id__C ?? null;
         ? item.Line_Item_Amount
         : undefined,
     discountAmount:
-      typeof item.Discount === "number"
-        ? item.Discount
-        : undefined,
-        discountType : item.Discount_Type ?? undefined,
+      typeof item.Discount === "number" ? item.Discount : undefined,
+    discountType: item.Discount_Type ?? undefined,
   }));
 
   const discountAmount =
@@ -105,9 +105,7 @@ const customerId = payload?.contact?.data?.[0]?.Customer_Id__C ?? null;
   const taxAmount =
     typeof estimate.Tax_Amount === "number" ? estimate.Tax_Amount : undefined;
   const grandTotal =
-    typeof estimate.Grand_Total === "number"
-      ? estimate.Grand_Total
-      : undefined;
+    typeof estimate.Grand_Total === "number" ? estimate.Grand_Total : undefined;
 
   const termsAndConditions =
     typeof estimate.Terms_And_Conditions?.value === "string"
@@ -134,7 +132,7 @@ const customerId = payload?.contact?.data?.[0]?.Customer_Id__C ?? null;
     quotationNumber,
     quotationDate,
     validityDays,
-    totalDiscount: estimate.Discount_value__C ,
+    totalDiscount: estimate.Discount_value__C,
     totalDiscountType: estimate.DiscountType__C,
     lineItems,
     discountAmount,
@@ -142,7 +140,7 @@ const customerId = payload?.contact?.data?.[0]?.Customer_Id__C ?? null;
     taxAmount,
     grandTotal,
     termsAndConditions,
-    
+
     notes,
     zohoEstimateId: zohoEstimateId ?? undefined,
   };
@@ -156,15 +154,15 @@ export async function POST(req: NextRequest) {
     const name = body?.name;
     const id = body?.id;
 
-    if (!name && !id ) {
+    if (!name && !id) {
       return NextResponse.json(
         { success: false, error: "Missing or invalid name or id" },
-        { status: 400 }
+        { status: 400 },
       );
     }
     let reqPayload: any = {};
 
-    if(id) {
+    if (id) {
       reqPayload = {
         ...reqPayload,
         id: id,
@@ -200,7 +198,7 @@ export async function POST(req: NextRequest) {
           error: "Failed to fetch estimate",
           details: errorBody,
         },
-        { status: res.status }
+        { status: res.status },
       );
     }
 
@@ -212,7 +210,7 @@ export async function POST(req: NextRequest) {
           success: false,
           error: "Estimate function returned unsuccessful response",
         },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
@@ -225,7 +223,6 @@ export async function POST(req: NextRequest) {
         ? payload.current_status
         : null;
 
- 
     // Surface basic lifecycle information so clients can decide
     // whether this estimate should still be actionable.
     const rawEstimate = payload?.estimate?.data?.[0] ?? null;
@@ -251,7 +248,7 @@ export async function POST(req: NextRequest) {
         lifecycle,
         currentStatus,
       },
-      { status: 200 }
+      { status: 200 },
     );
   } catch (error) {
     console.error("get-estimate API error:", error);
@@ -260,8 +257,7 @@ export async function POST(req: NextRequest) {
         success: false,
         error: "Unexpected error while fetching estimate",
       },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
-
