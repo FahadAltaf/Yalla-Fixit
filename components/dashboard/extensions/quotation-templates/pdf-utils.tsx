@@ -14,6 +14,41 @@ export interface PDFGeneratorOptions {
   imageQuality?: number;
 }
 
+function findSafePageBreakOffset(
+  ctx: CanvasRenderingContext2D,
+  canvasWidth: number,
+  targetOffset: number,
+  maxBacktrackPx: number,
+  minOffset: number
+): number {
+  const target = Math.floor(targetOffset);
+  const minCandidate = Math.max(minOffset, target - maxBacktrackPx);
+
+  // Prefer cutting at a mostly-white row to avoid slicing through text.
+  for (let y = target; y >= minCandidate; y--) {
+    const row = ctx.getImageData(0, y, canvasWidth, 1).data;
+    let darkPixels = 0;
+
+    for (let i = 0; i < row.length; i += 4) {
+      const r = row[i];
+      const g = row[i + 1];
+      const b = row[i + 2];
+      const a = row[i + 3];
+
+      if (a > 10 && (r < 245 || g < 245 || b < 245)) {
+        darkPixels++;
+      }
+    }
+
+    const darkRatio = darkPixels / canvasWidth;
+    if (darkRatio < 0.008) {
+      return y;
+    }
+  }
+
+  return target;
+}
+
 export async function generateQuotationPDFBlob(
   templateId: string,
   data: QuotationData,
@@ -78,6 +113,13 @@ export async function generateQuotationPDFBlob(
 
     const PX_PER_MM = canvas.width / PAGE_W_MM;
     const CONTENT_H_PX = CONTENT_H_MM * PX_PER_MM;
+    const MIN_SLICE_H_PX = 28 * PX_PER_MM;
+    const PAGE_BREAK_BACKTRACK_PX = 14 * PX_PER_MM;
+    const canvasCtx = canvas.getContext("2d");
+
+    if (!canvasCtx) {
+      throw new Error("Unable to read rendered quotation canvas.");
+    }
 
     const pdf = new jsPDF({
       orientation: "portrait",
@@ -93,7 +135,19 @@ export async function generateQuotationPDFBlob(
         pdf.addPage([PAGE_W_MM, PAGE_H_MM], "portrait");
       }
 
-      const sliceH = Math.min(CONTENT_H_PX, canvas.height - sourceY);
+      const idealSliceH = Math.min(CONTENT_H_PX, canvas.height - sourceY);
+      const remainingAfterIdeal = canvas.height - (sourceY + idealSliceH);
+
+      let sliceH = idealSliceH;
+      if (remainingAfterIdeal > MIN_SLICE_H_PX) {
+        sliceH = findSafePageBreakOffset(
+          canvasCtx,
+          canvas.width,
+          sourceY + idealSliceH,
+          PAGE_BREAK_BACKTRACK_PX,
+          sourceY + MIN_SLICE_H_PX
+        ) - sourceY;
+      }
 
       const pageCanvas = document.createElement("canvas");
       pageCanvas.width = canvas.width;
