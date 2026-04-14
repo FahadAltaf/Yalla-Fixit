@@ -347,7 +347,7 @@ export function QuotationTemplatesPage() {
           ? `Revision created: ${json.revisionEstimateNumber}`
           : "Revision estimate created successfully."
       );
-      // await fetchEstimate({ id: activeData.zohoEstimateId });
+      await fetchEstimate({ id: activeData.zohoEstimateId });
       setIsCreateRevisionOpen(false);
       setRevisionReason("");
     } catch (error) {
