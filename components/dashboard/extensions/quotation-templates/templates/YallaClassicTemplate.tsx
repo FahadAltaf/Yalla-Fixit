@@ -37,6 +37,21 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
       .map((s) => s.trim())
       .filter(Boolean)
     : null;
+  const isRevision =
+    typeof data.quotationType === "string" &&
+    data.quotationType.trim().toLowerCase() === "revision";
+  const revisionCode =
+    data.revisionType === "External"
+      ? "CR"
+      : data.revisionType === "Internal"
+        ? "IR"
+        : null;
+  const revisionDisplayNumber =
+    typeof data.revisionNumber === "number" ? String(data.revisionNumber) : null;
+  const displayQuotationNumber =
+    isRevision && revisionCode
+      ? `${revisionCode}${revisionDisplayNumber ? `-${revisionDisplayNumber}` : ""}-${data.quotationNumber}`
+      : data.quotationNumber;
 
   return (
     <div
@@ -78,7 +93,7 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
             Quotation
           </div>
           <div style={{ fontWeight: 700, fontSize: "14px", color: "#1e293b", marginTop: "6px" }}>
-            {data.quotationNumber}
+            {displayQuotationNumber}
           </div>
           <div style={{ color: "#64748b", fontSize: "11px", marginTop: "2px" }}>{data.quotationDate}</div>
         </div>

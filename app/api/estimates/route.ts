@@ -3,11 +3,25 @@ import {
   QuotationData,
   QuotationLineItem,
 } from "@/components/dashboard/extensions/quotation-templates/quotation-templates";
+import { createServerClientForApi } from "@/lib/supabase/supabase-server-client";
 
 const SUPABASE_FUNCTION_URL = `${process.env.SUPABASE_URL}/functions/v1/get-estimate`;
 
 // NOTE: This is a publishable key provided explicitly in the spec.
 const SUPABASE_PUBLISHABLE_KEY = process.env.SUPABASE_ANON_KEY!;
+
+function buildIdNameValue(id: string, name: string): string {
+  return `${id}_${name}`;
+}
+
+function parseRevisionType(
+  value: unknown,
+): "Internal" | "External" | undefined {
+  if (value === "Internal" || value === "External") {
+    return value;
+  }
+  return undefined;
+}
 
 function mapToQuotationData(payload: any): QuotationData {
   const estimate = payload?.estimate?.data?.[0];
@@ -44,6 +58,16 @@ function mapToQuotationData(payload: any): QuotationData {
     serviceAddressParts.length > 0 ? serviceAddressParts.join(", ") : null;
   const customerId = payload?.contact?.data?.[0]?.Customer_Id__C ?? null;
   const quotationNumber = estimate.Name ?? "";
+  const currentQuotationKey =
+    zohoEstimateId && quotationNumber
+      ? buildIdNameValue(zohoEstimateId, quotationNumber)
+      : null;
+  const matchedRevision =
+    currentQuotationKey && Array.isArray(payload?.revisions)
+      ? payload.revisions.find(
+          (row: any) => row?.revision_quotation_number === currentQuotationKey,
+        )
+      : null;
 
   const quotationDateRaw =
     estimate.Creation_Date__C ?? estimate.Created_Time ?? null;
@@ -132,6 +156,17 @@ function mapToQuotationData(payload: any): QuotationData {
     quotationNumber,
     quotationDate,
     validityDays,
+    quotationType:
+      typeof estimate.Quotation_Type__C === "string"
+        ? estimate.Quotation_Type__C
+        : undefined,
+    revisionType:
+      parseRevisionType(estimate.Revision_Type__C) ??
+      parseRevisionType(matchedRevision?.revision_type),
+    revisionNumber:
+      typeof matchedRevision?.revision_number === "number"
+        ? matchedRevision.revision_number
+        : undefined,
     totalDiscount: estimate.Discount_value__C,
     totalDiscountType: estimate.DiscountType__C,
     lineItems,
@@ -239,6 +274,28 @@ export async function POST(req: NextRequest) {
           Expired_Time: rawEstimate.Expired_Time ?? null,
         }
       : null;
+    const revisions = Array.isArray(payload?.revisions)
+      ? payload.revisions
+      : [];
+
+    const effectiveRootKey = `${quotation.zohoEstimateId}_${quotation.quotationNumber}`;
+    console.log("🚀 ~ POST ~ effectiveRootKey:", effectiveRootKey);
+    let hasRootOrParentRevision = false;
+    const supabase = await createServerClientForApi();
+    const { data: revisionRows, error: revisionRowsError } = await supabase
+      .from("estimate_revisions")
+      .select("id")
+      .or(
+        `parent_quotation_number.eq.${effectiveRootKey},root_quotation_number.eq.${effectiveRootKey}`,
+      )
+      .limit(1);
+    console.log("🚀 ~ POST ~ revisionRows:", revisionRows);
+    if (revisionRowsError) {
+      throw new Error(revisionRowsError.message);
+    }
+    hasRootOrParentRevision = (revisionRows?.length ?? 0) > 0;
+
+    const canCreateRevision = !hasRootOrParentRevision;
 
     return NextResponse.json(
       {
@@ -247,6 +304,8 @@ export async function POST(req: NextRequest) {
         estimateStatus,
         lifecycle,
         currentStatus,
+        revisions,
+        canCreateRevision,
       },
       { status: 200 },
     );

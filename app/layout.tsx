@@ -16,11 +16,14 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
+  display: "swap",
+
 });
 
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+  display: "swap",
 });
 
 export const metadata: Metadata = {
@@ -100,7 +103,7 @@ export default function RootLayout({
         <AuthProvider>
           <ThemeProviderWrapper>
             <TooltipProvider>
-                {children}
+              {children}
             </TooltipProvider>
             <Toaster position="top-center" duration={3000} richColors />
           </ThemeProviderWrapper>

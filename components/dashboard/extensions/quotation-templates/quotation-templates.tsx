@@ -39,6 +39,9 @@ export interface QuotationData {
   quotationNumber: string;
   quotationDate: string;
   validityDays?: number;
+  quotationType?: string;
+  revisionType?: "Internal" | "External";
+  revisionNumber?: number;
   /** Zoho FSM estimate record id used for transitions (when available). */
   zohoEstimateId?: string;
 

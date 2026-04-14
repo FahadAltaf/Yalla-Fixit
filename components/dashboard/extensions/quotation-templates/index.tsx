@@ -35,6 +35,7 @@ import {
   Download,
   MoreVertical,
   AlertTriangle,
+  GitBranchPlus,
 } from "lucide-react";
 
 import {
@@ -47,6 +48,105 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { YallaClassicTemplate } from "./templates/YallaClassicTemplate";
 import { generateQuotationPDFBlob } from "./pdf-utils";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
+type EstimateRevision = {
+  root_quotation_number: string;
+  parent_quotation_number: string;
+  revision_quotation_number: string | null;
+  revision_type: "Internal" | "External";
+  revision_number: number;
+};
+
+type RevisionNode = {
+  key: string;
+  queryName: string;
+  label: string;
+  revisionNumber: number;
+};
+
+function parseIdName(value: string | null | undefined): {
+  id: string;
+  name: string;
+} | null {
+  if (!value || typeof value !== "string") {
+    return null;
+  }
+  const separatorIndex = value.indexOf("_");
+  if (separatorIndex === -1) {
+    return null;
+  }
+  const id = value.slice(0, separatorIndex).trim();
+  const name = value.slice(separatorIndex + 1).trim();
+  if (!id || !name) {
+    return null;
+  }
+  return { id, name };
+}
+
+function buildIdNameValue(id: string, name: string): string {
+  return `${id}_${name}`;
+}
+
+function buildRevisionChain(
+  revisions: EstimateRevision[],
+): RevisionNode[] {
+  const nodes = new Map<string, RevisionNode>();
+
+  for (const revision of revisions) {
+    const rootParsed = parseIdName(revision.root_quotation_number);
+    if (rootParsed && !nodes.has(rootParsed.id)) {
+      nodes.set(rootParsed.id, {
+        key: rootParsed.id,
+        queryName: rootParsed.name,
+        label: `Root · ${rootParsed.name}`,
+        revisionNumber: 0,
+      });
+    }
+
+    const parentParsed = parseIdName(revision.parent_quotation_number);
+    if (parentParsed && !nodes.has(parentParsed.id)) {
+      nodes.set(parentParsed.id, {
+        key: parentParsed.id,
+        queryName: parentParsed.name,
+        label: `Parent · ${parentParsed.name}`,
+        revisionNumber: Math.max(1, revision.revision_number - 1),
+      });
+    }
+
+    const revisionParsed = parseIdName(revision.revision_quotation_number);
+    const revisionName = revisionParsed?.name ?? revision.revision_quotation_number;
+    if (revisionParsed && revisionName) {
+      nodes.set(revisionParsed.id, {
+        key: revisionParsed.id,
+        queryName: revisionName,
+        label: `R${revision.revision_number} · ${revisionName}`,
+        revisionNumber: revision.revision_number,
+      });
+    }
+  }
+
+  // if (fallbackCurrentName && !nodes.has(`current-${fallbackCurrentName}`)) {
+  //   nodes.set(`current-${fallbackCurrentName}`, {
+  //     key: `current-${fallbackCurrentName}`,
+  //     queryName: fallbackCurrentName,
+  //     label: `Current · ${fallbackCurrentName}`,
+  //     revisionNumber: Number.MAX_SAFE_INTEGER,
+  //   });
+  // }
+
+  return [...nodes.values()].sort((a, b) => a.revisionNumber - b.revisionNumber);
+}
 
 export function QuotationTemplatesPage() {
   const [searchQuery, setSearchQuery] = useState("");
@@ -63,15 +163,16 @@ export function QuotationTemplatesPage() {
   const yallaClassicTemplate =
     QUOTATION_TEMPLATES.find((t) => t.id === "yalla-classic") ?? QUOTATION_TEMPLATES[0];
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isCreateRevisionOpen, setIsCreateRevisionOpen] = useState(false);
+  const [revisionType, setRevisionType] = useState<"Internal" | "External">("Internal");
+  const [revisionReason, setRevisionReason] = useState("");
+  const [isCreatingRevision, setIsCreatingRevision] = useState(false);
+  const [revisions, setRevisions] = useState<EstimateRevision[]>([]);
+  const [selectedRevisionQuery, setSelectedRevisionQuery] = useState<string | null>(null);
+  const [canCreateRevision, setCanCreateRevision] = useState(false);
 
   // ── Search handler ──────────────────────────────────────────────────────
-  const handleSearch = async () => {
-    const q = searchQuery.trim();
-    if (!q) {
-      toast.error("Please enter a quotation number or customer name.");
-      return;
-    }
-
+  const fetchEstimate = async (payload: { name?: string; id?: string }) => {
     setIsSearching(true);
     setHasSearched(false);
 
@@ -81,7 +182,7 @@ export function QuotationTemplatesPage() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ name: q }),
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
@@ -92,25 +193,49 @@ export function QuotationTemplatesPage() {
         success: boolean;
         quotation?: QuotationData;
         currentStatus?: string | null;
+        revisions?: EstimateRevision[];
+        canCreateRevision?: boolean;
       } = await response.json();
-
       if (json.success && json.quotation) {
         setSearchResults(json.quotation);
         setCurrentStatus(json.currentStatus ?? null);
-        toast.success("Quotation data loaded!");
+        setRevisions(Array.isArray(json.revisions) ? json.revisions : []);
+        setSelectedRevisionQuery(json.quotation.quotationNumber ?? null);
+        setCanCreateRevision(Boolean(json.canCreateRevision));
       } else {
         setSearchResults(null);
         setCurrentStatus(null);
-        toast.error("No quotation found for this ID.");
+        setRevisions([]);
+        setSelectedRevisionQuery(null);
+        setCanCreateRevision(false);
+        throw new Error("No quotation found for this ID.");
       }
     } catch (error) {
       console.error("Search error:", error);
       setSearchResults(null);
       setCurrentStatus(null);
-      toast.error("Failed to load quotation. Please try again.");
+      setRevisions([]);
+      setSelectedRevisionQuery(null);
+      setCanCreateRevision(false);
+      throw error;
     } finally {
       setHasSearched(true);
       setIsSearching(false);
+    }
+  };
+
+  const handleSearch = async () => {
+    const q = searchQuery.trim();
+    if (!q) {
+      toast.error("Please enter a quotation number or customer name.");
+      return;
+    }
+
+    try {
+      await fetchEstimate({ name: q });
+      toast.success("Quotation data loaded!");
+    } catch {
+      toast.error("Failed to load quotation. Please try again.");
     }
   };
 
@@ -160,6 +285,80 @@ export function QuotationTemplatesPage() {
   };
 
   const activeData = searchResults ?? null;
+  const revisionChain = buildRevisionChain(
+    revisions,
+  );
+
+  const handleSelectRevision = async (quotationName: string) => {
+    if (!quotationName || quotationName === selectedRevisionQuery || isSearching) {
+      return;
+    }
+    try {
+      setSearchQuery(quotationName);
+      await fetchEstimate({ name: quotationName });
+
+      toast.success("Loaded selected revision.");
+    } catch {
+      toast.error("Failed to load selected revision.");
+    }
+  };
+
+  const handleCreateRevision = async () => {
+    if (!activeData?.zohoEstimateId) {
+      toast.error("Estimate id is missing. Please search again.");
+      return;
+    }
+
+    setIsCreatingRevision(true);
+    try {
+      const parentQuotationNumber = buildIdNameValue(
+        activeData.zohoEstimateId,
+        activeData.quotationNumber,
+      );
+      const rootQuotationNumber =
+        revisions[0]?.root_quotation_number ?? parentQuotationNumber;
+
+      const response = await fetch("/api/estimates/revision", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          estimateId: activeData.zohoEstimateId,
+          rootQuotationNumber,
+          parentQuotationNumber,
+          revisionType,
+          reason: revisionReason.trim() || undefined,
+        }),
+      });
+
+      const json: {
+        success: boolean;
+        error?: string;
+        revisionEstimateNumber?: string | null;
+      } = await response.json();
+
+      if (!response.ok || !json.success) {
+        throw new Error(json.error ?? "Failed to create revision estimate");
+      }
+
+      toast.success(
+        json.revisionEstimateNumber
+          ? `Revision created: ${json.revisionEstimateNumber}`
+          : "Revision estimate created successfully."
+      );
+      // await fetchEstimate({ id: activeData.zohoEstimateId });
+      setIsCreateRevisionOpen(false);
+      setRevisionReason("");
+    } catch (error) {
+      console.error("Create revision error:", error);
+      toast.error(
+        error instanceof Error ? error.message : "Failed to create revision estimate."
+      );
+    } finally {
+      setIsCreatingRevision(false);
+    }
+  };
 
   return (
 
@@ -266,6 +465,27 @@ export function QuotationTemplatesPage() {
                 </div>
               </Alert>
             )}
+            {revisionChain.length > 0 && (
+              <Tabs
+                value={selectedRevisionQuery ?? ""}
+                onValueChange={(value) => {
+
+                  void handleSelectRevision(value);
+                }}
+              >
+                <TabsList className="w-full justify-start ">
+                  {revisionChain.map((node) => (
+                    <TabsTrigger
+                      key={node.key}
+                      value={node.queryName}
+                      className="min-w-max text-xs"
+                    >
+                      {node.label}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </Tabs>
+            )}
           </div>
         )}
 
@@ -362,6 +582,16 @@ export function QuotationTemplatesPage() {
                         <Download className="mr-2 size-3.5" />
                         Download PDF
                       </DropdownMenuItem>
+                      {canCreateRevision && (
+                        <DropdownMenuItem
+                          className="text-xs"
+                          onClick={() => setIsCreateRevisionOpen(true)}
+                          disabled={!activeData?.zohoEstimateId || isCreatingRevision}
+                        >
+                          <GitBranchPlus className="mr-2 size-3.5" />
+                          Create revision
+                        </DropdownMenuItem>
+                      )}
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
@@ -411,6 +641,61 @@ export function QuotationTemplatesPage() {
             setCurrentStatus={setCurrentStatus}
           />
         )}
+        <Dialog open={isCreateRevisionOpen} onOpenChange={setIsCreateRevisionOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Create Revision</DialogTitle>
+              <DialogDescription>
+                Create a new estimate revision from quotation{" "}
+                <span className="font-medium">{activeData?.quotationNumber}</span>.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="revision-type">Quotation type</Label>
+                <Select
+                  value={revisionType}
+                  onValueChange={(value) =>
+                    setRevisionType(value as "Internal" | "External")
+                  }
+                >
+                  <SelectTrigger id="revision-type" className="w-full">
+                    <SelectValue placeholder="Select quotation type" />
+                  </SelectTrigger>
+                  <SelectContent className="w-full">
+                    <SelectItem value="Internal">Internal</SelectItem>
+                    <SelectItem value="External">External</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="revision-reason">Reason (optional)</Label>
+                <Textarea
+                  id="revision-reason"
+                  placeholder="Enter reason for creating this revision..."
+                  value={revisionReason}
+                  onChange={(event) => setRevisionReason(event.target.value)}
+                  rows={3}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setIsCreateRevisionOpen(false)}
+                disabled={isCreatingRevision}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleCreateRevision}
+                disabled={!activeData?.zohoEstimateId || isCreatingRevision}
+              >
+                {isCreatingRevision ? "Creating..." : "Create"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </CardContent>
     </Card>
   );
