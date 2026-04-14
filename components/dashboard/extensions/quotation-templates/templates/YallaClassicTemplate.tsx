@@ -50,7 +50,7 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
     typeof data.revisionNumber === "number" ? String(data.revisionNumber) : null;
   const displayQuotationNumber =
     isRevision && revisionCode
-      ? `${revisionCode}${revisionDisplayNumber ? `-${revisionDisplayNumber}` : ""}-${data.quotationNumber}`
+      ? `${data.quotationNumber}-${revisionCode}-${revisionDisplayNumber ? `${revisionDisplayNumber}` : ""}`
       : data.quotationNumber;
 
   return (
