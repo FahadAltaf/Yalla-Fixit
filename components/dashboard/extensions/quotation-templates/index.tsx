@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import {
@@ -37,7 +37,6 @@ import {
   AlertTriangle,
   GitBranchPlus,
   ImagePlus,
-  Trash2,
 } from "lucide-react";
 
 import {
@@ -62,118 +61,14 @@ import {
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Separator } from "@/components/ui/separator";
-
-type EstimateRevision = {
-  root_quotation_number: string;
-  parent_quotation_number: string;
-  revision_quotation_number: string | null;
-  revision_type: "Internal" | "External";
-  revision_number: number;
-};
-
-type RevisionNode = {
-  key: string;
-  queryName: string;
-  label: string;
-  revisionNumber: number;
-};
+import { AttachServiceItemImagesDialog, ServiceItemOption } from "./attach-service-item-images-dialog";
+import { buildRevisionChain, EstimateRevision } from "./revision-chain";
+import { useServiceItemImages } from "./use-service-item-images";
 
 type TemplateImageMode = "with-images" | "without-images";
 
-type ServiceItemOption = {
-  id: string;
-  label: string;
-};
-
-const MAX_IMAGES_PER_SERVICE_ITEM = 2;
-
-function getRevisionCode(revisionType: EstimateRevision["revision_type"]): "IR" | "CR" {
-  return revisionType === "External" ? "CR" : "IR";
-}
-
-function parseIdName(value: string | null | undefined): {
-  id: string;
-  name: string;
-} | null {
-  if (!value || typeof value !== "string") {
-    return null;
-  }
-  const separatorIndex = value.indexOf("_");
-  if (separatorIndex === -1) {
-    return null;
-  }
-  const id = value.slice(0, separatorIndex).trim();
-  const name = value.slice(separatorIndex + 1).trim();
-  if (!id || !name) {
-    return null;
-  }
-  return { id, name };
-}
-
 function buildIdNameValue(id: string, name: string): string {
   return `${id}_${name}`;
-}
-
-function normalizeId(value: string | null | undefined): string {
-  return (value ?? "").trim();
-}
-
-function buildRevisionChain(
-  revisions: EstimateRevision[],
-): RevisionNode[] {
-  const nodes = new Map<string, RevisionNode>();
-  let rootName: string | null = null;
-  let rootId: string | null = null;
-
-  for (const revision of revisions) {
-    const rootParsed = parseIdName(revision.root_quotation_number);
-    if (!rootName && rootParsed?.name) {
-      rootName = rootParsed.name;
-      rootId = rootParsed.id;
-    }
-
-    const parentParsed = parseIdName(revision.parent_quotation_number);
-    if (!rootName && parentParsed?.name) {
-      rootName = parentParsed.name;
-      rootId = parentParsed.id;
-    }
-  }
-
-  if (rootName) {
-    nodes.set(rootId ?? `root-${rootName}`, {
-      key: rootId ?? `root-${rootName}`,
-      queryName: rootName,
-      label: rootName,
-      revisionNumber: 0,
-    });
-  }
-
-  for (const revision of revisions) {
-    const revisionParsed = parseIdName(revision.revision_quotation_number);
-    const revisionName = revisionParsed?.name ?? revision.revision_quotation_number;
-    if (revisionParsed && revisionName) {
-      const rootLabel = rootName ?? revisionName;
-      const revisionCode = getRevisionCode(revision.revision_type);
-      nodes.set(revisionParsed.id, {
-        key: revisionParsed.id,
-        queryName: revisionName,
-        label: `${rootLabel}-${revisionCode}-${revision.revision_number}(${revisionName})`,
-        revisionNumber: revision.revision_number,
-      });
-    }
-  }
-
-  // if (fallbackCurrentName && !nodes.has(`current-${fallbackCurrentName}`)) {
-  //   nodes.set(`current-${fallbackCurrentName}`, {
-  //     key: `current-${fallbackCurrentName}`,
-  //     queryName: fallbackCurrentName,
-  //     label: `Current · ${fallbackCurrentName}`,
-  //     revisionNumber: Number.MAX_SAFE_INTEGER,
-  //   });
-  // }
-
-  return [...nodes.values()].sort((a, b) => a.revisionNumber - b.revisionNumber);
 }
 
 export function QuotationTemplatesPage() {
@@ -198,10 +93,6 @@ export function QuotationTemplatesPage() {
   const [revisionReason, setRevisionReason] = useState("");
   const [isCreatingRevision, setIsCreatingRevision] = useState(false);
   const [isAttachImagesOpen, setIsAttachImagesOpen] = useState(false);
-  const [selectedServiceItemId, setSelectedServiceItemId] = useState<string>("");
-  const [selectedImageFiles, setSelectedImageFiles] = useState<File[]>([]);
-  const [isUploadingServiceItemImages, setIsUploadingServiceItemImages] = useState(false);
-  const [deletingImageUrl, setDeletingImageUrl] = useState<string | null>(null);
   const [revisions, setRevisions] = useState<EstimateRevision[]>([]);
   const [selectedRevisionQuery, setSelectedRevisionQuery] = useState<string | null>(null);
   const [canCreateRevision, setCanCreateRevision] = useState(false);
@@ -345,151 +236,24 @@ export function QuotationTemplatesPage() {
           all.findIndex((candidate) => candidate.id === item.id) === index,
       );
   }, [activeData]);
-
-  const selectedServiceItemImageCount = useMemo(() => {
-    if (!activeData || !selectedServiceItemId) {
-      return 0;
-    }
-    const targetServiceItemId = normalizeId(selectedServiceItemId);
-    return (activeData.serviceItemImages ?? []).filter(
-      (image) => normalizeId(image.serviceItemId) === targetServiceItemId,
-    ).length;
-  }, [activeData, selectedServiceItemId]);
-  const selectedServiceItemImages = useMemo(() => {
-    if (!activeData || !selectedServiceItemId) {
-      return [];
-    }
-    const targetServiceItemId = normalizeId(selectedServiceItemId);
-    return (activeData.serviceItemImages ?? []).filter(
-      (image) => normalizeId(image.serviceItemId) === targetServiceItemId,
-    );
-  }, [activeData, selectedServiceItemId]);
-
-  const remainingImageSlots = Math.max(
-    0,
-    MAX_IMAGES_PER_SERVICE_ITEM - selectedServiceItemImageCount,
-  );
-  const selectedImageCount = selectedImageFiles.length;
-  const remainingAfterSelection = Math.max(
-    0,
-    MAX_IMAGES_PER_SERVICE_ITEM -
-    (selectedServiceItemImageCount + selectedImageCount),
-  );
-  const selectedImagePreviews = useMemo(
-    () =>
-      selectedImageFiles.map((file) => ({
-        key: `${file.name}-${file.size}-${file.lastModified}`,
-        name: file.name,
-        url: URL.createObjectURL(file),
-      })),
-    [selectedImageFiles],
-  );
-
-  useEffect(() => {
-    return () => {
-      selectedImagePreviews.forEach((preview) => {
-        URL.revokeObjectURL(preview.url);
-      });
-    };
-  }, [selectedImagePreviews]);
-
-  const handleImageFilesChange: React.ChangeEventHandler<HTMLInputElement> = (
-    event,
-  ) => {
-    const files = Array.from(event.target.files ?? []);
-    if (files.length === 0) {
-      setSelectedImageFiles([]);
-      return;
-    }
-
-    const acceptedFiles = files.filter((file) => file.type.startsWith("image/"));
-    if (acceptedFiles.length !== files.length) {
-      toast.error("Only image files are allowed.");
-    }
-
-    setSelectedImageFiles(acceptedFiles.slice(0, remainingImageSlots));
-  };
-
-  const handleRemoveSelectedImage = (previewKey: string) => {
-    setSelectedImageFiles((prev) =>
-      prev.filter(
-        (file) =>
-          `${file.name}-${file.size}-${file.lastModified}` !== previewKey,
-      ),
-    );
-  };
-
-  const handleAttachImages = async () => {
-    if (!activeData?.zohoEstimateId || !activeData?.quotationNumber) {
-      toast.error("Quotation info is missing. Please search again.");
-      return;
-    }
-    if (!selectedServiceItemId) {
-      toast.error("Please select a service item.");
-      return;
-    }
-    if (selectedImageFiles.length === 0) {
-      toast.error("Please select at least one image.");
-      return;
-    }
-    if (selectedImageFiles.length > remainingImageSlots) {
-      toast.error(`Only ${remainingImageSlots} image slot(s) left for this service item.`);
-      return;
-    }
-
-    setIsUploadingServiceItemImages(true);
-    try {
-      const formData = new FormData();
-      formData.append("quotationId", activeData.zohoEstimateId);
-      formData.append("quotationName", activeData.quotationNumber);
-      formData.append("serviceItemId", selectedServiceItemId);
-      for (const file of selectedImageFiles) {
-        formData.append("images", file);
-      }
-
-      const response = await fetch("/api/estimates/service-item-images", {
-        method: "POST",
-        body: formData,
-      });
-      const json: {
-        success: boolean;
-        error?: string;
-        images?: ServiceItemImage[];
-      } = await response.json();
-      if (!response.ok || !json.success) {
-        throw new Error(json.error ?? "Failed to upload images.");
-      }
-
-      if (json.images && json.images.length > 0) {
-        setSearchResults((prev) => {
-          if (!prev) {
-            return prev;
-          }
-          const existing = prev.serviceItemImages ?? [];
-          const dedupedNew = json.images!.filter(
-            (image) =>
-              !existing.some((row) => row.supabaseUrl === image.supabaseUrl),
-          );
-          return {
-            ...prev,
-            serviceItemImages: [...existing, ...dedupedNew],
-          };
-        });
-      }
-
-      // await fetchEstimate({ id: activeData.zohoEstimateId });
-      setIsAttachImagesOpen(false);
-      toast.success("Images attached successfully.");
-      setSelectedImageFiles([]);
-    } catch (error) {
-      console.error("Attach images error:", error);
-      toast.error(
-        error instanceof Error ? error.message : "Failed to attach images.",
-      );
-    } finally {
-      setIsUploadingServiceItemImages(false);
-    }
-  };
+  const {
+    selectedServiceItemId,
+    selectedImageFiles,
+    isUploadingServiceItemImages,
+    deletingImageUrl,
+    selectedServiceItemImages,
+    remainingAfterSelection,
+    selectedImagePreviews,
+    onSelectServiceItem,
+    handleImageFilesChange,
+    handleRemoveSelectedImage,
+    handleAttachImages,
+    handleDeleteServiceItemImage,
+    resetAttachImagesState,
+  } = useServiceItemImages({
+    activeData,
+    setSearchResultsAction: setSearchResults,
+  });
 
   const handleSelectRevision = async (quotationName: string) => {
     if (!quotationName || quotationName === selectedRevisionQuery || isSearching) {
@@ -505,53 +269,6 @@ export function QuotationTemplatesPage() {
     }
   };
 
-  const handleDeleteServiceItemImage = async (imageUrl: string) => {
-    if (!activeData?.zohoEstimateId || !selectedServiceItemId) {
-      toast.error("Missing quotation or service item data.");
-      return;
-    }
-
-    setDeletingImageUrl(imageUrl);
-    try {
-      const response = await fetch("/api/estimates/service-item-images", {
-        method: "DELETE",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          quotationId: activeData.zohoEstimateId,
-          serviceItemId: selectedServiceItemId,
-          supabaseUrl: imageUrl,
-        }),
-      });
-
-      const json: { success: boolean; error?: string } = await response.json();
-      if (!response.ok || !json.success) {
-        throw new Error(json.error ?? "Failed to delete image.");
-      }
-
-      setSearchResults((prev) => {
-        if (!prev) {
-          return prev;
-        }
-        return {
-          ...prev,
-          serviceItemImages: (prev.serviceItemImages ?? []).filter(
-            (image) => image.supabaseUrl !== imageUrl,
-          ),
-        };
-      });
-
-      toast.success("Image removed.");
-    } catch (error) {
-      console.error("Delete image error:", error);
-      toast.error(
-        error instanceof Error ? error.message : "Failed to remove image.",
-      );
-    } finally {
-      setDeletingImageUrl(null);
-    }
-  };
 
   const handleCreateRevision = async () => {
     if (!activeData?.zohoEstimateId) {
@@ -686,7 +403,7 @@ export function QuotationTemplatesPage() {
               <FileText className="size-5 text-primary shrink-0" />
               <div className="min-w-0">
                 <p className="text-sm font-semibold truncate">
-                  {searchResults.quotationNumber} · {searchResults.customerCompanyName}
+                  {searchResults.quotationNumber} {searchResults.customerCompanyName ? `· ${searchResults.customerCompanyName}` : ""}
                 </p>
                 <p className="text-xs text-muted-foreground truncate">
                   {searchResults.serviceAddress ?? "No service address"} ·{" "}
@@ -764,7 +481,7 @@ export function QuotationTemplatesPage() {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h2 className="text-lg font-semibold flex items-center gap-2">
-                  <Sparkles className="size-4 text-amber-500" />
+                  <Sparkles className="size-4 text-primary" />
                   Template Preview
                 </h2>
                 <p className="text-xs text-muted-foreground mt-0.5">
@@ -848,7 +565,10 @@ export function QuotationTemplatesPage() {
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         className="text-xs"
-                        onClick={() => setIsAttachImagesOpen(true)}
+                        onClick={() => {
+                          resetAttachImagesState();
+                          setIsAttachImagesOpen(true);
+                        }}
                         disabled={!serviceItemOptions.length}
                       >
                         <ImagePlus className="mr-2 size-3.5" />
@@ -915,147 +635,39 @@ export function QuotationTemplatesPage() {
             setCurrentStatus={setCurrentStatus}
           />
         )}
-        <Dialog open={isAttachImagesOpen} onOpenChange={setIsAttachImagesOpen}>
-          <DialogContent className="sm:max-w-[400px]">
-            <DialogHeader>
-              <DialogTitle>Attach Service Item Images</DialogTitle>
-              <DialogDescription>
-                Select a service item and upload up to 2 images for it.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="service-item-id">Service item</Label>
-                <Select
-                  value={selectedServiceItemId}
-                  onValueChange={(value) => {
-                    setSelectedServiceItemId(value);
-                    setSelectedImageFiles([]);
-                  }}
-                >
-                  <SelectTrigger id="service-item-id" className="w-full">
-                    <SelectValue placeholder="Select service item" />
-                  </SelectTrigger>
-                  <SelectContent className="w-full">
-                    {serviceItemOptions.map((item) => (
-                      <SelectItem key={item.id} value={item.id}>
-                        {item.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="service-item-images">Images (max 2)</Label>
-                <Input
-                  id="service-item-images"
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  onChange={handleImageFilesChange}
-                  disabled={!selectedServiceItemId || remainingImageSlots === 0}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Remaining: {remainingAfterSelection}
-                </p>
-              </div>
-              {(selectedImagePreviews.length > 0 ||
-                selectedServiceItemImages.length > 0) && (
-                  <div className="space-y-2">
-                    <Label>Attachments</Label>
-                    <div className="grid grid-cols-2 gap-2">
-                      {selectedImagePreviews.map((preview) => (
-                        <div
-                          key={preview.key}
-                          className="relative overflow-hidden rounded-md border border-dashed"
-                        >
-                          <img
-                            src={preview.url}
-                            alt={preview.name}
-                            className="h-24 w-full"
-                          />
-                          <div className="flex items-center justify-between gap-1 px-1 py-1">
-                            <p className="truncate text-[10px] text-muted-foreground">
-                              {preview.name}
-                            </p>
-                            <Badge variant="outline" className="h-4 px-1 text-[9px]">
-                              Selected
-                            </Badge>
-                          </div>
-                          <Button
-                            type="button"
-                            size="icon"
-                            variant="destructive"
-                            className="absolute right-1 top-1 size-6"
-                            onClick={() => handleRemoveSelectedImage(preview.key)}
-                          >
-                            <Trash2 className="size-3.5" />
-                          </Button>
-                        </div>
-                      ))}
-                      {selectedServiceItemImages.map((image) => (
-                        <div
-                          key={image.supabaseUrl}
-                          className="relative overflow-hidden rounded-md border"
-                        >
-                          <a
-                            href={image.supabaseUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="block"
-                          >
-                            <img
-                              src={image.supabaseUrl}
-                              alt="Service item attachment"
-                              className="h-24 w-full"
-                            />
-                          </a>
-                          <Badge
-                            variant="secondary"
-                            className="absolute bottom-1 left-1 h-4 px-1 text-[9px]"
-                          >
-                            Uploaded
-                          </Badge>
-                          <Button
-                            type="button"
-                            size="icon"
-                            variant="destructive"
-                            className="absolute right-1 top-1 size-6"
-                            disabled={deletingImageUrl === image.supabaseUrl}
-                            onClick={() =>
-                              void handleDeleteServiceItemImage(image.supabaseUrl)
-                            }
-                          >
-                            <Trash2 className="size-3.5" />
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-            </div>
-            <DialogFooter>
-              <Button
-                variant="outline"
-                onClick={() => setIsAttachImagesOpen(false)}
-                disabled={isUploadingServiceItemImages}
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={handleAttachImages}
-                disabled={
-                  isUploadingServiceItemImages ||
-                  Boolean(deletingImageUrl) ||
-                  !selectedServiceItemId ||
-                  selectedImageFiles.length === 0
-                }
-              >
-                {isUploadingServiceItemImages ? "Uploading..." : "Upload Images"}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <AttachServiceItemImagesDialog
+          open={isAttachImagesOpen}
+          onOpenChangeAction={(nextOpen) => {
+            console.log("🚀 ~ QuotationTemplatesPage ~ nextOpen:", nextOpen)
+
+            setIsAttachImagesOpen(nextOpen);
+          }}
+          serviceItemOptions={serviceItemOptions}
+          selectedServiceItemId={selectedServiceItemId}
+          onSelectServiceItemAction={onSelectServiceItem}
+          onFileChangeAction={handleImageFilesChange}
+          remainingAfterSelection={remainingAfterSelection}
+          selectedImagePreviews={selectedImagePreviews}
+          selectedServiceItemImages={selectedServiceItemImages}
+          onRemoveSelectedImageAction={handleRemoveSelectedImage}
+          onDeleteUploadedImageAction={(url) => void handleDeleteServiceItemImage(url)}
+          deletingImageUrl={deletingImageUrl}
+          isUploadingServiceItemImages={isUploadingServiceItemImages}
+          onUploadAction={() => {
+            void (async () => {
+              const isSuccess = await handleAttachImages();
+              if (isSuccess) {
+                setIsAttachImagesOpen(false);
+              }
+            })();
+          }}
+          uploadDisabled={
+            isUploadingServiceItemImages ||
+            Boolean(deletingImageUrl) ||
+            !selectedServiceItemId ||
+            selectedImageFiles.length === 0
+          }
+        />
         <Dialog open={isCreateRevisionOpen} onOpenChange={setIsCreateRevisionOpen}>
           <DialogContent className="sm:max-w-[400px]">
             <DialogHeader>
