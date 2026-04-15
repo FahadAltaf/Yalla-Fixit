@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import {
@@ -36,11 +36,14 @@ import {
   MoreVertical,
   AlertTriangle,
   GitBranchPlus,
+  ImagePlus,
+  Trash2,
 } from "lucide-react";
 
 import {
   QUOTATION_TEMPLATES,
   QuotationData,
+  ServiceItemImage,
   calculateTotals,
 } from "./quotation-templates";
 import { QuotationPreviewModal } from "./quotation-preview-modal";
@@ -59,6 +62,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Separator } from "@/components/ui/separator";
 
 type EstimateRevision = {
   root_quotation_number: string;
@@ -74,6 +78,15 @@ type RevisionNode = {
   label: string;
   revisionNumber: number;
 };
+
+type TemplateImageMode = "with-images" | "without-images";
+
+type ServiceItemOption = {
+  id: string;
+  label: string;
+};
+
+const MAX_IMAGES_PER_SERVICE_ITEM = 2;
 
 function getRevisionCode(revisionType: EstimateRevision["revision_type"]): "IR" | "CR" {
   return revisionType === "External" ? "CR" : "IR";
@@ -100,6 +113,10 @@ function parseIdName(value: string | null | undefined): {
 
 function buildIdNameValue(id: string, name: string): string {
   return `${id}_${name}`;
+}
+
+function normalizeId(value: string | null | undefined): string {
+  return (value ?? "").trim();
 }
 
 function buildRevisionChain(
@@ -171,6 +188,8 @@ export function QuotationTemplatesPage() {
 
   // Template preview state (for now only Yalla Classic, with/without discount)
   const [discountMode, setDiscountMode] = useState<"with" | "without" | "with-total">("with");
+  const [templateImageMode, setTemplateImageMode] =
+    useState<TemplateImageMode>("without-images");
   const yallaClassicTemplate =
     QUOTATION_TEMPLATES.find((t) => t.id === "yalla-classic") ?? QUOTATION_TEMPLATES[0];
   const [isGenerating, setIsGenerating] = useState(false);
@@ -178,6 +197,11 @@ export function QuotationTemplatesPage() {
   const [revisionType, setRevisionType] = useState<"Internal" | "External">("Internal");
   const [revisionReason, setRevisionReason] = useState("");
   const [isCreatingRevision, setIsCreatingRevision] = useState(false);
+  const [isAttachImagesOpen, setIsAttachImagesOpen] = useState(false);
+  const [selectedServiceItemId, setSelectedServiceItemId] = useState<string>("");
+  const [selectedImageFiles, setSelectedImageFiles] = useState<File[]>([]);
+  const [isUploadingServiceItemImages, setIsUploadingServiceItemImages] = useState(false);
+  const [deletingImageUrl, setDeletingImageUrl] = useState<string | null>(null);
   const [revisions, setRevisions] = useState<EstimateRevision[]>([]);
   const [selectedRevisionQuery, setSelectedRevisionQuery] = useState<string | null>(null);
   const [canCreateRevision, setCanCreateRevision] = useState(false);
@@ -206,9 +230,14 @@ export function QuotationTemplatesPage() {
         currentStatus?: string | null;
         revisions?: EstimateRevision[];
         canCreateRevision?: boolean;
+        serviceItemImages?: ServiceItemImage[];
       } = await response.json();
       if (json.success && json.quotation) {
-        setSearchResults(json.quotation);
+        setSearchResults({
+          ...json.quotation,
+          serviceItemImages:
+            json.serviceItemImages ?? json.quotation.serviceItemImages ?? [],
+        });
         setCurrentStatus(json.currentStatus ?? null);
         setRevisions(Array.isArray(json.revisions) ? json.revisions : []);
         setSelectedRevisionQuery(json.quotation.quotationNumber ?? null);
@@ -273,7 +302,8 @@ export function QuotationTemplatesPage() {
           imageFormat: "JPEG",
           imageQuality: 0.92,
         },
-        discountMode
+        discountMode,
+        templateImageMode === "with-images",
       );
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -299,6 +329,167 @@ export function QuotationTemplatesPage() {
   const revisionChain = buildRevisionChain(
     revisions,
   );
+  const serviceItemOptions = useMemo<ServiceItemOption[]>(() => {
+    if (!activeData) {
+      return [];
+    }
+
+    return activeData.lineItems
+      .map((item) => ({
+        id: item.serviceItemId,
+        label: item.description,
+      }))
+      .filter((item): item is ServiceItemOption => Boolean(item.id))
+      .filter(
+        (item, index, all) =>
+          all.findIndex((candidate) => candidate.id === item.id) === index,
+      );
+  }, [activeData]);
+
+  const selectedServiceItemImageCount = useMemo(() => {
+    if (!activeData || !selectedServiceItemId) {
+      return 0;
+    }
+    const targetServiceItemId = normalizeId(selectedServiceItemId);
+    return (activeData.serviceItemImages ?? []).filter(
+      (image) => normalizeId(image.serviceItemId) === targetServiceItemId,
+    ).length;
+  }, [activeData, selectedServiceItemId]);
+  const selectedServiceItemImages = useMemo(() => {
+    if (!activeData || !selectedServiceItemId) {
+      return [];
+    }
+    const targetServiceItemId = normalizeId(selectedServiceItemId);
+    return (activeData.serviceItemImages ?? []).filter(
+      (image) => normalizeId(image.serviceItemId) === targetServiceItemId,
+    );
+  }, [activeData, selectedServiceItemId]);
+
+  const remainingImageSlots = Math.max(
+    0,
+    MAX_IMAGES_PER_SERVICE_ITEM - selectedServiceItemImageCount,
+  );
+  const selectedImageCount = selectedImageFiles.length;
+  const remainingAfterSelection = Math.max(
+    0,
+    MAX_IMAGES_PER_SERVICE_ITEM -
+    (selectedServiceItemImageCount + selectedImageCount),
+  );
+  const selectedImagePreviews = useMemo(
+    () =>
+      selectedImageFiles.map((file) => ({
+        key: `${file.name}-${file.size}-${file.lastModified}`,
+        name: file.name,
+        url: URL.createObjectURL(file),
+      })),
+    [selectedImageFiles],
+  );
+
+  useEffect(() => {
+    return () => {
+      selectedImagePreviews.forEach((preview) => {
+        URL.revokeObjectURL(preview.url);
+      });
+    };
+  }, [selectedImagePreviews]);
+
+  const handleImageFilesChange: React.ChangeEventHandler<HTMLInputElement> = (
+    event,
+  ) => {
+    const files = Array.from(event.target.files ?? []);
+    if (files.length === 0) {
+      setSelectedImageFiles([]);
+      return;
+    }
+
+    const acceptedFiles = files.filter((file) => file.type.startsWith("image/"));
+    if (acceptedFiles.length !== files.length) {
+      toast.error("Only image files are allowed.");
+    }
+
+    setSelectedImageFiles(acceptedFiles.slice(0, remainingImageSlots));
+  };
+
+  const handleRemoveSelectedImage = (previewKey: string) => {
+    setSelectedImageFiles((prev) =>
+      prev.filter(
+        (file) =>
+          `${file.name}-${file.size}-${file.lastModified}` !== previewKey,
+      ),
+    );
+  };
+
+  const handleAttachImages = async () => {
+    if (!activeData?.zohoEstimateId || !activeData?.quotationNumber) {
+      toast.error("Quotation info is missing. Please search again.");
+      return;
+    }
+    if (!selectedServiceItemId) {
+      toast.error("Please select a service item.");
+      return;
+    }
+    if (selectedImageFiles.length === 0) {
+      toast.error("Please select at least one image.");
+      return;
+    }
+    if (selectedImageFiles.length > remainingImageSlots) {
+      toast.error(`Only ${remainingImageSlots} image slot(s) left for this service item.`);
+      return;
+    }
+
+    setIsUploadingServiceItemImages(true);
+    try {
+      const formData = new FormData();
+      formData.append("quotationId", activeData.zohoEstimateId);
+      formData.append("quotationName", activeData.quotationNumber);
+      formData.append("serviceItemId", selectedServiceItemId);
+      for (const file of selectedImageFiles) {
+        formData.append("images", file);
+      }
+
+      const response = await fetch("/api/estimates/service-item-images", {
+        method: "POST",
+        body: formData,
+      });
+      const json: {
+        success: boolean;
+        error?: string;
+        images?: ServiceItemImage[];
+      } = await response.json();
+      if (!response.ok || !json.success) {
+        throw new Error(json.error ?? "Failed to upload images.");
+      }
+
+      if (json.images && json.images.length > 0) {
+        setSearchResults((prev) => {
+          if (!prev) {
+            return prev;
+          }
+          const existing = prev.serviceItemImages ?? [];
+          const dedupedNew = json.images!.filter(
+            (image) =>
+              !existing.some((row) => row.supabaseUrl === image.supabaseUrl),
+          );
+          return {
+            ...prev,
+            serviceItemImages: [...existing, ...dedupedNew],
+          };
+        });
+      }
+
+      // await fetchEstimate({ id: activeData.zohoEstimateId });
+      setIsAttachImagesOpen(false);
+      toast.success("Images attached successfully.");
+      setSelectedImageFiles([]);
+    } catch (error) {
+      console.error("Attach images error:", error);
+      toast.error(
+        error instanceof Error ? error.message : "Failed to attach images.",
+      );
+    } finally {
+      setIsUploadingServiceItemImages(false);
+    }
+  };
 
   const handleSelectRevision = async (quotationName: string) => {
     if (!quotationName || quotationName === selectedRevisionQuery || isSearching) {
@@ -311,6 +502,54 @@ export function QuotationTemplatesPage() {
       toast.success("Loaded selected revision.");
     } catch {
       toast.error("Failed to load selected revision.");
+    }
+  };
+
+  const handleDeleteServiceItemImage = async (imageUrl: string) => {
+    if (!activeData?.zohoEstimateId || !selectedServiceItemId) {
+      toast.error("Missing quotation or service item data.");
+      return;
+    }
+
+    setDeletingImageUrl(imageUrl);
+    try {
+      const response = await fetch("/api/estimates/service-item-images", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          quotationId: activeData.zohoEstimateId,
+          serviceItemId: selectedServiceItemId,
+          supabaseUrl: imageUrl,
+        }),
+      });
+
+      const json: { success: boolean; error?: string } = await response.json();
+      if (!response.ok || !json.success) {
+        throw new Error(json.error ?? "Failed to delete image.");
+      }
+
+      setSearchResults((prev) => {
+        if (!prev) {
+          return prev;
+        }
+        return {
+          ...prev,
+          serviceItemImages: (prev.serviceItemImages ?? []).filter(
+            (image) => image.supabaseUrl !== imageUrl,
+          ),
+        };
+      });
+
+      toast.success("Image removed.");
+    } catch (error) {
+      console.error("Delete image error:", error);
+      toast.error(
+        error instanceof Error ? error.message : "Failed to remove image.",
+      );
+    } finally {
+      setDeletingImageUrl(null);
     }
   };
 
@@ -556,6 +795,20 @@ export function QuotationTemplatesPage() {
                       </SelectItem>
                     </SelectContent>
                   </Select>
+                  <Select
+                    value={templateImageMode}
+                    onValueChange={(value) =>
+                      setTemplateImageMode(value as TemplateImageMode)
+                    }
+                  >
+                    <SelectTrigger className="w-max h-8 text-xs">
+                      <SelectValue placeholder="Select image mode" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="without-images">Without Images</SelectItem>
+                      <SelectItem value="with-images">With Images</SelectItem>
+                    </SelectContent>
+                  </Select>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button
@@ -592,6 +845,14 @@ export function QuotationTemplatesPage() {
                       >
                         <Download className="mr-2 size-3.5" />
                         Download PDF
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        className="text-xs"
+                        onClick={() => setIsAttachImagesOpen(true)}
+                        disabled={!serviceItemOptions.length}
+                      >
+                        <ImagePlus className="mr-2 size-3.5" />
+                        Attach images
                       </DropdownMenuItem>
                       {canCreateRevision && (
                         <DropdownMenuItem
@@ -630,6 +891,7 @@ export function QuotationTemplatesPage() {
                       data={activeData}
                       hideDiscount={discountMode === "without"}
                       discountMode={discountMode}
+                      includeServiceItemImages={templateImageMode === "with-images"}
                     />
                   </div>
                 )
@@ -648,12 +910,154 @@ export function QuotationTemplatesPage() {
             template={yallaClassicTemplate}
             data={activeData}
             discountMode={discountMode}
+            imageMode={templateImageMode}
             shouldMarkAsSent={currentStatus === "New"}
             setCurrentStatus={setCurrentStatus}
           />
         )}
+        <Dialog open={isAttachImagesOpen} onOpenChange={setIsAttachImagesOpen}>
+          <DialogContent className="sm:max-w-[400px]">
+            <DialogHeader>
+              <DialogTitle>Attach Service Item Images</DialogTitle>
+              <DialogDescription>
+                Select a service item and upload up to 2 images for it.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="service-item-id">Service item</Label>
+                <Select
+                  value={selectedServiceItemId}
+                  onValueChange={(value) => {
+                    setSelectedServiceItemId(value);
+                    setSelectedImageFiles([]);
+                  }}
+                >
+                  <SelectTrigger id="service-item-id" className="w-full">
+                    <SelectValue placeholder="Select service item" />
+                  </SelectTrigger>
+                  <SelectContent className="w-full">
+                    {serviceItemOptions.map((item) => (
+                      <SelectItem key={item.id} value={item.id}>
+                        {item.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="service-item-images">Images (max 2)</Label>
+                <Input
+                  id="service-item-images"
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={handleImageFilesChange}
+                  disabled={!selectedServiceItemId || remainingImageSlots === 0}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Remaining: {remainingAfterSelection}
+                </p>
+              </div>
+              {(selectedImagePreviews.length > 0 ||
+                selectedServiceItemImages.length > 0) && (
+                  <div className="space-y-2">
+                    <Label>Attachments</Label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {selectedImagePreviews.map((preview) => (
+                        <div
+                          key={preview.key}
+                          className="relative overflow-hidden rounded-md border border-dashed"
+                        >
+                          <img
+                            src={preview.url}
+                            alt={preview.name}
+                            className="h-24 w-full"
+                          />
+                          <div className="flex items-center justify-between gap-1 px-1 py-1">
+                            <p className="truncate text-[10px] text-muted-foreground">
+                              {preview.name}
+                            </p>
+                            <Badge variant="outline" className="h-4 px-1 text-[9px]">
+                              Selected
+                            </Badge>
+                          </div>
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="destructive"
+                            className="absolute right-1 top-1 size-6"
+                            onClick={() => handleRemoveSelectedImage(preview.key)}
+                          >
+                            <Trash2 className="size-3.5" />
+                          </Button>
+                        </div>
+                      ))}
+                      {selectedServiceItemImages.map((image) => (
+                        <div
+                          key={image.supabaseUrl}
+                          className="relative overflow-hidden rounded-md border"
+                        >
+                          <a
+                            href={image.supabaseUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="block"
+                          >
+                            <img
+                              src={image.supabaseUrl}
+                              alt="Service item attachment"
+                              className="h-24 w-full"
+                            />
+                          </a>
+                          <Badge
+                            variant="secondary"
+                            className="absolute bottom-1 left-1 h-4 px-1 text-[9px]"
+                          >
+                            Uploaded
+                          </Badge>
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="destructive"
+                            className="absolute right-1 top-1 size-6"
+                            disabled={deletingImageUrl === image.supabaseUrl}
+                            onClick={() =>
+                              void handleDeleteServiceItemImage(image.supabaseUrl)
+                            }
+                          >
+                            <Trash2 className="size-3.5" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setIsAttachImagesOpen(false)}
+                disabled={isUploadingServiceItemImages}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleAttachImages}
+                disabled={
+                  isUploadingServiceItemImages ||
+                  Boolean(deletingImageUrl) ||
+                  !selectedServiceItemId ||
+                  selectedImageFiles.length === 0
+                }
+              >
+                {isUploadingServiceItemImages ? "Uploading..." : "Upload Images"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
         <Dialog open={isCreateRevisionOpen} onOpenChange={setIsCreateRevisionOpen}>
-          <DialogContent>
+          <DialogContent className="sm:max-w-[400px]">
             <DialogHeader>
               <DialogTitle>Create Revision</DialogTitle>
               <DialogDescription>

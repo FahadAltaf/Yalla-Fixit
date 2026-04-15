@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   QuotationData,
   QuotationLineItem,
+  ServiceItemImage,
 } from "@/components/dashboard/extensions/quotation-templates/quotation-templates";
 import { createServerClientForApi } from "@/lib/supabase/supabase-server-client";
 
@@ -19,6 +20,22 @@ function parseRevisionType(
 ): "Internal" | "External" | undefined {
   if (value === "Internal" || value === "External") {
     return value;
+  }
+  return undefined;
+}
+
+function relationId(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) {
+    return value;
+  }
+  if (
+    value &&
+    typeof value === "object" &&
+    "id" in value &&
+    typeof value.id === "string" &&
+    value.id.trim()
+  ) {
+    return value.id;
   }
   return undefined;
 }
@@ -98,6 +115,7 @@ function mapToQuotationData(payload: any): QuotationData {
   });
 
   const lineItems: QuotationLineItem[] = sortedServiceLineItems.map((item) => ({
+    serviceItemId: relationId(item.Service),
     description: item.Service?.name ?? item.Name ?? "Service",
     details: item.Description ?? undefined,
     quantity: typeof item.Quantity === "number" ? item.Quantity : 1,
@@ -297,15 +315,39 @@ export async function POST(req: NextRequest) {
 
     const canCreateRevision = !hasRootOrParentRevision;
 
+    let serviceItemImages: ServiceItemImage[] = [];
+    if (quotation.zohoEstimateId && quotation.quotationNumber) {
+      const { data: imageRows, error: imageRowsError } = await supabase
+        .from("estimate_service_items")
+        .select("quotation_id,quotation_name,service_item_id,supabase_url")
+        .eq("quotation_id", quotation.zohoEstimateId)
+        .order("created_at", { ascending: true });
+
+      if (imageRowsError) {
+        throw new Error(imageRowsError.message);
+      }
+
+      serviceItemImages = (imageRows ?? []).map((row) => ({
+        quotationId: row.quotation_id,
+        quotationName: row.quotation_name,
+        serviceItemId: row.service_item_id,
+        supabaseUrl: row.supabase_url,
+      }));
+    }
+
     return NextResponse.json(
       {
         success: true,
-        quotation,
+        quotation: {
+          ...quotation,
+          serviceItemImages,
+        },
         estimateStatus,
         lifecycle,
         currentStatus,
         revisions,
         canCreateRevision,
+        serviceItemImages,
       },
       { status: 200 },
     );

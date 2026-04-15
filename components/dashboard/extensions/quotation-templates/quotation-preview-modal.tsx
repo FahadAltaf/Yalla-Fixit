@@ -42,6 +42,7 @@ interface Props {
   template: QuotationTemplate;
   data: QuotationData;
   discountMode: "with" | "without" | "with-total";
+  imageMode: "with-images" | "without-images";
   /**
    * When false, the Zoho FSM "mark as sent" transition will not be
    * triggered after sending the email. This is useful when the
@@ -68,7 +69,8 @@ async function generatePDFBlob(
   templateId: string,
   data: QuotationData,
   options: PDFGeneratorOptions = {},
-  discountMode: "with" | "without" | "with-total" = "with"
+  discountMode: "with" | "without" | "with-total" = "with",
+  imageMode: "with-images" | "without-images" = "without-images",
 ): Promise<Blob> {
   const { scale = 2, imageFormat = "JPEG", imageQuality = 0.92 } = options;
 
@@ -91,6 +93,7 @@ async function generatePDFBlob(
       case "minimal-clean": TemplateEl = <MinimalCleanTemplate data={data} />; break;
       default: TemplateEl = <YallaClassicTemplate data={data} forPDF hideDiscount={discountMode === "without"}
         discountMode={discountMode}
+        includeServiceItemImages={imageMode === "with-images"}
       />;
     }
 
@@ -191,6 +194,7 @@ export function QuotationPreviewModal({
   template,
   data,
   discountMode,
+  imageMode,
   shouldMarkAsSent = true,
   setCurrentStatus
 }: Props) {
@@ -257,7 +261,7 @@ export function QuotationPreviewModal({
         scale: 2,
         imageFormat: "JPEG",
         imageQuality: 0.92,
-      }, discountMode);
+      }, discountMode, imageMode);
       const arrayBuffer = await pdfBlob.arrayBuffer();
       const bytes = new Uint8Array(arrayBuffer);
       let binary = "";

@@ -1,6 +1,7 @@
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface QuotationLineItem {
+  serviceItemId?: string;
   description: string;
   details?: string;
   quantity: number;
@@ -11,6 +12,13 @@ export interface QuotationLineItem {
   lineAmount?: number;
   discountAmount: number;
   discountType?: 'Currency' | 'Percent';
+}
+
+export interface ServiceItemImage {
+  quotationId: string;
+  quotationName: string;
+  serviceItemId: string;
+  supabaseUrl: string;
 }
 
 export interface QuotationData {
@@ -47,6 +55,7 @@ export interface QuotationData {
 
   // Line items
   lineItems: QuotationLineItem[];
+  serviceItemImages?: ServiceItemImage[];
 
   // Financials (from API when available; otherwise calculated)
   discountAmount?: number;

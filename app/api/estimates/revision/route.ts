@@ -23,6 +23,13 @@ type RevisionRow = {
   revision_number: number;
 };
 
+type ServiceItemImageRow = {
+  quotation_id: string;
+  quotation_name: string;
+  service_item_id: string;
+  supabase_url: string;
+};
+
 function relationId(value: unknown): string | undefined {
   if (typeof value === "string" && value.trim()) {
     return value;
@@ -391,6 +398,54 @@ export async function POST(req: NextRequest) {
         },
         { status: 500 },
       );
+    }
+
+    if (createdEstimateNumber) {
+      const { data: sourceImages, error: sourceImagesError } = await supabase
+        .from("estimate_service_items")
+        .select("quotation_id,quotation_name,service_item_id,supabase_url")
+        .eq("quotation_id", sourceEstimateId);
+
+      if (sourceImagesError) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "Revision estimate was created, but failed to load service item images for copy.",
+            details: sourceImagesError.message,
+            revisionEstimateId: createdEstimateId,
+            revisionEstimateNumber: createdEstimateNumber,
+          },
+          { status: 500 },
+        );
+      }
+
+      const mappedImages: ServiceItemImageRow[] = (sourceImages ?? []).map((row) => ({
+        quotation_id: createdEstimateId,
+        quotation_name: createdEstimateNumber,
+        service_item_id: row.service_item_id,
+        supabase_url: row.supabase_url,
+      }));
+
+      if (mappedImages.length > 0) {
+        const { error: copyImagesError } = await supabase
+          .from("estimate_service_items")
+          .insert(mappedImages);
+
+        if (copyImagesError) {
+          return NextResponse.json(
+            {
+              success: false,
+              error:
+                "Revision estimate was created, but failed to copy service item images.",
+              details: copyImagesError.message,
+              revisionEstimateId: createdEstimateId,
+              revisionEstimateNumber: createdEstimateNumber,
+            },
+            { status: 500 },
+          );
+        }
+      }
     }
 
     return NextResponse.json({

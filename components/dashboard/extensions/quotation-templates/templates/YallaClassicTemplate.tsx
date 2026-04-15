@@ -9,9 +9,17 @@ interface Props {
   forPDF?: boolean;
   type?: "normal" | "review";
   discountMode?: string;
+  includeServiceItemImages?: boolean;
 }
 
-export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = false, type = "normal", discountMode }: Props) {
+export function YallaClassicTemplate({
+  data,
+  hideDiscount = false,
+  forPDF = false,
+  type = "normal",
+  discountMode,
+  includeServiceItemImages = false,
+}: Props) {
   const calculated = calculateTotals(data);
   const subTotal = calculated.subTotal;
   const discount = discountMode === 'with-total' ? data.totalDiscountType === 'Percentage' ? ((Number(data.totalDiscount) || 0) / 100) * subTotal : Number(data.totalDiscount) || 0 : data.lineItems.reduce((sum, item) => {
@@ -52,6 +60,16 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
     isRevision && revisionCode
       ? `${data.quotationNumber}-${revisionCode}-${revisionDisplayNumber ? `${revisionDisplayNumber}` : ""}`
       : data.quotationNumber;
+  const serviceItemImagesById = (data.serviceItemImages ?? []).reduce<Record<string, string[]>>(
+    (acc, image) => {
+      if (!acc[image.serviceItemId]) {
+        acc[image.serviceItemId] = [];
+      }
+      acc[image.serviceItemId].push(image.supabaseUrl);
+      return acc;
+    },
+    {},
+  );
 
   return (
     <div
@@ -182,6 +200,27 @@ export function YallaClassicTemplate({ data, hideDiscount = false, forPDF = fals
                   {item.details && (
                     <div style={{ color: "#64748b", fontSize: "11px", whiteSpace: 'pre-line' }}>
                       {item.details}
+                    </div>
+                  )}
+                  {includeServiceItemImages && item.serviceItemId && serviceItemImagesById[item.serviceItemId]?.length > 0 && (
+                    <div style={{ marginTop: "8px" }}>
+
+                      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                        {serviceItemImagesById[item.serviceItemId].map((url) => (
+                          <img
+                            key={url}
+                            src={url}
+                            alt={`${item.description} attachment`}
+                            style={{
+                              width: "120px",
+                              height: "90px",
+                              // objectFit: "cover",
+                              borderRadius: "6px",
+                              border: "1px solid #e2e8f0",
+                            }}
+                          />
+                        ))}
+                      </div>
                     </div>
                   )}
                 </td>
