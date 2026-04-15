@@ -25,7 +25,8 @@ async function fetchQuotation(
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ id: estimateId }),
+      // Review page does not need dashboard-only extras.
+      body: JSON.stringify({ id: estimateId, fetchMode: "review" }),
       cache: "no-store",
     });
 

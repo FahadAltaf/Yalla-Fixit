@@ -236,7 +236,10 @@ export async function POST(req: NextRequest) {
         apikey: SUPABASE_ANON_KEY,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ id: estimateId }),
+      body: JSON.stringify({
+        id: estimateId,
+        type: "estimate_only",
+      }),
     });
 
     const sourceEstimateJson = await sourceEstimateRes.json().catch(() => null);
@@ -356,7 +359,10 @@ export async function POST(req: NextRequest) {
           apikey: SUPABASE_ANON_KEY,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ id: createdEstimateId }),
+        body: JSON.stringify({
+          id: createdEstimateId,
+          type: "estimate_only",
+        }),
       });
 
       if (createdEstimateLookupRes.ok) {

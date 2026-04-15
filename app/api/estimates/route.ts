@@ -206,6 +206,8 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => ({}));
     const name = body?.name;
     const id = body?.id;
+    const fetchMode: "dashboard" | "review" =
+      body?.fetchMode === "review" ? "review" : "dashboard";
 
     if (!name && !id) {
       return NextResponse.json(
@@ -213,7 +215,12 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       );
     }
-    let reqPayload: any = {};
+    let reqPayload: any = {
+      includes:
+        fetchMode === "review"
+          ? ["estimate", "transitions", "revisions"]
+          : ["estimate", "contact", "transitions", "revisions"],
+    };
 
     if (id) {
       reqPayload = {
@@ -300,23 +307,29 @@ export async function POST(req: NextRequest) {
     console.log("🚀 ~ POST ~ effectiveRootKey:", effectiveRootKey);
     let hasRootOrParentRevision = false;
     const supabase = await createServerClientForApi();
-    const { data: revisionRows, error: revisionRowsError } = await supabase
-      .from("estimate_revisions")
-      .select("id")
-      .or(
-        `parent_quotation_number.eq.${effectiveRootKey},root_quotation_number.eq.${effectiveRootKey}`,
-      )
-      .limit(1);
-    console.log("🚀 ~ POST ~ revisionRows:", revisionRows);
-    if (revisionRowsError) {
-      throw new Error(revisionRowsError.message);
+    if (fetchMode === "dashboard") {
+      const { data: revisionRows, error: revisionRowsError } = await supabase
+        .from("estimate_revisions")
+        .select("id")
+        .or(
+          `parent_quotation_number.eq.${effectiveRootKey},root_quotation_number.eq.${effectiveRootKey}`,
+        )
+        .limit(1);
+      console.log("🚀 ~ POST ~ revisionRows:", revisionRows);
+      if (revisionRowsError) {
+        throw new Error(revisionRowsError.message);
+      }
+      hasRootOrParentRevision = (revisionRows?.length ?? 0) > 0;
     }
-    hasRootOrParentRevision = (revisionRows?.length ?? 0) > 0;
 
     const canCreateRevision = !hasRootOrParentRevision;
 
     let serviceItemImages: ServiceItemImage[] = [];
-    if (quotation.zohoEstimateId && quotation.quotationNumber) {
+    if (
+      fetchMode === "dashboard" &&
+      quotation.zohoEstimateId &&
+      quotation.quotationNumber
+    ) {
       const { data: imageRows, error: imageRowsError } = await supabase
         .from("estimate_service_items")
         .select("quotation_id,quotation_name,service_item_id,supabase_url")
