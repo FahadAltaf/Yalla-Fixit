@@ -205,18 +205,19 @@ export function YallaClassicTemplate({
                   {includeServiceItemImages && item.serviceItemId && serviceItemImagesById[item.serviceItemId]?.length > 0 && (
                     <div style={{ marginTop: "8px" }}>
 
-                      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "8px" }}>
                         {serviceItemImagesById[item.serviceItemId].map((url) => (
                           <img
                             key={url}
                             src={url}
                             alt={`${item.description} attachment`}
                             style={{
-                              width: "120px",
-                              height: "90px",
-                              // objectFit: "cover",
-                              borderRadius: "6px",
-                              border: "1px solid #e2e8f0",
+                              width: "100%",
+                              height: "auto",
+                              objectFit: "cover",
+                              objectPosition: "top",
+                              // borderRadius: "6px",
+                              // border: "1px solid #e2e8f0",
                             }}
                           />
                         ))}

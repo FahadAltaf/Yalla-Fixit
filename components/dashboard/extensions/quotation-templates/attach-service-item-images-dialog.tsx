@@ -130,12 +130,12 @@ export function AttachServiceItemImagesDialog({
                   {selectedImagePreviews.map((preview) => (
                     <div
                       key={preview.key}
-                      className="relative overflow-hidden rounded-md border border-dashed"
+                      className="relative overflow-hidden rounded-md border border-dashed h-max"
                     >
                       <img
                         src={preview.url}
                         alt={preview.name}
-                        className="h-24 w-full"
+                        className="h-auto w-full object-cover"
                       />
                       <div className="flex items-center justify-between gap-1 px-1 py-1">
                         <p className="truncate text-[10px] text-muted-foreground">
@@ -159,7 +159,7 @@ export function AttachServiceItemImagesDialog({
                   {selectedServiceItemImages.map((image) => (
                     <div
                       key={image.supabaseUrl}
-                      className="relative overflow-hidden rounded-md border"
+                      className="relative overflow-hidden rounded-md border h-max"
                     >
                       <a
                         href={image.supabaseUrl}
@@ -170,7 +170,7 @@ export function AttachServiceItemImagesDialog({
                         <img
                           src={image.supabaseUrl}
                           alt="Service item attachment"
-                          className="h-24 w-full"
+                          className="h-auto w-full object-cover"
                         />
                       </a>
                       <Badge
