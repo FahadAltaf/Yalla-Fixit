@@ -75,6 +75,10 @@ type RevisionNode = {
   revisionNumber: number;
 };
 
+function getRevisionCode(revisionType: EstimateRevision["revision_type"]): "IR" | "CR" {
+  return revisionType === "External" ? "CR" : "IR";
+}
+
 function parseIdName(value: string | null | undefined): {
   id: string;
   name: string;
@@ -102,35 +106,42 @@ function buildRevisionChain(
   revisions: EstimateRevision[],
 ): RevisionNode[] {
   const nodes = new Map<string, RevisionNode>();
+  let rootName: string | null = null;
+  let rootId: string | null = null;
 
   for (const revision of revisions) {
     const rootParsed = parseIdName(revision.root_quotation_number);
-    if (rootParsed && !nodes.has(rootParsed.id)) {
-      nodes.set(rootParsed.id, {
-        key: rootParsed.id,
-        queryName: rootParsed.name,
-        label: `Root · ${rootParsed.name}`,
-        revisionNumber: 0,
-      });
+    if (!rootName && rootParsed?.name) {
+      rootName = rootParsed.name;
+      rootId = rootParsed.id;
     }
 
     const parentParsed = parseIdName(revision.parent_quotation_number);
-    if (parentParsed && !nodes.has(parentParsed.id)) {
-      nodes.set(parentParsed.id, {
-        key: parentParsed.id,
-        queryName: parentParsed.name,
-        label: `Parent · ${parentParsed.name}`,
-        revisionNumber: Math.max(1, revision.revision_number - 1),
-      });
+    if (!rootName && parentParsed?.name) {
+      rootName = parentParsed.name;
+      rootId = parentParsed.id;
     }
+  }
 
+  if (rootName) {
+    nodes.set(rootId ?? `root-${rootName}`, {
+      key: rootId ?? `root-${rootName}`,
+      queryName: rootName,
+      label: rootName,
+      revisionNumber: 0,
+    });
+  }
+
+  for (const revision of revisions) {
     const revisionParsed = parseIdName(revision.revision_quotation_number);
     const revisionName = revisionParsed?.name ?? revision.revision_quotation_number;
     if (revisionParsed && revisionName) {
+      const rootLabel = rootName ?? revisionName;
+      const revisionCode = getRevisionCode(revision.revision_type);
       nodes.set(revisionParsed.id, {
         key: revisionParsed.id,
         queryName: revisionName,
-        label: `R${revision.revision_number} · ${revisionName}`,
+        label: `${rootLabel}-${revisionCode}-${revision.revision_number}(${revisionName})`,
         revisionNumber: revision.revision_number,
       });
     }
