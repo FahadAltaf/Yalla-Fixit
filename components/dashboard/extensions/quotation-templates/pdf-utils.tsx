@@ -55,6 +55,7 @@ export async function generateQuotationPDFBlob(
   options: PDFGeneratorOptions = {},
   discountMode: "with" | "without" | "with-total" = "with",
   includeServiceItemImages = false,
+  rootQuotationNumber = "",
 ): Promise<Blob> {
   const { scale = 2, imageFormat = "JPEG", imageQuality = 0.92 } = options;
 
@@ -87,6 +88,7 @@ export async function generateQuotationPDFBlob(
             hideDiscount={discountMode === "without"}
             discountMode={discountMode}
             includeServiceItemImages={includeServiceItemImages}
+            rootQuotationNumber={rootQuotationNumber}
           />
         );
     }

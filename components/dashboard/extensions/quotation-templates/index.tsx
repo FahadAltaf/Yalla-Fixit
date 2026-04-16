@@ -195,6 +195,7 @@ export function QuotationTemplatesPage() {
         },
         discountMode,
         templateImageMode === "with-images",
+        revisionChain[0]?.label || "",
       );
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
