@@ -309,12 +309,13 @@ export function QuotationTemplatesPage() {
         throw new Error(json.error ?? "Failed to create revision estimate");
       }
 
+
+      await fetchEstimate({ id: activeData.zohoEstimateId });
       toast.success(
         json.revisionEstimateNumber
           ? `Revision created: ${json.revisionEstimateNumber}`
           : "Revision estimate created successfully."
       );
-      await fetchEstimate({ id: activeData.zohoEstimateId });
       setIsCreateRevisionOpen(false);
       setRevisionReason("");
     } catch (error) {
@@ -612,6 +613,7 @@ export function QuotationTemplatesPage() {
                       hideDiscount={discountMode === "without"}
                       discountMode={discountMode}
                       includeServiceItemImages={templateImageMode === "with-images"}
+                      rootQuotationNumber={revisionChain[0]?.label || ""}
                     />
                   </div>
                 )

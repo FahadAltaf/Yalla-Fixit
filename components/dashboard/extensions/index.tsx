@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Download, FileText  } from "lucide-react";
+import { Download, FileText } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -96,7 +96,7 @@ export default function Extensions() {
                           aria-hidden="true"
                         />
                       )}
-                      
+
                     </TabsTrigger>
                   ))}
                 </TabsList>

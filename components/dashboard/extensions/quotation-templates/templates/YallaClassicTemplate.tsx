@@ -10,6 +10,7 @@ interface Props {
   type?: "normal" | "review";
   discountMode?: string;
   includeServiceItemImages?: boolean;
+  rootQuotationNumber?: string;
 }
 
 export function YallaClassicTemplate({
@@ -19,6 +20,7 @@ export function YallaClassicTemplate({
   type = "normal",
   discountMode,
   includeServiceItemImages = false,
+  rootQuotationNumber,
 }: Props) {
   const calculated = calculateTotals(data);
   const subTotal = calculated.subTotal;
@@ -58,7 +60,7 @@ export function YallaClassicTemplate({
     typeof data.revisionNumber === "number" ? String(data.revisionNumber) : null;
   const displayQuotationNumber =
     isRevision && revisionCode
-      ? `${data.quotationNumber}-${revisionCode}-${revisionDisplayNumber ? `${revisionDisplayNumber}` : ""}`
+      ? `${rootQuotationNumber}-${revisionCode}-${revisionDisplayNumber ? `${revisionDisplayNumber}` : ""}`
       : data.quotationNumber;
   const serviceItemImagesById = (data.serviceItemImages ?? []).reduce<Record<string, string[]>>(
     (acc, image) => {
