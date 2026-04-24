@@ -85,18 +85,24 @@ function buildRevisionPayload(
   const companyId = relationId(sourceEstimate.Company);
   const territoryId = relationId(sourceEstimate.Territory);
   const assetId = relationId(sourceEstimate.Asset);
+  const requestId = relationId(sourceEstimate.Request);
+  const workOrderId = relationId(sourceEstimate.Work_Order);
+  const dispatcherId = relationId(sourceEstimate.Dispatcher);
 
   const sourceName =
     typeof sourceEstimate.Name === "string" ? sourceEstimate.Name : undefined;
   const sourceIdName = sourceName
     ? buildIdNameValue(sourceEstimateId, sourceName)
     : undefined;
+
+  // Root quotation number: prefer the existing one, fallback to building from source
   const rootQuotationNumber =
     typeof sourceEstimate.Root_Quotation_Number__C === "string" &&
     sourceEstimate.Root_Quotation_Number__C.trim()
       ? sourceEstimate.Root_Quotation_Number__C
       : sourceIdName;
 
+  // ── Service Line Items ──────────────────────────────────────────────────────
   const serviceLineItems = Array.isArray(sourceEstimate.Service_Line_Items)
     ? sourceEstimate.Service_Line_Items.map((item) => {
         const line = item as Record<string, unknown>;
@@ -113,14 +119,33 @@ function buildRevisionPayload(
                 ? line.Amount
                 : 0,
           Amount: typeof line.Amount === "number" ? line.Amount : undefined,
+          Line_Item_Amount:
+            typeof line.Line_Item_Amount === "number"
+              ? line.Line_Item_Amount
+              : undefined,
           Discount: typeof line.Discount === "number" ? line.Discount : 0,
-          Sequence:
-            typeof line.Sequence === "number" ? line.Sequence : undefined,
-          Tax: line.Tax ?? undefined,
           Discount_Type:
             typeof line.Discount_Type === "string"
               ? line.Discount_Type
               : undefined,
+          Sequence:
+            typeof line.Sequence === "number" ? line.Sequence : undefined,
+          Tax: line.Tax ?? undefined,
+          Is_Optional:
+            typeof line.Is_Optional === "boolean" ? line.Is_Optional : false,
+          User_Preference:
+            typeof line.User_Preference === "boolean"
+              ? line.User_Preference
+              : undefined,
+          Customer_Preference:
+            typeof line.Customer_Preference === "number"
+              ? line.Customer_Preference
+              : 0,
+          Quantity_Source:
+            typeof line.Quantity_Source === "string"
+              ? line.Quantity_Source
+              : undefined,
+          // Part line items nested inside service line items
           Part_Line_Items: Array.isArray(line.Part_Line_Items)
             ? line.Part_Line_Items.map((part) => {
                 const partLine = part as Record<string, unknown>;
@@ -146,18 +171,38 @@ function buildRevisionPayload(
                     typeof partLine.Amount === "number"
                       ? partLine.Amount
                       : undefined,
+                  Line_Item_Amount:
+                    typeof partLine.Line_Item_Amount === "number"
+                      ? partLine.Line_Item_Amount
+                      : undefined,
                   Discount:
                     typeof partLine.Discount === "number"
                       ? partLine.Discount
                       : 0,
+                  Discount_Type:
+                    typeof partLine.Discount_Type === "string"
+                      ? partLine.Discount_Type
+                      : undefined,
                   Sequence:
                     typeof partLine.Sequence === "number"
                       ? partLine.Sequence
                       : undefined,
                   Tax: partLine.Tax ?? undefined,
-                  Discount_Type:
-                    typeof partLine.Discount_Type === "string"
-                      ? partLine.Discount_Type
+                  Is_Optional:
+                    typeof partLine.Is_Optional === "boolean"
+                      ? partLine.Is_Optional
+                      : false,
+                  User_Preference:
+                    typeof partLine.User_Preference === "boolean"
+                      ? partLine.User_Preference
+                      : undefined,
+                  Customer_Preference:
+                    typeof partLine.Customer_Preference === "number"
+                      ? partLine.Customer_Preference
+                      : 0,
+                  Quantity_Source:
+                    typeof partLine.Quantity_Source === "string"
+                      ? partLine.Quantity_Source
                       : undefined,
                 };
               })
@@ -166,9 +211,56 @@ function buildRevisionPayload(
       })
     : [];
 
+  // ── Top-level Part Line Items ───────────────────────────────────────────────
+  const topLevelPartLineItems = Array.isArray(sourceEstimate.Part_Line_Items)
+    ? sourceEstimate.Part_Line_Items.map((part) => {
+        const partLine = part as Record<string, unknown>;
+        return {
+          Part: relationId(partLine.Part),
+          Description:
+            typeof partLine.Description === "string"
+              ? partLine.Description
+              : null,
+          Quantity:
+            typeof partLine.Quantity === "number" ? partLine.Quantity : 1,
+          Unit: typeof partLine.Unit === "string" ? partLine.Unit : null,
+          List_Price:
+            typeof partLine.List_Price === "number"
+              ? partLine.List_Price
+              : typeof partLine.Amount === "number"
+                ? partLine.Amount
+                : 0,
+          Amount:
+            typeof partLine.Amount === "number" ? partLine.Amount : undefined,
+          Discount:
+            typeof partLine.Discount === "number" ? partLine.Discount : 0,
+          Discount_Type:
+            typeof partLine.Discount_Type === "string"
+              ? partLine.Discount_Type
+              : undefined,
+          Sequence:
+            typeof partLine.Sequence === "number" ? partLine.Sequence : undefined,
+          Tax: partLine.Tax ?? undefined,
+          Is_Optional:
+            typeof partLine.Is_Optional === "boolean"
+              ? partLine.Is_Optional
+              : false,
+          Customer_Preference:
+            typeof partLine.Customer_Preference === "number"
+              ? partLine.Customer_Preference
+              : 0,
+        };
+      })
+    : [];
+
+  // ── Terms & Conditions ─────────────────────────────────────────────────────
+  const termsAndConditionsId = relationId(sourceEstimate.Terms_And_Conditions);
+
+  // ── Build Final Payload ────────────────────────────────────────────────────
   return {
     data: [
       {
+        // Core fields
         Summary:
           typeof sourceEstimate.Summary === "string"
             ? sourceEstimate.Summary
@@ -177,8 +269,17 @@ function buildRevisionPayload(
           typeof sourceEstimate.Expiry_Date === "string"
             ? sourceEstimate.Expiry_Date
             : undefined,
+
+        // Relations
         Contact: contactId,
         Company: companyId,
+        Territory: territoryId,
+        Asset: assetId ?? null,
+        Request: requestId ?? null,
+        Work_Order: workOrderId ?? null,
+        Dispatcher: dispatcherId ?? null,
+
+        // Contact info
         Email:
           typeof sourceEstimate.Email === "string"
             ? sourceEstimate.Email
@@ -187,10 +288,16 @@ function buildRevisionPayload(
           typeof sourceEstimate.Phone === "string"
             ? sourceEstimate.Phone
             : null,
-        Asset: assetId ?? null,
-        Territory: territoryId,
+        Mobile:
+          typeof sourceEstimate.Mobile === "string"
+            ? sourceEstimate.Mobile
+            : null,
+
+        // Addresses
         Service_Address: sourceEstimate.Service_Address ?? null,
         Billing_Address: sourceEstimate.Billing_Address ?? null,
+
+        // Currency & financials
         Currency:
           typeof sourceEstimate.Currency === "string"
             ? sourceEstimate.Currency
@@ -200,7 +307,45 @@ function buildRevisionPayload(
           typeof sourceEstimate.Adjustment === "number"
             ? sourceEstimate.Adjustment
             : 0,
+        Discount:
+          typeof sourceEstimate.Discount === "number"
+            ? sourceEstimate.Discount
+            : 0,
+        Discount_Type:
+          typeof sourceEstimate.Discount_Type === "string"
+            ? sourceEstimate.Discount_Type
+            : undefined,
+        DiscountType__C:
+          typeof sourceEstimate.DiscountType__C === "string"
+            ? sourceEstimate.DiscountType__C
+            : null,
+        Discount_value__C:
+          typeof sourceEstimate.Discount_value__C === "number"
+            ? sourceEstimate.Discount_value__C
+            : null,
+        Round_Off:
+          typeof sourceEstimate.Round_Off === "number"
+            ? sourceEstimate.Round_Off
+            : 0,
+        Place_of_Supply:
+          typeof sourceEstimate.Place_of_Supply === "string"
+            ? sourceEstimate.Place_of_Supply
+            : null,
+
+        // Config (Zoho tax/discount settings)
+        Config:
+          typeof sourceEstimate.Config === "string"
+            ? sourceEstimate.Config
+            : undefined,
+
+        // Terms & Conditions
+        Terms_And_Conditions: termsAndConditionsId ?? null,
+
+        // Line items
         Service_Line_Items: serviceLineItems,
+        Part_Line_Items: topLevelPartLineItems,
+
+        // Revision-specific fields — these are always set for a revision
         Root_Quotation_Number__C: rootQuotationNumber,
         Previous_Quotation_Number__C: sourceIdName ?? null,
         Revision_Type__C: revisionType,
@@ -311,10 +456,7 @@ export async function POST(req: NextRequest) {
     });
 
     const createJson = await createRes.json().catch(() => null);
-    console.log(
-      "🚀 ~ POST ~ createJson (full):\n",
-      JSON.stringify(createJson, null, 2),
-    );
+
     if (!createRes.ok) {
       return NextResponse.json(
         {
@@ -426,12 +568,14 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      const mappedImages: ServiceItemImageRow[] = (sourceImages ?? []).map((row) => ({
-        quotation_id: createdEstimateId,
-        quotation_name: createdEstimateNumber,
-        service_item_id: row.service_item_id,
-        supabase_url: row.supabase_url,
-      }));
+      const mappedImages: ServiceItemImageRow[] = (sourceImages ?? []).map(
+        (row) => ({
+          quotation_id: createdEstimateId,
+          quotation_name: createdEstimateNumber,
+          service_item_id: row.service_item_id,
+          supabase_url: row.supabase_url,
+        }),
+      );
 
       if (mappedImages.length > 0) {
         const { error: copyImagesError } = await supabase
