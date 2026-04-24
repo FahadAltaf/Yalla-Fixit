@@ -344,7 +344,7 @@ export function QuotationTemplatesPage() {
         </div>
       </CardHeader>
 
-      <CardContent className="space-y-6">
+      <CardContent className="space-y-4">
 
         {/* ── Search card ── */}
         <form
@@ -400,7 +400,7 @@ export function QuotationTemplatesPage() {
 
         {/* Loaded data summary */}
         {hasSearched && searchResults && (
-          <div className="mt-4 space-y-4">
+          <div className=" space-y-4">
             <div className="flex items-center gap-3 p-3 bg-primary/5 rounded-lg border border-primary/20">
               <FileText className="size-5 text-primary shrink-0" />
               <div className="min-w-0">
