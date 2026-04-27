@@ -56,10 +56,11 @@ export function YallaClassicTemplate({
       : data.revisionType === "Internal"
         ? "IR"
         : null;
+
   const revisionDisplayNumber =
     typeof data.revisionNumber === "number" ? String(data.revisionNumber) : null;
   const displayQuotationNumber =
-    isRevision && revisionCode
+    isRevision && revisionCode && rootQuotationNumber
       ? `${rootQuotationNumber}-${revisionCode}-${revisionDisplayNumber ? `${revisionDisplayNumber}` : ""}`
       : data.quotationNumber;
   const serviceItemImagesById = (data.serviceItemImages ?? []).reduce<Record<string, string[]>>(

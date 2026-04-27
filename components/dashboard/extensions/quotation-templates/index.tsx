@@ -380,7 +380,6 @@ export function QuotationTemplatesPage() {
           </Button>
         </form>
 
-
         {/* Loading skeleton */}
         {isSearching && (
           <Card className="border-dashed">
