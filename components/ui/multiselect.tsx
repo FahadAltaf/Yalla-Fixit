@@ -16,6 +16,7 @@ import {
 export interface Option {
   value: string;
   label: string;
+  color?: string;
   disable?: boolean;
   /** fixed option that can&lsquo;t be removed. */
   fixed?: boolean;
@@ -488,6 +489,14 @@ const MultipleSelector = React.forwardRef<
         >
           <div className="flex flex-wrap gap-1">
             {selected.map((option) => {
+              const optionStyle = option.color
+                ? {
+                    backgroundColor: `${option.color}1A`,
+                    borderColor: `${option.color}66`,
+                    color: option.color,
+                  }
+                : undefined;
+
               return (
                 <div
                   key={option.value}
@@ -495,6 +504,7 @@ const MultipleSelector = React.forwardRef<
                     "animate-fadeIn relative inline-flex h-7 cursor-default items-center rounded-md border border-solid bg-background pe-7 pl-2 ps-2 text-xs font-medium text-secondary-foreground transition-all hover:bg-background disabled:cursor-not-allowed disabled:opacity-50 data-[fixed]:pe-2",
                     badgeClassName
                   )}
+                  style={optionStyle}
                   data-fixed={option.fixed}
                   data-disabled={disabled || undefined}
                 >

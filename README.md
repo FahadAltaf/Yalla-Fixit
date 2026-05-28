@@ -14,7 +14,11 @@ pnpm dev
 bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3032](http://localhost:3032) with your browser to see the result.
+
+For local Supabase setup, see [docs/LOCAL-SUPABASE.md](docs/LOCAL-SUPABASE.md).
+
+For Todos module email and reminder setup, see [docs/TODOS-MODULE.md](docs/TODOS-MODULE.md).
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 

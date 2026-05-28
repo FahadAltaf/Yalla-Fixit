@@ -1,3 +1,4 @@
+import { TODO_STATUS_LABELS, Todo } from "@/types/types";
 
 interface EmailOptions {
   to?: string | string[];
@@ -25,9 +26,19 @@ export const emailService = {
         }
       );
       const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          typeof data?.error === "string"
+            ? data.error
+            : JSON.stringify(data?.error ?? data)
+        );
+      }
+
       return data;
     } catch (error) {
-      console.log("🚀 ~ error:", error);
+      console.error("Email send error:", error);
+      throw error;
     }
   },
 
@@ -234,5 +245,67 @@ export const emailService = {
     `;
 
     return emailService.sendEmail({ to: email, subject, html });
-  }
+  },
+
+  sendTodoAssignedEmail: async (email: string, todo: Todo) => {
+    const subject = "You have been assigned a todo";
+    const todoUrl = `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3032"}/todos?todo=${encodeURIComponent(todo.todo_key)}`;
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #1f2937;">
+        <h2 style="margin: 0 0 12px;">New todo assigned</h2>
+        <p style="margin: 0 0 16px;">A todo has been assigned to you in the Yalla Fixit portal.</p>
+        <div style="border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin-bottom: 16px;">
+          <p style="margin: 0 0 8px;"><strong>ID:</strong> ${todo.todo_key}</p>
+          <p style="margin: 0 0 8px;"><strong>Title:</strong> ${todo.title}</p>
+          <p style="margin: 0 0 8px;"><strong>Description:</strong> ${todo.description}</p>
+          <p style="margin: 0 0 8px;"><strong>Status:</strong> ${TODO_STATUS_LABELS[todo.status]}</p>
+          <p style="margin: 0 0 8px;"><strong>Deadline:</strong> ${new Date(todo.deadline_at).toLocaleString()}</p>
+          ${
+            todo.related_type || todo.related_id
+              ? `<p style="margin: 0 0 8px;"><strong>Related:</strong> ${todo.related_type || ""} ${todo.related_id || ""}</p>`
+              : ""
+          }
+          ${
+            todo.tags.length
+              ? `<p style="margin: 0;"><strong>Tags:</strong> ${todo.tags.join(", ")}</p>`
+              : ""
+          }
+        </div>
+        <a href="${todoUrl}" style="display: inline-block; background: #83201e; color: #ffffff; padding: 12px 18px; border-radius: 6px; text-decoration: none;">Open Todos</a>
+      </div>
+    `;
+
+    return emailService.sendEmail({ to: email, subject, html });
+  },
+
+  sendTodoReminderEmail: async (emails: string[], todo: Todo) => {
+    const subject = "Todo reminder";
+    const todoUrl = `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3032"}/todos?todo=${encodeURIComponent(todo.todo_key)}`;
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #1f2937;">
+        <h2 style="margin: 0 0 12px;">Todo reminder</h2>
+        <p style="margin: 0 0 16px;">This is a reminder/followup for a todo in the Yalla Fixit portal.</p>
+        <div style="border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin-bottom: 16px;">
+          <p style="margin: 0 0 8px;"><strong>ID:</strong> ${todo.todo_key}</p>
+          <p style="margin: 0 0 8px;"><strong>Title:</strong> ${todo.title}</p>
+          <p style="margin: 0 0 8px;"><strong>Description:</strong> ${todo.description}</p>
+          <p style="margin: 0 0 8px;"><strong>Status:</strong> ${TODO_STATUS_LABELS[todo.status]}</p>
+          <p style="margin: 0 0 8px;"><strong>Deadline:</strong> ${new Date(todo.deadline_at).toLocaleString()}</p>
+          ${
+            todo.reminder_at
+              ? `<p style="margin: 0 0 8px;"><strong>Reminder time:</strong> ${new Date(todo.reminder_at).toLocaleString()}</p>`
+              : ""
+          }
+          ${
+            todo.related_type || todo.related_id
+              ? `<p style="margin: 0 0 8px;"><strong>Related:</strong> ${todo.related_type || ""} ${todo.related_id || ""}</p>`
+              : ""
+          }
+        </div>
+        <a href="${todoUrl}" style="display: inline-block; background: #83201e; color: #ffffff; padding: 12px 18px; border-radius: 6px; text-decoration: none;">Open Todos</a>
+      </div>
+    `;
+
+    return emailService.sendEmail({ to: emails, subject, html });
+  },
 }; 
