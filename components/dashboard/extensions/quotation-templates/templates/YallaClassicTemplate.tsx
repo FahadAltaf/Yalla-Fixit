@@ -24,7 +24,7 @@ export function YallaClassicTemplate({
 }: Props) {
   const calculated = calculateTotals(data);
   const subTotal = calculated.subTotal;
-  const discount = discountMode === 'with-total' ? data.totalDiscountType === 'Percentage' ? ((Number(data.totalDiscount) || 0) / 100) * subTotal : Number(data.totalDiscount) || 0 : data.lineItems.reduce((sum, item) => {
+  const discount = data.lineItems.reduce((sum, item) => {
     const lineTotal = item.quantity * item.unitPrice;
     const lineDiscount =
       item.discountType === "Percent"
