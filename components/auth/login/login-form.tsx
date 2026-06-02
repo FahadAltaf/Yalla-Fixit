@@ -432,7 +432,7 @@ const LoginForm = () => {
                   maxLength={11}
                   value={otp}
                   onChange={(value) =>
-                    setOtp(value.replace(/\D/g, "").slice(0, 6))
+                    setOtp(value.replace(/\D/g, "").slice(0, 11))
                   }
                   inputMode="numeric"
                   containerClassName="flex items-center gap-3 has-disabled:opacity-50"
