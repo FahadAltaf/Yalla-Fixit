@@ -25,9 +25,9 @@ const ResetPasswordForm = ({
   isValidSession,
   setIsValidSession,
 }: ResetPasswordFormProps) => {
+  const { settings } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { settings } = useAuth();
 
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -68,7 +68,7 @@ const ResetPasswordForm = ({
               setIsValidSession(false);
               toast.error(
                 (result as AuthServiceError).message ||
-                "Invalid or expired reset link. Please request a new one."
+                "Invalid expired token"
               );
               return;
             }
@@ -80,7 +80,7 @@ const ResetPasswordForm = ({
             }
             setIsValidSession(false);
             toast.error(
-              "Invalid or expired reset link. Please request a new one."
+              "Invalid expired token"
             );
             return;
           }
@@ -88,6 +88,7 @@ const ResetPasswordForm = ({
 
         // Method 2: Check for query parameters (token_hash and type)
         const tokenHash = searchParams.get("token_hash");
+        console.log("🚀 ~ checkSession ~ tokenHash:", tokenHash)
         const type = searchParams.get("type");
 
         if (type === "recovery" && tokenHash) {
@@ -101,21 +102,21 @@ const ResetPasswordForm = ({
             setIsValidSession(false);
             toast.error(
               (result as AuthServiceError).message ||
-              "Invalid or expired reset link. Please request a new one."
+              "Invalid expired token"
             );
             return;
           }
           const data = result as { session: { access_token: string } | null };
-          // if (data?.session) {
-          //   setIsValidSession(true);
-          //   // Clean URL
-          //   window.history.replaceState(null, "", window.location.pathname);
-          //   return;
-          // }
-          // setIsValidSession(false);
-          // toast.error(
-          //   "Invalid or expired reset link. Please request a new one."
-          // );
+          if (data?.session) {
+            setIsValidSession(true);
+            // Clean URL
+            window.history.replaceState(null, "", window.location.pathname);
+            return;
+          }
+          setIsValidSession(false);
+          toast.error(
+            "Invalid expired token"
+          );
           return;
         }
 
@@ -126,7 +127,7 @@ const ResetPasswordForm = ({
       } catch (err) {
         console.error("Session check error:", err);
         setIsValidSession(false);
-        toast.error("Something went wrong. Please try again.");
+        toast.error("Something went wrong");
       }
     };
 
@@ -161,7 +162,7 @@ const ResetPasswordForm = ({
     }
 
     if (!isPasswordStrong) {
-      toast.error("Please meet all password requirements");
+      toast.error("Password must meet requirements");
       return;
     }
 
@@ -179,7 +180,7 @@ const ResetPasswordForm = ({
         return;
       }
 
-      toast.success("Password reset successfully!");
+      toast.success("Password reset successfully");
 
       // Sign out user after password reset
       const signOutResult = await signOut();
@@ -197,7 +198,7 @@ const ResetPasswordForm = ({
 
       // Redirect to login
       setTimeout(() => {
-        router.push("/auth/login?reset=success");
+        router.push(`/auth/login?reset=success`);
       }, 1500);
     } catch (err) {
       console.error("Password reset error:", err);
@@ -212,7 +213,6 @@ const ResetPasswordForm = ({
   if (isValidSession === null || isValidSession === false) {
     return;
   }
-
   return (
     <form className="space-y-4" onSubmit={handleSubmit}>
       {/* Password */}
