@@ -8,6 +8,7 @@ import {
 } from "@/types/types";
 import {
   LayoutDashboard,
+  ListTodo,
   Puzzle,
   Settings,
   Shield,
@@ -69,6 +70,13 @@ export const baseSectionsItems: MenuItem[] = [
     icon: <LayoutDashboard className="size-4 text-primary" />,
     isActive: false,
     resource: ResourceType.DASHBOARD,
+  },
+  {
+    title: "Todos",
+    url: "/todos",
+    icon: <ListTodo className="size-4 text-primary" />,
+    isActive: false,
+    resource: ResourceType.TODOS,
   },
   {
     title: "Extensions",

@@ -20,6 +20,7 @@ const StatusBadge = ({ status }: { status: string }) => {
         "valid",
         "active",
         "accepted",
+        "done",
       ].includes(normalizedStatus)
     ) {
       return "bg-green-600/10 text-green-600 focus-visible:ring-green-600/20 dark:bg-green-400/10 dark:text-green-400 dark:focus-visible:ring-green-400/40 [a&]:hover:bg-green-600/5 dark:[a&]:hover:bg-green-400/5";
@@ -30,11 +31,13 @@ const StatusBadge = ({ status }: { status: string }) => {
       [
         "scheduled",
         "pending",
+        "todo",
         "in-progress",
         "processing",
         "expiring-soon",
         "draft",
         "busy",
+        "blocked",
       ].includes(normalizedStatus)
     ) {
       return "bg-amber-600/10 text-amber-600 focus-visible:ring-amber-600/20 dark:bg-amber-400/10 dark:text-amber-400 dark:focus-visible:ring-amber-400/40 [a&]:hover:bg-amber-600/5 dark:[a&]:hover:bg-amber-400/5";
@@ -52,6 +55,7 @@ const StatusBadge = ({ status }: { status: string }) => {
         "no-answer",
         "no_answer",
         "high",
+        "canceled",
       ].includes(normalizedStatus)
     ) {
       return "bg-destructive/10 [a&]:hover:bg-destructive/5 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 text-destructive";

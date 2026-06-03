@@ -80,6 +80,8 @@ export interface RoleAccess {
 export enum ResourceType {
   // Dashboard
   DASHBOARD = "dashboard",
+  // Work Management
+  TODOS = "todos",
   // Admin Management
   USERS = "users",
   ROLES = "roles",
@@ -88,6 +90,80 @@ export enum ResourceType {
   // Extensions
   EXTENSIONS = "extensions",
 }
+
+export type TodoStatus =
+  | "todo"
+  | "in_progress"
+  | "done"
+  | "canceled"
+  | "blocked";
+
+export type TodoRelatedType = "work_order" | "quotation" | "appointment";
+
+export interface TodoAssignee {
+  user_id: string;
+  user_profile?: User;
+}
+
+export interface TodoComment {
+  id: string;
+  todo_id: string;
+  author_id: string;
+  body: string;
+  created_at: string;
+  updated_at?: string;
+  author?: User;
+}
+
+export interface TodoUpdateLog {
+  id: string;
+  todo_id: string;
+  actor_id?: string | null;
+  action: string;
+  field_name?: string | null;
+  old_value?: unknown;
+  new_value?: unknown;
+  created_at: string;
+  actor?: User;
+}
+
+export interface TodoTag {
+  id: string;
+  name: string;
+  color: string;
+  created_at?: string;
+  updated_at?: string | null;
+}
+
+export interface Todo {
+  id: string;
+  todo_key: string;
+  owner_id: string;
+  title: string;
+  description: string;
+  tags: string[];
+  related_type?: TodoRelatedType | null;
+  related_id?: string | null;
+  deadline_at: string;
+  reminder_at?: string | null;
+  reminder_sent_at?: string | null;
+  status: TodoStatus;
+  created_at: string;
+  updated_at?: string;
+  completed_at?: string | null;
+  owner?: User;
+  assignees?: User[];
+  comments?: TodoComment[];
+  updates?: TodoUpdateLog[];
+}
+
+export const TODO_STATUS_LABELS: Record<TodoStatus, string> = {
+  todo: "To-do",
+  in_progress: "In progress",
+  done: "Done",
+  canceled: "Canceled",
+  blocked: "Blocked",
+};
 
 export interface Attachment {
   "$file_id": string;

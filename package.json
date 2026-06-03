@@ -7,6 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "supabase:start": "npx --yes supabase start",
+    "supabase:stop": "npx --yes supabase stop",
+    "supabase:status": "npx --yes supabase status",
+    "supabase:reset": "npx --yes supabase db reset",
     "generate-audio": "ts-node --project tsconfig.scripts.json scripts/generate-audio-files.ts"
   },
   "dependencies": {
@@ -15,6 +19,7 @@
     "@ai-sdk/openai": "^3.0.12",
     "@ai-sdk/react": "^3.0.44",
     "@base-ui/react": "^1.0.0",
+    "@dnd-kit/core": "^6.3.1",
     "@hookform/resolvers": "^5.2.2",
     "@hugeicons/core-free-icons": "^3.1.0",
     "@hugeicons/react": "^1.1.3",

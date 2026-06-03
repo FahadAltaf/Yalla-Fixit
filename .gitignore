@@ -32,6 +32,19 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
+!.env.local.example
+
+# local Supabase state and data dumps
+supabase/.branches/
+supabase/.temp/
+supabase/.env
+supabase/**/prod-data*.sql
+supabase/**/production*.sql
+supabase/**/backup*.sql
+supabase/**/dump*.sql
+supabase/**/data.local.sql
+*.local.sql
 
 # vercel
 .vercel
