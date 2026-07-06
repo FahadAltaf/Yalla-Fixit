@@ -28,7 +28,7 @@ export function AmcPaginatedTemplate({
           viewportHeight={viewportHeight}
           bodyHeight={bodyHeight}
         >
-          <AmcContractBody data={data} />
+          <AmcContractBody data={data} isPdf />
         </AmcPdfPage>
       ))}
     </div>

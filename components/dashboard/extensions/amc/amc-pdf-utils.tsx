@@ -41,7 +41,7 @@ function AmcMeasurementTemplate({ data }: { data: AmcComputedData }) {
         <AmcPageHeader />
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
-        <AmcContractBody data={data} />
+        <AmcContractBody data={data} isPdf />
       </div>
       <div data-amc-measure-footer>
         <AmcPageFooter page={1} totalPages={1} />

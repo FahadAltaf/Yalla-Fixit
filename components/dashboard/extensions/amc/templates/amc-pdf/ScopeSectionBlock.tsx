@@ -1,41 +1,40 @@
 import type { ScopeSectionContent } from "../../amc-contract-content";
-import { AMC_PDF_STYLES, bodyText } from "./amc-pdf-styles";
+import {
+  clauseBulletItem,
+  clauseParagraph,
+  CLAUSE_LAYOUT,
+  highlightStyle,
+} from "./amc-pdf-styles";
 
 interface Props {
   section: ScopeSectionContent;
+  isPdf?: boolean;
 }
 
-export function ScopeSectionBlock({ section }: Props) {
+export function ScopeSectionBlock({ section, isPdf = false }: Props) {
   return (
-    <div style={{ marginBottom: "10px" }}>
+    <div style={{ marginBottom: CLAUSE_LAYOUT.SECTION_GAP }}>
       <div
         style={{
-          ...bodyText,
+          ...clauseParagraph,
           fontWeight: 700,
-          backgroundColor: AMC_PDF_STYLES.HIGHLIGHT_YELLOW,
           display: "inline",
           padding: "1px 2px",
+          marginLeft: CLAUSE_LAYOUT.SUB_SECTION_INDENT,
+          ...highlightStyle(isPdf),
         }}
       >
         {section.sectionNumber} {section.title}
       </div>
       {section.intro && (
-        <div style={{ ...bodyText, marginTop: "4px", whiteSpace: "pre-line" }}>
+        <div style={{ ...clauseParagraph, marginTop: "4px", whiteSpace: "pre-line" }}>
           {section.intro}
         </div>
       )}
-      <ul style={{ margin: "4px 0 0 0", paddingLeft: "14px", listStyle: "none" }}>
+      <ul style={{ margin: "4px 0 0 0", padding: 0, listStyle: "none" }}>
         {section.bullets.map((bullet) => (
-          <li
-            key={bullet}
-            style={{
-              ...bodyText,
-              marginBottom: "2px",
-              position: "relative",
-              paddingLeft: "8px",
-            }}
-          >
-            <span style={{ position: "absolute", left: 0 }}>-</span>
+          <li key={bullet} style={clauseBulletItem}>
+            <span style={{ position: "absolute", left: "44px" }}>-</span>
             {bullet}
           </li>
         ))}

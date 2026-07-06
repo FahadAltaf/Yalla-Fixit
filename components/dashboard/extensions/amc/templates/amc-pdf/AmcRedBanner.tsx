@@ -1,22 +1,25 @@
-import { AMC_PDF_STYLES } from "./amc-pdf-styles";
+import { AMC_PDF_STYLES, PDF_EXTRA_PADDING_BOTTOM } from "./amc-pdf-styles";
 
 interface Props {
   title: string;
+  isPdf?: boolean;
 }
 
-export function AmcRedBanner({ title }: Props) {
+export function AmcRedBanner({ title, isPdf = false }: Props) {
   return (
     <div
       style={{
         backgroundColor: AMC_PDF_STYLES.BRAND_RED,
         color: "#ffffff",
-        fontWeight: 700,
-        fontSize: "14px",
-        padding: "5px 8px",
+        fontSize: "16px",
         marginBottom: "8px",
         letterSpacing: "0.4px",
         textTransform: "uppercase",
-        paddingBottom: "10px",
+        marginTop: "20px",
+        paddingLeft: "12px",
+        paddingRight: "12px",
+        fontWeight: 300,
+        ...(isPdf ? { paddingBottom: PDF_EXTRA_PADDING_BOTTOM } : {}),
       }}
     >
       {title}

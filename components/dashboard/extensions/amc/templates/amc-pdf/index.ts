@@ -3,4 +3,4 @@ export { AmcPageHeader } from "./AmcPageHeader";
 export { AmcPdfPage } from "./AmcPdfPage";
 export { AmcRedBanner } from "./AmcRedBanner";
 export { ScopeSectionBlock } from "./ScopeSectionBlock";
-export { AMC_PDF_STYLES, bodyText, sectionTitle, tableCell } from "./amc-pdf-styles";
+export { AMC_PDF_STYLES, bodyText, clauseBulletItem, clauseLetterItem, clauseMainTitle, clauseParagraph, clauseSubTitle, CLAUSE_LAYOUT, PDF_EXTRA_PADDING_BOTTOM, PDF_HIGHLIGHT_PADDING_BOTTOM, sectionTitle, tableCell, highlightStyle, brandRedText } from "./amc-pdf-styles";

@@ -8,7 +8,7 @@ interface Props {
   forPDF?: boolean;
 }
 
-export function AmcContractTemplate({ data }: Props) {
+export function AmcContractTemplate({ data, forPDF = false }: Props) {
   return (
     <div
       id="amc-pdf-root"
@@ -20,7 +20,7 @@ export function AmcContractTemplate({ data }: Props) {
       }}
     >
       <AmcPageHeader />
-      <AmcContractBody data={data} />
+      <AmcContractBody data={data} isPdf={forPDF} />
     </div>
   );
 }
