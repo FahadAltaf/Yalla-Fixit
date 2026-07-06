@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
-import { createServerClientForApi } from "@/lib/supabase/supabase-server-client";
+import { hasResourceAction } from "@/lib/role-permissions";
+import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
+import { ActionType, ResourceType } from "@/types/types";
 
 const tagPayloadSchema = z.object({
   name: z.string().trim().min(1),
@@ -12,18 +14,13 @@ const tagUpdateSchema = tagPayloadSchema.extend({
   id: z.string().uuid(),
 });
 
-async function requireUser() {
-  const sessionClient = await createServerClientForApi();
-  const {
-    data: { user },
-  } = await sessionClient.auth.getUser();
-  return user?.id ?? null;
-}
-
 export async function GET() {
   try {
-    const userId = await requireUser();
-    if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const { accessUser } = await getAuthenticatedUserAccess();
+    if (!accessUser) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!hasResourceAction(accessUser, ResourceType.TODOS, ActionType.VIEW)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
     const admin = await createAdminServerClient();
     const { data, error } = await admin
@@ -41,8 +38,11 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const userId = await requireUser();
-    if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const { accessUser } = await getAuthenticatedUserAccess();
+    if (!accessUser) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!hasResourceAction(accessUser, ResourceType.TODOS, ActionType.EDIT)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
     const parsed = tagPayloadSchema.safeParse(await req.json());
     if (!parsed.success) {
@@ -69,8 +69,11 @@ export async function POST(req: NextRequest) {
 
 export async function PUT(req: NextRequest) {
   try {
-    const userId = await requireUser();
-    if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const { accessUser } = await getAuthenticatedUserAccess();
+    if (!accessUser) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!hasResourceAction(accessUser, ResourceType.TODOS, ActionType.EDIT)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
     const parsed = tagUpdateSchema.safeParse(await req.json());
     if (!parsed.success) {
@@ -99,8 +102,11 @@ export async function PUT(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
-    const userId = await requireUser();
-    if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const { accessUser } = await getAuthenticatedUserAccess();
+    if (!accessUser) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!hasResourceAction(accessUser, ResourceType.TODOS, ActionType.DELETE)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
     const id = req.nextUrl.searchParams.get("id");
     if (!id) return NextResponse.json({ error: "Tag ID is required" }, { status: 400 });

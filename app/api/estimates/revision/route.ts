@@ -106,6 +106,22 @@ function buildRevisionPayload(
   const serviceLineItems = Array.isArray(sourceEstimate.Service_Line_Items)
     ? sourceEstimate.Service_Line_Items.map((item) => {
         const line = item as Record<string, unknown>;
+        console.log(
+          "[revision] service line item ID:",
+          relationId(line.Service),
+        );
+
+        // 👇 ADD THIS to catch nested part IDs
+        if (Array.isArray(line.Part_Line_Items)) {
+          line.Part_Line_Items.forEach((part) => {
+            const p = part as Record<string, unknown>;
+            console.log(
+              "[revision] nested part line item ID:",
+              relationId(p.Part),
+            );
+          });
+        }
+
         return {
           Service: relationId(line.Service),
           Description:
@@ -239,7 +255,9 @@ function buildRevisionPayload(
               ? partLine.Discount_Type
               : undefined,
           Sequence:
-            typeof partLine.Sequence === "number" ? partLine.Sequence : undefined,
+            typeof partLine.Sequence === "number"
+              ? partLine.Sequence
+              : undefined,
           Tax: partLine.Tax ?? undefined,
           Is_Optional:
             typeof partLine.Is_Optional === "boolean"
@@ -358,8 +376,15 @@ function buildRevisionPayload(
 
 export async function POST(req: NextRequest) {
   try {
-    const parsed = createRevisionSchema.safeParse(await req.json());
+    const rawBody = await req.json();
+    console.log("[revision] POST request body:", JSON.stringify(rawBody));
+
+    const parsed = createRevisionSchema.safeParse(rawBody);
     if (!parsed.success) {
+      console.error(
+        "[revision] 400 — request validation failed:",
+        JSON.stringify(parsed.error.flatten()),
+      );
       return NextResponse.json(
         { success: false, error: parsed.error.flatten() },
         { status: 400 },
@@ -373,6 +398,14 @@ export async function POST(req: NextRequest) {
       revisionType,
       reason,
     } = parsed.data;
+
+    console.log("[revision] validated input:", {
+      estimateId,
+      rootQuotationNumber,
+      parentQuotationNumber,
+      revisionType,
+      reason,
+    });
 
     const sourceEstimateRes = await fetch(GET_ESTIMATE_EDGE_URL, {
       method: "POST",
@@ -389,6 +422,11 @@ export async function POST(req: NextRequest) {
 
     const sourceEstimateJson = await sourceEstimateRes.json().catch(() => null);
     if (!sourceEstimateRes.ok || !sourceEstimateJson?.success) {
+      console.error("[revision] failed to load source estimate:", {
+        status: sourceEstimateRes.status,
+        estimateId,
+        response: sourceEstimateJson,
+      });
       return NextResponse.json(
         {
           success: false,
@@ -415,6 +453,11 @@ export async function POST(req: NextRequest) {
         : null;
 
     if (!sourceEstimateId || !sourceQuotationNumber) {
+      console.error("[revision] 400 — source estimate id/name missing:", {
+        sourceEstimateId,
+        sourceQuotationNumber,
+        sourceEstimateKeys: Object.keys(sourceEstimateRecord),
+      });
       return NextResponse.json(
         {
           success: false,
@@ -438,6 +481,12 @@ export async function POST(req: NextRequest) {
 
     const revisionNumber = (revisionRows?.length ?? 0) + 1;
 
+    console.log("[revision] existing revisions for root:", {
+      rootQuotationNumber,
+      count: revisionRows?.length ?? 0,
+      revisionNumber,
+    });
+
     const payload = buildRevisionPayload(
       sourceEstimate,
       sourceEstimateId,
@@ -445,6 +494,19 @@ export async function POST(req: NextRequest) {
       reason,
     );
     const accessToken = await getAccessToken();
+
+    console.log("[revision] Zoho create payload summary:", {
+      rootQuotationNumber: payload.data[0]?.Root_Quotation_Number__C,
+      previousQuotationNumber: payload.data[0]?.Previous_Quotation_Number__C,
+      revisionType: payload.data[0]?.Revision_Type__C,
+      serviceLineItemsCount: payload.data[0]?.Service_Line_Items?.length ?? 0,
+      partLineItemsCount: payload.data[0]?.Part_Line_Items?.length ?? 0,
+    });
+
+    console.log(
+      "[revision] Zoho create payload:",
+      JSON.stringify(payload, null, 2),
+    );
 
     const createRes = await fetch(`${ZOHO_BASE_URL}/Estimates`, {
       method: "POST",
@@ -458,6 +520,11 @@ export async function POST(req: NextRequest) {
     const createJson = await createRes.json().catch(() => null);
 
     if (!createRes.ok) {
+      console.error("[revision] Zoho create failed:", {
+        status: createRes.status,
+        response: createJson,
+        payload: JSON.stringify(payload),
+      });
       return NextResponse.json(
         {
           success: false,
@@ -597,6 +664,12 @@ export async function POST(req: NextRequest) {
         }
       }
     }
+
+    console.log("[revision] success:", {
+      revisionEstimateId: createdEstimateId,
+      revisionEstimateNumber: createdEstimateNumber,
+      revisionNumber,
+    });
 
     return NextResponse.json({
       success: true,

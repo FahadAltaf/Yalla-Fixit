@@ -1,59 +1,55 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
-import { createServerClientForApi } from "@/lib/supabase/supabase-server-client";
-import { UserRoles } from "@/types/types";
+import {
+  canEditTodoRecord,
+  canViewTodoRecord,
+  hasResourceAction,
+  isAdminUser,
+} from "@/lib/role-permissions";
+import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
+import { ActionType, ResourceType } from "@/types/types";
 
 const createCommentSchema = z.object({
   todoId: z.string().uuid(),
   body: z.string().trim().min(1),
 });
 
-async function getCurrentProfile() {
-  const sessionClient = await createServerClientForApi();
-  const {
-    data: { user },
-  } = await sessionClient.auth.getUser();
-  if (!user?.id) return null;
-
+async function loadTodoForAccess(todoId: string) {
   const admin = await createAdminServerClient();
-  const { data } = await admin
-    .from("user_profile")
-    .select("id,email,roles(name)")
-    .eq("id", user.id)
-    .single();
-
-  return data as unknown as {
-    id: string;
-    email?: string;
-    roles?: { name?: string } | Array<{ name?: string }>;
-  } | null;
-}
-
-async function canAccessTodo(todoId: string, userId: string, isAdmin: boolean) {
-  if (isAdmin) return true;
-  const admin = await createAdminServerClient();
-  const [{ data: owned }, { data: assigned }] = await Promise.all([
-    admin.from("todos").select("id").eq("id", todoId).eq("owner_id", userId).maybeSingle(),
-    admin.from("todo_assignees").select("todo_id").eq("todo_id", todoId).eq("user_id", userId).maybeSingle(),
+  const [{ data: todo }, { data: assignees }] = await Promise.all([
+    admin.from("todos").select("id,owner_id").eq("id", todoId).maybeSingle(),
+    admin.from("todo_assignees").select("user_id").eq("todo_id", todoId),
   ]);
-  return Boolean(owned || assigned);
+
+  if (!todo) return null;
+
+  return {
+    id: todo.id,
+    owner_id: todo.owner_id,
+    assignees: (assignees ?? []).map((row) => ({ id: row.user_id })),
+  };
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const profile = await getCurrentProfile();
-    if (!profile) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const { profile, accessUser } = await getAuthenticatedUserAccess();
+    if (!profile || !accessUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (!hasResourceAction(accessUser, ResourceType.TODOS, ActionType.EDIT)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
     const parsed = createCommentSchema.safeParse(await req.json());
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
     }
 
-    const role = Array.isArray(profile.roles) ? profile.roles[0] : profile.roles;
-    const isAdmin = role?.name === UserRoles.ADMIN;
-    const hasAccess = await canAccessTodo(parsed.data.todoId, profile.id, isAdmin);
-    if (!hasAccess) return NextResponse.json({ error: "Todo not found" }, { status: 404 });
+    const todo = await loadTodoForAccess(parsed.data.todoId);
+    if (!todo || !canEditTodoRecord(accessUser, todo, profile.id)) {
+      return NextResponse.json({ error: "Todo not found" }, { status: 404 });
+    }
 
     const admin = await createAdminServerClient();
     const { error } = await admin.from("todo_comments").insert({
@@ -72,8 +68,13 @@ export async function POST(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
-    const profile = await getCurrentProfile();
-    if (!profile) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const { profile, accessUser } = await getAuthenticatedUserAccess();
+    if (!profile || !accessUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (!hasResourceAction(accessUser, ResourceType.TODOS, ActionType.EDIT)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
     const id = req.nextUrl.searchParams.get("id");
     const todoId = req.nextUrl.searchParams.get("todoId");
@@ -81,14 +82,14 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "Comment ID and todo ID are required" }, { status: 400 });
     }
 
-    const role = Array.isArray(profile.roles) ? profile.roles[0] : profile.roles;
-    const isAdmin = role?.name === UserRoles.ADMIN;
-    const hasAccess = await canAccessTodo(todoId, profile.id, isAdmin);
-    if (!hasAccess) return NextResponse.json({ error: "Todo not found" }, { status: 404 });
+    const todo = await loadTodoForAccess(todoId);
+    if (!todo || !canViewTodoRecord(accessUser, todo, profile.id)) {
+      return NextResponse.json({ error: "Todo not found" }, { status: 404 });
+    }
 
     const admin = await createAdminServerClient();
     let query = admin.from("todo_comments").delete().eq("id", id).eq("todo_id", todoId);
-    if (!isAdmin) {
+    if (!isAdminUser(accessUser)) {
       query = query.eq("author_id", profile.id);
     }
     const { error } = await query;

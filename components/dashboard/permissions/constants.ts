@@ -23,6 +23,13 @@ const menuResources = Array.from(
   )
 );
 
+const CRUD_MODULE_ACTIONS = [
+  ActionType.VIEW,
+  ActionType.CREATE,
+  ActionType.EDIT,
+  ActionType.DELETE,
+];
+
 // Auto-configured resource → actions mapping
 // Default for every menu-driven module is VIEW only
 export const RESOURCE_ACTIONS: Record<ResourceType, ActionType[]> = menuResources.reduce(
@@ -32,6 +39,8 @@ export const RESOURCE_ACTIONS: Record<ResourceType, ActionType[]> = menuResource
   },
   {} as Record<ResourceType, ActionType[]>
 );
+
+RESOURCE_ACTIONS[ResourceType.TODOS] = CRUD_MODULE_ACTIONS;
 
 // Helper to get display name for resource based on menu item titles
 const resourceDisplayNameMap: Partial<Record<ResourceType, string>> =

@@ -72,6 +72,8 @@ query GetUsers($filter: user_profileFilter, $limit: Int = 10, $offset: Int = 0, 
                  node {
                    resource
                    action
+                   enabled
+                   record_access
                  }
                }
              }
@@ -119,6 +121,8 @@ export const GET_USERS = `
                  node {
                    resource
                    action
+                   enabled
+                   record_access
                  }
                }
              }
@@ -155,6 +159,8 @@ query GetUsersById($id: UUID!) {
                  node {
                    resource
                    action
+                   enabled
+                   record_access
                  }
                }
              }

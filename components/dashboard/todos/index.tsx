@@ -56,6 +56,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dialog";
 import StatusBadge from "@/components/ui/status-badge";
 import { useAuth } from "@/context/AuthContext";
+import {
+  canDeleteTodoRecord,
+  canEditTodoRecord,
+  hasAllRecordsAccess,
+  hasResourceAction,
+  isAdminUser,
+} from "@/lib/role-permissions";
 import { usersService } from "@/modules/users/services/users-service";
 import {
   TodoCreateInput,
@@ -65,12 +72,13 @@ import {
 } from "@/modules/todos";
 import {
   TODO_STATUS_LABELS,
+  ActionType,
+  ResourceType,
   Todo,
   TodoRelatedType,
   TodoStatus,
   TodoTag,
   User,
-  UserRoles,
 } from "@/types/types";
 
 const TODO_STATUSES: TodoStatus[] = ["todo", "in_progress", "done", "blocked", "canceled"];
@@ -251,13 +259,16 @@ function DroppableColumn({
 function TodoCard({
   todo,
   onEdit,
+  canDrag,
 }: {
   todo: Todo;
   onEdit: (todo: Todo) => void;
+  canDrag: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: todo.id,
     data: { status: todo.status },
+    disabled: !canDrag,
   });
 
   const style = transform
@@ -268,7 +279,7 @@ function TodoCard({
     <div
       ref={setNodeRef}
       style={style}
-      className={`rounded-lg bg-background p-3 shadow-xs cursor-grab active:cursor-grabbing ${deadlineBorderClass(todo)} ${
+      className={`rounded-lg bg-background p-3 shadow-xs ${canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"} ${deadlineBorderClass(todo)} ${
         isDragging ? "opacity-70 shadow-md" : ""
       }`}
       onDoubleClick={() => onEdit(todo)}
@@ -308,12 +319,14 @@ function TodosListView({
   tagColorMap,
   onEdit,
   onDelete,
+  canDeleteTodo,
 }: {
   todos: Todo[];
   loading: boolean;
   tagColorMap: Map<string, string>;
   onEdit: (todo: Todo) => void;
   onDelete: (todo: Todo) => void;
+  canDeleteTodo: (todo: Todo) => boolean;
 }) {
   return (
     <Card className="w-full min-w-0 max-w-full overflow-hidden p-0">
@@ -388,10 +401,12 @@ function TodosListView({
                     <Button size="sm" variant="ghost" onClick={() => onEdit(todo)}>
                       Open
                     </Button>
-                    <Button size="icon-sm" variant="ghost" onClick={() => onDelete(todo)}>
-                      <Trash2 className="size-4" />
-                      <span className="sr-only">Delete todo</span>
-                    </Button>
+                    {canDeleteTodo(todo) && (
+                      <Button size="icon-sm" variant="ghost" onClick={() => onDelete(todo)}>
+                        <Trash2 className="size-4" />
+                        <span className="sr-only">Delete todo</span>
+                      </Button>
+                    )}
                   </div>
                 </TableCell>
               </TableRow>
@@ -434,7 +449,15 @@ export default function TodosPage() {
   });
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
-  const isAdmin = userProfile?.roles?.name === UserRoles.ADMIN;
+  const userId = userProfile?.id ?? "";
+  const isAdmin = isAdminUser(userProfile);
+  const canCreate = hasResourceAction(userProfile, ResourceType.TODOS, ActionType.CREATE);
+  const canEdit = hasResourceAction(userProfile, ResourceType.TODOS, ActionType.EDIT);
+  const canDelete = hasResourceAction(userProfile, ResourceType.TODOS, ActionType.DELETE);
+  const canViewAllRecords = isAdmin || hasAllRecordsAccess(userProfile, ResourceType.TODOS);
+
+  const canEditTodo = (todo: Todo) => canEditTodoRecord(userProfile, todo, userId);
+  const canDeleteTodo = (todo: Todo) => canDeleteTodoRecord(userProfile, todo, userId);
 
   const userOptions: Option[] = useMemo(
     () => users.map((user) => ({ value: user.id, label: userLabel(user) })),
@@ -503,6 +526,10 @@ export default function TodosPage() {
   }, [JSON.stringify(filters)]);
 
   const openCreateDialog = () => {
+    if (!canCreate) {
+      toast.error("You do not have permission to create todos");
+      return;
+    }
     setEditingTodo(null);
     setForm(emptyForm);
     setCommentBody("");
@@ -570,6 +597,10 @@ export default function TodosPage() {
   };
 
   const saveTagDefinition = async () => {
+    if (!canEdit) {
+      toast.error("You do not have permission to manage tags");
+      return;
+    }
     if (!tagForm.name.trim()) {
       toast.error("Tag name is required");
       return;
@@ -602,6 +633,10 @@ export default function TodosPage() {
   };
 
   const removeTagDefinition = async (tag: TodoTag) => {
+    if (!canDelete) {
+      toast.error("You do not have permission to delete tags");
+      return;
+    }
     try {
       await todosService.deleteTag(tag.id);
       if (tagForm.id === tag.id) resetTagForm();
@@ -614,6 +649,16 @@ export default function TodosPage() {
   };
 
   const saveTodo = async () => {
+    if (editingTodo) {
+      if (!canEditTodo(editingTodo)) {
+        toast.error("You do not have permission to edit this todo");
+        return;
+      }
+    } else if (!canCreate) {
+      toast.error("You do not have permission to create todos");
+      return;
+    }
+
     if (!form.title.trim()) {
       toast.error("Title is required");
       return;
@@ -663,6 +708,10 @@ export default function TodosPage() {
   };
 
   const updateStatus = async (todo: Todo, status: TodoStatus) => {
+    if (!canEditTodo(todo)) {
+      toast.error("You do not have permission to update this todo");
+      return;
+    }
     if (todo.status === status) return;
     const previousTodos = todos;
     setTodos((current) => current.map((item) => (item.id === todo.id ? { ...item, status } : item)));
@@ -687,6 +736,11 @@ export default function TodosPage() {
 
   const confirmDelete = async () => {
     if (!deleteTodo) return;
+    if (!canDeleteTodo(deleteTodo)) {
+      toast.error("You do not have permission to delete this todo");
+      setDeleteTodo(null);
+      return;
+    }
     try {
       await todosService.deleteTodo(deleteTodo.id);
       toast.success("Todo deleted");
@@ -700,6 +754,10 @@ export default function TodosPage() {
 
   const addComment = async () => {
     if (!editingTodo || !commentBody.trim()) return;
+    if (!canEditTodo(editingTodo)) {
+      toast.error("You do not have permission to comment on this todo");
+      return;
+    }
     try {
       await todosService.addComment(editingTodo.id, commentBody.trim());
       setCommentBody("");
@@ -719,6 +777,10 @@ export default function TodosPage() {
 
   const removeComment = async (commentId: string) => {
     if (!editingTodo) return;
+    if (!canEditTodo(editingTodo)) {
+      toast.error("You do not have permission to delete comments on this todo");
+      return;
+    }
     try {
       await todosService.deleteComment(commentId, editingTodo.id);
       toast.success("Comment deleted");
@@ -738,6 +800,8 @@ export default function TodosPage() {
     acc[status] = todos.filter((todo) => todo.status === status);
     return acc;
   }, {} as Record<TodoStatus, Todo[]>);
+
+  const isDialogReadOnly = Boolean(editingTodo && !canEditTodo(editingTodo));
 
   return (
     <div className="w-full min-w-0 space-y-4">
@@ -769,18 +833,22 @@ export default function TodosPage() {
               <span className="hidden sm:inline">List</span>
             </Button>
           </div>
-          <Button type="button" variant="outline" size="sm" className="h-11" onClick={() => setTagsDialogOpen(true)}>
-            <Palette className="size-4 sm:mr-2" />
-            <span className="hidden sm:inline">Tags</span>
-          </Button>
+          {canEdit && (
+            <Button type="button" variant="outline" size="sm" className="h-11" onClick={() => setTagsDialogOpen(true)}>
+              <Palette className="size-4 sm:mr-2" />
+              <span className="hidden sm:inline">Tags</span>
+            </Button>
+          )}
           <Button variant="outline" size="sm" className="h-11" onClick={loadTodos} disabled={loading}>
             <RefreshCw className={`size-4 sm:mr-2 ${loading ? "animate-spin" : ""}`} />
             <span className="hidden sm:inline">Refresh</span>
           </Button>
-          <Button size="sm" className="h-11" onClick={openCreateDialog}>
-            <Plus className="size-4 sm:mr-2" />
-            <span className="hidden sm:inline">New Todo</span>
-          </Button>
+          {canCreate && (
+            <Button size="sm" className="h-11" onClick={openCreateDialog}>
+              <Plus className="size-4 sm:mr-2" />
+              <span className="hidden sm:inline">New Todo</span>
+            </Button>
+          )}
         </div>
       </div>
 
@@ -860,7 +928,7 @@ export default function TodosPage() {
               </SelectContent>
             </Select>
           </div>
-          {isAdmin && (
+          {canViewAllRecords && (
             <div className="grid gap-1">
               <Label className="text-xs text-muted-foreground">Owner</Label>
               <Select
@@ -1005,6 +1073,7 @@ export default function TodosPage() {
                         key={todo.id}
                         todo={todo}
                         onEdit={openEditDialog}
+                        canDrag={canEditTodo(todo)}
                       />
                     ))}
                     {!loading && todosByStatus[status].length === 0 && (
@@ -1024,6 +1093,7 @@ export default function TodosPage() {
             tagColorMap={tagColorMap}
             onEdit={openEditDialog}
             onDelete={setDeleteTodo}
+            canDeleteTodo={canDeleteTodo}
           />
         )}
       </div>
@@ -1065,9 +1135,11 @@ export default function TodosPage() {
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
+                {canEdit && (
                 <Button type="button" size="sm" className="h-10" onClick={saveTagDefinition} disabled={isSavingTag}>
                   {tagForm.id ? "Update" : "Add"}
                 </Button>
+                )}
                 {tagForm.id && (
                   <Button type="button" size="sm" className="h-10" variant="outline" onClick={resetTagForm} disabled={isSavingTag}>
                     Cancel
@@ -1113,7 +1185,7 @@ export default function TodosPage() {
                       >
                         {definition ? "Edit" : "Color"}
                       </Button>
-                      {definition && (
+                      {definition && canDelete && (
                         <Button
                           type="button"
                           size="icon-sm"
@@ -1151,7 +1223,13 @@ export default function TodosPage() {
                   )}
                   {editingTodo && <StatusBadge status={editingTodo.status} />}
                 </div>
-                <DialogTitle className="text-2xl">{editingTodo ? form.title || "Untitled todo" : "Create Todo"}</DialogTitle>
+                <DialogTitle className="text-2xl">
+                  {editingTodo
+                    ? isDialogReadOnly
+                      ? "View Todo"
+                      : form.title || "Untitled todo"
+                    : "Create Todo"}
+                </DialogTitle>
               </div>
               <div className="flex shrink-0 gap-2 sm:pr-2">
                 {editingTodo && (
@@ -1172,6 +1250,7 @@ export default function TodosPage() {
                   <Label>Title</Label>
                   <Input
                     value={form.title}
+                    disabled={isDialogReadOnly}
                     onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))}
                     placeholder="Short todo title"
                   />
@@ -1180,6 +1259,7 @@ export default function TodosPage() {
                   <Label>Description</Label>
                   <Textarea
                     value={form.description}
+                    disabled={isDialogReadOnly}
                     onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
                     placeholder="What needs to be done?"
                     className="min-h-32 resize-none"
@@ -1207,15 +1287,17 @@ export default function TodosPage() {
                                 <span>
                                   {userLabel(comment.author)} · {new Date(comment.created_at).toLocaleString()}
                                 </span>
-                                <Button
-                                  type="button"
-                                  size="icon-xs"
-                                  variant="ghost"
-                                  onClick={() => removeComment(comment.id)}
-                                >
-                                  <Trash2 className="size-3.5" />
-                                  <span className="sr-only">Delete comment</span>
-                                </Button>
+                                {!isDialogReadOnly && (
+                                  <Button
+                                    type="button"
+                                    size="icon-xs"
+                                    variant="ghost"
+                                    onClick={() => removeComment(comment.id)}
+                                  >
+                                    <Trash2 className="size-3.5" />
+                                    <span className="sr-only">Delete comment</span>
+                                  </Button>
+                                )}
                               </div>
                               <p className="mt-2 text-sm whitespace-pre-wrap">{comment.body}</p>
                             </div>
@@ -1224,16 +1306,18 @@ export default function TodosPage() {
                           <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">No comments yet.</p>
                         )}
                       </div>
-                      <div className="flex gap-2">
-                        <Input
-                          value={commentBody}
-                          onChange={(event) => setCommentBody(event.target.value)}
-                          placeholder="Add a comment"
-                        />
-                        <Button type="button" variant="outline" onClick={addComment} disabled={!commentBody.trim()}>
-                          Add
-                        </Button>
-                      </div>
+                      {!isDialogReadOnly && (
+                        <div className="flex gap-2">
+                          <Input
+                            value={commentBody}
+                            onChange={(event) => setCommentBody(event.target.value)}
+                            placeholder="Add a comment"
+                          />
+                          <Button type="button" variant="outline" onClick={addComment} disabled={!commentBody.trim()}>
+                            Add
+                          </Button>
+                        </div>
+                      )}
                     </TabsContent>
 
                     <TabsContent value="updates" className="mt-0 space-y-3">
@@ -1265,7 +1349,11 @@ export default function TodosPage() {
               <div className="grid gap-3 rounded-md border p-4">
                 <div className="grid gap-1.5">
                   <Label>Status</Label>
-                  <Select value={form.status} onValueChange={(value) => setForm((current) => ({ ...current, status: value as TodoStatus }))}>
+                  <Select
+                    value={form.status}
+                    disabled={isDialogReadOnly}
+                    onValueChange={(value) => setForm((current) => ({ ...current, status: value as TodoStatus }))}
+                  >
                     <SelectTrigger className="w-full">
                       <SelectValue />
                     </SelectTrigger>
@@ -1283,6 +1371,7 @@ export default function TodosPage() {
                   <MultipleSelector
                     value={selectedAssignees}
                     options={userOptions}
+                    disabled={isDialogReadOnly}
                     placeholder="Select assignees"
                     onChange={(options) => setForm((current) => ({ ...current, assigneeIds: options.map((option) => option.value) }))}
                     emptyIndicator={<span className="text-muted-foreground">No users found</span>}
@@ -1301,7 +1390,8 @@ export default function TodosPage() {
                       label: tag,
                       color: tagColorMap.get(tag.toLowerCase()),
                     }))}
-                    creatable
+                    disabled={isDialogReadOnly}
+                    creatable={!isDialogReadOnly}
                     placeholder="Add or select tags"
                     onChange={(options) => setForm((current) => ({ ...current, tags: options.map((option) => option.value) }))}
                     emptyIndicator={<span className="text-muted-foreground">Create a new tag</span>}
@@ -1315,6 +1405,7 @@ export default function TodosPage() {
                   <Input
                     type="datetime-local"
                     value={form.deadlineAt}
+                    disabled={isDialogReadOnly}
                     onChange={(event) => setForm((current) => ({ ...current, deadlineAt: event.target.value }))}
                   />
                 </div>
@@ -1323,6 +1414,7 @@ export default function TodosPage() {
                   <Input
                     type="datetime-local"
                     value={form.reminderAt}
+                    disabled={isDialogReadOnly}
                     onChange={(event) => setForm((current) => ({ ...current, reminderAt: event.target.value }))}
                   />
                 </div>
@@ -1331,7 +1423,11 @@ export default function TodosPage() {
               <div className="grid gap-3 rounded-md border p-4">
                 <div className="grid gap-1.5">
                   <Label>Related Type</Label>
-                  <Select value={form.relatedType} onValueChange={(value) => setForm((current) => ({ ...current, relatedType: value as TodoRelatedType | "none" }))}>
+                  <Select
+                    value={form.relatedType}
+                    disabled={isDialogReadOnly}
+                    onValueChange={(value) => setForm((current) => ({ ...current, relatedType: value as TodoRelatedType | "none" }))}
+                  >
                     <SelectTrigger className="w-full">
                       <SelectValue />
                     </SelectTrigger>
@@ -1349,6 +1445,7 @@ export default function TodosPage() {
                   <Label>Related ID</Label>
                   <Input
                     value={form.relatedId}
+                    disabled={isDialogReadOnly}
                     onChange={(event) => setForm((current) => ({ ...current, relatedId: event.target.value }))}
                     placeholder="AP-123 or WO-1234"
                   />
@@ -1360,11 +1457,13 @@ export default function TodosPage() {
 
           <DialogFooter className="border-t pt-4">
             <Button type="button" variant="outline" onClick={() => setDialogOpen(false)} disabled={isSaving}>
-              Cancel
+              {isDialogReadOnly ? "Close" : "Cancel"}
             </Button>
-            <Button type="button" onClick={saveTodo} disabled={isSaving}>
-              {isSaving ? "Saving..." : "Save Todo"}
-            </Button>
+            {!isDialogReadOnly && (
+              <Button type="button" onClick={saveTodo} disabled={isSaving}>
+                {isSaving ? "Saving..." : editingTodo ? "Save Todo" : "Create Todo"}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

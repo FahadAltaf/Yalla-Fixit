@@ -19,10 +19,12 @@ export const GET_USER_BY_ID = `
           description
           role_accessCollection {
             edges {
-              node {
-                resource
-                action
-              }
+                node {
+                  resource
+                  action
+                  enabled
+                  record_access
+                }
             }
           }
         }

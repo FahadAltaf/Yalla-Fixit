@@ -1,9 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { createServerClientForApi } from "@/lib/supabase/supabase-server-client";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { emailService } from "@/lib/email-service";
-import { Todo, TodoRelatedType, TodoStatus, User, UserRoles } from "@/types/types";
+import {
+  canDeleteTodoRecord,
+  canEditTodoRecord,
+  canViewTodoRecord,
+  hasResourceAction,
+} from "@/lib/role-permissions";
+import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
+import { ActionType, ResourceType, Todo, TodoRelatedType, TodoStatus, User } from "@/types/types";
 
 const TODO_STATUSES = ["todo", "in_progress", "done", "canceled", "blocked"] as const;
 const RELATED_TYPES = ["work_order", "quotation", "appointment"] as const;
@@ -42,16 +48,6 @@ type TodoRow = {
   completed_at: string | null;
 };
 
-type ProfileRow = Omit<User, "roles"> & {
-  roles?:
-    | {
-        name?: string | null;
-      }
-    | Array<{
-        name?: string | null;
-      }>;
-};
-
 function normalizeTags(tags: string[]) {
   return Array.from(
     new Set(tags.map((tag) => tag.trim()).filter(Boolean))
@@ -74,36 +70,6 @@ function assigneeSnapshot(users: User[] = []) {
   return users
     .map((user) => ({ id: user.id, name: userDisplayName(user) }))
     .sort((a, b) => a.name.localeCompare(b.name));
-}
-
-function isAdmin(profile: ProfileRow | null) {
-  const role = Array.isArray(profile?.roles) ? profile?.roles[0] : profile?.roles;
-  return role?.name === UserRoles.ADMIN;
-}
-
-async function getCurrentUserProfile() {
-  const sessionClient = await createServerClientForApi();
-  const {
-    data: { user },
-    error,
-  } = await sessionClient.auth.getUser();
-
-  if (error || !user?.id) {
-    return { authUserId: null, profile: null };
-  }
-
-  const admin = await createAdminServerClient();
-  const { data: profile, error: profileError } = await admin
-    .from("user_profile")
-    .select("id,email,first_name,last_name,full_name,role_id,is_active,profile_image,roles(name)")
-    .eq("id", user.id)
-    .single();
-
-  if (profileError || !profile) {
-    return { authUserId: user.id, profile: null };
-  }
-
-  return { authUserId: user.id, profile: profile as unknown as ProfileRow };
 }
 
 async function loadTodos(todoIds?: string[]): Promise<Todo[]> {
@@ -205,13 +171,6 @@ async function loadTodos(todoIds?: string[]): Promise<Todo[]> {
     comments: commentsByTodo.get(row.id) ?? [],
     updates: updatesByTodo.get(row.id) ?? [],
   }));
-}
-
-function canAccessTodo(todo: Todo, profile: ProfileRow | null) {
-  if (!profile) return false;
-  if (isAdmin(profile)) return true;
-  if (todo.owner_id === profile.id) return true;
-  return Boolean(todo.assignees?.some((assignee) => assignee.id === profile.id));
 }
 
 function dateInputValue(value: string) {
@@ -357,14 +316,21 @@ function buildTodoChangeLog(existing: Todo, payload: z.infer<typeof todoUpdateSc
 
 export async function GET(req: NextRequest) {
   try {
-    const { profile } = await getCurrentUserProfile();
-    if (!profile) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const { profile, accessUser } = await getAuthenticatedUserAccess();
+    if (!profile || !accessUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (!hasResourceAction(accessUser, ResourceType.TODOS, ActionType.VIEW)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
     const page = Number(req.nextUrl.searchParams.get("page") ?? 0);
     const pageSize = Number(req.nextUrl.searchParams.get("pageSize") ?? 100);
 
     const todos = await loadTodos();
-    const visibleTodos = todos.filter((todo) => canAccessTodo(todo, profile));
+    const visibleTodos = todos.filter((todo) =>
+      canViewTodoRecord(accessUser, todo, profile.id)
+    );
     const filteredTodos = applyFilters(visibleTodos, req);
     const sortedTodos = sortTodos(filteredTodos, req);
     const start = page * pageSize;
@@ -384,8 +350,13 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { profile } = await getCurrentUserProfile();
-    if (!profile) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const { profile, accessUser } = await getAuthenticatedUserAccess();
+    if (!profile || !accessUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (!hasResourceAction(accessUser, ResourceType.TODOS, ActionType.CREATE)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
     const parsed = todoPayloadSchema.safeParse(await req.json());
     if (!parsed.success) {
@@ -446,8 +417,13 @@ export async function POST(req: NextRequest) {
 
 export async function PUT(req: NextRequest) {
   try {
-    const { profile } = await getCurrentUserProfile();
-    if (!profile) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const { profile, accessUser } = await getAuthenticatedUserAccess();
+    if (!profile || !accessUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (!hasResourceAction(accessUser, ResourceType.TODOS, ActionType.EDIT)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
     const parsed = todoUpdateSchema.safeParse(await req.json());
     if (!parsed.success) {
@@ -455,7 +431,7 @@ export async function PUT(req: NextRequest) {
     }
 
     const [existing] = await loadTodos([parsed.data.id]);
-    if (!existing || !canAccessTodo(existing, profile)) {
+    if (!existing || !canEditTodoRecord(accessUser, existing, profile.id)) {
       return NextResponse.json({ error: "Todo not found" }, { status: 404 });
     }
 
@@ -527,14 +503,19 @@ export async function PUT(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
-    const { profile } = await getCurrentUserProfile();
-    if (!profile) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const { profile, accessUser } = await getAuthenticatedUserAccess();
+    if (!profile || !accessUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (!hasResourceAction(accessUser, ResourceType.TODOS, ActionType.DELETE)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
     const id = req.nextUrl.searchParams.get("id");
     if (!id) return NextResponse.json({ error: "ID is required" }, { status: 400 });
 
     const [existing] = await loadTodos([id]);
-    if (!existing || !canAccessTodo(existing, profile)) {
+    if (!existing || !canDeleteTodoRecord(accessUser, existing, profile.id)) {
       return NextResponse.json({ error: "Todo not found" }, { status: 404 });
     }
 

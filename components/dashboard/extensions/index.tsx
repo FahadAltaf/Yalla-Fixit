@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Download, FileText } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Download, FileText, Wrench } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -16,28 +16,45 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import Link from "next/link";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useAuth } from "@/context/AuthContext";
 import { ExtensionsPageClient } from "./bulk-download";
 import { QuotationTemplatesPage } from "./quotation-templates/index";
+import { AmcContractsPage } from "./amc/index";
+import { canAccessAmcContracts } from "./amc/amc-constants";
+
+const ALL_NAV_ITEMS = [
+  { name: "Bulk Download", icon: Download },
+  { name: "Quotation Templates", icon: FileText },
+  { name: "AMC Contracts", icon: Wrench },
+] as const;
 
 export default function Extensions() {
+  const { userProfile } = useAuth();
   const [activeSection, setActiveSection] = useState("Bulk Download");
 
-  // Navigation data
-  const data = {
-    nav: [
-      { name: "Bulk Download", icon: Download },
-      { name: "Quotation Templates", icon: FileText },
+  const canAccessAmc = canAccessAmcContracts(userProfile?.email);
 
-    ],
-  };
+  const nav = useMemo(
+    () =>
+      ALL_NAV_ITEMS.filter(
+        (item) => item.name !== "AMC Contracts" || canAccessAmc
+      ),
+    [canAccessAmc]
+  );
 
-  // Render different setting sections
+  const resolvedActiveSection =
+    activeSection === "AMC Contracts" && !canAccessAmc
+      ? "Bulk Download"
+      : activeSection;
+
   const renderSettingsContent = () => {
-    switch (activeSection) {
+    switch (resolvedActiveSection) {
       case "Bulk Download":
         return <ExtensionsPageClient />;
       case "Quotation Templates":
         return <QuotationTemplatesPage />;
+      case "AMC Contracts":
+        return canAccessAmc ? <AmcContractsPage /> : <ExtensionsPageClient />;
       default:
         return null;
     }
@@ -52,11 +69,11 @@ export default function Extensions() {
               <SidebarGroup>
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    {data.nav.map((item) => (
+                    {nav.map((item) => (
                       <SidebarMenuItem key={item.name}>
                         <SidebarMenuButton
                           asChild
-                          isActive={item.name === activeSection}
+                          isActive={item.name === resolvedActiveSection}
                           onClick={() => setActiveSection(item.name)}
                           className="group/menu-button font-medium gap-3 h-9 rounded-md bg-linear-to-r hover:bg-transparent hover:from-sidebar-accent hover:to-sidebar-accent/40 data-[active=true]:from-primary/20 data-[active=true]:to-primary/5 [&>svg]:size-auto"
                         >
@@ -80,11 +97,15 @@ export default function Extensions() {
           </Sidebar>
 
           <main className="flex flex-col w-full">
-            {/* Mobile Tabs - Visible on mobile, hidden on desktop */}
             <div className="md:hidden mb-4">
-              <Tabs value={activeSection} onValueChange={setActiveSection}>
-                <TabsList className="grid w-full grid-cols-4 h-auto! p-1">
-                  {data.nav.map((item) => (
+              <Tabs value={resolvedActiveSection} onValueChange={setActiveSection}>
+                <TabsList
+                  className="grid w-full h-auto! p-1"
+                  style={{
+                    gridTemplateColumns: `repeat(${nav.length}, minmax(0, 1fr))`,
+                  }}
+                >
+                  {nav.map((item) => (
                     <TabsTrigger
                       key={item.name}
                       value={item.name}
@@ -96,7 +117,6 @@ export default function Extensions() {
                           aria-hidden="true"
                         />
                       )}
-
                     </TabsTrigger>
                   ))}
                 </TabsList>

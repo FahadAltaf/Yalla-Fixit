@@ -30,6 +30,8 @@ export interface User {
         node: {
           resource: string;
           action: string;
+          enabled?: boolean | null;
+          record_access?: string | null;
         };
       }>;
     };
