@@ -25,7 +25,7 @@ import { canAccessAmcContracts } from "./amc/amc-constants";
 const ALL_NAV_ITEMS = [
   { name: "Bulk Download", icon: Download },
   { name: "Quotation Templates", icon: FileText },
-  { name: "AMC Contracts", icon: Wrench },
+  { name: "AMC Proposals", icon: Wrench },
 ] as const;
 
 export default function Extensions() {
@@ -37,13 +37,13 @@ export default function Extensions() {
   const nav = useMemo(
     () =>
       ALL_NAV_ITEMS.filter(
-        (item) => item.name !== "AMC Contracts" || canAccessAmc
+        (item) => item.name !== "AMC Proposals" || canAccessAmc
       ),
     [canAccessAmc]
   );
 
   const resolvedActiveSection =
-    activeSection === "AMC Contracts" && !canAccessAmc
+    activeSection === "AMC Proposals" && !canAccessAmc
       ? "Bulk Download"
       : activeSection;
 
@@ -53,7 +53,7 @@ export default function Extensions() {
         return <ExtensionsPageClient />;
       case "Quotation Templates":
         return <QuotationTemplatesPage />;
-      case "AMC Contracts":
+      case "AMC Proposals":
         return canAccessAmc ? <AmcContractsPage /> : <ExtensionsPageClient />;
       default:
         return null;

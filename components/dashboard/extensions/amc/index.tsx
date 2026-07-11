@@ -186,7 +186,7 @@ export function AmcContractsPage() {
         <div className="flex flex-col gap-1">
           <CardTitle className="text-xl flex items-center gap-2">
             <Wrench className="size-5 text-primary" />
-            AMC Contracts
+            AMC Proposals
           </CardTitle>
           <CardDescription>
             Build annual maintenance contract proposals and download a generated

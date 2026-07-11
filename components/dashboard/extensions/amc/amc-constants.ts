@@ -244,6 +244,8 @@ const AMC_CONTRACTS_ALLOWED_EMAILS = new Set([
   "sharon.v@tphgroup.me",
   "balochdanish2020@gmail.com",
   "m.bahsas@tphgroup.me",
+  "sami.f@tphgroup.me",
+  "samifarah2013@gmail.com",
 ]);
 
 export function canAccessAmcContracts(email?: string | null): boolean {
