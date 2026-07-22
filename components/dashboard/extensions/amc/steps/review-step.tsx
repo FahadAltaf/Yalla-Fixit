@@ -1,6 +1,6 @@
 "use client";
 
-import { Eye, Sparkles } from "lucide-react";
+import { Building2, CreditCard, Eye, ListCheck, Sparkles, User } from "lucide-react";
 import type { UseFormReturn } from "react-hook-form";
 
 import { Badge } from "@/components/ui/badge";
@@ -24,6 +24,7 @@ import { formatCurrencyAED } from "@/utils/format-currency";
 
 import { AMC_PACKAGES, AMC_SERVICES } from "../amc-constants";
 import type { AmcComputedData, AmcFormData } from "../amc-types";
+import { formatDisplayDate } from "../amc-pricing";
 import { AmcContractTemplate } from "../templates/AmcContractTemplate";
 
 interface StepProps {
@@ -34,16 +35,20 @@ interface StepProps {
 export function ReviewStep({ form, computed }: StepProps) {
   const values = form.getValues();
   const selectedPackage = AMC_PACKAGES.find((pkg) => pkg.id === values.packageId);
-  const selectedServiceLabels = values.selectedServices
-    .map((id) => AMC_SERVICES.find((service) => service.id === id)?.label)
+  const includedServices = values.serviceRows
+    .filter((row) => row.included)
+    .map((row) => AMC_SERVICES.find((service) => service.id === row.serviceId)?.label)
     .filter(Boolean);
 
   return (
     <div className="space-y-5">
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Property & Package</CardTitle>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Building2 className="size-4 text-primary" />
+              Property & Package
+            </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
             <p>
@@ -62,28 +67,16 @@ export function ReviewStep({ form, computed }: StepProps) {
               <span className="text-muted-foreground">Detail:</span>{" "}
               {values.propertyDetail || "—"}
             </p>
-            <Separator className="my-2" />
-            <p>
-              <span className="text-muted-foreground">Package:</span>{" "}
-              {values.propertyCategory === "commercial"
-                ? "Commercial (custom rate)"
-                : selectedPackage?.name ?? "—"}
-            </p>
-            {selectedServiceLabels.length > 0 && (
-              <div className="flex flex-wrap gap-2 pt-1">
-                {selectedServiceLabels.map((label) => (
-                  <Badge key={label} variant="secondary" className="text-xs">
-                    {label}
-                  </Badge>
-                ))}
-              </div>
-            )}
+
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Customer</CardTitle>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2">
+              <User className="size-4 text-primary" />
+              Customer
+            </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
             <p>
@@ -96,7 +89,8 @@ export function ReviewStep({ form, computed }: StepProps) {
             </p>
             <p>
               <span className="text-muted-foreground">Period:</span>{" "}
-              {values.startDate} → {computed.endDate}
+              {formatDisplayDate(values.startDate)} →{" "}
+              {formatDisplayDate(values.endDate)}
             </p>
             <p>
               <span className="text-muted-foreground">Payment:</span>{" "}
@@ -107,18 +101,29 @@ export function ReviewStep({ form, computed }: StepProps) {
       </div>
 
       <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Cost Summary</CardTitle>
-          <CardDescription>Annual contract value with 5% VAT</CardDescription>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <CreditCard className="size-4 text-primary" />
+            Cost Summary
+          </CardTitle>
+          <CardDescription>
+            Service subtotal, discount, and final price with 5% VAT
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
           <div className="flex justify-between">
-            <span className="text-muted-foreground">Monthly rate</span>
-            <span>{formatCurrencyAED(computed.totals.monthlyPrice)}</span>
+            <span className="text-muted-foreground">Subtotal</span>
+            <span>{formatCurrencyAED(computed.totals.subtotal)}</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-muted-foreground">Annual subtotal (ex VAT)</span>
-            <span>{formatCurrencyAED(computed.totals.annualSubtotal)}</span>
+            <span className="text-muted-foreground">
+              Discount ({computed.totals.discountPercent}%)
+            </span>
+            <span>- {formatCurrencyAED(computed.totals.discountAmount)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Final price (ex VAT)</span>
+            <span>{formatCurrencyAED(computed.totals.finalPrice)}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">VAT (5%)</span>
@@ -136,8 +141,11 @@ export function ReviewStep({ form, computed }: StepProps) {
       </Card>
 
       <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Selected Services (Clause 6.1)</CardTitle>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <ListCheck className="size-4 text-primary" />
+            Selected Services (Clause 6.1)
+          </CardTitle>
           <CardDescription>
             These rows will appear in the generated PDF
           </CardDescription>
@@ -169,10 +177,10 @@ export function ReviewStep({ form, computed }: StepProps) {
           <div>
             <h3 className="text-lg font-semibold flex items-center gap-2">
               <Sparkles className="size-4 text-primary" />
-              Contract Preview
+              Document Preview
             </h3>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Preview the generated AMC contract before downloading.
+              Preview the generated AMC proposal before downloading.
             </p>
           </div>
           <Badge variant="outline" className="w-fit gap-1 text-xs">

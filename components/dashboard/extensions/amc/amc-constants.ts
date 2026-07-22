@@ -1,4 +1,5 @@
-import type { AmcPackage, AmcService } from "./amc-types";
+import type { AmcFormData, AmcPackage, AmcService, AmcServiceRow } from "./amc-types";
+import { getDefaultEndDateFromStart } from "./amc-date-utils";
 
 export const AMC_PACKAGES: AmcPackage[] = [
   {
@@ -39,6 +40,7 @@ export const AMC_PACKAGES: AmcPackage[] = [
   },
 ];
 
+// TODO(pricing): team to fill unit rates from pricing sheet — all default to 0 until then.
 export const AMC_SERVICES: AmcService[] = [
   {
     id: "helpdesk",
@@ -46,6 +48,7 @@ export const AMC_SERVICES: AmcService[] = [
     scope: "24/7 Technical Support Hotline",
     reference: "Clause 1.1",
     frequencyType: "covered",
+    unitRate: 0,
     villaOnly: false,
     hasScopeSection: false,
   },
@@ -55,6 +58,7 @@ export const AMC_SERVICES: AmcService[] = [
     scope: "Planned Preventive Maintenance ~ Air conditioning service",
     reference: "Clause 2.1",
     frequencyType: "ppm",
+    unitRate: 0,
     villaOnly: false,
     sectionNumber: "2.1",
     sectionTitle: "Air Condition Service and Maintenance (PPM)",
@@ -66,6 +70,7 @@ export const AMC_SERVICES: AmcService[] = [
     scope: "Planned Preventive Maintenance ~ Electrical Service",
     reference: "Clause 2.2",
     frequencyType: "ppm",
+    unitRate: 0,
     villaOnly: false,
     sectionNumber: "2.2",
     sectionTitle: "Electrical Service and Maintenance (PPM)",
@@ -77,6 +82,7 @@ export const AMC_SERVICES: AmcService[] = [
     scope: "Planned Preventive Maintenance ~ Plumbing Service",
     reference: "Clause 2.3",
     frequencyType: "ppm",
+    unitRate: 0,
     villaOnly: false,
     sectionNumber: "2.3",
     sectionTitle: "Plumbing Service and Maintenance",
@@ -89,6 +95,7 @@ export const AMC_SERVICES: AmcService[] = [
     reference: "Clause 2.4",
     frequencyType: "fixed",
     frequencyPerYear: 1,
+    unitRate: 0,
     villaOnly: true,
     sectionNumber: "2.4",
     sectionTitle: "Water Pump Maintenance",
@@ -101,6 +108,7 @@ export const AMC_SERVICES: AmcService[] = [
     reference: "Clause 2.5",
     frequencyType: "fixed",
     frequencyPerYear: 1,
+    unitRate: 0,
     villaOnly: true,
     sectionNumber: "2.5",
     sectionTitle: "Roof Drain cleaning",
@@ -113,6 +121,7 @@ export const AMC_SERVICES: AmcService[] = [
     reference: "Clause 2.6",
     frequencyType: "fixed",
     frequencyPerYear: 2,
+    unitRate: 0,
     villaOnly: true,
     sectionNumber: "2.6",
     sectionTitle: "Water tank cleaning",
@@ -125,6 +134,7 @@ export const AMC_SERVICES: AmcService[] = [
     reference: "Clause 2.7",
     frequencyType: "fixed",
     frequencyPerYear: 1,
+    unitRate: 0,
     villaOnly: false,
     sectionNumber: "2.7",
     sectionTitle: "Duct cleaning",
@@ -137,6 +147,7 @@ export const AMC_SERVICES: AmcService[] = [
     reference: "Clause 2.8",
     frequencyType: "fixed",
     frequencyPerYear: 1,
+    unitRate: 0,
     villaOnly: false,
     sectionNumber: "2.8",
     sectionTitle: "Coil cleaning",
@@ -148,6 +159,7 @@ export const AMC_SERVICES: AmcService[] = [
     scope: "Free Handyman service",
     reference: "Clause 2.9",
     frequencyType: "handyman",
+    unitRate: 0,
     villaOnly: false,
     sectionNumber: "2.9",
     sectionTitle: "Free Handyman service",
@@ -159,6 +171,7 @@ export const AMC_SERVICES: AmcService[] = [
     scope: "Free Emergency Call-out / Visit",
     reference: "Clause 3.1",
     frequencyType: "unlimited",
+    unitRate: 0,
     villaOnly: false,
     hasScopeSection: false,
   },
@@ -168,6 +181,7 @@ export const AMC_SERVICES: AmcService[] = [
     scope: "Free Non-Emergency Call-out",
     reference: "Clause 3.2",
     frequencyType: "unlimited",
+    unitRate: 0,
     villaOnly: false,
     hasScopeSection: false,
   },
@@ -200,40 +214,93 @@ export function generateProposalNumber(): string {
   return `AMC-${year}-${suffix}`;
 }
 
-export function getDefaultFormValues() {
+export function getServicesForUnitType(unitType: string) {
+  return AMC_SERVICES.filter(
+    (service) => !service.villaOnly || unitType === "villa",
+  );
+}
+
+export function getDefaultFrequencyForService(
+  serviceId: string,
+  packageId?: string,
+  propertyCategory: AmcFormData["propertyCategory"] = "residential",
+): number {
+  const service = AMC_SERVICES.find((item) => item.id === serviceId);
+  if (!service) return 1;
+
+  const pkg = AMC_PACKAGES.find((item) => item.id === packageId);
+  const ppmVisits =
+    propertyCategory === "commercial" ? 0 : (pkg?.ppmVisitsPerYear ?? 1);
+  const handymanHours =
+    propertyCategory === "commercial" ? 0 : (pkg?.handymanHoursPerYear ?? 1);
+
+  switch (service.frequencyType) {
+    case "covered":
+    case "unlimited":
+      return 1;
+    case "ppm":
+      return ppmVisits > 0 ? ppmVisits : 1;
+    case "handyman":
+      return handymanHours > 0 ? handymanHours : 1;
+    case "fixed":
+      return service.frequencyPerYear ?? 1;
+    default:
+      return 1;
+  }
+}
+
+export function isFrequencyEditable(frequencyType: AmcService["frequencyType"]) {
+  return frequencyType === "ppm" || frequencyType === "handyman" || frequencyType === "fixed";
+}
+
+export function buildDefaultServiceRows(
+  unitType: AmcFormData["unitType"],
+  packageId?: string,
+  propertyCategory: AmcFormData["propertyCategory"] = "residential",
+): AmcServiceRow[] {
+  return getServicesForUnitType(unitType).map((service) => ({
+    serviceId: service.id,
+    included: false,
+    units: 1,
+    frequency: getDefaultFrequencyForService(
+      service.id,
+      packageId,
+      propertyCategory,
+    ),
+  }));
+}
+
+export function getDefaultEndDate(startDate: string): string {
+  return getDefaultEndDateFromStart(startDate);
+}
+
+export function getDefaultFormValues(): AmcFormData {
   const today = new Date();
   const startDate = today.toISOString().split("T")[0];
+  const unitType = "villa" as const;
 
   return {
-    propertyCategory: "residential" as const,
-    unitType: "villa" as const,
+    propertyCategory: "residential",
+    unitType,
     propertyAddress: "",
     propertyDetail: "",
     packageId: "",
     customMonthlyPrice: undefined,
-    selectedServices: [] as string[],
-    serviceFrequencies: {} as Record<string, string>,
+    serviceRows: buildDefaultServiceRows(unitType),
+    discountPercent: 0,
     customerName: "",
     customerId: "",
     customerPhone: "",
     customerEmail: "",
     coordinationContacts: [
-      { name: "", phone: "", designation: "owner" as const },
-      { name: "", phone: "", designation: "owner" as const },
-    ] as [
-      { name: string; phone: string; designation: "owner" },
-      { name: string; phone: string; designation: "owner" },
+      { name: "", phone: "", designation: "owner" },
+      { name: "", phone: "", designation: "owner" },
     ],
     startDate,
-    paymentTerms: "annual" as const,
+    endDate: getDefaultEndDate(startDate),
+    paymentTerms: "annual",
     proposalNumber: generateProposalNumber(),
   };
-}
-
-export function getServicesForUnitType(unitType: string) {
-  return AMC_SERVICES.filter(
-    (service) => !service.villaOnly || unitType === "villa",
-  );
 }
 
 export function getDefaultSelectedServices() {

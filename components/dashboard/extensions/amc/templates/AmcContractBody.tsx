@@ -221,10 +221,19 @@ function Clause5Block() {
 }
 
 export function AmcContractBody({ data, isPdf = false }: Props) {
-  const { formData, totals, frequencyRows } = data;
+  const { formData, totals, frequencyRows, documentType } = data;
   const contacts = formData.coordinationContacts;
-  const totalAmountText = `${totals.annualSubtotal.toFixed(2)} AED (VAT EXCLUDED) + ${totals.vatAmount.toFixed(2)} AED VAT = ${totals.grandTotal.toFixed(2)} AED`;
-  const selectedScopeSections = getSelectedScopeSections(formData.selectedServices);
+  const totalAmountText = `${totals.finalPrice.toFixed(2)} AED (VAT EXCLUDED) + ${totals.vatAmount.toFixed(2)} AED VAT = ${totals.grandTotal.toFixed(2)} AED`;
+  const selectedServiceIds = formData.serviceRows
+    .filter((row) => row.included)
+    .map((row) => row.serviceId);
+  const selectedScopeSections = getSelectedScopeSections(selectedServiceIds);
+  const dateLabel =
+    documentType === "contract" ? "AMC CONTRACT DATE:" : "AMC PROPOSAL DATE:";
+  const numberLabel =
+    documentType === "contract"
+      ? "AMC CONTRACT NUMBER:"
+      : "AMC PROPOSAL NUMBER:";
 
   const text = bodyText;
   const {
@@ -245,9 +254,9 @@ export function AmcContractBody({ data, isPdf = false }: Props) {
       <AmcRedBanner title={data.packageTitle} isPdf={isPdf} />
 
       <div style={{ ...text, marginBottom: "6px", fontSize: "12px" }}>
-        <span style={{ fontWeight: 700 }}>AMC PROPOSAL DATE:</span> {data.proposalDate}
+        <span style={{ fontWeight: 700 }}>{dateLabel}</span> {data.proposalDate}
         &nbsp;&nbsp;&nbsp;&nbsp;
-        <span style={{ fontWeight: 700 }}>AMC PROPOSAL NUMBER:</span> {formData.proposalNumber}
+        <span style={{ fontWeight: 700 }}>{numberLabel}</span> {formData.proposalNumber}
       </div>
 
       <div style={{ ...text, fontWeight: 700, marginBottom: "6px", fontSize: "12px" }}>

@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { isEndDateBeforeStartDate } from "./amc-date-utils";
+
 export const propertyCategorySchema = z.enum(["residential", "commercial"]);
 export const unitTypeSchema = z.enum(["villa", "apartment", "office"]);
 export const paymentTermsSchema = z.enum(["monthly", "quarterly", "annual"]);
@@ -15,6 +17,14 @@ export const coordinationContactSchema = z.object({
   designation: designationSchema,
 });
 
+export const amcServiceRowSchema = z.object({
+  serviceId: z.string().min(1),
+  included: z.boolean(),
+  units: z.coerce.number().int().min(1, "Units must be at least 1"),
+  frequency: z.coerce.number().int().min(1, "Frequency must be at least 1"),
+  price: z.coerce.number().min(0).optional(),
+});
+
 export const amcFormSchema = z
   .object({
     propertyCategory: propertyCategorySchema,
@@ -23,10 +33,8 @@ export const amcFormSchema = z
     propertyDetail: z.string().min(1, "Property detail is required"),
     packageId: z.string().optional(),
     customMonthlyPrice: z.coerce.number().positive().optional(),
-    selectedServices: z
-      .array(z.string())
-      .min(1, "Select at least one service"),
-    serviceFrequencies: z.record(z.string(), z.string()),
+    serviceRows: z.array(amcServiceRowSchema),
+    discountPercent: z.coerce.number().min(0).max(100).default(0),
     customerName: z.string().min(1, "Customer name is required"),
     customerId: z.string().optional(),
     customerPhone: z.string().min(1, "Customer phone is required"),
@@ -36,8 +44,10 @@ export const amcFormSchema = z
       coordinationContactSchema,
     ]),
     startDate: z.string().min(1, "Start date is required"),
+    endDate: z.string().min(1, "End date is required"),
     paymentTerms: paymentTermsSchema,
     proposalNumber: z.string().min(1, "Proposal number is required"),
+    submissionId: z.string().uuid().optional(),
   })
   .superRefine((data, ctx) => {
     if (data.propertyCategory === "residential" && !data.packageId) {
@@ -57,16 +67,44 @@ export const amcFormSchema = z
       }
     }
 
-    for (const serviceId of data.selectedServices) {
-      const frequency = data.serviceFrequencies?.[serviceId]?.trim();
-      if (!frequency) {
+    const includedRows = data.serviceRows.filter((row) => row.included);
+    if (includedRows.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Select at least one service",
+        path: ["serviceRows"],
+      });
+    }
+
+    for (const row of includedRows) {
+      if (row.units < 1) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: "Enter a frequency for each selected service",
-          path: ["serviceFrequencies"],
+          message: "Units must be a positive integer",
+          path: ["serviceRows"],
         });
         break;
       }
+      if (row.frequency < 1) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Frequency must be a positive integer",
+          path: ["serviceRows"],
+        });
+        break;
+      }
+    }
+
+    if (
+      data.startDate &&
+      data.endDate &&
+      isEndDateBeforeStartDate(data.startDate, data.endDate)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Contract end date cannot be before the start date",
+        path: ["endDate"],
+      });
     }
   });
 
@@ -75,6 +113,7 @@ export type UnitType = z.infer<typeof unitTypeSchema>;
 export type PaymentTerms = z.infer<typeof paymentTermsSchema>;
 export type Designation = z.infer<typeof designationSchema>;
 export type CoordinationContact = z.infer<typeof coordinationContactSchema>;
+export type AmcServiceRow = z.infer<typeof amcServiceRowSchema>;
 export type AmcFormData = z.infer<typeof amcFormSchema>;
 
 export interface AmcPackage {
@@ -94,6 +133,8 @@ export type AmcServiceFrequencyType =
   | "handyman"
   | "fixed";
 
+export type AmcDocumentType = "proposal" | "contract";
+
 export interface AmcService {
   id: string;
   label: string;
@@ -101,6 +142,7 @@ export interface AmcService {
   reference: string;
   frequencyType: AmcServiceFrequencyType;
   frequencyPerYear?: number;
+  unitRate: number;
   villaOnly: boolean;
   sectionNumber?: string;
   sectionTitle?: string;
@@ -114,6 +156,10 @@ export interface FrequencyRow {
 }
 
 export interface AmcTotals {
+  subtotal: number;
+  discountPercent: number;
+  discountAmount: number;
+  finalPrice: number;
   monthlyPrice: number;
   annualSubtotal: number;
   vatAmount: number;
@@ -122,6 +168,7 @@ export interface AmcTotals {
 }
 
 export interface AmcComputedData {
+  documentType: AmcDocumentType;
   packageName: string;
   packageTitle: string;
   propertyTypeLabel: string;
@@ -130,4 +177,56 @@ export interface AmcComputedData {
   totals: AmcTotals;
   frequencyRows: FrequencyRow[];
   formData: AmcFormData;
+}
+
+export type AmcSubmissionStatus = "draft" | "generated";
+
+export interface AmcSubmissionProperty {
+  propertyCategory: PropertyCategory;
+  unitType: UnitType;
+  propertyAddress: string;
+  propertyDetail: string;
+}
+
+export interface AmcSubmissionCustomer {
+  customerName: string;
+  customerId?: string;
+  customerPhone: string;
+  customerEmail: string;
+  coordinationContacts: [CoordinationContact, CoordinationContact];
+  startDate: string;
+  endDate: string;
+  paymentTerms: PaymentTerms;
+  proposalNumber: string;
+}
+
+export interface AmcSubmissionPackage {
+  packageId?: string;
+  customMonthlyPrice?: number;
+  propertyCategory: PropertyCategory;
+}
+
+export interface AmcSubmissionServiceRow extends AmcServiceRow {
+  price: number;
+}
+
+export interface AmcSubmission {
+  id: string;
+  owner_id: string;
+  status: AmcSubmissionStatus;
+  property: AmcSubmissionProperty;
+  customer: AmcSubmissionCustomer;
+  package: AmcSubmissionPackage;
+  services: AmcSubmissionServiceRow[];
+  discount_percent: number;
+  discount_amount: number;
+  final_price: number;
+  generated_documents: AmcDocumentType[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AmcSubmissionListResponse {
+  submissions: AmcSubmission[];
+  totalCount: number;
 }
