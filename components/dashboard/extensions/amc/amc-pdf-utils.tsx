@@ -10,6 +10,8 @@ import {
 import type { AmcComputedData } from "./amc-types";
 import { AmcContractBody } from "./templates/AmcContractBody";
 import { AmcPaginatedTemplate } from "./templates/AmcPaginatedTemplate";
+import { AmcProposalBody } from "./templates/AmcProposalBody";
+import { AmcProposalPaginatedTemplate } from "./templates/AmcProposalPaginatedTemplate";
 import { AmcPageFooter } from "./templates/amc-pdf/AmcPageFooter";
 import { AmcPageHeader } from "./templates/amc-pdf/AmcPageHeader";
 import { AMC_PDF_STYLES } from "./templates/amc-pdf/amc-pdf-styles";
@@ -20,7 +22,7 @@ export interface PDFGeneratorOptions {
   imageQuality?: number;
 }
 
-function AmcMeasurementTemplate({ data }: { data: AmcComputedData }) {
+function AmcContractMeasurementTemplate({ data }: { data: AmcComputedData }) {
   return (
     <div
       data-amc-measure-page
@@ -50,11 +52,42 @@ function AmcMeasurementTemplate({ data }: { data: AmcComputedData }) {
   );
 }
 
+function AmcProposalMeasurementTemplate({ data }: { data: AmcComputedData }) {
+  return (
+    <div
+      data-amc-measure-page
+      style={{
+        width: `${AMC_PDF_STYLES.PAGE_WIDTH}px`,
+        height: `${AMC_PDF_STYLES.PAGE_HEIGHT}px`,
+        boxSizing: "border-box",
+        padding: "20px 28px 16px",
+        display: "flex",
+        flexDirection: "column",
+        fontFamily: AMC_PDF_STYLES.BODY_FONT,
+        position: "absolute",
+        visibility: "hidden",
+        pointerEvents: "none",
+      }}
+    >
+      <div data-amc-measure-header>
+        <AmcPageHeader />
+      </div>
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <AmcProposalBody data={data} isPdf />
+      </div>
+      <div data-amc-measure-footer>
+        <AmcPageFooter page={1} totalPages={1} />
+      </div>
+    </div>
+  );
+}
+
 export async function generateAmcPDFBlob(
   data: AmcComputedData,
   options: PDFGeneratorOptions = {}
 ): Promise<Blob> {
   const { scale = 2, imageFormat = "JPEG", imageQuality = 0.92 } = options;
+  const isProposal = data.documentType === "proposal";
 
   const tempDiv = document.createElement("div");
   tempDiv.style.cssText = `
@@ -70,7 +103,13 @@ export async function generateAmcPDFBlob(
 
   try {
     await new Promise<void>((resolve) => {
-      root.render(<AmcMeasurementTemplate data={data} />);
+      root.render(
+        isProposal ? (
+          <AmcProposalMeasurementTemplate data={data} />
+        ) : (
+          <AmcContractMeasurementTemplate data={data} />
+        )
+      );
       setTimeout(resolve, 500);
     });
 
@@ -79,12 +118,21 @@ export async function generateAmcPDFBlob(
 
     await new Promise<void>((resolve) => {
       root.render(
-        <AmcPaginatedTemplate
-          data={data}
-          sliceOffsets={sliceOffsets}
-          viewportHeight={viewportHeight}
-          bodyHeight={bodyHeight}
-        />
+        isProposal ? (
+          <AmcProposalPaginatedTemplate
+            data={data}
+            sliceOffsets={sliceOffsets}
+            viewportHeight={viewportHeight}
+            bodyHeight={bodyHeight}
+          />
+        ) : (
+          <AmcPaginatedTemplate
+            data={data}
+            sliceOffsets={sliceOffsets}
+            viewportHeight={viewportHeight}
+            bodyHeight={bodyHeight}
+          />
+        )
       );
       setTimeout(resolve, 500);
     });

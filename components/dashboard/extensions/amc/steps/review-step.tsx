@@ -1,6 +1,16 @@
 "use client";
 
-import { Building2, CreditCard, Eye, ListCheck, Sparkles, User } from "lucide-react";
+import { useMemo, useState } from "react";
+import {
+  Building2,
+  CreditCard,
+  Eye,
+  FileText,
+  ListCheck,
+  ScrollText,
+  Sparkles,
+  User,
+} from "lucide-react";
 import type { UseFormReturn } from "react-hook-form";
 
 import { Badge } from "@/components/ui/badge";
@@ -20,12 +30,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatCurrencyAED } from "@/utils/format-currency";
 
-import { AMC_PACKAGES, AMC_SERVICES } from "../amc-constants";
-import type { AmcComputedData, AmcFormData } from "../amc-types";
-import { formatDisplayDate } from "../amc-pricing";
+import type { AmcComputedData, AmcDocumentType, AmcFormData } from "../amc-types";
+import { computeAmcData, formatDisplayDate } from "../amc-pricing";
 import { AmcContractTemplate } from "../templates/AmcContractTemplate";
+import { AmcProposalTemplate } from "../templates/AmcProposalTemplate";
 
 interface StepProps {
   form: UseFormReturn<AmcFormData>;
@@ -33,12 +44,17 @@ interface StepProps {
 }
 
 export function ReviewStep({ form, computed }: StepProps) {
-  const values = form.getValues();
-  const selectedPackage = AMC_PACKAGES.find((pkg) => pkg.id === values.packageId);
-  const includedServices = values.serviceRows
-    .filter((row) => row.included)
-    .map((row) => AMC_SERVICES.find((service) => service.id === row.serviceId)?.label)
-    .filter(Boolean);
+  const values = form.watch();
+  const [previewTab, setPreviewTab] = useState<AmcDocumentType>("proposal");
+
+  const proposalPreview = useMemo(
+    () => computeAmcData(values, "proposal"),
+    [values],
+  );
+  const contractPreview = useMemo(
+    () => computeAmcData(values, "contract"),
+    [values],
+  );
 
   return (
     <div className="space-y-5">
@@ -67,7 +83,6 @@ export function ReviewStep({ form, computed }: StepProps) {
               <span className="text-muted-foreground">Detail:</span>{" "}
               {values.propertyDetail || "—"}
             </p>
-
           </CardContent>
         </Card>
 
@@ -180,7 +195,7 @@ export function ReviewStep({ form, computed }: StepProps) {
               Document Preview
             </h3>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Preview the generated AMC proposal before downloading.
+              Switch between proposal and contract previews before downloading.
             </p>
           </div>
           <Badge variant="outline" className="w-fit gap-1 text-xs">
@@ -189,13 +204,42 @@ export function ReviewStep({ form, computed }: StepProps) {
           </Badge>
         </div>
 
-        <div className="border rounded-lg overflow-hidden bg-slate-100">
-          <div className="bg-slate-100 overflow-auto flex items-start justify-center p-6 max-h-[600px]">
-            <div className="shadow-2xl ring-1 ring-black/5 rounded overflow-hidden bg-white">
-              <AmcContractTemplate data={computed} />
+        <Tabs
+          value={previewTab}
+          onValueChange={(value) => setPreviewTab(value as AmcDocumentType)}
+          className="w-full gap-3"
+        >
+          <TabsList className="w-full sm:w-auto">
+            <TabsTrigger value="proposal" className="gap-2">
+              <FileText className="size-4" />
+              Generate Proposal
+            </TabsTrigger>
+            <TabsTrigger value="contract" className="gap-2">
+              <ScrollText className="size-4" />
+              Generate Contract
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="proposal" className="mt-0">
+            <div className="border rounded-lg overflow-hidden bg-slate-100">
+              <div className="bg-slate-100 overflow-auto flex items-start justify-center p-6 max-h-[600px]">
+                <div className="shadow-2xl ring-1 ring-black/5 rounded overflow-hidden bg-white">
+                  <AmcProposalTemplate data={proposalPreview} />
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
+          </TabsContent>
+
+          <TabsContent value="contract" className="mt-0">
+            <div className="border rounded-lg overflow-hidden bg-slate-100">
+              <div className="bg-slate-100 overflow-auto flex items-start justify-center p-6 max-h-[600px]">
+                <div className="shadow-2xl ring-1 ring-black/5 rounded overflow-hidden bg-white">
+                  <AmcContractTemplate data={contractPreview} />
+                </div>
+              </div>
+            </div>
+          </TabsContent>
+        </Tabs>
       </div>
     </div>
   );

@@ -59,8 +59,13 @@ export async function openAmcPdfInNewTab(
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
-export async function openAmcPdfFromSubmission(submission: AmcSubmission) {
+export async function openAmcPdfFromSubmission(
+  submission: AmcSubmission,
+  documentType?: AmcDocumentType,
+) {
   const formData = submissionToFormData(submission);
-  const documentType = resolveViewDocumentType(submission);
-  await openAmcPdfInNewTab(formData, documentType);
+  await openAmcPdfInNewTab(
+    formData,
+    documentType ?? resolveViewDocumentType(submission),
+  );
 }
