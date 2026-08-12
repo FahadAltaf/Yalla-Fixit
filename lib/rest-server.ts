@@ -3,6 +3,29 @@
  * Similar to executeGraphQLBackend but for REST operations
  */
 
+// Turn a route's error payload into a readable, specific message. Routes may
+// return a plain string (`{ error: "..." }`) or a Zod validation object
+// (`{ error: { formErrors, fieldErrors } }`); the latter used to surface as the
+// useless "[object Object]". This names the exact field(s) that failed.
+function extractErrorMessage(payload: unknown, status: number): string {
+  const err = (payload as { error?: unknown; message?: unknown })?.error;
+  if (typeof err === "string" && err.trim()) return err;
+  if (err && typeof err === "object") {
+    const flat = err as { formErrors?: unknown; fieldErrors?: Record<string, unknown> };
+    const form = Array.isArray(flat.formErrors) ? (flat.formErrors as string[]) : [];
+    const fields = flat.fieldErrors
+      ? Object.entries(flat.fieldErrors).flatMap(([field, msgs]) =>
+          Array.isArray(msgs) ? (msgs as string[]).map((m) => `${field}: ${m}`) : [],
+        )
+      : [];
+    const all = [...form, ...fields].filter(Boolean);
+    if (all.length) return all.join("; ");
+  }
+  const msg = (payload as { message?: unknown })?.message;
+  if (typeof msg === "string" && msg.trim()) return msg;
+  return `Request failed (HTTP ${status})`;
+}
+
 export async function executeRESTBackend<T = unknown>(
   endpoint: string,
   options: {
@@ -44,8 +67,8 @@ export async function executeRESTBackend<T = unknown>(
     const response = await fetch(url.toString(), requestOptions);
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || `HTTP error! status: ${response.status}`);
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(extractErrorMessage(payload, response.status));
     }
 
     const result = await response.json();

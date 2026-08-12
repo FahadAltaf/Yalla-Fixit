@@ -41,6 +41,9 @@ export const RESOURCE_ACTIONS: Record<ResourceType, ActionType[]> = menuResource
 );
 
 RESOURCE_ACTIONS[ResourceType.TODOS] = CRUD_MODULE_ACTIONS;
+// Scheduling is a full CRUD module plus an Approve permission (#2): the holder
+// can approve/reject a submitted day and receives the submission email.
+RESOURCE_ACTIONS[ResourceType.SCHEDULING] = [...CRUD_MODULE_ACTIONS, ActionType.APPROVE];
 
 // Helper to get display name for resource based on menu item titles
 const resourceDisplayNameMap: Partial<Record<ResourceType, string>> =
@@ -63,6 +66,7 @@ export const getActionDisplayName = (action: ActionType): string => {
     [ActionType.EDIT]: "Edit",
     [ActionType.DELETE]: "Delete",
     [ActionType.EXPORT]: "Export",
+    [ActionType.APPROVE]: "Approve",
   };
   return names[action] || action;
 };

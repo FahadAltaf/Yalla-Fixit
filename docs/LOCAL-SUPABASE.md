@@ -64,4 +64,5 @@ If `npm run supabase:start` fails with a `dockerDesktopLinuxEngine` pipe error o
 
 - Code changes go through the normal Git branch and deployment workflow.
 - Database changes should be added as new SQL migrations, reviewed, backed up against production, then applied intentionally to the live Supabase project.
-- Edge Functions referenced by the app, such as `get-estimate`, `zoho-fsm-work-orders`, and `zoho-fsm-estimate-transitions`, are not currently present in this repo. Test those with local stubs or a separate staging setup before relying on them.
+- Edge Functions referenced by the app, such as `get-estimate`, `zoho-fsm-work-orders`, `zoho-fsm-appointments`, and `zoho-fsm-estimate-transitions`, are not currently present in this repo (deployed directly to the Supabase project) and are not versioned here. Test those with local stubs or a separate staging setup before relying on them.
+- New Edge Functions for the Scheduling module, starting with `zoho-fsm-service-resources` (`supabase/functions/zoho-fsm-service-resources/`), *are* checked into this repo going forward. Deploy with `supabase functions deploy zoho-fsm-service-resources --project-ref <ref>`.

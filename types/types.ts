@@ -13,6 +13,8 @@ export interface User {
   updated_at?: string;
   profile_image?: string | null;
   status?: string;
+  // When TRUE, this user receives the "schedule needs approval" email.
+  receives_schedule_approval_email?: boolean;
 
   settings?: {
     edges: {
@@ -91,6 +93,8 @@ export enum ResourceType {
   SETTINGS = "settings",
   // Extensions
   EXTENSIONS = "extensions",
+  // Scheduling
+  SCHEDULING = "scheduling",
 }
 
 export type TodoStatus =
@@ -184,12 +188,74 @@ export interface ServiceAppointment {
   attachments?: Attachment[];
 }
 
+export type TechnicianShift = "morning" | "night";
+
+export interface TechnicianRole {
+  id: string;
+  name: string;
+  sort_order: number;
+  technician_count?: number;
+}
+
+export interface TechnicianServiceType {
+  id: string;
+  name: string;
+  sort_order: number;
+  technician_count?: number;
+}
+
+export interface TechnicianReference {
+  fsm_resource_id: string;
+  display_name: string;
+  is_active: boolean;
+  last_synced_at: string;
+  // Portal-managed attributes (kept across FSM sync).
+  role_id?: string | null;
+  role_name?: string | null;
+  service_type_id?: string | null;
+  service_type_name?: string | null;
+  shift?: TechnicianShift | null;
+  team_leader_fsm_id?: string | null;
+  team_leader_name?: string | null;
+}
+
+export interface TechnicianTag {
+  id: string;
+  name: string;
+  created_by?: string | null;
+  created_at: string;
+  updated_by?: string | null;
+  updated_at: string;
+  technician_count?: number;
+}
+
+export type LeaveStatus = "active" | "cancelled";
+
+export interface LeaveRecord {
+  id: string;
+  technician_fsm_id: string;
+  technician?: TechnicianReference;
+  leave_type: string;
+  start_at: string;
+  end_at: string;
+  status: LeaveStatus;
+  notes?: string | null;
+  created_by?: string | null;
+  created_at: string;
+  updated_by?: string | null;
+  updated_at: string;
+  cancelled_by?: string | null;
+  cancelled_at?: string | null;
+}
+
 export enum ActionType {
   CREATE = "create",
   EDIT = "edit",
   DELETE = "delete",
   VIEW = "view",
   EXPORT = "export",
+  // Grants the holder the right to approve/reject a submitted schedule (#2).
+  APPROVE = "approve",
 }
 
 export interface Settings {
