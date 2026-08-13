@@ -56,8 +56,9 @@ query GetUsers($filter: user_profileFilter, $limit: Int = 10, $offset: Int = 0, 
         last_name
         full_name
         is_active
-       
-        
+        receives_schedule_approval_email
+
+
         last_login
         profile_image
         created_at
@@ -109,6 +110,7 @@ export const GET_USERS = `
            last_name
            full_name
            is_active
+           receives_schedule_approval_email
            last_login
            profile_image
            created_at
@@ -146,6 +148,7 @@ query GetUsersById($id: UUID!) {
        last_name
        full_name
        is_active
+       receives_schedule_approval_email
        last_login
        profile_image
        created_at
@@ -180,6 +183,7 @@ export const UPDATE_USER = `
     $full_name: String
     $profile_image: String
     $is_active: Boolean
+    $receives_schedule_approval_email: Boolean
   ) {
     updateuser_profileCollection(
       filter: { id: { eq: $id } }
@@ -190,6 +194,7 @@ export const UPDATE_USER = `
         role_id: $role_id
         profile_image: $profile_image
         is_active: $is_active
+        receives_schedule_approval_email: $receives_schedule_approval_email
       }
     ) {
       affectedCount
@@ -202,6 +207,7 @@ export const UPDATE_USER = `
         role_id
         profile_image
         is_active
+        receives_schedule_approval_email
       }
     }
   }

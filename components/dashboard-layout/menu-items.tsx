@@ -7,6 +7,7 @@ import {
   UserRoles,
 } from "@/types/types";
 import {
+  CalendarClock,
   LayoutDashboard,
   ListTodo,
   Puzzle,
@@ -84,6 +85,13 @@ export const baseSectionsItems: MenuItem[] = [
     icon: <Puzzle className="size-4 text-primary" />,
     isActive: false,
     resource: ResourceType.EXTENSIONS,
+  },
+  {
+    title: "Scheduling",
+    url: "/scheduling",
+    icon: <CalendarClock className="size-4 text-primary" />,
+    isActive: false,
+    resource: ResourceType.SCHEDULING,
   },
 ] as MenuItem[];
 

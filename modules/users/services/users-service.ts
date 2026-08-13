@@ -111,6 +111,7 @@ export const usersService = {
         full_name: data.full_name,
         profile_image: data.profile_image,
         is_active: data.is_active,
+        receives_schedule_approval_email: data.receives_schedule_approval_email ?? false,
       });
 
       if (response.errors) {

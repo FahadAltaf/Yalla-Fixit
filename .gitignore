@@ -10,6 +10,18 @@
 !.yarn/releases
 !.yarn/versions
 
+# lockfiles: bun.lock is the single source of truth (the team uses bun).
+# Don't commit other package managers' lockfiles — an accidental `npm install`
+# must not add a conflicting one.
+/package-lock.json
+/yarn.lock
+/pnpm-lock.yaml
+
+# editors / OS (local only)
+.vscode/
+.idea/
+Thumbs.db
+
 # testing
 /coverage
 

@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import type { User } from "@/types/types";
 import { usersService } from "@/modules/users/services/users-service";
 import type { Role } from "@/types/types";
@@ -59,6 +60,9 @@ export default function EditUser({
   listRoles,
 }: EditUserProps) {
   const [profile_image, setProfile] = useState(userData?.profile_image || "");
+  const [receivesApprovalEmail, setReceivesApprovalEmail] = useState(
+    userData?.receives_schedule_approval_email ?? false,
+  );
   const [isLoading, setIsLoading] = useState(false);
   // Initialize form
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -83,6 +87,7 @@ export default function EditUser({
         role: userData.role_id || "",
       });
       setProfile(userData.profile_image || "");
+      setReceivesApprovalEmail(userData.receives_schedule_approval_email ?? false);
     }
   }, [userData, form]);
 
@@ -102,6 +107,7 @@ export default function EditUser({
         full_name: values.firstName + " " + values.lastName,
         role_id: values.role,
         is_active: userData.is_active,
+        receives_schedule_approval_email: receivesApprovalEmail,
       };
 
       await usersService.updateUser(updatedUserData);
@@ -223,6 +229,20 @@ export default function EditUser({
                     </FormItem>
                   )}
                 />
+
+                <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-sm font-medium">Schedule approval emails</span>
+                    <span className="text-muted-foreground text-xs">
+                      Send this user the &quot;a schedule needs approval&quot; email on submission.
+                    </span>
+                  </div>
+                  <Switch
+                    checked={receivesApprovalEmail}
+                    onCheckedChange={setReceivesApprovalEmail}
+                    aria-label="Receive schedule approval emails"
+                  />
+                </div>
 
 <DialogFooter className=" -mx-6 -mb-6">
 <Button
