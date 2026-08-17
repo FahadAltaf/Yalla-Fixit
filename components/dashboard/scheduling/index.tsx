@@ -19,6 +19,7 @@ import {
 } from "@/types/types";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
+import { PageHeading } from "@/components/dashboard/shared/kaizen";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import StatusBadge from "@/components/ui/status-badge";
@@ -211,25 +212,24 @@ export default function SchedulingDashboard({ technicians }: Props) {
     <>
       <SchedulingNav />
       <div className="flex flex-col gap-4 p-4 md:p-6">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 className="text-xl font-semibold">Technicians</h1>
-            <p className="text-muted-foreground text-sm">
-              {techs.length} technicians synced from Zoho FSM. Set role, service, shift, driver, tags and leave.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button variant="outline" size="sm" onClick={() => setManageList("roles")}>
-              <Settings2 className="size-4" /> Roles
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => setManageList("services")}>
-              <Settings2 className="size-4" /> Services
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => setManageList("tags")}>
-              <Settings2 className="size-4" /> Tags
-            </Button>
-          </div>
-        </div>
+        <PageHeading
+          eyebrow="Scheduling"
+          title="Technicians & leave"
+          description={`${techs.length} technicians synced from Zoho FSM. Set role, service, shift, driver, tags, and leave.`}
+          actions={
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" onClick={() => setManageList("roles")}>
+                <Settings2 className="size-4" /> Roles
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setManageList("services")}>
+                <Settings2 className="size-4" /> Services
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setManageList("tags")}>
+                <Settings2 className="size-4" /> Tags
+              </Button>
+            </div>
+          }
+        />
 
         <div className="flex flex-wrap items-center gap-2">
           <Input
@@ -371,7 +371,7 @@ export default function SchedulingDashboard({ technicians }: Props) {
                       <TableCell>
                         {leave ? (
                           <span className="text-xs">
-                            <Badge className="border-none bg-amber-600/10 text-amber-600 dark:bg-amber-400/10 dark:text-amber-400">
+                            <Badge className="border-none bg-warning/10 text-warning">
                               {leave.current ? "On Leave" : "Upcoming"}
                             </Badge>{" "}
                             <span className="text-muted-foreground">

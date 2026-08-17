@@ -3,7 +3,7 @@ import { listTechnicians } from "@/modules/scheduling";
 import SchedulingDashboard from "@/components/dashboard/scheduling";
 
 const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
-const title = "Technicians | Scheduling";
+const title = "Technicians & leave | Scheduling";
 const description = "Technicians, leave, and tags synced from Zoho FSM for the scheduling module.";
 
 export const metadata: Metadata = {

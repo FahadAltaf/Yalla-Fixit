@@ -497,7 +497,7 @@ export default function AddEntryDialog({
                       <Loader2 className="size-3.5 animate-spin" /> Loading service lines from FSM…
                     </div>
                   ) : selectableLines.length === 0 ? (
-                    <div className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
+                    <div className="rounded border border-warning/40 bg-warning/10 px-2 py-1.5 text-[11px] text-warning">
                       Every service line on this work order already has an appointment. Use the existing appointment
                       instead.
                     </div>
@@ -577,7 +577,7 @@ export default function AddEntryDialog({
             )}
 
             {shiftMoved && (
-              <div className="flex items-start gap-2 rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-xs text-sky-700 dark:text-sky-300">
+              <div className="flex items-start gap-2 rounded-md border border-brand/40 bg-brand-50 px-3 py-2 text-xs text-brand">
                 <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
                 <span>
                   {formatTimeAmPm(startTime)} falls in the{" "}
@@ -588,7 +588,7 @@ export default function AddEntryDialog({
             )}
 
             {!isAllDay && resolvedShift === null && (
-              <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+              <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
                 <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
                 <span>
                   {formatTimeAmPm(startTime)} is outside both shift windows (Night {shiftWindowLabel("night", config)},
@@ -646,7 +646,7 @@ export default function AddEntryDialog({
                     />
                     <span className="flex-1">{t.display_name}</span>
                     {leave && (
-                      <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                      <span className="rounded bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium text-warning">
                         On leave: {leave.leave_type}
                       </span>
                     )}

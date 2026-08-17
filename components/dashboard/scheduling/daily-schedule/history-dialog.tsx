@@ -212,7 +212,7 @@ export default function HistoryDialog({ date, onOpenChange }: Props) {
                           <li key={i} className="relative pb-3 last:pb-0">
                             <span
                               className={`absolute top-1.5 -left-[21px] size-2.5 rounded-full ring-2 ring-[var(--background)] ${
-                                t.tone === "bad" ? "bg-red-500" : t.tone === "muted" ? "bg-slate-400" : "bg-emerald-500"
+                                t.tone === "bad" ? "bg-danger" : t.tone === "muted" ? "bg-ink/40" : "bg-success"
                               }`}
                             />
                             <div className="text-sm font-medium capitalize">{t.kind}</div>

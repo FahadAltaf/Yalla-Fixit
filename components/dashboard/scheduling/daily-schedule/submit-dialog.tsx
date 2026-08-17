@@ -110,7 +110,7 @@ export default function SubmitDialog({ scheduleVersionId, date, onOpenChange, on
                   The day waits as Pending Approval and the chosen person is emailed.
                 </p>
                 {noApprovers ? (
-                  <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                  <p className="mt-2 text-xs text-warning">
                     No approvers set. Turn on “Schedule approval emails” for a user in the Users module first.
                   </p>
                 ) : (

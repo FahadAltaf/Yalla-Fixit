@@ -5,15 +5,20 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/actions/utils";
 
 const TABS = [
-  { href: "/scheduling", label: "Daily Schedule" },
-  { href: "/scheduling/technicians", label: "Technicians & Leave" },
+  { href: "/scheduling", label: "Daily schedule" },
+  { href: "/scheduling/technicians", label: "Technicians & leave" },
 ];
 
+/**
+ * Scheduling section tabs, in the Kaizen pill shape used on the jobs
+ * table so the two modules navigate the same way. The active tab is a
+ * solid brand pill; the rest are hairline outlines.
+ */
 export default function SchedulingNav() {
   const pathname = usePathname();
 
   return (
-    <div className="flex gap-1 border-b px-4 pt-2 md:px-6">
+    <div className="flex flex-wrap items-center gap-1.5 px-4 pt-4 md:px-6">
       {TABS.map((tab) => {
         const isActive = pathname === tab.href;
         return (
@@ -21,10 +26,10 @@ export default function SchedulingNav() {
             key={tab.href}
             href={tab.href}
             className={cn(
-              "rounded-t-md px-3 py-2 text-sm font-medium transition-colors",
+              "inline-flex items-center rounded-full border px-3.5 py-1.5 text-sm font-medium transition-colors",
               isActive
-                ? "border-b-2 border-primary text-foreground"
-                : "text-muted-foreground hover:text-foreground",
+                ? "border-brand bg-brand text-white"
+                : "border-border text-ink-soft hover:bg-mist-soft",
             )}
           >
             {tab.label}

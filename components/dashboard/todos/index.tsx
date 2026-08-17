@@ -55,6 +55,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dialog";
 import StatusBadge from "@/components/ui/status-badge";
+import { PageHeading } from "@/components/dashboard/shared/kaizen";
 import { useAuth } from "@/context/AuthContext";
 import {
   canDeleteTodoRecord,
@@ -207,10 +208,10 @@ function userLabel(user?: User | null) {
 }
 
 function statusIcon(status: TodoStatus) {
-  if (status === "done") return <CheckCircle2 className="size-4 text-green-600" />;
-  if (status === "blocked") return <CircleAlert className="size-4 text-amber-600" />;
+  if (status === "done") return <CheckCircle2 className="size-4 text-success" />;
+  if (status === "blocked") return <CircleAlert className="size-4 text-warning" />;
   if (status === "canceled") return <CirclePause className="size-4 text-destructive" />;
-  if (status === "in_progress") return <Clock className="size-4 text-amber-600" />;
+  if (status === "in_progress") return <Clock className="size-4 text-warning" />;
   return <ListTodo className="size-4 text-muted-foreground" />;
 }
 
@@ -228,8 +229,8 @@ function deadlineBorderClass(todo: Todo) {
   const dayMs = 24 * 60 * 60 * 1000;
   const daysUntilDeadline = Math.round((localDayTime(deadline) - localDayTime(new Date())) / dayMs);
 
-  if (daysUntilDeadline <= 0) return "border border-red-500";
-  if (daysUntilDeadline <= 2) return "border border-yellow-400";
+  if (daysUntilDeadline <= 0) return "border-danger border";
+  if (daysUntilDeadline <= 2) return "border-warning border";
   return "border";
 }
 
@@ -805,13 +806,13 @@ export default function TodosPage() {
 
   return (
     <div className="w-full min-w-0 space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-xl font-semibold">Todos</h1>
-          <p className="text-sm text-muted-foreground">Track portal work by owner, assignee, deadline, and followup.</p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <div className="flex h-11 rounded-md border p-1">
+      <PageHeading
+        eyebrow="Work management"
+        title="Todos"
+        description="Track portal work by owner, assignee, deadline, and follow-up."
+        actions={
+          <div className="flex flex-wrap gap-2">
+          <div className="flex h-11 rounded-full border p-1">
             <Button
               type="button"
               size="sm"
@@ -846,11 +847,12 @@ export default function TodosPage() {
           {canCreate && (
             <Button size="sm" className="h-11" onClick={openCreateDialog}>
               <Plus className="size-4 sm:mr-2" />
-              <span className="hidden sm:inline">New Todo</span>
+              <span className="hidden sm:inline">New todo</span>
             </Button>
           )}
         </div>
-      </div>
+        }
+      />
 
       <Card className="w-full min-w-0 p-4">
         <div className="flex items-center justify-between gap-3">

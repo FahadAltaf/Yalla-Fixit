@@ -617,6 +617,13 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
         <SchedulingNav />
       </div>
       <div className="flex flex-col gap-4 p-4 md:p-6 print:gap-2 print:p-0">
+        <div className="print:hidden">
+          <p className="eyebrow">Scheduling</p>
+          <h1 className="mt-1.5 text-3xl">Daily schedule</h1>
+          <p className="text-muted-foreground mt-1 text-[0.9375rem]">
+            Day and night shifts, synced with Zoho FSM and versioned through approval.
+          </p>
+        </div>
         <div className="flex flex-wrap items-center justify-between gap-3 print:hidden">
           <div className="flex items-center gap-2">
             <Button size="icon" variant="outline" onClick={() => setDate(addDaysIso(date, -1))} title="Previous day">
@@ -876,7 +883,7 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
           )}
           {(version?.status === "sync_failed" || version?.status === "partially_synced") && (
             <div className="flex flex-wrap items-center gap-2">
-              <span className={version.status === "sync_failed" ? "text-destructive text-sm" : "text-amber-600 dark:text-amber-400 text-sm"}>
+              <span className={version.status === "sync_failed" ? "text-destructive text-sm" : "text-warning text-sm"}>
                 {version.status === "sync_failed"
                   ? "Sync failed — no appointments were written."
                   : "Partially synced — some appointments failed."}{" "}
@@ -1278,7 +1285,7 @@ function ShiftSection({
       </div>
 
       {outOfWindow.length > 0 && (
-        <div className="flex items-start gap-2 border-b bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+        <div className="flex items-start gap-2 border-b bg-warning/10 px-3 py-2 text-xs text-warning">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
           <span>
             {outOfWindow.length} entr{outOfWindow.length === 1 ? "y is" : "ies are"} outside the{" "}
@@ -1366,8 +1373,8 @@ function ShiftSection({
               // group; the technicians assigned to a driver sit underneath.
               const isDriver = driverIds.has(technician.fsm_resource_id);
               const roleLabel = technician.role_name;
-              const rowTint = isDriver ? "bg-sky-500/10" : "";
-              const nameColor = isDriver ? "font-semibold text-sky-700 dark:text-sky-400" : "";
+              const rowTint = isDriver ? "bg-brand-50" : "";
+              const nameColor = isDriver ? "font-semibold text-brand" : "";
 
               return (
                 <div
@@ -1383,12 +1390,12 @@ function ShiftSection({
                     <div className="flex items-center gap-1.5">
                       <span className={`truncate text-sm font-medium ${nameColor}`}>{technician.display_name}</span>
                       {isDriver && (
-                        <span className="rounded bg-sky-500/15 px-1 py-0.5 text-[9px] font-semibold tracking-wide text-sky-700 uppercase dark:text-sky-400">
+                        <span className="rounded bg-brand-100 px-1 py-0.5 text-[9px] font-semibold tracking-wide text-brand uppercase">
                           Driver
                         </span>
                       )}
                       {leave && (
-                        <span className="rounded bg-amber-500/15 px-1 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                        <span className="rounded bg-warning/15 px-1 py-0.5 text-[10px] font-medium text-warning">
                           Unavailable
                         </span>
                       )}
@@ -1410,7 +1417,7 @@ function ShiftSection({
                   </div>
 
                   <div
-                    className={`relative min-w-0 flex-1 ${leave ? "bg-amber-500/10" : ""}`}
+                    className={`relative min-w-0 flex-1 ${leave ? "bg-warning/10" : ""}`}
                     style={{ height: rowHeight }}
                   >
                     {/* One clickable cell per hour: clicking 5–6 AM opens the
@@ -1441,7 +1448,7 @@ function ShiftSection({
                     ))}
 
                     {leave && (
-                      <span className="pointer-events-none absolute top-1 left-2 z-10 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                      <span className="pointer-events-none absolute top-1 left-2 z-10 text-[11px] font-medium text-warning">
                         On Leave: {leave.leave_type} ({new Date(leave.start_at).toLocaleDateString()}–
                         {new Date(leave.end_at).toLocaleDateString()})
                       </span>
@@ -1463,16 +1470,16 @@ function ShiftSection({
                       // red ring on a coloured box). Free-text stays slate,
                       // everything else is the brand colour.
                       const boxColour = syncFailed
-                        ? "bg-red-600 text-white"
+                        ? "bg-danger text-white"
                         : isFreeText
-                          ? "border border-dashed border-slate-300 bg-slate-500 text-white"
+                          ? "border border-dashed border-border bg-ink/40 text-white"
                           : "bg-primary text-white";
 
                       // Rings only mark real, actionable states: an out-of-window
                       // time, or a leave conflict. (The "changed in FSM" review
                       // flag was dropped — the board just stays synced.)
                       let ring = "";
-                      if (outside) ring = "ring-2 ring-amber-500 ring-offset-1";
+                      if (outside) ring = "ring-2 ring-warning ring-offset-1";
                       else if (conflictsWithLeave) ring = "ring-2 ring-destructive";
 
                       const tooltip = syncFailed
