@@ -34,7 +34,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return (localStorage.getItem("theme") as Theme) || "light";
   });
 
-  const [primaryColor, setPrimaryColorState] = useState<string>("220 90% 56%");
+  // Kaizen brand red. This is the design system's primary and the value
+  // the app falls back to before settings load, or when no primary has
+  // been chosen. The previous default was an HSL channel fragment left
+  // over from an older shadcn version, which does not resolve at all in
+  // this codebase's rgb()/hex tokens.
+  const [primaryColor, setPrimaryColorState] = useState<string>("#8C1D24");
 
   const [secondaryColor, setSecondaryColorState] =
     useState<string>("160 90% 44%");
@@ -50,7 +55,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       // Batch state updates to prevent cascading renders
       startTransition(() => {
         setThemeState(settings.appearance_theme as Theme);
-        setPrimaryColorState(settings.primary_color as string);
+        setPrimaryColorState((settings.primary_color as string) || "#8C1D24");
         setSecondaryColorState(settings.secondary_color as string);
         setSiteTitleState(settings.site_name as string);
         setFaviconState(settings.favicon_url as string);

@@ -8,7 +8,23 @@
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-sans);
+  --font-display: var(--font-display);
   --font-mono: var(--font-geist-mono);
+  /* Kaizen palette exposed as Tailwind utilities (bg-brand,
+     text-ink-soft, border-hairline) for the cases where a component
+     needs the source colour rather than its shadcn role. */
+  --color-brand: var(--kz-brand);
+  --color-brand-dark: var(--kz-brand-dark);
+  --color-brand-50: var(--kz-brand-50);
+  --color-brand-100: var(--kz-brand-100);
+  --color-brand-200: var(--kz-brand-200);
+  --color-ink: var(--kz-ink);
+  --color-ink-soft: var(--kz-ink-soft);
+  --color-mist: var(--kz-mist);
+  --color-mist-soft: var(--kz-mist-soft);
+  --color-success: var(--kz-success);
+  --color-warning: var(--kz-warning);
+  --color-danger: var(--kz-danger);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -46,73 +62,151 @@
   --radius-3xl: calc(var(--radius) + 12px);
   --radius-4xl: calc(var(--radius) + 16px);
 }
+/* =====================================================
+   Kaizen Unit Management design system
+   Brand red on neutral greys. Swiss, minimal, trustworthy.
+
+   The system's own tokens are declared first, then mapped onto the
+   shadcn names the components already consume. Mapping rather than
+   renaming means every existing component picks the brand up without
+   being touched, and a token change lands in one place.
+   ===================================================== */
+
 :root {
-  --background: rgb(255, 255, 255);
-  --foreground: rgb(10, 10, 10);
-  --card: rgb(255, 255, 255);
-  --card-foreground: rgb(10, 10, 10);
-  --popover: rgb(255, 255, 255);
-  --popover-foreground: rgb(10, 10, 10);
-  --primary: rgb(27, 147, 136);
-  --primary-foreground: rgb(242, 251, 249);
-  --secondary: rgb(244, 244, 245);
-  --secondary-foreground: rgb(24, 24, 27);
-  --muted: rgb(245, 245, 245);
-  --muted-foreground: rgb(115, 115, 115);
-  --accent: rgb(245, 245, 245);
-  --accent-foreground: rgb(23, 23, 23);
-  --destructive: rgb(223, 34, 37);
-  --border: rgb(229, 229, 229);
-  --input: rgb(229, 229, 229);
-  --ring: rgb(161, 161, 161);
-  --chart-1: rgb(84, 233, 210);
-  --chart-2: rgb(49, 210, 190);
-  --chart-3: rgb(29, 182, 165);
-  --chart-4: rgb(27, 147, 136);
-  --chart-5: rgb(0, 118, 110);
-  --radius: 0.625rem;
-  --sidebar: rgb(250, 250, 250);
-  --sidebar-foreground: rgb(10, 10, 10);
-  --sidebar-primary: rgb(27, 147, 136);
-  --sidebar-primary-foreground: rgb(242, 251, 249);
-  --sidebar-accent: rgb(245, 245, 245);
-  --sidebar-accent-foreground: rgb(23, 23, 23);
-  --sidebar-border: rgb(229, 229, 229);
-  --sidebar-ring: rgb(161, 161, 161);
+  /* ---- Kaizen source tokens ---- */
+  --kz-brand: #8c1d24;
+  --kz-brand-dark: #6e161c; /* hover */
+  --kz-brand-darker: #561115; /* active */
+  --kz-brand-50: #fbf2f3;
+  --kz-brand-100: #f6e1e2;
+  --kz-brand-200: #ecc3c6;
+
+  --kz-ink: #16181a;
+  --kz-ink-soft: #3f4347;
+  --kz-mist: #eaebea;
+  --kz-mist-soft: #f4f5f4;
+
+  --kz-success: #059669; /* verified / compliance only */
+  --kz-whatsapp: #25d366;
+
+  /* Extensions, not in the source system.
+     The system defines one semantic colour (success) because it was
+     built for a marketing site. A management dashboard has to show
+     severity and breached deadlines, and reusing brand red for danger
+     would make "approve" and "delete" read identically. These two sit
+     with the palette without competing with it. */
+  --kz-warning: #b45309;
+  --kz-danger: #b91c1c;
+
+  /* Hairline borders: ink at low opacity, never a heavy grey. */
+  --kz-hairline: color-mix(in srgb, var(--kz-ink) 9%, transparent);
+  --kz-border-input: color-mix(in srgb, var(--kz-ink) 15%, transparent);
+
+  --kz-shadow-sm: 0 1px 2px rgba(22, 24, 26, 0.06);
+  --kz-shadow-md: 0 8px 24px rgba(22, 24, 26, 0.08);
+  --kz-shadow-lg: 0 16px 40px rgba(22, 24, 26, 0.12);
+
+  --kz-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --kz-dur-fast: 150ms;
+  --kz-dur-base: 200ms;
+
+  --kz-tracking-tight: -0.02em;
+  --kz-tracking-eyebrow: 0.14em;
+
+  /* ---- Mapped onto shadcn ---- */
+  --background: #ffffff;
+  --foreground: var(--kz-ink);
+  --card: #ffffff;
+  --card-foreground: var(--kz-ink);
+  --popover: #ffffff;
+  --popover-foreground: var(--kz-ink);
+
+  --primary: var(--kz-brand);
+  --primary-foreground: #ffffff;
+
+  /* Secondary and muted both land on mist-soft: the system alternates
+     white and mist-soft surfaces and has no third neutral. */
+  --secondary: var(--kz-mist-soft);
+  --secondary-foreground: var(--kz-ink);
+  --muted: var(--kz-mist-soft);
+  --muted-foreground: var(--kz-ink-soft);
+
+  /* Accent is the brand tint used for chips, icon tiles and hovers. */
+  --accent: var(--kz-brand-50);
+  --accent-foreground: var(--kz-brand);
+
+  --destructive: var(--kz-danger);
+
+  --border: var(--kz-hairline);
+  --input: var(--kz-border-input);
+  --ring: var(--kz-brand);
+
+  /* Charts run brand red to ink, so a series reads as one family
+     rather than a rainbow. */
+  --chart-1: var(--kz-brand);
+  --chart-2: #a8474d;
+  --chart-3: #c47c80;
+  --chart-4: var(--kz-ink-soft);
+  --chart-5: #8b9094;
+
+  /* 14px card radius, the system's default surface shape. */
+  --radius: 0.875rem;
+
+  --sidebar: var(--kz-mist-soft);
+  --sidebar-foreground: var(--kz-ink);
+  --sidebar-primary: var(--kz-brand);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: var(--kz-brand-50);
+  --sidebar-accent-foreground: var(--kz-brand);
+  --sidebar-border: var(--kz-hairline);
+  --sidebar-ring: var(--kz-brand);
 }
 
+/* Dark mode.
+   The system has no dark theme, but it does have one dark motif: the
+   near-black #16181A band with white text and brand-200 accents. This
+   extends that motif rather than inventing a second palette, so the
+   two stay recognisably the same brand. Brand red at full strength is
+   too dark to read on ink, so accents step up to brand-200. */
 .dark {
-  --background: rgb(10, 10, 10);
-  --foreground: rgb(250, 250, 250);
-  --card: rgb(23, 23, 23);
-  --card-foreground: rgb(250, 250, 250);
-  --popover: rgb(23, 23, 23);
-  --popover-foreground: rgb(250, 250, 250);
-  --primary: rgb(29, 182, 165);
-  --primary-foreground: rgb(11, 47, 46);
-  --secondary: rgb(39, 39, 42);
-  --secondary-foreground: rgb(250, 250, 250);
-  --muted: rgb(38, 38, 38);
-  --muted-foreground: rgb(161, 161, 161);
-  --accent: rgb(64, 64, 64);
-  --accent-foreground: rgb(250, 250, 250);
-  --destructive: rgb(255, 100, 103);
-  --border: rgba(255, 255, 255, 0.10);
+  --background: var(--kz-ink);
+  --foreground: #ffffff;
+  --card: #1d2023;
+  --card-foreground: #ffffff;
+  --popover: #1d2023;
+  --popover-foreground: #ffffff;
+
+  --primary: #d4696f;
+  --primary-foreground: var(--kz-ink);
+
+  --secondary: #262a2e;
+  --secondary-foreground: #ffffff;
+  --muted: #262a2e;
+  --muted-foreground: #b9bcbf;
+
+  --accent: rgba(255, 255, 255, 0.08);
+  --accent-foreground: var(--kz-brand-200);
+
+  --destructive: #ef6b6b;
+
+  --border: rgba(255, 255, 255, 0.1);
   --input: rgba(255, 255, 255, 0.15);
-  --ring: rgb(115, 115, 115);
-  --chart-1: rgb(84, 233, 210);
-  --chart-2: rgb(49, 210, 190);
-  --chart-3: rgb(29, 182, 165);
-  --chart-4: rgb(27, 147, 136);
-  --chart-5: rgb(0, 118, 110);
-  --sidebar: rgb(23, 23, 23);
-  --sidebar-foreground: rgb(250, 250, 250);
-  --sidebar-primary: rgb(49, 210, 190);
-  --sidebar-primary-foreground: rgb(11, 47, 46);
-  --sidebar-accent: rgb(38, 38, 38);
-  --sidebar-accent-foreground: rgb(250, 250, 250);
-  --sidebar-border: rgba(255, 255, 255, 0.10);
-  --sidebar-ring: rgb(115, 115, 115);
+  --ring: #d4696f;
+
+  --chart-1: #d4696f;
+  --chart-2: var(--kz-brand-200);
+  --chart-3: #f0d3d5;
+  --chart-4: #8b9094;
+  --chart-5: #5c6165;
+
+  --sidebar: #1d2023;
+  --sidebar-foreground: #ffffff;
+  --sidebar-primary: #d4696f;
+  --sidebar-primary-foreground: var(--kz-ink);
+  --sidebar-accent: rgba(255, 255, 255, 0.08);
+  --sidebar-accent-foreground: var(--kz-brand-200);
+  --sidebar-border: rgba(255, 255, 255, 0.1);
+  --sidebar-ring: #d4696f;
 }
 @layer base {
   * {
@@ -120,6 +214,89 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-family: var(--font-sans);
+    /* The system asks for 1.6 on body copy, which is looser than a
+       dashboard usually runs. It is what makes the density read as
+       calm rather than cramped, so it is kept. */
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Lexend carries every heading, with the system's tight tracking.
+     Set on the elements rather than per component so a heading is
+     correct by default and nothing has to remember. */
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-family: var(--font-display);
+    font-weight: 600;
+    letter-spacing: var(--kz-tracking-tight);
+    line-height: 1.2;
+  }
+
+  /* Figures line up in tables and stat blocks. */
+  table,
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Lucide at the brand's 1.75 stroke rather than its own default of 2.
+     lucide-react writes stroke-width as a presentation attribute, which
+     any CSS declaration outranks, so one rule covers every icon in the
+     app without touching the call sites. */
+  svg.lucide {
+    stroke-width: 1.75;
+  }
+}
+
+@layer components {
+  /* The signature type move: an uppercase kicker above a section
+     title. Small, wide-tracked, brand red. */
+  .eyebrow {
+    font-family: var(--font-sans);
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1;
+    text-transform: uppercase;
+    letter-spacing: var(--kz-tracking-eyebrow);
+    color: var(--kz-brand);
+  }
+
+  .dark .eyebrow {
+    color: var(--kz-brand-200);
+  }
+
+  /* Interactive cards lift on hover: 2px, a soft neutral shadow, and
+     the border warming toward brand. Shadows are never coloured. */
+  .kz-card-interactive {
+    transition:
+      transform var(--kz-dur-base) var(--kz-ease-out),
+      box-shadow var(--kz-dur-base) var(--kz-ease-out),
+      border-color var(--kz-dur-base) var(--kz-ease-out);
+  }
+
+  .kz-card-interactive:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--kz-shadow-md);
+    border-color: color-mix(in srgb, var(--kz-brand) 30%, transparent);
+  }
+
+  /* The one near-black band per page. */
+  .kz-band-dark {
+    background: var(--kz-ink);
+    color: #ffffff;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .kz-card-interactive {
+      transition: none;
+    }
+    .kz-card-interactive:hover {
+      transform: none;
+    }
   }
 }
 

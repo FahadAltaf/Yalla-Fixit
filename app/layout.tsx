@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono, Inter } from "next/font/google";
+import { Geist_Mono, Lexend, Source_Sans_3 } from "next/font/google";
 import "./globals.css";
 import { siteConfig } from "@/lib/site-config";
 import {
@@ -11,13 +11,28 @@ import { Toaster } from "sonner";
 import { ThemeProviderWrapper } from "@/context/theme-provider-wrapper";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+/**
+ * Kaizen type pairing: Lexend carries every heading, Source Sans 3
+ * carries body copy. Both are loaded here so the whole app gets them,
+ * and both are exposed as CSS variables that globals.css maps onto
+ * --font-display and --font-sans.
+ *
+ * Only the weights the system actually specifies are requested (600-700
+ * display, 400-600 body); pulling the full families would cost several
+ * hundred kilobytes for faces nothing renders.
+ */
+const lexend = Lexend({
   subsets: ["latin"],
+  weight: ["600", "700"],
+  variable: "--font-display",
   display: "swap",
+});
 
+const sourceSans = Source_Sans_3({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  variable: "--font-sans",
+  display: "swap",
 });
 
 const geistMono = Geist_Mono({
@@ -92,13 +107,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={inter.variable}>
+    <html lang="en" className={`${sourceSans.variable} ${lexend.variable}`}>
       <head>
         <OrganizationSchema />
         <WebsiteSchema />
       </head>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${geistMono.variable} antialiased`}
         suppressHydrationWarning
       >
         <AuthProvider>
