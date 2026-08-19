@@ -68,7 +68,6 @@ export const createTaskSchema = z
     property_id: z.string().uuid().optional(),
     property: propertyInputSchema.optional(),
 
-    project_id: z.string().uuid().optional().nullable(),
     task_type: taskTypeSchema.default("single_unit"),
     service_tier: serviceTierSchema.optional().nullable(),
     package_name: z.string().trim().max(120).optional().or(z.literal("")),

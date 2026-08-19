@@ -49,17 +49,28 @@ const SidebarGroupedMenuItems = ({ section }: { section: MenuSection }) => {
       {section.title && <SidebarGroupLabel>{section.title}</SidebarGroupLabel>}
       <SidebarGroupContent>
         <SidebarMenu>
-          {section.items.map((item) =>
-            item.items && item.items.length > 0 ? (
+          {section.items.map((item) => {
+            // Within a group, exactly one sub-item is selected: the one
+            // whose url is the longest prefix of the current path. Plain
+            // startsWith lit up every ancestor at once (on /snagging/jobs/new
+            // it marked Today, Jobs and New job all active), so the
+            // selection never told you where you actually were.
+            const activeSubUrl =
+              item.items
+                ?.filter(
+                  (subItem) =>
+                    pathname === subItem.url || pathname.startsWith(`${subItem.url}/`),
+                )
+                .sort((a, b) => b.url.length - a.url.length)[0]?.url ?? null;
+
+            return item.items && item.items.length > 0 ? (
               <Collapsible className="group/collapsible" key={item.title}>
                 <SidebarMenuItem>
                   <CollapsibleTrigger asChild>
                     <SidebarMenuButton
                       tooltip={item.title}
                       className="truncate"
-                      isActive={item.items.some((subItem) =>
-                        pathname.startsWith(subItem.url)
-                      )}
+                      isActive={activeSubUrl !== null}
                     >
                       {renderIcon(item.icon)}
                       <span>{item.title}</span>
@@ -73,7 +84,7 @@ const SidebarGroupedMenuItems = ({ section }: { section: MenuSection }) => {
                           <SidebarMenuSubButton
                             className="justify-between"
                             asChild
-                            isActive={pathname.startsWith(subItem.url)}
+                            isActive={subItem.url === activeSubUrl}
                           >
                             <Link href={subItem.url}>
                               {subItem.title}
@@ -108,8 +119,8 @@ const SidebarGroupedMenuItems = ({ section }: { section: MenuSection }) => {
                   </SidebarMenuBadge>
                 )}
               </SidebarMenuItem>
-            )
-          )}
+            );
+          })}
         </SidebarMenu>
       </SidebarGroupContent>
     </SidebarGroup>

@@ -40,7 +40,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const { data: parent, error: parentError } = await admin
       .from("snagging_tasks")
       .select(
-        `id, code, property_id, project_id, task_type, service_tier, round_number,
+        `id, code, property_id, task_type, service_tier, round_number,
          parent_task_id, approval_manager_id, supervisor_id, catalogue_version, status`,
       )
       .eq("id", id)
@@ -98,7 +98,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       .from("snagging_tasks")
       .insert({
         code: roundCode(parent.code, nextRound),
-        project_id: parent.project_id,
         property_id: parent.property_id,
         task_type: parent.task_type,
         service_tier: parent.service_tier,

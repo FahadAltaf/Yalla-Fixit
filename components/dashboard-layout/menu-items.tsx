@@ -123,20 +123,25 @@ export const baseSectionsItems: MenuItem[] = [
         resource: ResourceType.SNAGGING,
       },
       {
+        title: "New job",
+        url: "/snagging/jobs/new",
+        resource: ResourceType.SNAGGING,
+      },
+      {
         title: "Review",
         url: "/snagging/review",
         resource: ResourceType.SNAGGING,
       },
-      {
-        title: "Analytics",
-        url: "/snagging/analytics",
-        resource: ResourceType.SNAGGING,
-      },
-      {
-        title: "Snag catalogue",
-        url: "/snagging/catalogue",
-        resource: ResourceType.SNAGGING_CATALOGUE,
-      },
+      // {
+      //   title: "Analytics",
+      //   url: "/snagging/analytics",
+      //   resource: ResourceType.SNAGGING,
+      // },
+      // {
+      //   title: "Snag catalogue",
+      //   url: "/snagging/catalogue",
+      //   resource: ResourceType.SNAGGING_CATALOGUE,
+      // },
     ],
   },
 ] as MenuItem[];

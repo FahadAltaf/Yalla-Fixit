@@ -81,7 +81,8 @@ export async function GET(req: NextRequest) {
          locked, catalogue_version, rejection_category, rejection_reason,
          remediation_due_at, updated_at, property_id,
          property:snagging_properties(id, client_name, unit_label, building_name,
-           community, city, property_type, developer_name)`,
+           community, city, property_type, developer_name),
+         assignees:snagging_task_assignees(user_profile:user_id(full_name, email))`,
       )
       .in("id", taskIds)
       .in("status", [
@@ -117,11 +118,24 @@ export async function GET(req: NextRequest) {
       ),
     ]);
 
-    // Floor plans are downloaded whole for offline use, so they need a
-    // URL. Photos do not: the device already holds every frame it took,
-    // and re-downloading its own evidence on a site connection would be
-    // wasteful.
-    const signedPlans = await signMediaPaths(admin, plans);
+    // Floor plans and photos are both signed so a device that did not
+    // capture them — a second inspector on the job, or a phone that was
+    // reinstalled — can still show them. A phone that took a photo has it
+    // locally and simply ignores the URL.
+    const [signedPlans, signedPhotos] = await Promise.all([
+      signMediaPaths(admin, plans),
+      signMediaPaths(admin, photos),
+    ]);
+
+    // Fold each task's assignees into a plain list of names for the app.
+    const tasksWithTeam = (tasks ?? []).map((task) => {
+      const assignees = (task as { assignees?: Array<{ user_profile?: { full_name?: string | null; email?: string | null } | null }> }).assignees ?? [];
+      const team = assignees
+        .map((row) => row.user_profile?.full_name || row.user_profile?.email)
+        .filter((name): name is string => Boolean(name));
+      const { assignees: _drop, ...rest } = task as Record<string, unknown> & { assignees?: unknown };
+      return { ...rest, team };
+    });
 
     const catalogueChanged =
       coldStart ||
@@ -133,10 +147,10 @@ export async function GET(req: NextRequest) {
         server_time: serverTime,
         cold_start: coldStart,
         catalogue: catalogueChanged ? await loadCatalogue(admin) : null,
-        tasks: tasks ?? [],
+        tasks: tasksWithTeam,
         areas,
         snags,
-        photos,
+        photos: signedPhotos,
         floor_plans: signedPlans,
         verifications,
       },

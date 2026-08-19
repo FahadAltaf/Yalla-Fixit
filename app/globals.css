@@ -152,12 +152,19 @@
   /* 14px card radius, the system's default surface shape. */
   --radius: 0.875rem;
 
-  --sidebar: var(--kz-mist-soft);
+  /* Sidebar: a clean near-white ground, like before the retheme. The
+     brand shows in the selected item (see the active rules in the base
+     layer), not by tinting the whole rail. Hover is a neutral grey so
+     it never gets mistaken for the current page. */
+  --sidebar: #fafafa;
   --sidebar-foreground: var(--kz-ink);
   --sidebar-primary: var(--kz-brand);
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: var(--kz-brand-50);
-  --sidebar-accent-foreground: var(--kz-brand);
+  /* Hover: a soft translucent ink wash rather than a flat solid grey,
+     so it reads as a gentle highlight and never competes with the
+     brand-tinted selected item. */
+  --sidebar-accent: color-mix(in srgb, var(--kz-ink) 5%, transparent);
+  --sidebar-accent-foreground: var(--kz-ink);
   --sidebar-border: var(--kz-hairline);
   --sidebar-ring: var(--kz-brand);
 }
@@ -249,6 +256,32 @@
      app without touching the call sites. */
   svg.lucide {
     stroke-width: 1.75;
+  }
+
+  /* Selected sidebar item.
+     A clean, fully-filled soft-brand chip with brand text and medium
+     weight — no inset bar, which curved around the pill's rounded
+     corners and read as a broken outline. The fill and colour alone
+     carry "you are here", and it stays distinct from the neutral hover.
+     Marked important so it wins over the shadcn hover utilities on the
+     same element (hovering the current item must not grey it out). */
+  [data-sidebar="menu-button"][data-active="true"],
+  [data-sidebar="menu-sub-button"][data-active="true"] {
+    background-color: var(--kz-brand-50) !important;
+    color: var(--kz-brand) !important;
+    font-weight: 600;
+    box-shadow: none !important;
+  }
+
+  [data-sidebar="menu-button"][data-active="true"] svg,
+  [data-sidebar="menu-sub-button"][data-active="true"] svg {
+    color: var(--kz-brand);
+  }
+
+  .dark [data-sidebar="menu-button"][data-active="true"],
+  .dark [data-sidebar="menu-sub-button"][data-active="true"] {
+    background-color: rgba(255, 255, 255, 0.08) !important;
+    color: var(--kz-brand-200) !important;
   }
 }
 

@@ -339,7 +339,6 @@ export interface SnaggingCatalogueArea {
 
 export interface SnaggingProperty {
   id: string;
-  project_id?: string | null;
   crm_contact_id?: string | null;
   crm_property_id?: string | null;
   client_name: string;
@@ -524,8 +523,6 @@ export interface SnaggingTaskSummary {
   property_type: SnaggingPropertyType;
   client_name: string;
   developer_name?: string | null;
-  project_id?: string | null;
-  project_name?: string | null;
   area_count: number;
   confirmed_area_count: number;
   snag_count: number;

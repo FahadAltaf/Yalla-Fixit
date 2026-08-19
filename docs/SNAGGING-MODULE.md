@@ -83,6 +83,8 @@ from the app — see [lib/server/request-user-access.ts](../lib/server/request-u
 | Route | Method | Use |
 |---|---|---|
 | `/overview` | GET | Dashboard counts, review queue, severity totals, sync health |
+| `/clients` | GET | Distinct clients from existing properties, for the new-job picker |
+| `/floor-plans` | POST | Multipart floor-plan upload to the private bucket (FR-1.02) |
 | `/tasks` | GET, POST | List (view-backed, enriched with inspector + M/L split) and create |
 | `/tasks/[id]` | GET, PATCH | Detail with evidence; schedule/assignment edits |
 | `/tasks/[id]/approve` | POST | Manager approval, queues the report |
@@ -181,6 +183,21 @@ unavailable there — it is wrapped in a guard rather than crashing.
 For the app to sync it needs `EXPO_PUBLIC_API_URL` pointing at this
 portal (`http://localhost:3032` by default) and the migrations applied;
 until then the pull returns a 500 and the job list stays empty.
+
+## Schema trim (migration 20260818090000)
+
+Three tables were created ahead of unbuilt features and removed to keep
+the schema lean, via `20260818090000_drop_unused_snagging_tables.sql`
+(apply it when convenient — the app already runs with or without it):
+
+- `snagging_projects` — full-building B2B engagements. Single-unit and
+  de-snag flows never referenced it; its `project_id` FK columns on
+  tasks/properties and its join in the summary view are removed too.
+- `snagging_report_tokens`, `snagging_report_token_events` — tokenised
+  delivery (FR-5.04-06), not implemented.
+
+`snagging_reports` is kept: the approval flow stages a row there and
+report generation builds on it. Everything else maps to a wired flow.
 
 ## Not built yet
 

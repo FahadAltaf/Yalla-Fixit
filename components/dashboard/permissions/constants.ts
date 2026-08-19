@@ -44,6 +44,22 @@ RESOURCE_ACTIONS[ResourceType.TODOS] = CRUD_MODULE_ACTIONS;
 // Scheduling is a full CRUD module plus an Approve permission (#2): the holder
 // can approve/reject a submitted day and receives the submission email.
 RESOURCE_ACTIONS[ResourceType.SCHEDULING] = [...CRUD_MODULE_ACTIONS, ActionType.APPROVE];
+// Snagging is a full CRUD module plus Approve (the manager sign-off gate,
+// BR-4) and Export (analytics CSV). Without these listed here, the
+// Permissions screen could only ever grant View, so nobody but an admin
+// could create a job or approve an inspection.
+RESOURCE_ACTIONS[ResourceType.SNAGGING] = [
+  ...CRUD_MODULE_ACTIONS,
+  ActionType.APPROVE,
+  ActionType.EXPORT,
+];
+// The catalogue is master data: entries are retired, never deleted (BR-8),
+// so it offers View / Create / Edit but not Delete.
+RESOURCE_ACTIONS[ResourceType.SNAGGING_CATALOGUE] = [
+  ActionType.VIEW,
+  ActionType.CREATE,
+  ActionType.EDIT,
+];
 
 // Helper to get display name for resource based on menu item titles
 const resourceDisplayNameMap: Partial<Record<ResourceType, string>> =

@@ -299,6 +299,25 @@ async function applyArea(
 ): Promise<string> {
   const task = await loadWritableTask(admin, ctx, payload.task_id);
 
+  // FR-2.01: an inspector can add a room the office did not list. The
+  // device sends it as an insert keyed by the id it generated, so an
+  // upsert is safe on replay.
+  if (ctx.mutation.op === "insert") {
+    const { error } = await admin.from("snagging_areas").upsert(
+      {
+        id: ctx.mutation.entity_id,
+        task_id: task.id,
+        name: (payload.name as string) ?? "Area",
+        catalogue_area_code: (payload.catalogue_area_code as string) ?? null,
+        sort_order: (payload.sort_order as number) ?? 0,
+        status: "pending",
+      },
+      { onConflict: "id" },
+    );
+    if (error) throw new Error(error.message);
+    return task.id;
+  }
+
   // FR-2.07: an area with no defects needs the inspector's note as its
   // positive coverage record, otherwise "clear" evidences nothing.
   const confirmedAt = payload.confirmed_at as string | null | undefined;
@@ -324,6 +343,22 @@ async function applyPhoto(
   payload: Record<string, unknown>,
 ): Promise<string> {
   const task = await loadWritableTask(admin, ctx, payload.task_id);
+
+  if (ctx.mutation.op === "delete") {
+    // An inspector removed the photo before submitting. Drop the row, and
+    // the object with it, so storage does not accumulate orphans. The
+    // object delete is best-effort: a missing key is not a failure.
+    const storagePath = payload.storage_path as string | undefined;
+    if (storagePath) {
+      await admin.storage.from("snagging").remove([storagePath]);
+    }
+    const { error } = await admin
+      .from("snagging_snag_photos")
+      .delete()
+      .eq("id", ctx.mutation.entity_id);
+    if (error) throw new Error(error.message);
+    return task.id;
+  }
 
   // The binary went straight to storage under a signed upload URL; this
   // records the metadata and the EXIF that gives the frame its

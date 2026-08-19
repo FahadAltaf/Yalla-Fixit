@@ -1,12 +1,33 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, LayoutGrid, MapPin, Users } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  ImageIcon,
+  LayoutGrid,
+  MapPin,
+  Plus,
+  Search,
+  Upload,
+  UserPlus,
+  Users,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import MultipleSelector, { type Option } from "@/components/ui/multiselect";
@@ -19,7 +40,7 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import { snaggingService } from "@/modules/snagging";
+import { snaggingService, type SnaggingClientOption } from "@/modules/snagging";
 import { usersService } from "@/modules/users/services/users-service";
 import type { SnaggingPropertyType, User } from "@/types/types";
 
@@ -30,21 +51,26 @@ import { PROPERTY_TYPE_LABELS, PageHeading } from "./shared";
  *
  * Four steps, because the reference pack an inspector pulls has four
  * parts: the property it is for, the plans they pin against, the rooms
- * they walk, and who is assigned. The stepper is honest about where you
- * are; each step validates before it lets you move on, so a job cannot
- * reach the field half-built.
+ * they walk, and who is assigned. Each step validates before it lets
+ * you move on, so a job cannot reach the field half-built.
  */
 
+type AreaChoice = { name: string; code: string | null };
+type PendingPlan = { id: string; file: File; label: string; width?: number; height?: number; url: string };
+
 type Draft = {
+  client_name: string;
+  client_email: string;
+  client_phone: string;
   unit_label: string;
   building_name: string;
-  client_name: string;
   community: string;
   developer_name: string;
   task_type: "single_unit" | "full_building";
   property_type: SnaggingPropertyType;
   scheduled_date: string;
   notes: string;
+  areas: AreaChoice[];
   technician_ids: string[];
   approval_manager_id: string;
 };
@@ -56,15 +82,126 @@ const STEPS = [
   { key: "assign", label: "Assign", icon: Users },
 ] as const;
 
-/** Rooms the property-type template seeds, shown as a preview in step 3. */
-const TEMPLATE_PREVIEW: Record<SnaggingPropertyType, string[]> = {
-  studio: ["Entrance", "Living / sleeping area", "Kitchen", "Bathroom", "Balcony"],
-  "1br": ["Entrance", "Living room", "Kitchen", "Master bedroom", "Master bathroom", "Guest WC", "Laundry", "Balcony"],
-  "2br": ["Entrance", "Living room", "Dining room", "Kitchen", "Master bedroom", "Master bathroom", "Bedroom 2", "Bathroom 2", "Guest WC", "Laundry", "Store", "Balcony"],
-  "3br": ["Entrance", "Living room", "Dining room", "Kitchen", "Master bedroom", "Master bathroom", "Bedroom 2", "Bathroom 2", "Bedroom 3", "Bathroom 3", "Guest WC", "Corridor", "Laundry", "Store", "Maid room", "Balcony"],
-  "4br": ["Entrance", "Living room", "Dining room", "Family room", "Kitchen", "Master bedroom", "Master bathroom", "Bedroom 2", "Bathroom 2", "Bedroom 3", "Bathroom 3", "Bedroom 4", "Bathroom 4", "Guest WC", "Corridor", "Laundry", "Store", "Maid room", "Balcony"],
-  villa: ["Entrance", "Living room", "Dining room", "Family room", "Kitchen", "Guest WC", "Staircase", "Master bedroom", "Master bathroom", "Bedroom 2", "Bathroom 2", "Bedroom 3", "Bathroom 3", "Bedroom 4", "Bathroom 4", "Corridor", "Laundry", "Store", "Maid room", "Terrace", "Garden", "Roof", "Garage"],
-  townhouse: ["Entrance", "Living room", "Dining room", "Kitchen", "Guest WC", "Staircase", "Master bedroom", "Master bathroom", "Bedroom 2", "Bathroom 2", "Bedroom 3", "Corridor", "Laundry", "Store", "Terrace", "Garden", "Garage"],
+/**
+ * Rooms each property-type template seeds, with the catalogue area code
+ * each draws its defect list from. The code rides with the area so the
+ * inspector's capture sheet offers the right elements in each room.
+ */
+const TEMPLATES: Record<SnaggingPropertyType, AreaChoice[]> = {
+  studio: [
+    { name: "Entrance", code: "ENT" },
+    { name: "Living / sleeping area", code: "LIV" },
+    { name: "Kitchen", code: "KIT" },
+    { name: "Bathroom", code: "BTH" },
+    { name: "Balcony", code: "BAL" },
+  ],
+  "1br": [
+    { name: "Entrance", code: "ENT" },
+    { name: "Living room", code: "LIV" },
+    { name: "Kitchen", code: "KIT" },
+    { name: "Master bedroom", code: "MBR" },
+    { name: "Master bathroom", code: "MBA" },
+    { name: "Guest WC", code: "WC" },
+    { name: "Laundry", code: "LDY" },
+    { name: "Balcony", code: "BAL" },
+  ],
+  "2br": [
+    { name: "Entrance", code: "ENT" },
+    { name: "Living room", code: "LIV" },
+    { name: "Dining room", code: "DIN" },
+    { name: "Kitchen", code: "KIT" },
+    { name: "Master bedroom", code: "MBR" },
+    { name: "Master bathroom", code: "MBA" },
+    { name: "Bedroom 2", code: "BED" },
+    { name: "Bathroom 2", code: "BTH" },
+    { name: "Guest WC", code: "WC" },
+    { name: "Laundry", code: "LDY" },
+    { name: "Store", code: "STO" },
+    { name: "Balcony", code: "BAL" },
+  ],
+  "3br": [
+    { name: "Entrance", code: "ENT" },
+    { name: "Living room", code: "LIV" },
+    { name: "Dining room", code: "DIN" },
+    { name: "Kitchen", code: "KIT" },
+    { name: "Master bedroom", code: "MBR" },
+    { name: "Master bathroom", code: "MBA" },
+    { name: "Bedroom 2", code: "BED" },
+    { name: "Bathroom 2", code: "BTH" },
+    { name: "Bedroom 3", code: "BED" },
+    { name: "Bathroom 3", code: "BTH" },
+    { name: "Guest WC", code: "WC" },
+    { name: "Corridor", code: "COR" },
+    { name: "Laundry", code: "LDY" },
+    { name: "Store", code: "STO" },
+    { name: "Maid room", code: "MRM" },
+    { name: "Balcony", code: "BAL" },
+  ],
+  "4br": [
+    { name: "Entrance", code: "ENT" },
+    { name: "Living room", code: "LIV" },
+    { name: "Dining room", code: "DIN" },
+    { name: "Family room", code: "FAM" },
+    { name: "Kitchen", code: "KIT" },
+    { name: "Master bedroom", code: "MBR" },
+    { name: "Master bathroom", code: "MBA" },
+    { name: "Bedroom 2", code: "BED" },
+    { name: "Bathroom 2", code: "BTH" },
+    { name: "Bedroom 3", code: "BED" },
+    { name: "Bathroom 3", code: "BTH" },
+    { name: "Bedroom 4", code: "BED" },
+    { name: "Bathroom 4", code: "BTH" },
+    { name: "Guest WC", code: "WC" },
+    { name: "Corridor", code: "COR" },
+    { name: "Laundry", code: "LDY" },
+    { name: "Store", code: "STO" },
+    { name: "Maid room", code: "MRM" },
+    { name: "Balcony", code: "BAL" },
+  ],
+  villa: [
+    { name: "Entrance", code: "ENT" },
+    { name: "Living room", code: "LIV" },
+    { name: "Dining room", code: "DIN" },
+    { name: "Family room", code: "FAM" },
+    { name: "Kitchen", code: "KIT" },
+    { name: "Guest WC", code: "WC" },
+    { name: "Staircase", code: "STA" },
+    { name: "Master bedroom", code: "MBR" },
+    { name: "Master bathroom", code: "MBA" },
+    { name: "Bedroom 2", code: "BED" },
+    { name: "Bathroom 2", code: "BTH" },
+    { name: "Bedroom 3", code: "BED" },
+    { name: "Bathroom 3", code: "BTH" },
+    { name: "Bedroom 4", code: "BED" },
+    { name: "Bathroom 4", code: "BTH" },
+    { name: "Corridor", code: "COR" },
+    { name: "Laundry", code: "LDY" },
+    { name: "Store", code: "STO" },
+    { name: "Maid room", code: "MRM" },
+    { name: "Terrace", code: "TER" },
+    { name: "Garden", code: "GDN" },
+    { name: "Roof", code: "ROF" },
+    { name: "Garage", code: "GAR" },
+  ],
+  townhouse: [
+    { name: "Entrance", code: "ENT" },
+    { name: "Living room", code: "LIV" },
+    { name: "Dining room", code: "DIN" },
+    { name: "Kitchen", code: "KIT" },
+    { name: "Guest WC", code: "WC" },
+    { name: "Staircase", code: "STA" },
+    { name: "Master bedroom", code: "MBR" },
+    { name: "Master bathroom", code: "MBA" },
+    { name: "Bedroom 2", code: "BED" },
+    { name: "Bathroom 2", code: "BTH" },
+    { name: "Bedroom 3", code: "BED" },
+    { name: "Corridor", code: "COR" },
+    { name: "Laundry", code: "LDY" },
+    { name: "Store", code: "STO" },
+    { name: "Terrace", code: "TER" },
+    { name: "Garden", code: "GDN" },
+    { name: "Garage", code: "GAR" },
+  ],
 };
 
 export default function NewJobWizard() {
@@ -72,20 +209,28 @@ export default function NewJobWizard() {
   const [step, setStep] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [users, setUsers] = useState<User[]>([]);
+  const [plans, setPlans] = useState<PendingPlan[]>([]);
 
   const [draft, setDraft] = useState<Draft>({
+    client_name: "",
+    client_email: "",
+    client_phone: "",
     unit_label: "",
     building_name: "",
-    client_name: "",
     community: "",
     developer_name: "",
     task_type: "single_unit",
     property_type: "2br",
     scheduled_date: "",
     notes: "",
+    areas: TEMPLATES["2br"],
     technician_ids: [],
     approval_manager_id: "",
   });
+
+  // Tracks whether the inspector list was hand-edited, so re-picking a
+  // property type does not wipe a custom room set the user built.
+  const areasTouched = useRef(false);
 
   useEffect(() => {
     usersService
@@ -103,20 +248,41 @@ export default function NewJobWizard() {
     setDraft((current) => ({ ...current, [key]: value }));
   }
 
+  // Changing the property type reseeds the room list, unless the user
+  // has already customised it.
+  function setPropertyType(value: SnaggingPropertyType) {
+    setDraft((current) => ({
+      ...current,
+      property_type: value,
+      areas: areasTouched.current ? current.areas : TEMPLATES[value],
+    }));
+  }
+
+  function setAreas(next: AreaChoice[]) {
+    areasTouched.current = true;
+    set("areas", next);
+  }
+
   const stepValid = useMemo(() => {
     switch (STEPS[step].key) {
       case "property":
         return (
+          draft.client_name.trim().length >= 2 &&
           draft.unit_label.trim().length > 0 &&
-          draft.building_name.trim().length > 0 &&
-          draft.client_name.trim().length >= 2
+          draft.building_name.trim().length > 0
         );
+      case "floorplans":
+        // A plan is optional for a single unit, mandatory for a full
+        // building (FR-1.02).
+        return draft.task_type !== "full_building" || plans.length > 0;
+      case "areas":
+        return draft.areas.length > 0;
       case "assign":
         return draft.technician_ids.length > 0;
       default:
         return true;
     }
-  }, [step, draft]);
+  }, [step, draft, plans.length]);
 
   async function submit() {
     setSubmitting(true);
@@ -127,16 +293,42 @@ export default function NewJobWizard() {
           building_name: draft.building_name,
           community: draft.community,
           client_name: draft.client_name,
+          client_email: draft.client_email,
+          client_phone: draft.client_phone,
           developer_name: draft.developer_name,
           property_type: draft.property_type,
           city: "Dubai",
         },
         task_type: draft.task_type,
         scheduled_date: draft.scheduled_date,
+        areas: draft.areas.map((area) => ({
+          name: area.name,
+          catalogue_area_code: area.code ?? undefined,
+        })),
         technician_ids: draft.technician_ids,
         approval_manager_id: draft.approval_manager_id || null,
         notes: draft.notes,
       });
+
+      // Plans upload after the task exists, so each attaches to it. A
+      // failed plan does not lose the job — it is reported and the job
+      // still opens, where the plan can be re-added.
+      let planFailures = 0;
+      for (const plan of plans) {
+        try {
+          await snaggingService.uploadFloorPlan(created.id, plan.file, {
+            label: plan.label,
+            width: plan.width,
+            height: plan.height,
+          });
+        } catch {
+          planFailures += 1;
+        }
+      }
+
+      if (planFailures > 0) {
+        toast.warning(`${planFailures} floor plan(s) did not upload. Add them from the job.`);
+      }
 
       toast.success(`Job ${created.code} created`);
       router.push(`/snagging/${created.id}`);
@@ -156,7 +348,6 @@ export default function NewJobWizard() {
         description="Four steps to a reference pack an inspector can pull before losing signal."
       />
 
-      {/* Stepper */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {STEPS.map((entry, index) => {
           const done = index < step;
@@ -188,7 +379,12 @@ export default function NewJobWizard() {
                 >
                   {done ? <Check className="size-3" /> : index + 1}
                 </span>
-                <span className={cn("text-sm font-medium", current ? "text-foreground" : "text-muted-foreground")}>
+                <span
+                  className={cn(
+                    "text-sm font-medium",
+                    current ? "text-foreground" : "text-muted-foreground",
+                  )}
+                >
                   {entry.label}
                 </span>
               </div>
@@ -197,26 +393,31 @@ export default function NewJobWizard() {
         })}
       </div>
 
-      <Card className="max-w-3xl gap-0 p-0">
+      <Card className="gap-0 p-0">
         <div className="p-6">
           {STEPS[step].key === "property" ? (
-            <PropertyStep draft={draft} set={set} />
+            <PropertyStep draft={draft} set={set} setPropertyType={setPropertyType} />
           ) : STEPS[step].key === "floorplans" ? (
-            <FloorPlansStep taskType={draft.task_type} />
+            <FloorPlansStep taskType={draft.task_type} plans={plans} setPlans={setPlans} />
           ) : STEPS[step].key === "areas" ? (
-            <AreasStep propertyType={draft.property_type} set={set} />
-          ) : (
-            <AssignStep
-              draft={draft}
-              set={set}
-              userOptions={userOptions}
-              users={users}
+            <AreasStep
+              propertyType={draft.property_type}
+              areas={draft.areas}
+              setAreas={setAreas}
             />
+          ) : (
+            <AssignStep draft={draft} set={set} userOptions={userOptions} users={users} />
           )}
         </div>
 
         <div className="flex items-center justify-between border-t px-6 py-4">
-          <p className="text-muted-foreground text-xs">Required fields are marked.</p>
+          <p className="text-muted-foreground text-xs">
+            {STEPS[step].key === "areas"
+              ? `${draft.areas.length} area${draft.areas.length === 1 ? "" : "s"} selected.`
+              : STEPS[step].key === "floorplans"
+                ? "One plan minimum for a full building. Optional for a single unit."
+                : "Required fields are marked."}
+          </p>
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
@@ -264,12 +465,273 @@ function Field({
   );
 }
 
-function PropertyStep({
+/**
+ * Client picker.
+ *
+ * The search box finds a client already on file; the + button beside it
+ * opens a dialog to add a brand-new one (name, email, phone). Once a
+ * client is chosen either way, it is shown as a settled card with a
+ * Change action, so the job always carries exactly one deliberate
+ * client rather than whatever half-typed text was left in a field.
+ *
+ * Clients come from the distinct client rows on existing properties, so
+ * there is no second table to keep in step.
+ */
+function ClientPicker({
   draft,
   set,
 }: {
   draft: Draft;
   set: <K extends keyof Draft>(key: K, value: Draft[K]) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [open, setOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [clients, setClients] = useState<SnaggingClientOption[]>([]);
+  const [loading, setLoading] = useState(true);
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let active = true;
+    snaggingService
+      .searchClients()
+      .then((rows) => active && setClients(rows))
+      .catch(() => undefined)
+      .finally(() => active && setLoading(false));
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    function onClick(event: MouseEvent) {
+      if (boxRef.current && !boxRef.current.contains(event.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, []);
+
+  const matches = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) return clients.slice(0, 8);
+    return clients
+      .filter(
+        (c) =>
+          c.client_name.toLowerCase().includes(term) ||
+          (c.client_email ?? "").toLowerCase().includes(term),
+      )
+      .slice(0, 8);
+  }, [clients, search]);
+
+  function choose(client: SnaggingClientOption) {
+    set("client_name", client.client_name);
+    set("client_email", client.client_email ?? "");
+    set("client_phone", client.client_phone ?? "");
+    if (client.developer_name && !draft.developer_name) set("developer_name", client.developer_name);
+    setOpen(false);
+    setSearch("");
+  }
+
+  function saveNew(client: { name: string; email: string; phone: string }) {
+    set("client_name", client.name);
+    set("client_email", client.email);
+    set("client_phone", client.phone);
+    setAddOpen(false);
+    setSearch("");
+  }
+
+  function clear() {
+    set("client_name", "");
+    set("client_email", "");
+    set("client_phone", "");
+  }
+
+  // A client is settled: show it as a card rather than the search box.
+  if (draft.client_name.trim().length > 0) {
+    return (
+      <>
+        <div className="border-brand/30 bg-brand-50/50 flex items-center justify-between gap-3 rounded-[12px] border px-3 py-2.5">
+          <div className="min-w-0">
+            <p className="truncate font-medium">{draft.client_name}</p>
+            <p className="text-muted-foreground truncate text-xs">
+              {[draft.client_email, draft.client_phone].filter(Boolean).join(" · ") ||
+                "No contact details"}
+            </p>
+          </div>
+          <Button type="button" variant="ghost" size="sm" onClick={clear}>
+            Change
+          </Button>
+        </div>
+        <AddClientDialog open={addOpen} onOpenChange={setAddOpen} onSave={saveNew} />
+      </>
+    );
+  }
+
+  return (
+    <div ref={boxRef}>
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1">
+          <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2" />
+          <Input
+            value={search}
+            onChange={(event) => {
+              setSearch(event.target.value);
+              setOpen(true);
+            }}
+            onFocus={() => setOpen(true)}
+            placeholder="Search clients on file"
+            className="pr-9 pl-9"
+          />
+          <ChevronDown className="text-muted-foreground pointer-events-none absolute top-1/2 right-3 size-4 -translate-y-1/2" />
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          onClick={() => setAddOpen(true)}
+          aria-label="Add a new client"
+          title="Add a new client"
+        >
+          <Plus className="size-4" />
+        </Button>
+      </div>
+
+      {open ? (
+        <div className="relative">
+          <div className="bg-popover absolute z-50 mt-1 w-full overflow-hidden rounded-[12px] border shadow-md">
+            <div className="max-h-64 overflow-y-auto py-1">
+              {loading ? (
+                <p className="text-muted-foreground px-3 py-2 text-sm">Loading clients…</p>
+              ) : matches.length === 0 ? (
+                <p className="text-muted-foreground px-3 py-2 text-sm">
+                  No client on file matches. Use the + button to add a new one.
+                </p>
+              ) : (
+                matches.map((client) => (
+                  <button
+                    key={`${client.client_name}-${client.client_email ?? ""}`}
+                    type="button"
+                    onClick={() => choose(client)}
+                    className="hover:bg-mist-soft flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm"
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate font-medium">{client.client_name}</span>
+                      {client.client_email ? (
+                        <span className="text-muted-foreground block truncate text-xs">
+                          {client.client_email}
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="text-muted-foreground shrink-0 text-xs">
+                      {client.property_count} job{client.property_count === 1 ? "" : "s"}
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                setAddOpen(true);
+              }}
+              className="text-brand hover:bg-mist-soft flex w-full items-center gap-2 border-t px-3 py-2 text-left text-sm font-medium"
+            >
+              <UserPlus className="size-4" />
+              Add a new client
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      <AddClientDialog
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        initialName={search.trim()}
+        onSave={saveNew}
+      />
+    </div>
+  );
+}
+
+/** Collects a brand-new client: name (required), email, phone. */
+function AddClientDialog({
+  open,
+  onOpenChange,
+  initialName = "",
+  onSave,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  initialName?: string;
+  onSave: (client: { name: string; email: string; phone: string }) => void;
+}) {
+  // The dialog content unmounts when closed, so these initialisers run
+  // fresh on each open — seeding the name from whatever was typed in the
+  // search so a near-miss flows straight into a new client, with no
+  // reset effect needed.
+  const [name, setName] = useState(initialName);
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+
+  const valid = name.trim().length >= 2 && (email === "" || /.+@.+\..+/.test(email));
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Add a client</DialogTitle>
+          <DialogDescription>
+            The client receives the report. Only the name is required.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <Field label="Client name" required>
+            <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Daniel Maman" />
+          </Field>
+          <Field label="Email">
+            <Input
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="name@example.com"
+            />
+          </Field>
+          <Field label="Phone">
+            <Input
+              value={phone}
+              onChange={(event) => setPhone(event.target.value)}
+              placeholder="+971 50 000 0000"
+            />
+          </Field>
+        </div>
+
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            disabled={!valid}
+            onClick={() => onSave({ name: name.trim(), email: email.trim(), phone: phone.trim() })}
+          >
+            Add client
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PropertyStep({
+  draft,
+  set,
+  setPropertyType,
+}: {
+  draft: Draft;
+  set: <K extends keyof Draft>(key: K, value: Draft[K]) => void;
+  setPropertyType: (value: SnaggingPropertyType) => void;
 }) {
   return (
     <div className="space-y-5">
@@ -280,6 +742,10 @@ function PropertyStep({
           offline.
         </p>
       </div>
+
+      <Field label="Client" required hint="search on file, or + to add new">
+        <ClientPicker draft={draft} set={set} />
+      </Field>
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Unit reference" required>
@@ -296,12 +762,36 @@ function PropertyStep({
             placeholder="e.g. Riviera Tower 3"
           />
         </Field>
-        <Field label="Client" required>
+        <Field label="Community">
           <Input
-            value={draft.client_name}
-            onChange={(event) => set("client_name", event.target.value)}
-            placeholder="Who receives the report"
+            value={draft.community}
+            onChange={(event) => set("community", event.target.value)}
+            placeholder="e.g. Dubai Marina"
           />
+        </Field>
+        <Field label="Developer">
+          <Input
+            value={draft.developer_name}
+            onChange={(event) => set("developer_name", event.target.value)}
+            placeholder="e.g. Emaar"
+          />
+        </Field>
+        <Field label="Property type">
+          <Select
+            value={draft.property_type}
+            onValueChange={(value) => setPropertyType(value as SnaggingPropertyType)}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {Object.entries(PROPERTY_TYPE_LABELS).map(([value, label]) => (
+                <SelectItem key={value} value={value}>
+                  {label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </Field>
         <Field label="Job type">
           <div className="flex gap-2">
@@ -327,20 +817,6 @@ function PropertyStep({
             ))}
           </div>
         </Field>
-        <Field label="Community">
-          <Input
-            value={draft.community}
-            onChange={(event) => set("community", event.target.value)}
-            placeholder="e.g. Dubai Marina"
-          />
-        </Field>
-        <Field label="Developer">
-          <Input
-            value={draft.developer_name}
-            onChange={(event) => set("developer_name", event.target.value)}
-            placeholder="e.g. Emaar"
-          />
-        </Field>
       </div>
 
       <Field label="Office notes" hint="(optional)">
@@ -355,76 +831,213 @@ function PropertyStep({
   );
 }
 
-function FloorPlansStep({ taskType }: { taskType: Draft["task_type"] }) {
+function FloorPlansStep({
+  taskType,
+  plans,
+  setPlans,
+}: {
+  taskType: Draft["task_type"];
+  plans: PendingPlan[];
+  setPlans: React.Dispatch<React.SetStateAction<PendingPlan[]>>;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  async function addFiles(files: FileList | null) {
+    if (!files) return;
+    const next: PendingPlan[] = [];
+
+    for (const file of Array.from(files)) {
+      const url = URL.createObjectURL(file);
+      const dims = await readDimensions(file, url);
+      next.push({
+        id: `${file.name}-${file.size}-${Math.random().toString(36).slice(2)}`,
+        file,
+        label: file.name.replace(/\.[^.]+$/, ""),
+        width: dims?.width,
+        height: dims?.height,
+        url,
+      });
+    }
+
+    setPlans((current) => [...current, ...next]);
+  }
+
+  function remove(id: string) {
+    setPlans((current) => {
+      const target = current.find((plan) => plan.id === id);
+      if (target) URL.revokeObjectURL(target.url);
+      return current.filter((plan) => plan.id !== id);
+    });
+  }
+
   return (
     <div className="space-y-5">
       <div>
         <h2 className="text-xl">Floor plans</h2>
         <p className="text-muted-foreground mt-1 text-sm">
           Plans let the inspector pin each snag to a coordinate. They download with the pack for
-          offline use.
+          offline use.{" "}
+          {taskType === "full_building"
+            ? "At least one plan is required for a full building."
+            : "Optional for a single unit."}
         </p>
       </div>
 
-      <div className="border-border rounded-lg border border-dashed p-8 text-center">
-        <LayoutGrid className="text-muted-foreground mx-auto size-6" />
-        <p className="mt-3 text-sm font-medium">Upload comes from the job detail</p>
-        <p className="text-muted-foreground mx-auto mt-1 max-w-md text-sm">
-          {taskType === "full_building"
-            ? "A full-building job is created as a draft, and a plan is required before it can be assigned. You will add it on the job once this is created."
-            : "For a single unit a plan is optional. You can attach one from the job detail after this is created."}
-        </p>
-      </div>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,application/pdf"
+        multiple
+        className="hidden"
+        onChange={(event) => {
+          void addFiles(event.target.files);
+          event.target.value = "";
+        }}
+      />
+
+      <button
+        type="button"
+        onClick={() => inputRef.current?.click()}
+        className="border-border hover:border-brand/40 hover:bg-mist-soft/50 flex w-full flex-col items-center gap-2 rounded-lg border border-dashed px-6 py-10 text-center transition-colors"
+      >
+        <Upload className="text-muted-foreground size-6" />
+        <span className="font-medium">Add a plan image</span>
+        <span className="text-muted-foreground text-sm">PNG, JPG, WEBP or PDF · up to 15MB</span>
+      </button>
+
+      {plans.length > 0 ? (
+        <ul className="grid gap-3 sm:grid-cols-2">
+          {plans.map((plan) => (
+            <li
+              key={plan.id}
+              className="border-border flex items-center gap-3 rounded-lg border p-2"
+            >
+              <span className="bg-mist-soft flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-md">
+                {plan.file.type.startsWith("image/") ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={plan.url} alt="" className="size-full object-cover" />
+                ) : (
+                  <ImageIcon className="text-muted-foreground size-5" />
+                )}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium">{plan.label}</p>
+                <p className="text-muted-foreground text-xs">
+                  {plan.width && plan.height
+                    ? `${plan.width}×${plan.height}px`
+                    : "PDF"}{" "}
+                  · {(plan.file.size / 1024 / 1024).toFixed(1)}MB
+                </p>
+              </div>
+              <Button variant="ghost" size="icon" onClick={() => remove(plan.id)} aria-label="Remove">
+                <X className="size-4" />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }
 
 function AreasStep({
   propertyType,
-  set,
+  areas,
+  setAreas,
 }: {
   propertyType: SnaggingPropertyType;
-  set: <K extends keyof Draft>(key: K, value: Draft[K]) => void;
+  areas: AreaChoice[];
+  setAreas: (next: AreaChoice[]) => void;
 }) {
-  const rooms = TEMPLATE_PREVIEW[propertyType] ?? [];
+  const [custom, setCustom] = useState("");
+
+  // The full option list is the template for this property type, plus
+  // any custom rooms already added, so ticking and unticking never
+  // loses a room the user typed.
+  const options = useMemo(() => {
+    const template = TEMPLATES[propertyType];
+    const templateNames = new Set(template.map((a) => a.name.toLowerCase()));
+    const extras = areas.filter((a) => !templateNames.has(a.name.toLowerCase()));
+    return [...template, ...extras];
+  }, [propertyType, areas]);
+
+  const selectedNames = useMemo(
+    () => new Set(areas.map((a) => a.name.toLowerCase())),
+    [areas],
+  );
+
+  function toggle(option: AreaChoice) {
+    const key = option.name.toLowerCase();
+    if (selectedNames.has(key)) {
+      setAreas(areas.filter((a) => a.name.toLowerCase() !== key));
+    } else {
+      setAreas([...areas, option]);
+    }
+  }
+
+  function addCustom() {
+    const name = custom.trim();
+    if (!name) return;
+    if (selectedNames.has(name.toLowerCase())) {
+      setCustom("");
+      return;
+    }
+    // A custom room carries no catalogue code; the capture sheet falls
+    // back to the whole catalogue there.
+    setAreas([...areas, { name, code: null }]);
+    setCustom("");
+  }
 
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-xl">Areas</h2>
+        <h2 className="text-xl">Areas to inspect</h2>
         <p className="text-muted-foreground mt-1 text-sm">
-          The property type seeds the room list. The inspector can add or drop rooms on site, so
-          this is a starting point, not a cage.
+          Each area becomes a room the inspector confirms on site. Tick the rooms this job needs,
+          and add any the template does not list.
         </p>
       </div>
 
-      <Field label="Property type">
-        <Select value={propertyType} onValueChange={(value) => set("property_type", value as SnaggingPropertyType)}>
-          <SelectTrigger className="w-full sm:w-64">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {Object.entries(PROPERTY_TYPE_LABELS).map(([value, label]) => (
-              <SelectItem key={value} value={value}>
-                {label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </Field>
-
-      <div>
-        <p className="eyebrow mb-3">{rooms.length} rooms in this template</p>
-        <div className="flex flex-wrap gap-2">
-          {rooms.map((room) => (
-            <span
-              key={room}
-              className="border-border bg-mist-soft inline-flex rounded-full border px-3 py-1 text-sm"
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {options.map((option) => {
+          const checked = selectedNames.has(option.name.toLowerCase());
+          return (
+            <label
+              key={option.name}
+              className={cn(
+                "flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 text-sm transition-colors",
+                checked
+                  ? "border-brand bg-brand-50/60"
+                  : "border-border hover:bg-mist-soft",
+              )}
             >
-              {room}
-            </span>
-          ))}
+              <Checkbox checked={checked} onCheckedChange={() => toggle(option)} />
+              <span className={cn("font-medium", checked && "text-brand")}>{option.name}</span>
+            </label>
+          );
+        })}
+      </div>
+
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="flex-1">
+          <Field label="Add a custom area">
+            <Input
+              value={custom}
+              onChange={(event) => setCustom(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  addCustom();
+                }
+              }}
+              placeholder="e.g. Roof terrace, Plant room"
+            />
+          </Field>
         </div>
+        <Button type="button" variant="outline" onClick={addCustom} disabled={!custom.trim()}>
+          <Plus className="size-4" />
+          Add area
+        </Button>
       </div>
     </div>
   );
@@ -446,8 +1059,8 @@ function AssignStep({
       <div>
         <h2 className="text-xl">Assign and schedule</h2>
         <p className="text-muted-foreground mt-1 text-sm">
-          Who walks the unit, who signs it off, and when. No report reaches a client without a
-          manager approval.
+          Who walks the unit, who signs it off, and when. The job appears on each inspector&apos;s
+          phone as soon as it is created.
         </p>
       </div>
 
@@ -492,4 +1105,18 @@ function AssignStep({
       </div>
     </div>
   );
+}
+
+/** Reads an image's pixel dimensions so pins can resolve to pixels later. */
+function readDimensions(
+  file: File,
+  url: string,
+): Promise<{ width: number; height: number } | null> {
+  if (!file.type.startsWith("image/")) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const img = new window.Image();
+    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
 }

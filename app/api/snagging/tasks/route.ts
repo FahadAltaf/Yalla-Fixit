@@ -55,9 +55,6 @@ export async function GET(req: NextRequest) {
     const developer = params.get("developer");
     if (developer && developer !== "all") query = query.eq("developer_name", developer);
 
-    const projectId = params.get("projectId");
-    if (projectId) query = query.eq("project_id", projectId);
-
     const from = params.get("from");
     if (from) query = query.gte("scheduled_date", from);
 
@@ -200,7 +197,6 @@ export async function POST(req: NextRequest) {
       const { data: created, error: propertyError } = await admin
         .from("snagging_properties")
         .insert({
-          project_id: input.project_id ?? null,
           client_name: p.client_name,
           client_email: emptyToNull(p.client_email),
           client_phone: emptyToNull(p.client_phone),
@@ -245,7 +241,6 @@ export async function POST(req: NextRequest) {
         .from("snagging_tasks")
         .insert({
           code,
-          project_id: input.project_id ?? null,
           property_id: property.id,
           task_type: input.task_type,
           service_tier: input.service_tier ?? null,

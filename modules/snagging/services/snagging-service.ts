@@ -18,7 +18,6 @@ export interface SnaggingTaskFilters {
   status?: string;
   search?: string;
   developer?: string;
-  projectId?: string;
   assigneeId?: string;
   from?: string;
   to?: string;
@@ -37,6 +36,14 @@ export interface CatalogueResponse {
   areas: SnaggingCatalogueArea[];
   area_elements: Array<{ area_code: string; element_code: string; sort_order: number }>;
   total?: number;
+}
+
+export interface SnaggingClientOption {
+  client_name: string;
+  client_email: string | null;
+  client_phone: string | null;
+  developer_name: string | null;
+  property_count: number;
 }
 
 function toParams(filters: SnaggingTaskFilters, page: number, pageSize: number) {
@@ -71,6 +78,37 @@ export const snaggingService = {
       method: "POST",
       body: input as unknown as Record<string, unknown>,
     }),
+
+  searchClients: async (search?: string): Promise<SnaggingClientOption[]> =>
+    executeRESTBackend<SnaggingClientOption[]>("/api/snagging/clients", {
+      method: "GET",
+      params: search ? { search } : {},
+    }),
+
+  /**
+   * Uploads a floor plan to a job. Sent as multipart form data rather
+   * than JSON because it carries the image file; the REST helper is
+   * JSON-only, so this uses fetch directly.
+   */
+  uploadFloorPlan: async (
+    taskId: string,
+    file: File,
+    meta: { label?: string; width?: number; height?: number },
+  ): Promise<{ id: string }> => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("task_id", taskId);
+    if (meta.label) form.append("label", meta.label);
+    if (meta.width) form.append("width", String(meta.width));
+    if (meta.height) form.append("height", String(meta.height));
+
+    const response = await fetch("/api/snagging/floor-plans", { method: "POST", body: form });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload?.error ?? "Failed to upload the floor plan");
+    }
+    return payload.data;
+  },
 
   updateTask: async (id: string, input: UpdateTaskInput): Promise<{ id: string }> =>
     executeRESTBackend(`/api/snagging/tasks/${id}`, {
