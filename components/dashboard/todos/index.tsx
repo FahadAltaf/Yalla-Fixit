@@ -248,9 +248,8 @@ function DroppableColumn({
   return (
     <section
       ref={setNodeRef}
-      className={`min-h-[420px] rounded-lg border bg-muted/20 transition-colors ${
-        isOver ? "border-primary bg-primary/5" : ""
-      }`}
+      className={`min-h-[420px] rounded-lg border bg-muted/20 transition-colors ${isOver ? "border-primary bg-primary/5" : ""
+        }`}
     >
       {children}
     </section>
@@ -280,9 +279,8 @@ function TodoCard({
     <div
       ref={setNodeRef}
       style={style}
-      className={`rounded-lg bg-background p-3 shadow-xs ${canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"} ${deadlineBorderClass(todo)} ${
-        isDragging ? "opacity-70 shadow-md" : ""
-      }`}
+      className={`rounded-lg bg-background p-3 shadow-xs ${canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"} ${deadlineBorderClass(todo)} ${isDragging ? "opacity-70 shadow-md" : ""
+        }`}
       onDoubleClick={() => onEdit(todo)}
       {...listeners}
       {...attributes}
@@ -812,45 +810,43 @@ export default function TodosPage() {
         description="Track portal work by owner, assignee, deadline, and follow-up."
         actions={
           <div className="flex flex-wrap gap-2">
-          <div className="flex h-11 rounded-full border p-1">
-            <Button
-              type="button"
-              size="sm"
-              className="h-9"
-              variant={viewMode === "kanban" ? "secondary" : "ghost"}
-              onClick={() => setViewMode("kanban")}
-            >
-              <LayoutGrid className="size-4 sm:mr-2" />
-              <span className="hidden sm:inline">Kanban</span>
+            <div className="flex h-11 rounded-full border p-1">
+              <Button
+                type="button"
+                size="sm"
+                variant={viewMode === "kanban" ? "secondary" : "ghost"}
+                onClick={() => setViewMode("kanban")}
+              >
+                <LayoutGrid className="size-3.5 sm:mr-1.5" />
+                <span className="hidden sm:inline">Kanban</span>
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={viewMode === "list" ? "secondary" : "ghost"}
+                onClick={() => setViewMode("list")}
+              >
+                <List className="size-3.5 sm:mr-1.5" />
+                <span className="hidden sm:inline">List</span>
+              </Button>
+            </div>
+            {canEdit && (
+              <Button type="button" variant="outline" size="sm" onClick={() => setTagsDialogOpen(true)}>
+                <Palette className="size-3.5 sm:mr-1.5" />
+                <span className="hidden sm:inline">Tags</span>
+              </Button>
+            )}
+            <Button variant="outline" size="sm" onClick={loadTodos} disabled={loading}>
+              <RefreshCw className={`size-3.5 sm:mr-1.5 ${loading ? "animate-spin" : ""}`} />
+              <span className="hidden sm:inline">Refresh</span>
             </Button>
-            <Button
-              type="button"
-              size="sm"
-              className="h-9"
-              variant={viewMode === "list" ? "secondary" : "ghost"}
-              onClick={() => setViewMode("list")}
-            >
-              <List className="size-4 sm:mr-2" />
-              <span className="hidden sm:inline">List</span>
-            </Button>
+            {canCreate && (
+              <Button size="sm" onClick={openCreateDialog}>
+                <Plus className="size-3.5 sm:mr-1.5" />
+                <span className="hidden sm:inline">New Todo</span>
+              </Button>
+            )}
           </div>
-          {canEdit && (
-            <Button type="button" variant="outline" size="sm" className="h-11" onClick={() => setTagsDialogOpen(true)}>
-              <Palette className="size-4 sm:mr-2" />
-              <span className="hidden sm:inline">Tags</span>
-            </Button>
-          )}
-          <Button variant="outline" size="sm" className="h-11" onClick={loadTodos} disabled={loading}>
-            <RefreshCw className={`size-4 sm:mr-2 ${loading ? "animate-spin" : ""}`} />
-            <span className="hidden sm:inline">Refresh</span>
-          </Button>
-          {canCreate && (
-            <Button size="sm" className="h-11" onClick={openCreateDialog}>
-              <Plus className="size-4 sm:mr-2" />
-              <span className="hidden sm:inline">New todo</span>
-            </Button>
-          )}
-        </div>
         }
       />
 
@@ -874,137 +870,136 @@ export default function TodosPage() {
         </div>
 
         <div
-          className={`grid transition-[grid-template-rows,opacity,margin] duration-300 ease-in-out ${
-            filtersOpen ? "mt-4 grid-rows-[1fr] opacity-100" : "mt-0 grid-rows-[0fr] opacity-0"
-          }`}
+          className={`grid transition-[grid-template-rows,opacity,margin] duration-300 ease-in-out ${filtersOpen ? "mt-4 grid-rows-[1fr] opacity-100" : "mt-0 grid-rows-[0fr] opacity-0"
+            }`}
         >
           <div className="min-h-0 overflow-hidden">
             <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-          <div className="grid gap-1">
-            <Label className="text-xs text-muted-foreground">Search</Label>
-            <div className="relative">
-              <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-              <Input
-                className="pl-8"
-                placeholder="ID, title, description, or related ID"
-                value={filters.search || ""}
-                onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))}
-              />
-            </div>
-          </div>
-          <div className="grid gap-1">
-            <Label className="text-xs text-muted-foreground">Status</Label>
-            <Select
-              value={filters.status || "all"}
-              onValueChange={(value) => setFilters((current) => ({ ...current, status: value as TodoStatus | "all" }))}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All statuses</SelectItem>
-                {TODO_STATUSES.map((status) => (
-                  <SelectItem key={status} value={status}>
-                    {TODO_STATUS_LABELS[status]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="grid gap-1">
-            <Label className="text-xs text-muted-foreground">Assignee</Label>
-            <Select
-              value={filters.assigneeId || "all"}
-              onValueChange={(value) => setFilters((current) => ({ ...current, assigneeId: value === "all" ? undefined : value }))}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Assignee" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All assignees</SelectItem>
-                {users.map((user) => (
-                  <SelectItem key={user.id} value={user.id}>
-                    {userLabel(user)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          {canViewAllRecords && (
-            <div className="grid gap-1">
-              <Label className="text-xs text-muted-foreground">Owner</Label>
-              <Select
-                value={filters.ownerId || "all"}
-                onValueChange={(value) => setFilters((current) => ({ ...current, ownerId: value === "all" ? undefined : value }))}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Owner" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All owners</SelectItem>
-                  {users.map((user) => (
-                    <SelectItem key={user.id} value={user.id}>
-                      {userLabel(user)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-          <div className="grid gap-1">
-            <Label className="text-xs text-muted-foreground">Related Type</Label>
-            <Select
-              value={filters.relatedType || "all"}
-              onValueChange={(value) => setFilters((current) => ({ ...current, relatedType: value as TodoRelatedType | "all" }))}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Related type" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All related types</SelectItem>
-                {RELATED_TYPES.map((type) => (
-                  <SelectItem key={type} value={type}>
-                    {type.replace("_", " ")}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="grid gap-1">
-            <Label className="text-xs text-muted-foreground">Tags</Label>
-            <Select
-              value={filters.tag || "all"}
-              onValueChange={(value) => setFilters((current) => ({ ...current, tag: value === "all" ? undefined : value }))}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Tag" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All tags</SelectItem>
-                {uniqueTags.map((tag) => (
-                  <SelectItem key={tag} value={tag}>
-                    {tag}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="grid gap-1">
-            <Label className="text-xs text-muted-foreground">Deadline</Label>
-            <Input
-              type="date"
-              value={filters.deadlineDate || ""}
-              onChange={(event) => setFilters((current) => ({ ...current, deadlineDate: event.target.value }))}
-            />
-          </div>
-          <div className="grid gap-1">
-            <Label className="text-xs text-muted-foreground">Reminder</Label>
-            <Input
-              type="date"
-              value={filters.reminderDate || ""}
-              onChange={(event) => setFilters((current) => ({ ...current, reminderDate: event.target.value }))}
-            />
-          </div>
+              <div className="grid gap-1">
+                <Label className="text-xs text-muted-foreground">Search</Label>
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+                  <Input
+                    className="pl-8"
+                    placeholder="ID, title, description, or related ID"
+                    value={filters.search || ""}
+                    onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))}
+                  />
+                </div>
+              </div>
+              <div className="grid gap-1">
+                <Label className="text-xs text-muted-foreground">Status</Label>
+                <Select
+                  value={filters.status || "all"}
+                  onValueChange={(value) => setFilters((current) => ({ ...current, status: value as TodoStatus | "all" }))}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All statuses</SelectItem>
+                    {TODO_STATUSES.map((status) => (
+                      <SelectItem key={status} value={status}>
+                        {TODO_STATUS_LABELS[status]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-1">
+                <Label className="text-xs text-muted-foreground">Assignee</Label>
+                <Select
+                  value={filters.assigneeId || "all"}
+                  onValueChange={(value) => setFilters((current) => ({ ...current, assigneeId: value === "all" ? undefined : value }))}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Assignee" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All assignees</SelectItem>
+                    {users.map((user) => (
+                      <SelectItem key={user.id} value={user.id}>
+                        {userLabel(user)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {canViewAllRecords && (
+                <div className="grid gap-1">
+                  <Label className="text-xs text-muted-foreground">Owner</Label>
+                  <Select
+                    value={filters.ownerId || "all"}
+                    onValueChange={(value) => setFilters((current) => ({ ...current, ownerId: value === "all" ? undefined : value }))}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Owner" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All owners</SelectItem>
+                      {users.map((user) => (
+                        <SelectItem key={user.id} value={user.id}>
+                          {userLabel(user)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              <div className="grid gap-1">
+                <Label className="text-xs text-muted-foreground">Related Type</Label>
+                <Select
+                  value={filters.relatedType || "all"}
+                  onValueChange={(value) => setFilters((current) => ({ ...current, relatedType: value as TodoRelatedType | "all" }))}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Related type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All related types</SelectItem>
+                    {RELATED_TYPES.map((type) => (
+                      <SelectItem key={type} value={type}>
+                        {type.replace("_", " ")}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-1">
+                <Label className="text-xs text-muted-foreground">Tags</Label>
+                <Select
+                  value={filters.tag || "all"}
+                  onValueChange={(value) => setFilters((current) => ({ ...current, tag: value === "all" ? undefined : value }))}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Tag" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All tags</SelectItem>
+                    {uniqueTags.map((tag) => (
+                      <SelectItem key={tag} value={tag}>
+                        {tag}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-1">
+                <Label className="text-xs text-muted-foreground">Deadline</Label>
+                <Input
+                  type="date"
+                  value={filters.deadlineDate || ""}
+                  onChange={(event) => setFilters((current) => ({ ...current, deadlineDate: event.target.value }))}
+                />
+              </div>
+              <div className="grid gap-1">
+                <Label className="text-xs text-muted-foreground">Reminder</Label>
+                <Input
+                  type="date"
+                  value={filters.reminderDate || ""}
+                  onChange={(event) => setFilters((current) => ({ ...current, reminderDate: event.target.value }))}
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -1107,107 +1102,106 @@ export default function TodosPage() {
           </DialogHeader>
 
           <div className={`min-h-0 overflow-y-auto pr-2 ${dialogScrollClass}`}>
-          <div className="grid gap-4">
-            <div className="grid gap-4 rounded-md border p-4">
-              <div className="grid gap-1.5">
-                <Label>Tag Name</Label>
-                <Input
-                  value={tagForm.name}
-                  onChange={(event) => setTagForm((current) => ({ ...current, name: event.target.value }))}
-                  placeholder="priority, client, billing"
-                />
-              </div>
-              <div className="grid gap-1.5">
-                <Label>Color</Label>
-                <div className="grid grid-cols-9 gap-2 sm:grid-cols-18">
-                  {MATERIAL_TAG_COLORS.map((color) => (
-                    <button
-                      key={color}
-                      type="button"
-                      className={`size-7 rounded-full border transition-transform hover:scale-110 ${
-                        tagForm.color.toLowerCase() === color.toLowerCase()
-                          ? "ring-2 ring-primary ring-offset-2"
-                          : ""
-                      }`}
-                      style={{ backgroundColor: color }}
-                      onClick={() => setTagForm((current) => ({ ...current, color }))}
-                      aria-label={`Use color ${color}`}
-                    />
-                  ))}
+            <div className="grid gap-4">
+              <div className="grid gap-4 rounded-md border p-4">
+                <div className="grid gap-1.5">
+                  <Label>Tag Name</Label>
+                  <Input
+                    value={tagForm.name}
+                    onChange={(event) => setTagForm((current) => ({ ...current, name: event.target.value }))}
+                    placeholder="priority, client, billing"
+                  />
+                </div>
+                <div className="grid gap-1.5">
+                  <Label>Color</Label>
+                  <div className="grid grid-cols-9 gap-2 sm:grid-cols-18">
+                    {MATERIAL_TAG_COLORS.map((color) => (
+                      <button
+                        key={color}
+                        type="button"
+                        className={`size-7 rounded-full border transition-transform hover:scale-110 ${tagForm.color.toLowerCase() === color.toLowerCase()
+                            ? "ring-2 ring-primary ring-offset-2"
+                            : ""
+                          }`}
+                        style={{ backgroundColor: color }}
+                        onClick={() => setTagForm((current) => ({ ...current, color }))}
+                        aria-label={`Use color ${color}`}
+                      />
+                    ))}
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {canEdit && (
+                    <Button type="button" size="sm" className="h-10" onClick={saveTagDefinition} disabled={isSavingTag}>
+                      {tagForm.id ? "Update" : "Add"}
+                    </Button>
+                  )}
+                  {tagForm.id && (
+                    <Button type="button" size="sm" className="h-10" variant="outline" onClick={resetTagForm} disabled={isSavingTag}>
+                      Cancel
+                    </Button>
+                  )}
                 </div>
               </div>
-              <div className="flex flex-wrap gap-2">
-                {canEdit && (
-                <Button type="button" size="sm" className="h-10" onClick={saveTagDefinition} disabled={isSavingTag}>
-                  {tagForm.id ? "Update" : "Add"}
-                </Button>
-                )}
-                {tagForm.id && (
-                  <Button type="button" size="sm" className="h-10" variant="outline" onClick={resetTagForm} disabled={isSavingTag}>
-                    Cancel
-                  </Button>
-                )}
-              </div>
-            </div>
 
-            <div className="grid gap-2">
-              {tagRows.length ? (
-                tagRows.map(({ name, definition }) => (
-                  <div key={name} className="flex items-center justify-between gap-3 rounded-md border p-3">
-                    <div className="flex min-w-0 items-center gap-3">
-                      <span
-                        className="size-4 shrink-0 rounded-full border"
-                        style={{ backgroundColor: definition?.color || "#64748b" }}
-                      />
-                      <Badge
-                        variant="outline"
-                        className="rounded-sm"
-                        style={tagBadgeStyle(definition?.color)}
-                      >
-                        {name}
-                      </Badge>
-                      {!definition && (
-                        <span className="text-xs text-muted-foreground">No color assigned</span>
-                      )}
-                    </div>
-                    <div className="flex shrink-0 gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={() =>
-                          editTagDefinition(
-                            definition || {
-                              id: "",
-                              name,
-                              color: "#64748b",
-                            }
-                          )
-                        }
-                      >
-                        {definition ? "Edit" : "Color"}
-                      </Button>
-                      {definition && canDelete && (
+              <div className="grid gap-2">
+                {tagRows.length ? (
+                  tagRows.map(({ name, definition }) => (
+                    <div key={name} className="flex items-center justify-between gap-3 rounded-md border p-3">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <span
+                          className="size-4 shrink-0 rounded-full border"
+                          style={{ backgroundColor: definition?.color || "#64748b" }}
+                        />
+                        <Badge
+                          variant="outline"
+                          className="rounded-sm"
+                          style={tagBadgeStyle(definition?.color)}
+                        >
+                          {name}
+                        </Badge>
+                        {!definition && (
+                          <span className="text-xs text-muted-foreground">No color assigned</span>
+                        )}
+                      </div>
+                      <div className="flex shrink-0 gap-2">
                         <Button
                           type="button"
-                          size="icon-sm"
-                          variant="ghost"
-                          onClick={() => removeTagDefinition(definition)}
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            editTagDefinition(
+                              definition || {
+                                id: "",
+                                name,
+                                color: "#64748b",
+                              }
+                            )
+                          }
                         >
-                          <Trash2 className="size-4" />
-                          <span className="sr-only">Delete tag color</span>
+                          {definition ? "Edit" : "Color"}
                         </Button>
-                      )}
+                        {definition && canDelete && (
+                          <Button
+                            type="button"
+                            size="icon-sm"
+                            variant="ghost"
+                            onClick={() => removeTagDefinition(definition)}
+                          >
+                            <Trash2 className="size-4" />
+                            <span className="sr-only">Delete tag color</span>
+                          </Button>
+                        )}
+                      </div>
                     </div>
+                  ))
+                ) : (
+                  <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
+                    No tags yet.
                   </div>
-                ))
-              ) : (
-                <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
-                  No tags yet.
-                </div>
-              )}
+                )}
+              </div>
             </div>
-          </div>
           </div>
         </DialogContent>
       </Dialog>
@@ -1245,216 +1239,216 @@ export default function TodosPage() {
           </DialogHeader>
 
           <div className={`min-h-0 overflow-y-auto pr-2 ${dialogScrollClass}`}>
-          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
-            <div className="space-y-4">
-              <div className="grid gap-3 rounded-md border p-4">
-                <div className="grid gap-1.5">
-                  <Label>Title</Label>
-                  <Input
-                    value={form.title}
-                    disabled={isDialogReadOnly}
-                    onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))}
-                    placeholder="Short todo title"
-                  />
-                </div>
-                <div className="grid gap-1.5">
-                  <Label>Description</Label>
-                  <Textarea
-                    value={form.description}
-                    disabled={isDialogReadOnly}
-                    onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
-                    placeholder="What needs to be done?"
-                    className="min-h-32 resize-none"
-                  />
-                </div>
-              </div>
-
-              {editingTodo && (
+            <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+              <div className="space-y-4">
                 <div className="grid gap-3 rounded-md border p-4">
-                  <Tabs defaultValue="comments" className="gap-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <Label>Activity</Label>
-                      <TabsList>
-                        <TabsTrigger value="comments">Comments ({editingTodo.comments?.length ?? 0})</TabsTrigger>
-                        <TabsTrigger value="updates">Updates ({editingTodo.updates?.length ?? 0})</TabsTrigger>
-                      </TabsList>
-                    </div>
+                  <div className="grid gap-1.5">
+                    <Label>Title</Label>
+                    <Input
+                      value={form.title}
+                      disabled={isDialogReadOnly}
+                      onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))}
+                      placeholder="Short todo title"
+                    />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label>Description</Label>
+                    <Textarea
+                      value={form.description}
+                      disabled={isDialogReadOnly}
+                      onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
+                      placeholder="What needs to be done?"
+                      className="min-h-32 resize-none"
+                    />
+                  </div>
+                </div>
 
-                    <TabsContent value="comments" className="mt-0 space-y-3">
-                      <div className="space-y-2">
-                        {editingTodo.comments?.length ? (
-                          editingTodo.comments.map((comment) => (
-                            <div key={comment.id} className="rounded-md bg-muted/50 p-3">
-                              <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                                <span>
-                                  {userLabel(comment.author)} · {new Date(comment.created_at).toLocaleString()}
-                                </span>
-                                {!isDialogReadOnly && (
-                                  <Button
-                                    type="button"
-                                    size="icon-xs"
-                                    variant="ghost"
-                                    onClick={() => removeComment(comment.id)}
-                                  >
-                                    <Trash2 className="size-3.5" />
-                                    <span className="sr-only">Delete comment</span>
-                                  </Button>
-                                )}
+                {editingTodo && (
+                  <div className="grid gap-3 rounded-md border p-4">
+                    <Tabs defaultValue="comments" className="gap-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <Label>Activity</Label>
+                        <TabsList>
+                          <TabsTrigger value="comments">Comments ({editingTodo.comments?.length ?? 0})</TabsTrigger>
+                          <TabsTrigger value="updates">Updates ({editingTodo.updates?.length ?? 0})</TabsTrigger>
+                        </TabsList>
+                      </div>
+
+                      <TabsContent value="comments" className="mt-0 space-y-3">
+                        <div className="space-y-2">
+                          {editingTodo.comments?.length ? (
+                            editingTodo.comments.map((comment) => (
+                              <div key={comment.id} className="rounded-md bg-muted/50 p-3">
+                                <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                                  <span>
+                                    {userLabel(comment.author)} · {new Date(comment.created_at).toLocaleString()}
+                                  </span>
+                                  {!isDialogReadOnly && (
+                                    <Button
+                                      type="button"
+                                      size="icon-xs"
+                                      variant="ghost"
+                                      onClick={() => removeComment(comment.id)}
+                                    >
+                                      <Trash2 className="size-3.5" />
+                                      <span className="sr-only">Delete comment</span>
+                                    </Button>
+                                  )}
+                                </div>
+                                <p className="mt-2 text-sm whitespace-pre-wrap">{comment.body}</p>
                               </div>
-                              <p className="mt-2 text-sm whitespace-pre-wrap">{comment.body}</p>
+                            ))
+                          ) : (
+                            <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">No comments yet.</p>
+                          )}
+                        </div>
+                        {!isDialogReadOnly && (
+                          <div className="flex gap-2">
+                            <Input
+                              value={commentBody}
+                              onChange={(event) => setCommentBody(event.target.value)}
+                              placeholder="Add a comment"
+                            />
+                            <Button type="button" variant="outline" onClick={addComment} disabled={!commentBody.trim()}>
+                              Add
+                            </Button>
+                          </div>
+                        )}
+                      </TabsContent>
+
+                      <TabsContent value="updates" className="mt-0 space-y-3">
+                        {editingTodo.updates?.length ? (
+                          editingTodo.updates.map((update) => (
+                            <div key={update.id} className="flex gap-3 rounded-md bg-muted/40 p-3">
+                              <div className="mt-1 size-2 shrink-0 rounded-full bg-primary" />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+                                  <span className="font-medium">{userLabel(update.actor)}</span>
+                                  <span className="text-muted-foreground">{formatUpdateSummary(update)}</span>
+                                </div>
+                                <div className="mt-1 text-xs text-muted-foreground">
+                                  {new Date(update.created_at).toLocaleString()}
+                                </div>
+                              </div>
                             </div>
                           ))
                         ) : (
-                          <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">No comments yet.</p>
+                          <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">No updates yet.</p>
                         )}
-                      </div>
-                      {!isDialogReadOnly && (
-                        <div className="flex gap-2">
-                          <Input
-                            value={commentBody}
-                            onChange={(event) => setCommentBody(event.target.value)}
-                            placeholder="Add a comment"
-                          />
-                          <Button type="button" variant="outline" onClick={addComment} disabled={!commentBody.trim()}>
-                            Add
-                          </Button>
-                        </div>
-                      )}
-                    </TabsContent>
-
-                    <TabsContent value="updates" className="mt-0 space-y-3">
-                      {editingTodo.updates?.length ? (
-                        editingTodo.updates.map((update) => (
-                          <div key={update.id} className="flex gap-3 rounded-md bg-muted/40 p-3">
-                            <div className="mt-1 size-2 shrink-0 rounded-full bg-primary" />
-                            <div className="min-w-0 flex-1">
-                              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-                                <span className="font-medium">{userLabel(update.actor)}</span>
-                                <span className="text-muted-foreground">{formatUpdateSummary(update)}</span>
-                              </div>
-                              <div className="mt-1 text-xs text-muted-foreground">
-                                {new Date(update.created_at).toLocaleString()}
-                              </div>
-                            </div>
-                          </div>
-                        ))
-                      ) : (
-                        <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">No updates yet.</p>
-                      )}
-                    </TabsContent>
-                  </Tabs>
-                </div>
-              )}
-            </div>
-
-            <div className="grid content-start gap-4">
-              <div className="grid gap-3 rounded-md border p-4">
-                <div className="grid gap-1.5">
-                  <Label>Status</Label>
-                  <Select
-                    value={form.status}
-                    disabled={isDialogReadOnly}
-                    onValueChange={(value) => setForm((current) => ({ ...current, status: value as TodoStatus }))}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {TODO_STATUSES.map((status) => (
-                        <SelectItem key={status} value={status}>
-                          {TODO_STATUS_LABELS[status]}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="grid gap-1.5">
-                  <Label>Assignees</Label>
-                  <MultipleSelector
-                    value={selectedAssignees}
-                    options={userOptions}
-                    disabled={isDialogReadOnly}
-                    placeholder="Select assignees"
-                    onChange={(options) => setForm((current) => ({ ...current, assigneeIds: options.map((option) => option.value) }))}
-                    emptyIndicator={<span className="text-muted-foreground">No users found</span>}
-                  />
-                </div>
-                <div className="grid gap-1.5">
-                  <Label>Tags</Label>
-                  <MultipleSelector
-                    value={form.tags.map((tag) => ({
-                      value: tag,
-                      label: tag,
-                      color: tagColorMap.get(tag.toLowerCase()),
-                    }))}
-                    options={uniqueTags.map((tag) => ({
-                      value: tag,
-                      label: tag,
-                      color: tagColorMap.get(tag.toLowerCase()),
-                    }))}
-                    disabled={isDialogReadOnly}
-                    creatable={!isDialogReadOnly}
-                    placeholder="Add or select tags"
-                    onChange={(options) => setForm((current) => ({ ...current, tags: options.map((option) => option.value) }))}
-                    emptyIndicator={<span className="text-muted-foreground">Create a new tag</span>}
-                  />
-                </div>
+                      </TabsContent>
+                    </Tabs>
+                  </div>
+                )}
               </div>
 
-              <div className="grid gap-3 rounded-md border p-4">
-                <div className="grid gap-1.5">
-                  <Label>Deadline</Label>
-                  <Input
-                    type="datetime-local"
-                    value={form.deadlineAt}
-                    disabled={isDialogReadOnly}
-                    onChange={(event) => setForm((current) => ({ ...current, deadlineAt: event.target.value }))}
-                  />
+              <div className="grid content-start gap-4">
+                <div className="grid gap-3 rounded-md border p-4">
+                  <div className="grid gap-1.5">
+                    <Label>Status</Label>
+                    <Select
+                      value={form.status}
+                      disabled={isDialogReadOnly}
+                      onValueChange={(value) => setForm((current) => ({ ...current, status: value as TodoStatus }))}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {TODO_STATUSES.map((status) => (
+                          <SelectItem key={status} value={status}>
+                            {TODO_STATUS_LABELS[status]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label>Assignees</Label>
+                    <MultipleSelector
+                      value={selectedAssignees}
+                      options={userOptions}
+                      disabled={isDialogReadOnly}
+                      placeholder="Select assignees"
+                      onChange={(options) => setForm((current) => ({ ...current, assigneeIds: options.map((option) => option.value) }))}
+                      emptyIndicator={<span className="text-muted-foreground">No users found</span>}
+                    />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label>Tags</Label>
+                    <MultipleSelector
+                      value={form.tags.map((tag) => ({
+                        value: tag,
+                        label: tag,
+                        color: tagColorMap.get(tag.toLowerCase()),
+                      }))}
+                      options={uniqueTags.map((tag) => ({
+                        value: tag,
+                        label: tag,
+                        color: tagColorMap.get(tag.toLowerCase()),
+                      }))}
+                      disabled={isDialogReadOnly}
+                      creatable={!isDialogReadOnly}
+                      placeholder="Add or select tags"
+                      onChange={(options) => setForm((current) => ({ ...current, tags: options.map((option) => option.value) }))}
+                      emptyIndicator={<span className="text-muted-foreground">Create a new tag</span>}
+                    />
+                  </div>
                 </div>
-                <div className="grid gap-1.5">
-                  <Label>Reminder / Followup</Label>
-                  <Input
-                    type="datetime-local"
-                    value={form.reminderAt}
-                    disabled={isDialogReadOnly}
-                    onChange={(event) => setForm((current) => ({ ...current, reminderAt: event.target.value }))}
-                  />
-                </div>
-              </div>
 
-              <div className="grid gap-3 rounded-md border p-4">
-                <div className="grid gap-1.5">
-                  <Label>Related Type</Label>
-                  <Select
-                    value={form.relatedType}
-                    disabled={isDialogReadOnly}
-                    onValueChange={(value) => setForm((current) => ({ ...current, relatedType: value as TodoRelatedType | "none" }))}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">None</SelectItem>
-                      {RELATED_TYPES.map((type) => (
-                        <SelectItem key={type} value={type}>
-                          {type.replace("_", " ")}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                <div className="grid gap-3 rounded-md border p-4">
+                  <div className="grid gap-1.5">
+                    <Label>Deadline</Label>
+                    <Input
+                      type="datetime-local"
+                      value={form.deadlineAt}
+                      disabled={isDialogReadOnly}
+                      onChange={(event) => setForm((current) => ({ ...current, deadlineAt: event.target.value }))}
+                    />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label>Reminder / Followup</Label>
+                    <Input
+                      type="datetime-local"
+                      value={form.reminderAt}
+                      disabled={isDialogReadOnly}
+                      onChange={(event) => setForm((current) => ({ ...current, reminderAt: event.target.value }))}
+                    />
+                  </div>
                 </div>
-                <div className="grid gap-1.5">
-                  <Label>Related ID</Label>
-                  <Input
-                    value={form.relatedId}
-                    disabled={isDialogReadOnly}
-                    onChange={(event) => setForm((current) => ({ ...current, relatedId: event.target.value }))}
-                    placeholder="AP-123 or WO-1234"
-                  />
+
+                <div className="grid gap-3 rounded-md border p-4">
+                  <div className="grid gap-1.5">
+                    <Label>Related Type</Label>
+                    <Select
+                      value={form.relatedType}
+                      disabled={isDialogReadOnly}
+                      onValueChange={(value) => setForm((current) => ({ ...current, relatedType: value as TodoRelatedType | "none" }))}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">None</SelectItem>
+                        {RELATED_TYPES.map((type) => (
+                          <SelectItem key={type} value={type}>
+                            {type.replace("_", " ")}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label>Related ID</Label>
+                    <Input
+                      value={form.relatedId}
+                      disabled={isDialogReadOnly}
+                      onChange={(event) => setForm((current) => ({ ...current, relatedId: event.target.value }))}
+                      placeholder="AP-123 or WO-1234"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
           </div>
 
           <DialogFooter className="border-t pt-4">

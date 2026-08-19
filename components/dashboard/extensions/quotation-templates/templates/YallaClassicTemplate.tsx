@@ -37,6 +37,14 @@ export function YallaClassicTemplate({
   const grandTotal = data.grandTotal || calculated.grandTotal;
   const avgTax = calculated.avgTax;
 
+  // "Discount Template By Total (No List Price)": same as By Total, but the
+  // List Price column is dropped (the team only needs the final amount) and
+  // the Summary's Discount line always carries the effective percentage.
+  const hideListPrice = discountMode === "with-total-no-list";
+  const isByTotal =
+    discountMode === "with-total" || discountMode === "with-total-no-list";
+  const discountPct = subTotal > 0 ? (discount / subTotal) * 100 : 0;
+
   // Parse Terms & Conditions from API:
   // - Strip leading "Notes:" label
   // - Split into items on newlines that start with "1-", "2-", etc.
@@ -150,9 +158,11 @@ export function YallaClassicTemplate({
       <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: "8px" }}>
         <thead>
           <tr style={{ background: "black" }}>
-            {(hideDiscount || discountMode === "with-total"
-              ? ["SR #", "Service & Part", "Qty", "Unit", "List Price", "Amount"]
-              : ["SR #", "Service & Part", "Qty", "Unit", "List Price", "Discount", "Amount"]
+            {(hideListPrice
+              ? ["SR #", "Service & Part", "Qty", "Unit", "Amount"]
+              : hideDiscount || isByTotal
+                ? ["SR #", "Service & Part", "Qty", "Unit", "List Price", "Amount"]
+                : ["SR #", "Service & Part", "Qty", "Unit", "List Price", "Discount", "Amount"]
             ).map((h, i) => (
               <th
                 key={h}
@@ -238,11 +248,13 @@ export function YallaClassicTemplate({
                     ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
                     : { padding: "12px" }), textAlign: "right", verticalAlign: "top", color: "#64748b"
                 }}>{item.unit}</td>
-                <td style={{
-                  fontSize: "11px", width: "100px", ...(forPDF
-                    ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
-                    : { padding: "12px" }), textAlign: "right", verticalAlign: "top"
-                }}>{formatCurrencyAED(item.unitPrice)}</td>
+                {!hideListPrice && (
+                  <td style={{
+                    fontSize: "11px", width: "100px", ...(forPDF
+                      ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
+                      : { padding: "12px" }), textAlign: "right", verticalAlign: "top"
+                  }}>{formatCurrencyAED(item.unitPrice)}</td>
+                )}
                 {(discountMode === "with") && (
                   <td style={{
                     fontSize: "11px", width: "86px", ...(forPDF
@@ -270,7 +282,7 @@ export function YallaClassicTemplate({
         <div style={{ minWidth: "260px" }}>
           {[
             { key: "subTotal", label: "Sub Total", value: subTotal, muted: false },
-            { key: "discount", label: discountMode === 'with-total' ? data.totalDiscountType === 'Percentage' ? `Discount (${data.totalDiscount}%)` : `Discount` : "Discount", value: discount, muted: true },
+            { key: "discount", label: discountMode === 'with-total-no-list' ? `Discount (${discountPct.toFixed(0)}%)` : discountMode === 'with-total' ? data.totalDiscountType === 'Percentage' ? `Discount (${data.totalDiscount}%)` : `Discount` : "Discount", value: discount, muted: true },
             { key: "totalAfterDiscount", label: "Total After Discount", value: totalAfterDiscount, muted: true },
             {
               key: "taxAmount",
