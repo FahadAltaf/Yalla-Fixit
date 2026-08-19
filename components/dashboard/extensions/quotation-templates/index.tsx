@@ -82,7 +82,7 @@ export function QuotationTemplatesPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   // Template preview state (for now only Yalla Classic, with/without discount)
-  const [discountMode, setDiscountMode] = useState<"with" | "without" | "with-total">("with");
+  const [discountMode, setDiscountMode] = useState<"with" | "without" | "with-total" | "with-total-no-list">("with");
   const [templateImageMode, setTemplateImageMode] =
     useState<TemplateImageMode>("without-images");
   const yallaClassicTemplate =
@@ -495,7 +495,7 @@ export function QuotationTemplatesPage() {
                   <Select
                     value={discountMode}
                     onValueChange={(value) =>
-                      setDiscountMode(value as "with" | "without" | "with-total")
+                      setDiscountMode(value as "with" | "without" | "with-total" | "with-total-no-list")
                     }
                   >
                     <SelectTrigger className="w-max h-8 text-xs">
@@ -504,6 +504,9 @@ export function QuotationTemplatesPage() {
                     <SelectContent>
                       <SelectItem value="with-total">
                         Discount Template By Total
+                      </SelectItem>
+                      <SelectItem value="with-total-no-list">
+                        Discount Template By Total (No List Price)
                       </SelectItem>
                       <SelectItem value="with">
                         Discount Template By Line Items

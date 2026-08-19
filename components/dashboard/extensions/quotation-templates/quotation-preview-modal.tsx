@@ -41,7 +41,7 @@ interface Props {
   onClose: () => void;
   template: QuotationTemplate;
   data: QuotationData;
-  discountMode: "with" | "without" | "with-total";
+  discountMode: "with" | "without" | "with-total" | "with-total-no-list";
   imageMode: "with-images" | "without-images";
   /**
    * When false, the Zoho FSM "mark as sent" transition will not be
@@ -69,7 +69,7 @@ async function generatePDFBlob(
   templateId: string,
   data: QuotationData,
   options: PDFGeneratorOptions = {},
-  discountMode: "with" | "without" | "with-total" = "with",
+  discountMode: "with" | "without" | "with-total" | "with-total-no-list" = "with",
   imageMode: "with-images" | "without-images" = "without-images",
 ): Promise<Blob> {
   const { scale = 2, imageFormat = "JPEG", imageQuality = 0.92 } = options;

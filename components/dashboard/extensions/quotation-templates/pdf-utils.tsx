@@ -53,7 +53,7 @@ export async function generateQuotationPDFBlob(
   templateId: string,
   data: QuotationData,
   options: PDFGeneratorOptions = {},
-  discountMode: "with" | "without" | "with-total" = "with",
+  discountMode: "with" | "without" | "with-total" | "with-total-no-list" = "with",
   includeServiceItemImages = false,
   rootQuotationNumber = "",
 ): Promise<Blob> {

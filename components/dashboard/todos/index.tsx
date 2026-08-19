@@ -810,42 +810,40 @@ export default function TodosPage() {
           <h1 className="text-xl font-semibold">Todos</h1>
           <p className="text-sm text-muted-foreground">Track portal work by owner, assignee, deadline, and followup.</p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <div className="flex h-11 rounded-md border p-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-0.5 rounded-md border bg-muted/40 p-0.5">
             <Button
               type="button"
               size="sm"
-              className="h-9"
               variant={viewMode === "kanban" ? "secondary" : "ghost"}
               onClick={() => setViewMode("kanban")}
             >
-              <LayoutGrid className="size-4 sm:mr-2" />
+              <LayoutGrid className="size-3.5 sm:mr-1.5" />
               <span className="hidden sm:inline">Kanban</span>
             </Button>
             <Button
               type="button"
               size="sm"
-              className="h-9"
               variant={viewMode === "list" ? "secondary" : "ghost"}
               onClick={() => setViewMode("list")}
             >
-              <List className="size-4 sm:mr-2" />
+              <List className="size-3.5 sm:mr-1.5" />
               <span className="hidden sm:inline">List</span>
             </Button>
           </div>
           {canEdit && (
-            <Button type="button" variant="outline" size="sm" className="h-11" onClick={() => setTagsDialogOpen(true)}>
-              <Palette className="size-4 sm:mr-2" />
+            <Button type="button" variant="outline" size="sm" onClick={() => setTagsDialogOpen(true)}>
+              <Palette className="size-3.5 sm:mr-1.5" />
               <span className="hidden sm:inline">Tags</span>
             </Button>
           )}
-          <Button variant="outline" size="sm" className="h-11" onClick={loadTodos} disabled={loading}>
-            <RefreshCw className={`size-4 sm:mr-2 ${loading ? "animate-spin" : ""}`} />
+          <Button variant="outline" size="sm" onClick={loadTodos} disabled={loading}>
+            <RefreshCw className={`size-3.5 sm:mr-1.5 ${loading ? "animate-spin" : ""}`} />
             <span className="hidden sm:inline">Refresh</span>
           </Button>
           {canCreate && (
-            <Button size="sm" className="h-11" onClick={openCreateDialog}>
-              <Plus className="size-4 sm:mr-2" />
+            <Button size="sm" onClick={openCreateDialog}>
+              <Plus className="size-3.5 sm:mr-1.5" />
               <span className="hidden sm:inline">New Todo</span>
             </Button>
           )}

@@ -23,7 +23,7 @@ export function buildQuotationEmailHtml({
   approveUrl: string;
   rejectUrl: string;
   includeApprovalSection: boolean;
-  discountMode: "with" | "without" | "with-total";
+  discountMode: "with" | "without" | "with-total" | "with-total-no-list";
 }) {
   const {
     customerCompanyName,
@@ -49,7 +49,7 @@ export function buildQuotationEmailHtml({
     (sum, item) => sum + (item.unitPrice * item.quantity || 0),
     0
   );
-  const discountAmount = discountMode === "with-total" ? data.totalDiscountType === "Percentage" ? ((Number(data.totalDiscount) || 0) / 100) * subtotal : Number(data.totalDiscount) || 0 : lineItems.reduce((sum, item) => {
+  const discountAmount = (discountMode === "with-total" || discountMode === "with-total-no-list") ? data.totalDiscountType === "Percentage" ? ((Number(data.totalDiscount) || 0) / 100) * subtotal : Number(data.totalDiscount) || 0 : lineItems.reduce((sum, item) => {
     const lineTotal = item.unitPrice * item.quantity;
     const lineDiscount =
       item.discountType === "Percent"
@@ -181,7 +181,7 @@ export function buildQuotationEmailHtml({
           </tr>
           <tr>
             <td style="padding:6px 0; font-size:13px; color:#4b5563;">
-              ${discountMode === "with-total" ? data.totalDiscountType === "Percentage" ? `Discount (${data.totalDiscount}%)` : `Discount` : "Discount"}
+              ${discountMode === "with-total-no-list" ? `Discount (${subtotal > 0 ? ((discountAmount / subtotal) * 100).toFixed(0) : 0}%)` : discountMode === "with-total" ? data.totalDiscountType === "Percentage" ? `Discount (${data.totalDiscount}%)` : `Discount` : "Discount"}
             </td>
             <td style="padding:6px 0; font-size:13px; color:#b91c1c; text-align:right;">
               - ${formatCurrencyAED(discountAmount)}
