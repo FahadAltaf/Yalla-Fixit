@@ -270,11 +270,8 @@ export function formatWindow(startAt?: string | null, endAt?: string | null): st
 }
 
 export const PROPERTY_TYPE_LABELS: Record<string, string> = {
-  studio: "Studio",
-  "1br": "1 Bedroom",
-  "2br": "2 Bedroom",
-  "3br": "3 Bedroom",
-  "4br": "4 Bedroom",
+  apartment: "Apartment",
   villa: "Villa",
   townhouse: "Townhouse",
+  commercial: "Commercial",
 };

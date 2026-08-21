@@ -26,6 +26,7 @@ type WithNestedPhotos = { photos?: WithPath[] | null };
 export async function signMediaPaths<T extends WithPath | WithNestedPhotos>(
   admin: SupabaseClient,
   rows: T[],
+  expiresIn = SIGNED_URL_TTL_SECONDS,
 ): Promise<T[]> {
   if (!rows || rows.length === 0) return rows ?? [];
 
@@ -41,7 +42,7 @@ export async function signMediaPaths<T extends WithPath | WithNestedPhotos>(
 
   if (paths.size === 0) return rows;
 
-  const urlByPath = await signPaths(admin, [...paths]);
+  const urlByPath = await signPaths(admin, [...paths], expiresIn);
 
   return rows.map((row) => {
     const next = { ...row } as T & { signed_url?: string | null };

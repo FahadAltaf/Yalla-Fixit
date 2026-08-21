@@ -11,6 +11,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { snaggingService } from "@/modules/snagging";
 import type { SnaggingTask } from "@/types/types";
 
+import { AuditTimeline } from "./audit-timeline";
+import { ChecklistPanel } from "./checklist-panel";
+import { QuotationPanel } from "./quotation-panel";
 import { ReviewPanel } from "./review-panel";
 
 /**
@@ -69,7 +72,13 @@ export default function InspectionDetail({ taskId }: { taskId: string }) {
         </Link>
       </Button>
 
+      <QuotationPanel task={task} onChanged={() => void load()} />
+
       <ReviewPanel task={task} onChanged={() => void load()} />
+
+      <ChecklistPanel task={task} />
+
+      <AuditTimeline taskId={task.id} />
     </div>
   );
 }

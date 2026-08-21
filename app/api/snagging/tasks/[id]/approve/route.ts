@@ -32,17 +32,17 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
 
     const admin = await createAdminServerClient();
-    const { data: task, error: loadError } = await admin
-      .from("snagging_tasks")
-      .select("id, code, status, property_id, round_number, approval_manager_id")
+    const { data: job, error: loadError } = await admin
+      .from("snagging_jobs")
+      .select("id, code, status, round_number, approval_manager_id")
       .eq("id", id)
       .maybeSingle();
 
     if (loadError) throw new Error(loadError.message);
-    if (!task) return NextResponse.json({ error: "Inspection not found" }, { status: 404 });
+    if (!job) return NextResponse.json({ error: "Inspection not found" }, { status: 404 });
 
     try {
-      assertTransition(task.status as SnaggingTaskStatus, "approved");
+      assertTransition(job.status as SnaggingTaskStatus, "approved");
     } catch (transitionError) {
       return NextResponse.json(
         { error: (transitionError as Error).message },
@@ -53,13 +53,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const approvedAt = new Date().toISOString();
 
     const { error: updateError } = await admin
-      .from("snagging_tasks")
+      .from("snagging_jobs")
       .update({
         status: "approved",
         approved_at: approvedAt,
-        approved_by: profile.id,
         locked: true,
-        rejection_category: null,
       })
       // Guarding on the status we read makes the transition safe against
       // two managers hitting approve at the same moment.
@@ -67,30 +65,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       .in("status", ["submitted", "in_review"]);
 
     if (updateError) throw new Error(updateError.message);
-
-    const { error: actionError } = await admin.from("snagging_approvals").insert({
-      task_id: id,
-      action: "approved",
-      comment: parsed.data.comment?.trim() || null,
-      actor_id: profile.id,
-    });
-    if (actionError) throw new Error(actionError.message);
-
-    // FR-5.01: the branded report is generated off the back of approval.
-    // The row is queued here and picked up by the generator; delivery
-    // (FR-5.04) is a separate, explicit action by ops.
-    const { data: report, error: reportError } = await admin
-      .from("snagging_reports")
-      .insert({
-        task_id: id,
-        property_id: task.property_id,
-        round_number: task.round_number,
-        report_type: task.round_number > 1 ? "delta" : "full",
-        status: "queued",
-      })
-      .select("id")
-      .single();
-    if (reportError) throw new Error(reportError.message);
 
     await recordAudit(admin, {
       entityType: "task",
@@ -100,10 +74,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       actorId: profile.id,
       actorLabel: profile.full_name ?? profile.email,
       justification: parsed.data.comment?.trim() || null,
-      payload: { code: task.code, report_id: report.id },
+      payload: { code: job.code },
     });
 
-    return NextResponse.json({ data: { id, status: "approved", report_id: report.id } });
+    // The branded report queue lives outside the lean schema, so no
+    // report row is created here; the response keeps its shape with a
+    // null report_id.
+    return NextResponse.json({ data: { id, status: "approved", report_id: null } });
   } catch (error) {
     console.error("Snagging approve error:", error);
     return NextResponse.json({ error: "Failed to approve inspection" }, { status: 500 });

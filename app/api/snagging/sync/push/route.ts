@@ -4,36 +4,22 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import { recordAuditBatch, type AuditEntry } from "@/lib/server/snagging/audit";
-import {
-  approvalDueAt,
-  isTaskEditableByInspector,
-  statusFromVerdict,
-} from "@/lib/server/snagging/workflow";
+import { isTaskEditableByInspector, statusFromVerdict } from "@/lib/server/snagging/workflow";
 import { syncPushSchema, type SyncPushInput } from "@/modules/snagging/schemas";
-import {
-  ActionType,
-  ResourceType,
-  SnaggingTaskStatus,
-  SnaggingVerdict,
-} from "@/types/types";
+import { ActionType, ResourceType, SnaggingTaskStatus, SnaggingVerdict } from "@/types/types";
 
 /**
  * Drains the device outbox (§6.3).
  *
- * Contract, in one place because everything else here follows from it:
- *
- *   - Every mutation carries a client-generated UUID. Applying the same
- *     id twice is a no-op, so a retry after a dropped response cannot
- *     duplicate a snag. The ledger row is what makes that true.
- *   - Mutations are applied in the order the device queued them, and
- *     one failure does not abandon the batch: each result comes back
- *     individually so the device can retire what succeeded and retry
- *     only what did not.
- *   - Rows are always keyed by the id the device generated, never by a
- *     server-assigned one, so a record has the same identity on both
- *     sides from the moment it is created offline.
+ * Every mutation carries a client-generated UUID; applying the same id
+ * twice is a no-op, so a retry after a dropped response cannot duplicate a
+ * snag. The device speaks the pre-merge vocabulary (task_id, submission,
+ * verification); this route maps it onto the lean schema — task_id is the
+ * job id, a submission writes the sign-off onto the job, and a verification
+ * updates the snag's status.
  */
+type Admin = SupabaseClient;
+type JobRef = { id: string; status: string; code: string };
 
 type MutationResult = {
   mutation_id: string;
@@ -43,7 +29,7 @@ type MutationResult = {
 
 export async function POST(req: NextRequest) {
   try {
-    const { profile, accessUser, origin } = await getRequestUserAccess(req);
+    const { profile, accessUser } = await getRequestUserAccess(req);
     if (!profile || !accessUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -59,47 +45,33 @@ export async function POST(req: NextRequest) {
 
     const admin = await createAdminServerClient();
 
-    await touchDevice(admin, profile.id, input);
-
-    // Which mutation ids has this server already seen? One round trip
-    // rather than one per mutation.
-    const ids = input.mutations.map((mutation) => mutation.mutation_id);
+    // Which ids has this server already seen?
+    const ids = input.mutations.map((m) => m.mutation_id);
     const { data: seenRows, error: seenError } = await admin
       .from("snagging_sync_mutations")
       .select("mutation_id")
       .in("mutation_id", ids);
     if (seenError) throw new Error(seenError.message);
-    const seen = new Set((seenRows ?? []).map((row) => row.mutation_id));
+    const seen = new Set((seenRows ?? []).map((r) => r.mutation_id));
 
-    // A task the caller is not assigned to is not theirs to write to,
-    // whatever the payload claims. Loaded once and consulted per
-    // mutation.
-    const { data: assignments, error: assignmentError } = await admin
-      .from("snagging_task_assignees")
-      .select("task_id")
-      .eq("user_id", profile.id);
-    if (assignmentError) throw new Error(assignmentError.message);
-    const assignedTasks = new Set((assignments ?? []).map((row) => row.task_id));
+    // The jobs this inspector may write to (single inspector per job now).
+    const { data: myJobs, error: jobsError } = await admin
+      .from("snagging_jobs")
+      .select("id, status, code")
+      .eq("inspector_id", profile.id);
+    if (jobsError) throw new Error(jobsError.message);
+    const jobById = new Map<string, JobRef>((myJobs ?? []).map((j) => [j.id, j as JobRef]));
 
-    const taskCache = new Map<string, { id: string; status: string; property_id: string; code: string }>();
     const results: MutationResult[] = [];
     const ledger: Array<Record<string, unknown>> = [];
-    const audit: AuditEntry[] = [];
 
     for (const mutation of input.mutations) {
       if (seen.has(mutation.mutation_id)) {
         results.push({ mutation_id: mutation.mutation_id, status: "duplicate" });
         continue;
       }
-
       try {
-        const taskId = await applyMutation(admin, {
-          mutation,
-          userId: profile.id,
-          assignedTasks,
-          taskCache,
-        });
-
+        await applyMutation(admin, { mutation, userId: profile.id, jobById });
         results.push({ mutation_id: mutation.mutation_id, status: "applied" });
         ledger.push({
           mutation_id: mutation.mutation_id,
@@ -110,20 +82,9 @@ export async function POST(req: NextRequest) {
           op: mutation.op,
           status: "applied",
         });
-        audit.push({
-          entityType: mutation.entity === "photo" ? "photo" : (mutation.entity as AuditEntry["entityType"]),
-          entityId: mutation.entity_id,
-          taskId,
-          eventType: `${mutation.entity}_${mutation.op}`,
-          actorId: profile.id,
-          actorLabel: profile.full_name ?? profile.email,
-          origin: origin === "mobile" ? "mobile" : "portal",
-        });
       } catch (mutationError) {
         const message = (mutationError as Error).message;
         results.push({ mutation_id: mutation.mutation_id, status: "rejected", error: message });
-        // Rejections are recorded too. Without this the device would
-        // retry a permanently invalid mutation forever.
         ledger.push({
           mutation_id: mutation.mutation_id,
           user_id: profile.id,
@@ -144,8 +105,6 @@ export async function POST(req: NextRequest) {
       if (ledgerError) throw new Error(ledgerError.message);
     }
 
-    await recordAuditBatch(admin, audit);
-
     return NextResponse.json({
       data: {
         server_time: new Date().toISOString(),
@@ -161,152 +120,81 @@ export async function POST(req: NextRequest) {
 }
 
 type Mutation = SyncPushInput["mutations"][number];
+type Ctx = { mutation: Mutation; userId: string; jobById: Map<string, JobRef> };
 
-type ApplyContext = {
-  mutation: Mutation;
-  userId: string;
-  assignedTasks: Set<string>;
-  taskCache: Map<string, { id: string; status: string; property_id: string; code: string }>;
-};
-
-/** Returns the task the mutation belongs to, for the audit row. */
-async function applyMutation(admin: SupabaseClient, ctx: ApplyContext): Promise<string | null> {
-  const { mutation } = ctx;
-  const payload = mutation.payload as Record<string, unknown>;
-
-  switch (mutation.entity) {
-    case "snag":
-      return applySnag(admin, ctx, payload);
-    case "area":
-      return applyArea(admin, ctx, payload);
-    case "photo":
-      return applyPhoto(admin, ctx, payload);
-    case "verification":
-      return applyVerification(admin, ctx, payload);
-    case "submission":
-      return applySubmission(admin, ctx, payload);
-    case "task":
-      return applyTaskProgress(admin, ctx, payload);
-    default:
-      throw new Error(`Unsupported entity ${mutation.entity}`);
+async function applyMutation(admin: Admin, ctx: Ctx): Promise<void> {
+  const payload = ctx.mutation.payload as Record<string, unknown>;
+  switch (ctx.mutation.entity) {
+    case "snag": return applySnag(admin, ctx, payload);
+    case "area": return applyArea(admin, ctx, payload);
+    case "photo": return applyPhoto(admin, ctx, payload);
+    case "checklist": return applyChecklist(admin, ctx, payload);
+    case "verification": return applyVerification(admin, ctx, payload);
+    case "submission": return applySubmission(admin, ctx, payload);
+    case "task": return applyTaskProgress(admin, ctx, payload);
+    default: throw new Error(`Unsupported entity ${ctx.mutation.entity}`);
   }
 }
 
-async function loadWritableTask(
-  admin: SupabaseClient,
-  ctx: ApplyContext,
-  taskId: unknown,
-): Promise<{ id: string; status: string; property_id: string; code: string }> {
-  if (typeof taskId !== "string" || !taskId) {
-    throw new Error("Missing task_id");
+/** Resolves the job a mutation targets and asserts it is still writable. */
+function writableJob(ctx: Ctx, taskId: unknown): JobRef {
+  if (typeof taskId !== "string" || !taskId) throw new Error("Missing task_id");
+  const job = ctx.jobById.get(taskId);
+  if (!job) throw new Error("Not assigned to this inspection");
+  if (!isTaskEditableByInspector(job.status as SnaggingTaskStatus)) {
+    throw new Error(`Inspection is ${job.status} and cannot be edited`);
   }
-  if (!ctx.assignedTasks.has(taskId)) {
-    throw new Error("Not assigned to this inspection");
-  }
-
-  const cached = ctx.taskCache.get(taskId);
-  if (cached) return assertWritable(cached);
-
-  const { data, error } = await admin
-    .from("snagging_tasks")
-    .select("id, status, property_id, code")
-    .eq("id", taskId)
-    .maybeSingle();
-
-  if (error) throw new Error(error.message);
-  if (!data) throw new Error("Inspection not found");
-
-  ctx.taskCache.set(taskId, data);
-  return assertWritable(data);
+  return job;
 }
 
-function assertWritable(task: { id: string; status: string; property_id: string; code: string }) {
-  // BR-6/FR-2.09: a submitted inspection is immutable until a manager
-  // sends it back. The device enforces this too, but a queued mutation
-  // can arrive after the lock was applied, so the server is the one
-  // that decides.
-  if (!isTaskEditableByInspector(task.status as SnaggingTaskStatus)) {
-    throw new Error(`Inspection is ${task.status} and cannot be edited`);
-  }
-  return task;
-}
-
-async function applySnag(
-  admin: SupabaseClient,
-  ctx: ApplyContext,
-  payload: Record<string, unknown>,
-): Promise<string> {
-  const task = await loadWritableTask(admin, ctx, payload.task_id);
+async function applySnag(admin: Admin, ctx: Ctx, payload: Record<string, unknown>): Promise<void> {
+  const job = writableJob(ctx, payload.task_id);
 
   if (ctx.mutation.op === "delete") {
-    // Snags are withdrawn, never removed: the audit trail has to keep
-    // showing that something was captured and then retracted (BR-7).
     const { error } = await admin
       .from("snagging_snags")
       .update({ status: "withdrawn" })
       .eq("id", ctx.mutation.entity_id)
       .eq("locked", false);
     if (error) throw new Error(error.message);
-    return task.id;
+    return;
   }
 
   const severity = payload.severity;
   if (severity !== "low" && severity !== "medium" && severity !== "high") {
-    throw new Error("severity must be low, medium or high"); // BR-3
+    throw new Error("severity must be low, medium or high");
   }
-  if (!payload.catalogue_code) {
-    throw new Error("Every snag must reference a catalogue entry"); // BR-2
-  }
+  if (!payload.catalogue_code) throw new Error("Every snag must carry a classification code");
 
   const row = {
     id: ctx.mutation.entity_id,
-    property_id: task.property_id,
-    origin_task_id: task.id,
+    job_id: job.id,
     area_id: payload.area_id as string,
     snag_code: payload.snag_code as string,
     catalogue_entry_id: (payload.catalogue_entry_id as string) ?? null,
     catalogue_code: payload.catalogue_code as string,
-    area_code: (payload.area_code as string) ?? null,
-    element_code: (payload.element_code as string) ?? null,
-    defect_code: (payload.defect_code as string) ?? null,
-    area_label: (payload.area_label as string) ?? null,
     element_label: (payload.element_label as string) ?? null,
     defect_label: (payload.defect_label as string) ?? null,
     severity,
     note: (payload.note as string) ?? null,
-    floor_plan_id: (payload.floor_plan_id as string) ?? null,
     pin_x: toNumber(payload.pin_x),
     pin_y: toNumber(payload.pin_y),
     round_created: (payload.round_created as number) ?? 1,
-    captured_at: (payload.captured_at as string) ?? new Date().toISOString(),
     created_by: ctx.userId,
+    created_at: (payload.captured_at as string) ?? new Date().toISOString(),
   };
-
-  // Upsert rather than branch on op: an update that arrives before its
-  // insert (queue reordered by a retry) still lands correctly.
-  const { error } = await admin
-    .from("snagging_snags")
-    .upsert(row, { onConflict: "id" });
+  const { error } = await admin.from("snagging_snags").upsert(row, { onConflict: "id" });
   if (error) throw new Error(error.message);
-
-  return task.id;
 }
 
-async function applyArea(
-  admin: SupabaseClient,
-  ctx: ApplyContext,
-  payload: Record<string, unknown>,
-): Promise<string> {
-  const task = await loadWritableTask(admin, ctx, payload.task_id);
+async function applyArea(admin: Admin, ctx: Ctx, payload: Record<string, unknown>): Promise<void> {
+  const job = writableJob(ctx, payload.task_id);
 
-  // FR-2.01: an inspector can add a room the office did not list. The
-  // device sends it as an insert keyed by the id it generated, so an
-  // upsert is safe on replay.
   if (ctx.mutation.op === "insert") {
     const { error } = await admin.from("snagging_areas").upsert(
       {
         id: ctx.mutation.entity_id,
-        task_id: task.id,
+        job_id: job.id,
         name: (payload.name as string) ?? "Area",
         catalogue_area_code: (payload.catalogue_area_code as string) ?? null,
         sort_order: (payload.sort_order as number) ?? 0,
@@ -315,270 +203,148 @@ async function applyArea(
       { onConflict: "id" },
     );
     if (error) throw new Error(error.message);
-    return task.id;
+    return;
   }
 
-  // FR-2.07: an area with no defects needs the inspector's note as its
-  // positive coverage record, otherwise "clear" evidences nothing.
-  const confirmedAt = payload.confirmed_at as string | null | undefined;
-  const note = (payload.note as string | null | undefined)?.trim() || null;
+  // Only the fields the device actually sent are touched. A completion
+  // carries note + confirmed_at; an access change carries access_state +
+  // access_reason (+ the confirmation it may set). Merging blindly would let
+  // one mutation blank out what the other owns.
+  const update: Record<string, unknown> = {};
+  if ("note" in payload) update.note = (payload.note as string | null | undefined)?.trim() || null;
+  if ("confirmed_at" in payload) update.confirmed_at = (payload.confirmed_at as string | null) ?? null;
+  if ("access_state" in payload) update.access_state = (payload.access_state as string) ?? "accessible";
+  if ("access_reason" in payload) update.access_reason = (payload.access_reason as string | null) ?? null;
+  if (Object.keys(update).length === 0) return;
 
   const { error } = await admin
     .from("snagging_areas")
-    .update({
-      note,
-      confirmed_at: confirmedAt ?? null,
-      confirmed_by: confirmedAt ? ctx.userId : null,
-    })
+    .update(update)
     .eq("id", ctx.mutation.entity_id)
-    .eq("task_id", task.id);
-
+    .eq("job_id", job.id);
   if (error) throw new Error(error.message);
-  return task.id;
 }
 
-async function applyPhoto(
-  admin: SupabaseClient,
-  ctx: ApplyContext,
-  payload: Record<string, unknown>,
-): Promise<string> {
-  const task = await loadWritableTask(admin, ctx, payload.task_id);
+async function applyPhoto(admin: Admin, ctx: Ctx, payload: Record<string, unknown>): Promise<void> {
+  const job = writableJob(ctx, payload.task_id);
 
   if (ctx.mutation.op === "delete") {
-    // An inspector removed the photo before submitting. Drop the row, and
-    // the object with it, so storage does not accumulate orphans. The
-    // object delete is best-effort: a missing key is not a failure.
     const storagePath = payload.storage_path as string | undefined;
-    if (storagePath) {
-      await admin.storage.from("snagging").remove([storagePath]);
-    }
-    const { error } = await admin
-      .from("snagging_snag_photos")
-      .delete()
-      .eq("id", ctx.mutation.entity_id);
+    if (storagePath) await admin.storage.from("snagging").remove([storagePath]);
+    const { error } = await admin.from("snagging_snag_photos").delete().eq("id", ctx.mutation.entity_id);
     if (error) throw new Error(error.message);
-    return task.id;
+    return;
   }
 
-  // The binary went straight to storage under a signed upload URL; this
-  // records the metadata and the EXIF that gives the frame its
-  // evidentiary weight (R6, FR-4.05).
   const row = {
     id: ctx.mutation.entity_id,
     snag_id: payload.snag_id as string,
-    task_id: task.id,
+    job_id: job.id,
     storage_path: payload.storage_path as string,
     media_type: (payload.media_type as string) ?? "photo",
     bytes: toNumber(payload.bytes),
     width: toNumber(payload.width),
     height: toNumber(payload.height),
-    checksum_md5: (payload.checksum_md5 as string) ?? null,
-    exif: (payload.exif as Record<string, unknown>) ?? null,
-    gps_lat: toNumber(payload.gps_lat),
-    gps_lng: toNumber(payload.gps_lng),
     taken_at: (payload.taken_at as string) ?? new Date().toISOString(),
     round_number: (payload.round_number as number) ?? 1,
-    uploaded_by: ctx.userId,
   };
-
-  const { error } = await admin
-    .from("snagging_snag_photos")
-    .upsert(row, { onConflict: "id" });
+  const { error } = await admin.from("snagging_snag_photos").upsert(row, { onConflict: "id" });
   if (error) throw new Error(error.message);
-
-  return task.id;
 }
 
-async function applyVerification(
-  admin: SupabaseClient,
-  ctx: ApplyContext,
-  payload: Record<string, unknown>,
-): Promise<string> {
-  const task = await loadWritableTask(admin, ctx, payload.round_task_id);
+/** The inspector answering a checklist item (N4): passed / failed / not_checked. */
+async function applyChecklist(admin: Admin, ctx: Ctx, payload: Record<string, unknown>): Promise<void> {
+  const job = writableJob(ctx, payload.task_id);
+  const status = payload.status;
+  if (status !== "pending" && status !== "passed" && status !== "failed" && status !== "not_checked") {
+    throw new Error("Invalid checklist status");
+  }
+  const { error } = await admin
+    .from("snagging_job_checklist")
+    .update({
+      status,
+      reason: (payload.reason as string) ?? null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", ctx.mutation.entity_id)
+    .eq("job_id", job.id);
+  if (error) throw new Error(error.message);
+}
 
+/** A de-snag verdict now just moves the snag's status (no history table). */
+async function applyVerification(admin: Admin, ctx: Ctx, payload: Record<string, unknown>): Promise<void> {
+  writableJob(ctx, payload.round_task_id);
   const verdict = payload.verdict as SnaggingVerdict;
-  const allowed: SnaggingVerdict[] = [
-    "verified_closed",
-    "verified_poor_quality",
-    "verified_not_done",
-    "withdrawn",
-  ];
+  const allowed: SnaggingVerdict[] = ["verified_closed", "verified_poor_quality", "verified_not_done", "withdrawn"];
   if (!allowed.includes(verdict)) throw new Error(`Unknown verdict ${verdict}`);
 
-  const snagId = payload.snag_id as string;
-
-  const { error } = await admin.from("snagging_snag_verifications").upsert(
-    {
-      id: ctx.mutation.entity_id,
-      snag_id: snagId,
-      round_task_id: task.id,
-      round_number: (payload.round_number as number) ?? 2,
-      verdict,
-      note: (payload.note as string) ?? null,
-      created_by: ctx.userId,
-    },
-    { onConflict: "snag_id,round_task_id" },
-  );
-  if (error) throw new Error(error.message);
-
-  // §5.2: the round updates the snag's status rather than creating a
-  // second record of the same defect.
-  const { error: statusError } = await admin
+  const { error } = await admin
     .from("snagging_snags")
     .update({ status: statusFromVerdict(verdict) })
-    .eq("id", snagId);
-  if (statusError) throw new Error(statusError.message);
-
-  return task.id;
+    .eq("id", payload.snag_id as string);
+  if (error) throw new Error(error.message);
 }
 
-async function applySubmission(
-  admin: SupabaseClient,
-  ctx: ApplyContext,
-  payload: Record<string, unknown>,
-): Promise<string> {
-  const task = await loadWritableTask(admin, ctx, payload.task_id);
+/** Sign-off writes onto the job and locks the visit (no submissions table). */
+async function applySubmission(admin: Admin, ctx: Ctx, payload: Record<string, unknown>): Promise<void> {
+  const job = writableJob(ctx, payload.task_id);
 
-  // FR-2.04 and FR-3.04: every snag carries at least one photo, and
-  // submission waits until all of them have landed in storage. The
-  // device gates this too, but the server is the one that has to be
-  // sure — a report cannot reach a client with a missing frame.
-  //
-  // Done as two id-only reads and a set difference rather than an
-  // embedded null filter: filtering a parent row on a left-joined
-  // column is not something PostgREST does predictably.
-  const [snagRows, photoRows, areaCountResult] = await Promise.all([
-    admin
-      .from("snagging_snags")
-      .select("id, snag_code")
-      .eq("origin_task_id", task.id)
-      .neq("status", "withdrawn"),
-    admin.from("snagging_snag_photos").select("snag_id").eq("task_id", task.id),
-    admin
-      .from("snagging_areas")
-      .select("id", { count: "exact", head: true })
-      .eq("task_id", task.id),
+  // Every snag must carry at least one photo, and every mandatory checklist
+  // item must be answered, before the visit can close (BR-5, BR-12).
+  const [snagRows, photoRows, checklistRows] = await Promise.all([
+    admin.from("snagging_snags").select("id, snag_code").eq("job_id", job.id).neq("status", "withdrawn"),
+    admin.from("snagging_snag_photos").select("snag_id").eq("job_id", job.id),
+    admin.from("snagging_job_checklist").select("code").eq("job_id", job.id).eq("mandatory", true).eq("status", "pending"),
   ]);
-
   if (snagRows.error) throw new Error(snagRows.error.message);
   if (photoRows.error) throw new Error(photoRows.error.message);
+  if (checklistRows.error) throw new Error(checklistRows.error.message);
 
-  const photographed = new Set((photoRows.data ?? []).map((row) => row.snag_id));
-  const missing = (snagRows.data ?? []).filter((snag) => !photographed.has(snag.id));
-
-  if (missing.length > 0) {
-    const sample = missing
-      .slice(0, 3)
-      .map((snag) => snag.snag_code)
-      .join(", ");
-    throw new Error(
-      `${missing.length} snag(s) still have no photo uploaded (${sample}${
-        missing.length > 3 ? ", …" : ""
-      })`,
-    );
+  const pendingChecks = checklistRows.data ?? [];
+  if (pendingChecks.length > 0) {
+    throw new Error(`${pendingChecks.length} mandatory checklist item(s) are still unanswered`);
   }
 
-  const snagCount = snagRows.data?.length ?? 0;
-  const areaCount = areaCountResult.count ?? 0;
+  const photographed = new Set((photoRows.data ?? []).map((r) => r.snag_id));
+  const missing = (snagRows.data ?? []).filter((s) => !photographed.has(s.id));
+  if (missing.length > 0) {
+    const sample = missing.slice(0, 3).map((s) => s.snag_code).join(", ");
+    throw new Error(`${missing.length} snag(s) still have no photo uploaded (${sample}${missing.length > 3 ? ", …" : ""})`);
+  }
 
-  const attempt = Number(payload.attempt ?? 1);
-
-  const { error } = await admin.from("snagging_submissions").upsert(
-    {
-      id: ctx.mutation.entity_id,
-      task_id: task.id,
-      attempt,
-      signed_at: (payload.signed_at as string) ?? new Date().toISOString(),
-      signer_name: (payload.signer_name as string) ?? "",
-      signature_path: (payload.signature_path as string) ?? null,
-      gps_lat: toNumber(payload.gps_lat),
-      gps_lng: toNumber(payload.gps_lng),
-      device_id: (payload.device_id as string) ?? null,
-      app_version: (payload.app_version as string) ?? null,
-      snag_count: snagCount,
-      area_count: areaCount,
-      submitted_by: ctx.userId,
-    },
-    { onConflict: "task_id,attempt" },
-  );
-  if (error) throw new Error(error.message);
-
-  const submittedAt = new Date();
-  const { error: taskError } = await admin
-    .from("snagging_tasks")
+  const submittedAt = new Date().toISOString();
+  const { error } = await admin
+    .from("snagging_jobs")
     .update({
       status: "submitted",
-      submitted_at: submittedAt.toISOString(),
-      submitted_by: ctx.userId,
       locked: true,
-      approval_due_at: approvalDueAt(submittedAt),
+      submitted_at: submittedAt,
+      signer_name: (payload.signer_name as string) ?? null,
+      signed_at: (payload.signed_at as string) ?? submittedAt,
+      signature_path: (payload.signature_path as string) ?? null,
     })
-    .eq("id", task.id);
-  if (taskError) throw new Error(taskError.message);
+    .eq("id", job.id);
+  if (error) throw new Error(error.message);
 
-  // BR-6: everything captured in this visit becomes immutable.
-  const { error: lockError } = await admin
-    .from("snagging_snags")
-    .update({ locked: true })
-    .eq("origin_task_id", task.id);
+  const { error: lockError } = await admin.from("snagging_snags").update({ locked: true }).eq("job_id", job.id);
   if (lockError) throw new Error(lockError.message);
 
-  const { error: actionError } = await admin.from("snagging_approvals").insert({
-    task_id: task.id,
-    action: "submitted",
-    actor_id: ctx.userId,
-  });
-  if (actionError) throw new Error(actionError.message);
-
-  // The cache is stale the moment the lock lands.
-  ctx.taskCache.delete(task.id);
-
-  return task.id;
+  ctx.jobById.set(job.id, { ...job, status: "submitted" });
 }
 
 /** The device reporting that work has started on site (FR-1.06). */
-async function applyTaskProgress(
-  admin: SupabaseClient,
-  ctx: ApplyContext,
-  payload: Record<string, unknown>,
-): Promise<string> {
-  const task = await loadWritableTask(admin, ctx, ctx.mutation.entity_id);
-
-  if (payload.status !== "in_progress") {
-    throw new Error("The app may only move an inspection to in_progress");
-  }
-  if (task.status === "in_progress") return task.id;
+async function applyTaskProgress(admin: Admin, ctx: Ctx, payload: Record<string, unknown>): Promise<void> {
+  const job = writableJob(ctx, ctx.mutation.entity_id);
+  if (payload.status !== "in_progress") throw new Error("The app may only move an inspection to in_progress");
+  if (job.status === "in_progress") return;
 
   const { error } = await admin
-    .from("snagging_tasks")
-    .update({
-      status: "in_progress",
-      started_at: (payload.started_at as string) ?? new Date().toISOString(),
-    })
-    .eq("id", task.id)
+    .from("snagging_jobs")
+    .update({ status: "in_progress", started_at: (payload.started_at as string) ?? new Date().toISOString() })
+    .eq("id", job.id)
     .in("status", ["assigned", "rejected"]);
   if (error) throw new Error(error.message);
-
-  ctx.taskCache.delete(task.id);
-  return task.id;
-}
-
-/** FR-3.05 — the free-space figure powers the low-storage warning. */
-async function touchDevice(admin: SupabaseClient, userId: string, input: SyncPushInput) {
-  if (!input.device_id) return;
-
-  const { error } = await admin.from("snagging_devices").upsert(
-    {
-      device_id: input.device_id,
-      user_id: userId,
-      app_version: input.app_version ?? null,
-      free_bytes: input.free_bytes ?? null,
-      last_seen_at: new Date().toISOString(),
-    },
-    { onConflict: "device_id" },
-  );
-
-  if (error) console.error("snagging device upsert failed", error.message);
+  ctx.jobById.set(job.id, { ...job, status: "in_progress" });
 }
 
 function toNumber(value: unknown): number | null {

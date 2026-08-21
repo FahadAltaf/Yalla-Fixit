@@ -2,7 +2,17 @@
 
 import { useMemo, useState } from "react";
 import Image from "next/image";
-import { CheckCircle2, Flag, ImageOff, MapPin, RotateCcw, XCircle } from "lucide-react";
+import Link from "next/link";
+import {
+  CalendarPlus,
+  CheckCircle2,
+  FileText,
+  Flag,
+  ImageOff,
+  MapPin,
+  RotateCcw,
+  XCircle,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -26,6 +36,7 @@ import {
   type SnaggingTask,
 } from "@/types/types";
 
+import { AdditionalVisitDialog } from "./additional-visit-dialog";
 import { RejectInspectionDialog } from "./reject-inspection-dialog";
 import {
   SectionCard,
@@ -34,6 +45,8 @@ import {
   TaskStatusBadge,
   formatGstDateTime,
 } from "./shared";
+
+type Snag = NonNullable<SnaggingTask["snags"]>[number];
 
 /**
  * The review panel: everything a manager needs to accept or reject one
@@ -58,6 +71,8 @@ export function ReviewPanel({
   const [rejectOpen, setRejectOpen] = useState(false);
   const [flagged, setFlagged] = useState<Set<string>>(new Set());
   const [preview, setPreview] = useState<SnaggingPhoto | null>(null);
+  const [detail, setDetail] = useState<Snag | null>(null);
+  const [visitOpen, setVisitOpen] = useState(false);
 
   const canApprove = hasResourceAction(user, ResourceType.SNAGGING, ActionType.APPROVE);
   const canCreate = hasResourceAction(user, ResourceType.SNAGGING, ActionType.CREATE);
@@ -68,6 +83,12 @@ export function ReviewPanel({
   const highCount = snags.filter((snag) => snag.severity === "high").length;
   const confirmedAreas = areas.filter((area) => area.confirmed_at).length;
   const pendingArea = areas.find((area) => !area.confirmed_at);
+  // Rooms the inspector could not fully reach (R1-R6/J3). Surfaced so a
+  // coordinator sees why an area carries no snags — a locked door, not a
+  // clean pass — before approving.
+  const accessIssues = areas.filter(
+    (area) => area.access_state && area.access_state !== "accessible",
+  );
   const photoTotal = snags.reduce((sum, snag) => sum + (snag.photos?.length ?? 0), 0);
   const snagsWithPhoto = snags.filter((snag) => (snag.photos?.length ?? 0) > 0).length;
 
@@ -86,7 +107,7 @@ export function ReviewPanel({
     setWorking(true);
     try {
       await snaggingService.approveTask(task.id);
-      toast.success("Approved. The report has been queued.");
+      toast.success("Inspection approved. Open the report to send it to the client.");
       onChanged();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not approve");
@@ -116,7 +137,9 @@ export function ReviewPanel({
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground font-mono text-xs">{task.code}</span>
               <TaskStatusBadge status={task.status} />
-              {task.round_number > 1 ? (
+              {task.visit_type === "additional" ? (
+                <Badge variant="outline">Additional visit</Badge>
+              ) : task.round_number > 1 ? (
                 <Badge variant="outline">Round {task.round_number}</Badge>
               ) : null}
             </div>
@@ -135,6 +158,14 @@ export function ReviewPanel({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {["submitted", "in_review", "approved", "delivered"].includes(task.status) ? (
+              <Button asChild variant="outline">
+                <Link href={`/snagging/${task.id}/report`}>
+                  <FileText className="size-4" />
+                  Report
+                </Link>
+              </Button>
+            ) : null}
             {awaitingDecision && canApprove ? (
               <>
                 <Button variant="outline" onClick={() => setRejectOpen(true)} disabled={working}>
@@ -148,10 +179,16 @@ export function ReviewPanel({
               </>
             ) : null}
             {(task.status === "approved" || task.status === "delivered") && canCreate ? (
-              <Button variant="outline" onClick={() => void openRound()} disabled={working}>
-                <RotateCcw className="size-4" />
-                Open de-snag round
-              </Button>
+              <>
+                <Button variant="outline" onClick={() => void openRound()} disabled={working}>
+                  <RotateCcw className="size-4" />
+                  Open de-snag round
+                </Button>
+                <Button variant="outline" onClick={() => setVisitOpen(true)} disabled={working}>
+                  <CalendarPlus className="size-4" />
+                  Additional visit
+                </Button>
+              </>
             ) : null}
           </div>
         </div>
@@ -178,8 +215,19 @@ export function ReviewPanel({
 
         {task.status === "rejected" && task.rejection_reason ? (
           <div className="border-danger/30 bg-danger/5 border-t px-5 py-4">
-            <p className="text-danger text-sm font-medium">Sent back for correction</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-danger text-sm font-medium">Sent back for correction</p>
+              {task.rejection_category ? (
+                <span className="bg-danger/10 text-danger rounded px-2 py-0.5 text-xs font-medium capitalize">
+                  {task.rejection_category.replace(/_/g, " ")}
+                </span>
+              ) : null}
+              {(task.rejection_count ?? 0) > 1 ? (
+                <span className="text-muted-foreground text-xs">· {task.rejection_count}× returned</span>
+              ) : null}
+            </div>
             <p className="text-muted-foreground mt-1 text-sm">{task.rejection_reason}</p>
+            {task.remediation_due_at ? <RemediationDue due={task.remediation_due_at} /> : null}
           </div>
         ) : awaitingDecision ? (
           <div className="border-warning/30 bg-warning/5 border-t px-5 py-3">
@@ -192,6 +240,40 @@ export function ReviewPanel({
           </div>
         ) : null}
       </Card>
+
+      {accessIssues.length > 0 ? (
+        <SectionCard
+          title="Access issues"
+          description={`${accessIssues.length} area(s) not fully inspected`}
+          bodyClassName="border-t"
+        >
+          <ul>
+            {accessIssues.map((area) => (
+              <li
+                key={area.id}
+                className="flex flex-wrap items-start gap-3 border-b px-5 py-3 last:border-b-0"
+              >
+                <span
+                  className={cn(
+                    "mt-0.5 rounded-md px-2 py-0.5 text-xs font-medium",
+                    area.access_state === "not_accessible"
+                      ? "bg-destructive/10 text-destructive"
+                      : "bg-warning/10 text-warning",
+                  )}
+                >
+                  {area.access_state === "not_accessible" ? "No access" : "Limited access"}
+                </span>
+                <div className="min-w-48 flex-1">
+                  <p className="font-medium">{area.name}</p>
+                  {area.access_reason ? (
+                    <p className="text-muted-foreground mt-0.5 text-sm">{area.access_reason}</p>
+                  ) : null}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </SectionCard>
+      ) : null}
 
       <SectionCard
         title="Walk the snags"
@@ -215,11 +297,15 @@ export function ReviewPanel({
                 <SnagIndex index={index + 1} severity={snag.severity} />
 
                 <div className="min-w-48 flex-1">
-                  <p className="font-medium">
+                  <button
+                    type="button"
+                    onClick={() => setDetail(snag)}
+                    className="hover:text-primary text-left font-medium hover:underline"
+                  >
                     {[snag.area?.name ?? snag.area_label, snag.element_label, snag.defect_label]
                       .filter(Boolean)
                       .join(" · ")}
-                  </p>
+                  </button>
                   <p className="text-muted-foreground mt-0.5 text-sm">
                     <span className="font-mono text-xs">{snag.snag_code}</span>
                     {snag.note ? <span> · {snag.note}</span> : null}
@@ -288,6 +374,8 @@ export function ReviewPanel({
         onRejected={onChanged}
       />
 
+      <AdditionalVisitDialog taskId={task.id} open={visitOpen} onOpenChange={setVisitOpen} />
+
       <Dialog open={Boolean(preview)} onOpenChange={(open) => !open && setPreview(null)}>
         <DialogContent className="sm:max-w-3xl">
           <DialogHeader>
@@ -315,6 +403,104 @@ export function ReviewPanel({
           )}
         </DialogContent>
       </Dialog>
+
+      <SnagDetailDialog
+        snag={detail}
+        onClose={() => setDetail(null)}
+        onOpenPhoto={(photo) => setPreview(photo)}
+      />
+    </div>
+  );
+}
+
+/** Everything captured for one snag: classification, note, pin, and evidence. */
+function SnagDetailDialog({
+  snag,
+  onClose,
+  onOpenPhoto,
+}: {
+  snag: Snag | null;
+  onClose: () => void;
+  onOpenPhoto: (photo: SnaggingPhoto) => void;
+}) {
+  const photos = (snag?.photos ?? []).filter((p) => p.signed_url);
+  return (
+    <Dialog open={Boolean(snag)} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{snag?.defect_label ?? "Snag"}</DialogTitle>
+          <DialogDescription>
+            <span className="font-mono text-xs">{snag?.snag_code}</span>
+          </DialogDescription>
+        </DialogHeader>
+
+        {snag ? (
+          <div className="space-y-4 text-sm">
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
+              <Detail label="Area" value={snag.area?.name ?? snag.area_label} />
+              <Detail label="Element" value={snag.element_label} />
+              <Detail label="Defect" value={snag.defect_label} />
+              <Detail label="Severity" value={<SeverityBadge severity={snag.severity} />} />
+              <Detail label="Status" value={snag.status} />
+              <Detail
+                label="Pin on plan"
+                value={
+                  snag.pin_x !== null && snag.pin_x !== undefined && snag.pin_y !== null && snag.pin_y !== undefined
+                    ? `${Math.round(Number(snag.pin_x) * 100)}%, ${Math.round(Number(snag.pin_y) * 100)}%`
+                    : "Not placed"
+                }
+              />
+            </dl>
+
+            {snag.note ? (
+              <div>
+                <p className="text-muted-foreground text-xs">Note</p>
+                <p className="mt-0.5">{snag.note}</p>
+              </div>
+            ) : null}
+
+            <div>
+              <p className="text-muted-foreground mb-1.5 text-xs">
+                Evidence ({photos.length} {photos.length === 1 ? "file" : "files"})
+              </p>
+              {photos.length > 0 ? (
+                <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+                  {photos.map((photo) => (
+                    <button
+                      key={photo.id}
+                      type="button"
+                      onClick={() => onOpenPhoto(photo)}
+                      className="focus-visible:ring-ring relative aspect-square overflow-hidden rounded-md border focus-visible:ring-2 focus-visible:outline-none"
+                    >
+                      <Image
+                        src={photo.signed_url as string}
+                        alt=""
+                        fill
+                        unoptimized
+                        sizes="120px"
+                        className="object-cover"
+                      />
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-muted-foreground flex items-center gap-2 py-4">
+                  <ImageOff className="size-4" /> No photo uploaded yet.
+                </p>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function Detail({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div>
+      <dt className="text-muted-foreground text-xs">{label}</dt>
+      <dd className="mt-0.5">{value || "—"}</dd>
     </div>
   );
 }
@@ -343,5 +529,23 @@ function Stat({
       </p>
       {caption ? <p className="text-muted-foreground mt-1 text-xs">{caption}</p> : null}
     </div>
+  );
+}
+
+/** The remediation SLA deadline for a returned inspection (§5.3). */
+function RemediationDue({ due }: { due: string }) {
+  const deadline = new Date(due);
+  const overdue = deadline.getTime() < Date.now();
+  const when = deadline.toLocaleString("en-GB", {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Asia/Dubai",
+  });
+  return (
+    <p className={cn("mt-1 text-xs", overdue ? "text-danger font-medium" : "text-muted-foreground")}>
+      {overdue ? `Fix overdue — was due ${when}` : `Fix due by ${when}`}
+    </p>
   );
 }

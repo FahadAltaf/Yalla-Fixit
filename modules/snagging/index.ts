@@ -4,6 +4,9 @@ export type {
   SnaggingTaskListResponse,
   CatalogueResponse,
   SnaggingClientOption,
+  SnaggingPricingConfig,
+  SnaggingQuotation,
+  SnaggingQuoteLine,
 } from "./services/snagging-service";
 
 export * from "./schemas";

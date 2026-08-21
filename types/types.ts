@@ -283,14 +283,10 @@ export type SnaggingTaskStatus =
 
 export type SnaggingTaskType = "single_unit" | "full_building";
 
-export type SnaggingPropertyType =
-  | "studio"
-  | "1br"
-  | "2br"
-  | "3br"
-  | "4br"
-  | "villa"
-  | "townhouse";
+/** Which kind of visit a job is (Q1-Q6). */
+export type SnaggingVisitType = "initial" | "desnag" | "additional";
+
+export type SnaggingPropertyType = "apartment" | "villa" | "townhouse" | "commercial";
 
 export type SnaggingServiceTier = "essential" | "comfort" | "full" | "b2b_building";
 
@@ -363,7 +359,12 @@ export interface SnaggingArea {
   note?: string | null;
   confirmed_at?: string | null;
   confirmed_by?: string | null;
+  /** How reachable the room was on the day (R1-R6/J3). */
+  access_state?: SnaggingAreaAccessState;
+  access_reason?: string | null;
 }
+
+export type SnaggingAreaAccessState = "accessible" | "not_accessible" | "limited_access";
 
 export interface SnaggingPhoto {
   id: string;
@@ -461,6 +462,10 @@ export interface SnaggingTask {
   service_tier?: SnaggingServiceTier | null;
   package_name?: string | null;
   round_number: number;
+  /** Distinguishes a fresh pass, a de-snag round, and a chargeable extra visit (Q1-Q6). */
+  visit_type?: SnaggingVisitType;
+  /** Snapshot of the additional-visit price at booking time, additional visits only. */
+  visit_charge?: number | null;
   parent_task_id?: string | null;
   status: SnaggingTaskStatus;
   scheduled_date?: string | null;
@@ -483,12 +488,57 @@ export interface SnaggingTask {
   created_at?: string;
   updated_at?: string;
 
+  // Sign-off + delivery (K1-K3). Come through on the job row.
+  signed_at?: string | null;
+  signer_name?: string | null;
+  signature_path?: string | null;
+  delivery_channel?: string | null;
+  delivery_recipient?: string | null;
+
   property?: SnaggingProperty | null;
   areas?: SnaggingArea[];
   snags?: SnaggingSnag[];
   assignees?: SnaggingAssignee[];
   approvals?: SnaggingApprovalAction[];
   floor_plans?: SnaggingFloorPlan[];
+  checklist?: SnaggingChecklistItem[];
+  submissions?: SnaggingSubmission[];
+}
+
+/** One append-only audit event on an inspection (BR-5). */
+export interface SnaggingAuditEvent {
+  id: number;
+  event_type: string;
+  entity_type: string;
+  actor_label?: string | null;
+  origin?: string | null;
+  justification?: string | null;
+  payload?: Record<string, unknown> | null;
+  created_at: string;
+}
+
+/** The inspector's on-site sign-off for a visit (FR-2.08). */
+export interface SnaggingSubmission {
+  id: string;
+  task_id: string;
+  attempt: number;
+  signed_at?: string | null;
+  signer_name?: string | null;
+  signature_path?: string | null;
+  signature_url?: string | null;
+}
+
+export type SnaggingChecklistStatus = "pending" | "passed" | "failed" | "not_checked";
+
+export interface SnaggingChecklistItem {
+  id: string;
+  code: string;
+  group_name: string;
+  label: string;
+  mandatory: boolean;
+  status: SnaggingChecklistStatus;
+  reason?: string | null;
+  sort_order: number;
 }
 
 /** Row shape of the snagging_task_summaries view. */
@@ -498,6 +548,7 @@ export interface SnaggingTaskSummary {
   status: SnaggingTaskStatus;
   task_type: SnaggingTaskType;
   round_number: number;
+  visit_type?: SnaggingVisitType;
   parent_task_id?: string | null;
   scheduled_date?: string | null;
   scheduled_start_at?: string | null;
@@ -508,6 +559,7 @@ export interface SnaggingTaskSummary {
   rejection_category?: SnaggingRejectionCategory | null;
   rejection_reason?: string | null;
   rejection_count: number;
+  remediation_due_at?: string | null;
   approval_due_at?: string | null;
   submitted_at?: string | null;
   approved_at?: string | null;

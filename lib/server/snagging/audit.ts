@@ -32,11 +32,10 @@ export type AuditEntry = {
   payload?: Record<string, unknown> | null;
 };
 
-export async function recordAudit(
-  admin: SupabaseClient,
-  entry: AuditEntry,
-): Promise<void> {
-  const { error } = await admin.from("snagging_audit_events").insert({
+const AUDIT_TABLE = "snagging_audit_events";
+
+function toRow(entry: AuditEntry): Record<string, unknown> {
+  return {
     entity_type: entry.entityType,
     entity_id: entry.entityId ?? null,
     task_id: entry.taskId ?? null,
@@ -46,35 +45,31 @@ export async function recordAudit(
     origin: entry.origin ?? "portal",
     justification: entry.justification ?? null,
     payload: entry.payload ?? null,
-  });
+  };
+}
 
-  if (error) {
-    console.error("snagging audit insert failed", entry.eventType, error.message);
+/**
+ * Records one audit event.
+ *
+ * Never throws: the action being audited has already committed by the
+ * time we get here, so a lost audit row must not fail the user's request.
+ * Failures are logged and swallowed.
+ */
+export async function recordAudit(admin: SupabaseClient, entry: AuditEntry): Promise<void> {
+  try {
+    const { error } = await admin.from(AUDIT_TABLE).insert(toRow(entry));
+    if (error) console.error("snagging audit insert failed", error.message);
+  } catch (error) {
+    console.error("snagging audit insert threw", error);
   }
 }
 
-/** Batched form, for sync pushes that apply many mutations at once. */
-export async function recordAuditBatch(
-  admin: SupabaseClient,
-  entries: AuditEntry[],
-): Promise<void> {
+export async function recordAuditBatch(admin: SupabaseClient, entries: AuditEntry[]): Promise<void> {
   if (entries.length === 0) return;
-
-  const { error } = await admin.from("snagging_audit_events").insert(
-    entries.map((entry) => ({
-      entity_type: entry.entityType,
-      entity_id: entry.entityId ?? null,
-      task_id: entry.taskId ?? null,
-      event_type: entry.eventType,
-      actor_id: entry.actorId ?? null,
-      actor_label: entry.actorLabel ?? null,
-      origin: entry.origin ?? "portal",
-      justification: entry.justification ?? null,
-      payload: entry.payload ?? null,
-    })),
-  );
-
-  if (error) {
-    console.error("snagging audit batch insert failed", error.message);
+  try {
+    const { error } = await admin.from(AUDIT_TABLE).insert(entries.map(toRow));
+    if (error) console.error("snagging audit batch insert failed", error.message);
+  } catch (error) {
+    console.error("snagging audit batch insert threw", error);
   }
 }

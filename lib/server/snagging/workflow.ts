@@ -121,8 +121,18 @@ export const CARRY_FORWARD_STATUSES = CARRY_FORWARD;
  * an inspector can tell at a glance which visit a report belongs to.
  */
 export function roundCode(parentCode: string, roundNumber: number): string {
-  const base = parentCode.replace(/-R\d+$/, "");
+  const base = parentCode.replace(/-[RV]\d+$/, "");
   return `${base}-R${roundNumber}`;
+}
+
+/**
+ * Builds the code for an additional (chargeable) visit, e.g.
+ * VIL42 -> VIL42-V2. A -V suffix tells it apart from a -R de-snag round
+ * at a glance on a report or in a list.
+ */
+export function visitCode(parentCode: string, visitNumber: number): string {
+  const base = parentCode.replace(/-[RV]\d+$/, "");
+  return `${base}-V${visitNumber}`;
 }
 
 /**

@@ -9,11 +9,13 @@ import { rejectTaskSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType, SnaggingTaskStatus } from "@/types/types";
 
 /**
- * Manager rejection with the three-tier branching from §5.3.
+ * Manager rejection (§5.3).
  *
- * The category is not cosmetic: it sets the remediation clock, and a
- * `critical` rejection means the evidence itself is unusable, so the
- * captured snags are unlocked for correction rather than left frozen.
+ * The written reason is the durable record of what went wrong (BR-5).
+ * The category is persisted and drives the remediation clock
+ * (remediation_due_at) and the rejection tally (rejection_count). A
+ * rejection also unlocks the captured snags so the inspector can correct
+ * them, unless it is only a `minor` fix ops can make in the portal.
  */
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
@@ -35,31 +37,35 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const { category, comment } = parsed.data;
 
     const admin = await createAdminServerClient();
-    const { data: task, error: loadError } = await admin
-      .from("snagging_tasks")
+    const { data: job, error: loadError } = await admin
+      .from("snagging_jobs")
       .select("id, code, status, rejection_count")
       .eq("id", id)
       .maybeSingle();
 
     if (loadError) throw new Error(loadError.message);
-    if (!task) return NextResponse.json({ error: "Inspection not found" }, { status: 404 });
+    if (!job) return NextResponse.json({ error: "Inspection not found" }, { status: 404 });
 
     try {
-      assertTransition(task.status as SnaggingTaskStatus, "rejected");
+      assertTransition(job.status as SnaggingTaskStatus, "rejected");
     } catch (transitionError) {
       return NextResponse.json({ error: (transitionError as Error).message }, { status: 409 });
     }
 
+    // §5.3 — the category sets the remediation clock and adds to the tally,
+    // so the deadline the inspector sees and the "how many times" figure
+    // both come from here rather than being dropped.
+    const remediationDeadline = remediationDueAt(category);
+
     const { error: updateError } = await admin
-      .from("snagging_tasks")
+      .from("snagging_jobs")
       .update({
         status: "rejected",
         locked: false,
-        rejection_category: category,
         rejection_reason: comment,
-        rejection_count: (task.rejection_count ?? 0) + 1,
-        remediation_due_at: remediationDueAt(category),
-        approval_due_at: null,
+        rejection_category: category,
+        remediation_due_at: remediationDeadline,
+        rejection_count: (job.rejection_count ?? 0) + 1,
       })
       .eq("id", id)
       .in("status", ["submitted", "in_review"]);
@@ -73,18 +79,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       const { error: unlockError } = await admin
         .from("snagging_snags")
         .update({ locked: false })
-        .eq("origin_task_id", id);
+        .eq("job_id", id);
       if (unlockError) throw new Error(unlockError.message);
     }
-
-    const { error: actionError } = await admin.from("snagging_approvals").insert({
-      task_id: id,
-      action: "rejected",
-      rejection_category: category,
-      comment,
-      actor_id: profile.id,
-    });
-    if (actionError) throw new Error(actionError.message);
 
     await recordAudit(admin, {
       entityType: "task",
@@ -94,10 +91,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       actorId: profile.id,
       actorLabel: profile.full_name ?? profile.email,
       justification: comment,
-      payload: { code: task.code, category, attempt: (task.rejection_count ?? 0) + 1 },
+      payload: { code: job.code, category },
     });
 
-    return NextResponse.json({ data: { id, status: "rejected", category } });
+    return NextResponse.json({
+      data: { id, status: "rejected", category, remediation_due_at: remediationDeadline },
+    });
   } catch (error) {
     console.error("Snagging reject error:", error);
     return NextResponse.json({ error: "Failed to reject inspection" }, { status: 500 });

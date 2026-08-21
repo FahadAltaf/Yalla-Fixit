@@ -2,7 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
+import { searchFsmWorkOrders } from "@/lib/server/zoho/work-orders";
 import { ActionType, ResourceType } from "@/types/types";
+
+// The non-number filters scan several pages of recent work orders, so give
+// this route more headroom than the platform default.
+export const maxDuration = 60;
 
 const searchSchema = z.object({
   workOrderName: z.string().trim().optional(),
@@ -14,7 +19,7 @@ const searchSchema = z.object({
 });
 
 // PLAN-003/004 (O-4): multi-result work order search by number, client,
-// company, address or due-date. Proxies the zoho-fsm-work-order-search fn.
+// company, address or due-date.
 export async function POST(req: NextRequest) {
   try {
     const { profile, accessUser } = await getAuthenticatedUserAccess();
@@ -30,32 +35,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
     }
 
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const anonKey = process.env.SUPABASE_ANON_KEY;
-    if (!supabaseUrl || !anonKey) {
-      return NextResponse.json({ error: "Supabase environment is not configured" }, { status: 500 });
-    }
+    const result = await searchFsmWorkOrders(parsed.data);
+    if (!result.ok) return NextResponse.json(result.json, { status: result.status });
 
-    const res = await fetch(`${supabaseUrl}/functions/v1/zoho-fsm-work-order-search`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${anonKey}`,
-        apikey: anonKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(parsed.data),
-    });
-
-    const text = await res.text();
-    let json: unknown;
-    try {
-      json = JSON.parse(text);
-    } catch {
-      json = { error: "The work-order-search function returned an invalid response" };
-    }
-
-    if (res.ok) return NextResponse.json({ data: json });
-    return NextResponse.json(json, { status: res.status });
+    return NextResponse.json({ data: result.json });
   } catch (error) {
     console.error("Work-order-search error:", error);
     return NextResponse.json({ error: "Failed to search work orders" }, { status: 500 });

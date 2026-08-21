@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  CalendarIcon,
   Check,
   ChevronDown,
   ImageIcon,
@@ -15,9 +16,11 @@ import {
   Users,
   X,
 } from "lucide-react";
+import { format, parseISO } from "date-fns";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { Calendar } from "@/components/ui/calendar";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -30,7 +33,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import MultipleSelector, { type Option } from "@/components/ui/multiselect";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -59,6 +62,7 @@ type AreaChoice = { name: string; code: string | null };
 type PendingPlan = { id: string; file: File; label: string; width?: number; height?: number; url: string };
 
 type Draft = {
+  client_id: string;
   client_name: string;
   client_email: string;
   client_phone: string;
@@ -66,9 +70,23 @@ type Draft = {
   building_name: string;
   community: string;
   developer_name: string;
-  task_type: "single_unit" | "full_building";
   property_type: SnaggingPropertyType;
-  scheduled_date: string;
+  bedrooms: number; // 0 = studio; ignored for commercial
+  built_up_area: string; // sqft
+  plot_area: string; // villa / townhouse
+  external_areas_in_scope: boolean;
+  floors: string; // villa
+  location_lat: string;
+  location_lng: string;
+  title_deed_path: string;
+  noc_required: boolean;
+  noc_path: string;
+  appointment_date: string; // YYYY-MM-DD
+  appointment_time: string; // HH:MM
+  developer_contact_name: string;
+  developer_contact_phone: string;
+  client_contact_name: string;
+  client_contact_phone: string;
   notes: string;
   areas: AreaChoice[];
   technician_ids: string[];
@@ -87,122 +105,61 @@ const STEPS = [
  * each draws its defect list from. The code rides with the area so the
  * inspector's capture sheet offers the right elements in each room.
  */
-const TEMPLATES: Record<SnaggingPropertyType, AreaChoice[]> = {
-  studio: [
-    { name: "Entrance", code: "ENT" },
-    { name: "Living / sleeping area", code: "LIV" },
-    { name: "Kitchen", code: "KIT" },
-    { name: "Bathroom", code: "BTH" },
-    { name: "Balcony", code: "BAL" },
-  ],
-  "1br": [
-    { name: "Entrance", code: "ENT" },
-    { name: "Living room", code: "LIV" },
-    { name: "Kitchen", code: "KIT" },
-    { name: "Master bedroom", code: "MBR" },
-    { name: "Master bathroom", code: "MBA" },
-    { name: "Guest WC", code: "WC" },
-    { name: "Laundry", code: "LDY" },
-    { name: "Balcony", code: "BAL" },
-  ],
-  "2br": [
-    { name: "Entrance", code: "ENT" },
-    { name: "Living room", code: "LIV" },
-    { name: "Dining room", code: "DIN" },
-    { name: "Kitchen", code: "KIT" },
-    { name: "Master bedroom", code: "MBR" },
-    { name: "Master bathroom", code: "MBA" },
-    { name: "Bedroom 2", code: "BED" },
-    { name: "Bathroom 2", code: "BTH" },
-    { name: "Guest WC", code: "WC" },
-    { name: "Laundry", code: "LDY" },
-    { name: "Store", code: "STO" },
-    { name: "Balcony", code: "BAL" },
-  ],
-  "3br": [
-    { name: "Entrance", code: "ENT" },
-    { name: "Living room", code: "LIV" },
-    { name: "Dining room", code: "DIN" },
-    { name: "Kitchen", code: "KIT" },
-    { name: "Master bedroom", code: "MBR" },
-    { name: "Master bathroom", code: "MBA" },
-    { name: "Bedroom 2", code: "BED" },
-    { name: "Bathroom 2", code: "BTH" },
-    { name: "Bedroom 3", code: "BED" },
-    { name: "Bathroom 3", code: "BTH" },
-    { name: "Guest WC", code: "WC" },
-    { name: "Corridor", code: "COR" },
-    { name: "Laundry", code: "LDY" },
-    { name: "Store", code: "STO" },
-    { name: "Maid room", code: "MRM" },
-    { name: "Balcony", code: "BAL" },
-  ],
-  "4br": [
-    { name: "Entrance", code: "ENT" },
-    { name: "Living room", code: "LIV" },
-    { name: "Dining room", code: "DIN" },
-    { name: "Family room", code: "FAM" },
-    { name: "Kitchen", code: "KIT" },
-    { name: "Master bedroom", code: "MBR" },
-    { name: "Master bathroom", code: "MBA" },
-    { name: "Bedroom 2", code: "BED" },
-    { name: "Bathroom 2", code: "BTH" },
-    { name: "Bedroom 3", code: "BED" },
-    { name: "Bathroom 3", code: "BTH" },
-    { name: "Bedroom 4", code: "BED" },
-    { name: "Bathroom 4", code: "BTH" },
-    { name: "Guest WC", code: "WC" },
-    { name: "Corridor", code: "COR" },
-    { name: "Laundry", code: "LDY" },
-    { name: "Store", code: "STO" },
-    { name: "Maid room", code: "MRM" },
-    { name: "Balcony", code: "BAL" },
-  ],
-  villa: [
-    { name: "Entrance", code: "ENT" },
-    { name: "Living room", code: "LIV" },
-    { name: "Dining room", code: "DIN" },
-    { name: "Family room", code: "FAM" },
-    { name: "Kitchen", code: "KIT" },
-    { name: "Guest WC", code: "WC" },
-    { name: "Staircase", code: "STA" },
-    { name: "Master bedroom", code: "MBR" },
-    { name: "Master bathroom", code: "MBA" },
-    { name: "Bedroom 2", code: "BED" },
-    { name: "Bathroom 2", code: "BTH" },
-    { name: "Bedroom 3", code: "BED" },
-    { name: "Bathroom 3", code: "BTH" },
-    { name: "Bedroom 4", code: "BED" },
-    { name: "Bathroom 4", code: "BTH" },
-    { name: "Corridor", code: "COR" },
-    { name: "Laundry", code: "LDY" },
-    { name: "Store", code: "STO" },
-    { name: "Maid room", code: "MRM" },
-    { name: "Terrace", code: "TER" },
-    { name: "Garden", code: "GDN" },
-    { name: "Roof", code: "ROF" },
-    { name: "Garage", code: "GAR" },
-  ],
-  townhouse: [
-    { name: "Entrance", code: "ENT" },
-    { name: "Living room", code: "LIV" },
-    { name: "Dining room", code: "DIN" },
-    { name: "Kitchen", code: "KIT" },
-    { name: "Guest WC", code: "WC" },
-    { name: "Staircase", code: "STA" },
-    { name: "Master bedroom", code: "MBR" },
-    { name: "Master bathroom", code: "MBA" },
-    { name: "Bedroom 2", code: "BED" },
-    { name: "Bathroom 2", code: "BTH" },
-    { name: "Bedroom 3", code: "BED" },
-    { name: "Corridor", code: "COR" },
-    { name: "Laundry", code: "LDY" },
-    { name: "Store", code: "STO" },
-    { name: "Terrace", code: "TER" },
-    { name: "Garden", code: "GDN" },
-    { name: "Garage", code: "GAR" },
-  ],
-};
+/**
+ * Builds the starting room list from the property type and bedroom count.
+ * The area list is only a starting point; the coordinator edits it and the
+ * inspector can add rooms on site (Action Point H1).
+ */
+function templateFor(type: SnaggingPropertyType, bedrooms: number | null): AreaChoice[] {
+  const rooms: AreaChoice[] = [];
+  const add = (name: string, code: string) => rooms.push({ name, code });
+
+  if (type === "commercial") {
+    add("Reception", "ENT");
+    add("Open office", "LIV");
+    add("Meeting room", "DIN");
+    add("Pantry", "KIT");
+    add("Guest WC", "WC");
+    add("Storage", "STO");
+    add("Corridor", "COR");
+    return rooms;
+  }
+
+  const bed = bedrooms ?? 0;
+  add("Entrance", "ENT");
+  add(bed === 0 ? "Living / sleeping area" : "Living room", "LIV");
+  if (bed >= 2) add("Dining room", "DIN");
+  if (bed >= 4) add("Family room", "FAM");
+  add("Kitchen", "KIT");
+
+  if (bed === 0) {
+    add("Bathroom", "BTH");
+  } else {
+    add("Master bedroom", "MBR");
+    add("Master bathroom", "MBA");
+    for (let i = 2; i <= bed; i += 1) {
+      add(`Bedroom ${i}`, "BED");
+      add(`Bathroom ${i}`, "BTH");
+    }
+    add("Guest WC", "WC");
+  }
+
+  add("Laundry", "LDY");
+  if (bed >= 2) add("Store", "STO");
+
+  if (type === "villa" || type === "townhouse") {
+    add("Staircase", "STA");
+    if (bed >= 3) add("Maid room", "MRM");
+    add("Terrace", "TER");
+    add("Garden", "GDN");
+    add("Garage", "GAR");
+    if (type === "villa") add("Roof", "ROF");
+  } else {
+    add("Balcony", "BAL");
+  }
+
+  return rooms;
+}
 
 export default function NewJobWizard() {
   const router = useRouter();
@@ -210,8 +167,11 @@ export default function NewJobWizard() {
   const [submitting, setSubmitting] = useState(false);
   const [users, setUsers] = useState<User[]>([]);
   const [plans, setPlans] = useState<PendingPlan[]>([]);
+  const [titleDeedFile, setTitleDeedFile] = useState<File | null>(null);
+  const [nocFile, setNocFile] = useState<File | null>(null);
 
   const [draft, setDraft] = useState<Draft>({
+    client_id: "",
     client_name: "",
     client_email: "",
     client_phone: "",
@@ -219,11 +179,25 @@ export default function NewJobWizard() {
     building_name: "",
     community: "",
     developer_name: "",
-    task_type: "single_unit",
-    property_type: "2br",
-    scheduled_date: "",
+    property_type: "apartment",
+    bedrooms: 2,
+    built_up_area: "",
+    plot_area: "",
+    external_areas_in_scope: false,
+    floors: "",
+    location_lat: "",
+    location_lng: "",
+    title_deed_path: "",
+    noc_required: false,
+    noc_path: "",
+    appointment_date: "",
+    appointment_time: "",
+    developer_contact_name: "",
+    developer_contact_phone: "",
+    client_contact_name: "",
+    client_contact_phone: "",
     notes: "",
-    areas: TEMPLATES["2br"],
+    areas: templateFor("apartment", 2),
     technician_ids: [],
     approval_manager_id: "",
   });
@@ -239,22 +213,26 @@ export default function NewJobWizard() {
       .catch(() => toast.error("Could not load the staff list"));
   }, []);
 
-  const userOptions: Option[] = users.map((user) => ({
-    value: user.id,
-    label: user.full_name || user.email || user.id,
-  }));
 
   function set<K extends keyof Draft>(key: K, value: Draft[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
   }
 
-  // Changing the property type reseeds the room list, unless the user
-  // has already customised it.
+  // Changing the property type or bedroom count reseeds the room list,
+  // unless the user has already customised it.
   function setPropertyType(value: SnaggingPropertyType) {
     setDraft((current) => ({
       ...current,
       property_type: value,
-      areas: areasTouched.current ? current.areas : TEMPLATES[value],
+      areas: areasTouched.current ? current.areas : templateFor(value, current.bedrooms),
+    }));
+  }
+
+  function setBedrooms(value: number) {
+    setDraft((current) => ({
+      ...current,
+      bedrooms: value,
+      areas: areasTouched.current ? current.areas : templateFor(current.property_type, value),
     }));
   }
 
@@ -266,28 +244,38 @@ export default function NewJobWizard() {
   const stepValid = useMemo(() => {
     switch (STEPS[step].key) {
       case "property":
+        // Client name + phone (D1), a unit, and built up area (E3) are the
+        // minimum a job and its quotation depend on.
         return (
           draft.client_name.trim().length >= 2 &&
+          draft.client_phone.trim().length >= 5 &&
           draft.unit_label.trim().length > 0 &&
-          draft.building_name.trim().length > 0
+          Number(draft.built_up_area) > 0
         );
       case "floorplans":
-        // A plan is optional for a single unit, mandatory for a full
-        // building (FR-1.02).
-        return draft.task_type !== "full_building" || plans.length > 0;
+        // Floor plans are optional; the plan can be added from the job later.
+        return true;
       case "areas":
         return draft.areas.length > 0;
       case "assign":
-        return draft.technician_ids.length > 0;
+        // An inspector and an approval manager are both required (I1).
+        return draft.technician_ids.length > 0 && draft.approval_manager_id.trim().length > 0;
       default:
         return true;
     }
-  }, [step, draft, plans.length]);
+  }, [step, draft]);
 
   async function submit() {
     setSubmitting(true);
     try {
+      // Combine appointment date + time into one instant (GST) when set.
+      const appointmentAt = draft.appointment_date
+        ? `${draft.appointment_date}T${draft.appointment_time || "09:00"}:00+04:00`
+        : undefined;
+      const num = (v: string) => (v.trim() && Number(v) ? Number(v) : undefined);
+
       const created = await snaggingService.createTask({
+        client_id: draft.client_id || undefined,
         property: {
           unit_label: draft.unit_label,
           building_name: draft.building_name,
@@ -298,9 +286,23 @@ export default function NewJobWizard() {
           developer_name: draft.developer_name,
           property_type: draft.property_type,
           city: "Dubai",
+          bedrooms: draft.property_type === "commercial" ? undefined : draft.bedrooms,
+          built_up_area_sqft: num(draft.built_up_area),
+          plot_area_sqft: num(draft.plot_area),
+          external_areas_in_scope: draft.external_areas_in_scope,
+          floors: num(draft.floors),
+          location_lat: num(draft.location_lat),
+          location_lng: num(draft.location_lng),
+          title_deed_path: draft.title_deed_path || undefined,
+          noc_required: draft.noc_required,
+          noc_path: draft.noc_path || undefined,
         },
-        task_type: draft.task_type,
-        scheduled_date: draft.scheduled_date,
+        scheduled_date: draft.appointment_date || undefined,
+        appointment_at: appointmentAt,
+        developer_contact_name: draft.developer_contact_name || undefined,
+        developer_contact_phone: draft.developer_contact_phone || undefined,
+        client_contact_name: draft.client_contact_name || undefined,
+        client_contact_phone: draft.client_contact_phone || undefined,
         areas: draft.areas.map((area) => ({
           name: area.name,
           catalogue_area_code: area.code ?? undefined,
@@ -328,6 +330,23 @@ export default function NewJobWizard() {
 
       if (planFailures > 0) {
         toast.warning(`${planFailures} floor plan(s) did not upload. Add them from the job.`);
+      }
+
+      // Title deed (E8) and NOC (E10) upload after the job exists, and never
+      // block it — a failure is reported and the job still opens.
+      if (titleDeedFile) {
+        try {
+          await snaggingService.uploadDocument(created.id, titleDeedFile, "title_deed");
+        } catch {
+          toast.warning("The title deed did not upload. Add it from the job.");
+        }
+      }
+      if (nocFile) {
+        try {
+          await snaggingService.uploadDocument(created.id, nocFile, "noc");
+        } catch {
+          toast.warning("The NOC did not upload. Add it from the job.");
+        }
       }
 
       toast.success(`Job ${created.code} created`);
@@ -396,17 +415,27 @@ export default function NewJobWizard() {
       <Card className="gap-0 p-0">
         <div className="p-6">
           {STEPS[step].key === "property" ? (
-            <PropertyStep draft={draft} set={set} setPropertyType={setPropertyType} />
+            <PropertyStep
+              draft={draft}
+              set={set}
+              setPropertyType={setPropertyType}
+              setBedrooms={setBedrooms}
+              titleDeedFile={titleDeedFile}
+              setTitleDeedFile={setTitleDeedFile}
+              nocFile={nocFile}
+              setNocFile={setNocFile}
+            />
           ) : STEPS[step].key === "floorplans" ? (
-            <FloorPlansStep taskType={draft.task_type} plans={plans} setPlans={setPlans} />
+            <FloorPlansStep plans={plans} setPlans={setPlans} />
           ) : STEPS[step].key === "areas" ? (
             <AreasStep
               propertyType={draft.property_type}
+              bedrooms={draft.bedrooms}
               areas={draft.areas}
               setAreas={setAreas}
             />
           ) : (
-            <AssignStep draft={draft} set={set} userOptions={userOptions} users={users} />
+            <AssignStep draft={draft} set={set} users={users} />
           )}
         </div>
 
@@ -415,7 +444,7 @@ export default function NewJobWizard() {
             {STEPS[step].key === "areas"
               ? `${draft.areas.length} area${draft.areas.length === 1 ? "" : "s"} selected.`
               : STEPS[step].key === "floorplans"
-                ? "One plan minimum for a full building. Optional for a single unit."
+                ? "Floor plans are optional and can be added from the job later."
                 : "Required fields are marked."}
           </p>
           <div className="flex items-center gap-2">
@@ -524,6 +553,7 @@ function ClientPicker({
   }, [clients, search]);
 
   function choose(client: SnaggingClientOption) {
+    set("client_id", client.id ?? "");
     set("client_name", client.client_name);
     set("client_email", client.client_email ?? "");
     set("client_phone", client.client_phone ?? "");
@@ -532,15 +562,19 @@ function ClientPicker({
     setSearch("");
   }
 
-  function saveNew(client: { name: string; email: string; phone: string }) {
-    set("client_name", client.name);
-    set("client_email", client.email);
-    set("client_phone", client.phone);
+  // The new client has already been persisted by the dialog, so it arrives
+  // with an id we link the job to.
+  function saveNew(client: SnaggingClientOption) {
+    set("client_id", client.id ?? "");
+    set("client_name", client.client_name);
+    set("client_email", client.client_email ?? "");
+    set("client_phone", client.client_phone ?? "");
     setAddOpen(false);
     setSearch("");
   }
 
   function clear() {
+    set("client_id", "");
     set("client_name", "");
     set("client_email", "");
     set("client_phone", "");
@@ -622,9 +656,11 @@ function ClientPicker({
                         </span>
                       ) : null}
                     </span>
-                    <span className="text-muted-foreground shrink-0 text-xs">
-                      {client.property_count} job{client.property_count === 1 ? "" : "s"}
-                    </span>
+                    {client.property_count ? (
+                      <span className="text-muted-foreground shrink-0 text-xs">
+                        {client.property_count} job{client.property_count === 1 ? "" : "s"}
+                      </span>
+                    ) : null}
                   </button>
                 ))
               )}
@@ -664,7 +700,7 @@ function AddClientDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initialName?: string;
-  onSave: (client: { name: string; email: string; phone: string }) => void;
+  onSave: (client: SnaggingClientOption) => void;
 }) {
   // The dialog content unmounts when closed, so these initialisers run
   // fresh on each open — seeding the name from whatever was typed in the
@@ -673,8 +709,34 @@ function AddClientDialog({
   const [name, setName] = useState(initialName);
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
+  const [saving, setSaving] = useState(false);
 
-  const valid = name.trim().length >= 2 && (email === "" || /.+@.+\..+/.test(email));
+  // D1/D2: name and phone are required (phone in any international format);
+  // email is optional and must never block the record.
+  const valid =
+    name.trim().length >= 2 &&
+    /[0-9]{6,}/.test(phone.replace(/[^0-9]/g, "")) &&
+    (email === "" || /.+@.+\..+/.test(email));
+
+  // Persist the client now, so it is genuinely on file (and reusable) the
+  // moment it is added, rather than only when the job is finally created.
+  async function add() {
+    if (!valid || saving) return;
+    setSaving(true);
+    try {
+      const created = await snaggingService.createClient({
+        client_name: name.trim(),
+        client_email: email.trim() || undefined,
+        client_phone: phone.trim() || undefined,
+      });
+      onSave(created);
+      toast.success(`${created.client_name} added`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not add the client");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -688,9 +750,23 @@ function AddClientDialog({
 
         <div className="space-y-4">
           <Field label="Client name" required>
-            <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Daniel Maman" />
+            <Input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="e.g. Ahmed Khan"
+              autoFocus
+            />
           </Field>
-          <Field label="Email">
+          <Field label="Phone" required hint="any country">
+            <Input
+              type="tel"
+              inputMode="tel"
+              value={phone}
+              onChange={(event) => setPhone(event.target.value)}
+              placeholder="+971 50 000 0000"
+            />
+          </Field>
+          <Field label="Email" hint="(optional)">
             <Input
               type="email"
               value={email}
@@ -698,25 +774,14 @@ function AddClientDialog({
               placeholder="name@example.com"
             />
           </Field>
-          <Field label="Phone">
-            <Input
-              value={phone}
-              onChange={(event) => setPhone(event.target.value)}
-              placeholder="+971 50 000 0000"
-            />
-          </Field>
         </div>
 
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
             Cancel
           </Button>
-          <Button
-            type="button"
-            disabled={!valid}
-            onClick={() => onSave({ name: name.trim(), email: email.trim(), phone: phone.trim() })}
-          >
-            Add client
+          <Button type="button" disabled={!valid || saving} onClick={() => void add()}>
+            {saving ? "Adding…" : "Add client"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -724,15 +789,72 @@ function AddClientDialog({
   );
 }
 
+/** A compact optional-document picker (PDF or image). */
+function DocumentField({
+  label,
+  hint,
+  file,
+  onPick,
+}: {
+  label: string;
+  hint?: string;
+  file: File | null;
+  onPick: (file: File | null) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  return (
+    <Field label={label} hint={hint}>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,application/pdf"
+        className="hidden"
+        onChange={(event) => onPick(event.target.files?.[0] ?? null)}
+      />
+      {file ? (
+        <div className="border-border flex items-center gap-2 rounded-md border px-3 py-2 text-sm">
+          <ImageIcon className="text-muted-foreground size-4 shrink-0" />
+          <span className="min-w-0 flex-1 truncate">{file.name}</span>
+          <Button type="button" variant="ghost" size="icon" onClick={() => onPick(null)} aria-label="Remove">
+            <X className="size-4" />
+          </Button>
+        </div>
+      ) : (
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full justify-start font-normal"
+          onClick={() => inputRef.current?.click()}
+        >
+          <Upload className="mr-2 size-4" /> Choose file
+        </Button>
+      )}
+    </Field>
+  );
+}
+
 function PropertyStep({
   draft,
   set,
   setPropertyType,
+  setBedrooms,
+  titleDeedFile,
+  setTitleDeedFile,
+  nocFile,
+  setNocFile,
 }: {
   draft: Draft;
   set: <K extends keyof Draft>(key: K, value: Draft[K]) => void;
   setPropertyType: (value: SnaggingPropertyType) => void;
+  setBedrooms: (value: number) => void;
+  titleDeedFile: File | null;
+  setTitleDeedFile: (file: File | null) => void;
+  nocFile: File | null;
+  setNocFile: (file: File | null) => void;
 }) {
+  const isCommercial = draft.property_type === "commercial";
+  const isVilla = draft.property_type === "villa";
+  const hasPlot = isVilla || draft.property_type === "townhouse";
   return (
     <div className="space-y-5">
       <div>
@@ -776,7 +898,7 @@ function PropertyStep({
             placeholder="e.g. Emaar"
           />
         </Field>
-        <Field label="Property type">
+        <Field label="Property type" required>
           <Select
             value={draft.property_type}
             onValueChange={(value) => setPropertyType(value as SnaggingPropertyType)}
@@ -793,30 +915,114 @@ function PropertyStep({
             </SelectContent>
           </Select>
         </Field>
-        <Field label="Job type">
-          <div className="flex gap-2">
-            {(
-              [
-                { value: "single_unit", label: "Single unit" },
-                { value: "full_building", label: "Full building" },
-              ] as const
-            ).map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => set("task_type", option.value)}
-                className={cn(
-                  "flex-1 rounded-full border px-3 py-2 text-sm font-medium transition-colors",
-                  draft.task_type === option.value
-                    ? "border-brand bg-brand text-white"
-                    : "border-border text-ink-soft hover:bg-mist-soft",
-                )}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
+
+        {!isCommercial ? (
+          <Field label="Bedrooms" required>
+            <Select value={String(draft.bedrooms)} onValueChange={(v) => setBedrooms(Number(v))}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="0">Studio</SelectItem>
+                {Array.from({ length: 11 }, (_, i) => i + 1).map((n) => (
+                  <SelectItem key={n} value={String(n)}>
+                    {n} bedroom{n > 1 ? "s" : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        ) : null}
+
+        <Field label="Built up area (sq ft)" required hint="pricing is based on this">
+          <Input
+            type="number"
+            inputMode="decimal"
+            value={draft.built_up_area}
+            onChange={(event) => set("built_up_area", event.target.value)}
+            placeholder="e.g. 1200"
+          />
         </Field>
+
+        {hasPlot ? (
+          <Field label="Plot area (sq ft)">
+            <Input
+              type="number"
+              inputMode="decimal"
+              value={draft.plot_area}
+              onChange={(event) => set("plot_area", event.target.value)}
+              placeholder="e.g. 3500"
+            />
+          </Field>
+        ) : null}
+
+        {isVilla ? (
+          <Field label="Number of floors">
+            <Input
+              type="number"
+              inputMode="numeric"
+              value={draft.floors}
+              onChange={(event) => set("floors", event.target.value)}
+              placeholder="e.g. 2"
+            />
+          </Field>
+        ) : null}
+      </div>
+
+      {hasPlot ? (
+        <label className="border-border flex items-center gap-3 rounded-lg border px-3 py-2.5 text-sm">
+          <Checkbox
+            checked={draft.external_areas_in_scope}
+            onCheckedChange={(v) => set("external_areas_in_scope", Boolean(v))}
+          />
+          <span>External areas (garden, pool, landscaping) are inside the inspection scope</span>
+        </label>
+      ) : null}
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="Location latitude" hint="(optional pin)">
+          <Input
+            type="number"
+            inputMode="decimal"
+            value={draft.location_lat}
+            onChange={(event) => set("location_lat", event.target.value)}
+            placeholder="e.g. 25.0772"
+          />
+        </Field>
+        <Field label="Location longitude" hint="(optional pin)">
+          <Input
+            type="number"
+            inputMode="decimal"
+            value={draft.location_lng}
+            onChange={(event) => set("location_lng", event.target.value)}
+            placeholder="e.g. 55.1345"
+          />
+        </Field>
+      </div>
+
+      <label className="border-border flex items-center gap-3 rounded-lg border px-3 py-2.5 text-sm">
+        <Checkbox
+          checked={draft.noc_required}
+          onCheckedChange={(v) => set("noc_required", Boolean(v))}
+        />
+        <span>The person requesting the inspection is not the owner — an NOC / authorization letter is required</span>
+      </label>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <DocumentField
+          label="Title deed"
+          hint="(optional — confirms unit and area)"
+          file={titleDeedFile}
+          onPick={setTitleDeedFile}
+        />
+        {draft.noc_required ? (
+          <DocumentField
+            label="NOC / authorization letter"
+            hint="(optional — never blocks the job)"
+            file={nocFile}
+            onPick={setNocFile}
+          />
+        ) : null}
       </div>
 
       <Field label="Office notes" hint="(optional)">
@@ -832,11 +1038,9 @@ function PropertyStep({
 }
 
 function FloorPlansStep({
-  taskType,
   plans,
   setPlans,
 }: {
-  taskType: Draft["task_type"];
   plans: PendingPlan[];
   setPlans: React.Dispatch<React.SetStateAction<PendingPlan[]>>;
 }) {
@@ -876,10 +1080,7 @@ function FloorPlansStep({
         <h2 className="text-xl">Floor plans</h2>
         <p className="text-muted-foreground mt-1 text-sm">
           Plans let the inspector pin each snag to a coordinate. They download with the pack for
-          offline use.{" "}
-          {taskType === "full_building"
-            ? "At least one plan is required for a full building."
-            : "Optional for a single unit."}
+          offline use. Optional — you can add them from the job later.
         </p>
       </div>
 
@@ -942,10 +1143,12 @@ function FloorPlansStep({
 
 function AreasStep({
   propertyType,
+  bedrooms,
   areas,
   setAreas,
 }: {
   propertyType: SnaggingPropertyType;
+  bedrooms: number;
   areas: AreaChoice[];
   setAreas: (next: AreaChoice[]) => void;
 }) {
@@ -955,11 +1158,11 @@ function AreasStep({
   // any custom rooms already added, so ticking and unticking never
   // loses a room the user typed.
   const options = useMemo(() => {
-    const template = TEMPLATES[propertyType];
+    const template = templateFor(propertyType, bedrooms);
     const templateNames = new Set(template.map((a) => a.name.toLowerCase()));
     const extras = areas.filter((a) => !templateNames.has(a.name.toLowerCase()));
     return [...template, ...extras];
-  }, [propertyType, areas]);
+  }, [propertyType, bedrooms, areas]);
 
   const selectedNames = useMemo(
     () => new Set(areas.map((a) => a.name.toLowerCase())),
@@ -1046,38 +1249,44 @@ function AreasStep({
 function AssignStep({
   draft,
   set,
-  userOptions,
   users,
 }: {
   draft: Draft;
   set: <K extends keyof Draft>(key: K, value: Draft[K]) => void;
-  userOptions: Option[];
   users: User[];
 }) {
+  const scheduled = draft.appointment_date ? parseISO(draft.appointment_date) : undefined;
+
   return (
     <div className="space-y-5">
       <div>
         <h2 className="text-xl">Assign and schedule</h2>
         <p className="text-muted-foreground mt-1 text-sm">
-          Who walks the unit, who signs it off, and when. The job appears on each inspector&apos;s
-          phone as soon as it is created.
+          Who walks the unit, who signs it off, when, and who gives access. The job appears on the
+          inspector&apos;s phone as soon as it is created.
         </p>
       </div>
 
-      <Field label="Inspectors" required>
-        <MultipleSelector
-          value={userOptions.filter((option) => draft.technician_ids.includes(option.value))}
-          options={userOptions}
-          onChange={(options) => set("technician_ids", options.map((option) => option.value))}
-          placeholder="Assign inspectors"
-          emptyIndicator={
-            <p className="text-muted-foreground py-2 text-center text-sm">No staff found</p>
-          }
-        />
-      </Field>
-
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Approval manager">
+        <Field label="Inspector" required>
+          <Select
+            value={draft.technician_ids[0] ?? ""}
+            onValueChange={(value) => set("technician_ids", value ? [value] : [])}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Assign an inspector" />
+            </SelectTrigger>
+            <SelectContent>
+              {users.map((user) => (
+                <SelectItem key={user.id} value={user.id}>
+                  {user.full_name || user.email}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+
+        <Field label="Approval manager" required>
           <Select
             value={draft.approval_manager_id}
             onValueChange={(value) => set("approval_manager_id", value)}
@@ -1094,15 +1303,85 @@ function AssignStep({
             </SelectContent>
           </Select>
         </Field>
+      </div>
 
-        <Field label="Scheduled date">
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="Appointment date">
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                className={cn(
+                  "w-full justify-start text-left font-normal",
+                  !scheduled && "text-muted-foreground",
+                )}
+              >
+                <CalendarIcon className="mr-2 size-4" />
+                {scheduled ? format(scheduled, "PPP") : "Pick a date"}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="start">
+              <Calendar
+                mode="single"
+                selected={scheduled}
+                onSelect={(date) => set("appointment_date", date ? format(date, "yyyy-MM-dd") : "")}
+                autoFocus
+              />
+            </PopoverContent>
+          </Popover>
+        </Field>
+
+        <Field label="Appointment time">
           <Input
-            type="date"
-            value={draft.scheduled_date}
-            onChange={(event) => set("scheduled_date", event.target.value)}
+            type="time"
+            value={draft.appointment_time}
+            onChange={(event) => set("appointment_time", event.target.value)}
           />
         </Field>
       </div>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="Developer site contact">
+          <Input
+            value={draft.developer_contact_name}
+            onChange={(event) => set("developer_contact_name", event.target.value)}
+            placeholder="Who opens the door"
+          />
+        </Field>
+        <Field label="Developer contact phone">
+          <Input
+            type="tel"
+            inputMode="tel"
+            value={draft.developer_contact_phone}
+            onChange={(event) => set("developer_contact_phone", event.target.value)}
+            placeholder="+971 50 000 0000"
+          />
+        </Field>
+        <Field label="Client site contact">
+          <Input
+            value={draft.client_contact_name}
+            onChange={(event) => set("client_contact_name", event.target.value)}
+            placeholder="Client or their agent"
+          />
+        </Field>
+        <Field label="Client contact phone">
+          <Input
+            type="tel"
+            inputMode="tel"
+            value={draft.client_contact_phone}
+            onChange={(event) => set("client_contact_phone", event.target.value)}
+            placeholder="+971 50 000 0000"
+          />
+        </Field>
+      </div>
+
+      {draft.noc_required ? (
+        <p className="bg-warning/10 text-warning rounded-md px-3 py-2 text-sm">
+          This job needs an NOC / authorization letter.{" "}
+          {draft.noc_path ? "It is on file." : "It is not on file yet — add it on the property step."}
+        </p>
+      ) : null}
     </div>
   );
 }

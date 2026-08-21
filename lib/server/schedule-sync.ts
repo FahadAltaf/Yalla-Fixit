@@ -1,4 +1,5 @@
 import type { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
+import { createFsmAppointment, updateFsmAppointment } from "@/lib/server/zoho/appointments";
 
 type Admin = Awaited<ReturnType<typeof createAdminServerClient>>;
 
@@ -64,33 +65,7 @@ export type SyncEntryResult = {
   label?: string;
 };
 
-// Calls a scheduling Edge Function with the shared anon credentials. Returns
-// the parsed body regardless of HTTP status so the caller can log failures.
-export async function callEdgeFunction(fnName: string, body: Record<string, unknown>) {
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const anonKey = process.env.SUPABASE_ANON_KEY;
-  if (!supabaseUrl || !anonKey) throw new Error("Supabase environment is not configured");
-
-  const res = await fetch(`${supabaseUrl}/functions/v1/${fnName}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${anonKey}`,
-      apikey: anonKey,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-  const text = await res.text();
-  let json: any;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    json = { raw: text };
-  }
-  return { ok: res.ok, status: res.status, json };
-}
-
-// A readable one-line reason from an Edge Function's error body (AC-015).
+// A readable one-line reason from an FSM call's error body (AC-015).
 function describeError(json: any, httpStatus: number): string {
   if (json?.error && typeof json.error === "string") {
     // FSM validation details are often nested; surface the first message.
@@ -138,8 +113,8 @@ export async function syncEntryToFsm(
 
   const scheduleType = entry.fsm_schedule_type === "All Day" ? "All Day" : "Time-bound";
   const result = creating
-    ? await callEdgeFunction("zoho-fsm-appointment-create", {
-        workOrderId: entry.fsm_work_order_id,
+    ? await createFsmAppointment({
+        workOrderId: entry.fsm_work_order_id as string,
         scheduledStart: entry.start_at,
         scheduledEnd: entry.end_at,
         serviceResourceIds,
@@ -151,8 +126,8 @@ export async function syncEntryToFsm(
         scheduleType,
         appointmentDate: entry.operating_date,
       })
-    : await callEdgeFunction("zoho-fsm-appointment-update", {
-        appointmentId: entry.fsm_appointment_id,
+    : await updateFsmAppointment({
+        appointmentId: entry.fsm_appointment_id as string,
         scheduledStart: entry.start_at,
         scheduledEnd: entry.end_at,
         serviceResourceIds,
@@ -202,20 +177,10 @@ export async function syncEntryToFsm(
   if (creating && result.json?.appointmentName) entryUpdate.fsm_appointment_name = result.json.appointmentName;
   if (modifiedTime) entryUpdate.fsm_last_modified_marker = modifiedTime;
 
+  // The reconcile baseline is entry.fsm_last_modified_marker, set just above.
+  // There was a parallel copy in fsm_appointment_snapshots, but nothing ever
+  // read it -- reconcile compares against the entry -- so that table is gone.
   await admin.from("schedule_entries").update(entryUpdate).eq("id", entry.id);
-
-  // Keep the reconcile baseline in step with what we just wrote.
-  if (newAppointmentId && modifiedTime) {
-    await admin.from("fsm_appointment_snapshots").upsert(
-      {
-        fsm_appointment_id: newAppointmentId,
-        fsm_work_order_id: entry.fsm_work_order_id,
-        last_modified_marker: modifiedTime,
-        last_checked_at: completedAt,
-      },
-      { onConflict: "fsm_appointment_id" },
-    );
-  }
 
   return { entryId: entry.id, status: "succeeded", label: syncEntryLabel(entry) };
 }

@@ -133,17 +133,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // A day that had drifted (published_fsm_changed) is realigned once its
-    // appointment is re-pushed; clear the day-level flag if nothing else drifts.
-    const { data: stillChanged } = await admin
-      .from("schedule_entries")
-      .select("id")
-      .eq("schedule_version_id", version.id)
-      .not("changed_in_fsm_at", "is", null)
-      .limit(1);
-    if (!stillChanged || stillChanged.length === 0) {
-      await admin.from("daily_schedules").update({ has_fsm_changes: false }).eq("id", version.daily_schedule_id);
-    }
+    // There used to be a day-level has_fsm_changes flag cleared here, but
+    // nothing ever set it to TRUE -- reconcile now adopts FSM's values
+    // silently rather than marking a day as drifted -- so the column is gone.
+    // Per-entry drift still lives on schedule_entries.changed_in_fsm_at.
 
     return NextResponse.json({ data: { synced: true } });
   } catch (error) {

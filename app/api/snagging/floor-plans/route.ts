@@ -4,7 +4,7 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
-import { SNAGGING_BUCKET } from "@/lib/server/snagging/media";
+import { SNAGGING_BUCKET, mediaObjectKey } from "@/lib/server/snagging/media";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
@@ -58,40 +58,41 @@ export async function POST(req: NextRequest) {
 
     const admin = await createAdminServerClient();
 
-    // The task the plan belongs to has to exist and carry a property, so
-    // the plan is reachable from either side (FR-1.02).
-    const { data: task, error: taskError } = await admin
-      .from("snagging_tasks")
-      .select("id, property_id")
+    // In the lean schema the plan lives on the job itself (one plan per
+    // job), so the job has to exist before we attach the plan (FR-1.02).
+    const { data: job, error: jobError } = await admin
+      .from("snagging_jobs")
+      .select("id")
       .eq("id", taskId)
       .maybeSingle();
-    if (taskError) throw new Error(taskError.message);
-    if (!task) return NextResponse.json({ error: "Job not found" }, { status: 404 });
+    if (jobError) throw new Error(jobError.message);
+    if (!job) return NextResponse.json({ error: "Job not found" }, { status: 404 });
 
-    const extension = file.name.split(".").pop()?.toLowerCase() || "bin";
-    const path = `tasks/${taskId}/floor-plans/${crypto.randomUUID()}.${extension}`;
+    // A job carries exactly one plan, so key it by the job id (via the
+    // shared media key helper) and upsert so a re-upload replaces it.
+    const path = mediaObjectKey({
+      taskId,
+      mediaId: taskId,
+      kind: "floor_plan",
+      contentType: file.type,
+    });
 
     const { error: uploadError } = await admin.storage
       .from(SNAGGING_BUCKET)
       .upload(path, file, { contentType: file.type, upsert: true });
     if (uploadError) throw new Error(uploadError.message);
 
-    const { data: row, error: insertError } = await admin
-      .from("snagging_floor_plans")
-      .insert({
-        task_id: taskId,
-        property_id: task.property_id,
-        label,
-        storage_path: path,
-        mime_type: file.type,
-        width,
-        height,
-        bytes: file.size,
-        uploaded_by: profile.id,
+    const { data: row, error: updateError } = await admin
+      .from("snagging_jobs")
+      .update({
+        floor_plan_path: path,
+        floor_plan_width: width,
+        floor_plan_height: height,
       })
-      .select("id, label, storage_path, width, height")
+      .eq("id", taskId)
+      .select("id, floor_plan_path, floor_plan_width, floor_plan_height")
       .single();
-    if (insertError) throw new Error(insertError.message);
+    if (updateError) throw new Error(updateError.message);
 
     await recordAudit(admin, {
       entityType: "task",
@@ -103,7 +104,18 @@ export async function POST(req: NextRequest) {
       payload: { label, bytes: file.size },
     });
 
-    return NextResponse.json({ data: row }, { status: 201 });
+    return NextResponse.json(
+      {
+        data: {
+          id: row.id,
+          label,
+          storage_path: row.floor_plan_path,
+          width: row.floor_plan_width,
+          height: row.floor_plan_height,
+        },
+      },
+      { status: 201 },
+    );
   } catch (error) {
     console.error("Snagging floor-plan upload error:", error);
     return NextResponse.json({ error: "Failed to upload the floor plan" }, { status: 500 });

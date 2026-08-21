@@ -4,6 +4,12 @@ import type { TechnicianReference, TechnicianShift } from "@/types/types";
 
 export type { TechnicianReference } from "@/types/types";
 
+// NOTE: this module is re-exported by the @/modules/scheduling barrel, which
+// "use client" components import for techniciansService. Keep server-only
+// machinery (admin client, Zoho calls) OUT of here or it lands in the client
+// bundle -- the roster refresh lives in the page instead, via
+// refreshTechniciansIfStale() from @/lib/server/zoho/service-resources.
+
 // Server component loader. Resolves the managed attribute names (role,
 // service type, team leader) alongside the raw ids so the UI needn't join.
 export async function listTechnicians(): Promise<TechnicianReference[]> {

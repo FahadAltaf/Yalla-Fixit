@@ -444,10 +444,13 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
 
   const handleRefresh = async () => {
     try {
-      // Reconcile still runs (it refreshes snapshots and flags genuine
-      // external edits), but we don't announce "updated in FSM" -- Zoho's
-      // automation bumps every appointment, so that message was just noise.
-      await scheduleService.reconcile();
+      // Adopt any direct FSM edits for THIS day before reloading. Scoped to
+      // the visible date so a refresh costs one FSM read per entry on screen
+      // rather than one per entry across every scheduled day.
+      //
+      // We don't announce "updated in FSM" -- Zoho's automation bumps every
+      // appointment, so that message was just noise.
+      await scheduleService.reconcile(date);
     } catch {
       // Non-fatal: still reload the local view even if reconciliation fails.
     }

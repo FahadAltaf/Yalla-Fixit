@@ -38,16 +38,19 @@ export async function POST(req: NextRequest) {
 
     const admin = await createAdminServerClient();
 
-    // Only somebody on the job may add evidence to it.
-    const { data: assignment, error: assignmentError } = await admin
-      .from("snagging_task_assignees")
-      .select("task_id")
-      .eq("task_id", input.task_id)
-      .eq("user_id", profile.id)
+    // The job the evidence belongs to has to exist. `task_id` is the job
+    // id in the lean schema; a mobile inspector may only add evidence to
+    // a job assigned to them.
+    const { data: job, error: jobError } = await admin
+      .from("snagging_jobs")
+      .select("id, inspector_id")
+      .eq("id", input.task_id)
       .maybeSingle();
-    if (assignmentError) throw new Error(assignmentError.message);
-
-    if (!assignment) {
+    if (jobError) throw new Error(jobError.message);
+    if (!job) {
+      return NextResponse.json({ error: "Job not found" }, { status: 404 });
+    }
+    if (job.inspector_id && job.inspector_id !== profile.id) {
       return NextResponse.json({ error: "Not assigned to this inspection" }, { status: 403 });
     }
 

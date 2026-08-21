@@ -251,7 +251,10 @@ export default function JobsTable() {
                     <TableCell>
                       <TaskStatusBadge status={task.status} />
                     </TableCell>
-                    <TableCell className="text-sm tabular-nums">R{task.round_number}</TableCell>
+                    <TableCell className="text-sm tabular-nums">
+                      {task.visit_type === "additional" ? "V" : "R"}
+                      {task.round_number}
+                    </TableCell>
                     <TableCell>
                       <SeverityCounts
                         high={task.high_severity_count}

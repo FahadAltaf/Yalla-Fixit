@@ -12,13 +12,10 @@ import { z } from "zod";
 export const severitySchema = z.enum(["low", "medium", "high"]);
 
 export const propertyTypeSchema = z.enum([
-  "studio",
-  "1br",
-  "2br",
-  "3br",
-  "4br",
+  "apartment",
   "villa",
   "townhouse",
+  "commercial",
 ]);
 
 export const serviceTierSchema = z.enum(["essential", "comfort", "full", "b2b_building"]);
@@ -46,35 +43,49 @@ export const verdictSchema = z.enum([
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Expected YYYY-MM-DD");
 const isoDateTime = z.string().datetime({ offset: true });
 
-/** BR-1: a task is always anchored to a property record. */
+/** BR-1: a task is always anchored to a client and a property record. */
 export const propertyInputSchema = z.object({
+  // Client (D1: name required, phone required and international, email optional).
   client_name: z.string().trim().min(2, "Client name is required"),
   client_email: z.string().email("Enter a valid email").optional().or(z.literal("")),
   client_phone: z.string().trim().max(32).optional().or(z.literal("")),
+  // Property location.
   unit_label: z.string().trim().min(1, "Unit is required"),
   building_name: z.string().trim().optional().or(z.literal("")),
   community: z.string().trim().optional().or(z.literal("")),
   city: z.string().trim().optional().or(z.literal("")),
   property_type: propertyTypeSchema,
   developer_name: z.string().trim().optional().or(z.literal("")),
-  handover_date: isoDate.optional().or(z.literal("")),
-  crm_contact_id: z.string().trim().optional().or(z.literal("")),
-  crm_property_id: z.string().trim().optional().or(z.literal("")),
+  // Measurements (E2-E6). Bedrooms: 0 = studio, hidden for commercial.
+  bedrooms: z.coerce.number().int().min(0).max(11).optional().nullable(),
+  built_up_area_sqft: z.coerce.number().positive("Built up area is required").optional().nullable(),
+  plot_area_sqft: z.coerce.number().positive().optional().nullable(),
+  external_areas_in_scope: z.coerce.boolean().optional(),
+  floors: z.coerce.number().int().min(1).max(20).optional().nullable(),
+  // Location pin (E7) and documents (E8/E10).
+  location_lat: z.coerce.number().optional().nullable(),
+  location_lng: z.coerce.number().optional().nullable(),
+  title_deed_path: z.string().trim().optional().or(z.literal("")),
+  noc_required: z.coerce.boolean().optional(),
+  noc_path: z.string().trim().optional().or(z.literal("")),
 });
 
 export const createTaskSchema = z
   .object({
+    // An already-persisted client (from the picker / add-client dialog).
+    client_id: z.string().uuid().optional(),
     // Either an existing property, or the details to create one.
     property_id: z.string().uuid().optional(),
     property: propertyInputSchema.optional(),
 
-    task_type: taskTypeSchema.default("single_unit"),
-    service_tier: serviceTierSchema.optional().nullable(),
-    package_name: z.string().trim().max(120).optional().or(z.literal("")),
-
+    // Job type is gone from this step (E9): full building is a separate flow.
     scheduled_date: isoDate.optional().or(z.literal("")),
-    scheduled_start_at: isoDateTime.optional().or(z.literal("")),
-    scheduled_end_at: isoDateTime.optional().or(z.literal("")),
+    // Appointment date + time (I2), and the two site contacts (I3, I4).
+    appointment_at: isoDateTime.optional().or(z.literal("")),
+    developer_contact_name: z.string().trim().max(120).optional().or(z.literal("")),
+    developer_contact_phone: z.string().trim().max(32).optional().or(z.literal("")),
+    client_contact_name: z.string().trim().max(120).optional().or(z.literal("")),
+    client_contact_phone: z.string().trim().max(32).optional().or(z.literal("")),
 
     // FR-1.04
     technician_ids: z.array(z.string().uuid()).default([]),
@@ -95,17 +106,10 @@ export const createTaskSchema = z
 
     notes: z.string().trim().max(4000).optional().or(z.literal("")),
   })
-  .refine((value) => Boolean(value.property_id || value.property), {
-    message: "Select an existing property or provide new property details",
-    path: ["property_id"],
-  })
-  .refine(
-    (value) =>
-      !value.scheduled_start_at ||
-      !value.scheduled_end_at ||
-      value.scheduled_end_at > value.scheduled_start_at,
-    { message: "End time must be after the start time", path: ["scheduled_end_at"] },
-  );
+  .refine((value) => Boolean(value.client_id || value.property), {
+    message: "Select an existing client or provide client and property details",
+    path: ["client_id"],
+  });
 
 export type CreateTaskInput = z.infer<typeof createTaskSchema>;
 
@@ -174,6 +178,19 @@ export const createRoundSchema = z.object({
   snag_ids: z.array(z.string().uuid()).optional(),
 });
 
+/**
+ * Schedules an additional (chargeable) snagging visit on a property
+ * (Q1-Q6). Unlike a de-snag round it carries no snags forward — it is a
+ * fresh inspection pass — so there is no snag_ids field.
+ */
+export const createVisitSchema = z.object({
+  scheduled_date: isoDate.optional().or(z.literal("")),
+  technician_ids: z.array(z.string().uuid()).default([]),
+  approval_manager_id: z.string().uuid().optional().nullable(),
+  notes: z.string().trim().max(4000).optional().or(z.literal("")),
+  reason: z.string().trim().max(4000).optional().or(z.literal("")),
+});
+
 export const deliverReportSchema = z.object({
   channel: z.enum(["email", "whatsapp", "manual"]).default("email"),
   recipient: z.string().trim().min(3, "Recipient is required"),
@@ -191,7 +208,7 @@ export const deliverReportSchema = z.object({
  */
 export const syncMutationSchema = z.object({
   mutation_id: z.string().uuid(),
-  entity: z.enum(["snag", "area", "photo", "verification", "submission", "task"]),
+  entity: z.enum(["snag", "area", "photo", "verification", "submission", "task", "checklist"]),
   entity_id: z.string().uuid(),
   op: z.enum(["insert", "update", "delete"]),
   payload: z.record(z.string(), z.unknown()),

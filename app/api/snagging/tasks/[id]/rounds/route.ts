@@ -11,12 +11,12 @@ import { ActionType, ResourceType } from "@/types/types";
 /**
  * Opens a de-snagging round against an inspection (FR-6.01, FR-6.02).
  *
- * The round is a new task; the snags are not copied. A snag is a
- * persistent entity owned by the property (§5.2), so the round works
- * against the same rows and records a verdict per snag. What the round
- * does carry is its own area list, limited to the areas that still have
- * something outstanding, so the inspector is not walked through rooms
- * that were signed off clean.
+ * In the lean schema a round is simply a new snagging_jobs row that
+ * points back at its parent. Areas belong to a job, so the round gets
+ * its own copy of the parent's areas, and the outstanding snags are
+ * carried forward as fresh rows against the new job (remapped onto the
+ * copied areas) with status pending_verification: the developer has
+ * claimed these are fixed and this round is us going to check.
  */
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
@@ -38,10 +38,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const admin = await createAdminServerClient();
 
     const { data: parent, error: parentError } = await admin
-      .from("snagging_tasks")
+      .from("snagging_jobs")
       .select(
-        `id, code, property_id, task_type, service_tier, round_number,
-         parent_task_id, approval_manager_id, supervisor_id, catalogue_version, status`,
+        `id, code, status, round_number, client_id, unit_label, building_name, community,
+         property_type, developer_name, inspector_id, approval_manager_id, scheduled_date`,
       )
       .eq("id", id)
       .maybeSingle();
@@ -58,26 +58,17 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       );
     }
 
-    // Rounds chain off the original inspection, not off each other, so
-    // round 3 still points at round 1 as its parent.
-    const rootId = parent.parent_task_id ?? parent.id;
+    const nextRound = (parent.round_number ?? 1) + 1;
 
-    const { data: siblings, error: siblingError } = await admin
-      .from("snagging_tasks")
-      .select("round_number")
-      .or(`id.eq.${rootId},parent_task_id.eq.${rootId}`)
-      .order("round_number", { ascending: false })
-      .limit(1);
-    if (siblingError) throw new Error(siblingError.message);
-
-    const nextRound = (siblings?.[0]?.round_number ?? 1) + 1;
-
-    // FR-6.02: everything still outstanding across the property, unless
-    // the reviewer narrowed the list to a chosen subset.
+    // FR-6.02: everything still outstanding on the parent job, unless the
+    // reviewer narrowed the list to a chosen subset.
     let snagQuery = admin
       .from("snagging_snags")
-      .select("id, area_id, status, snagging_areas!inner(name, catalogue_area_code, sort_order)")
-      .eq("property_id", parent.property_id)
+      .select(
+        `id, area_id, snag_code, catalogue_entry_id, catalogue_code, element_label,
+         defect_label, severity, note, pin_x, pin_y, status`,
+      )
+      .eq("job_id", parent.id)
       .in("status", CARRY_FORWARD_STATUSES);
 
     if (input.snag_ids && input.snag_ids.length > 0) {
@@ -89,26 +80,32 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
     if (!openSnags || openSnags.length === 0) {
       return NextResponse.json(
-        { error: "Nothing outstanding on this property, so there is nothing to re-inspect" },
+        { error: "Nothing outstanding on this job, so there is nothing to re-inspect" },
         { status: 409 },
       );
     }
 
+    // 1) The round itself: a new job that inherits the parent's context.
+    const inspectorId =
+      input.technician_ids.length > 0 ? input.technician_ids[0] : parent.inspector_id;
+
     const { data: round, error: roundError } = await admin
-      .from("snagging_tasks")
+      .from("snagging_jobs")
       .insert({
         code: roundCode(parent.code, nextRound),
-        property_id: parent.property_id,
-        task_type: parent.task_type,
-        service_tier: parent.service_tier,
-        package_name: `De-snag round ${nextRound}`,
-        round_number: nextRound,
-        parent_task_id: rootId,
         status: "assigned",
-        scheduled_date: input.scheduled_date?.trim() || null,
-        supervisor_id: parent.supervisor_id,
+        visit_type: "desnag",
+        round_number: nextRound,
+        parent_job_id: parent.id,
+        client_id: parent.client_id,
+        unit_label: parent.unit_label,
+        building_name: parent.building_name,
+        community: parent.community,
+        property_type: parent.property_type,
+        developer_name: parent.developer_name,
+        inspector_id: inspectorId,
         approval_manager_id: input.approval_manager_id ?? parent.approval_manager_id,
-        catalogue_version: parent.catalogue_version,
+        scheduled_date: input.scheduled_date?.trim() || parent.scheduled_date,
         notes: input.notes?.trim() || null,
         created_by: profile.id,
       })
@@ -117,55 +114,52 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
     if (roundError) throw new Error(roundError.message);
 
-    // Only the rooms with something left to verify.
-    const areaByName = new Map<
-      string,
-      { name: string; catalogue_area_code: string | null; sort_order: number }
-    >();
-    for (const snag of openSnags) {
-      const area = (snag as unknown as {
-        snagging_areas: { name: string; catalogue_area_code: string | null; sort_order: number };
-      }).snagging_areas;
-      if (area && !areaByName.has(area.name)) areaByName.set(area.name, area);
+    // 2) Copy the parent's areas into the new job, keeping an
+    //    old-area-id -> new-area-id map so the carried snags can be
+    //    re-pinned onto the round's own area rows.
+    const { data: parentAreas, error: areaLoadError } = await admin
+      .from("snagging_areas")
+      .select("id, name, catalogue_area_code, sort_order")
+      .eq("job_id", parent.id)
+      .order("sort_order", { ascending: true });
+    if (areaLoadError) throw new Error(areaLoadError.message);
+
+    const areaIdMap = new Map<string, string>();
+    for (const area of parentAreas ?? []) {
+      const { data: newArea, error: areaInsertError } = await admin
+        .from("snagging_areas")
+        .insert({
+          job_id: round.id,
+          name: area.name,
+          catalogue_area_code: area.catalogue_area_code,
+          sort_order: area.sort_order,
+        })
+        .select("id")
+        .single();
+      if (areaInsertError) throw new Error(areaInsertError.message);
+      areaIdMap.set(area.id, newArea.id);
     }
 
-    const areas = [...areaByName.values()]
-      .sort((a, b) => a.sort_order - b.sort_order)
-      .map((area) => ({
-        task_id: round.id,
-        name: area.name,
-        catalogue_area_code: area.catalogue_area_code,
-        sort_order: area.sort_order,
-      }));
+    // 3) Carry the outstanding snags forward as fresh rows on the round,
+    //    remapped onto the copied areas and marked pending_verification.
+    const carriedRows = openSnags.map((snag) => ({
+      job_id: round.id,
+      area_id: snag.area_id ? areaIdMap.get(snag.area_id) ?? null : null,
+      snag_code: snag.snag_code,
+      catalogue_entry_id: snag.catalogue_entry_id,
+      catalogue_code: snag.catalogue_code,
+      element_label: snag.element_label,
+      defect_label: snag.defect_label,
+      severity: snag.severity,
+      note: snag.note,
+      pin_x: snag.pin_x,
+      pin_y: snag.pin_y,
+      status: "pending_verification" as const,
+      round_created: nextRound,
+    }));
 
-    if (areas.length > 0) {
-      const { error: areaError } = await admin.from("snagging_areas").insert(areas);
-      if (areaError) throw new Error(areaError.message);
-    }
-
-    if (input.technician_ids.length > 0) {
-      const { error: assigneeError } = await admin.from("snagging_task_assignees").insert(
-        input.technician_ids.map((userId) => ({
-          task_id: round.id,
-          user_id: userId,
-          role: "technician" as const,
-          assigned_by: profile.id,
-        })),
-      );
-      if (assigneeError) throw new Error(assigneeError.message);
-    }
-
-    // §5.2: the developer has claimed these are fixed, and this round
-    // is us going to check. That is exactly "pending verification".
-    const { error: statusError } = await admin
-      .from("snagging_snags")
-      .update({ status: "pending_verification" })
-      .in(
-        "id",
-        openSnags.map((snag) => snag.id),
-      )
-      .eq("status", "open");
-    if (statusError) throw new Error(statusError.message);
+    const { error: carryError } = await admin.from("snagging_snags").insert(carriedRows);
+    if (carryError) throw new Error(carryError.message);
 
     await recordAudit(admin, {
       entityType: "task",
@@ -177,9 +171,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       payload: {
         code: round.code,
         round_number: nextRound,
-        parent_task_id: rootId,
-        carried_snags: openSnags.length,
-        areas: areas.length,
+        parent_job_id: parent.id,
+        carried_snags: carriedRows.length,
+        areas: areaIdMap.size,
       },
     });
 
@@ -189,7 +183,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           id: round.id,
           code: round.code,
           round_number: nextRound,
-          carried_snags: openSnags.length,
+          carried_snags: carriedRows.length,
         },
       },
       { status: 201 },

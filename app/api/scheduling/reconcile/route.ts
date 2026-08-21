@@ -1,11 +1,26 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
+import { reconcileFsmAppointments } from "@/lib/server/zoho/reconcile";
 import { ActionType, ResourceType } from "@/types/types";
 
-// SYNC-013: manual refresh/reconcile action for authorised users -- calls
-// the same Edge Function the pg_cron job uses on a schedule.
-export async function POST() {
+// Reconciliation can take a few seconds per FSM read; a busy all-days sweep
+// needs more than the platform default.
+export const maxDuration = 60;
+
+const bodySchema = z.object({
+  // Scope the sweep to one operating date. The daily-schedule Refresh button
+  // passes the day being viewed, which is the common case and much cheaper
+  // than re-reading every current entry across every day.
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+
+// SYNC-013: on-demand refresh/reconcile for authorised users. Replaces the
+// every-10-minutes pg_cron job -- FSM changes are adopted when a scheduler
+// actually opens or refreshes a day, which is both cheaper and fresher at
+// the moment it matters.
+export async function POST(req: NextRequest) {
   try {
     const { profile, accessUser } = await getAuthenticatedUserAccess();
     if (!profile || !accessUser) {
@@ -15,30 +30,22 @@ export async function POST() {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const anonKey = process.env.SUPABASE_ANON_KEY;
-    if (!supabaseUrl || !anonKey) {
-      return NextResponse.json({ error: "Supabase staging environment is not configured" }, { status: 500 });
-    }
-
-    const edgeResponse = await fetch(`${supabaseUrl}/functions/v1/zoho-fsm-reconcile`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${anonKey}`,
-        apikey: anonKey,
-        "Content-Type": "application/json",
-      },
-    });
-
-    const responseText = await edgeResponse.text();
-    let responseBody: unknown;
+    // The Refresh button sends no body; treat that as an all-days sweep.
+    let raw: unknown = {};
     try {
-      responseBody = JSON.parse(responseText);
+      raw = await req.json();
     } catch {
-      responseBody = { error: "The reconcile function returned an invalid response" };
+      raw = {};
+    }
+    const parsed = bodySchema.safeParse(raw ?? {});
+    if (!parsed.success) {
+      return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
     }
 
-    return NextResponse.json(responseBody, { status: edgeResponse.status });
+    const result = await reconcileFsmAppointments({ operatingDate: parsed.data.date });
+    if (!result.ok) return NextResponse.json(result.json, { status: result.status });
+
+    return NextResponse.json({ data: result.json });
   } catch (error) {
     console.error("Scheduling reconcile error:", error);
     return NextResponse.json({ error: "Failed to trigger reconciliation" }, { status: 500 });

@@ -74,7 +74,6 @@ export interface DailySchedule {
   id: string;
   schedule_date: string;
   current_version_id: string | null;
-  has_fsm_changes: boolean;
 }
 
 export interface DayScheduleResponse {
@@ -232,9 +231,13 @@ export const scheduleService = {
     });
   },
 
-  reconcile: async (): Promise<{ checked: number; changed: number }> => {
+  // Adopt any direct Zoho FSM changes into the portal. Pass the operating
+  // date to reconcile just that day (what the Refresh button does); omit it
+  // to sweep every current version.
+  reconcile: async (date?: string): Promise<{ checked: number; changed: number }> => {
     return executeRESTBackend<{ checked: number; changed: number }>("/api/scheduling/reconcile", {
       method: "POST",
+      body: date ? { date } : {},
     });
   },
 

@@ -46,18 +46,38 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const [entries, areas, matrix] = await Promise.all([
+    const [entries, areas] = await Promise.all([
       query,
+      // The area -> element applicability matrix now lives on the areas
+      // row itself, as the element_codes text[] column. There is no
+      // separate snagging_catalogue_area_elements table any more.
       admin
         .from("snagging_catalogue_areas")
-        .select("code, label, sort_order, active")
+        .select("code, label, sort_order, element_codes")
         .order("sort_order", { ascending: true }),
-      admin.from("snagging_catalogue_area_elements").select("area_code, element_code, sort_order"),
     ]);
 
     if (entries.error) throw new Error(entries.error.message);
     if (areas.error) throw new Error(areas.error.message);
-    if (matrix.error) throw new Error(matrix.error.message);
+
+    // Rebuild the flat { area_code, element_code, sort_order } pairs the
+    // response has always exposed by expanding each area's element_codes
+    // array, so the client sees the same shape it did when the matrix was
+    // its own table.
+    const areaRows = (areas.data ?? []) as Array<{
+      code: string;
+      label: string | null;
+      sort_order: number | null;
+      element_codes: string[] | null;
+    }>;
+
+    const area_elements = areaRows.flatMap((area) =>
+      (area.element_codes ?? []).map((element_code, index) => ({
+        area_code: area.code,
+        element_code,
+        sort_order: index,
+      })),
+    );
 
     // No totalCount here on purpose: the client's REST helper treats a
     // { data, totalCount } envelope as a paginated response and returns
@@ -67,8 +87,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       data: {
         entries: entries.data ?? [],
-        areas: areas.data ?? [],
-        area_elements: matrix.data ?? [],
+        areas: areaRows.map(({ code, label, sort_order }) => ({ code, label, sort_order })),
+        area_elements,
         total: entries.count ?? 0,
       },
     });

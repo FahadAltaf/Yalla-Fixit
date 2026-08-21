@@ -1,12 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, Clock, Download, ThumbsUp, Timer } from "lucide-react";
+import { AlertTriangle, CalendarIcon, Clock, Download, ThumbsUp, Timer } from "lucide-react";
+import { format, parseISO } from "date-fns";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { Calendar } from "@/components/ui/calendar";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { cn } from "@/lib/utils";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -23,6 +27,44 @@ import { snaggingService } from "@/modules/snagging";
 import { ActionType, ResourceType, type SnaggingAnalytics } from "@/types/types";
 
 import { PageHeading, SeverityBadge } from "./shared";
+
+/** A shadcn date picker (Popover + Calendar) writing a YYYY-MM-DD string. */
+function DateField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const date = value ? parseISO(value) : undefined;
+  return (
+    <div className="text-sm">
+      <span className="text-muted-foreground mb-1 block text-xs">{label}</span>
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            className={cn("w-40 justify-start text-left font-normal", !date && "text-muted-foreground")}
+          >
+            <CalendarIcon className="mr-2 size-4" />
+            {date ? format(date, "dd MMM yyyy") : label}
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-auto p-0" align="start">
+          <Calendar
+            mode="single"
+            selected={date}
+            onSelect={(d) => onChange(d ? format(d, "yyyy-MM-dd") : "")}
+            autoFocus
+          />
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
 
 /**
  * Operational analytics (§6.7) and the KPI targets from §2.3.
@@ -107,24 +149,8 @@ export default function SnaggingAnalyticsDashboard() {
         description="Throughput, quality, and developer performance across the period."
         actions={
           <div className="flex flex-wrap items-end gap-2">
-          <label className="text-sm">
-            <span className="text-muted-foreground mb-1 block text-xs">From</span>
-            <Input
-              type="date"
-              value={from}
-              onChange={(event) => setFrom(event.target.value)}
-              className="w-40"
-            />
-          </label>
-          <label className="text-sm">
-            <span className="text-muted-foreground mb-1 block text-xs">To</span>
-            <Input
-              type="date"
-              value={to}
-              onChange={(event) => setTo(event.target.value)}
-              className="w-40"
-            />
-          </label>
+            <DateField label="From" value={from} onChange={setFrom} />
+            <DateField label="To" value={to} onChange={setTo} />
             {canExport ? (
               <Button variant="outline" onClick={exportCsv} disabled={!data}>
                 <Download className="size-4" />
