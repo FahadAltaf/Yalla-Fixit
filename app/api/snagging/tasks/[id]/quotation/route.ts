@@ -72,7 +72,9 @@ async function generate(admin: Admin, jobId: string, userId: string) {
   const [{ data: job, error: jobError }, { data: config, error: configError }] = await Promise.all([
     admin
       .from("snagging_jobs")
-      .select("id, code, property_type, built_up_area_sqft, plot_area_sqft, external_areas_in_scope, bedrooms")
+      .select(
+        "id, code, property:property_id(property_type, built_up_area_sqft, plot_area_sqft, external_areas_in_scope, bedrooms)",
+      )
       .eq("id", jobId)
       .maybeSingle(),
     admin.from("snagging_pricing_config").select("*").eq("id", true).maybeSingle(),
@@ -82,7 +84,13 @@ async function generate(admin: Admin, jobId: string, userId: string) {
   if (configError) throw new Error(configError.message);
   if (!config) return NextResponse.json({ error: "Pricing is not configured yet" }, { status: 400 });
 
-  const priced = computeQuotation(job as QuoteJob, config as PricingConfig);
+  // Pricing inputs live on the property record now (BR-1).
+  const jobRow = job as { code: string; property: QuoteJob | QuoteJob[] | null };
+  const property = Array.isArray(jobRow.property) ? jobRow.property[0] : jobRow.property;
+  if (!property) {
+    return NextResponse.json({ error: "This job has no property to price yet" }, { status: 400 });
+  }
+  const priced = computeQuotation(property as QuoteJob, config as PricingConfig);
 
   // One live quote per job: refresh a draft in place, otherwise open a new one.
   const existing = await latestQuote(admin, jobId);

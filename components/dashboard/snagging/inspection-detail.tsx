@@ -13,6 +13,7 @@ import type { SnaggingTask } from "@/types/types";
 
 import { AuditTimeline } from "./audit-timeline";
 import { ChecklistPanel } from "./checklist-panel";
+import { FloorPlansPanel } from "./floor-plans-panel";
 import { QuotationPanel } from "./quotation-panel";
 import { ReviewPanel } from "./review-panel";
 
@@ -77,6 +78,8 @@ export default function InspectionDetail({ taskId }: { taskId: string }) {
       <ReviewPanel task={task} onChanged={() => void load()} />
 
       <ChecklistPanel task={task} />
+
+      <FloorPlansPanel taskId={task.id} />
 
       <AuditTimeline taskId={task.id} />
     </div>

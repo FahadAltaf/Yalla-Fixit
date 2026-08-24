@@ -45,7 +45,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { snaggingService, type SnaggingClientOption } from "@/modules/snagging";
 import { usersService } from "@/modules/users/services/users-service";
-import type { SnaggingPropertyType, User } from "@/types/types";
+import type { SnaggingProperty, SnaggingPropertyType, User } from "@/types/types";
 
 import { PROPERTY_TYPE_LABELS, PageHeading } from "./shared";
 
@@ -63,6 +63,8 @@ type PendingPlan = { id: string; file: File; label: string; width?: number; heig
 
 type Draft = {
   client_id: string;
+  /** Set when an existing property record is reused (BR-1); "" = create new. */
+  property_id: string;
   client_name: string;
   client_email: string;
   client_phone: string;
@@ -172,6 +174,7 @@ export default function NewJobWizard() {
 
   const [draft, setDraft] = useState<Draft>({
     client_id: "",
+    property_id: "",
     client_name: "",
     client_email: "",
     client_phone: "",
@@ -241,6 +244,33 @@ export default function NewJobWizard() {
     set("areas", next);
   }
 
+  // Reuse an existing property (BR-1): prefill every field from the record and
+  // remember its id so the job links to it. Passing null returns to "new".
+  function applyProperty(prop: SnaggingProperty | null) {
+    const type = (prop?.property_type as SnaggingPropertyType) ?? draft.property_type;
+    const s = (v: number | null | undefined) => (v != null ? String(v) : "");
+    setDraft((current) => ({
+      ...current,
+      property_id: prop?.id ?? "",
+      unit_label: prop?.unit_label ?? (prop ? "" : current.unit_label),
+      building_name: prop?.building_name ?? (prop ? "" : current.building_name),
+      community: prop?.community ?? (prop ? "" : current.community),
+      developer_name: prop?.developer_name ?? (prop ? "" : current.developer_name),
+      property_type: type,
+      bedrooms: prop?.bedrooms ?? current.bedrooms,
+      built_up_area: prop ? s(prop.built_up_area_sqft) : current.built_up_area,
+      plot_area: prop ? s(prop.plot_area_sqft) : current.plot_area,
+      external_areas_in_scope: prop ? Boolean(prop.external_areas_in_scope) : current.external_areas_in_scope,
+      floors: prop ? s(prop.floors) : current.floors,
+      location_lat: prop ? s(prop.location_lat) : current.location_lat,
+      location_lng: prop ? s(prop.location_lng) : current.location_lng,
+      title_deed_path: prop?.title_deed_path ?? (prop ? "" : current.title_deed_path),
+      noc_required: prop ? Boolean(prop.noc_required) : current.noc_required,
+      noc_path: prop?.noc_path ?? (prop ? "" : current.noc_path),
+      areas: areasTouched.current ? current.areas : templateFor(type, prop?.bedrooms ?? current.bedrooms),
+    }));
+  }
+
   const stepValid = useMemo(() => {
     switch (STEPS[step].key) {
       case "property":
@@ -276,6 +306,7 @@ export default function NewJobWizard() {
 
       const created = await snaggingService.createTask({
         client_id: draft.client_id || undefined,
+        property_id: draft.property_id || undefined,
         property: {
           unit_label: draft.unit_label,
           building_name: draft.building_name,
@@ -420,6 +451,7 @@ export default function NewJobWizard() {
               set={set}
               setPropertyType={setPropertyType}
               setBedrooms={setBedrooms}
+              applyProperty={applyProperty}
               titleDeedFile={titleDeedFile}
               setTitleDeedFile={setTitleDeedFile}
               nocFile={nocFile}
@@ -554,6 +586,7 @@ function ClientPicker({
 
   function choose(client: SnaggingClientOption) {
     set("client_id", client.id ?? "");
+    set("property_id", "");
     set("client_name", client.client_name);
     set("client_email", client.client_email ?? "");
     set("client_phone", client.client_phone ?? "");
@@ -566,6 +599,7 @@ function ClientPicker({
   // with an id we link the job to.
   function saveNew(client: SnaggingClientOption) {
     set("client_id", client.id ?? "");
+    set("property_id", "");
     set("client_name", client.client_name);
     set("client_email", client.client_email ?? "");
     set("client_phone", client.client_phone ?? "");
@@ -575,6 +609,7 @@ function ClientPicker({
 
   function clear() {
     set("client_id", "");
+    set("property_id", "");
     set("client_name", "");
     set("client_email", "");
     set("client_phone", "");
@@ -838,6 +873,7 @@ function PropertyStep({
   set,
   setPropertyType,
   setBedrooms,
+  applyProperty,
   titleDeedFile,
   setTitleDeedFile,
   nocFile,
@@ -847,6 +883,7 @@ function PropertyStep({
   set: <K extends keyof Draft>(key: K, value: Draft[K]) => void;
   setPropertyType: (value: SnaggingPropertyType) => void;
   setBedrooms: (value: number) => void;
+  applyProperty: (prop: SnaggingProperty | null) => void;
   titleDeedFile: File | null;
   setTitleDeedFile: (file: File | null) => void;
   nocFile: File | null;
@@ -855,6 +892,24 @@ function PropertyStep({
   const isCommercial = draft.property_type === "commercial";
   const isVilla = draft.property_type === "villa";
   const hasPlot = isVilla || draft.property_type === "townhouse";
+
+  // The client's properties on file, so an existing one can be reused (BR-1).
+  const [clientProperties, setClientProperties] = useState<SnaggingProperty[]>([]);
+  useEffect(() => {
+    if (!draft.client_id) {
+      setClientProperties([]);
+      return;
+    }
+    let active = true;
+    snaggingService
+      .listProperties(draft.client_id)
+      .then((rows) => active && setClientProperties(rows))
+      .catch(() => active && setClientProperties([]));
+    return () => {
+      active = false;
+    };
+  }, [draft.client_id]);
+
   return (
     <div className="space-y-5">
       <div>
@@ -868,6 +923,35 @@ function PropertyStep({
       <Field label="Client" required hint="search on file, or + to add new">
         <ClientPicker draft={draft} set={set} />
       </Field>
+
+      {draft.client_id && clientProperties.length > 0 ? (
+        <Field label="Property" hint="reuse one on file, or start a new one">
+          <Select
+            value={draft.property_id || "new"}
+            onValueChange={(value) =>
+              applyProperty(value === "new" ? null : clientProperties.find((p) => p.id === value) ?? null)
+            }
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="new">+ New property</SelectItem>
+              {clientProperties.map((p) => (
+                <SelectItem key={p.id} value={p.id}>
+                  {[p.unit_label, p.building_name].filter(Boolean).join(", ") || p.unit_label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+      ) : null}
+
+      {draft.property_id ? (
+        <p className="text-muted-foreground -mt-2 text-xs">
+          Reusing a saved property. Any edits below update that property record.
+        </p>
+      ) : null}
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Unit reference" required>

@@ -45,6 +45,17 @@ function fmtDate(value?: string | null): string {
   }).format(new Date(value));
 }
 
+function fmtDateTime(value?: string | null): string {
+  if (!value) return "";
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: GST,
+  }).format(new Date(value));
+}
+
 function visitLabel(task: SnaggingTask): string {
   if (task.visit_type === "additional") return `Additional visit · V${task.round_number}`;
   if (task.visit_type === "desnag" || task.round_number > 1)
@@ -344,6 +355,11 @@ export const InspectionReport = forwardRef<HTMLDivElement, {
                             }}
                           />
                         ))}
+                      </div>
+                    ) : null}
+                    {photos[0]?.taken_at ? (
+                      <div style={{ fontSize: 10.5, color: C.sub, marginTop: 4 }}>
+                        Captured {fmtDateTime(photos[0].taken_at)}
                       </div>
                     ) : null}
                   </div>

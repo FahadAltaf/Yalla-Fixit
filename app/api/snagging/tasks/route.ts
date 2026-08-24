@@ -4,6 +4,7 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { generateTaskCode } from "@/lib/server/snagging/workflow";
+import { propertySnapshot, resolveProperty } from "@/lib/server/snagging/property";
 import { createTaskSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType, type SnaggingVisitType } from "@/types/types";
 
@@ -258,6 +259,17 @@ export async function POST(req: NextRequest) {
         createdBy: profile.id,
       }));
 
+    // 1b. Resolve the property record (BR-1). Reuses the client's property
+    // for this unit or creates one; the full attributes live there now. The
+    // job keeps only a 5-field snapshot for the list search and mobile wire.
+    const property = await resolveProperty(admin, {
+      propertyId: input.property_id ?? null,
+      clientId,
+      fields: p,
+      createdBy: profile.id,
+    });
+    const snapshot = propertySnapshot(property.columns);
+
     // 2. Create the job. The unique index on `code` is the arbiter.
     const inspectorId = input.technician_ids[0] ?? null;
     let job: { id: string; code: string } | null = null;
@@ -277,22 +289,14 @@ export async function POST(req: NextRequest) {
           code,
           status: "draft",
           client_id: clientId,
-          unit_label: p.unit_label,
-          building_name: emptyToNull(p.building_name),
-          community: emptyToNull(p.community),
-          property_type: p.property_type,
-          developer_name: emptyToNull(p.developer_name),
-          // Measurements + documents (E2-E10).
-          bedrooms: p.property_type === "commercial" ? null : p.bedrooms ?? null,
-          built_up_area_sqft: p.built_up_area_sqft ?? null,
-          plot_area_sqft: p.property_type === "villa" || p.property_type === "townhouse" ? p.plot_area_sqft ?? null : null,
-          external_areas_in_scope: Boolean(p.external_areas_in_scope),
-          floors: p.property_type === "villa" ? p.floors ?? null : null,
-          location_lat: p.location_lat ?? null,
-          location_lng: p.location_lng ?? null,
-          title_deed_path: emptyToNull(p.title_deed_path),
-          noc_required: Boolean(p.noc_required),
-          noc_path: emptyToNull(p.noc_path),
+          property_id: property.id,
+          // Denormalised snapshot for the list search + mobile wire; the full
+          // property record lives in snagging_properties (BR-1).
+          unit_label: snapshot.unit_label,
+          building_name: snapshot.building_name,
+          community: snapshot.community,
+          property_type: snapshot.property_type,
+          developer_name: snapshot.developer_name,
           // Assignment + schedule (I1-I4).
           inspector_id: inspectorId,
           approval_manager_id: input.approval_manager_id ?? null,

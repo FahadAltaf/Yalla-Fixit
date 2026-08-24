@@ -37,6 +37,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
          client:client_id(id, name, email, phone, company),
          inspector:inspector_id(id, full_name, email, profile_image),
          manager:approval_manager_id(id, full_name, email),
+         property_record:property_id(*),
          areas:snagging_areas(*)`,
       )
       .eq("id", id)
@@ -58,7 +59,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         `*,
          area:snagging_areas(id, name),
          photos:snagging_snag_photos(id, snag_id, job_id, storage_path, media_type,
-           bytes, width, height, taken_at, round_number)`,
+           bytes, width, height, taken_at, round_number, gps_lat, gps_lng)`,
       )
       .eq("job_id", id)
       .order("snag_code", { ascending: true });
@@ -84,17 +85,34 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       job.inspector as { id?: string; full_name?: string; email?: string; profile_image?: string } | null,
     );
 
+    // The property record is canonical now (BR-1); fall back to the job's
+    // denormalised snapshot for any job that predates the property link.
+    const rec = firstOf(job.property_record as Record<string, unknown> | null) as
+      | Record<string, unknown>
+      | null;
+    const pick = (key: string) => (rec ? rec[key] : (job as Record<string, unknown>)[key]);
     const property = {
-      id: job.client_id,
+      id: (rec?.id as string | undefined) ?? job.property_id ?? job.client_id,
       client_name: client?.name ?? "",
       client_email: client?.email ?? null,
       client_phone: client?.phone ?? null,
-      unit_label: job.unit_label,
-      building_name: job.building_name,
-      community: job.community,
+      unit_label: pick("unit_label"),
+      building_name: pick("building_name"),
+      community: pick("community"),
       city: "Dubai",
-      property_type: job.property_type,
-      developer_name: job.developer_name,
+      property_type: pick("property_type"),
+      developer_name: pick("developer_name"),
+      // Full attributes for the job detail / property edit (portal only).
+      bedrooms: pick("bedrooms") ?? null,
+      built_up_area_sqft: pick("built_up_area_sqft") ?? null,
+      plot_area_sqft: pick("plot_area_sqft") ?? null,
+      external_areas_in_scope: pick("external_areas_in_scope") ?? false,
+      floors: pick("floors") ?? null,
+      location_lat: pick("location_lat") ?? null,
+      location_lng: pick("location_lng") ?? null,
+      title_deed_path: pick("title_deed_path") ?? null,
+      noc_required: pick("noc_required") ?? false,
+      noc_path: pick("noc_path") ?? null,
     };
 
     const assignees = inspector
@@ -107,16 +125,16 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         }]
       : [];
 
-    const floor_plans = job.floor_plan_path
-      ? await signMediaPaths(admin, [{
-          id: job.id,
-          task_id: job.id,
-          label: "Floor plan",
-          storage_path: job.floor_plan_path,
-          width: job.floor_plan_width,
-          height: job.floor_plan_height,
-        }])
-      : [];
+    const { data: planRows, error: planError } = await admin
+      .from("snagging_floor_plans")
+      .select("id, job_id, label, storage_path, width, height, sort_order")
+      .eq("job_id", id)
+      .order("sort_order", { ascending: true });
+    if (planError) throw new Error(planError.message);
+    const floor_plans = await signMediaPaths(
+      admin,
+      (planRows ?? []).map((p) => ({ ...p, task_id: p.job_id })),
+    );
 
     // Sign the signature image so the report can render the sign-off; the
     // stored path is private like every other object in the bucket.

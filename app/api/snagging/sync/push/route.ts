@@ -177,6 +177,7 @@ async function applySnag(admin: Admin, ctx: Ctx, payload: Record<string, unknown
     defect_label: (payload.defect_label as string) ?? null,
     severity,
     note: (payload.note as string) ?? null,
+    floor_plan_id: (payload.floor_plan_id as string) ?? null,
     pin_x: toNumber(payload.pin_x),
     pin_y: toNumber(payload.pin_y),
     round_created: (payload.round_created as number) ?? 1,
@@ -247,6 +248,10 @@ async function applyPhoto(admin: Admin, ctx: Ctx, payload: Record<string, unknow
     height: toNumber(payload.height),
     taken_at: (payload.taken_at as string) ?? new Date().toISOString(),
     round_number: (payload.round_number as number) ?? 1,
+    // Where and (via EXIF) when the photo was actually taken (FR-2.06).
+    gps_lat: toNumber(payload.gps_lat),
+    gps_lng: toNumber(payload.gps_lng),
+    exif: (payload.exif as Record<string, unknown> | null) ?? null,
   };
   const { error } = await admin.from("snagging_snag_photos").upsert(row, { onConflict: "id" });
   if (error) throw new Error(error.message);

@@ -70,6 +70,26 @@ export const propertyInputSchema = z.object({
   noc_path: z.string().trim().optional().or(z.literal("")),
 });
 
+/** A standalone property record (BR-1) — client + property attributes, no client detail. */
+export const propertyUpsertSchema = z.object({
+  client_id: z.string().uuid(),
+  unit_label: z.string().trim().min(1, "Unit is required"),
+  building_name: z.string().trim().optional().or(z.literal("")),
+  community: z.string().trim().optional().or(z.literal("")),
+  property_type: propertyTypeSchema,
+  developer_name: z.string().trim().optional().or(z.literal("")),
+  bedrooms: z.coerce.number().int().min(0).max(11).optional().nullable(),
+  built_up_area_sqft: z.coerce.number().positive().optional().nullable(),
+  plot_area_sqft: z.coerce.number().positive().optional().nullable(),
+  external_areas_in_scope: z.coerce.boolean().optional(),
+  floors: z.coerce.number().int().min(1).max(20).optional().nullable(),
+  location_lat: z.coerce.number().optional().nullable(),
+  location_lng: z.coerce.number().optional().nullable(),
+  title_deed_path: z.string().trim().optional().or(z.literal("")),
+  noc_required: z.coerce.boolean().optional(),
+  noc_path: z.string().trim().optional().or(z.literal("")),
+});
+
 export const createTaskSchema = z
   .object({
     // An already-persisted client (from the picker / add-client dialog).

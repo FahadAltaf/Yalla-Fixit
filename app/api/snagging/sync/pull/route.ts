@@ -154,7 +154,7 @@ export async function GET(req: NextRequest) {
       defect_label: s.defect_label,
       severity: s.severity,
       note: s.note,
-      floor_plan_id: null,
+      floor_plan_id: s.floor_plan_id ?? null,
       pin_x: s.pin_x,
       pin_y: s.pin_y,
       status: s.status,
@@ -187,21 +187,30 @@ export async function GET(req: NextRequest) {
       taken_at: p.taken_at as string,
       round_number: (p.round_number as number) ?? 1,
       created_at: (p.created_at as string | null) ?? null,
+      gps_lat: (p.gps_lat as number | null) ?? null,
+      gps_lng: (p.gps_lng as number | null) ?? null,
     }));
 
-    // Floor plans are now a column on the job; emit one entry per job that
-    // has a plan, keyed by the job id so the app stores/renders it as before.
-    const planRows = (jobs ?? [])
-      .map((job) => job as JobRow)
-      .filter((j) => Boolean(j.floor_plan_path))
-      .map((j) => ({
-        id: j.id,
-        task_id: j.id,
-        label: "Floor plan",
-        storage_path: j.floor_plan_path as string,
-        width: j.floor_plan_width,
-        height: j.floor_plan_height,
-      }));
+    // Every floor plan for the inspector's jobs, each with its own id so a
+    // pinned snag can point at the right floor (G3). Sent in full each pull
+    // rather than by delta — plans are few and rarely change, and the app
+    // upserts them by id.
+    const { data: planData, error: planError } = await admin
+      .from("snagging_floor_plans")
+      .select("id, job_id, label, storage_path, width, height, sort_order")
+      .in("job_id", jobIds)
+      .order("sort_order", { ascending: true });
+    if (planError) throw new Error(planError.message);
+
+    const planRows = (planData ?? []).map((p) => ({
+      id: p.id,
+      task_id: p.job_id,
+      label: p.label,
+      storage_path: p.storage_path,
+      width: p.width,
+      height: p.height,
+      sort_order: p.sort_order,
+    }));
 
     const [signedPlans, signedPhotos] = await Promise.all([
       signMediaPaths(admin, planRows),

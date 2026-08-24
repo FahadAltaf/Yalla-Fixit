@@ -40,7 +40,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const { data: parent, error: parentError } = await admin
       .from("snagging_jobs")
       .select(
-        `id, code, status, round_number, client_id, unit_label, building_name, community,
+        `id, code, status, round_number, client_id, property_id, unit_label, building_name, community,
          property_type, developer_name, inspector_id, approval_manager_id, scheduled_date`,
       )
       .eq("id", id)
@@ -98,6 +98,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         round_number: nextRound,
         parent_job_id: parent.id,
         client_id: parent.client_id,
+        property_id: parent.property_id,
         unit_label: parent.unit_label,
         building_name: parent.building_name,
         community: parent.community,

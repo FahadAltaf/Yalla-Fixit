@@ -347,6 +347,21 @@ export interface SnaggingProperty {
   property_type: SnaggingPropertyType;
   developer_name?: string | null;
   handover_date?: string | null;
+  // Property record fields (BR-1). Present on the job-detail property object
+  // and the snagging_properties endpoints.
+  client_id?: string | null;
+  bedrooms?: number | null;
+  built_up_area_sqft?: number | null;
+  plot_area_sqft?: number | null;
+  external_areas_in_scope?: boolean | null;
+  floors?: number | null;
+  location_lat?: number | null;
+  location_lng?: number | null;
+  title_deed_path?: string | null;
+  noc_required?: boolean | null;
+  noc_path?: string | null;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface SnaggingArea {
@@ -421,7 +436,8 @@ export interface SnaggingFloorPlan {
   label: string;
   storage_path: string;
   mime_type?: string | null;
-  page_number: number;
+  page_number?: number;
+  sort_order?: number | null;
   width?: number | null;
   height?: number | null;
   signed_url?: string | null;

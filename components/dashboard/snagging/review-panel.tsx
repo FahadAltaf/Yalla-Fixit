@@ -142,6 +142,11 @@ export function ReviewPanel({
               ) : task.round_number > 1 ? (
                 <Badge variant="outline">Round {task.round_number}</Badge>
               ) : null}
+              {task.visit_type === "additional" && (task.visit_charge ?? 0) > 0 ? (
+                <span className="text-muted-foreground text-xs">
+                  Charge AED {task.visit_charge!.toLocaleString()}
+                </span>
+              ) : null}
             </div>
             <h2 className="text-2xl">{task.property?.unit_label}</h2>
             <p className="text-muted-foreground text-sm">

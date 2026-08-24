@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
 
     const { data: job, error: jobError } = await admin
       .from("snagging_jobs")
-      .select("id")
+      .select("id, property_id")
       .eq("id", taskId)
       .maybeSingle();
     if (jobError) throw new Error(jobError.message);
@@ -79,11 +79,21 @@ export async function POST(req: NextRequest) {
       .upload(path, file, { contentType: file.type, upsert: true });
     if (uploadError) throw new Error(uploadError.message);
 
-    const { error: updateError } = await admin
-      .from("snagging_jobs")
-      .update({ [column]: path })
-      .eq("id", taskId);
-    if (updateError) throw new Error(updateError.message);
+    // Documents belong to the property record now (BR-1). Fall back to the
+    // job column only if the job predates a property link.
+    if (job.property_id) {
+      const { error: updateError } = await admin
+        .from("snagging_properties")
+        .update({ [column]: path, updated_at: new Date().toISOString() })
+        .eq("id", job.property_id);
+      if (updateError) throw new Error(updateError.message);
+    } else {
+      const { error: updateError } = await admin
+        .from("snagging_jobs")
+        .update({ [column]: path })
+        .eq("id", taskId);
+      if (updateError) throw new Error(updateError.message);
+    }
 
     return NextResponse.json({ data: { kind, storage_path: path } }, { status: 201 });
   } catch (error) {

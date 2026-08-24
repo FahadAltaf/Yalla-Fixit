@@ -2,12 +2,35 @@ import { executeRESTBackend } from "@/lib/rest-server";
 import type {
   SnaggingAnalytics,
   SnaggingAuditEvent,
+  SnaggingFloorPlan,
   SnaggingOverview,
+  SnaggingProperty,
+  SnaggingPropertyType,
   SnaggingCatalogueArea,
   SnaggingCatalogueEntry,
   SnaggingTask,
   SnaggingTaskSummary,
 } from "@/types/types";
+
+/** Payload for creating or editing a property record (BR-1). */
+export interface SnaggingPropertyInput {
+  client_id: string;
+  unit_label: string;
+  building_name?: string;
+  community?: string;
+  property_type: SnaggingPropertyType;
+  developer_name?: string;
+  bedrooms?: number | null;
+  built_up_area_sqft?: number | null;
+  plot_area_sqft?: number | null;
+  external_areas_in_scope?: boolean;
+  floors?: number | null;
+  location_lat?: number | null;
+  location_lng?: number | null;
+  title_deed_path?: string;
+  noc_required?: boolean;
+  noc_path?: string;
+}
 import type {
   CatalogueEntryInput,
   CreateTaskInput,
@@ -170,6 +193,25 @@ export const snaggingService = {
       body: input as unknown as Record<string, unknown>,
     }),
 
+  // ── Properties (BR-1) ──────────────────────────────────────────────────
+  listProperties: async (clientId?: string): Promise<SnaggingProperty[]> =>
+    executeRESTBackend<SnaggingProperty[]>("/api/snagging/properties", {
+      method: "GET",
+      params: clientId ? { client_id: clientId } : {},
+    }),
+
+  createProperty: async (input: SnaggingPropertyInput): Promise<SnaggingProperty> =>
+    executeRESTBackend<SnaggingProperty>("/api/snagging/properties", {
+      method: "POST",
+      body: input as unknown as Record<string, unknown>,
+    }),
+
+  updateProperty: async (id: string, input: SnaggingPropertyInput): Promise<SnaggingProperty> =>
+    executeRESTBackend<SnaggingProperty>("/api/snagging/properties", {
+      method: "PATCH",
+      body: { id, ...input } as unknown as Record<string, unknown>,
+    }),
+
   /**
    * Uploads a floor plan to a job. Sent as multipart form data rather
    * than JSON because it carries the image file; the REST helper is
@@ -194,6 +236,18 @@ export const snaggingService = {
     }
     return payload.data;
   },
+
+  listFloorPlans: async (taskId: string): Promise<SnaggingFloorPlan[]> =>
+    executeRESTBackend<SnaggingFloorPlan[]>("/api/snagging/floor-plans", {
+      method: "GET",
+      params: { task_id: taskId },
+    }),
+
+  deleteFloorPlan: async (id: string): Promise<{ id: string }> =>
+    executeRESTBackend<{ id: string }>("/api/snagging/floor-plans", {
+      method: "DELETE",
+      params: { id },
+    }),
 
   /** Uploads a title deed (E8) or NOC (E10) and attaches it to the job. */
   uploadDocument: async (
