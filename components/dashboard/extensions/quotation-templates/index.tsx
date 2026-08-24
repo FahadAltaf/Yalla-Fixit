@@ -506,7 +506,7 @@ export function QuotationTemplatesPage() {
                         Discount Template By Total
                       </SelectItem>
                       <SelectItem value="with-total-no-list">
-                        Discount Template By Total (No List Price)
+                        Discount Template By Total (Unit Price)
                       </SelectItem>
                       <SelectItem value="with">
                         Discount Template By Line Items

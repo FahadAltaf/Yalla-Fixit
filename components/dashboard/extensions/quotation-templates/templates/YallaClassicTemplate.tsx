@@ -37,10 +37,14 @@ export function YallaClassicTemplate({
   const grandTotal = data.grandTotal || calculated.grandTotal;
   const avgTax = calculated.avgTax;
 
-  // "Discount Template By Total (No List Price)": same as By Total, but the
-  // List Price column is dropped (the team only needs the final amount) and
-  // the Summary's Discount line always carries the effective percentage.
-  const hideListPrice = discountMode === "with-total-no-list";
+  // "Discount Template By Total (Unit Price)": same as By Total, and the
+  // Summary's Discount line always carries the effective percentage.
+  //
+  // The price column IS shown in this mode, but headed "Unit Price" rather
+  // than "List Price", and it always renders the undiscounted per-unit rate
+  // (item.unitPrice) -- the discount is applied once at the total, never to
+  // this column.
+  const priceColumnLabel = discountMode === "with-total-no-list" ? "Unit Price" : "List Price";
   const isByTotal =
     discountMode === "with-total" || discountMode === "with-total-no-list";
   const discountPct = subTotal > 0 ? (discount / subTotal) * 100 : 0;
@@ -158,11 +162,9 @@ export function YallaClassicTemplate({
       <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: "8px" }}>
         <thead>
           <tr style={{ background: "black" }}>
-            {(hideListPrice
-              ? ["SR #", "Service & Part", "Qty", "Unit", "Amount"]
-              : hideDiscount || isByTotal
-                ? ["SR #", "Service & Part", "Qty", "Unit", "List Price", "Amount"]
-                : ["SR #", "Service & Part", "Qty", "Unit", "List Price", "Discount", "Amount"]
+            {(hideDiscount || isByTotal
+              ? ["SR #", "Service & Part", "Qty", "Unit", priceColumnLabel, "Amount"]
+              : ["SR #", "Service & Part", "Qty", "Unit", priceColumnLabel, "Discount", "Amount"]
             ).map((h, i) => (
               <th
                 key={h}
@@ -248,13 +250,11 @@ export function YallaClassicTemplate({
                     ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
                     : { padding: "12px" }), textAlign: "right", verticalAlign: "top", color: "#64748b"
                 }}>{item.unit}</td>
-                {!hideListPrice && (
-                  <td style={{
-                    fontSize: "11px", width: "100px", ...(forPDF
-                      ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
-                      : { padding: "12px" }), textAlign: "right", verticalAlign: "top"
-                  }}>{formatCurrencyAED(item.unitPrice)}</td>
-                )}
+                <td style={{
+                  fontSize: "11px", width: "100px", ...(forPDF
+                    ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
+                    : { padding: "12px" }), textAlign: "right", verticalAlign: "top"
+                }}>{formatCurrencyAED(item.unitPrice)}</td>
                 {(discountMode === "with") && (
                   <td style={{
                     fontSize: "11px", width: "86px", ...(forPDF
