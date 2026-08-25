@@ -61,7 +61,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         `*,
          area:snagging_areas(id, name),
          photos:snagging_snag_photos(id, snag_id, job_id, storage_path, media_type,
-           bytes, width, height, taken_at, round_number, gps_lat, gps_lng)`,
+           bytes, width, height, taken_at, round_number, gps_lat, gps_lng, exif)`,
       )
       .eq("job_id", id)
       .order("snag_code", { ascending: true });

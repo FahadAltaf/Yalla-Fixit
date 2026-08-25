@@ -326,6 +326,13 @@ export const snaggingService = {
       params: excludeJobId ? { date, excludeJobId } : { date },
     }),
 
+  /** FR-6.01 — pick a submitted inspection up for review (submitted → in_review). */
+  reviewTask: async (id: string, comment?: string) =>
+    executeRESTBackend(`/api/snagging/tasks/${id}/review`, {
+      method: "POST",
+      body: { comment: comment ?? "" },
+    }),
+
   approveTask: async (id: string, comment?: string) =>
     executeRESTBackend(`/api/snagging/tasks/${id}/approve`, {
       method: "POST",

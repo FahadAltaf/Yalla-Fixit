@@ -4,8 +4,10 @@ import { useMemo, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import {
+  AlertTriangle,
   CalendarPlus,
   CheckCircle2,
+  ClipboardCheck,
   FileText,
   Flag,
   ImageOff,
@@ -93,6 +95,12 @@ export function ReviewPanel({
   const snagsWithPhoto = snags.filter((snag) => (snag.photos?.length ?? 0) > 0).length;
 
   const awaitingDecision = task.status === "submitted" || task.status === "in_review";
+  // FR-6.07 — flag an approval that has waited longer than the 48h SLA.
+  const submittedMs = task.submitted_at ? Date.parse(task.submitted_at) : NaN;
+  const approvalOverdue =
+    awaitingDecision &&
+    !Number.isNaN(submittedMs) &&
+    submittedMs + 48 * 60 * 60 * 1000 < Date.now();
 
   function toggleFlag(id: string) {
     setFlagged((current) => {
@@ -101,6 +109,19 @@ export function ReviewPanel({
       else next.add(id);
       return next;
     });
+  }
+
+  async function startReview() {
+    setWorking(true);
+    try {
+      await snaggingService.reviewTask(task.id);
+      toast.success("Review started. Approve or send it back when you're done.");
+      onChanged();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not start the review");
+    } finally {
+      setWorking(false);
+    }
   }
 
   async function approve() {
@@ -147,6 +168,12 @@ export function ReviewPanel({
                   Charge AED {task.visit_charge!.toLocaleString()}
                 </span>
               ) : null}
+              {approvalOverdue ? (
+                <span className="bg-danger/10 text-danger inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-semibold">
+                  <AlertTriangle className="size-3.5" />
+                  Approval overdue (48h SLA)
+                </span>
+              ) : null}
             </div>
             <h2 className="text-2xl">{task.property?.unit_label}</h2>
             <p className="text-muted-foreground text-sm">
@@ -177,10 +204,20 @@ export function ReviewPanel({
                   <XCircle className="size-4" />
                   Send back
                 </Button>
-                <Button onClick={() => void approve()} disabled={working}>
-                  <CheckCircle2 className="size-4" />
-                  Approve inspection
-                </Button>
+                {task.status === "submitted" ? (
+                  // FR-6.01 — the review must be picked up (submitted →
+                  // in_review, audited) before it can be approved. Approve
+                  // only appears once the inspection is under review.
+                  <Button onClick={() => void startReview()} disabled={working}>
+                    <ClipboardCheck className="size-4" />
+                    Start review
+                  </Button>
+                ) : (
+                  <Button onClick={() => void approve()} disabled={working}>
+                    <CheckCircle2 className="size-4" />
+                    Approve inspection
+                  </Button>
+                )}
               </>
             ) : null}
             {(task.status === "approved" || task.status === "delivered") && canCreate ? (
@@ -406,6 +443,7 @@ export function ReviewPanel({
               <ImageOff className="mr-2 size-5" /> This photo is no longer available
             </div>
           )}
+          {preview ? <PhotoExif photo={preview} /> : null}
         </DialogContent>
       </Dialog>
 
@@ -506,6 +544,85 @@ function Detail({ label, value }: { label: string; value: React.ReactNode }) {
     <div>
       <dt className="text-muted-foreground text-xs">{label}</dt>
       <dd className="mt-0.5">{value || "—"}</dd>
+    </div>
+  );
+}
+
+/**
+ * FR-6.05 — the capture metadata behind a photo, so the approver can
+ * judge the evidence, not just look at it: when and where it was taken,
+ * the device that took it, and the raw dimensions. EXIF is read straight
+ * off the stored `exif` blob; only the keys we recognise are surfaced,
+ * and the block hides itself when a photo carries nothing.
+ */
+function PhotoExif({ photo }: { photo: SnaggingPhoto }) {
+  const exif = (photo.exif ?? {}) as Record<string, unknown>;
+  const str = (...keys: string[]): string | null => {
+    for (const key of keys) {
+      const v = exif[key];
+      if (typeof v === "string" && v.trim()) return v.trim();
+      if (typeof v === "number" && Number.isFinite(v)) return String(v);
+    }
+    return null;
+  };
+
+  const make = str("Make", "make");
+  const model = str("Model", "model");
+  const camera = [make, model].filter(Boolean).join(" ") || null;
+  const lens = str("LensModel", "lensModel", "LensMake");
+  const software = str("Software", "software");
+  const exposure = str("ExposureTime", "exposureTime");
+  const fnumber = str("FNumber", "fNumber", "ApertureValue");
+  const iso = str("ISOSpeedRatings", "ISO", "iso");
+  const dims =
+    photo.width && photo.height ? `${photo.width} × ${photo.height}` : null;
+  const size =
+    photo.bytes && photo.bytes > 0
+      ? `${(photo.bytes / (1024 * 1024)).toFixed(1)} MB`
+      : null;
+  const hasGps = photo.gps_lat != null && photo.gps_lng != null;
+
+  const rows: Array<{ label: string; value: React.ReactNode }> = [];
+  if (camera) rows.push({ label: "Camera", value: camera });
+  if (lens) rows.push({ label: "Lens", value: lens });
+  const shot = [exposure ? `${exposure}s` : null, fnumber ? `ƒ/${fnumber}` : null, iso ? `ISO ${iso}` : null]
+    .filter(Boolean)
+    .join(" · ");
+  if (shot) rows.push({ label: "Exposure", value: shot });
+  if (dims) rows.push({ label: "Dimensions", value: dims });
+  if (size) rows.push({ label: "File size", value: size });
+  if (software) rows.push({ label: "Software", value: software });
+  rows.push({
+    label: "Captured",
+    value: formatGstDateTime(photo.taken_at) || "Unknown",
+  });
+  rows.push({
+    label: "Location",
+    value: hasGps ? (
+      <a
+        href={`https://www.google.com/maps?q=${photo.gps_lat},${photo.gps_lng}`}
+        target="_blank"
+        rel="noreferrer"
+        className="text-brand inline-flex items-center gap-1 hover:underline"
+      >
+        <MapPin className="size-3.5" />
+        {photo.gps_lat!.toFixed(5)}, {photo.gps_lng!.toFixed(5)}
+      </a>
+    ) : (
+      "No GPS recorded"
+    ),
+  });
+
+  return (
+    <div className="bg-muted/40 rounded-md border p-4">
+      <p className="text-muted-foreground mb-2 text-xs font-medium tracking-wide uppercase">
+        Capture data (EXIF)
+      </p>
+      <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-3">
+        {rows.map((row) => (
+          <Detail key={row.label} label={row.label} value={row.value} />
+        ))}
+      </dl>
     </div>
   );
 }

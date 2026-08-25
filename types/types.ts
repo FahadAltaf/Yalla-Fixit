@@ -617,6 +617,8 @@ export interface SnaggingTaskSummary {
   inspector_name?: string | null;
   medium_severity_count?: number;
   low_severity_count?: number;
+  /** FR-6.07 — submitted more than 48h ago and still awaiting a decision. */
+  escalated?: boolean;
 }
 
 /** Payload behind the "Today at a glance" dashboard. */

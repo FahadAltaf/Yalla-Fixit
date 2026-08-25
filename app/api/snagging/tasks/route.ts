@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import { generateTaskCode } from "@/lib/server/snagging/workflow";
+import { APPROVAL_SLA_HOURS, generateTaskCode } from "@/lib/server/snagging/workflow";
 import { propertySnapshot, resolveProperty } from "@/lib/server/snagging/property";
 import { createTaskSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType, type SnaggingVisitType } from "@/types/types";
@@ -175,11 +175,24 @@ async function enrichRows(admin: Admin, rows: JobRow[]) {
     photoAgg.set(p.job_id, (photoAgg.get(p.job_id) ?? 0) + 1);
   }
 
+  const now = Date.now();
   return rows.map((row) => {
     const s = snagAgg.get(row.id) ?? zero();
     const ar = areaAgg.get(row.id) ?? { total: 0, confirmed: 0 };
     const client = firstOf(row.client);
     const insp = firstOf(row.inspector);
+    // FR-6.07 — the 48h approval SLA. Derived from submitted_at at read
+    // time (rather than a stored column and a cron) so an approval that
+    // has waited too long surfaces as escalated the moment the queue is
+    // opened. Only jobs still awaiting a decision can be escalated.
+    const submittedMs = row.submitted_at ? Date.parse(row.submitted_at) : NaN;
+    const approvalDueAt = Number.isNaN(submittedMs)
+      ? null
+      : new Date(submittedMs + APPROVAL_SLA_HOURS * 60 * 60 * 1000).toISOString();
+    const escalated =
+      !Number.isNaN(submittedMs) &&
+      (row.status === "submitted" || row.status === "in_review") &&
+      submittedMs + APPROVAL_SLA_HOURS * 60 * 60 * 1000 < now;
     return {
       id: row.id,
       code: row.code,
@@ -198,7 +211,8 @@ async function enrichRows(admin: Admin, rows: JobRow[]) {
       rejection_reason: row.rejection_reason,
       rejection_count: row.rejection_count ?? 0,
       remediation_due_at: row.remediation_due_at ?? null,
-      approval_due_at: null,
+      approval_due_at: approvalDueAt,
+      escalated,
       submitted_at: row.submitted_at,
       approved_at: row.approved_at,
       delivered_at: null,

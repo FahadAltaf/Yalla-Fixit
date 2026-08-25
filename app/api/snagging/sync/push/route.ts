@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
+import { recordAudit } from "@/lib/server/snagging/audit";
 import { isTaskEditableByInspector, statusFromVerdict } from "@/lib/server/snagging/workflow";
 import { syncPushSchema, type SyncPushInput } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType, SnaggingTaskStatus, SnaggingVerdict } from "@/types/types";
@@ -71,7 +72,12 @@ export async function POST(req: NextRequest) {
         continue;
       }
       try {
-        await applyMutation(admin, { mutation, userId: profile.id, jobById });
+        await applyMutation(admin, {
+          mutation,
+          userId: profile.id,
+          actorLabel: profile.full_name ?? profile.email ?? null,
+          jobById,
+        });
         results.push({ mutation_id: mutation.mutation_id, status: "applied" });
         ledger.push({
           mutation_id: mutation.mutation_id,
@@ -120,7 +126,12 @@ export async function POST(req: NextRequest) {
 }
 
 type Mutation = SyncPushInput["mutations"][number];
-type Ctx = { mutation: Mutation; userId: string; jobById: Map<string, JobRef> };
+type Ctx = {
+  mutation: Mutation;
+  userId: string;
+  actorLabel: string | null;
+  jobById: Map<string, JobRef>;
+};
 
 async function applyMutation(admin: Admin, ctx: Ctx): Promise<void> {
   const payload = ctx.mutation.payload as Record<string, unknown>;
@@ -388,6 +399,20 @@ async function applySubmission(admin: Admin, ctx: Ctx, payload: Record<string, u
   const { error: lockError } = await admin.from("snagging_snags").update({ locked: true }).eq("job_id", job.id);
   if (lockError) throw new Error(lockError.message);
 
+  // FR-6.04 — the status change that hands the job to the approval queue
+  // is audited like every manager-side transition, not just silently
+  // written by the sync route.
+  await recordAudit(admin, {
+    entityType: "submission",
+    entityId: job.id,
+    taskId: job.id,
+    eventType: "task_submitted",
+    actorId: ctx.userId,
+    actorLabel: ctx.actorLabel,
+    origin: "mobile",
+    payload: { code: job.code, signer_name: (payload.signer_name as string) ?? null },
+  });
+
   ctx.jobById.set(job.id, { ...job, status: "submitted" });
 }
 
@@ -403,6 +428,19 @@ async function applyTaskProgress(admin: Admin, ctx: Ctx, payload: Record<string,
     .eq("id", job.id)
     .in("status", ["assigned", "rejected"]);
   if (error) throw new Error(error.message);
+
+  // FR-6.04 — start-of-work is a status change, so it belongs in the trail.
+  await recordAudit(admin, {
+    entityType: "task",
+    entityId: job.id,
+    taskId: job.id,
+    eventType: "task_in_progress",
+    actorId: ctx.userId,
+    actorLabel: ctx.actorLabel,
+    origin: "mobile",
+    payload: { code: job.code },
+  });
+
   ctx.jobById.set(job.id, { ...job, status: "in_progress" });
 }
 

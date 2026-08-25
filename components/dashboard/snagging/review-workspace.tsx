@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ClipboardCheck } from "lucide-react";
+import { AlertTriangle, ClipboardCheck } from "lucide-react";
 import { toast } from "sonner";
 
 import { Card } from "@/components/ui/card";
@@ -114,7 +114,15 @@ export default function ReviewWorkspace() {
                           : "hover:bg-mist-soft border-l-transparent",
                       )}
                     >
-                      <span className="text-muted-foreground font-mono text-xs">{row.code}</span>
+                      <span className="flex items-center gap-2">
+                        <span className="text-muted-foreground font-mono text-xs">{row.code}</span>
+                        {row.escalated ? (
+                          <span className="bg-danger/10 text-danger inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase">
+                            <AlertTriangle className="size-3" />
+                            Overdue
+                          </span>
+                        ) : null}
+                      </span>
                       <span className="mt-0.5 block font-medium">{row.unit_label}</span>
                       <span className="text-muted-foreground block text-xs">
                         {[row.building_name, row.client_name].filter(Boolean).join(" · ")}
@@ -125,7 +133,9 @@ export default function ReviewWorkspace() {
                             {row.high_severity_count} high
                           </span>
                         ) : null}
-                        <span>{timeAgo(row.submitted_at)}</span>
+                        <span className={cn(row.escalated && "text-danger font-medium")}>
+                          {timeAgo(row.submitted_at)}
+                        </span>
                       </span>
                     </button>
                   </li>
