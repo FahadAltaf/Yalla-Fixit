@@ -66,7 +66,7 @@ export function ReviewPanel({
   task: SnaggingTask;
   onChanged: () => void;
 }) {
-  const { user } = useAuth();
+  const { userProfile } = useAuth();
   const [working, setWorking] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [flagged, setFlagged] = useState<Set<string>>(new Set());
@@ -74,8 +74,8 @@ export function ReviewPanel({
   const [detail, setDetail] = useState<Snag | null>(null);
   const [visitOpen, setVisitOpen] = useState(false);
 
-  const canApprove = hasResourceAction(user, ResourceType.SNAGGING, ActionType.APPROVE);
-  const canCreate = hasResourceAction(user, ResourceType.SNAGGING, ActionType.CREATE);
+  const canApprove = hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.APPROVE);
+  const canCreate = hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.CREATE);
 
   const snags = useMemo(() => task.snags ?? [], [task]);
   const areas = task.areas ?? [];

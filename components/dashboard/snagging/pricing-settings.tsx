@@ -25,8 +25,8 @@ const TYPE_LABEL: Record<string, string> = {
 
 /** Admin pricing formula, scope of work and terms (F7-F10). */
 export default function PricingSettings() {
-  const { user } = useAuth();
-  const canEdit = hasResourceAction(user, ResourceType.SNAGGING_CATALOGUE, ActionType.EDIT);
+  const { userProfile } = useAuth();
+  const canEdit = hasResourceAction(userProfile, ResourceType.SNAGGING_CATALOGUE, ActionType.EDIT);
   const [config, setConfig] = useState<SnaggingPricingConfig | null>(null);
   const [saving, setSaving] = useState(false);
 

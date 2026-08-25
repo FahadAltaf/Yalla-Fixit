@@ -9,11 +9,14 @@ import { approveTaskSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType, SnaggingTaskStatus } from "@/types/types";
 
 /**
- * Manager approval (FR-4.02, BR-4).
+ * Start of review (FR-3.09, FR-6.01).
  *
- * Approval is the only gate to client delivery and has no bypass, so
- * the permission checked here is the dedicated `approve` action rather
- * than `edit`.
+ * Moves a submitted inspection into `in_review`, the intermediate state
+ * the status flow requires between Submitted and Approved. In the
+ * manager-owned model this is the approval manager picking the job up:
+ * the same person who will then Approve or Reject it. It therefore checks
+ * the same `approve` permission and the same designated-manager gate as
+ * approval, and only advances a job that is currently `submitted`.
  */
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
@@ -34,64 +37,50 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const admin = await createAdminServerClient();
     const { data: job, error: loadError } = await admin
       .from("snagging_jobs")
-      .select("id, code, status, round_number, approval_manager_id")
+      .select("id, code, status, approval_manager_id")
       .eq("id", id)
       .maybeSingle();
 
     if (loadError) throw new Error(loadError.message);
     if (!job) return NextResponse.json({ error: "Inspection not found" }, { status: 404 });
 
-    // FR-6.01 — only the job's designated approval manager (or an admin) may
-    // approve. The `approve` permission alone is not enough.
+    // FR-6.01 — reserved for the job's designated approval manager (or an admin).
     if (!isDesignatedApprovalManager(profile.id, job.approval_manager_id, isAdminUser(accessUser))) {
       return NextResponse.json(
-        { error: "Only this inspection's approval manager can approve it." },
+        { error: "Only this inspection's approval manager can start its review." },
         { status: 403 },
       );
     }
 
     try {
-      assertTransition(job.status as SnaggingTaskStatus, "approved");
+      assertTransition(job.status as SnaggingTaskStatus, "in_review");
     } catch (transitionError) {
-      return NextResponse.json(
-        { error: (transitionError as Error).message },
-        { status: 409 },
-      );
+      return NextResponse.json({ error: (transitionError as Error).message }, { status: 409 });
     }
-
-    const approvedAt = new Date().toISOString();
 
     const { error: updateError } = await admin
       .from("snagging_jobs")
-      .update({
-        status: "approved",
-        approved_at: approvedAt,
-        locked: true,
-      })
-      // Guarding on the status we read makes the transition safe against
-      // two managers hitting approve at the same moment.
+      .update({ status: "in_review" })
       .eq("id", id)
-      .in("status", ["submitted", "in_review"]);
-
+      // Guard on the status we read so two managers opening the queue at
+      // once cannot both advance it.
+      .eq("status", "submitted");
     if (updateError) throw new Error(updateError.message);
 
     await recordAudit(admin, {
       entityType: "task",
       entityId: id,
       taskId: id,
-      eventType: "task_approved",
+      eventType: "task_in_review",
       actorId: profile.id,
       actorLabel: profile.full_name ?? profile.email,
       justification: parsed.data.comment?.trim() || null,
       payload: { code: job.code },
     });
 
-    // The branded report queue lives outside the lean schema, so no
-    // report row is created here; the response keeps its shape with a
-    // null report_id.
-    return NextResponse.json({ data: { id, status: "approved", report_id: null } });
+    return NextResponse.json({ data: { id, status: "in_review" } });
   } catch (error) {
-    console.error("Snagging approve error:", error);
-    return NextResponse.json({ error: "Failed to approve inspection" }, { status: 500 });
+    console.error("Snagging review error:", error);
+    return NextResponse.json({ error: "Failed to start review" }, { status: 500 });
   }
 }

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
-import { hasResourceAction } from "@/lib/role-permissions";
+import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { SNAGGING_BUCKET, mediaObjectKey } from "@/lib/server/snagging/media";
 import { mediaSignSchema } from "@/modules/snagging/schemas";
@@ -50,7 +50,9 @@ export async function POST(req: NextRequest) {
     if (!job) {
       return NextResponse.json({ error: "Job not found" }, { status: 404 });
     }
-    if (job.inspector_id && job.inspector_id !== profile.id) {
+    // An inspector may only add evidence to their own job; an admin is
+    // never restricted in the snagging module.
+    if (job.inspector_id && job.inspector_id !== profile.id && !isAdminUser(accessUser)) {
       return NextResponse.json({ error: "Not assigned to this inspection" }, { status: 403 });
     }
 

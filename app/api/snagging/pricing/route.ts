@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
+import { recordAudit } from "@/lib/server/snagging/audit";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
@@ -72,6 +73,14 @@ export async function PUT(req: NextRequest) {
     };
 
     const admin = await createAdminServerClient();
+
+    // Capture the previous values so the audit trail records old -> new (F10/FR-2.08).
+    const { data: before } = await admin
+      .from("snagging_pricing_config")
+      .select(CONFIG_COLUMNS)
+      .eq("id", true)
+      .maybeSingle();
+
     const { data, error } = await admin
       .from("snagging_pricing_config")
       .upsert({ id: true, ...updates }, { onConflict: "id" })
@@ -80,6 +89,33 @@ export async function PUT(req: NextRequest) {
     if (error) throw new Error(error.message);
 
     await admin.from("snagging_pricing_config_log").insert({ changed_by: profile.id, changes: updates });
+
+    // One audit event per kind of change (pricing / scope / terms), with the
+    // previous and new value where practical.
+    const prev = (before ?? {}) as Record<string, unknown>;
+    const changed = (keys: string[]) =>
+      keys.some((k) => JSON.stringify(prev[k]) !== JSON.stringify((updates as Record<string, unknown>)[k]));
+    const events: Array<{ eventType: string; keys: string[] }> = [
+      { eventType: "pricing_updated", keys: ["rate_per_sqft", "external_rate_per_sqft", "multipliers", "tax_rate", "desnag_price", "additional_visit_price", "currency"] },
+      { eventType: "scope_updated", keys: ["scope_of_work"] },
+      { eventType: "terms_updated", keys: ["terms"] },
+    ];
+    for (const ev of events) {
+      if (!changed(ev.keys)) continue;
+      const old: Record<string, unknown> = {};
+      const next: Record<string, unknown> = {};
+      for (const k of ev.keys) {
+        old[k] = prev[k];
+        next[k] = (updates as Record<string, unknown>)[k];
+      }
+      await recordAudit(admin, {
+        entityType: "catalogue",
+        eventType: ev.eventType,
+        actorId: profile.id,
+        actorLabel: profile.full_name ?? profile.email,
+        payload: { old, new: next },
+      });
+    }
 
     return NextResponse.json({ data });
   } catch (error) {

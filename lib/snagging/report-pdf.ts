@@ -1,6 +1,8 @@
 import html2canvas from "html2canvas";
 import { jsPDF } from "jspdf";
 
+import { sanitizeUnsupportedColors } from "@/lib/pdf/sanitize-colors";
+
 /**
  * Turns an already-rendered DOM node into a multi-page A4 PDF blob.
  *
@@ -43,7 +45,7 @@ export async function elementToPdfBlob(node: HTMLElement, scale = 2): Promise<Bl
     allowTaint: true,
     background: "#ffffff",
     logging: false,
-    ...({ scale } as object),
+    ...({ scale, onclone: (doc: Document) => sanitizeUnsupportedColors(doc) } as object),
   });
 
   const PAGE_W_MM = 210;
@@ -96,4 +98,33 @@ export async function elementToPdfBlob(node: HTMLElement, scale = 2): Promise<Bl
   }
 
   return pdf.output("blob");
+}
+
+/**
+ * Renders a React element into a detached, on-body container, rasterises it to
+ * a PDF, then cleans up. This is the reliable path for a document that isn't
+ * already visible on screen — html2canvas cannot capture a node parked far
+ * off-screen inside the app tree, and a detached container also avoids
+ * inheriting the app's oklch theme colours (which html2canvas can't parse).
+ */
+export async function renderReactToPdfBlob(
+  element: import("react").ReactElement,
+  scale = 2,
+): Promise<Blob> {
+  const { createRoot } = await import("react-dom/client");
+  const holder = document.createElement("div");
+  holder.style.cssText =
+    "position:fixed;left:-9999px;top:0;width:794px;background:#ffffff;z-index:-1;pointer-events:none";
+  document.body.appendChild(holder);
+  const root = createRoot(holder);
+  try {
+    await new Promise<void>((resolve) => {
+      root.render(element);
+      setTimeout(resolve, 350);
+    });
+    return await elementToPdfBlob(holder, scale);
+  } finally {
+    root.unmount();
+    holder.remove();
+  }
 }

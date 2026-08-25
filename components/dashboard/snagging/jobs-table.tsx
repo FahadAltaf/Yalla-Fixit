@@ -58,7 +58,7 @@ const PAGE_SIZE = 25;
 export default function JobsTable() {
   const router = useRouter();
   const params = useSearchParams();
-  const { user } = useAuth();
+  const { userProfile } = useAuth();
 
   const initialFilter = (params.get("status") as FilterValue) ?? "all";
   const [filter, setFilter] = useState<FilterValue>(
@@ -72,7 +72,7 @@ export default function JobsTable() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
 
-  const canCreate = hasResourceAction(user, ResourceType.SNAGGING, ActionType.CREATE);
+  const canCreate = hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.CREATE);
 
   useEffect(() => {
     const timer = setTimeout(() => {

@@ -74,7 +74,7 @@ function DateField({
  * distributions would be answering a question nobody asked first.
  */
 export default function SnaggingAnalyticsDashboard() {
-  const { user } = useAuth();
+  const { userProfile } = useAuth();
   const [data, setData] = useState<SnaggingAnalytics | null>(null);
   const [loading, setLoading] = useState(true);
   const [from, setFrom] = useState(() => {
@@ -84,7 +84,7 @@ export default function SnaggingAnalyticsDashboard() {
   });
   const [to, setTo] = useState(() => new Date().toISOString().slice(0, 10));
 
-  const canExport = hasResourceAction(user, ResourceType.SNAGGING, ActionType.EXPORT);
+  const canExport = hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.EXPORT);
 
   const load = useCallback(async () => {
     setLoading(true);

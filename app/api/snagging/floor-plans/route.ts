@@ -143,6 +143,62 @@ export async function POST(req: NextRequest) {
   }
 }
 
+/**
+ * PATCH /api/snagging/floor-plans — reorder plans (FR-3.06) and/or relabel one.
+ * Body: { order: string[] } sets each plan's sort_order to its index, so the
+ * floor sequence is explicit and stable — never inferred from the label.
+ * Or: { id, label } to rename a single plan.
+ */
+export async function PATCH(req: NextRequest) {
+  try {
+    const { profile, accessUser } = await getRequestUserAccess(req);
+    if (!profile || !accessUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.EDIT)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    const body = (await req.json().catch(() => ({}))) as {
+      order?: unknown;
+      id?: unknown;
+      label?: unknown;
+    };
+    const admin = await createAdminServerClient();
+
+    // Reorder: assign sort_order by position in the given id list.
+    if (Array.isArray(body.order)) {
+      const ids = body.order.filter((v): v is string => typeof v === "string");
+      if (ids.length === 0) return NextResponse.json({ error: "Empty order" }, { status: 400 });
+      // Update one row per id; the list is short (one entry per floor).
+      for (let i = 0; i < ids.length; i += 1) {
+        const { error } = await admin
+          .from("snagging_floor_plans")
+          .update({ sort_order: i })
+          .eq("id", ids[i]);
+        if (error) throw new Error(error.message);
+      }
+      return NextResponse.json({ data: { order: ids } });
+    }
+
+    // Rename a single plan.
+    if (typeof body.id === "string" && typeof body.label === "string") {
+      const label = body.label.trim() || "Floor plan";
+      const { error } = await admin
+        .from("snagging_floor_plans")
+        .update({ label })
+        .eq("id", body.id);
+      if (error) throw new Error(error.message);
+      return NextResponse.json({ data: { id: body.id, label } });
+    }
+
+    return NextResponse.json({ error: "Provide `order` or `id` + `label`" }, { status: 400 });
+  } catch (error) {
+    console.error("Snagging floor-plan PATCH error:", error);
+    return NextResponse.json({ error: "Failed to update floor plans" }, { status: 500 });
+  }
+}
+
 /** DELETE /api/snagging/floor-plans?id=… — remove one plan (object + row). */
 export async function DELETE(req: NextRequest) {
   try {
@@ -165,6 +221,14 @@ export async function DELETE(req: NextRequest) {
       .maybeSingle();
     if (loadError) throw new Error(loadError.message);
     if (!plan) return NextResponse.json({ error: "Floor plan not found" }, { status: 404 });
+
+    // Clear any area pins that sat on this plan so no stale coordinates linger.
+    // (The FK also nulls floor_plan_id via ON DELETE SET NULL; the areas
+    // themselves are always preserved — FR-3.07.)
+    await admin
+      .from("snagging_areas")
+      .update({ floor_plan_id: null, pin_x: null, pin_y: null })
+      .eq("floor_plan_id", id);
 
     if (plan.storage_path) await admin.storage.from(SNAGGING_BUCKET).remove([plan.storage_path]);
     const { error: deleteError } = await admin.from("snagging_floor_plans").delete().eq("id", id);

@@ -72,6 +72,24 @@ export function assertTransition(from: SnaggingTaskStatus, to: SnaggingTaskStatu
   }
 }
 
+/**
+ * FR-3.08 / FR-6.01 — the manager gate on the approval chain.
+ *
+ * Review, approval, rejection and delivery are reserved for the job's
+ * designated approval manager. Holding the `approve` permission is not
+ * enough on its own, because the BRD makes the approval manager a named,
+ * mandatory role per job ("no bypass"). Admins are the deliberate
+ * operational override.
+ */
+export function isDesignatedApprovalManager(
+  actorId: string,
+  approvalManagerId: string | null | undefined,
+  isAdmin: boolean,
+): boolean {
+  if (isAdmin) return true;
+  return approvalManagerId != null && actorId === approvalManagerId;
+}
+
 /** BR-6: once submitted, the record is read-only to the device. */
 export function isTaskEditableByInspector(status: SnaggingTaskStatus): boolean {
   return status === "assigned" || status === "in_progress" || status === "rejected";

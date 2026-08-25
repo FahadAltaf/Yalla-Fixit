@@ -271,7 +271,10 @@ export async function POST(req: NextRequest) {
     const snapshot = propertySnapshot(property.columns);
 
     // 2. Create the job. The unique index on `code` is the arbiter.
-    const inspectorId = input.technician_ids[0] ?? null;
+    // An inspector is NOT assigned here (FR-3.08): assignment is gated on the
+    // client approving the quotation, and happens from the job afterwards. A
+    // brand-new job has no approved quotation, so it starts unassigned.
+    const inspectorId = null;
     let job: { id: string; code: string } | null = null;
     let lastError: string | null = null;
     for (let attempt = 0; attempt < 5 && !job; attempt += 1) {

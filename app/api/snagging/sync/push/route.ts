@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
-import { hasResourceAction } from "@/lib/role-permissions";
+import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { isTaskEditableByInspector, statusFromVerdict } from "@/lib/server/snagging/workflow";
 import { syncPushSchema, type SyncPushInput } from "@/modules/snagging/schemas";
@@ -55,10 +55,10 @@ export async function POST(req: NextRequest) {
     const seen = new Set((seenRows ?? []).map((r) => r.mutation_id));
 
     // The jobs this inspector may write to (single inspector per job now).
-    const { data: myJobs, error: jobsError } = await admin
-      .from("snagging_jobs")
-      .select("id, status, code")
-      .eq("inspector_id", profile.id);
+    // An admin is never restricted in snagging, so they may write to any job.
+    let jobsQuery = admin.from("snagging_jobs").select("id, status, code");
+    if (!isAdminUser(accessUser)) jobsQuery = jobsQuery.eq("inspector_id", profile.id);
+    const { data: myJobs, error: jobsError } = await jobsQuery;
     if (jobsError) throw new Error(jobsError.message);
     const jobById = new Map<string, JobRef>((myJobs ?? []).map((j) => [j.id, j as JobRef]));
 
@@ -191,6 +191,20 @@ async function applySnag(admin: Admin, ctx: Ctx, payload: Record<string, unknown
 async function applyArea(admin: Admin, ctx: Ctx, payload: Record<string, unknown>): Promise<void> {
   const job = writableJob(ctx, payload.task_id);
 
+  // A floor-plan pin is all-or-nothing so the DB check (pin_x null == pin_y
+  // null) always holds, and floor_plan_id follows the pin.
+  const pinFields = (): Record<string, unknown> => {
+    if (!("pin_x" in payload) && !("pin_y" in payload) && !("floor_plan_id" in payload)) return {};
+    const x = (payload.pin_x as number | null | undefined) ?? null;
+    const y = (payload.pin_y as number | null | undefined) ?? null;
+    const placed = x !== null && y !== null;
+    return {
+      floor_plan_id: placed ? ((payload.floor_plan_id as string | null) ?? null) : null,
+      pin_x: placed ? x : null,
+      pin_y: placed ? y : null,
+    };
+  };
+
   if (ctx.mutation.op === "insert") {
     const { error } = await admin.from("snagging_areas").upsert(
       {
@@ -200,6 +214,7 @@ async function applyArea(admin: Admin, ctx: Ctx, payload: Record<string, unknown
         catalogue_area_code: (payload.catalogue_area_code as string) ?? null,
         sort_order: (payload.sort_order as number) ?? 0,
         status: "pending",
+        ...pinFields(),
       },
       { onConflict: "id" },
     );
@@ -209,13 +224,22 @@ async function applyArea(admin: Admin, ctx: Ctx, payload: Record<string, unknown
 
   // Only the fields the device actually sent are touched. A completion
   // carries note + confirmed_at; an access change carries access_state +
-  // access_reason (+ the confirmation it may set). Merging blindly would let
-  // one mutation blank out what the other owns.
+  // access_reason (+ the confirmation it may set); an area-pin change carries
+  // floor_plan_id + pin_x/pin_y. Merging blindly would let one mutation blank
+  // out what the other owns.
   const update: Record<string, unknown> = {};
   if ("note" in payload) update.note = (payload.note as string | null | undefined)?.trim() || null;
   if ("confirmed_at" in payload) update.confirmed_at = (payload.confirmed_at as string | null) ?? null;
   if ("access_state" in payload) update.access_state = (payload.access_state as string) ?? "accessible";
   if ("access_reason" in payload) update.access_reason = (payload.access_reason as string | null) ?? null;
+  // FR-4.01 area start (COALESCE-style: only the first start is kept, so a
+  // later mutation without started_at never clears it).
+  if ("started_at" in payload) update.started_at = (payload.started_at as string | null) ?? null;
+  // FR-4.11 elements not checked under limited access.
+  if ("elements_not_checked" in payload) {
+    update.elements_not_checked = (payload.elements_not_checked as string | null | undefined)?.trim() || null;
+  }
+  Object.assign(update, pinFields());
   if (Object.keys(update).length === 0) return;
 
   const { error } = await admin
@@ -237,6 +261,24 @@ async function applyPhoto(admin: Admin, ctx: Ctx, payload: Record<string, unknow
     return;
   }
 
+  // A marker-only update (FR-4.06) touches just the defect spot, so it does not
+  // clobber the photo metadata written when the object was first uploaded.
+  if (ctx.mutation.op === "update") {
+    if (!("marker_x" in payload) && !("marker_y" in payload)) return;
+    const x = (payload.marker_x as number | null | undefined) ?? null;
+    const y = (payload.marker_y as number | null | undefined) ?? null;
+    const placed = x !== null && y !== null;
+    const { error } = await admin
+      .from("snagging_snag_photos")
+      .update({ marker_x: placed ? x : null, marker_y: placed ? y : null })
+      .eq("id", ctx.mutation.entity_id);
+    if (error) throw new Error(error.message);
+    return;
+  }
+
+  const markerX = toNumber(payload.marker_x);
+  const markerY = toNumber(payload.marker_y);
+  const markerPlaced = markerX !== null && markerY !== null;
   const row = {
     id: ctx.mutation.entity_id,
     snag_id: payload.snag_id as string,
@@ -252,6 +294,9 @@ async function applyPhoto(admin: Admin, ctx: Ctx, payload: Record<string, unknow
     gps_lat: toNumber(payload.gps_lat),
     gps_lng: toNumber(payload.gps_lng),
     exif: (payload.exif as Record<string, unknown> | null) ?? null,
+    // Exact defect spot on the photo (FR-4.06), all-or-nothing.
+    marker_x: markerPlaced ? markerX : null,
+    marker_y: markerPlaced ? markerY : null,
   };
   const { error } = await admin.from("snagging_snag_photos").upsert(row, { onConflict: "id" });
   if (error) throw new Error(error.message);
@@ -299,15 +344,24 @@ async function applySubmission(admin: Admin, ctx: Ctx, payload: Record<string, u
   const [snagRows, photoRows, checklistRows] = await Promise.all([
     admin.from("snagging_snags").select("id, snag_code").eq("job_id", job.id).neq("status", "withdrawn"),
     admin.from("snagging_snag_photos").select("snag_id").eq("job_id", job.id),
-    admin.from("snagging_job_checklist").select("code").eq("job_id", job.id).eq("mandatory", true).eq("status", "pending"),
+    admin.from("snagging_job_checklist").select("code, status, reason").eq("job_id", job.id).eq("mandatory", true),
   ]);
   if (snagRows.error) throw new Error(snagRows.error.message);
   if (photoRows.error) throw new Error(photoRows.error.message);
   if (checklistRows.error) throw new Error(checklistRows.error.message);
 
-  const pendingChecks = checklistRows.data ?? [];
+  // FR-4.13 / FR-4.15 (BRD §8): a mandatory item is only "answered" when it is
+  // passed, failed, or explicitly marked not-checked WITH a reason. A pending
+  // item, or a not-checked item with no reason, still blocks submission.
+  const pendingChecks = (checklistRows.data ?? []).filter((c) => {
+    if (c.status === "pending") return true;
+    if (c.status === "not_checked") return !(c.reason && String(c.reason).trim().length > 0);
+    return false;
+  });
   if (pendingChecks.length > 0) {
-    throw new Error(`${pendingChecks.length} mandatory checklist item(s) are still unanswered`);
+    throw new Error(
+      `${pendingChecks.length} mandatory checklist item(s) still need an answer (or a reason for not checking)`,
+    );
   }
 
   const photographed = new Set((photoRows.data ?? []).map((r) => r.snag_id));

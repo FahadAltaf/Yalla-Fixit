@@ -32,6 +32,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { PhoneInput } from "@/components/ui/phone-input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
@@ -288,8 +289,9 @@ export default function NewJobWizard() {
       case "areas":
         return draft.areas.length > 0;
       case "assign":
-        // An inspector and an approval manager are both required (I1).
-        return draft.technician_ids.length > 0 && draft.approval_manager_id.trim().length > 0;
+        // Schedule + contacts are optional here; the inspector is assigned from
+        // the job only after the client approves the quotation (FR-3.08).
+        return true;
       default:
         return true;
     }
@@ -338,7 +340,9 @@ export default function NewJobWizard() {
           name: area.name,
           catalogue_area_code: area.code ?? undefined,
         })),
-        technician_ids: draft.technician_ids,
+        // The inspector is assigned from the job after the quotation is
+        // approved (FR-3.08); creation never assigns one.
+        technician_ids: [],
         approval_manager_id: draft.approval_manager_id || null,
         notes: draft.notes,
       });
@@ -793,13 +797,7 @@ function AddClientDialog({
             />
           </Field>
           <Field label="Phone" required hint="any country">
-            <Input
-              type="tel"
-              inputMode="tel"
-              value={phone}
-              onChange={(event) => setPhone(event.target.value)}
-              placeholder="+971 50 000 0000"
-            />
+            <PhoneInput value={phone} onChange={setPhone} />
           </Field>
           <Field label="Email" hint="(optional)">
             <Input
@@ -1344,33 +1342,15 @@ function AssignStep({
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-xl">Assign and schedule</h2>
+        <h2 className="text-xl">Schedule and site contacts</h2>
         <p className="text-muted-foreground mt-1 text-sm">
-          Who walks the unit, who signs it off, when, and who gives access. The job appears on the
-          inspector&apos;s phone as soon as it is created.
+          When the inspection happens and who gives access. The inspector is assigned from the job
+          once the client approves the quotation (FR-3.08); you can pre-select the approval manager here.
         </p>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Inspector" required>
-          <Select
-            value={draft.technician_ids[0] ?? ""}
-            onValueChange={(value) => set("technician_ids", value ? [value] : [])}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Assign an inspector" />
-            </SelectTrigger>
-            <SelectContent>
-              {users.map((user) => (
-                <SelectItem key={user.id} value={user.id}>
-                  {user.full_name || user.email}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
-
-        <Field label="Approval manager" required>
+        <Field label="Approval manager">
           <Select
             value={draft.approval_manager_id}
             onValueChange={(value) => set("approval_manager_id", value)}
@@ -1434,12 +1414,9 @@ function AssignStep({
           />
         </Field>
         <Field label="Developer contact phone">
-          <Input
-            type="tel"
-            inputMode="tel"
+          <PhoneInput
             value={draft.developer_contact_phone}
-            onChange={(event) => set("developer_contact_phone", event.target.value)}
-            placeholder="+971 50 000 0000"
+            onChange={(v) => set("developer_contact_phone", v)}
           />
         </Field>
         <Field label="Client site contact">
@@ -1450,12 +1427,9 @@ function AssignStep({
           />
         </Field>
         <Field label="Client contact phone">
-          <Input
-            type="tel"
-            inputMode="tel"
+          <PhoneInput
             value={draft.client_contact_phone}
-            onChange={(event) => set("client_contact_phone", event.target.value)}
-            placeholder="+971 50 000 0000"
+            onChange={(v) => set("client_contact_phone", v)}
           />
         </Field>
       </div>

@@ -39,7 +39,7 @@ const CHANNELS = [
  * or record that it was delivered to the client.
  */
 export function ReportView({ taskId }: { taskId: string }) {
-  const { user } = useAuth();
+  const { userProfile } = useAuth();
   const reportRef = useRef<HTMLDivElement>(null);
 
   const [task, setTask] = useState<SnaggingTask | null>(null);
@@ -72,7 +72,7 @@ export function ReportView({ taskId }: { taskId: string }) {
     void load();
   }, [load]);
 
-  const canDeliver = hasResourceAction(user, ResourceType.SNAGGING, ActionType.APPROVE);
+  const canDeliver = hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.APPROVE);
 
   async function downloadPdf() {
     if (!reportRef.current || !task) return;

@@ -2,11 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { emailService } from "@/lib/email-service";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
-import { hasResourceAction } from "@/lib/role-permissions";
+import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
 import { mintReportToken } from "@/lib/server/snagging/report-token";
-import { assertTransition } from "@/lib/server/snagging/workflow";
+import { assertTransition, isDesignatedApprovalManager } from "@/lib/server/snagging/workflow";
 import { deliverReportSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType, SnaggingTaskStatus } from "@/types/types";
 
@@ -43,12 +43,21 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const admin = await createAdminServerClient();
     const { data: job, error: loadError } = await admin
       .from("snagging_jobs")
-      .select("id, code, status, unit_label, building_name")
+      .select("id, code, status, unit_label, building_name, approval_manager_id")
       .eq("id", id)
       .maybeSingle();
 
     if (loadError) throw new Error(loadError.message);
     if (!job) return NextResponse.json({ error: "Inspection not found" }, { status: 404 });
+
+    // FR-6.01 — delivery is a manager act, reserved for the job's designated
+    // approval manager (or an admin).
+    if (!isDesignatedApprovalManager(profile.id, job.approval_manager_id, isAdminUser(accessUser))) {
+      return NextResponse.json(
+        { error: "Only this inspection's approval manager can deliver it." },
+        { status: 403 },
+      );
+    }
 
     // Deliver from approved (the lifecycle move); allow re-running once
     // delivered to reissue or resend the link without changing status.

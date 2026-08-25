@@ -64,15 +64,15 @@ import { PageHeading, SeverityBadge } from "./shared";
  * still reference it.
  */
 export default function CatalogueAdmin() {
-  const { user } = useAuth();
+  const { userProfile } = useAuth();
   const [data, setData] = useState<CatalogueResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [element, setElement] = useState("all");
   const [createOpen, setCreateOpen] = useState(false);
 
-  const canEdit = hasResourceAction(user, ResourceType.SNAGGING_CATALOGUE, ActionType.EDIT);
-  const canCreate = hasResourceAction(user, ResourceType.SNAGGING_CATALOGUE, ActionType.CREATE);
+  const canEdit = hasResourceAction(userProfile, ResourceType.SNAGGING_CATALOGUE, ActionType.EDIT);
+  const canCreate = hasResourceAction(userProfile, ResourceType.SNAGGING_CATALOGUE, ActionType.CREATE);
 
   const load = useCallback(async () => {
     setLoading(true);

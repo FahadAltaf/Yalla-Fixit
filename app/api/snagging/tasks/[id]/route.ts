@@ -3,9 +3,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
+import { recordAudit } from "@/lib/server/snagging/audit";
 import { signMediaPaths } from "@/lib/server/snagging/media";
+import { assertTransition } from "@/lib/server/snagging/workflow";
 import { updateTaskSchema } from "@/modules/snagging/schemas";
-import { ActionType, ResourceType } from "@/types/types";
+import { ActionType, ResourceType, SnaggingTaskStatus } from "@/types/types";
 
 /**
  * One inspection with everything the detail screen and the approval
@@ -115,6 +117,23 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       noc_path: pick("noc_path") ?? null,
     };
 
+    // Sign the property's NOC and title deed (FR-3.04 / FR-1.09) so the job can
+    // show "on file" with a view/download link — reusing the existing
+    // property-level document, never a second upload.
+    const [nocSigned, deedSigned] = await Promise.all([
+      property.noc_path
+        ? signMediaPaths(admin, [{ id: "noc", storage_path: property.noc_path as string }])
+        : Promise.resolve([]),
+      property.title_deed_path
+        ? signMediaPaths(admin, [{ id: "deed", storage_path: property.title_deed_path as string }])
+        : Promise.resolve([]),
+    ]);
+    const propertyWithDocs = {
+      ...property,
+      noc_url: (nocSigned[0] as { signed_url?: string } | undefined)?.signed_url ?? null,
+      title_deed_url: (deedSigned[0] as { signed_url?: string } | undefined)?.signed_url ?? null,
+    };
+
     const assignees = inspector
       ? [{
           id: inspector.id,
@@ -158,7 +177,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         ...job,
         task_type: "single_unit",
         parent_task_id: job.parent_job_id,
-        property,
+        property: propertyWithDocs,
         areas,
         assignees,
         approvals: [],
@@ -195,7 +214,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     const admin = await createAdminServerClient();
     const { data: existing, error: loadError } = await admin
       .from("snagging_jobs")
-      .select("id, status, locked")
+      .select("id, code, status, locked, inspector_id, approval_manager_id, scheduled_date, appointment_at, parent_job_id")
       .eq("id", id)
       .maybeSingle();
     if (loadError) throw new Error(loadError.message);
@@ -210,16 +229,113 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
 
     // Only fields that still exist on the job map through.
     const updates: Record<string, unknown> = {};
+    // Appointment carries date + time (FR-3.02); scheduled_date stays in step
+    // for the list/mobile, derived from the appointment when only it is given.
+    if (input.appointment_at !== undefined) {
+      updates.appointment_at = input.appointment_at;
+      if (input.scheduled_date === undefined) {
+        updates.scheduled_date = input.appointment_at ? input.appointment_at.slice(0, 10) : null;
+      }
+    }
     if (input.scheduled_date !== undefined) updates.scheduled_date = input.scheduled_date;
     if (input.approval_manager_id !== undefined) updates.approval_manager_id = input.approval_manager_id;
+    // Site contacts (FR-3.03), editable after creation.
+    if (input.developer_contact_name !== undefined) updates.developer_contact_name = input.developer_contact_name;
+    if (input.developer_contact_phone !== undefined) updates.developer_contact_phone = input.developer_contact_phone;
+    if (input.client_contact_name !== undefined) updates.client_contact_name = input.client_contact_name;
+    if (input.client_contact_phone !== undefined) updates.client_contact_phone = input.client_contact_phone;
     if (input.notes !== undefined) updates.notes = input.notes;
-    if (input.status !== undefined) updates.status = input.status;
-    // Single inspector per job: first technician wins.
-    if (input.technician_ids !== undefined) updates.inspector_id = input.technician_ids[0] ?? null;
+    // Status moves normally go through the dedicated action routes (submit,
+    // approve, reject, deliver). The only status change this generic edit
+    // still serves is cancellation, so any status it is asked to write must
+    // be a legal transition from the current one — a PATCH cannot skip or
+    // reverse the state machine. (The schema already caps the field to
+    // draft/assigned/cancelled, so the approval chain is unreachable here.)
+    if (input.status !== undefined && input.status !== existing.status) {
+      try {
+        assertTransition(existing.status as SnaggingTaskStatus, input.status as SnaggingTaskStatus);
+      } catch (transitionError) {
+        return NextResponse.json({ error: (transitionError as Error).message }, { status: 409 });
+      }
+      updates.status = input.status;
+    }
+
+    // Inspector assignment (FR-3.08). Single inspector per job: first wins.
+    let assignedInspectorId: string | null | undefined;
+    if (input.technician_ids !== undefined) {
+      assignedInspectorId = input.technician_ids[0] ?? null;
+      updates.inspector_id = assignedInspectorId;
+    }
+
+    // Assigning (or changing to) a real inspector is gated server-side, so a
+    // direct PATCH cannot bypass the quotation approval the UI enforces.
+    const assigningInspector =
+      assignedInspectorId != null && assignedInspectorId !== existing.inspector_id;
+    if (assigningInspector) {
+      // 1. The client must have approved the quotation — unless this is a child
+      //    job (de-snag round / additional visit), whose parent already cleared
+      //    the gate and which is created assigned by design.
+      const isChild = existing.parent_job_id != null;
+      if (!isChild) {
+        const { data: quote } = await admin
+          .from("snagging_quotations")
+          .select("status")
+          .eq("job_id", id)
+          .maybeSingle();
+        if (!quote || quote.status !== "approved") {
+          return NextResponse.json(
+            { error: "Assign an inspector only after the client approves the quotation." },
+            { status: 409 },
+          );
+        }
+      }
+      // 2. An approval manager is mandatory (already on the job, or set now).
+      const managerId =
+        input.approval_manager_id !== undefined ? input.approval_manager_id : existing.approval_manager_id;
+      if (!managerId) {
+        return NextResponse.json(
+          { error: "Select an approval manager before assigning an inspector." },
+          { status: 400 },
+        );
+      }
+      // 3. No double-booking: the inspector must be free on the appointment day.
+      const day = (updates.scheduled_date as string | null | undefined) ?? existing.scheduled_date ?? null;
+      if (day) {
+        const { data: clashes, error: clashError } = await admin
+          .from("snagging_jobs")
+          .select("code")
+          .eq("inspector_id", assignedInspectorId)
+          .eq("scheduled_date", day)
+          .in("status", ["assigned", "in_progress"])
+          .neq("id", id)
+          .limit(1);
+        if (clashError) throw new Error(clashError.message);
+        if (clashes && clashes.length > 0) {
+          return NextResponse.json(
+            {
+              error: `That inspector is already on inspection ${clashes[0].code} on ${day}. Pick another inspector or change the date.`,
+            },
+            { status: 409 },
+          );
+        }
+      }
+    }
 
     if (Object.keys(updates).length > 0) {
       const { error: updateError } = await admin.from("snagging_jobs").update(updates).eq("id", id);
       if (updateError) throw new Error(updateError.message);
+    }
+
+    if (assigningInspector) {
+      await recordAudit(admin, {
+        entityType: "task",
+        entityId: id,
+        taskId: id,
+        eventType: "inspector_assigned",
+        actorId: profile.id,
+        actorLabel: profile.full_name ?? profile.email,
+        payload: { inspector_id: assignedInspectorId, code: existing.code },
+      });
     }
 
     return NextResponse.json({ data: { id } });

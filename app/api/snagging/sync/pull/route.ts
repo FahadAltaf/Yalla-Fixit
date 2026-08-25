@@ -138,6 +138,13 @@ export async function GET(req: NextRequest) {
       confirmed_at: a.confirmed_at,
       access_state: a.access_state ?? "accessible",
       access_reason: a.access_reason ?? null,
+      // Area pin on a floor plan (FR-3.05/3.07).
+      floor_plan_id: a.floor_plan_id ?? null,
+      pin_x: a.pin_x ?? null,
+      pin_y: a.pin_y ?? null,
+      // Field inspection (Module 4): area start time + limited-access elements.
+      started_at: a.started_at ?? null,
+      elements_not_checked: a.elements_not_checked ?? null,
     }));
 
     const snags = snagRows.map((s) => ({
@@ -189,6 +196,9 @@ export async function GET(req: NextRequest) {
       created_at: (p.created_at as string | null) ?? null,
       gps_lat: (p.gps_lat as number | null) ?? null,
       gps_lng: (p.gps_lng as number | null) ?? null,
+      // Exact defect spot on the photo (FR-4.06).
+      marker_x: (p.marker_x as number | null) ?? null,
+      marker_y: (p.marker_y as number | null) ?? null,
     }));
 
     // Every floor plan for the inspector's jobs, each with its own id so a

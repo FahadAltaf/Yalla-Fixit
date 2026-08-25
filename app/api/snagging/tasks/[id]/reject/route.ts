@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
-import { hasResourceAction } from "@/lib/role-permissions";
+import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
-import { assertTransition, remediationDueAt } from "@/lib/server/snagging/workflow";
+import { assertTransition, isDesignatedApprovalManager, remediationDueAt } from "@/lib/server/snagging/workflow";
 import { rejectTaskSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType, SnaggingTaskStatus } from "@/types/types";
 
@@ -39,12 +39,21 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const admin = await createAdminServerClient();
     const { data: job, error: loadError } = await admin
       .from("snagging_jobs")
-      .select("id, code, status, rejection_count")
+      .select("id, code, status, rejection_count, approval_manager_id")
       .eq("id", id)
       .maybeSingle();
 
     if (loadError) throw new Error(loadError.message);
     if (!job) return NextResponse.json({ error: "Inspection not found" }, { status: 404 });
+
+    // FR-6.01 — rejection is a manager act, reserved for the job's designated
+    // approval manager (or an admin).
+    if (!isDesignatedApprovalManager(profile.id, job.approval_manager_id, isAdminUser(accessUser))) {
+      return NextResponse.json(
+        { error: "Only this inspection's approval manager can reject it." },
+        { status: 403 },
+      );
+    }
 
     try {
       assertTransition(job.status as SnaggingTaskStatus, "rejected");

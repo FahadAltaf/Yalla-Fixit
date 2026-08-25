@@ -29,6 +29,11 @@ const EVENT_META: Record<string, { label: string; Icon: LucideIcon }> = {
   catalogue_entry_updated: { label: "Catalogue entry updated", Icon: Tag },
   catalogue_entry_retired: { label: "Catalogue entry retired", Icon: Tag },
   catalogue_entry_reactivated: { label: "Catalogue entry reactivated", Icon: Tag },
+  quotation_generated: { label: "Quotation generated", Icon: FileText },
+  quotation_regenerated: { label: "Quotation regenerated", Icon: FileText },
+  quotation_sent: { label: "Quotation sent to client", Icon: FileText },
+  quotation_approved: { label: "Quotation approved", Icon: CheckCircle2 },
+  quotation_rejected: { label: "Quotation rejected", Icon: XCircle },
 };
 
 function metaFor(eventType: string) {

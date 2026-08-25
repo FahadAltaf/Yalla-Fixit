@@ -360,6 +360,9 @@ export interface SnaggingProperty {
   title_deed_path?: string | null;
   noc_required?: boolean | null;
   noc_path?: string | null;
+  /** Signed, short-lived URLs to view/download the property documents (FR-3.04). */
+  noc_url?: string | null;
+  title_deed_url?: string | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -371,6 +374,10 @@ export interface SnaggingArea {
   catalogue_area_code?: string | null;
   sort_order: number;
   status: SnaggingAreaStatus;
+  /** Area pin on a floor plan (FR-3.05/3.07): the Floor -> Plan -> Pin -> Area link. */
+  floor_plan_id?: string | null;
+  pin_x?: number | null;
+  pin_y?: number | null;
   note?: string | null;
   confirmed_at?: string | null;
   confirmed_by?: string | null;
@@ -487,6 +494,15 @@ export interface SnaggingTask {
   scheduled_date?: string | null;
   scheduled_start_at?: string | null;
   scheduled_end_at?: string | null;
+  /** Appointment date + time (FR-3.02). */
+  appointment_at?: string | null;
+  /** The single assigned inspector (FR-3.08). */
+  inspector_id?: string | null;
+  // Site contacts (FR-3.03) — developer-side and client-side representatives.
+  developer_contact_name?: string | null;
+  developer_contact_phone?: string | null;
+  client_contact_name?: string | null;
+  client_contact_phone?: string | null;
   supervisor_id?: string | null;
   approval_manager_id?: string | null;
   notes?: string | null;

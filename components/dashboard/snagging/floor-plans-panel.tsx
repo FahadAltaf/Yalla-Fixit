@@ -38,8 +38,8 @@ function readImageSize(file: File): Promise<{ width?: number; height?: number }>
  * inspector then pins each snag to the right floor on the device.
  */
 export function FloorPlansPanel({ taskId }: { taskId: string }) {
-  const { user } = useAuth();
-  const canEdit = hasResourceAction(user, ResourceType.SNAGGING, ActionType.EDIT);
+  const { userProfile } = useAuth();
+  const canEdit = hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.EDIT);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [plans, setPlans] = useState<SnaggingFloorPlan[]>([]);

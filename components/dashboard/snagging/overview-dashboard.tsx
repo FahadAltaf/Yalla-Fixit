@@ -33,12 +33,12 @@ import {
  */
 export default function SnaggingOverviewDashboard() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { userProfile } = useAuth();
   const [data, setData] = useState<SnaggingOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
 
-  const canCreate = hasResourceAction(user, ResourceType.SNAGGING, ActionType.CREATE);
+  const canCreate = hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.CREATE);
 
   const load = useCallback(async () => {
     try {

@@ -135,11 +135,16 @@ export type CreateTaskInput = z.infer<typeof createTaskSchema>;
 
 export const updateTaskSchema = z.object({
   scheduled_date: isoDate.optional().nullable(),
-  scheduled_start_at: isoDateTime.optional().nullable(),
-  scheduled_end_at: isoDateTime.optional().nullable(),
+  // Appointment carries date + time (I2) and is editable after creation.
+  appointment_at: isoDateTime.optional().nullable(),
   technician_ids: z.array(z.string().uuid()).optional(),
   supervisor_id: z.string().uuid().optional().nullable(),
   approval_manager_id: z.string().uuid().optional().nullable(),
+  // Site contacts (I3/I4) — editable after creation.
+  developer_contact_name: z.string().trim().max(120).optional().nullable(),
+  developer_contact_phone: z.string().trim().max(32).optional().nullable(),
+  client_contact_name: z.string().trim().max(120).optional().nullable(),
+  client_contact_phone: z.string().trim().max(32).optional().nullable(),
   package_name: z.string().trim().max(120).optional().nullable(),
   service_tier: serviceTierSchema.optional().nullable(),
   notes: z.string().trim().max(4000).optional().nullable(),
@@ -186,6 +191,33 @@ export const catalogueToggleSchema = z.object({
   id: z.string().uuid(),
   active: z.boolean(),
 });
+
+/**
+ * Area management (FR-3.05 / FR-3.07). An area optionally carries a pin on a
+ * floor plan: floor_plan_id + pin_x/pin_y (0..1 fractions), which is the
+ * Floor -> Floor Plan -> Pin -> Area link. A pin is placed only with an
+ * explicit area — never auto-assigned to the first area.
+ */
+const pinFraction = z.number().min(0).max(1);
+export const createAreaSchema = z.object({
+  name: z.string().trim().min(1, "Area name is required").max(120),
+  catalogue_area_code: z.string().trim().max(32).optional().nullable(),
+  floor_plan_id: z.string().uuid().nullable().optional(),
+  pin_x: pinFraction.nullable().optional(),
+  pin_y: pinFraction.nullable().optional(),
+});
+
+export const updateAreaSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().trim().min(1).max(120).optional(),
+  catalogue_area_code: z.string().trim().max(32).optional().nullable(),
+  floor_plan_id: z.string().uuid().nullable().optional(),
+  pin_x: pinFraction.nullable().optional(),
+  pin_y: pinFraction.nullable().optional(),
+});
+
+export type CreateAreaInput = z.infer<typeof createAreaSchema>;
+export type UpdateAreaInput = z.infer<typeof updateAreaSchema>;
 
 export const createRoundSchema = z.object({
   scheduled_date: isoDate.optional().or(z.literal("")),

@@ -1,6 +1,8 @@
 import { executeRESTBackend } from "@/lib/rest-server";
+import type { CreateAreaInput, UpdateAreaInput } from "@/modules/snagging/schemas";
 import type {
   SnaggingAnalytics,
+  SnaggingArea,
   SnaggingAuditEvent,
   SnaggingFloorPlan,
   SnaggingOverview,
@@ -102,6 +104,14 @@ export interface SnaggingQuotation {
   approved_at: string | null;
   rejected_reason: string | null;
   created_at: string;
+  // Snapshot + client-decision fields (FR-2.06, §10).
+  property_snapshot?: Record<string, unknown> | null;
+  pricing_snapshot?: Record<string, unknown> | null;
+  decided_at?: string | null;
+  approved_by_name?: string | null;
+  approved_by_contact?: string | null;
+  /** Returned by the "send" action so the coordinator can copy the client link. */
+  approval_url?: string | null;
 }
 
 export interface SnaggingClientOption {
@@ -249,6 +259,41 @@ export const snaggingService = {
       params: { id },
     }),
 
+  /** Reorder plans (FR-3.06): ids in the new floor sequence. */
+  reorderFloorPlans: async (order: string[]): Promise<{ order: string[] }> =>
+    executeRESTBackend<{ order: string[] }>("/api/snagging/floor-plans", {
+      method: "PATCH",
+      body: { order },
+    }),
+
+  renameFloorPlan: async (id: string, label: string): Promise<{ id: string; label: string }> =>
+    executeRESTBackend<{ id: string; label: string }>("/api/snagging/floor-plans", {
+      method: "PATCH",
+      body: { id, label },
+    }),
+
+  // Area management (FR-3.05 / FR-3.07).
+  listAreas: async (taskId: string): Promise<SnaggingArea[]> =>
+    executeRESTBackend<SnaggingArea[]>(`/api/snagging/tasks/${taskId}/areas`, { method: "GET" }),
+
+  createArea: async (taskId: string, input: CreateAreaInput): Promise<SnaggingArea> =>
+    executeRESTBackend<SnaggingArea>(`/api/snagging/tasks/${taskId}/areas`, {
+      method: "POST",
+      body: input as unknown as Record<string, unknown>,
+    }),
+
+  updateArea: async (taskId: string, input: UpdateAreaInput): Promise<SnaggingArea> =>
+    executeRESTBackend<SnaggingArea>(`/api/snagging/tasks/${taskId}/areas`, {
+      method: "PATCH",
+      body: input as unknown as Record<string, unknown>,
+    }),
+
+  deleteArea: async (taskId: string, areaId: string): Promise<{ id: string }> =>
+    executeRESTBackend<{ id: string }>(`/api/snagging/tasks/${taskId}/areas`, {
+      method: "DELETE",
+      params: { areaId },
+    }),
+
   /** Uploads a title deed (E8) or NOC (E10) and attaches it to the job. */
   uploadDocument: async (
     taskId: string,
@@ -269,6 +314,16 @@ export const snaggingService = {
     executeRESTBackend(`/api/snagging/tasks/${id}`, {
       method: "PATCH",
       body: input as unknown as Record<string, unknown>,
+    }),
+
+  /** Which inspectors are already booked on a day (FR-3.08 availability). */
+  getAvailability: async (
+    date: string,
+    excludeJobId?: string,
+  ): Promise<{ date: string; busy: Record<string, string> }> =>
+    executeRESTBackend(`/api/snagging/availability`, {
+      method: "GET",
+      params: excludeJobId ? { date, excludeJobId } : { date },
     }),
 
   approveTask: async (id: string, comment?: string) =>
