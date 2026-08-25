@@ -37,6 +37,7 @@ import {
   type SnaggingPhoto,
   type SnaggingTask,
 } from "@/types/types";
+import { EmptyState } from "@/components/ui/empty-state";
 
 import { AdditionalVisitDialog } from "./additional-visit-dialog";
 import { RejectInspectionDialog } from "./reject-inspection-dialog";
@@ -44,8 +45,10 @@ import {
   SectionCard,
   SeverityBadge,
   SnagIndex,
+  SubmitButton,
   TaskStatusBadge,
   formatGstDateTime,
+  useConfirm,
 } from "./shared";
 
 type Snag = NonNullable<SnaggingTask["snags"]>[number];
@@ -69,6 +72,7 @@ export function ReviewPanel({
   onChanged: () => void;
 }) {
   const { userProfile } = useAuth();
+  const { confirm, dialog } = useConfirm();
   const [working, setWorking] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [flagged, setFlagged] = useState<Set<string>>(new Set());
@@ -125,6 +129,29 @@ export function ReviewPanel({
   }
 
   async function approve() {
+    // Approving accepts liability for the report and unlocks it for
+    // delivery to the client, so it asks first — and says plainly what
+    // is still outstanding, because the counts above are easy to skim
+    // past.
+    const outstanding = [
+      snagsWithPhoto < snags.length
+        ? `${snags.length - snagsWithPhoto} snag(s) have no photo`
+        : null,
+      confirmedAreas < areas.length
+        ? `${areas.length - confirmedAreas} area(s) not confirmed`
+        : null,
+      accessIssues.length > 0 ? `${accessIssues.length} area(s) with access issues` : null,
+    ].filter(Boolean);
+
+    const ok = await confirm({
+      title: `Approve ${task.code}?`,
+      description: outstanding.length
+        ? `This accepts the inspection and lets the report go to the client. Still outstanding: ${outstanding.join(", ")}.`
+        : "This accepts the inspection and lets the report go to the client.",
+      confirmText: "Approve inspection",
+    });
+    if (!ok) return;
+
     setWorking(true);
     try {
       await snaggingService.approveTask(task.id);
@@ -138,6 +165,24 @@ export function ReviewPanel({
   }
 
   async function openRound() {
+    // Opening a round creates a new inspection and navigates away from
+    // this one; a reviewer who meant to open the report should not lose
+    // their place to a mis-click.
+    const carrying = snags.filter(
+      (snag) =>
+        snag.status === "open" ||
+        snag.status === "pending_verification" ||
+        snag.status === "verified_poor_quality" ||
+        snag.status === "verified_not_done",
+    ).length;
+
+    const ok = await confirm({
+      title: `Open a de-snag round for ${task.code}?`,
+      description: `This creates round ${task.round_number + 1} with the ${carrying} still-open snag(s) carried into it, and takes you to the new round.`,
+      confirmText: "Open round",
+    });
+    if (!ok) return;
+
     setWorking(true);
     try {
       const round = await snaggingService.openRound(task.id, {});
@@ -208,24 +253,37 @@ export function ReviewPanel({
                   // FR-6.01 — the review must be picked up (submitted →
                   // in_review, audited) before it can be approved. Approve
                   // only appears once the inspection is under review.
-                  <Button onClick={() => void startReview()} disabled={working}>
-                    <ClipboardCheck className="size-4" />
+                  <SubmitButton
+                    onClick={() => void startReview()}
+                    pending={working}
+                    pendingLabel="Starting…"
+                    icon={<ClipboardCheck className="size-4" />}
+                  >
                     Start review
-                  </Button>
+                  </SubmitButton>
                 ) : (
-                  <Button onClick={() => void approve()} disabled={working}>
-                    <CheckCircle2 className="size-4" />
+                  <SubmitButton
+                    onClick={() => void approve()}
+                    pending={working}
+                    pendingLabel="Approving…"
+                    icon={<CheckCircle2 className="size-4" />}
+                  >
                     Approve inspection
-                  </Button>
+                  </SubmitButton>
                 )}
               </>
             ) : null}
             {(task.status === "approved" || task.status === "delivered") && canCreate ? (
               <>
-                <Button variant="outline" onClick={() => void openRound()} disabled={working}>
-                  <RotateCcw className="size-4" />
+                <SubmitButton
+                  variant="outline"
+                  onClick={() => void openRound()}
+                  pending={working}
+                  pendingLabel="Opening…"
+                  icon={<RotateCcw className="size-4" />}
+                >
                   Open de-snag round
-                </Button>
+                </SubmitButton>
                 <Button variant="outline" onClick={() => setVisitOpen(true)} disabled={working}>
                   <CalendarPlus className="size-4" />
                   Additional visit
@@ -323,9 +381,11 @@ export function ReviewPanel({
         bodyClassName="border-t"
       >
         {snags.length === 0 ? (
-          <p className="text-muted-foreground px-5 py-10 text-center text-sm">
-            No defects recorded. Every area was signed off clear.
-          </p>
+          <EmptyState
+            icon={<CheckCircle2 className="size-6" />}
+            title="No defects recorded"
+            description="Every area on this inspection was walked and signed off clear."
+          />
         ) : (
           <ul>
             {snags.map((snag, index) => (
@@ -452,6 +512,8 @@ export function ReviewPanel({
         onClose={() => setDetail(null)}
         onOpenPhoto={(photo) => setPreview(photo)}
       />
+
+      {dialog}
     </div>
   );
 }

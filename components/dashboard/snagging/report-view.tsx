@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Copy, Download, Loader2, Printer, Send } from "lucide-react";
+import { ArrowLeft, Copy, Download, Printer, Send } from "lucide-react";
 import { saveAs } from "file-saver";
 import { toast } from "sonner";
 
@@ -26,6 +26,7 @@ import { snaggingService, type SnaggingQuotation } from "@/modules/snagging";
 import { ActionType, ResourceType, type SnaggingTask } from "@/types/types";
 
 import { InspectionReport } from "./inspection-report";
+import { ErrorState, SubmitButton } from "./shared";
 
 const CHANNELS = [
   { key: "email", label: "Email" },
@@ -45,6 +46,7 @@ export function ReportView({ taskId }: { taskId: string }) {
   const [task, setTask] = useState<SnaggingTask | null>(null);
   const [quotation, setQuotation] = useState<SnaggingQuotation | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [deliverOpen, setDeliverOpen] = useState(false);
   const [channel, setChannel] = useState<(typeof CHANNELS)[number]["key"]>("email");
@@ -53,6 +55,7 @@ export function ReportView({ taskId }: { taskId: string }) {
 
   const load = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const [t, q] = await Promise.all([
         snaggingService.getTask(taskId),
@@ -61,8 +64,11 @@ export function ReportView({ taskId }: { taskId: string }) {
       setTask(t);
       setQuotation(q);
       setRecipient(t.property?.client_email ?? t.property?.client_phone ?? "");
-    } catch {
-      toast.error("Could not load the inspection");
+    } catch (err) {
+      // Kept on screen with a retry: a toast that has faded leaves this
+      // page reading as "this inspection could not be found", which sends
+      // a coordinator hunting for a report that exists.
+      setError(err instanceof Error ? err.message : "Could not load the inspection");
     } finally {
       setLoading(false);
     }
@@ -77,25 +83,33 @@ export function ReportView({ taskId }: { taskId: string }) {
   async function downloadPdf() {
     if (!reportRef.current || !task) return;
     setBusy(true);
+    // Rasterising a multi-page report takes seconds; the toast holds the
+    // place so the download does not land with no explanation.
+    const t = toast.loading("Preparing the PDF…");
     try {
       const blob = await elementToPdfBlob(reportRef.current);
       saveAs(blob, `${task.code}-snagging-report.pdf`);
+      toast.success("PDF downloaded", { id: t });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not generate the PDF");
+      toast.error(error instanceof Error ? error.message : "Could not generate the PDF", { id: t });
     } finally {
       setBusy(false);
     }
   }
 
   async function deliver() {
-    if (!recipient.trim()) return;
+    if (!recipient.trim()) {
+      toast.error("Enter the client email or number the report goes to");
+      return;
+    }
     setBusy(true);
     try {
-      const res = await snaggingService.deliverReport(taskId, { channel, recipient: recipient.trim() });
+      const res = await snaggingService.deliverReport(taskId, {
+        channel,
+        recipient: recipient.trim(),
+      });
       setReportUrl(res.report_url);
-      toast.success(
-        res.email_sent ? "Report emailed to the client" : "Report link ready to share",
-      );
+      toast.success(res.email_sent ? "Report emailed to the client" : "Report link ready to share");
       setDeliverOpen(false);
       await load();
     } catch (error) {
@@ -121,6 +135,17 @@ export function ReportView({ taskId }: { taskId: string }) {
         <Skeleton className="h-9 w-40" />
         <Skeleton className="h-[600px] w-full max-w-[794px]" />
       </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <ErrorState
+        title="Could not load the report"
+        message={error}
+        onRetry={() => void load()}
+        retrying={loading}
+      />
     );
   }
 
@@ -157,10 +182,14 @@ export function ReportView({ taskId }: { taskId: string }) {
             <Printer className="size-4" />
             Print
           </Button>
-          <Button variant="outline" onClick={() => void downloadPdf()} disabled={busy}>
-            {busy ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+          <SubmitButton
+            variant="outline"
+            onClick={() => void downloadPdf()}
+            pending={busy}
+            icon={<Download className="size-4" />}
+          >
             Download PDF
-          </Button>
+          </SubmitButton>
           {canDeliver && (task.status === "approved" || task.status === "delivered") ? (
             <Button onClick={() => setDeliverOpen(true)} disabled={busy}>
               <Send className="size-4" />
@@ -172,7 +201,8 @@ export function ReportView({ taskId }: { taskId: string }) {
 
       {notReady ? (
         <div className="snag-report-noprint border-warning/30 bg-warning/5 rounded-md border px-4 py-2 text-sm">
-          This inspection is not finished yet — the report reflects only what has been captured so far.
+          This inspection is not finished yet — the report reflects only what has been captured so
+          far.
         </div>
       ) : null}
       {task.status === "delivered" ? (
@@ -211,7 +241,8 @@ export function ReportView({ taskId }: { taskId: string }) {
             <DialogTitle>Deliver report to client</DialogTitle>
             <DialogDescription>
               Generates a private client link and moves the job to delivered. On the email channel
-              the link is emailed automatically; otherwise copy it and send it through your channel.
+              the client is emailed the moment you confirm — that cannot be taken back. On the other
+              channels, copy the link and send it yourself.
             </DialogDescription>
           </DialogHeader>
 
@@ -247,9 +278,15 @@ export function ReportView({ taskId }: { taskId: string }) {
             <Button variant="outline" onClick={() => setDeliverOpen(false)} disabled={busy}>
               Cancel
             </Button>
-            <Button onClick={() => void deliver()} disabled={busy || recipient.trim().length < 3}>
-              Confirm delivery
-            </Button>
+            <SubmitButton
+              onClick={() => void deliver()}
+              disabled={recipient.trim().length < 3}
+              pending={busy}
+              pendingLabel={channel === "email" ? "Emailing…" : "Delivering…"}
+              icon={<Send className="size-4" />}
+            >
+              {channel === "email" ? "Email the report now" : "Confirm delivery"}
+            </SubmitButton>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -1,13 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BookMarked, Plus, Search } from "lucide-react";
+import { BookMarked, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import type { z } from "zod";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -35,23 +34,25 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { snaggingService, type CatalogueResponse } from "@/modules/snagging";
 import { catalogueEntrySchema, type CatalogueEntryInput } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType, type SnaggingCatalogueEntry } from "@/types/types";
 
-import { PageHeading, SeverityBadge } from "./shared";
+import { EmptyState } from "@/components/ui/empty-state";
+import { DataTable } from "@/components/data-table";
+import { getSnaggingCatalogueColumns } from "@/components/data-table/columns/column-snagging-catalogue";
+import { SnaggingCatalogueToolbar } from "@/components/data-table/toolbars/snagging-catalogue-toolbar";
+
+import {
+  ErrorState,
+  PageHeading,
+  StatCard,
+  StatGridSkeleton,
+  SubmitButton,
+  useConfirm,
+} from "./shared";
 
 /**
  * Snag catalogue administration (BRD §9).
@@ -65,21 +66,31 @@ import { PageHeading, SeverityBadge } from "./shared";
  */
 export default function CatalogueAdmin() {
   const { userProfile } = useAuth();
+  const { confirm, dialog } = useConfirm();
   const [data, setData] = useState<CatalogueResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [element, setElement] = useState("all");
   const [createOpen, setCreateOpen] = useState(false);
+  const [currentPage, setCurrentPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
+  // Which row is mid-flight, so the switch cannot be fired twice across
+  // the confirmation gap.
+  const [togglingId, setTogglingId] = useState<string | null>(null);
 
   const canEdit = hasResourceAction(userProfile, ResourceType.SNAGGING_CATALOGUE, ActionType.EDIT);
   const canCreate = hasResourceAction(userProfile, ResourceType.SNAGGING_CATALOGUE, ActionType.CREATE);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       setData(await snaggingService.listCatalogue());
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not load the catalogue");
+    } catch (err) {
+      // Held on screen instead of toasted: an empty catalogue table and
+      // a catalogue that failed to load look identical otherwise.
+      setError(err instanceof Error ? err.message : "Could not load the catalogue");
     } finally {
       setLoading(false);
     }
@@ -111,6 +122,33 @@ export default function CatalogueAdmin() {
     });
   }, [data, element, search]);
 
+  // The catalogue is a few hundred rows and already in memory, so the
+  // page is sliced here rather than round-tripping per page — the same
+  // shape the roles table uses against the shared DataTable.
+  const paginated = useMemo(() => {
+    const start = currentPage * pageSize;
+    return visible.slice(start, start + pageSize);
+  }, [visible, currentPage, pageSize]);
+
+  function handleGlobalFilterChange(value: string) {
+    setSearch(value);
+    setCurrentPage(0);
+  }
+
+  function handleElementChange(value: string) {
+    setElement(value);
+    setCurrentPage(0);
+  }
+
+  function handlePageChange(pageIndex: number) {
+    setCurrentPage(pageIndex);
+  }
+
+  function handlePageSizeChange(size: number) {
+    setPageSize(size);
+    setCurrentPage(0);
+  }
+
   const areasByElement = useMemo(() => {
     const map = new Map<string, string[]>();
     for (const pair of data?.area_elements ?? []) {
@@ -122,21 +160,45 @@ export default function CatalogueAdmin() {
   }, [data]);
 
   async function toggle(entry: SnaggingCatalogueEntry, active: boolean) {
+    if (togglingId) return;
+
+    // The switch changes the vocabulary for every inspector on every
+    // future inspection, not just this screen, so a stray click on a
+    // row must not carry it through.
+    const ok = await confirm(
+      active
+        ? {
+          title: `Put ${entry.code} back in use?`,
+          description: `Inspectors will be able to choose "${entry.defect_label}" again when capturing new snags.`,
+          confirmText: "Reinstate",
+        }
+        : {
+          title: "Retire this defect type?",
+          description: `Inspectors can no longer choose "${entry.defect_label}" on new inspections. Snags already recorded against ${entry.code} keep it, and issued reports still resolve.`,
+          confirmText: "Retire",
+          variant: "destructive",
+        },
+    );
+    if (!ok) return;
+
+    setTogglingId(entry.id);
     try {
       await snaggingService.setCatalogueEntryActive(entry.id, active);
       setData((current) =>
         current
           ? {
-              ...current,
-              entries: current.entries.map((row) =>
-                row.id === entry.id ? { ...row, active } : row,
-              ),
-            }
+            ...current,
+            entries: current.entries.map((row) =>
+              row.id === entry.id ? { ...row, active } : row,
+            ),
+          }
           : current,
       );
       toast.success(active ? `${entry.code} is back in use` : `${entry.code} retired`);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not update the entry");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not update the entry");
+    } finally {
+      setTogglingId(null);
     }
   }
 
@@ -146,137 +208,112 @@ export default function CatalogueAdmin() {
         eyebrow="Master data"
         title="Snag catalogue"
         description="The controlled vocabulary every snag is classified against. Owned by Operations."
-        actions={
-          canCreate ? (
-            <Button onClick={() => setCreateOpen(true)}>
-              <Plus className="size-4" />
-              Add defect type
-            </Button>
-          ) : null
-        }
+      // actions={
+      //   canCreate ? (
+      //     <Button onClick={() => setCreateOpen(true)}>
+      //       <Plus className="size-4" />
+      //       Add defect type
+      //     </Button>
+      //   ) : null
+      // }
       />
 
-      <div className="grid gap-4 sm:grid-cols-3">
-        <Card className="p-4">
-          <p className="text-muted-foreground text-sm">Defect types</p>
-          <p className="mt-1 text-2xl font-semibold">{data?.entries?.length ?? 0}</p>
-          <p className="text-muted-foreground mt-1 text-xs">
-            {(data?.entries ?? []).filter((entry) => !entry.active).length} retired
-          </p>
-        </Card>
-        <Card className="p-4">
-          <p className="text-muted-foreground text-sm">Areas</p>
-          <p className="mt-1 text-2xl font-semibold">{data?.areas?.length ?? 0}</p>
-          <p className="text-muted-foreground mt-1 text-xs">Level 1 of the taxonomy</p>
-        </Card>
-        <Card className="p-4">
-          <p className="text-muted-foreground text-sm">Area / element pairs</p>
-          <p className="mt-1 text-2xl font-semibold">{data?.area_elements?.length ?? 0}</p>
-          <p className="text-muted-foreground mt-1 text-xs">
-            Decides what the capture sheet offers in each room
-          </p>
-        </Card>
-      </div>
+      {error ? (
+        <ErrorState
+          title="Could not load the catalogue"
+          message={error}
+          onRetry={() => void load()}
+          retrying={loading}
+        />
+      ) : null}
 
-      <Card className="p-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="relative w-full sm:w-72">
-            <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2" />
-            <Input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Code or defect"
-              className="pl-9"
-              aria-label="Search the catalogue"
+      {/*
+        The table is always mounted and shows its own in-body loading, so
+        the page never renders a full-page skeleton and then a second
+        loading state inside the table. Only the counters above it, which
+        are not part of the table, get a placeholder.
+      */}
+      <div className="flex flex-col gap-6">
+        {loading ? (
+          <StatGridSkeleton count={3} className="sm:grid-cols-3 lg:grid-cols-3" />
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-3">
+            <StatCard
+              label="Defect types"
+              value={data?.entries?.length ?? 0}
+              caption={`${(data?.entries ?? []).filter((entry) => !entry.active).length} retired`}
+            />
+            <StatCard
+              label="Areas"
+              value={data?.areas?.length ?? 0}
+              caption="Level 1 of the taxonomy"
+            />
+            <StatCard
+              label="Area / element pairs"
+              value={data?.area_elements?.length ?? 0}
+              caption="Decides what the capture sheet offers in each room"
             />
           </div>
+        )}
 
-          <Select value={element} onValueChange={setElement}>
-            <SelectTrigger className="w-52">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All elements</SelectItem>
-              {elements.map(([code, label]) => (
-                <SelectItem key={code} value={code}>
-                  {label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        <Card className="py-0">
+          <DataTable
+            data={paginated}
+            toolbar={
+              <SnaggingCatalogueToolbar
+                fetchRecords={() => void load()}
+                onGlobalFilterChange={handleGlobalFilterChange}
+                isSearchLoading={loading}
+                pageSize={pageSize}
+                onPageSizeChange={handlePageSizeChange}
+                elements={elements}
+                elementValue={element}
+                onElementChange={handleElementChange}
+                canCreate={canCreate}
+                onCreate={() => setCreateOpen(true)}
+              />
+            }
+            columns={getSnaggingCatalogueColumns({
+              canEdit,
+              togglingId,
+              areasByElement,
+              onToggle: (entry, active) => void toggle(entry, active),
+            })}
+            onGlobalFilterChange={handleGlobalFilterChange}
+            onPageChange={handlePageChange}
+            onPageSizeChange={handlePageSizeChange}
+            pageSize={pageSize}
+            currentPage={currentPage}
+            loading={loading}
+            rowCount={visible.length}
+            type="snagging-catalogue"
+            isPagination={true}
+            emptyState={
+              <EmptyState
+                icon={<BookMarked />}
+                title="Nothing matches this filter"
+                description={
+                  data?.entries?.length
+                    ? "No defect type matches this search or element. Clear the filter to see the whole catalogue."
+                    : "The catalogue is empty. Add a defect type to give inspectors something to classify against."
+                }
+              />
+            }
+          />
+        </Card>
 
-          <span className="text-muted-foreground ml-auto text-sm">{visible.length} shown</span>
-        </div>
-      </Card>
-
-      <Card className="overflow-hidden p-0">
-        <div className="overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Code</TableHead>
-                <TableHead>Element</TableHead>
-                <TableHead>Defect type</TableHead>
-                <TableHead>Default severity</TableHead>
-                <TableHead>Applies in</TableHead>
-                <TableHead className="text-right">In use</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                Array.from({ length: 8 }).map((_, index) => (
-                  <TableRow key={index}>
-                    <TableCell colSpan={6}>
-                      <Skeleton className="h-6 w-full" />
-                    </TableCell>
-                  </TableRow>
-                ))
-              ) : visible.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="text-muted-foreground py-10 text-center">
-                    <BookMarked className="mx-auto mb-2 size-6" />
-                    Nothing matches this filter.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                visible.map((entry) => (
-                  <TableRow key={entry.id} className={entry.active ? "" : "opacity-60"}>
-                    <TableCell className="font-mono text-xs">{entry.code}</TableCell>
-                    <TableCell>{entry.element_label}</TableCell>
-                    <TableCell className="font-medium">
-                      {entry.defect_label}
-                      {entry.guidance ? (
-                        <p className="text-muted-foreground text-xs">{entry.guidance}</p>
-                      ) : null}
-                    </TableCell>
-                    <TableCell>
-                      <SeverityBadge severity={entry.default_severity} />
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline">
-                        {areasByElement.get(entry.element_code)?.length ?? 0} areas
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Switch
-                        checked={entry.active}
-                        disabled={!canEdit}
-                        onCheckedChange={(checked) => void toggle(entry, checked)}
-                        aria-label={`${entry.active ? "Retire" : "Reinstate"} ${entry.code}`}
-                      />
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
-        <p className="text-muted-foreground border-t p-3 text-xs">
+        <p className="text-muted-foreground text-xs">
           Entries are retired, never deleted, so reports issued against them keep resolving.
         </p>
-      </Card>
+      </div>
 
-      <AddEntryDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={() => void load()} />
+      <AddEntryDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onCreated={() => void load()}
+      />
+
+      {dialog}
     </div>
   );
 }
@@ -445,9 +482,9 @@ function AddEntryDialog({
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={submitting}>
-                {submitting ? "Saving…" : "Add entry"}
-              </Button>
+              <SubmitButton type="submit" pending={submitting} pendingLabel="Saving…">
+                Add entry
+              </SubmitButton>
             </DialogFooter>
           </form>
         </Form>

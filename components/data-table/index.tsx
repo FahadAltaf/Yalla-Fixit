@@ -8,7 +8,6 @@ import {
   ChevronRightIcon,
   ChevronUpIcon,
   ChevronsUpDownIcon,
-  Loader2Icon,
 } from "lucide-react";
 
 import type {
@@ -36,6 +35,8 @@ import {
   PaginationEllipsis,
   PaginationItem,
 } from "@/components/ui/pagination";
+
+import { Skeleton } from "@/components/ui/skeleton";
 
 import {
   Table,
@@ -82,6 +83,12 @@ interface DataTableProps<TData, TValue> {
   type?: string;
   handleRowClick?: (row: TData) => void;
   pageSizeOptions?: number[];
+  /**
+   * What to show when there are no rows. Defaults to the plain
+   * "No results." cell; pass an <EmptyState /> to explain what would be
+   * here and offer the action that fills it.
+   */
+  emptyState?: React.ReactNode;
 }
 
 export function DataTable<TData, TValue>({
@@ -95,6 +102,8 @@ export function DataTable<TData, TValue>({
   loading,
   rowCount,
   isPagination,
+  emptyState,
+  handleRowClick,
 }: DataTableProps<TData, TValue>) {
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [sortingState, setSortingState] = useState<SortingState>([]);
@@ -249,23 +258,38 @@ export function DataTable<TData, TValue>({
             </TableHeader>
             <TableBody>
               {loading ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={columns.length}
-                    className="h-24 text-center text-muted-foreground "
-                  >
-                    <div className="flex items-center justify-center gap-2">
-                      <Loader2Icon className="animate-spin size-4" />
-                      Loading...
-                    </div>
-                  </TableCell>
-                </TableRow>
+                // Skeleton rows rather than one spinner cell: the table
+                // keeps its real shape and height while it loads, so the
+                // page does not collapse to a thin bar and then jump back
+                // open when the rows land.
+                Array.from({ length: Math.min(Math.max(pageSize, 3), 8) }).map((_, rowIndex) => (
+                  <TableRow key={`skeleton-${rowIndex}`} className="hover:bg-transparent">
+                    {columns.map((_column, colIndex) => (
+                      <TableCell
+                        key={`skeleton-${rowIndex}-${colIndex}`}
+                        className="h-14 first:w-12.5 first:pl-4 last:w-29 last:px-4"
+                      >
+                        <Skeleton
+                          className={cn(
+                            "h-4",
+                            colIndex === 0 ? "w-24" : colIndex === columns.length - 1 ? "w-12" : "w-16"
+                          )}
+                        />
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))
               ) : table.getRowModel().rows?.length ? (
                 table.getRowModel().rows.map((row) => (
                   <TableRow
                     key={row.id}
                     data-state={row.getIsSelected() && "selected"}
-                    className="hover:bg-transparent"
+                    onClick={
+                      handleRowClick ? () => handleRowClick(row.original) : undefined
+                    }
+                    className={cn(
+                      handleRowClick ? "hover:bg-muted/50 cursor-pointer" : "hover:bg-transparent"
+                    )}
                   >
                     {row.getVisibleCells().map((cell) => (
                       <TableCell
@@ -281,12 +305,14 @@ export function DataTable<TData, TValue>({
                   </TableRow>
                 ))
               ) : (
-                <TableRow>
+                <TableRow className="hover:bg-transparent">
                   <TableCell
                     colSpan={columns.length}
-                    className="h-24 text-center"
+                    className={cn(
+                      emptyState ? "p-0" : "h-24 text-center"
+                    )}
                   >
-                    No results.
+                    {emptyState ?? "No results."}
                   </TableCell>
                 </TableRow>
               )}

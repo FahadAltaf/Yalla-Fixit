@@ -1,13 +1,25 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { CalendarClock, Download, Loader2, Save, ShieldCheck, UserCog } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import {
+  AlertTriangle,
+  CalendarClock,
+  Contact,
+  Download,
+  Lock,
+  RefreshCw,
+  Save,
+  ShieldCheck,
+  UserCog,
+} from "lucide-react";
 import { toast } from "sonner";
 
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
 import {
   Select,
   SelectContent,
@@ -21,7 +33,13 @@ import { snaggingService } from "@/modules/snagging";
 import { usersService } from "@/modules/users/services/users-service";
 import { ActionType, ResourceType, type SnaggingTask, type User } from "@/types/types";
 
-import { SectionCard } from "./shared";
+import {
+  DataState,
+  FieldsSkeleton,
+  SectionCard,
+  SubmitButton,
+  useConfirm,
+} from "./shared";
 
 const UNASSIGNED = "none";
 
@@ -43,10 +61,16 @@ function splitAppointment(iso: string | null): { date: string; time: string } {
 export function JobSetupPanel({ task, onChanged }: { task: SnaggingTask; onChanged: () => void }) {
   const { userProfile } = useAuth();
   const canEdit = hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.EDIT);
+  const { confirm, dialog } = useConfirm();
 
   const [users, setUsers] = useState<User[]>([]);
+  const [usersLoading, setUsersLoading] = useState(true);
+  const [usersError, setUsersError] = useState<string | null>(null);
   const [saving, setSaving] = useState<null | "appt" | "contacts" | "assign">(null);
   const [busyMap, setBusyMap] = useState<Record<string, string>>({});
+  const [availabilityError, setAvailabilityError] = useState<string | null>(null);
+  // Bumped to re-run the availability check after a failed one.
+  const [availabilityNonce, setAvailabilityNonce] = useState(0);
 
   const initial = splitAppointment(task.appointment_at ?? null);
   const [apptDate, setApptDate] = useState(initial.date);
@@ -60,28 +84,49 @@ export function JobSetupPanel({ task, onChanged }: { task: SnaggingTask; onChang
   const [inspectorId, setInspectorId] = useState(task.inspector_id ?? UNASSIGNED);
   const [managerId, setManagerId] = useState(task.approval_manager_id ?? UNASSIGNED);
 
-  useEffect(() => {
-    usersService
-      .getUsers()
-      .then((rows: User[]) => setUsers(rows.filter((r) => r.is_active !== false)))
-      .catch(() => setUsers([]));
+  const loadUsers = useCallback(async () => {
+    setUsersLoading(true);
+    setUsersError(null);
+    try {
+      const rows: User[] = await usersService.getUsers();
+      setUsers(rows.filter((r) => r.is_active !== false));
+    } catch (e) {
+      // An empty Select was the only sign of a failed fetch, so "no staff
+      // exist" and "the staff list broke" looked identical.
+      setUsers([]);
+      setUsersError(e instanceof Error ? e.message : "Could not load the staff list");
+    } finally {
+      setUsersLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void loadUsers();
+  }, [loadUsers]);
 
   // Availability for the appointment day, so a booked inspector is flagged.
   useEffect(() => {
     if (!apptDate) {
       setBusyMap({});
+      setAvailabilityError(null);
       return;
     }
     let active = true;
+    setAvailabilityError(null);
     snaggingService
       .getAvailability(apptDate, task.id)
       .then((r) => active && setBusyMap(r.busy ?? {}))
-      .catch(() => active && setBusyMap({}));
+      .catch((e) => {
+        // A swallowed failure reads as "everyone is free that day", which
+        // is how two jobs get booked onto one inspector.
+        if (!active) return;
+        setBusyMap({});
+        setAvailabilityError(e instanceof Error ? e.message : "Could not check availability");
+      });
     return () => {
       active = false;
     };
-  }, [apptDate, task.id]);
+  }, [apptDate, task.id, availabilityNonce]);
 
   // The quotation approval flips the job draft -> assigned; a child job (round /
   // additional visit) is created assigned. So anything past draft has cleared
@@ -126,6 +171,25 @@ export function JobSetupPanel({ task, onChanged }: { task: SnaggingTask; onChang
       toast.error("Select an approval manager before assigning an inspector");
       return;
     }
+
+    // Saving clears technician_ids, so a change here quietly takes the
+    // person currently on the job off it. Say whose job is being moved.
+    const current = task.inspector_id ?? null;
+    if (current && inspectorId !== current) {
+      const previous = users.find((u) => u.id === current);
+      const who = (previous?.full_name || previous?.email) ?? "The assigned inspector";
+      const unassigning = inspectorId === UNASSIGNED;
+      const ok = await confirm({
+        title: unassigning ? "Unassign the inspector?" : "Change the assigned inspector?",
+        description: unassigning
+          ? `${who} will be taken off this job and it will have no inspector until someone else is assigned.`
+          : `${who} will be taken off this job and replaced by the inspector you selected.`,
+        confirmText: unassigning ? "Unassign" : "Change inspector",
+        variant: "destructive",
+      });
+      if (!ok) return;
+    }
+
     setSaving("assign");
     try {
       await snaggingService.updateTask(task.id, {
@@ -153,96 +217,197 @@ export function JobSetupPanel({ task, onChanged }: { task: SnaggingTask; onChang
     >
       <div className="divide-y">
         {/* Appointment (FR-3.02) */}
-        <section className="space-y-3 p-5">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <CalendarClock className="size-4" /> Appointment
+        <SetupSection
+          icon={CalendarClock}
+          title="Appointment"
+          description="When the inspector is expected on site. Quoted in Gulf time."
+          footer={
+            canEdit ? (
+              <SubmitButton
+                size="sm"
+                variant="outline"
+                onClick={() => void saveAppointment()}
+                disabled={saving !== null}
+                pending={saving === "appt"}
+                pendingLabel="Saving…"
+                icon={<Save className="size-4" />}
+              >
+                Save appointment
+              </SubmitButton>
+            ) : null
+          }
+        >
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Date" htmlFor="appt-date">
+              <Input
+                id="appt-date"
+                type="date"
+                value={apptDate}
+                disabled={!canEdit}
+                onChange={(e) => setApptDate(e.target.value)}
+              />
+            </Field>
+            <Field label="Time (GST)" htmlFor="appt-time">
+              <Input
+                id="appt-time"
+                type="time"
+                value={apptTime}
+                disabled={!canEdit || !apptDate}
+                onChange={(e) => setApptTime(e.target.value)}
+              />
+            </Field>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div>
-              <Label className="text-xs">Date</Label>
-              <Input type="date" value={apptDate} disabled={!canEdit} onChange={(e) => setApptDate(e.target.value)} />
-            </div>
-            <div>
-              <Label className="text-xs">Time (GST)</Label>
-              <Input type="time" value={apptTime} disabled={!canEdit || !apptDate} onChange={(e) => setApptTime(e.target.value)} />
-            </div>
-          </div>
-          {canEdit ? (
-            <Button size="sm" variant="outline" onClick={() => void saveAppointment()} disabled={saving !== null}>
-              {saving === "appt" ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-              Save appointment
-            </Button>
-          ) : null}
-        </section>
+        </SetupSection>
 
         {/* Site contacts (FR-3.03) */}
-        <section className="space-y-3 p-5">
-          <div className="text-sm font-medium">Site contacts</div>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <div className="text-muted-foreground text-xs font-semibold uppercase">Developer side</div>
-              <Input placeholder="Name" value={devName} disabled={!canEdit} onChange={(e) => setDevName(e.target.value)} />
-              <Input placeholder="Phone" value={devPhone} disabled={!canEdit} onChange={(e) => setDevPhone(e.target.value)} />
+        <SetupSection
+          icon={Contact}
+          title="Site contacts"
+          description="Who the inspector calls to get in on the day."
+          footer={
+            canEdit ? (
+              <SubmitButton
+                size="sm"
+                variant="outline"
+                onClick={() => void saveContacts()}
+                disabled={saving !== null}
+                pending={saving === "contacts"}
+                pendingLabel="Saving…"
+                icon={<Save className="size-4" />}
+              >
+                Save contacts
+              </SubmitButton>
+            ) : null
+          }
+        >
+          <div className="grid gap-5 sm:grid-cols-2">
+            <div className="space-y-3">
+              <p className="eyebrow">Developer side</p>
+              <Field label="Name" htmlFor="dev-name">
+                <Input
+                  id="dev-name"
+                  value={devName}
+                  disabled={!canEdit}
+                  onChange={(e) => setDevName(e.target.value)}
+                />
+              </Field>
+              <Field label="Phone" htmlFor="dev-phone">
+                <Input
+                  id="dev-phone"
+                  value={devPhone}
+                  disabled={!canEdit}
+                  onChange={(e) => setDevPhone(e.target.value)}
+                />
+              </Field>
             </div>
-            <div className="space-y-2">
-              <div className="text-muted-foreground text-xs font-semibold uppercase">Client / representative</div>
-              <Input placeholder="Name" value={cliName} disabled={!canEdit} onChange={(e) => setCliName(e.target.value)} />
-              <Input placeholder="Phone" value={cliPhone} disabled={!canEdit} onChange={(e) => setCliPhone(e.target.value)} />
+            <div className="space-y-3">
+              <p className="eyebrow">Client / representative</p>
+              <Field label="Name" htmlFor="cli-name">
+                <Input
+                  id="cli-name"
+                  value={cliName}
+                  disabled={!canEdit}
+                  onChange={(e) => setCliName(e.target.value)}
+                />
+              </Field>
+              <Field label="Phone" htmlFor="cli-phone">
+                <Input
+                  id="cli-phone"
+                  value={cliPhone}
+                  disabled={!canEdit}
+                  onChange={(e) => setCliPhone(e.target.value)}
+                />
+              </Field>
             </div>
           </div>
-          {canEdit ? (
-            <Button size="sm" variant="outline" onClick={() => void saveContacts()} disabled={saving !== null}>
-              {saving === "contacts" ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-              Save contacts
-            </Button>
-          ) : null}
-        </section>
+        </SetupSection>
 
         {/* NOC (FR-3.04) — read-only, from the property (FR-1.09) */}
-        <section className="space-y-2 p-5">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <ShieldCheck className="size-4" /> NOC
-          </div>
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="text-muted-foreground">Required:</span>
-            <Badge variant={nocRequired ? "default" : "secondary"} className="border-0">
-              {nocRequired ? "Yes" : "No"}
-            </Badge>
-            <span className="text-muted-foreground ml-2">On file:</span>
-            {nocOnFile ? (
-              <Badge className="border-0 bg-emerald-600 text-white">On file</Badge>
-            ) : (
-              <Badge variant="secondary" className="border-0">Not uploaded</Badge>
-            )}
-            {nocOnFile && property?.noc_url ? (
-              <Button asChild size="sm" variant="outline" className="ml-1">
+        <SetupSection
+          icon={ShieldCheck}
+          title="NOC"
+          description="Managed on the property record, shown here so the gate is visible before the visit."
+          action={
+            nocOnFile && property?.noc_url ? (
+              <Button asChild size="sm" variant="outline">
                 <a href={property.noc_url} target="_blank" rel="noopener noreferrer">
                   <Download className="size-3.5" /> View NOC
                 </a>
               </Button>
-            ) : null}
-          </div>
-          <p className="text-muted-foreground text-xs">
-            The NOC is managed on the property record. {nocRequired && !nocOnFile ? "It is required but not yet uploaded." : null}
-          </p>
-        </section>
+            ) : null
+          }
+        >
+          <dl className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <dt className="text-muted-foreground text-xs font-medium">Required</dt>
+              <dd>
+                <Badge
+                  variant="secondary"
+                  className={cn(
+                    "border-0 font-medium",
+                    nocRequired ? "bg-brand-100 text-brand" : "bg-mist text-ink-soft",
+                  )}
+                >
+                  {nocRequired ? "Yes" : "No"}
+                </Badge>
+              </dd>
+            </div>
+            <div className="space-y-1.5">
+              <dt className="text-muted-foreground text-xs font-medium">On file</dt>
+              <dd>
+                <Badge
+                  variant="secondary"
+                  className={cn(
+                    "border-0 font-medium",
+                    nocOnFile ? "bg-success/10 text-success" : "bg-mist text-ink-soft",
+                  )}
+                >
+                  {nocOnFile ? "On file" : "Not uploaded"}
+                </Badge>
+              </dd>
+            </div>
+          </dl>
+          {nocRequired && !nocOnFile ? (
+            <Alert variant="destructive" className="border-destructive/30 mt-4">
+              <AlertTriangle />
+              <AlertTitle>NOC required but not uploaded</AlertTitle>
+              <AlertDescription>
+                Add it to the property record before the inspector attends, or access may be
+                refused on the day.
+              </AlertDescription>
+            </Alert>
+          ) : null}
+        </SetupSection>
 
         {/* Inspector assignment (FR-3.08) */}
-        <section className="space-y-3 p-5">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <UserCog className="size-4" /> Inspector assignment
-          </div>
+        <SetupSection
+          icon={UserCog}
+          title="Inspector assignment"
+          description="Who walks the unit, and who signs the report off."
+        >
           {!quotationApproved ? (
-            <p className="text-muted-foreground rounded-md border border-dashed p-3 text-sm">
-              An inspector can be assigned once the client approves the quotation.
-            </p>
+            <Alert>
+              <Lock />
+              <AlertTitle>Waiting on the client&apos;s quotation approval</AlertTitle>
+              <AlertDescription>
+                An inspector can be assigned once the client approves the quotation above.
+              </AlertDescription>
+            </Alert>
           ) : (
-            <>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <Label className="text-xs">Inspector</Label>
+            <DataState
+              loading={usersLoading}
+              error={usersError}
+              onRetry={() => void loadUsers()}
+              retrying={usersLoading}
+              errorTitle="Could not load the staff list"
+              // Matches the two selects below, so the inspector picker no
+              // longer renders empty and then pops full.
+              skeleton={<FieldsSkeleton fields={2} columns={2} className="p-0" />}
+            >
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Inspector" htmlFor="assign-inspector">
                   <Select value={inspectorId} onValueChange={setInspectorId} disabled={!canAssign}>
-                    <SelectTrigger className="w-full">
+                    <SelectTrigger id="assign-inspector" className="w-full">
                       <SelectValue placeholder="Assign an inspector" />
                     </SelectTrigger>
                     <SelectContent>
@@ -259,18 +424,28 @@ export function JobSetupPanel({ task, onChanged }: { task: SnaggingTask; onChang
                       })}
                     </SelectContent>
                   </Select>
-                  {apptDate ? (
+                  {availabilityError ? (
+                    <p className="text-destructive mt-1 flex flex-wrap items-center gap-1.5 text-xs">
+                      Could not check availability for {apptDate}; booked inspectors are not flagged.
+                      <button
+                        type="button"
+                        onClick={() => setAvailabilityNonce((n) => n + 1)}
+                        className="inline-flex items-center gap-1 underline underline-offset-2"
+                      >
+                        <RefreshCw className="size-3" /> Try again
+                      </button>
+                    </p>
+                  ) : apptDate ? (
                     <p className="text-muted-foreground mt-1 text-xs">
                       Availability shown for {apptDate}. Booked inspectors are disabled.
                     </p>
                   ) : (
                     <p className="text-muted-foreground mt-1 text-xs">Set an appointment date to check availability.</p>
                   )}
-                </div>
-                <div>
-                  <Label className="text-xs">Approval manager (required)</Label>
+                </Field>
+                <Field label="Approval manager" hint="Required before an inspector can be assigned." htmlFor="assign-manager">
                   <Select value={managerId} onValueChange={setManagerId} disabled={!canAssign}>
-                    <SelectTrigger className="w-full">
+                    <SelectTrigger id="assign-manager" className="w-full">
                       <SelectValue placeholder="Who signs this off?" />
                     </SelectTrigger>
                     <SelectContent>
@@ -282,20 +457,104 @@ export function JobSetupPanel({ task, onChanged }: { task: SnaggingTask; onChang
                       ))}
                     </SelectContent>
                   </Select>
-                </div>
+                </Field>
               </div>
               {canAssign ? (
-                <Button size="sm" onClick={() => void saveAssignment()} disabled={saving !== null}>
-                  {saving === "assign" ? <Loader2 className="size-4 animate-spin" /> : <UserCog className="size-4" />}
-                  {task.inspector_id ? "Update assignment" : "Assign inspector"}
-                </Button>
+                <div className="flex justify-end">
+                  <SubmitButton
+                    size="sm"
+                    onClick={() => void saveAssignment()}
+                    disabled={saving !== null}
+                    pending={saving === "assign"}
+                    pendingLabel="Saving…"
+                    icon={<UserCog className="size-4" />}
+                  >
+                    {task.inspector_id ? "Update assignment" : "Assign inspector"}
+                  </SubmitButton>
+                </div>
               ) : task.locked ? (
-                <p className="text-muted-foreground text-sm">This inspection is locked; reassignment is disabled.</p>
+                <Alert>
+                  <Lock />
+                  <AlertTitle>This inspection is locked</AlertTitle>
+                  <AlertDescription>
+                    The report has been approved, so the assignment can no longer be changed.
+                  </AlertDescription>
+                </Alert>
               ) : null}
-            </>
+            </DataState>
           )}
-        </section>
+        </SetupSection>
       </div>
+
+      {dialog}
     </SectionCard>
+  );
+}
+
+/**
+ * One block of the setup form: an icon'd title, a line saying what it is
+ * for, the fields, and its own save on the right.
+ *
+ * Each block writes to a different endpoint, so they keep separate save
+ * buttons — but they now share one header treatment instead of three
+ * slightly different hand-rolled ones.
+ */
+function SetupSection({
+  icon: Icon,
+  title,
+  description,
+  action,
+  footer,
+  children,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  title: string;
+  description?: string;
+  action?: React.ReactNode;
+  footer?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="p-5">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div className="flex items-start gap-2.5">
+          <Icon className="text-muted-foreground mt-0.5 size-4 shrink-0" />
+          <div>
+            <h3 className="text-sm leading-none font-medium">{title}</h3>
+            {description ? (
+              <p className="text-muted-foreground mt-1.5 text-xs">{description}</p>
+            ) : null}
+          </div>
+        </div>
+        {action}
+      </div>
+
+      {children}
+
+      {footer ? <div className="mt-4 flex justify-end">{footer}</div> : null}
+    </section>
+  );
+}
+
+/** Label + control + optional hint, so every field on the panel lines up. */
+function Field({
+  label,
+  hint,
+  htmlFor,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  htmlFor?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor={htmlFor} className="text-muted-foreground text-xs font-medium">
+        {label}
+      </Label>
+      {children}
+      {hint ? <p className="text-muted-foreground text-xs">{hint}</p> : null}
+    </div>
   );
 }

@@ -18,6 +18,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { snaggingService } from "@/modules/snagging";
 
+import { SubmitButton } from "./shared";
+
 /**
  * Books an additional (chargeable) snagging visit on a property (Q1-Q6).
  *
@@ -39,6 +41,9 @@ export function AdditionalVisitDialog({
   const [working, setWorking] = useState(false);
 
   async function submit() {
+    // The button is disabled while working, but a double Enter can still
+    // land twice — and this one bills the client.
+    if (working) return;
     setWorking(true);
     try {
       const visit = await snaggingService.scheduleVisit(taskId, {
@@ -97,10 +102,14 @@ export function AdditionalVisitDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={working}>
             Cancel
           </Button>
-          <Button onClick={() => void submit()} disabled={working}>
-            <CalendarPlus className="size-4" />
+          <SubmitButton
+            onClick={() => void submit()}
+            pending={working}
+            pendingLabel="Scheduling…"
+            icon={<CalendarPlus className="size-4" />}
+          >
             Schedule visit
-          </Button>
+          </SubmitButton>
         </DialogFooter>
       </DialogContent>
     </Dialog>

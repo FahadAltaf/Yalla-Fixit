@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
-  Loader2,
+  Map,
   MapPin,
   Pencil,
   Plus,
@@ -37,7 +37,15 @@ import { hasResourceAction } from "@/lib/role-permissions";
 import { snaggingService } from "@/modules/snagging";
 import { ActionType, ResourceType, type SnaggingArea, type SnaggingFloorPlan } from "@/types/types";
 
-import { SectionCard } from "./shared";
+import { EmptyState } from "@/components/ui/empty-state";
+
+import {
+  DataState,
+  ListSkeleton,
+  SectionCard,
+  SubmitButton,
+  useConfirm,
+} from "./shared";
 
 const NEW_AREA = "__new__";
 
@@ -93,13 +101,18 @@ async function toPinnablePlan(file: File): Promise<{ file: File; width?: number;
 export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
   const { userProfile } = useAuth();
   const canEdit = hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.EDIT);
+  const { confirm, dialog } = useConfirm();
   const fileRef = useRef<HTMLInputElement>(null);
   const imgWrapRef = useRef<HTMLDivElement>(null);
 
   const [plans, setPlans] = useState<SnaggingFloorPlan[]>([]);
   const [areas, setAreas] = useState<SnaggingArea[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // `busy` disables every control; `running` names the one mutation in
+  // flight so only that button spins — a PDF can take seconds to convert.
+  const [running, setRunning] = useState<null | "upload" | "pin" | "area" | "rename">(null);
   const [label, setLabel] = useState("");
   const [activePlanId, setActivePlanId] = useState<string | null>(null);
 
@@ -112,6 +125,7 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
 
   const load = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const [p, a] = await Promise.all([
         snaggingService.listFloorPlans(taskId),
@@ -120,8 +134,10 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
       setPlans(p);
       setAreas(a);
       setActivePlanId((cur) => cur ?? p[0]?.id ?? null);
-    } catch {
-      // A load failure should not break the job view.
+    } catch (e) {
+      // Swallowing this made a broken fetch look like a unit with no
+      // plans and no areas — the inspector would just start adding them.
+      setError(e instanceof Error ? e.message : "Could not load floor plans and areas");
     } finally {
       setLoading(false);
     }
@@ -137,6 +153,7 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
 
   async function upload(file: File) {
     setBusy(true);
+    setRunning("upload");
     try {
       const prepared = await toPinnablePlan(file);
       await snaggingService.uploadFloorPlan(taskId, prepared.file, {
@@ -151,11 +168,23 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
       toast.error(error instanceof Error ? error.message : "Could not upload the plan");
     } finally {
       setBusy(false);
+      setRunning(null);
       if (fileRef.current) fileRef.current.value = "";
     }
   }
 
   async function removePlan(plan: SnaggingFloorPlan) {
+    // The file is deleted outright, and every pin placed on it is left
+    // without a plan to sit on.
+    const ok = await confirm({
+      title: `Remove “${plan.label}”?`,
+      description:
+        "The uploaded plan is deleted. Areas pinned to this floor keep their names but lose their plan and pin position, and will need re-pinning.",
+      confirmText: "Remove plan",
+      variant: "destructive",
+    });
+    if (!ok) return;
+
     setBusy(true);
     try {
       await snaggingService.deleteFloorPlan(plan.id);
@@ -201,12 +230,14 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
   async function confirmPin() {
     if (!pending || !activePlanId) return;
     setBusy(true);
+    setRunning("pin");
     try {
       if (pinAreaChoice === NEW_AREA) {
         const name = newAreaName.trim();
         if (!name) {
           toast.error("Name the area this pin represents");
           setBusy(false);
+          setRunning(null);
           return;
         }
         await snaggingService.createArea(taskId, {
@@ -230,10 +261,21 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
       toast.error(error instanceof Error ? error.message : "Could not place the pin");
     } finally {
       setBusy(false);
+      setRunning(null);
     }
   }
 
   async function clearPin(area: SnaggingArea) {
+    // The position is not recoverable — the plan has to be clicked again.
+    const ok = await confirm({
+      title: `Remove the pin for “${area.name}”?`,
+      description:
+        "The area stays on the job, but it will no longer be marked on any floor plan. You can pin it again by clicking the plan.",
+      confirmText: "Remove pin",
+      variant: "destructive",
+    });
+    if (!ok) return;
+
     setBusy(true);
     try {
       await snaggingService.updateArea(taskId, { id: area.id, floor_plan_id: null, pin_x: null, pin_y: null });
@@ -250,6 +292,7 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
     const name = newAreaOnly.trim();
     if (!name) return;
     setBusy(true);
+    setRunning("area");
     try {
       await snaggingService.createArea(taskId, { name });
       setNewAreaOnly("");
@@ -259,6 +302,7 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
       toast.error(error instanceof Error ? error.message : "Could not add the area");
     } finally {
       setBusy(false);
+      setRunning(null);
     }
   }
 
@@ -267,6 +311,7 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
     const name = renaming.name.trim();
     if (!name) return;
     setBusy(true);
+    setRunning("rename");
     try {
       await snaggingService.updateArea(taskId, { id: renaming.id, name });
       setRenaming(null);
@@ -276,10 +321,21 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
       toast.error(error instanceof Error ? error.message : "Could not rename the area");
     } finally {
       setBusy(false);
+      setRunning(null);
     }
   }
 
   async function removeArea(area: SnaggingArea) {
+    // An area is not just a label: snags are recorded against it.
+    const ok = await confirm({
+      title: `Remove “${area.name}”?`,
+      description:
+        "The area and its pin are deleted. Any snag already recorded in this area loses the area it was logged against, and it cannot be undone from here.",
+      confirmText: "Remove area",
+      variant: "destructive",
+    });
+    if (!ok) return;
+
     setBusy(true);
     try {
       await snaggingService.deleteArea(taskId, area.id);
@@ -294,166 +350,211 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
 
   const planLabel = (id?: string | null) => plans.find((p) => p.id === id)?.label ?? null;
 
-  if (loading) {
-    return (
-      <SectionCard title="Floor plans & areas" bodyClassName="border-t p-5">
-        <p className="text-muted-foreground text-sm">Loading…</p>
-      </SectionCard>
-    );
-  }
-
   return (
     <SectionCard
       title="Floor plans & areas"
       description="One plan per floor (ordered), with each area pinned to its place"
       bodyClassName="border-t p-5"
     >
-      <div className="grid gap-6 lg:grid-cols-2">
-        {/* Left: floors + the active plan with pins */}
-        <div className="space-y-4">
-          {/* Floor list with ordering */}
-          <div className="space-y-2">
-            {plans.length === 0 ? (
-              <p className="text-muted-foreground text-sm">No floor plans yet.</p>
-            ) : (
-              plans.map((plan, i) => (
-                <div
-                  key={plan.id}
-                  className={`flex items-center gap-2 rounded-md border p-2 text-sm ${
-                    plan.id === activePlanId ? "border-primary bg-muted/50" : ""
-                  }`}
+      <DataState
+        loading={loading}
+        error={error}
+        onRetry={() => void load()}
+        retrying={loading}
+        errorTitle="Could not load floor plans and areas"
+        // Two bordered columns, so the plan list and the area list do not
+        // jump into place when the fetch lands.
+        skeleton={
+          <div className="grid gap-6 lg:grid-cols-2">
+            <ListSkeleton rows={3} className="overflow-hidden rounded-lg border" />
+            <ListSkeleton rows={5} className="overflow-hidden rounded-lg border" />
+          </div>
+        }
+      >
+        <div className="grid gap-6 lg:grid-cols-2">
+          {/* Left: floors + the active plan with pins */}
+          <div className="space-y-4">
+            {/* Floor list with ordering */}
+            <div className="space-y-2">
+              {plans.length === 0 ? (
+                <EmptyState
+                  icon={<Map className="size-6" />}
+                  title="No floor plans yet"
+                  description={
+                    canEdit
+                      ? "Add a plan per floor (PNG, JPG or PDF) to pin each area to its place on the unit."
+                      : "No plan has been uploaded for this unit yet."
+                  }
+                  className="rounded-lg border border-dashed py-10"
+                />
+              ) : (
+                plans.map((plan, i) => (
+                  <div
+                    key={plan.id}
+                    className={`flex items-center gap-2 rounded-md border p-2 text-sm ${
+                      plan.id === activePlanId ? "border-primary bg-muted/50" : ""
+                    }`}
+                  >
+                    <span className="text-muted-foreground w-6 text-center text-xs font-semibold">{i + 1}</span>
+                    <button type="button" className="flex-1 truncate text-left font-medium" onClick={() => setActivePlanId(plan.id)}>
+                      {plan.label}
+                    </button>
+                    <span className="text-muted-foreground text-xs">
+                      {areas.filter((a) => a.floor_plan_id === plan.id && a.pin_x != null).length} pins
+                    </span>
+                    {canEdit ? (
+                      <>
+                        <button type="button" disabled={busy || i === 0} onClick={() => void move(i, -1)} className="disabled:opacity-30" aria-label="Move up">
+                          <ArrowUp className="size-4" />
+                        </button>
+                        <button type="button" disabled={busy || i === plans.length - 1} onClick={() => void move(i, 1)} className="disabled:opacity-30" aria-label="Move down">
+                          <ArrowDown className="size-4" />
+                        </button>
+                        <button type="button" disabled={busy} onClick={() => void removePlan(plan)} className="text-muted-foreground hover:text-destructive" aria-label="Remove plan">
+                          <Trash2 className="size-4" />
+                        </button>
+                      </>
+                    ) : null}
+                  </div>
+                ))
+              )}
+            </div>
+
+            {canEdit ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Label (e.g. Ground floor)" className="max-w-48" />
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,application/pdf"
+                  hidden
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void upload(file);
+                  }}
+                />
+                {/* A PDF is rasterised in the browser, which is slow enough
+                    that the button has to say it is working. */}
+                <SubmitButton
+                  variant="outline"
+                  onClick={() => fileRef.current?.click()}
+                  disabled={busy}
+                  pending={running === "upload"}
+                  pendingLabel="Processing…"
+                  icon={<Upload className="size-4" />}
                 >
-                  <span className="text-muted-foreground w-6 text-center text-xs font-semibold">{i + 1}</span>
-                  <button type="button" className="flex-1 truncate text-left font-medium" onClick={() => setActivePlanId(plan.id)}>
-                    {plan.label}
-                  </button>
-                  <span className="text-muted-foreground text-xs">
-                    {areas.filter((a) => a.floor_plan_id === plan.id && a.pin_x != null).length} pins
-                  </span>
+                  Add plan
+                </SubmitButton>
+              </div>
+            ) : null}
+
+            {/* Active plan with pins */}
+            {activePlan?.signed_url ? (
+              <div className="space-y-2">
+                <p className="text-muted-foreground text-xs">
+                  {canEdit ? "Click the plan to place a pin for an area." : "Area pins on this floor."}
+                </p>
+                <div
+                  ref={imgWrapRef}
+                  onClick={onPlanClick}
+                  className={`relative w-full overflow-hidden rounded-lg border bg-muted ${canEdit ? "cursor-crosshair" : ""}`}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={activePlan.signed_url} alt={activePlan.label} className="block w-full select-none" draggable={false} />
+                  {pinnedHere.map((a, idx) => (
+                    <span
+                      key={a.id}
+                      className="absolute flex size-6 -translate-x-1/2 -translate-y-full items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white shadow"
+                      style={{ left: `${(a.pin_x ?? 0) * 100}%`, top: `${(a.pin_y ?? 0) * 100}%` }}
+                      title={a.name}
+                    >
+                      {idx + 1}
+                    </span>
+                  ))}
+                </div>
+                <div className="flex flex-wrap gap-2 text-xs">
+                  {pinnedHere.map((a, idx) => (
+                    <span key={a.id} className="bg-muted inline-flex items-center gap-1 rounded px-2 py-0.5">
+                      <span className="font-semibold">{idx + 1}</span> {a.name}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : activePlan ? (
+              <p className="text-muted-foreground text-sm">This plan has no preview.</p>
+            ) : null}
+          </div>
+
+          {/* Right: area list */}
+          <div className="space-y-3">
+            <div className="text-sm font-medium">Areas ({areas.length})</div>
+            <div className="space-y-1">
+              {areas.length === 0 ? (
+                <EmptyState
+                  icon={<MapPin className="size-6" />}
+                  title="No areas yet"
+                  description={
+                    canEdit
+                      ? "Add areas below, or click a floor plan to create one where you drop the pin."
+                      : "Areas appear here once the inspector sets them up."
+                  }
+                  className="rounded-lg border border-dashed py-10"
+                />
+              ) : null}
+              {areas.map((a) => (
+                <div key={a.id} className="flex items-center gap-2 rounded-md border p-2 text-sm">
+                  {a.pin_x != null ? <MapPin className="size-4 text-red-600" /> : <MapPin className="text-muted-foreground/40 size-4" />}
+                  <span className="flex-1 truncate">{a.name}</span>
+                  {a.floor_plan_id ? (
+                    <span className="text-muted-foreground truncate text-xs">{planLabel(a.floor_plan_id)}</span>
+                  ) : null}
                   {canEdit ? (
                     <>
-                      <button type="button" disabled={busy || i === 0} onClick={() => void move(i, -1)} className="disabled:opacity-30" aria-label="Move up">
-                        <ArrowUp className="size-4" />
+                      {a.pin_x != null ? (
+                        <button type="button" disabled={busy} onClick={() => void clearPin(a)} className="text-muted-foreground hover:text-foreground" title="Remove pin">
+                          <X className="size-4" />
+                        </button>
+                      ) : null}
+                      <button type="button" disabled={busy} onClick={() => setRenaming({ id: a.id, name: a.name })} className="text-muted-foreground hover:text-foreground" title="Rename">
+                        <Pencil className="size-4" />
                       </button>
-                      <button type="button" disabled={busy || i === plans.length - 1} onClick={() => void move(i, 1)} className="disabled:opacity-30" aria-label="Move down">
-                        <ArrowDown className="size-4" />
-                      </button>
-                      <button type="button" disabled={busy} onClick={() => void removePlan(plan)} className="text-muted-foreground hover:text-destructive" aria-label="Remove plan">
+                      <button type="button" disabled={busy} onClick={() => void removeArea(a)} className="text-muted-foreground hover:text-destructive" title="Remove">
                         <Trash2 className="size-4" />
                       </button>
                     </>
                   ) : null}
                 </div>
-              ))
-            )}
+              ))}
+            </div>
+            {canEdit ? (
+              <div className="flex items-center gap-2">
+                <Input
+                  value={newAreaOnly}
+                  onChange={(e) => setNewAreaOnly(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void addAreaOnly();
+                    }
+                  }}
+                  placeholder="Add an area (e.g. Balcony)"
+                />
+                <SubmitButton
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void addAreaOnly()}
+                  disabled={busy || !newAreaOnly.trim()}
+                  pending={running === "area"}
+                  pendingLabel="Adding…"
+                  icon={<Plus className="size-4" />}
+                >
+                  Add
+                </SubmitButton>
+              </div>
+            ) : null}
           </div>
-
-          {canEdit ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Label (e.g. Ground floor)" className="max-w-48" />
-              <input
-                ref={fileRef}
-                type="file"
-                accept="image/png,image/jpeg,image/webp,application/pdf"
-                hidden
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) void upload(file);
-                }}
-              />
-              <Button variant="outline" onClick={() => fileRef.current?.click()} disabled={busy}>
-                {busy ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
-                Add plan
-              </Button>
-            </div>
-          ) : null}
-
-          {/* Active plan with pins */}
-          {activePlan?.signed_url ? (
-            <div className="space-y-2">
-              <p className="text-muted-foreground text-xs">
-                {canEdit ? "Click the plan to place a pin for an area." : "Area pins on this floor."}
-              </p>
-              <div
-                ref={imgWrapRef}
-                onClick={onPlanClick}
-                className={`relative w-full overflow-hidden rounded-lg border bg-muted ${canEdit ? "cursor-crosshair" : ""}`}
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={activePlan.signed_url} alt={activePlan.label} className="block w-full select-none" draggable={false} />
-                {pinnedHere.map((a, idx) => (
-                  <span
-                    key={a.id}
-                    className="absolute flex size-6 -translate-x-1/2 -translate-y-full items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white shadow"
-                    style={{ left: `${(a.pin_x ?? 0) * 100}%`, top: `${(a.pin_y ?? 0) * 100}%` }}
-                    title={a.name}
-                  >
-                    {idx + 1}
-                  </span>
-                ))}
-              </div>
-              <div className="flex flex-wrap gap-2 text-xs">
-                {pinnedHere.map((a, idx) => (
-                  <span key={a.id} className="bg-muted inline-flex items-center gap-1 rounded px-2 py-0.5">
-                    <span className="font-semibold">{idx + 1}</span> {a.name}
-                  </span>
-                ))}
-              </div>
-            </div>
-          ) : activePlan ? (
-            <p className="text-muted-foreground text-sm">This plan has no preview.</p>
-          ) : null}
         </div>
-
-        {/* Right: area list */}
-        <div className="space-y-3">
-          <div className="text-sm font-medium">Areas ({areas.length})</div>
-          <div className="space-y-1">
-            {areas.map((a) => (
-              <div key={a.id} className="flex items-center gap-2 rounded-md border p-2 text-sm">
-                {a.pin_x != null ? <MapPin className="size-4 text-red-600" /> : <MapPin className="text-muted-foreground/40 size-4" />}
-                <span className="flex-1 truncate">{a.name}</span>
-                {a.floor_plan_id ? (
-                  <span className="text-muted-foreground truncate text-xs">{planLabel(a.floor_plan_id)}</span>
-                ) : null}
-                {canEdit ? (
-                  <>
-                    {a.pin_x != null ? (
-                      <button type="button" disabled={busy} onClick={() => void clearPin(a)} className="text-muted-foreground hover:text-foreground" title="Remove pin">
-                        <X className="size-4" />
-                      </button>
-                    ) : null}
-                    <button type="button" disabled={busy} onClick={() => setRenaming({ id: a.id, name: a.name })} className="text-muted-foreground hover:text-foreground" title="Rename">
-                      <Pencil className="size-4" />
-                    </button>
-                    <button type="button" disabled={busy} onClick={() => void removeArea(a)} className="text-muted-foreground hover:text-destructive" title="Remove">
-                      <Trash2 className="size-4" />
-                    </button>
-                  </>
-                ) : null}
-              </div>
-            ))}
-          </div>
-          {canEdit ? (
-            <div className="flex items-center gap-2">
-              <Input
-                value={newAreaOnly}
-                onChange={(e) => setNewAreaOnly(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void addAreaOnly();
-                  }
-                }}
-                placeholder="Add an area (e.g. Balcony)"
-              />
-              <Button variant="outline" size="sm" onClick={() => void addAreaOnly()} disabled={busy || !newAreaOnly.trim()}>
-                <Plus className="size-4" /> Add
-              </Button>
-            </div>
-          ) : null}
-        </div>
-      </div>
+      </DataState>
 
       {/* Assign a placed pin to an area */}
       <Dialog open={pending !== null} onOpenChange={(o) => !o && setPending(null)}>
@@ -491,10 +592,15 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setPending(null)} disabled={busy}>Cancel</Button>
-            <Button onClick={() => void confirmPin()} disabled={busy}>
-              {busy ? <Loader2 className="size-4 animate-spin" /> : <MapPin className="size-4" />}
+            <SubmitButton
+              onClick={() => void confirmPin()}
+              disabled={busy}
+              pending={running === "pin"}
+              pendingLabel="Placing…"
+              icon={<MapPin className="size-4" />}
+            >
               Place pin
-            </Button>
+            </SubmitButton>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -504,6 +610,10 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Rename area</DialogTitle>
+            <DialogDescription>
+              The new name is used everywhere this area appears — its pin, the snags recorded in it, and
+              the report.
+            </DialogDescription>
           </DialogHeader>
           <Input
             value={renaming?.name ?? ""}
@@ -517,10 +627,19 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
           />
           <DialogFooter>
             <Button variant="outline" onClick={() => setRenaming(null)} disabled={busy}>Cancel</Button>
-            <Button onClick={() => void renameArea()} disabled={busy || !renaming?.name.trim()}>Save</Button>
+            <SubmitButton
+              onClick={() => void renameArea()}
+              disabled={busy || !renaming?.name.trim()}
+              pending={running === "rename"}
+              pendingLabel="Saving…"
+            >
+              Save
+            </SubmitButton>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {dialog}
     </SectionCard>
   );
 }

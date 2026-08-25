@@ -19,6 +19,23 @@ export {
   timeAgo,
   type StatTone,
 } from "@/components/dashboard/shared/kaizen";
+
+// The four data states (loading / error / empty / content), plus the
+// pending-action button and the confirm-before-irreversible hook. Every
+// snagging screen reaches for these rather than hand-rolling a spinner,
+// a grey "Loading…" line, or an unguarded destructive click.
+export {
+  StatGridSkeleton,
+  ListSkeleton,
+  FieldsSkeleton,
+  HeadingSkeleton,
+  SectionSkeleton,
+  ErrorState,
+  DataState,
+  SubmitButton,
+  useConfirm,
+  type ConfirmOptions,
+} from "@/components/dashboard/shared/kaizen-states";
 import type {
   SnaggingRejectionCategory,
   SnaggingSeverity,
@@ -140,6 +157,38 @@ export function SeverityBadge({ severity }: { severity: SnaggingSeverity }) {
   return (
     <Badge variant="secondary" className={cn("border-0 font-medium", SEVERITY_STYLES[severity])}>
       {SEVERITY_LABELS[severity]}
+    </Badge>
+  );
+}
+
+/**
+ * Where a quotation stands with the client. Uses the same tints as the
+ * task and snag badges so one status vocabulary reads across the module,
+ * rather than a raw lowercase status string in a card subtitle.
+ */
+export type QuotationStatus = "draft" | "sent" | "approved" | "rejected";
+
+const QUOTATION_STATUS_LABELS: Record<QuotationStatus, string> = {
+  draft: "Draft",
+  sent: "Awaiting client",
+  approved: "Approved by client",
+  rejected: "Rejected by client",
+};
+
+const QUOTATION_STATUS_STYLES: Record<QuotationStatus, string> = {
+  draft: "bg-mist text-ink-soft",
+  sent: "bg-warning/10 text-warning",
+  approved: "bg-success/10 text-success",
+  rejected: "bg-danger/10 text-danger",
+};
+
+export function QuotationStatusBadge({ status }: { status: QuotationStatus }) {
+  return (
+    <Badge
+      variant="secondary"
+      className={cn("border-0 font-medium", QUOTATION_STATUS_STYLES[status])}
+    >
+      {QUOTATION_STATUS_LABELS[status]}
     </Badge>
   );
 }

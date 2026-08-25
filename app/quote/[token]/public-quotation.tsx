@@ -145,7 +145,7 @@ export function PublicQuotation({ token }: { token: string }) {
   return (
     <div style={{ minHeight: "100vh", background: "#f3f4f6", padding: "24px 16px" }}>
       <div style={{ maxWidth: 794, margin: "0 auto 16px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-        <div style={{ fontSize: 16, fontWeight: 800, color: "#9f2b23" }}>YALLA FIX IT</div>
+        <div style={{ fontSize: 16, fontWeight: 800, color: "#9f2b23" }}></div>
         <button type="button" onClick={() => void download()} disabled={downloading} style={{ ...btn("#0f766e"), opacity: downloading ? 0.7 : 1, cursor: downloading ? "default" : "pointer" }}>
           {downloading ? <Loader2 className="animate-spin" style={{ width: 16, height: 16 }} /> : <Download style={{ width: 16, height: 16 }} />}
           {downloading ? "Preparing…" : "Download PDF"}

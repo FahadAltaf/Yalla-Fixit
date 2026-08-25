@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   CalendarIcon,
@@ -48,7 +48,12 @@ import { snaggingService, type SnaggingClientOption } from "@/modules/snagging";
 import { usersService } from "@/modules/users/services/users-service";
 import type { SnaggingProperty, SnaggingPropertyType, User } from "@/types/types";
 
-import { PROPERTY_TYPE_LABELS, PageHeading } from "./shared";
+import {
+  ErrorState,
+  PROPERTY_TYPE_LABELS,
+  PageHeading,
+  SubmitButton,
+} from "./shared";
 
 /**
  * The new-job wizard.
@@ -164,11 +169,49 @@ function templateFor(type: SnaggingPropertyType, bedrooms: number | null): AreaC
   return rooms;
 }
 
+type PropertyErrorKey = "client" | "unit_label" | "built_up_area";
+
+/**
+ * The property-step rules, expressed as the sentence the coordinator
+ * needs rather than a bare boolean.
+ *
+ * The step gate and the inline messages both read this one function, so
+ * the Continue button can never grey out for a reason no field explains.
+ */
+function propertyErrors(draft: Draft): Partial<Record<PropertyErrorKey, string>> {
+  const errors: Partial<Record<PropertyErrorKey, string>> = {};
+
+  // Client name + phone (D1), a unit, and built up area (E3) are the
+  // minimum a job and its quotation depend on.
+  if (draft.client_name.trim().length < 2) {
+    errors.client = "Choose a client on file, or add a new one with the + button.";
+  } else if (draft.client_phone.trim().length < 5) {
+    errors.client =
+      "This client has no usable phone number. Change the client, or add one with the + button.";
+  }
+
+  if (draft.unit_label.trim().length === 0) {
+    errors.unit_label = "The inspector finds the property by this reference, so it is required.";
+  }
+
+  if (!(Number(draft.built_up_area) > 0)) {
+    errors.built_up_area = draft.built_up_area.trim()
+      ? "Enter the area as a number greater than 0."
+      : "The quotation is priced from this, so it is required.";
+  }
+
+  return errors;
+}
+
+const AREAS_ERROR = "Tick at least one area — a job with no rooms gives the inspector nothing to walk.";
+
 export default function NewJobWizard() {
   const router = useRouter();
   const [step, setStep] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [users, setUsers] = useState<User[]>([]);
+  const [usersLoading, setUsersLoading] = useState(true);
+  const [usersError, setUsersError] = useState<string | null>(null);
   const [plans, setPlans] = useState<PendingPlan[]>([]);
   const [titleDeedFile, setTitleDeedFile] = useState<File | null>(null);
   const [nocFile, setNocFile] = useState<File | null>(null);
@@ -210,12 +253,25 @@ export default function NewJobWizard() {
   // property type does not wipe a custom room set the user built.
   const areasTouched = useRef(false);
 
-  useEffect(() => {
-    usersService
-      .getUsers()
-      .then((rows: User[]) => setUsers(rows.filter((row) => row.is_active !== false)))
-      .catch(() => toast.error("Could not load the staff list"));
+  // Kept on screen rather than fired as a toast: a failed staff load used
+  // to leave the approval-manager picker silently empty, which reads as
+  // "there are no managers" instead of "the list did not load".
+  const loadUsers = useCallback(async () => {
+    setUsersLoading(true);
+    setUsersError(null);
+    try {
+      const rows: User[] = await usersService.getUsers();
+      setUsers(rows.filter((row) => row.is_active !== false));
+    } catch (error) {
+      setUsersError(error instanceof Error ? error.message : "Could not load the staff list");
+    } finally {
+      setUsersLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void loadUsers();
+  }, [loadUsers]);
 
 
   function set<K extends keyof Draft>(key: K, value: Draft[K]) {
@@ -272,30 +328,27 @@ export default function NewJobWizard() {
     }));
   }
 
-  const stepValid = useMemo(() => {
+  // What is stopping this step, in words. Empty means the step passes —
+  // the gate itself is unchanged, it just now carries its reasons.
+  const blockers = useMemo(() => {
     switch (STEPS[step].key) {
       case "property":
-        // Client name + phone (D1), a unit, and built up area (E3) are the
-        // minimum a job and its quotation depend on.
-        return (
-          draft.client_name.trim().length >= 2 &&
-          draft.client_phone.trim().length >= 5 &&
-          draft.unit_label.trim().length > 0 &&
-          Number(draft.built_up_area) > 0
-        );
+        return Object.values(propertyErrors(draft)).filter((m): m is string => Boolean(m));
       case "floorplans":
         // Floor plans are optional; the plan can be added from the job later.
-        return true;
+        return [];
       case "areas":
-        return draft.areas.length > 0;
+        return draft.areas.length > 0 ? [] : [AREAS_ERROR];
       case "assign":
         // Schedule + contacts are optional here; the inspector is assigned from
         // the job only after the client approves the quotation (FR-3.08).
-        return true;
+        return [];
       default:
-        return true;
+        return [];
     }
   }, [step, draft]);
+
+  const stepValid = blockers.length === 0;
 
   async function submit() {
     setSubmitting(true);
@@ -471,19 +524,35 @@ export default function NewJobWizard() {
               setAreas={setAreas}
             />
           ) : (
-            <AssignStep draft={draft} set={set} users={users} />
+            <AssignStep
+              draft={draft}
+              set={set}
+              users={users}
+              usersLoading={usersLoading}
+              usersError={usersError}
+              retryUsers={() => void loadUsers()}
+            />
           )}
         </div>
 
-        <div className="flex items-center justify-between border-t px-6 py-4">
-          <p className="text-muted-foreground text-xs">
-            {STEPS[step].key === "areas"
-              ? `${draft.areas.length} area${draft.areas.length === 1 ? "" : "s"} selected.`
-              : STEPS[step].key === "floorplans"
-                ? "Floor plans are optional and can be added from the job later."
-                : "Required fields are marked."}
-          </p>
-          <div className="flex items-center gap-2">
+        <div className="flex items-start justify-between gap-4 border-t px-6 py-4">
+          <div className="min-w-0">
+            <p className="text-muted-foreground text-xs">
+              {STEPS[step].key === "areas"
+                ? `${draft.areas.length} area${draft.areas.length === 1 ? "" : "s"} selected.`
+                : STEPS[step].key === "floorplans"
+                  ? "Floor plans are optional and can be added from the job later."
+                  : "Required fields are marked."}
+            </p>
+            {/* A greyed-out Continue used to explain nothing; the first
+                unmet rule is named here, and again under its own field. */}
+            {blockers.map((reason) => (
+              <p key={reason} className="text-destructive mt-1 text-xs">
+                {reason}
+              </p>
+            ))}
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
             <Button
               variant="outline"
               onClick={() => (step === 0 ? router.push("/snagging/jobs") : setStep(step - 1))}
@@ -492,9 +561,14 @@ export default function NewJobWizard() {
               Back
             </Button>
             {isLast ? (
-              <Button onClick={() => void submit()} disabled={!stepValid || submitting}>
-                {submitting ? "Creating…" : "Create job"}
-              </Button>
+              <SubmitButton
+                onClick={() => void submit()}
+                disabled={!stepValid}
+                pending={submitting}
+                pendingLabel="Creating…"
+              >
+                Create job
+              </SubmitButton>
             ) : (
               <Button onClick={() => setStep(step + 1)} disabled={!stepValid}>
                 Continue
@@ -511,11 +585,14 @@ function Field({
   label,
   required,
   hint,
+  error,
   children,
 }: {
   label: string;
   required?: boolean;
   hint?: string;
+  /** Why this field blocks the step. Shown under the control, in words. */
+  error?: string;
   children: React.ReactNode;
 }) {
   return (
@@ -526,6 +603,7 @@ function Field({
         {hint ? <span className="text-muted-foreground font-normal"> {hint}</span> : null}
       </Label>
       {children}
+      {error ? <p className="text-destructive text-xs">{error}</p> : null}
     </div>
   );
 }
@@ -1332,10 +1410,16 @@ function AssignStep({
   draft,
   set,
   users,
+  usersLoading,
+  usersError,
+  retryUsers,
 }: {
   draft: Draft;
   set: <K extends keyof Draft>(key: K, value: Draft[K]) => void;
   users: User[];
+  usersLoading: boolean;
+  usersError: string | null;
+  retryUsers: () => void;
 }) {
   const scheduled = draft.appointment_date ? parseISO(draft.appointment_date) : undefined;
 
@@ -1351,21 +1435,33 @@ function AssignStep({
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Approval manager">
-          <Select
-            value={draft.approval_manager_id}
-            onValueChange={(value) => set("approval_manager_id", value)}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Who signs this off?" />
-            </SelectTrigger>
-            <SelectContent>
-              {users.map((user) => (
-                <SelectItem key={user.id} value={user.id}>
-                  {user.full_name || user.email}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {usersError ? (
+            <ErrorState
+              title="Could not load the manager list"
+              message={usersError}
+              onRetry={retryUsers}
+              retrying={usersLoading}
+            />
+          ) : (
+            <Select
+              value={draft.approval_manager_id}
+              onValueChange={(value) => set("approval_manager_id", value)}
+              disabled={usersLoading}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue
+                  placeholder={usersLoading ? "Loading people…" : "Who signs this off?"}
+                />
+              </SelectTrigger>
+              <SelectContent>
+                {users.map((user) => (
+                  <SelectItem key={user.id} value={user.id}>
+                    {user.full_name || user.email}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
         </Field>
       </div>
 

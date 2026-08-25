@@ -2,16 +2,16 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, ClipboardCheck } from "lucide-react";
-import { toast } from "sonner";
 
 import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { snaggingService } from "@/modules/snagging";
 import type { SnaggingTask, SnaggingTaskSummary } from "@/types/types";
 
 import { ReviewPanel } from "./review-panel";
-import { PageHeading, timeAgo } from "./shared";
+import { ErrorState, PageHeading, timeAgo } from "./shared";
 
 /**
  * The review queue as a workspace: the waiting list on the left, the
@@ -28,8 +28,11 @@ export default function ReviewWorkspace() {
   const [task, setTask] = useState<SnaggingTask | null>(null);
   const [loadingQueue, setLoadingQueue] = useState(true);
   const [loadingTask, setLoadingTask] = useState(false);
+  const [queueError, setQueueError] = useState<string | null>(null);
+  const [taskError, setTaskError] = useState<string | null>(null);
 
   const loadQueue = useCallback(async () => {
+    setQueueError(null);
     try {
       const response = await snaggingService.listTasks(
         { queue: "approval", status: "submitted,in_review" },
@@ -43,7 +46,9 @@ export default function ReviewWorkspace() {
         return rows[0]?.id ?? null;
       });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not load the queue");
+      // Held on screen rather than toasted away: an empty-looking queue
+      // must never be mistaken for "nothing is waiting for review".
+      setQueueError(error instanceof Error ? error.message : "Could not load the queue");
     } finally {
       setLoadingQueue(false);
     }
@@ -51,10 +56,12 @@ export default function ReviewWorkspace() {
 
   const loadTask = useCallback(async (id: string) => {
     setLoadingTask(true);
+    setTaskError(null);
     try {
       setTask(await snaggingService.getTask(id));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not load the inspection");
+      setTask(null);
+      setTaskError(error instanceof Error ? error.message : "Could not load the inspection");
     } finally {
       setLoadingTask(false);
     }
@@ -93,11 +100,21 @@ export default function ReviewWorkspace() {
                 <Skeleton key={index} className="h-12 w-full" />
               ))}
             </div>
-          ) : queue.length === 0 ? (
-            <div className="text-muted-foreground px-4 py-10 text-center text-sm">
-              <ClipboardCheck className="mx-auto mb-2 size-6" />
-              Nothing waiting.
+          ) : queueError ? (
+            <div className="p-4">
+              <ErrorState
+                title="Could not load the queue"
+                message={queueError}
+                onRetry={() => void loadQueue()}
+              />
             </div>
+          ) : queue.length === 0 ? (
+            <EmptyState
+              icon={<ClipboardCheck className="size-6" />}
+              title="Nothing waiting"
+              description="Submitted inspections appear here, oldest first."
+              className="px-4 py-10"
+            />
           ) : (
             <ul className="border-t">
               {queue.map((row) => {
@@ -151,13 +168,22 @@ export default function ReviewWorkspace() {
               <Skeleton className="h-40 w-full" />
               <Skeleton className="h-96 w-full" />
             </div>
+          ) : taskError ? (
+            <ErrorState
+              title="Could not load this inspection"
+              message={taskError}
+              onRetry={() => selectedId && void loadTask(selectedId)}
+              retrying={loadingTask}
+            />
           ) : task ? (
             <ReviewPanel task={task} onChanged={() => void onChanged()} />
           ) : (
-            <Card className="p-10 text-center">
-              <p className="text-muted-foreground">
-                Nothing to review. Select an inspection when one arrives.
-              </p>
+            <Card className="p-0">
+              <EmptyState
+                icon={<ClipboardCheck className="size-6" />}
+                title="Nothing to review"
+                description="Pick an inspection from the queue, or wait for the next one to arrive."
+              />
             </Card>
           )}
         </div>

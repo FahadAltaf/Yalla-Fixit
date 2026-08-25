@@ -1,8 +1,17 @@
 "use client";
 
 import Link from "next/link";
+import { TrendingDown, TrendingUp } from "lucide-react";
 
-import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import {
+  Card,
+  CardAction,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
 /**
@@ -44,54 +53,84 @@ export function PageHeading({
 
 export type StatTone = "neutral" | "progress" | "review" | "good" | "bad";
 
-const TONE_DOT: Record<StatTone, string> = {
-  neutral: "bg-ink/25",
-  progress: "bg-warning",
-  review: "bg-brand",
-  good: "bg-success",
-  bad: "bg-danger",
+const TONE_TEXT: Record<StatTone, string> = {
+  neutral: "text-foreground",
+  progress: "text-warning",
+  review: "text-brand",
+  good: "text-success",
+  bad: "text-danger",
 };
 
 /**
- * A stat card: coloured dot, eyebrow label, figure, caption.
+ * A metric tile, in the shadcn section-card shape: label, headline
+ * figure, an optional trend badge in the corner, and a two-line footer
+ * that says what moved and over what period.
  *
- * The dot repeats a status colour, but the label and figure carry the
- * meaning on their own, so the card still reads to somebody who cannot
- * separate the hues.
+ * Trend direction is never colour alone — the badge carries an arrow and
+ * a signed number, and the footer repeats the movement in words, so the
+ * card reads to somebody who cannot separate the hues.
  */
 export function StatCard({
   label,
   value,
   caption,
+  headline,
+  trend,
   tone = "neutral",
   href,
 }: {
   label: string;
   value: React.ReactNode;
+  /** The muted second footer line: what the figure is measured over. */
   caption?: string;
+  /** The bold first footer line: what changed. */
+  headline?: string;
+  /** Corner badge, e.g. { value: "+12.5%", direction: "up" }. */
+  trend?: { value: string; direction: "up" | "down" };
   tone?: StatTone;
   href?: string;
 }) {
+  const TrendIcon = trend?.direction === "down" ? TrendingDown : TrendingUp;
+
   const body = (
     <Card
       className={cn(
-        "gap-0 p-4",
+        "@container/card h-full",
         href && "kz-card-interactive hover:border-brand/30 cursor-pointer",
       )}
     >
-      <div className="flex items-center gap-2">
-        <span className={cn("size-2 shrink-0 rounded-full", TONE_DOT[tone])} aria-hidden />
-        <span className="eyebrow truncate">{label}</span>
-      </div>
-      <p className="mt-2 text-3xl leading-none font-semibold tabular-nums">{value}</p>
-      {caption ? <p className="text-muted-foreground mt-2 text-xs">{caption}</p> : null}
+      <CardHeader>
+        <CardDescription className="truncate text-sm">{label}</CardDescription>
+        <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
+          {value}
+        </CardTitle>
+        {trend ? (
+          <CardAction>
+            <Badge variant="outline" className="gap-1">
+              <TrendIcon className="size-3.5" aria-hidden />
+              {trend.value}
+            </Badge>
+          </CardAction>
+        ) : null}
+      </CardHeader>
+      {headline || caption ? (
+        <CardFooter className="flex-col items-start gap-1 border-t-0 bg-transparent pt-0 text-sm">
+          {headline ? (
+            <div className={cn("line-clamp-1 flex items-center gap-1.5 font-medium", TONE_TEXT[tone])}>
+              {headline}
+              {trend ? <TrendIcon className="size-4" aria-hidden /> : null}
+            </div>
+          ) : null}
+          {caption ? <div className="text-muted-foreground text-xs">{caption}</div> : null}
+        </CardFooter>
+      ) : null}
     </Card>
   );
 
   return href ? (
     <Link
       href={href}
-      className="focus-visible:ring-ring rounded-lg focus-visible:ring-2 focus-visible:outline-none"
+      className="focus-visible:ring-ring block rounded-lg focus-visible:ring-2 focus-visible:outline-none"
     >
       {body}
     </Link>

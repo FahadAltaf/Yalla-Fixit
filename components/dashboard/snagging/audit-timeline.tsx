@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   CalendarPlus,
   CheckCircle2,
@@ -13,7 +13,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import { SectionCard } from "./shared";
+import { EmptyState } from "@/components/ui/empty-state";
+import { DataState, ListSkeleton, SectionCard } from "./shared";
 import { snaggingService } from "@/modules/snagging";
 import type { SnaggingAuditEvent } from "@/types/types";
 
@@ -71,25 +72,25 @@ function formatWhen(value: string): string {
 export function AuditTimeline({ taskId }: { taskId: string }) {
   const [events, setEvents] = useState<SnaggingAuditEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let active = true;
-    void (async () => {
-      try {
-        const data = await snaggingService.getAudit(taskId);
-        if (active) setEvents(data);
-      } catch {
-        // A missing trail should never break the job view.
-      } finally {
-        if (active) setLoading(false);
-      }
-    })();
-    return () => {
-      active = false;
-    };
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setEvents(await snaggingService.getAudit(taskId));
+    } catch (e) {
+      // A reviewer signing off has to tell "nothing happened yet" from
+      // "the trail did not load" — this used to render as no card at all.
+      setError(e instanceof Error ? e.message : "Could not load the history");
+    } finally {
+      setLoading(false);
+    }
   }, [taskId]);
 
-  if (!loading && events.length === 0) return null;
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   return (
     <SectionCard
@@ -97,32 +98,53 @@ export function AuditTimeline({ taskId }: { taskId: string }) {
       description="Every recorded action on this inspection"
       bodyClassName="border-t"
     >
-      <ol className="divide-y">
-        {events.map((event) => {
-          const { label, Icon } = metaFor(event.event_type);
-          const detail = detailFor(event);
-          return (
-            <li key={event.id} className="flex items-start gap-3 px-5 py-3">
-              <span className="bg-muted text-muted-foreground mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full">
-                <Icon className="size-4" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-                  <span className="font-medium">{label}</span>
-                  <span className="text-muted-foreground text-xs">{formatWhen(event.created_at)}</span>
-                </div>
-                <div className="text-muted-foreground text-sm">
-                  {event.actor_label ?? "System"}
-                  {detail ? <span> · {detail}</span> : null}
-                  {event.justification ? (
-                    <span className="text-foreground/80"> — “{event.justification}”</span>
-                  ) : null}
-                </div>
-              </div>
-            </li>
-          );
-        })}
-      </ol>
+      {/* Only the alert needs the card's padding; the skeleton and the
+          empty panel carry their own. */}
+      <div className={error ? "p-5" : undefined}>
+        <DataState
+          loading={loading}
+          error={error}
+          onRetry={() => void load()}
+          retrying={loading}
+          errorTitle="Could not load the history"
+          isEmpty={events.length === 0}
+          skeleton={<ListSkeleton rows={4} />}
+          empty={
+            <EmptyState
+              icon={<History className="size-6" />}
+              title="Nothing recorded yet"
+              description="Approvals, rejections, report deliveries and de-snag rounds appear here as they happen."
+            />
+          }
+        >
+          <ol className="divide-y">
+            {events.map((event) => {
+              const { label, Icon } = metaFor(event.event_type);
+              const detail = detailFor(event);
+              return (
+                <li key={event.id} className="flex items-start gap-3 px-5 py-3">
+                  <span className="bg-muted text-muted-foreground mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full">
+                    <Icon className="size-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+                      <span className="font-medium">{label}</span>
+                      <span className="text-muted-foreground text-xs">{formatWhen(event.created_at)}</span>
+                    </div>
+                    <div className="text-muted-foreground text-sm">
+                      {event.actor_label ?? "System"}
+                      {detail ? <span> · {detail}</span> : null}
+                      {event.justification ? (
+                        <span className="text-foreground/80"> — “{event.justification}”</span>
+                      ) : null}
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        </DataState>
+      </div>
     </SectionCard>
   );
 }
