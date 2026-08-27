@@ -4,7 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import { recordAudit } from "@/lib/server/snagging/audit";
+import { recordAuditBatch, type AuditEntry } from "@/lib/server/snagging/audit";
 import { isTaskEditableByInspector, statusFromVerdict } from "@/lib/server/snagging/workflow";
 import { syncPushSchema, type SyncPushInput } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType, SnaggingTaskStatus, SnaggingVerdict } from "@/types/types";
@@ -65,6 +65,7 @@ export async function POST(req: NextRequest) {
 
     const results: MutationResult[] = [];
     const ledger: Array<Record<string, unknown>> = [];
+    const audit: AuditEntry[] = [];
 
     for (const mutation of input.mutations) {
       if (seen.has(mutation.mutation_id)) {
@@ -77,6 +78,7 @@ export async function POST(req: NextRequest) {
           userId: profile.id,
           actorLabel: profile.full_name ?? profile.email ?? null,
           jobById,
+          audit,
         });
         results.push({ mutation_id: mutation.mutation_id, status: "applied" });
         ledger.push({
@@ -111,6 +113,11 @@ export async function POST(req: NextRequest) {
       if (ledgerError) throw new Error(ledgerError.message);
     }
 
+    // FR-6.04 — one insert for everything this push changed. Never
+    // throws: the mutations are already committed, and losing the trail
+    // must not fail the device's sync.
+    await recordAuditBatch(admin, audit);
+
     return NextResponse.json({
       data: {
         server_time: new Date().toISOString(),
@@ -131,7 +138,28 @@ type Ctx = {
   userId: string;
   actorLabel: string | null;
   jobById: Map<string, JobRef>;
+  /**
+   * FR-6.04 — audit rows collected across the whole push and inserted
+   * once at the end. A device drains its outbox in batches of dozens, so
+   * one INSERT per mutation would multiply the round trips for a payload
+   * that is already the slowest thing the app does.
+   */
+  audit: AuditEntry[];
 };
+
+/** Shorthand for the fields every sync-side audit row shares. */
+function auditFrom(
+  ctx: Ctx,
+  entry: Pick<AuditEntry, "entityType" | "entityId" | "taskId" | "eventType"> &
+    Partial<Pick<AuditEntry, "justification" | "payload">>,
+): void {
+  ctx.audit.push({
+    ...entry,
+    actorId: ctx.userId,
+    actorLabel: ctx.actorLabel,
+    origin: "mobile",
+  });
+}
 
 async function applyMutation(admin: Admin, ctx: Ctx): Promise<void> {
   const payload = ctx.mutation.payload as Record<string, unknown>;
@@ -168,6 +196,13 @@ async function applySnag(admin: Admin, ctx: Ctx, payload: Record<string, unknown
       .eq("id", ctx.mutation.entity_id)
       .eq("locked", false);
     if (error) throw new Error(error.message);
+    auditFrom(ctx, {
+      entityType: "snag",
+      entityId: ctx.mutation.entity_id,
+      taskId: job.id,
+      eventType: "snag_withdrawn",
+      payload: { code: job.code },
+    });
     return;
   }
 
@@ -197,6 +232,21 @@ async function applySnag(admin: Admin, ctx: Ctx, payload: Record<string, unknown
   };
   const { error } = await admin.from("snagging_snags").upsert(row, { onConflict: "id" });
   if (error) throw new Error(error.message);
+
+  auditFrom(ctx, {
+    entityType: "snag",
+    entityId: ctx.mutation.entity_id,
+    taskId: job.id,
+    eventType: ctx.mutation.op === "update" ? "snag_updated" : "snag_created",
+    // The note is the inspector's own words about the defect, which is
+    // the closest thing a capture has to a stated reason.
+    justification: (payload.note as string) ?? null,
+    payload: {
+      snag_code: row.snag_code,
+      catalogue_code: row.catalogue_code,
+      severity: row.severity,
+    },
+  });
 }
 
 async function applyArea(admin: Admin, ctx: Ctx, payload: Record<string, unknown>): Promise<void> {
@@ -259,6 +309,23 @@ async function applyArea(admin: Admin, ctx: Ctx, payload: Record<string, unknown
     .eq("id", ctx.mutation.entity_id)
     .eq("job_id", job.id);
   if (error) throw new Error(error.message);
+
+  // Access state carries a written reason (a locked door, a room only
+  // partly reachable), and confirming an area is a status change on the
+  // walk. Pin nudges and timestamps are not trailed — they would bury
+  // the entries that matter.
+  if ("access_state" in payload || "confirmed_at" in payload) {
+    auditFrom(ctx, {
+      entityType: "area",
+      entityId: ctx.mutation.entity_id,
+      taskId: job.id,
+      eventType:
+        "confirmed_at" in payload && payload.confirmed_at ? "area_confirmed" : "area_access_changed",
+      justification:
+        ((payload.access_reason as string) || (payload.elements_not_checked as string)) ?? null,
+      payload: { access_state: (payload.access_state as string) ?? null },
+    });
+  }
 }
 
 async function applyPhoto(admin: Admin, ctx: Ctx, payload: Record<string, unknown>): Promise<void> {
@@ -330,11 +397,24 @@ async function applyChecklist(admin: Admin, ctx: Ctx, payload: Record<string, un
     .eq("id", ctx.mutation.entity_id)
     .eq("job_id", job.id);
   if (error) throw new Error(error.message);
+
+  // Only answers that skip an item are trailed. A plain pass/fail is
+  // already the checklist row's own state; "not checked, because …" is
+  // the one that has to be explainable later.
+  if (status === "not_checked") {
+    auditFrom(ctx, {
+      entityType: "task",
+      entityId: ctx.mutation.entity_id,
+      taskId: job.id,
+      eventType: "checklist_not_checked",
+      justification: (payload.reason as string) ?? null,
+    });
+  }
 }
 
 /** A de-snag verdict now just moves the snag's status (no history table). */
 async function applyVerification(admin: Admin, ctx: Ctx, payload: Record<string, unknown>): Promise<void> {
-  writableJob(ctx, payload.round_task_id);
+  const job = writableJob(ctx, payload.round_task_id);
   const verdict = payload.verdict as SnaggingVerdict;
   const allowed: SnaggingVerdict[] = ["verified_closed", "verified_poor_quality", "verified_not_done", "withdrawn"];
   if (!allowed.includes(verdict)) throw new Error(`Unknown verdict ${verdict}`);
@@ -344,6 +424,17 @@ async function applyVerification(admin: Admin, ctx: Ctx, payload: Record<string,
     .update({ status: statusFromVerdict(verdict) })
     .eq("id", payload.snag_id as string);
   if (error) throw new Error(error.message);
+
+  // A verdict closes or re-opens a defect on the record, so it is a
+  // status change in its own right.
+  auditFrom(ctx, {
+    entityType: "verification",
+    entityId: payload.snag_id as string,
+    taskId: job.id,
+    eventType: "snag_verified",
+    justification: (payload.note as string) ?? null,
+    payload: { verdict },
+  });
 }
 
 /** Sign-off writes onto the job and locks the visit (no submissions table). */
@@ -402,14 +493,11 @@ async function applySubmission(admin: Admin, ctx: Ctx, payload: Record<string, u
   // FR-6.04 — the status change that hands the job to the approval queue
   // is audited like every manager-side transition, not just silently
   // written by the sync route.
-  await recordAudit(admin, {
+  auditFrom(ctx, {
     entityType: "submission",
     entityId: job.id,
     taskId: job.id,
     eventType: "task_submitted",
-    actorId: ctx.userId,
-    actorLabel: ctx.actorLabel,
-    origin: "mobile",
     payload: { code: job.code, signer_name: (payload.signer_name as string) ?? null },
   });
 
@@ -430,14 +518,11 @@ async function applyTaskProgress(admin: Admin, ctx: Ctx, payload: Record<string,
   if (error) throw new Error(error.message);
 
   // FR-6.04 — start-of-work is a status change, so it belongs in the trail.
-  await recordAudit(admin, {
+  auditFrom(ctx, {
     entityType: "task",
     entityId: job.id,
     taskId: job.id,
     eventType: "task_in_progress",
-    actorId: ctx.userId,
-    actorLabel: ctx.actorLabel,
-    origin: "mobile",
     payload: { code: job.code },
   });
 

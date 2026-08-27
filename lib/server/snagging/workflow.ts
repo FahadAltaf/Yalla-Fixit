@@ -14,6 +14,12 @@ import type {
 /** §6.4 — approvals not actioned in this window escalate (FR-4.06). */
 export const APPROVAL_SLA_HOURS = 48;
 
+/**
+ * §2.3 — an approved report is expected in the client's hands within a
+ * day. Drives the "Delivered within 24h" KPI on the analytics board.
+ */
+export const DELIVERY_SLA_HOURS = 24;
+
 /** §5.3 — remediation windows per rejection category. */
 export const REMEDIATION_SLA_HOURS: Record<SnaggingRejectionCategory, number> = {
   // "Same day" in the BRD. Eight working hours is the operational

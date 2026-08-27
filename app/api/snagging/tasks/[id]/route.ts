@@ -64,7 +64,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
            bytes, width, height, taken_at, round_number, gps_lat, gps_lng, exif)`,
       )
       .eq("job_id", id)
-      .order("snag_code", { ascending: true });
+      // Newest first for the working views. The client report has its
+      // own route and still orders by code within each area, so the
+      // delivered document is unaffected.
+      .order("created_at", { ascending: false });
     if (snagError) throw new Error(snagError.message);
 
     const signedSnags = await signMediaPaths(admin, snagRows ?? []);

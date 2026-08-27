@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
+import { APPROVAL_SLA_HOURS, DELIVERY_SLA_HOURS } from "@/lib/server/snagging/workflow";
 import { ActionType, ResourceType, SnaggingAnalytics } from "@/types/types";
 
 /**
@@ -11,10 +12,13 @@ import { ActionType, ResourceType, SnaggingAnalytics } from "@/types/types";
  * The lean rebuild dropped the snagging_task_summaries and
  * snagging_developer_quality views, so the distributions and the KPI
  * block are computed here from snagging_jobs + snagging_snags directly
- * and aggregated in JS. Metrics that depended on columns the lean
- * schema no longer keeps (approval SLA clock, per-snag verification
- * history) come back as zeros / nulls, but every response key the
- * dashboard reads is preserved so it never crashes on a missing field.
+ * and aggregated in JS.
+ *
+ * The only column the lean schema genuinely lost is approval_due_at;
+ * the approval SLA is therefore derived from submitted_at rather than
+ * read from a stored deadline, exactly as the review queue does it.
+ * rejection_count and delivered_at survived the rebuild, so the
+ * first-time-approval and delivery KPIs are computed, not stubbed.
  */
 
 /** Snag statuses that still count as outstanding (open work). */
@@ -44,12 +48,20 @@ export async function GET(req: NextRequest) {
     const admin = await createAdminServerClient();
     const todayStart = `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
 
-    const [openCount, pendingApproval, approvedToday, deliveredCount, snagRows, jobRows] =
+    // FR-6.07 — the same 48h rule the review queue applies, asked as a
+    // count. Derived from submitted_at because approval_due_at did not
+    // survive the lean rebuild.
+    const approvalCutoff = new Date(Date.now() - APPROVAL_SLA_HOURS * 60 * 60 * 1000).toISOString();
+
+    const [openCount, pendingApproval, approvedToday, deliveredCount, overdueApprovals, snagRows, jobRows] =
       await Promise.all([
         countJobs(admin, (q) => q.in("status", ["assigned", "in_progress", "rejected"])),
         countJobs(admin, (q) => q.in("status", ["submitted", "in_review"])),
         countJobs(admin, (q) => q.eq("status", "approved").gte("approved_at", todayStart)),
         countJobs(admin, (q) => q.eq("status", "delivered")),
+        countJobs(admin, (q) =>
+          q.in("status", ["submitted", "in_review"]).lt("submitted_at", approvalCutoff),
+        ),
         // Distribution source: severity + element live on the snag row.
         admin
           .from("snagging_snags")
@@ -60,7 +72,9 @@ export async function GET(req: NextRequest) {
         // submit/approve timestamps the KPI block needs.
         admin
           .from("snagging_jobs")
-          .select("id, developer_name, building_name, inspector_id, status, submitted_at, approved_at")
+          .select(
+            "id, developer_name, building_name, inspector_id, status, submitted_at, approved_at, delivered_at, rejection_count",
+          )
           .gte("created_at", fromTs)
           .lte("created_at", toTs),
       ]);
@@ -119,7 +133,7 @@ export async function GET(req: NextRequest) {
           delivered: deliveredCount,
           // The approval SLA clock (approval_due_at) was dropped in the
           // lean schema, so there is nothing to measure "overdue" against.
-          overdueApprovals: 0,
+          overdueApprovals,
         },
         bySeverity,
         byElement,
@@ -145,6 +159,8 @@ type JobRow = {
   status: string;
   submitted_at: string | null;
   approved_at: string | null;
+  delivered_at: string | null;
+  rejection_count: number | null;
 };
 
 async function countJobs(admin: Admin, refine: (query: JobQuery) => JobQuery): Promise<number> {
@@ -268,10 +284,43 @@ function computeKpis(jobs: JobRow[]): SnaggingAnalytics["kpis"] {
       )
     : null;
 
+  // §2.3 — how often an inspection is accepted without ever being sent
+  // back. rejection_count is incremented by the reject route, so a job
+  // that reached approval with a count of zero was right first time.
+  // Delivered jobs count too: they were approved on the way through.
+  const everApproved = jobs.filter(
+    (job) => job.approved_at !== null && job.approved_at !== undefined,
+  );
+  const firstTimeApprovalRate = everApproved.length
+    ? Math.round(
+        (everApproved.filter((job) => (job.rejection_count ?? 0) === 0).length /
+          everApproved.length) *
+          100,
+      )
+    : null;
+
+  // §2.3 — of the reports that went out, how many made the 24h window
+  // between approval and delivery. Jobs still undelivered are not
+  // counted as misses here: they have not failed the window yet, and
+  // folding them in would make the figure drift with queue depth rather
+  // than with delivery performance.
+  const delivered = jobs.filter((job) => job.delivered_at && job.approved_at);
+  const deliveredWithinSlaRate = delivered.length
+    ? Math.round(
+        (delivered.filter(
+          (job) =>
+            new Date(job.delivered_at!).getTime() - new Date(job.approved_at!).getTime() <=
+            DELIVERY_SLA_HOURS * 60 * 60 * 1000,
+        ).length /
+          delivered.length) *
+          100,
+      )
+    : null;
+
   return {
     avgPreparationMinutes,
-    firstTimeApprovalRate: null,
-    deliveredWithinSlaRate: null,
+    firstTimeApprovalRate,
+    deliveredWithinSlaRate,
   };
 }
 

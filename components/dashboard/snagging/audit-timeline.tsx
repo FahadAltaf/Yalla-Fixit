@@ -2,13 +2,22 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+  AlertTriangle,
   CalendarPlus,
   CheckCircle2,
+  ClipboardCheck,
+  DoorClosed,
   FileImage,
   FileText,
   History,
+  Pencil,
+  PlayCircle,
+  Plus,
   RotateCcw,
+  Send,
   Tag,
+  Trash2,
+  UserCog,
   XCircle,
   type LucideIcon,
 } from "lucide-react";
@@ -20,6 +29,10 @@ import type { SnaggingAuditEvent } from "@/types/types";
 
 /** Human-readable label + icon for each audited event type (BR-5). */
 const EVENT_META: Record<string, { label: string; Icon: LucideIcon }> = {
+  // Status changes, in the order the workflow walks them.
+  task_in_progress: { label: "Inspection started on site", Icon: PlayCircle },
+  task_submitted: { label: "Submitted for review", Icon: Send },
+  task_in_review: { label: "Review started", Icon: ClipboardCheck },
   task_approved: { label: "Inspection approved", Icon: CheckCircle2 },
   task_rejected: { label: "Sent back for correction", Icon: XCircle },
   report_delivered: { label: "Report delivered", Icon: FileText },
@@ -35,6 +48,15 @@ const EVENT_META: Record<string, { label: string; Icon: LucideIcon }> = {
   quotation_sent: { label: "Quotation sent to client", Icon: FileText },
   quotation_approved: { label: "Quotation approved", Icon: CheckCircle2 },
   quotation_rejected: { label: "Quotation rejected", Icon: XCircle },
+  inspector_assigned: { label: "Inspector assigned", Icon: UserCog },
+  // Edits captured on the device and replayed here by the sync route.
+  snag_created: { label: "Snag captured", Icon: Plus },
+  snag_updated: { label: "Snag edited", Icon: Pencil },
+  snag_withdrawn: { label: "Snag withdrawn", Icon: Trash2 },
+  snag_verified: { label: "Snag verified", Icon: CheckCircle2 },
+  area_confirmed: { label: "Area confirmed", Icon: CheckCircle2 },
+  area_access_changed: { label: "Area access recorded", Icon: DoorClosed },
+  checklist_not_checked: { label: "Checklist item skipped", Icon: AlertTriangle },
 };
 
 function metaFor(eventType: string) {
@@ -113,7 +135,7 @@ export function AuditTimeline({ taskId }: { taskId: string }) {
             <EmptyState
               icon={<History className="size-6" />}
               title="Nothing recorded yet"
-              description="Approvals, rejections, report deliveries and de-snag rounds appear here as they happen."
+              description="Status changes, snag edits, approvals, rejections and deliveries appear here as they happen."
             />
           }
         >
