@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 
 import { EmptyState } from "@/components/ui/empty-state";
-import { DataState, ListSkeleton, SectionCard } from "./shared";
+import { DataRow, DataState, ListSkeleton, SectionCard } from "./shared";
 import { snaggingService } from "@/modules/snagging";
 import type { SnaggingAuditEvent } from "@/types/types";
 
@@ -37,12 +37,18 @@ const EVENT_META: Record<string, { label: string; Icon: LucideIcon }> = {
   task_rejected: { label: "Sent back for correction", Icon: XCircle },
   report_delivered: { label: "Report delivered", Icon: FileText },
   round_created: { label: "De-snag round opened", Icon: RotateCcw },
-  additional_visit_created: { label: "Additional visit scheduled", Icon: CalendarPlus },
+  additional_visit_created: {
+    label: "Additional visit scheduled",
+    Icon: CalendarPlus,
+  },
   floor_plan_added: { label: "Floor plan added", Icon: FileImage },
   catalogue_entry_created: { label: "Catalogue entry created", Icon: Tag },
   catalogue_entry_updated: { label: "Catalogue entry updated", Icon: Tag },
   catalogue_entry_retired: { label: "Catalogue entry retired", Icon: Tag },
-  catalogue_entry_reactivated: { label: "Catalogue entry reactivated", Icon: Tag },
+  catalogue_entry_reactivated: {
+    label: "Catalogue entry reactivated",
+    Icon: Tag,
+  },
   quotation_generated: { label: "Quotation generated", Icon: FileText },
   quotation_regenerated: { label: "Quotation regenerated", Icon: FileText },
   quotation_sent: { label: "Quotation sent to client", Icon: FileText },
@@ -56,11 +62,19 @@ const EVENT_META: Record<string, { label: string; Icon: LucideIcon }> = {
   snag_verified: { label: "Snag verified", Icon: CheckCircle2 },
   area_confirmed: { label: "Area confirmed", Icon: CheckCircle2 },
   area_access_changed: { label: "Area access recorded", Icon: DoorClosed },
-  checklist_not_checked: { label: "Checklist item skipped", Icon: AlertTriangle },
+  checklist_not_checked: {
+    label: "Checklist item skipped",
+    Icon: AlertTriangle,
+  },
 };
 
 function metaFor(eventType: string) {
-  return EVENT_META[eventType] ?? { label: eventType.replace(/_/g, " "), Icon: History };
+  return (
+    EVENT_META[eventType] ?? {
+      label: eventType.replace(/_/g, " "),
+      Icon: History,
+    }
+  );
 }
 
 /** A one-line human summary pulled from the event's payload, when useful. */
@@ -70,9 +84,14 @@ function detailFor(event: SnaggingAuditEvent): string | null {
     return [p.channel, p.recipient].filter(Boolean).join(" · ") || null;
   }
   if (event.event_type === "task_rejected") {
-    return typeof p.category === "string" ? p.category.replace(/_/g, " ") : null;
+    return typeof p.category === "string"
+      ? p.category.replace(/_/g, " ")
+      : null;
   }
-  if (event.event_type === "round_created" || event.event_type === "additional_visit_created") {
+  if (
+    event.event_type === "round_created" ||
+    event.event_type === "additional_visit_created"
+  ) {
     return typeof p.code === "string" ? p.code : null;
   }
   return null;
@@ -117,6 +136,7 @@ export function AuditTimeline({ taskId }: { taskId: string }) {
   return (
     <SectionCard
       title="History"
+      icon={<History />}
       description="Every recorded action on this inspection"
       bodyClassName="border-t"
     >
@@ -144,23 +164,28 @@ export function AuditTimeline({ taskId }: { taskId: string }) {
               const { label, Icon } = metaFor(event.event_type);
               const detail = detailFor(event);
               return (
-                <li key={event.id} className="flex items-start gap-3 px-5 py-3">
-                  <span className="bg-muted text-muted-foreground mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full">
-                    <Icon className="size-4" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-                      <span className="font-medium">{label}</span>
-                      <span className="text-muted-foreground text-xs">{formatWhen(event.created_at)}</span>
-                    </div>
-                    <div className="text-muted-foreground text-sm">
-                      {event.actor_label ?? "System"}
-                      {detail ? <span> · {detail}</span> : null}
-                      {event.justification ? (
-                        <span className="text-foreground/80"> — “{event.justification}”</span>
-                      ) : null}
-                    </div>
-                  </div>
+                <li key={event.id}>
+                  <DataRow
+                    icon={<Icon aria-hidden />}
+                    title={label}
+                    subtitle={
+                      <>
+                        {event.actor_label ?? "System"}
+                        {detail ? <span> · {detail}</span> : null}
+                        {event.justification ? (
+                          <span className="text-foreground/80">
+                            {" "}
+                            — “{event.justification}”
+                          </span>
+                        ) : null}
+                      </>
+                    }
+                    trailing={
+                      <span className="text-muted-foreground text-xs">
+                        {formatWhen(event.created_at)}
+                      </span>
+                    }
+                  />
                 </li>
               );
             })}

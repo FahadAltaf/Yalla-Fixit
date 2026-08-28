@@ -24,11 +24,48 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import StatusBadge from "@/components/ui/status-badge";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dialog";
+import { EmptyState } from "@/components/ui/empty-state";
+import {
+  Select as UiSelect,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/actions/utils";
-import { Check, Loader2, Plus, Settings2, Trash2, X } from "lucide-react";
-import SchedulingNav from "./scheduling-nav";
+import {
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
+  MoreVertical,
+  Plus,
+  RefreshCw,
+  Search,
+  Settings2,
+  SlidersHorizontal,
+  Trash2,
+  UsersRound,
+  X,
+} from "lucide-react";
+import {
+  AvailabilityCell,
+  RoleCell,
+  ServiceCell,
+  ShiftCell,
+  TechnicianIdentity,
+  TechnicianRowSkeleton,
+  Unset,
+} from "./technician-cells";
 import TimeSelect from "./daily-schedule/time-select";
 
 type Props = { technicians: TechnicianReference[] };
@@ -94,6 +131,9 @@ export default function SchedulingDashboard({ technicians }: Props) {
 
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [refreshing, setRefreshing] = useState(false);
 
   const [manageList, setManageList] = useState<null | "tags" | "roles" | "services">(null);
   const [activeTechnician, setActiveTechnician] = useState<TechnicianReference | null>(null);
@@ -162,6 +202,36 @@ export default function SchedulingDashboard({ technicians }: Props) {
     return list.sort((a, b) => a.display_name.localeCompare(b.display_name));
   }, [techs, search]);
 
+  // Paginate rather than rendering all ~90 technicians at once: a long
+  // unbroken table is slow to scan and slow to render.
+  const total = visibleTechnicians.length;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const currentPage = Math.min(page, pageCount);
+  const pageStart = (currentPage - 1) * pageSize;
+  const pageRows = visibleTechnicians.slice(pageStart, pageStart + pageSize);
+
+  // Searching or resizing should always land you back on the first page,
+  // otherwise a narrowed result set can look empty.
+  useEffect(() => {
+    setPage(1);
+  }, [search, pageSize]);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      const result = await techniciansService.refreshFromFsm();
+      const removed = (result?.removed?.deleted?.length ?? 0) + (result?.removed?.referenced?.length ?? 0);
+      toast.success(
+        `Synced ${result?.resources?.length ?? 0} technicians from Zoho FSM` +
+        (removed > 0 ? ` (${removed} no longer listed)` : ""),
+      );
+      window.location.reload();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to refresh technicians");
+      setRefreshing(false);
+    }
+  };
+
   // Applies an attribute change to one or many technicians and updates local
   // state immediately (optimistic) with a background revert on error.
   const applyAttributes = async (ids: string[], attrs: TechnicianAttributeUpdate) => {
@@ -202,42 +272,68 @@ export default function SchedulingDashboard({ technicians }: Props) {
       return next;
     });
 
-  const allVisibleSelected = visibleTechnicians.length > 0 && visibleTechnicians.every((t) => selected.has(t.fsm_resource_id));
+  const allVisibleSelected = pageRows.length > 0 && pageRows.every((t) => selected.has(t.fsm_resource_id));
   const toggleSelectAll = () =>
-    setSelected(allVisibleSelected ? new Set<string>() : new Set(visibleTechnicians.map((t) => t.fsm_resource_id)));
+    setSelected(allVisibleSelected ? new Set<string>() : new Set(pageRows.map((t) => t.fsm_resource_id)));
 
   const selectedIds = [...selected];
 
   return (
     <>
-      <SchedulingNav />
-      <div className="flex flex-col gap-4 p-4 md:p-6">
+      <div className="flex flex-col gap-4">
         <PageHeading
           eyebrow="Scheduling"
           title="Technicians & leave"
           description={`${techs.length} technicians synced from Zoho FSM. Set role, service, shift, driver, tags, and leave.`}
           actions={
-            <div className="flex flex-wrap gap-2">
-              <Button variant="outline" size="sm" onClick={() => setManageList("roles")}>
-                <Settings2 className="size-4" /> Roles
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => setManageList("services")}>
-                <Settings2 className="size-4" /> Services
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => setManageList("tags")}>
-                <Settings2 className="size-4" /> Tags
-              </Button>
-            </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm">
+                  <Settings2 className="size-4" /> Manage lists
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => setManageList("roles")}>Roles</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setManageList("services")}>Service types</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setManageList("tags")}>Tags</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           }
         />
 
-        <div className="flex flex-wrap items-center gap-2">
-          <Input
-            placeholder="Search technicians..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="max-w-xs"
-          />
+        {/* Toolbar: search on the left, page size / refresh on the right. */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="relative w-full max-w-xs">
+            <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2" />
+            <Input
+              placeholder="Search technicians..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-9"
+              aria-label="Search technicians"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            {/* A native <select> was the one control on this page that did
+                not match the rest of the app; this is the same Select used
+                everywhere else. */}
+            <UiSelect value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
+              <SelectTrigger size="sm" className="h-8 w-max" aria-label="Rows per page">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {[10, 25, 50, 100].map((n) => (
+                  <SelectItem key={n} value={String(n)}>
+                    {n}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </UiSelect>
+            <Button size="sm" className="h-8" onClick={handleRefresh} disabled={refreshing}>
+              <RefreshCw className={cn("size-4", refreshing && "animate-spin")} />
+              {refreshing ? "Syncing..." : "Refresh"}
+            </Button>
+          </div>
         </div>
 
         {/* Bulk edit bar (#15) — appears when technicians are selected. */}
@@ -278,12 +374,16 @@ export default function SchedulingDashboard({ technicians }: Props) {
           </div>
         )}
 
-        <div className="overflow-x-auto rounded-md border">
+        <div className="overflow-hidden rounded-md border">
           <Table>
             <TableHeader>
-              <TableRow>
+              <TableRow className="hover:bg-transparent">
                 <TableHead className="w-[1%]">
-                  <Checkbox checked={allVisibleSelected} onCheckedChange={toggleSelectAll} aria-label="Select all" />
+                  <Checkbox
+                    checked={allVisibleSelected}
+                    onCheckedChange={toggleSelectAll}
+                    aria-label="Select all on this page"
+                  />
                 </TableHead>
                 <TableHead>Technician</TableHead>
                 <TableHead>Role</TableHead>
@@ -291,28 +391,45 @@ export default function SchedulingDashboard({ technicians }: Props) {
                 <TableHead>Shift</TableHead>
                 <TableHead>Driver</TableHead>
                 <TableHead>Tags</TableHead>
-                <TableHead>Leave</TableHead>
-                <TableHead className="w-[1%]" />
+                <TableHead>Availability</TableHead>
+                <TableHead className="w-[1%] text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
-                <TableRow>
-                  <TableCell colSpan={9} className="py-8 text-center">
-                    <Loader2 className="text-muted-foreground mx-auto size-5 animate-spin" />
-                  </TableCell>
-                </TableRow>
-              ) : visibleTechnicians.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={9} className="text-muted-foreground py-6 text-center">
-                    No technicians match the current filters.
+                // Skeleton rows mirror the real row shape so nothing reflows
+                // when the data lands.
+                Array.from({ length: 5 }).map((_, i) => <TechnicianRowSkeleton key={i} columns={9} />)
+              ) : pageRows.length === 0 ? (
+                <TableRow className="hover:bg-transparent">
+                  <TableCell colSpan={9} className="p-0">
+                    <EmptyState
+                      className="border-0"
+                      icon={<UsersRound className="size-5" />}
+                      title={search ? "No matching technicians" : "No technicians yet"}
+                      description={
+                        search
+                          ? `Nothing matches “${search}”. Try a different name, or clear the search.`
+                          : "Technicians are synced from Zoho FSM. Run a refresh to pull the current roster."
+                      }
+                      action={
+                        search
+                          ? { label: "Clear search", onClick: () => setSearch(""), variant: "outline" }
+                          : { label: "Refresh from FSM", onClick: handleRefresh }
+                      }
+                    />
                   </TableCell>
                 </TableRow>
               ) : (
-                visibleTechnicians.map((technician) => {
+                pageRows.map((technician) => {
                   const leave = nearestActiveLeave(leaveByTechnician.get(technician.fsm_resource_id) ?? []);
                   const technicianTags = assignments[technician.fsm_resource_id] ?? [];
                   const id = technician.fsm_resource_id;
+                  const leaveDetail = leave
+                    ? `${new Date(leave.record.start_at).toLocaleDateString()} – ${new Date(
+                      leave.record.end_at,
+                    ).toLocaleDateString()}`
+                    : undefined;
                   return (
                     <TableRow key={id} data-state={selected.has(id) ? "selected" : undefined}>
                       <TableCell>
@@ -322,46 +439,37 @@ export default function SchedulingDashboard({ technicians }: Props) {
                           aria-label={`Select ${technician.display_name}`}
                         />
                       </TableCell>
-                      <TableCell className="font-medium">{technician.display_name}</TableCell>
                       <TableCell>
-                        <Select
-                          ariaLabel={`Role for ${technician.display_name}`}
-                          value={technician.role_id ?? ""}
-                          options={roleOptions}
-                          onChange={(v) => applyAttributes([id], { roleId: v || null })}
+                        <TechnicianIdentity
+                          name={technician.display_name}
+                          subtitle={id}
+                          seed={id}
+                          inactive={!technician.is_active}
                         />
                       </TableCell>
                       <TableCell>
-                        <Select
-                          ariaLabel={`Service for ${technician.display_name}`}
-                          value={technician.service_type_id ?? ""}
-                          options={serviceOptions}
-                          onChange={(v) => applyAttributes([id], { serviceTypeId: v || null })}
-                        />
+                        <RoleCell name={technician.role_name} />
                       </TableCell>
                       <TableCell>
-                        <Select
-                          ariaLabel={`Shift for ${technician.display_name}`}
-                          value={technician.shift ?? ""}
-                          options={SHIFT_OPTIONS}
-                          onChange={(v) => applyAttributes([id], { shift: (v || null) as "morning" | "night" | null })}
-                        />
+                        <ServiceCell name={technician.service_type_name} />
                       </TableCell>
                       <TableCell>
-                        <Select
-                          ariaLabel={`Driver for ${technician.display_name}`}
-                          value={technician.team_leader_fsm_id ?? ""}
-                          options={driverOptions.filter((o) => o.value !== id)}
-                          onChange={(v) => applyAttributes([id], { teamLeaderFsmId: v || null })}
-                        />
+                        <ShiftCell shift={technician.shift} />
+                      </TableCell>
+                      <TableCell>
+                        {technician.team_leader_name ? (
+                          <span className="text-sm">{technician.team_leader_name}</span>
+                        ) : (
+                          <Unset />
+                        )}
                       </TableCell>
                       <TableCell>
                         <div className="flex max-w-[180px] flex-wrap gap-1">
                           {technicianTags.length === 0 ? (
-                            <span className="text-muted-foreground text-xs">--</span>
+                            <Unset label="—" />
                           ) : (
                             technicianTags.map((tag) => (
-                              <Badge key={tag.id} variant="secondary">
+                              <Badge key={tag.id} variant="secondary" className="font-normal">
                                 {tag.name}
                               </Badge>
                             ))
@@ -369,24 +477,32 @@ export default function SchedulingDashboard({ technicians }: Props) {
                         </div>
                       </TableCell>
                       <TableCell>
-                        {leave ? (
-                          <span className="text-xs">
-                            <Badge className="border-none bg-warning/10 text-warning">
-                              {leave.current ? "On Leave" : "Upcoming"}
-                            </Badge>{" "}
-                            <span className="text-muted-foreground">
-                              {leave.record.leave_type} ({new Date(leave.record.start_at).toLocaleDateString()}–
-                              {new Date(leave.record.end_at).toLocaleDateString()})
-                            </span>
-                          </span>
-                        ) : (
-                          <span className="text-muted-foreground text-xs">Available</span>
-                        )}
+                        <AvailabilityCell
+                          state={leave ? (leave.current ? "on-leave" : "upcoming") : "available"}
+                          detail={leaveDetail}
+                        />
                       </TableCell>
-                      <TableCell>
-                        <Button size="sm" variant="outline" onClick={() => setActiveTechnician(technician)}>
-                          Manage
-                        </Button>
+                      <TableCell className="text-right">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              aria-label={`Actions for ${technician.display_name}`}
+                            >
+                              <MoreVertical className="size-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onSelect={() => setActiveTechnician(technician)}>
+                              <SlidersHorizontal className="size-4" /> Edit attributes
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem onSelect={() => setActiveTechnician(technician)}>
+                              <Plus className="size-4" /> Add leave
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </TableCell>
                     </TableRow>
                   );
@@ -394,6 +510,36 @@ export default function SchedulingDashboard({ technicians }: Props) {
               )}
             </TableBody>
           </Table>
+
+          {/* Footer: what you are looking at, and how to move through it. */}
+          {!loading && total > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3">
+              <p className="text-muted-foreground text-sm">
+                Showing {pageStart + 1} to {Math.min(pageStart + pageSize, total)} of {total} technicians
+              </p>
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                >
+                  <ChevronLeft className="size-4" /> Previous
+                </Button>
+                <span className="text-muted-foreground px-2 text-sm tabular-nums">
+                  Page {currentPage} of {pageCount}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
+                  disabled={currentPage === pageCount}
+                >
+                  Next <ChevronRight className="size-4" />
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
 
         {manageList === "tags" && (
@@ -590,9 +736,13 @@ function ManageListDialog({
   return (
     <>
       <Dialog open onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="w-[calc(100%-2rem)] sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{title}</DialogTitle>
+            <DialogDescription>
+              These options appear wherever a {noun} can be chosen. Renaming one updates it everywhere;
+              deleting clears it from any technician that had it.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="flex gap-2">
@@ -608,7 +758,11 @@ function ManageListDialog({
           </div>
 
           <div className="flex max-h-80 flex-col gap-2 overflow-y-auto">
-            {items.length === 0 && <p className="text-muted-foreground text-sm">Nothing yet.</p>}
+            {items.length === 0 && (
+              <p className="text-muted-foreground rounded-md border border-dashed p-4 text-center text-sm">
+                No {noun}s yet. Add the first one above.
+              </p>
+            )}
             {items.map((item) => (
               <div key={item.id} className="flex items-center justify-between gap-2 rounded-md border p-2">
                 {editingId === item.id ? (
@@ -763,9 +917,13 @@ function ManageTechnicianDialog({
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
+      <DialogContent className="max-h-[90vh] w-[calc(100%-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{technician.display_name}</DialogTitle>
+          <DialogDescription>
+            Role, service type, shift and driver are portal-only settings — they are never written back to
+            Zoho FSM. Tags and leave are managed here too.
+          </DialogDescription>
         </DialogHeader>
 
         <div className="grid grid-cols-2 gap-3">
@@ -799,9 +957,8 @@ function ManageTechnicianDialog({
                   type="button"
                   onClick={() => toggleTag(tag.id)}
                   disabled={busyTagId === tag.id}
-                  className={`flex items-center justify-between gap-2 rounded-md border px-2.5 py-1.5 text-left text-sm transition-colors disabled:opacity-60 ${
-                    selected ? "border-primary bg-primary/10" : "hover:bg-muted/50"
-                  }`}
+                  className={`flex items-center justify-between gap-2 rounded-md border px-2.5 py-1.5 text-left text-sm transition-colors disabled:opacity-60 ${selected ? "border-primary bg-primary/10" : "hover:bg-muted/50"
+                    }`}
                 >
                   <span>{tag.name}</span>
                   {busyTagId === tag.id ? (

@@ -110,18 +110,26 @@ export async function loadReviewQueue(admin: SupabaseClient): Promise<AnalyticsJ
   return (data ?? []) as unknown as AnalyticsJob[];
 }
 
+export type SnagRow = {
+  job_id: string;
+  status: string;
+  defect_label: string | null;
+  /** AREA-ELEMENT-DEFECT; the middle segment is what the category map reads. */
+  catalogue_code: string | null;
+};
+
 /** Snags belonging to the given jobs, for the per-unit and mix figures. */
 export async function loadSnagsForJobs(
   admin: SupabaseClient,
   jobIds: string[],
-): Promise<Array<{ job_id: string; status: string; defect_label: string | null }>> {
+): Promise<SnagRow[]> {
   if (jobIds.length === 0) return [];
   const { data, error } = await admin
     .from("snagging_snags")
-    .select("job_id, status, defect_label")
+    .select("job_id, status, defect_label, catalogue_code")
     .in("job_id", jobIds);
   if (error) throw new Error(error.message);
-  return (data ?? []) as Array<{ job_id: string; status: string; defect_label: string | null }>;
+  return (data ?? []) as SnagRow[];
 }
 
 export async function loadInspectorNames(
@@ -139,6 +147,25 @@ export async function loadInspectorNames(
       (row) => [row.id, row.full_name ?? row.email ?? "Unknown"] as const,
     ),
   );
+}
+
+/**
+ * The window of the same length immediately before this one.
+ *
+ * What "vs last period" is measured against: a 30-day range compares
+ * against the 30 days before it, not against a fixed month, so the
+ * comparison holds whatever range somebody picks.
+ */
+export function previousRange(range: DateRange): DateRange {
+  const from = new Date(range.fromTs).getTime();
+  const to = new Date(range.toTs).getTime();
+  const span = to - from;
+  return {
+    from: new Date(from - span).toISOString().slice(0, 10),
+    to: range.from,
+    fromTs: new Date(from - span).toISOString(),
+    toTs: range.fromTs,
+  };
 }
 
 /** Whether a timestamp falls inside the selected period. */

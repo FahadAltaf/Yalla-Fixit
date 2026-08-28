@@ -2,7 +2,14 @@
 
 import { useMemo, useState } from "react";
 import Image from "next/image";
-import { CheckCircle2, Flag, ImageOff, MapPin } from "lucide-react";
+import {
+  CheckCircle2,
+  DoorClosed,
+  Flag,
+  ImageOff,
+  ListChecks,
+  MapPin,
+} from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,7 +22,11 @@ import {
 } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { cn } from "@/lib/utils";
-import type { SnaggingFloorPlan, SnaggingPhoto, SnaggingTask } from "@/types/types";
+import type {
+  SnaggingFloorPlan,
+  SnaggingPhoto,
+  SnaggingTask,
+} from "@/types/types";
 
 import {
   SectionCard,
@@ -37,8 +48,14 @@ type Snag = NonNullable<SnaggingTask["snags"]>[number];
  * when the panel reloads.
  */
 /** The plan a snag was pinned on, if it can be resolved. */
-function planForSnag(snag: Snag, plans: SnaggingFloorPlan[]): SnaggingFloorPlan | null {
-  return plans.find((p) => p.id === snag.floor_plan_id) ?? (plans.length === 1 ? plans[0] : null);
+function planForSnag(
+  snag: Snag,
+  plans: SnaggingFloorPlan[],
+): SnaggingFloorPlan | null {
+  return (
+    plans.find((p) => p.id === snag.floor_plan_id) ??
+    (plans.length === 1 ? plans[0] : null)
+  );
 }
 
 export function SnagWalkList({ task }: { task: SnaggingTask }) {
@@ -57,7 +74,8 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
   );
   // Flagging is only useful while a decision is still open; once the job
   // is approved or delivered the list is a record, not a worklist.
-  const awaitingDecision = task.status === "submitted" || task.status === "in_review";
+  const awaitingDecision =
+    task.status === "submitted" || task.status === "in_review";
 
   function toggleFlag(id: string) {
     setFlagged((current) => {
@@ -73,6 +91,7 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
       {accessIssues.length > 0 ? (
         <SectionCard
           title="Access issues"
+          icon={<DoorClosed />}
           description={`${accessIssues.length} area(s) not fully inspected`}
           bodyClassName="border-t"
         >
@@ -90,12 +109,16 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
                       : "bg-warning/10 text-warning",
                   )}
                 >
-                  {area.access_state === "not_accessible" ? "No access" : "Limited access"}
+                  {area.access_state === "not_accessible"
+                    ? "No access"
+                    : "Limited access"}
                 </span>
                 <div className="min-w-48 flex-1">
                   <p className="font-medium">{area.name}</p>
                   {area.access_reason ? (
-                    <p className="text-muted-foreground mt-0.5 text-sm">{area.access_reason}</p>
+                    <p className="text-muted-foreground mt-0.5 text-sm">
+                      {area.access_reason}
+                    </p>
                   ) : null}
                 </div>
               </li>
@@ -106,6 +129,7 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
 
       <SectionCard
         title="Walk the snags"
+        icon={<ListChecks />}
         description={`${snags.length} snags · ${flagged.size} flagged`}
         bodyClassName="border-t"
       >
@@ -119,134 +143,157 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
           <ul>
             {snags.map((snag, index) => {
               const photoCount = snag.photos?.length ?? 0;
-              const cover = (snag.photos ?? []).find((photo) => photo.signed_url) ?? null;
+              const cover =
+                (snag.photos ?? []).find((photo) => photo.signed_url) ?? null;
               const pinned =
-                snag.pin_x !== null && snag.pin_x !== undefined &&
-                snag.pin_y !== null && snag.pin_y !== undefined;
+                snag.pin_x !== null &&
+                snag.pin_x !== undefined &&
+                snag.pin_y !== null &&
+                snag.pin_y !== undefined;
               return (
-              <li
-                key={snag.id}
-                className={cn(
-                  "flex flex-wrap items-start gap-3 border-b px-5 py-4 last:border-b-0",
-                  flagged.has(snag.id) && "bg-warning/5",
-                )}
-              >
-                <SnagIndex index={index + 1} severity={snag.severity} />
+                <li
+                  key={snag.id}
+                  className={cn(
+                    "flex flex-wrap items-start gap-3 border-b px-5 py-4 last:border-b-0",
+                    flagged.has(snag.id) && "bg-warning/5",
+                  )}
+                >
+                  <SnagIndex index={index + 1} severity={snag.severity} />
 
-                <div className="min-w-48 flex-1">
-                  <button
-                    type="button"
-                    onClick={() => setDetail(snag)}
-                    className="hover:text-primary text-left font-medium hover:underline"
-                  >
-                    {[snag.area?.name ?? snag.area_label, snag.element_label, snag.defect_label]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </button>
-                  <p className="text-muted-foreground mt-0.5 flex flex-wrap items-center gap-x-2 text-xs">
-                    <span className="font-mono">{snag.snag_code}</span>
-                    {snag.catalogue_code ? <span>· {snag.catalogue_code}</span> : null}
-                    {snag.created_at ? <span>· {formatGstDateTime(snag.created_at)}</span> : null}
-                    {(snag.round_created ?? 1) > 1 ? <span>· Round {snag.round_created}</span> : null}
-                    <span>
-                      · {photoCount} {photoCount === 1 ? "photo" : "photos"}
-                    </span>
-                  </p>
-                  {snag.note ? (
-                    <p className="text-muted-foreground mt-1 text-sm">{snag.note}</p>
-                  ) : null}
+                  <div className="min-w-48 flex-1">
+                    <button
+                      type="button"
+                      onClick={() => setDetail(snag)}
+                      className="hover:text-primary text-left font-medium hover:underline"
+                    >
+                      {[
+                        snag.area?.name ?? snag.area_label,
+                        snag.element_label,
+                        snag.defect_label,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </button>
+                    <p className="text-muted-foreground mt-0.5 flex flex-wrap items-center gap-x-2 text-xs">
+                      <span className="font-mono">{snag.snag_code}</span>
+                      {snag.catalogue_code ? (
+                        <span>· {snag.catalogue_code}</span>
+                      ) : null}
+                      {snag.created_at ? (
+                        <span>· {formatGstDateTime(snag.created_at)}</span>
+                      ) : null}
+                      {(snag.round_created ?? 1) > 1 ? (
+                        <span>· Round {snag.round_created}</span>
+                      ) : null}
+                      <span>
+                        · {photoCount} {photoCount === 1 ? "photo" : "photos"}
+                      </span>
+                    </p>
+                    {snag.note ? (
+                      <p className="text-muted-foreground mt-1 text-sm">
+                        {snag.note}
+                      </p>
+                    ) : null}
 
-                  {/*
+                    {/*
                     One thumbnail, not all of them. Rendering every photo
                     inline minted a signed URL per image and loaded
                     hundreds on a busy job before the reviewer had
                     scrolled; the rest open with the snag.
                   */}
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    {/* The pin, in the list itself — a reviewer walking
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      {/* The pin, in the list itself — a reviewer walking
                         the snags can see where each defect is without
                         opening every one. */}
-                    {pinned ? (
-                      <button
-                        type="button"
-                        onClick={() => setDetail(snag)}
-                        className="focus-visible:ring-ring shrink-0 rounded-md focus-visible:ring-2 focus-visible:outline-none"
-                        aria-label={`Show ${snag.snag_code} on the plan`}
-                      >
-                        <SnagPlanPin snag={snag} plans={plans} compact />
-                      </button>
-                    ) : null}
-                  {cover ? (
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setPreview(cover)}
-                        className="focus-visible:ring-ring relative size-12 shrink-0 overflow-hidden rounded-md border focus-visible:ring-2 focus-visible:outline-none"
-                        aria-label={`Photo evidence for ${snag.snag_code}`}
-                      >
-                        <Image
-                          src={cover.signed_url as string}
-                          alt=""
-                          fill
-                          unoptimized
-                          sizes="48px"
-                          className="object-cover"
-                        />
-                      </button>
-                      {photoCount > 1 ? (
+                      {pinned ? (
                         <button
                           type="button"
                           onClick={() => setDetail(snag)}
-                          className="text-muted-foreground hover:text-foreground text-xs hover:underline"
+                          className="focus-visible:ring-ring shrink-0 rounded-md focus-visible:ring-2 focus-visible:outline-none"
+                          aria-label={`Show ${snag.snag_code} on the plan`}
                         >
-                          +{photoCount - 1} more
+                          <SnagPlanPin snag={snag} plans={plans} compact />
                         </button>
                       ) : null}
+                      {cover ? (
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setPreview(cover)}
+                            className="focus-visible:ring-ring relative size-12 shrink-0 overflow-hidden rounded-md border focus-visible:ring-2 focus-visible:outline-none"
+                            aria-label={`Photo evidence for ${snag.snag_code}`}
+                          >
+                            <Image
+                              src={cover.signed_url as string}
+                              alt=""
+                              fill
+                              unoptimized
+                              sizes="48px"
+                              className="object-cover"
+                            />
+                          </button>
+                          {photoCount > 1 ? (
+                            <button
+                              type="button"
+                              onClick={() => setDetail(snag)}
+                              className="text-muted-foreground hover:text-foreground text-xs hover:underline"
+                            >
+                              +{photoCount - 1} more
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
-                  ) : null}
                   </div>
-                </div>
 
-                <div className="flex items-center gap-2">
-                  {pinned ? (
-                    <span
-                      className="text-muted-foreground inline-flex items-center gap-1 text-xs"
-                      title={`Pinned at ${Math.round(Number(snag.pin_x) * 100)}%, ${Math.round(
-                        Number(snag.pin_y) * 100,
-                      )}% on the plan`}
-                    >
-                      <MapPin className="size-3.5" aria-hidden />
-                      On plan
-                    </span>
-                  ) : (
-                    <span className="text-muted-foreground/70 text-xs">Not pinned</span>
-                  )}
-                  <SeverityBadge severity={snag.severity} />
-                  <SnagStatusBadge status={snag.status} />
-                  {photoCount === 0 ? (
-                    <Badge variant="secondary" className="bg-warning/10 text-warning border-0">
-                      No photo
-                    </Badge>
-                  ) : null}
-                  {awaitingDecision ? (
-                    <Button
-                      variant={flagged.has(snag.id) ? "secondary" : "outline"}
-                      size="sm"
-                      onClick={() => toggleFlag(snag.id)}
-                    >
-                      <Flag className="size-3.5" />
-                      {flagged.has(snag.id) ? "Flagged" : "Flag"}
-                    </Button>
-                  ) : null}
-                </div>
-              </li>
+                  <div className="flex items-center gap-2">
+                    {pinned ? (
+                      <span
+                        className="text-muted-foreground inline-flex items-center gap-1 text-xs"
+                        title={`Pinned at ${Math.round(Number(snag.pin_x) * 100)}%, ${Math.round(
+                          Number(snag.pin_y) * 100,
+                        )}% on the plan`}
+                      >
+                        <MapPin className="size-3.5" aria-hidden />
+                        On plan
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground/70 text-xs">
+                        Not pinned
+                      </span>
+                    )}
+                    <SeverityBadge severity={snag.severity} />
+                    <SnagStatusBadge status={snag.status} />
+                    {photoCount === 0 ? (
+                      <Badge
+                        variant="secondary"
+                        className="bg-warning/10 text-warning border-0"
+                      >
+                        No photo
+                      </Badge>
+                    ) : null}
+                    {awaitingDecision ? (
+                      <Button
+                        variant={flagged.has(snag.id) ? "secondary" : "outline"}
+                        size="sm"
+                        onClick={() => toggleFlag(snag.id)}
+                      >
+                        <Flag className="size-3.5" />
+                        {flagged.has(snag.id) ? "Flagged" : "Flag"}
+                      </Button>
+                    ) : null}
+                  </div>
+                </li>
               );
             })}
           </ul>
         )}
       </SectionCard>
 
-      <Dialog open={Boolean(preview)} onOpenChange={(open) => !open && setPreview(null)}>
+      <Dialog
+        open={Boolean(preview)}
+        onOpenChange={(open) => !open && setPreview(null)}
+      >
         <DialogContent className="max-h-[88vh] overflow-x-hidden overflow-y-auto sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>Photo evidence</DialogTitle>
@@ -268,7 +315,8 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
             />
           ) : (
             <div className="text-muted-foreground flex h-64 items-center justify-center">
-              <ImageOff className="mr-2 size-5" /> This photo is no longer available
+              <ImageOff className="mr-2 size-5" /> This photo is no longer
+              available
             </div>
           )}
           {preview ? <PhotoExif photo={preview} /> : null}
@@ -314,20 +362,35 @@ function SnagDetailDialog({
               <Detail label="Area" value={snag.area?.name ?? snag.area_label} />
               <Detail label="Element" value={snag.element_label} />
               <Detail label="Defect" value={snag.defect_label} />
-              <Detail label="Severity" value={<SeverityBadge severity={snag.severity} />} />
+              <Detail
+                label="Severity"
+                value={<SeverityBadge severity={snag.severity} />}
+              />
               <Detail label="Status" value={snag.status} />
               <Detail
                 label="Round"
                 value={snag.round_created ? `Round ${snag.round_created}` : "1"}
               />
-              <Detail label="Captured" value={formatGstDateTime(snag.created_at)} />
-              <Detail label="Code" value={<span className="font-mono text-xs">{snag.catalogue_code}</span>} />
+              <Detail
+                label="Captured"
+                value={formatGstDateTime(snag.created_at)}
+              />
+              <Detail
+                label="Code"
+                value={
+                  <span className="font-mono text-xs">
+                    {snag.catalogue_code}
+                  </span>
+                }
+              />
             </dl>
 
             {/* Where the defect actually is, rather than a pair of
                 percentages a reviewer has to imagine. */}
             <div>
-              <p className="text-muted-foreground mb-1.5 text-xs">Pin on plan</p>
+              <p className="text-muted-foreground mb-1.5 text-xs">
+                Pin on plan
+              </p>
               <SnagPlanPin snag={snag} plans={plans} />
             </div>
 
@@ -340,7 +403,8 @@ function SnagDetailDialog({
 
             <div>
               <p className="text-muted-foreground mb-1.5 text-xs">
-                Evidence ({photos.length} {photos.length === 1 ? "file" : "files"})
+                Evidence ({photos.length}{" "}
+                {photos.length === 1 ? "file" : "files"})
               </p>
               {photos.length > 0 ? (
                 <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
@@ -415,8 +479,8 @@ function SnagPlanPin({
   if (!plan?.signed_url) {
     return (
       <p className="text-muted-foreground rounded-md border px-3 py-3 text-sm">
-        Pinned at {Math.round(Number(x) * 100)}%, {Math.round(Number(y) * 100)}% — the plan is not
-        available to display.
+        Pinned at {Math.round(Number(x) * 100)}%, {Math.round(Number(y) * 100)}%
+        — the plan is not available to display.
       </p>
     );
   }
@@ -425,7 +489,10 @@ function SnagPlanPin({
     <div
       className="bg-muted relative mx-auto max-w-full overflow-hidden rounded-md border"
       style={{
-        aspectRatio: plan.width && plan.height ? `${plan.width} / ${plan.height}` : "4 / 3",
+        aspectRatio:
+          plan.width && plan.height
+            ? `${plan.width} / ${plan.height}`
+            : "4 / 3",
         // Width-led: the box is never wider than its column, so a
         // landscape plan cannot push the dialog sideways. It still keeps
         // the plan's own ratio, which is what makes the stored fraction
@@ -434,7 +501,13 @@ function SnagPlanPin({
         ...(compact ? { height: 48, width: "auto" } : { width: "100%" }),
       }}
     >
-      <Image src={plan.signed_url} alt={plan.label} fill unoptimized className="object-contain" />
+      <Image
+        src={plan.signed_url}
+        alt={plan.label}
+        fill
+        unoptimized
+        className="object-contain"
+      />
       <span
         className={cn(
           "border-background bg-danger absolute -translate-x-1/2 -translate-y-1/2 rounded-full border-2 shadow",
@@ -495,7 +568,11 @@ function PhotoExif({ photo }: { photo: SnaggingPhoto }) {
   const rows: Array<{ label: string; value: React.ReactNode }> = [];
   if (camera) rows.push({ label: "Camera", value: camera });
   if (lens) rows.push({ label: "Lens", value: lens });
-  const shot = [exposure ? `${exposure}s` : null, fnumber ? `ƒ/${fnumber}` : null, iso ? `ISO ${iso}` : null]
+  const shot = [
+    exposure ? `${exposure}s` : null,
+    fnumber ? `ƒ/${fnumber}` : null,
+    iso ? `ISO ${iso}` : null,
+  ]
     .filter(Boolean)
     .join(" · ");
   if (shot) rows.push({ label: "Exposure", value: shot });

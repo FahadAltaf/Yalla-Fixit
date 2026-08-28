@@ -8,8 +8,10 @@ import { ArrowLeft, SearchX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
 import { snaggingService } from "@/modules/snagging";
 import type { SnaggingTask } from "@/types/types";
 
@@ -58,15 +60,12 @@ export default function InspectionDetail({ taskId }: { taskId: string }) {
   // The tab lives in the URL so a link can point at one, and a refresh
   // keeps the reviewer where they were.
   const [tab, setTabState] = useState<string | null>(params.get("tab"));
-  const setTab = useCallback(
-    (next: string) => {
-      setTabState(next);
-      const query = new URLSearchParams(window.location.search);
-      query.set("tab", next);
-      window.history.replaceState(null, "", `?${query.toString()}`);
-    },
-    [],
-  );
+  const setTab = useCallback((next: string) => {
+    setTabState(next);
+    const query = new URLSearchParams(window.location.search);
+    query.set("tab", next);
+    window.history.replaceState(null, "", `?${query.toString()}`);
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -78,7 +77,9 @@ export default function InspectionDetail({ taskId }: { taskId: string }) {
       // identical ("could not be found"), which sent people hunting for
       // a record that was there all along. They are separate states now.
       setTask(null);
-      setError(err instanceof Error ? err.message : "Could not load the inspection");
+      setError(
+        err instanceof Error ? err.message : "Could not load the inspection",
+      );
     } finally {
       setLoading(false);
     }
@@ -87,6 +88,17 @@ export default function InspectionDetail({ taskId }: { taskId: string }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  /*
+    Name this page in the breadcrumb. The trail is built from the URL, so
+    without this the last crumb was the job's UUID title-cased into
+    "4d5510Bf 4f50 4948 B5e7 …" — the one place on screen that should say
+    which unit you are looking at, saying nothing at all.
+  */
+  useBreadcrumbLabel(
+    taskId,
+    task ? (task.property?.unit_label ?? task.code) : undefined,
+  );
 
   if (loading) {
     return (
@@ -150,16 +162,24 @@ export default function InspectionDetail({ taskId }: { taskId: string }) {
         {/* Wraps onto a second line on a narrow screen rather than
             hiding tabs behind a sideways scroll. */}
         <TabsList className="h-auto w-full flex-wrap justify-start gap-1 group-data-horizontal/tabs:h-auto">
+          {/*
+            A tab carries its own count where one is already loaded, so
+            the row says how much is behind each panel before you open it.
+            Quotation and History fetch on demand, so they stay bare
+            rather than showing a number that could be wrong.
+          */}
           <TabsTrigger value="snags">
             Snags
-            {(task.snags?.length ?? 0) > 0 ? (
-              <span className="text-muted-foreground ml-1.5 tabular-nums">
-                {task.snags?.length}
-              </span>
-            ) : null}
+            <TabCount value={task.snags?.length} />
           </TabsTrigger>
-          <TabsTrigger value="areas">Areas &amp; plan</TabsTrigger>
-          <TabsTrigger value="checklist">Checklist</TabsTrigger>
+          <TabsTrigger value="areas">
+            Areas &amp; plan
+            <TabCount value={task.areas?.length} />
+          </TabsTrigger>
+          <TabsTrigger value="checklist">
+            Checklist
+            <TabCount value={task.checklist?.length} />
+          </TabsTrigger>
           <TabsTrigger value="setup">Setup</TabsTrigger>
           <TabsTrigger value="quotation">Quotation</TabsTrigger>
           <TabsTrigger value="history">History</TabsTrigger>
@@ -202,5 +222,24 @@ function BackToJobs() {
         Jobs
       </Link>
     </Button>
+  );
+}
+
+/**
+ * The count beside a tab label, absent rather than zero when empty.
+ *
+ * A Badge rather than a hand-styled span, so every tab's count picks up
+ * the same radius, padding and type scale as every other count in the
+ * app — and changes with it.
+ */
+function TabCount({ value }: { value?: number }) {
+  if (!value) return null;
+  return (
+    <Badge
+      variant="secondary"
+      className="ml-1.5 px-1.5 font-normal tabular-nums"
+    >
+      {value}
+    </Badge>
   );
 }

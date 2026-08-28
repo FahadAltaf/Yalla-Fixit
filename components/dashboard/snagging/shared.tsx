@@ -13,8 +13,11 @@ import {
 // Generic Kaizen primitives live in the shared module now; re-exported
 // here so the snagging screens keep importing them from one place.
 export {
+  DataRow,
   PageHeading,
   StatCard,
+  StatCardGrid,
+  SubHeading,
   SectionCard,
   PillTabs,
   timeAgo,

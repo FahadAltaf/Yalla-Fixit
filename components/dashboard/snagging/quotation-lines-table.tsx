@@ -66,7 +66,7 @@ export function QuotationLinesTable({
 
         <TableBody>
           {lines.map((line, index) => (
-            <TableRow key={index} className="hover:bg-transparent">
+            <TableRow key={index} className="hover:bg-transparent ">
               <TableCell className="font-medium">{line.description}</TableCell>
               <TableCell className="text-muted-foreground text-right whitespace-nowrap tabular-nums">
                 {line.qty} {line.unit}

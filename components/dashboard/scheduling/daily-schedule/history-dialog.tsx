@@ -9,7 +9,7 @@ import {
   type AuditResponse,
 } from "@/modules/scheduling";
 import StatusBadge from "@/components/ui/status-badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Loader2 } from "lucide-react";
 
 type Props = {
@@ -34,6 +34,19 @@ const STATUS_LABELS: Record<string, string> = {
   sync_failed: "Sync Failed",
   partially_synced: "Partially Synced",
 };
+
+// The operating date arrives as YYYY-MM-DD; show it the way the board does
+// rather than as a raw ISO string in the title.
+function formatDate(iso: string) {
+  const [y, m, d] = iso.split("-").map(Number);
+  if (!y || !m || !d) return iso;
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, {
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
 
 // A single merged timeline row.
 type TimelineItem = { at: number; kind: string; who: string; detail?: string; tone?: "ok" | "bad" | "muted" };
@@ -110,7 +123,10 @@ export default function HistoryDialog({ date, onOpenChange }: Props) {
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[86vh] w-[calc(100%-2rem)] overflow-hidden sm:max-w-4xl">
         <DialogHeader>
-          <DialogTitle>Schedule history — {date}</DialogTitle>
+          <DialogTitle>Schedule history — {formatDate(date)}</DialogTitle>
+          <DialogDescription>
+            Every version of this day, with the appointments it held and a timeline of what happened to it.
+          </DialogDescription>
         </DialogHeader>
 
         {loading ? (

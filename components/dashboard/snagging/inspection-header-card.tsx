@@ -5,8 +5,10 @@ import Link from "next/link";
 import {
   AlertTriangle,
   CalendarPlus,
+  Check,
   CheckCircle2,
   ClipboardCheck,
+  Copy,
   FileText,
   RotateCcw,
   XCircle,
@@ -16,6 +18,11 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
@@ -24,7 +31,13 @@ import { ActionType, ResourceType, type SnaggingTask } from "@/types/types";
 
 import { AdditionalVisitDialog } from "./additional-visit-dialog";
 import { RejectInspectionDialog } from "./reject-inspection-dialog";
-import { SubmitButton, TaskStatusBadge, useConfirm } from "./shared";
+import {
+  StatCard,
+  StatCardGrid,
+  SubmitButton,
+  TaskStatusBadge,
+  useConfirm,
+} from "./shared";
 
 /**
  * The inspection at a glance, and the decision that can be taken on it.
@@ -48,8 +61,16 @@ export function InspectionHeaderCard({
   const [rejectOpen, setRejectOpen] = useState(false);
   const [visitOpen, setVisitOpen] = useState(false);
 
-  const canApprove = hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.APPROVE);
-  const canCreate = hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.CREATE);
+  const canApprove = hasResourceAction(
+    userProfile,
+    ResourceType.SNAGGING,
+    ActionType.APPROVE,
+  );
+  const canCreate = hasResourceAction(
+    userProfile,
+    ResourceType.SNAGGING,
+    ActionType.CREATE,
+  );
 
   const snags = useMemo(() => task.snags ?? [], [task]);
   const areas = task.areas ?? [];
@@ -60,10 +81,16 @@ export function InspectionHeaderCard({
   const accessIssues = areas.filter(
     (area) => area.access_state && area.access_state !== "accessible",
   );
-  const photoTotal = snags.reduce((sum, snag) => sum + (snag.photos?.length ?? 0), 0);
-  const snagsWithPhoto = snags.filter((snag) => (snag.photos?.length ?? 0) > 0).length;
+  const photoTotal = snags.reduce(
+    (sum, snag) => sum + (snag.photos?.length ?? 0),
+    0,
+  );
+  const snagsWithPhoto = snags.filter(
+    (snag) => (snag.photos?.length ?? 0) > 0,
+  ).length;
 
-  const awaitingDecision = task.status === "submitted" || task.status === "in_review";
+  const awaitingDecision =
+    task.status === "submitted" || task.status === "in_review";
 
   // FR-6.07 — flag an approval that has waited longer than the 48h SLA.
   // The clock is read during render deliberately: this panel only ever
@@ -80,10 +107,14 @@ export function InspectionHeaderCard({
     setWorking(true);
     try {
       await snaggingService.reviewTask(task.id);
-      toast.success("Review started. Approve or send it back when you're done.");
+      toast.success(
+        "Review started. Approve or send it back when you're done.",
+      );
       onChanged();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not start the review");
+      toast.error(
+        error instanceof Error ? error.message : "Could not start the review",
+      );
     } finally {
       setWorking(false);
     }
@@ -101,7 +132,9 @@ export function InspectionHeaderCard({
       confirmedAreas < areas.length
         ? `${areas.length - confirmedAreas} area(s) not confirmed`
         : null,
-      accessIssues.length > 0 ? `${accessIssues.length} area(s) with access issues` : null,
+      accessIssues.length > 0
+        ? `${accessIssues.length} area(s) with access issues`
+        : null,
     ].filter(Boolean);
 
     const ok = await confirm({
@@ -116,7 +149,9 @@ export function InspectionHeaderCard({
     setWorking(true);
     try {
       await snaggingService.approveTask(task.id);
-      toast.success("Inspection approved. Open the report to send it to the client.");
+      toast.success(
+        "Inspection approved. Open the report to send it to the client.",
+      );
       onChanged();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not approve");
@@ -147,30 +182,33 @@ export function InspectionHeaderCard({
     setWorking(true);
     try {
       const round = await snaggingService.openRound(task.id, {});
-      toast.success(`Round ${round.round_number} opened with ${round.carried_snags} snag(s)`);
+      toast.success(
+        `Round ${round.round_number} opened with ${round.carried_snags} snag(s)`,
+      );
       window.location.href = `/snagging/${round.id}/desnag`;
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not open a round");
+      toast.error(
+        error instanceof Error ? error.message : "Could not open a round",
+      );
     } finally {
       setWorking(false);
     }
   }
 
-
   return (
     <>
       <Card className="gap-0 p-0">
-        <div className="flex flex-wrap items-start justify-between gap-4 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-4 p-5">
           <div className="space-y-1">
             <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-mono text-xs">{task.code}</span>
-              <TaskStatusBadge status={task.status} />
+              {/* <span className="text-muted-foreground font-mono text-xs">{task.code}</span> */}
               {task.visit_type === "additional" ? (
                 <Badge variant="outline">Additional visit</Badge>
               ) : task.round_number > 1 ? (
                 <Badge variant="outline">Round {task.round_number}</Badge>
               ) : null}
-              {task.visit_type === "additional" && (task.visit_charge ?? 0) > 0 ? (
+              {task.visit_type === "additional" &&
+              (task.visit_charge ?? 0) > 0 ? (
                 <span className="text-muted-foreground text-xs">
                   Charge AED {task.visit_charge!.toLocaleString()}
                 </span>
@@ -182,12 +220,25 @@ export function InspectionHeaderCard({
                 </span>
               ) : null}
             </div>
-            <h2 className="text-2xl">{task.property?.unit_label}</h2>
+            <div className="flex flex-row items-center gap-2">
+              <h2 className="text-2xl">{task.property?.unit_label}</h2>
+              <TaskStatusBadge status={task.status} />
+              {/*
+                The job code is what people quote to each other; the id is
+                what support needs. The code reads inline, the id hides
+                behind a copy button rather than taking a line of its own.
+              */}
+              <span className="text-muted-foreground font-mono text-xs">
+                {task.code}
+              </span>
+              <CopyId id={task.id} />
+            </div>
             <p className="text-muted-foreground text-sm">
               {[
                 task.property?.building_name,
                 task.property?.client_name,
-                task.assignees?.find((a) => a.role === "technician")?.user_profile?.full_name
+                task.assignees?.find((a) => a.role === "technician")
+                  ?.user_profile?.full_name
                   ? `inspected by ${task.assignees.find((a) => a.role === "technician")?.user_profile?.full_name}`
                   : null,
               ]
@@ -197,7 +248,9 @@ export function InspectionHeaderCard({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {["submitted", "in_review", "approved", "delivered"].includes(task.status) ? (
+            {["submitted", "in_review", "approved", "delivered"].includes(
+              task.status,
+            ) ? (
               <Button asChild variant="outline">
                 <Link href={`/snagging/${task.id}/report`}>
                   <FileText className="size-4" />
@@ -207,7 +260,11 @@ export function InspectionHeaderCard({
             ) : null}
             {awaitingDecision && canApprove ? (
               <>
-                <Button variant="outline" onClick={() => setRejectOpen(true)} disabled={working}>
+                <Button
+                  variant="outline"
+                  onClick={() => setRejectOpen(true)}
+                  disabled={working}
+                >
                   <XCircle className="size-4" />
                   Send back
                 </Button>
@@ -235,7 +292,8 @@ export function InspectionHeaderCard({
                 )}
               </>
             ) : null}
-            {(task.status === "approved" || task.status === "delivered") && canCreate ? (
+            {(task.status === "approved" || task.status === "delivered") &&
+            canCreate ? (
               <>
                 <SubmitButton
                   variant="outline"
@@ -246,7 +304,11 @@ export function InspectionHeaderCard({
                 >
                   Open de-snag round
                 </SubmitButton>
-                <Button variant="outline" onClick={() => setVisitOpen(true)} disabled={working}>
+                <Button
+                  variant="outline"
+                  onClick={() => setVisitOpen(true)}
+                  disabled={working}
+                >
                   <CalendarPlus className="size-4" />
                   Additional visit
                 </Button>
@@ -255,41 +317,29 @@ export function InspectionHeaderCard({
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-px border-t bg-border sm:grid-cols-4">
-          <Stat label="Snags" value={snags.length} caption={`across ${areas.length} areas`} />
-          <Stat
-            label="High severity"
-            value={highCount}
-            caption="must clear before handover"
-            tone={highCount > 0 ? "bad" : "neutral"}
-          />
-          <Stat
-            label="Areas confirmed"
-            value={`${confirmedAreas} / ${areas.length}`}
-            caption={pendingArea ? `${pendingArea.name} still pending` : "all walked"}
-          />
-          <Stat
-            label="Media"
-            value={`${snagsWithPhoto} / ${snags.length}`}
-            caption={`${photoTotal} files received`}
-          />
-        </div>
-
         {task.status === "rejected" && task.rejection_reason ? (
           <div className="border-danger/30 bg-danger/5 border-t px-5 py-4">
             <div className="flex flex-wrap items-center gap-2">
-              <p className="text-danger text-sm font-medium">Sent back for correction</p>
+              <p className="text-danger text-sm font-medium">
+                Sent back for correction
+              </p>
               {task.rejection_category ? (
                 <span className="bg-danger/10 text-danger rounded px-2 py-0.5 text-xs font-medium capitalize">
                   {task.rejection_category.replace(/_/g, " ")}
                 </span>
               ) : null}
               {(task.rejection_count ?? 0) > 1 ? (
-                <span className="text-muted-foreground text-xs">· {task.rejection_count}× returned</span>
+                <span className="text-muted-foreground text-xs">
+                  · {task.rejection_count}× returned
+                </span>
               ) : null}
             </div>
-            <p className="text-muted-foreground mt-1 text-sm">{task.rejection_reason}</p>
-            {task.remediation_due_at ? <RemediationDue due={task.remediation_due_at} /> : null}
+            <p className="text-muted-foreground mt-1 text-sm">
+              {task.rejection_reason}
+            </p>
+            {task.remediation_due_at ? (
+              <RemediationDue due={task.remediation_due_at} />
+            ) : null}
           </div>
         ) : awaitingDecision ? (
           <div className="border-warning/30 bg-warning/5 border-t px-5 py-3">
@@ -303,6 +353,44 @@ export function InspectionHeaderCard({
         ) : null}
       </Card>
 
+      {/*
+        The four numbers a manager decides on, in the same stat card
+        every other page uses rather than a divided strip that only
+        existed here.
+      */}
+      <StatCardGrid columns={4}>
+        <StatCard
+          label="Snags"
+          value={snags.length}
+          headline={`Across ${areas.length} ${areas.length === 1 ? "area" : "areas"}`}
+          caption="Captured on this walk"
+        />
+        <StatCard
+          label="High severity"
+          value={highCount}
+          headline={
+            highCount > 0 ? "Must clear before handover" : "None outstanding"
+          }
+          caption="Severity as recorded on site"
+          tone={highCount > 0 ? "bad" : "good"}
+        />
+        <StatCard
+          label="Areas confirmed"
+          value={`${confirmedAreas} / ${areas.length}`}
+          headline={
+            pendingArea ? `${pendingArea.name} still pending` : "All walked"
+          }
+          caption="Rooms the inspector signed off"
+          tone={pendingArea ? "progress" : "good"}
+        />
+        <StatCard
+          label="Media"
+          value={`${snagsWithPhoto} / ${snags.length}`}
+          headline={`${photoTotal} ${photoTotal === 1 ? "file" : "files"} received`}
+          caption="Snags carrying at least one photo"
+        />
+      </StatCardGrid>
+
       <RejectInspectionDialog
         open={rejectOpen}
         onOpenChange={setRejectOpen}
@@ -310,37 +398,14 @@ export function InspectionHeaderCard({
         onRejected={onChanged}
       />
 
-      <AdditionalVisitDialog taskId={task.id} open={visitOpen} onOpenChange={setVisitOpen} />
+      <AdditionalVisitDialog
+        taskId={task.id}
+        open={visitOpen}
+        onOpenChange={setVisitOpen}
+      />
 
       {dialog}
     </>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  caption,
-  tone = "neutral",
-}: {
-  label: string;
-  value: React.ReactNode;
-  caption?: string;
-  tone?: "neutral" | "bad";
-}) {
-  return (
-    <div className="bg-card p-4">
-      <p className="eyebrow">{label}</p>
-      <p
-        className={cn(
-          "mt-1 text-2xl font-semibold tabular-nums",
-          tone === "bad" && "text-danger",
-        )}
-      >
-        {value}
-      </p>
-      {caption ? <p className="text-muted-foreground mt-1 text-xs">{caption}</p> : null}
-    </div>
   );
 }
 
@@ -358,8 +423,62 @@ function RemediationDue({ due }: { due: string }) {
     timeZone: "Asia/Dubai",
   });
   return (
-    <p className={cn("mt-1 text-xs", overdue ? "text-danger font-medium" : "text-muted-foreground")}>
+    <p
+      className={cn(
+        "mt-1 text-xs",
+        overdue ? "text-danger font-medium" : "text-muted-foreground",
+      )}
+    >
       {overdue ? `Fix overdue — was due ${when}` : `Fix due by ${when}`}
     </p>
+  );
+}
+
+/**
+ * Copies the job's id, for a support conversation that needs it.
+ *
+ * The id used to be the breadcrumb's page title, which told a reader
+ * nothing and cost the one line that could have said which unit they
+ * were looking at. It lives here instead: out of the way, one click when
+ * somebody actually asks for it.
+ */
+function CopyId({ id }: { id: string }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(id);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // A clipboard a browser refuses is not worth an error dialog; the
+      // id is still selectable from the tooltip.
+      toast.error("Could not copy the job ID");
+    }
+  }
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={() => void copy()}
+          aria-label={`Copy job ID ${id}`}
+        >
+          {copied ? (
+            <Check className="text-success size-3.5" />
+          ) : (
+            <Copy className="size-3.5" />
+          )}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>
+        <p className="font-mono text-xs">{id}</p>
+        <p className="text-muted-foreground mt-0.5 text-xs">
+          {copied ? "Copied" : "Click to copy the job ID"}
+        </p>
+      </TooltipContent>
+    </Tooltip>
   );
 }

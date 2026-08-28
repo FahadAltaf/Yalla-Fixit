@@ -21,8 +21,9 @@ import {
   PageHeading,
   SectionSkeleton,
   SeverityBadge,
-  SnagIndex,
   SNAG_STATUS_LABELS,
+  SnagIndex,
+  SubHeading,
   SubmitButton,
   useConfirm,
 } from "./shared";
@@ -219,7 +220,7 @@ export default function DesnagBuilder({ taskId }: { taskId: string }) {
             </Card>
 
             <Card className="gap-0 self-start p-5">
-              <p className="eyebrow">Round {nextRound}</p>
+              <SubHeading>Round {nextRound}</SubHeading>
               <h2 className="mt-2 text-xl">New de-snag round</h2>
 
               <dl className="mt-4 space-y-3 text-sm">

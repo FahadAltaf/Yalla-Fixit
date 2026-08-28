@@ -113,13 +113,18 @@ export const baseSectionsItems: MenuItem[] = [
     resource: ResourceType.SNAGGING,
     items: [
       {
-        title: "Today",
+        title: "Overview",
         url: "/snagging",
+        // The section landing page, so it lights up on /snagging alone.
+        exact: true,
         resource: ResourceType.SNAGGING,
       },
       {
         title: "Jobs",
         url: "/snagging/jobs",
+        // An inspection opens at /snagging/<id>, not under /snagging/jobs,
+        // so Jobs claims those too and stays selected while a job is open.
+        match: ["/snagging"],
         resource: ResourceType.SNAGGING,
       },
       {

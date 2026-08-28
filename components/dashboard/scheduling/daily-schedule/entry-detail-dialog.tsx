@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import StatusBadge from "@/components/ui/status-badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dialog";
 import { AlertTriangle, ExternalLink, Loader2, RefreshCw, Trash2 } from "lucide-react";
 import TimeSelect, { formatTimeAmPm } from "./time-select";
@@ -209,6 +209,11 @@ export default function EntryDetailDialog({
             <DialogTitle>
               {entry.entry_type === "free_text" ? entry.title || "Text entry" : `${workOrderLabel} · ${appointmentLabel}`}
             </DialogTitle>
+            <DialogDescription>
+              {entry.entry_type === "free_text"
+                ? "A note on the board. Free-text entries are never written to Zoho FSM."
+                : "Appointment detail, its Zoho FSM sync state, and who last touched it."}
+            </DialogDescription>
           </DialogHeader>
 
           <div className="flex flex-wrap items-center gap-2">

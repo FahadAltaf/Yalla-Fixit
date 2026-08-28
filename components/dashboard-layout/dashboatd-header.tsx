@@ -7,8 +7,19 @@ import ProfileDropdown from "../shadcn-studio/blocks/dropdown-profile";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { useAuth } from "@/context/AuthContext";
 import { generateNameAvatar } from "@/utils/generateRandomAvatar";
-import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "../ui/breadcrumb";
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "../ui/breadcrumb";
 import { usePathname } from "next/navigation";
+import {
+  labelForSegment,
+  useBreadcrumbLabelVersion,
+} from "./breadcrumb-labels";
 
 const DashboardHeader = () => {
   const { userProfile } = useAuth();
@@ -16,8 +27,11 @@ const DashboardHeader = () => {
 
   const segments = React.useMemo(
     () => pathname.split("/").filter(Boolean),
-    [pathname]
+    [pathname],
   );
+
+  // Re-reads when a record page registers a name for its id segment.
+  void useBreadcrumbLabelVersion();
   return (
     <header className="before:bg-background/60 sticky top-0 z-50 before:absolute before:inset-0 before:mask-[linear-gradient(var(--card),var(--card)_18%,transparent_100%)] before:backdrop-blur-md">
       <div className="bg-card relative z-51 mx-auto mt-3 flex w-[calc(100%-2rem)] items-center justify-between rounded-xl border px-6 py-2 sm:w-[calc(100%-3rem)]">
@@ -28,7 +42,11 @@ const DashboardHeader = () => {
             <BreadcrumbList>
               <BreadcrumbItem>
                 <BreadcrumbLink href="/">
-                  <HomeIcon aria-hidden="true" size={15} className="relative " />
+                  <HomeIcon
+                    aria-hidden="true"
+                    size={15}
+                    className="relative "
+                  />
                   <span className="sr-only">Home</span>
                 </BreadcrumbLink>
               </BreadcrumbItem>
@@ -43,9 +61,15 @@ const DashboardHeader = () => {
               {segments.map((segment, index) => {
                 const href = "/" + segments.slice(0, index + 1).join("/");
                 const isLast = index === segments.length - 1;
-                const label = decodeURIComponent(segment)
-                  .replace(/-/g, " ")
-                  .replace(/\b\w/g, (char) => char.toUpperCase());
+                // A page that knows its own name supplies one; otherwise
+                // the segment is title-cased. Without this a record page
+                // showed its raw id as the page title.
+                const registered = labelForSegment(segment);
+                const label =
+                  registered ??
+                  decodeURIComponent(segment)
+                    .replace(/-/g, " ")
+                    .replace(/\b\w/g, (char) => char.toUpperCase());
 
                 return (
                   <React.Fragment key={href}>

@@ -72,4 +72,14 @@ export const techniciansService = {
       body: { fsmResourceIds, attributes },
     });
   },
+
+  // SYNC-013: pull the roster from Zoho FSM on demand. The page also
+  // self-refreshes when the cache is older than 6h, so this is the manual
+  // "I know someone just joined/left" escape hatch.
+  refreshFromFsm: async (): Promise<{
+    resources: unknown[];
+    removed: { deleted: string[]; referenced: string[] };
+  }> => {
+    return executeRESTBackend("/api/service-resources", { method: "POST" });
+  },
 };

@@ -49,6 +49,7 @@ import {
   ErrorState,
   PageHeading,
   StatCard,
+  StatCardGrid,
   StatGridSkeleton,
   SubmitButton,
   useConfirm,
@@ -235,9 +236,9 @@ export default function CatalogueAdmin() {
       */}
       <div className="flex flex-col gap-6">
         {loading ? (
-          <StatGridSkeleton count={3} className="sm:grid-cols-3 lg:grid-cols-3" />
+          <StatGridSkeleton count={3} />
         ) : (
-          <div className="grid gap-4 sm:grid-cols-3">
+          <StatCardGrid columns={3}>
             <StatCard
               label="Defect types"
               value={data?.entries?.length ?? 0}
@@ -253,7 +254,7 @@ export default function CatalogueAdmin() {
               value={data?.area_elements?.length ?? 0}
               caption="Decides what the capture sheet offers in each room"
             />
-          </div>
+          </StatCardGrid>
         )}
 
         <Card className="py-0">

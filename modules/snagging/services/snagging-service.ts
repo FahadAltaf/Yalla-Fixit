@@ -8,7 +8,6 @@ import type {
   SnaggingArea,
   SnaggingAuditEvent,
   SnaggingFloorPlan,
-  SnaggingOverview,
   SnaggingProperty,
   SnaggingPropertyType,
   SnaggingCatalogueArea,
@@ -148,9 +147,6 @@ export const snaggingService = {
       method: "GET",
       params: toParams(filters, page, pageSize),
     }),
-
-  getOverview: async (): Promise<SnaggingOverview> =>
-    executeRESTBackend<SnaggingOverview>("/api/snagging/overview", { method: "GET" }),
 
   getTask: async (id: string): Promise<SnaggingTask> =>
     executeRESTBackend<SnaggingTask>(`/api/snagging/tasks/${id}`, { method: "GET" }),
@@ -423,19 +419,19 @@ export const snaggingService = {
       body: { id, active },
     }),
 
+  /**
+   * The summary carries every grain of the completion chart, so the
+   * day / week / month toggle is a local switch and this is only called
+   * when the date range actually changes.
+   */
   getAnalytics: async (
-    range: {
-      from?: string;
-      to?: string;
-      granularity?: SnaggingAnalyticsGranularity;
-    } = {},
+    range: { from?: string; to?: string } = {},
   ): Promise<SnaggingAnalytics> =>
     executeRESTBackend<SnaggingAnalytics>("/api/snagging/analytics", {
       method: "GET",
       params: {
         ...(range.from ? { from: range.from } : {}),
         ...(range.to ? { to: range.to } : {}),
-        ...(range.granularity ? { granularity: range.granularity } : {}),
       },
     }),
 

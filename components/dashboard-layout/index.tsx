@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ChevronRightIcon, SearchIcon } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
-import { MenuSection, User } from "@/types/types";
+import { MenuItem, MenuSection, User } from "@/types/types";
 import { getNavData } from "./menu-items";
 import Image from "next/image";
 import { Input } from "@/components/ui/input";
@@ -35,6 +35,24 @@ import {
 import DashboardHeader from "./dashboatd-header";
 import CompanyLogo from "@/public/site-logo.webp";
 
+/**
+ * How specifically a sub-item claims the current path, as the length of
+ * the prefix it matched. 0 means it does not claim it at all.
+ *
+ * A `match` prefix only applies further down the tree, never on the
+ * prefix itself, so a list claiming its section root cannot steal the
+ * highlight from the landing page that lives there.
+ */
+function claimedDepth(pathname: string, item: MenuItem): number {
+  if (pathname === item.url) return item.url.length;
+  if (!item.exact && pathname.startsWith(`${item.url}/`)) return item.url.length;
+
+  for (const prefix of item.match ?? []) {
+    if (pathname.startsWith(`${prefix}/`)) return prefix.length;
+  }
+  return 0;
+}
+
 const SidebarGroupedMenuItems = ({ section }: { section: MenuSection }) => {
   const pathname = usePathname();
 
@@ -51,17 +69,23 @@ const SidebarGroupedMenuItems = ({ section }: { section: MenuSection }) => {
         <SidebarMenu>
           {section.items.map((item) => {
             // Within a group, exactly one sub-item is selected: the one
-            // whose url is the longest prefix of the current path. Plain
-            // startsWith lit up every ancestor at once (on /snagging/jobs/new
-            // it marked Today, Jobs and New job all active), so the
-            // selection never told you where you actually were.
+            // whose claimed path is the longest prefix of where you are.
+            // Plain startsWith lit up every ancestor at once (on
+            // /snagging/jobs/new it marked Overview, Jobs and New job all
+            // active), so the selection never told you where you were.
+            //
+            // `exact` keeps a section landing page from claiming its own
+            // children; `match` lets a list claim the record pages that
+            // open outside its own url, so opening an inspection keeps
+            // Jobs selected rather than jumping the highlight to Overview.
             const activeSubUrl =
               item.items
-                ?.filter(
-                  (subItem) =>
-                    pathname === subItem.url || pathname.startsWith(`${subItem.url}/`),
-                )
-                .sort((a, b) => b.url.length - a.url.length)[0]?.url ?? null;
+                ?.map((subItem) => ({
+                  url: subItem.url,
+                  depth: claimedDepth(pathname, subItem),
+                }))
+                .filter((entry) => entry.depth > 0)
+                .sort((a, b) => b.depth - a.depth)[0]?.url ?? null;
 
             return item.items && item.items.length > 0 ? (
               <Collapsible className="group/collapsible" key={item.title}>
@@ -187,7 +211,7 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
           </header> */}
           <DashboardHeader />
 
-          <main className="mx-auto size-full flex-1 px-4 py-6 sm:px-6">
+          <main className="@container/main mx-auto size-full flex-1 px-4 py-6 sm:px-6">
             {children}
           </main>
         </div>

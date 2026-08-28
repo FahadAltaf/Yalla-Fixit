@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Info, Save } from "lucide-react";
+import { Building2, Coins, FileText, Info, Save } from "lucide-react";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -10,7 +10,10 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
-import { snaggingService, type SnaggingPricingConfig } from "@/modules/snagging";
+import {
+  snaggingService,
+  type SnaggingPricingConfig,
+} from "@/modules/snagging";
 import { ActionType, ResourceType } from "@/types/types";
 
 import {
@@ -35,7 +38,11 @@ const TYPE_LABEL: Record<string, string> = {
 /** Admin pricing formula, scope of work and terms (F7-F10). */
 export default function PricingSettings() {
   const { userProfile } = useAuth();
-  const canEdit = hasResourceAction(userProfile, ResourceType.SNAGGING_CATALOGUE, ActionType.EDIT);
+  const canEdit = hasResourceAction(
+    userProfile,
+    ResourceType.SNAGGING_CATALOGUE,
+    ActionType.EDIT,
+  );
   const { confirm, dialog } = useConfirm();
 
   const [config, setConfig] = useState<SnaggingPricingConfig | null>(null);
@@ -65,13 +72,18 @@ export default function PricingSettings() {
     void load();
   }, [load]);
 
-  function set<K extends keyof SnaggingPricingConfig>(key: K, value: SnaggingPricingConfig[K]) {
+  function set<K extends keyof SnaggingPricingConfig>(
+    key: K,
+    value: SnaggingPricingConfig[K],
+  ) {
     setDirty(true);
     setConfig((c) => (c ? { ...c, [key]: value } : c));
   }
   function setMultiplier(type: string, value: number) {
     setDirty(true);
-    setConfig((c) => (c ? { ...c, multipliers: { ...c.multipliers, [type]: value } } : c));
+    setConfig((c) =>
+      c ? { ...c, multipliers: { ...c.multipliers, [type]: value } } : c,
+    );
   }
 
   /** Empty and malformed inputs must not reach the API as NaN. */
@@ -100,7 +112,9 @@ export default function PricingSettings() {
       setDirty(false);
       toast.success("Pricing saved");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not save pricing");
+      toast.error(
+        err instanceof Error ? err.message : "Could not save pricing",
+      );
     } finally {
       setSaving(false);
     }
@@ -114,7 +128,7 @@ export default function PricingSettings() {
         <PageHeading
           eyebrow="Master data"
           title="Snagging pricing"
-          description="The rate per square foot, the multiplier by property type, and the scope and terms on every quotation. Admin only."
+          description="The rate per square foot, the multiplier by property type, and the scope and terms on every quotation."
         />
       )}
 
@@ -142,13 +156,15 @@ export default function PricingSettings() {
                 <Info />
                 <AlertTitle>You are viewing these values read-only</AlertTitle>
                 <AlertDescription>
-                  Only an admin can change the snagging rates, multipliers and terms.
+                  Only an admin can change the snagging rates, multipliers and
+                  terms.
                 </AlertDescription>
               </Alert>
             ) : null}
 
             <SectionCard
               title="Rates"
+              icon={<Coins />}
               description="The base figures behind every quotation total."
               bodyClassName="border-t"
             >
@@ -170,7 +186,9 @@ export default function PricingSettings() {
                     step="0.01"
                     value={config.external_rate_per_sqft}
                     disabled={!canEdit}
-                    onChange={(e) => set("external_rate_per_sqft", num(e.target.value))}
+                    onChange={(e) =>
+                      set("external_rate_per_sqft", num(e.target.value))
+                    }
                   />
                 </Field>
                 <Field label="VAT %" hint="Applied to the quotation subtotal.">
@@ -201,7 +219,9 @@ export default function PricingSettings() {
                     step="1"
                     value={config.additional_visit_price}
                     disabled={!canEdit}
-                    onChange={(e) => set("additional_visit_price", num(e.target.value))}
+                    onChange={(e) =>
+                      set("additional_visit_price", num(e.target.value))
+                    }
                   />
                 </Field>
               </div>
@@ -209,6 +229,7 @@ export default function PricingSettings() {
 
             <SectionCard
               title="Multiplier by property type"
+              icon={<Building2 />}
               description="The base rate is multiplied by this before VAT."
               bodyClassName="border-t"
             >
@@ -230,6 +251,7 @@ export default function PricingSettings() {
 
             <SectionCard
               title="Scope of work & terms"
+              icon={<FileText />}
               description="Printed on every snagging quotation."
               bodyClassName="border-t"
             >
@@ -258,7 +280,9 @@ export default function PricingSettings() {
             {canEdit ? (
               <div className="flex flex-wrap items-center justify-end gap-3">
                 {dirty ? (
-                  <p className="text-muted-foreground text-sm">You have unsaved changes.</p>
+                  <p className="text-muted-foreground text-sm">
+                    You have unsaved changes.
+                  </p>
                 ) : null}
                 <SubmitButton
                   onClick={() => void save()}
@@ -292,7 +316,9 @@ function Field({
 }) {
   return (
     <div className="space-y-1.5">
-      <Label className="text-muted-foreground text-xs font-medium">{label}</Label>
+      <Label className="text-muted-foreground text-xs font-medium">
+        {label}
+      </Label>
       {children}
       {hint ? <p className="text-muted-foreground text-xs">{hint}</p> : null}
     </div>

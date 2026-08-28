@@ -452,7 +452,7 @@ export function ExtensionsPageClient() {
 
       {/* ── Main Card ── */}
       <Card className="w-full flex-1 relative top-px right-px gap-4">
-        <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        {/* <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div className="flex gap-1 flex-col">
             <CardTitle className="text-xl flex items-center gap-2">
               <Download className="size-5 text-primary" />
@@ -462,7 +462,14 @@ export function ExtensionsPageClient() {
               Download all attachments for a service appointment or an entire work order.
             </CardDescription>
           </div>
-        </CardHeader>
+        </CardHeader> */}
+        <div className="print:hidden px-4">
+          <p className="eyebrow">Extension</p>
+          <h1 className="mt-1.5 text-3xl">Bulk Download</h1>
+          <p className="text-muted-foreground mt-1 text-[0.9375rem]">
+            Download all attachments for a service appointment or an entire work order.
+          </p>
+        </div>
 
         <CardContent>
           <Tabs defaultValue="appointment" className="w-full gap-0">

@@ -1,324 +1,159 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowRight, Inbox, Plus, RefreshCw } from "lucide-react";
+import { Plus, RefreshCw } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
-import { snaggingService } from "@/modules/snagging";
-import { ActionType, ResourceType, type SnaggingOverview } from "@/types/types";
+import { ActionType, ResourceType } from "@/types/types";
 
-import { EmptyState } from "@/components/ui/empty-state";
-
-import {
-  DataState,
-  FieldsSkeleton,
-  ListSkeleton,
-  PageHeading,
-  SectionCard,
-  SectionSkeleton,
-  StatCard,
-  StatGridSkeleton,
-  SubmitButton,
-  timeAgo,
-} from "./shared";
+import { InspectionActivity } from "./overview/inspection-activity";
+import { InspectionPipeline } from "./overview/inspection-pipeline";
+import { InspectorPerformance } from "./overview/inspector-performance";
+import { KpiRow } from "./overview/kpi-row";
+import { NeedsAttention } from "./overview/needs-attention";
+import { QuotationAnalytics } from "./overview/quotation-analytics";
+import { SnagOverview } from "./overview/snag-overview";
+import { SnagSeverity } from "./overview/snag-severity";
+import { SnagsByCategory } from "./overview/snags-by-category";
+import { UpcomingInspections } from "./overview/upcoming-inspections";
+import { lastFetchedAt, refreshAll } from "./overview/use-section";
+import { PageHeading } from "./shared";
 
 /**
- * Today at a glance.
+ * The Snagging Overview.
  *
- * The screen answers three questions in the order an ops lead asks
- * them: what is in flight, what is waiting on me, and what is the
- * portfolio doing. Everything below the fold is context; everything
- * above it is a decision.
+ * Eight sections, each fetching its own data, rendering its own
+ * skeleton, and failing on its own. There is deliberately no combined
+ * request and no page-level spinner: the KPI row is interactive while
+ * the category chart is still loading, and a broken quotation query
+ * costs one card rather than the page.
+ *
+ * The order is an argument about attention. What needs somebody now
+ * comes first — headline figures, then activity beside the attention
+ * list, then the pipeline beside what is booked. The two analytics
+ * sections sit past a divider at the bottom, quieter, and do not even
+ * fetch until they are scrolled to.
  */
 export default function SnaggingOverviewDashboard() {
   const router = useRouter();
   const { userProfile } = useAuth();
-  const [data, setData] = useState<SnaggingOverview | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [syncing, setSyncing] = useState(false);
-
   const canCreate = hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.CREATE);
 
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      setData(await snaggingService.getOverview());
-    } catch (err) {
-      // Kept on the page rather than toasted: a failed overview used to
-      // leave the day looking like zero jobs in flight.
-      setError(err instanceof Error ? err.message : "Could not load the overview");
-    } finally {
-      setLoading(false);
-    }
+  const [refreshing, setRefreshing] = useState(false);
+
+  const pull = useCallback(() => {
+    setRefreshing(true);
+    refreshAll();
+    // The sections each reload on their own; this is only how long the
+    // button says it is working, so the click has an answer.
+    window.setTimeout(() => setRefreshing(false), 600);
   }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  async function refresh() {
-    setSyncing(true);
-    await load();
-    setSyncing(false);
-  }
-
-  const inFlight = data
-    ? data.counts.assigned + data.counts.inProgress + data.counts.submitted
-    : 0;
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeading
         eyebrow="Property care"
-        title="Today at a glance"
-        description={
-          data
-            ? `${inFlight} job${inFlight === 1 ? "" : "s"} in flight. ${
-                data.counts.submitted
-              } inspection${data.counts.submitted === 1 ? " is" : "s are"} waiting on you.`
-            : loading
-              ? "Loading the day."
-              : "Every inspection in flight, and what is waiting on you."
-        }
+        title="Snagging Overview"
+        description="Monitor inspections, quotations, snags, and work requiring attention."
         actions={
-          <>
-            <SubmitButton
-              variant="outline"
-              onClick={() => void refresh()}
-              pending={syncing}
-              pendingLabel="Pulling…"
-              icon={<RefreshCw className="size-4" />}
-            >
+          <div className="flex flex-wrap items-center gap-2">
+            <LastUpdated refreshing={refreshing} />
+            <Button variant="outline" onClick={pull} disabled={refreshing}>
+              <RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />
               Pull changes
-            </SubmitButton>
+            </Button>
             {canCreate ? (
               <Button onClick={() => router.push("/snagging/jobs/new")}>
                 <Plus className="size-4" />
                 New job
               </Button>
             ) : null}
-          </>
+          </div>
         }
       />
 
-      <DataState
-        loading={loading}
-        error={error}
-        // Retrying through refresh() so the spinner lands on the button
-        // that is already the page's "try the server again" control.
-        onRetry={() => void refresh()}
-        retrying={syncing}
-        errorTitle="Could not load the overview"
-        skeleton={
-          // The whole page has a shape while it loads, not just the KPI
-          // row: the sections below used to pop in after it.
-          <div className="flex flex-col gap-6">
-            <StatGridSkeleton count={5} className="lg:grid-cols-5" />
-            <div className="grid gap-6 lg:grid-cols-2">
-              <SectionSkeleton />
-              <SectionSkeleton>
-                <ListSkeleton rows={3} />
-              </SectionSkeleton>
-            </div>
-            <SectionSkeleton>
-              <FieldsSkeleton fields={3} columns={3} />
-            </SectionSkeleton>
-          </div>
-        }
+      <KpiRow />
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="">
+          <InspectionActivity />
+        </div>
+        <div className="">
+          <InspectionPipeline />
+        </div>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+
+        <div className="">
+          <NeedsAttention />
+        </div>
+        <div className="">
+          <UpcomingInspections />
+        </div>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <SnagOverview />
+        <SnagSeverity />
+      </div>
+
+      <SnagsByCategory />
+
+      {/* Everything below here is analysis rather than action. The
+          divider and the quieter cards are what stop it competing with
+          the attention list above. */}
+      <div
+        className="mt-4 flex items-center gap-4"
+        role="separator"
+        aria-label="Analytics"
       >
-        {data ? (
-          <div className="flex flex-col gap-6">
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-              <StatCard
-                label="Assigned"
-                value={data.counts.assigned}
-                caption="pack not pulled"
-                tone="neutral"
-                href="/snagging/jobs?status=assigned"
-              />
-              <StatCard
-                label="In progress"
-                value={data.counts.inProgress}
-                caption="capture underway"
-                tone="progress"
-                href="/snagging/jobs?status=in_progress"
-              />
-              <StatCard
-                label="Submitted"
-                value={data.counts.submitted}
-                caption="waiting on review"
-                tone="review"
-                href="/snagging/review"
-              />
-              <StatCard
-                label="Approved"
-                value={data.counts.approved}
-                caption="report ready"
-                tone="good"
-                href="/snagging/jobs?status=approved"
-              />
-              <StatCard
-                label="Needs correction"
-                value={data.counts.needsCorrection}
-                caption="reopened on device"
-                tone="bad"
-                href="/snagging/jobs?status=rejected"
-              />
-            </div>
+        <Separator className="flex-1" />
+        <span className="text-muted-foreground shrink-0 text-xs font-semibold tracking-[0.14em] uppercase">
+          Analytics
+        </span>
+        <Separator className="flex-1" />
+      </div>
 
-            <div className="grid gap-6 lg:grid-cols-2">
-              <SectionCard
-                title="Waiting on review"
-                action={
-                  <Button asChild variant="link" className="text-brand h-auto p-0">
-                    <Link href="/snagging/review">Open queue</Link>
-                  </Button>
-                }
-                bodyClassName="border-t"
-              >
-                {data.waitingOnReview.length === 0 ? (
-                  <EmptyState
-                    icon={<Inbox className="size-6" />}
-                    title="Nothing waiting"
-                    description="Every submitted inspection has been actioned. New submissions land here."
-                  />
-                ) : (
-                  <ul>
-                    {data.waitingOnReview.map((task) => (
-                      <li key={task.id} className="border-b last:border-b-0">
-                        <Link
-                          href={`/snagging/${task.id}`}
-                          className="hover:bg-mist-soft flex flex-wrap items-center gap-3 px-5 py-4 transition-colors"
-                        >
-                          <span className="text-muted-foreground font-mono text-xs">
-                            {task.code}
-                          </span>
-                          <span className="min-w-40 flex-1">
-                            <span className="block font-medium">{task.unit_label}</span>
-                            <span className="text-muted-foreground block text-xs">
-                              {[task.building_name, task.client_name].filter(Boolean).join(" · ")}
-                            </span>
-                          </span>
-                          {task.high_severity_count > 0 ? (
-                            <Badge
-                              variant="secondary"
-                              className="bg-danger/10 text-danger border-0"
-                            >
-                              {task.high_severity_count} high
-                            </Badge>
-                          ) : null}
-                          <span className="text-muted-foreground text-xs whitespace-nowrap">
-                            {timeAgo(task.submitted_at)}
-                          </span>
-                        </Link>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </SectionCard>
-
-              {/*
-                No severity breakdown here. A portfolio-wide split of
-                high / medium / low compares nothing useful across
-                projects, and severity is the client report's job
-                (FR-7.02, FR-10.05). What is left are the two figures
-                that were sitting underneath it, which are about the
-                state of the work rather than the shape of the defects.
-              */}
-              <SectionCard
-                title="Where the work stands"
-                description="De-snag activity still open, and how much comes back verified."
-                bodyClassName="px-5 pb-5"
-              >
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <p className="eyebrow">De-snag rounds</p>
-                    <p className="mt-1 text-2xl font-semibold tabular-nums">
-                      {data.roundsOutstanding}
-                    </p>
-                    <p className="text-muted-foreground text-xs">outstanding</p>
-                  </div>
-                  <div>
-                    <p className="eyebrow">Pass rate</p>
-                    <p className="text-success mt-1 text-2xl font-semibold tabular-nums">
-                      {data.passRate === null ? "—" : `${data.passRate}%`}
-                    </p>
-                    <p className="text-muted-foreground text-xs">verified closed, last 30d</p>
-                  </div>
-                </div>
-
-                <div className="mt-6 border-t pt-5">
-                  <p className="text-muted-foreground text-sm">
-                    Snags recorded across the portfolio:{" "}
-                    <span className="text-foreground font-medium tabular-nums">
-                      {data.openSnagTotal}
-                    </span>{" "}
-                    open of {data.snagTotal}.
-                  </p>
-                </div>
-              </SectionCard>
-            </div>
-
-            {/* The system allows one near-black band per page. It is spent
-                here, on the thing most likely to be misread: a submitted
-                inspection is not the same as a complete one. */}
-            <Card className="kz-band-dark border-0 p-6">
-              <div className="flex flex-wrap items-center justify-between gap-6">
-                <div className="max-w-xl">
-                  <p className="eyebrow text-brand-200">Still in flight</p>
-                  <h2 className="mt-2 text-2xl text-white">
-                    {data.sync.stuckInError === 0
-                      ? "Every change the field sent has landed"
-                      : `${data.sync.stuckInError} change${
-                          data.sync.stuckInError === 1 ? "" : "s"
-                        } the server refused`}
-                  </h2>
-                  <p className="mt-2 text-sm text-white/70">
-                    A submitted inspection is not the same as a complete one. Media can trail the
-                    snag record, so a job can arrive as metadata first and pick up its photos after.
-                  </p>
-                </div>
-
-                <div className="flex items-center gap-8">
-                  <div>
-                    <p className="text-2xl font-semibold text-white tabular-nums">
-                      {data.sync.photosReceived}
-                    </p>
-                    <p className="text-xs text-white/60">files received</p>
-                  </div>
-                  <div>
-                    <p
-                      className={`text-2xl font-semibold tabular-nums ${
-                        data.sync.stuckInError > 0 ? "text-brand-200" : "text-white"
-                      }`}
-                    >
-                      {data.sync.stuckInError}
-                    </p>
-                    <p className="text-xs text-white/60">stuck in error</p>
-                  </div>
-                  <Button
-                    asChild
-                    variant="outline"
-                    className="border-0 bg-white text-ink hover:bg-white/90"
-                  >
-                    <Link href="/snagging/analytics">
-                      Sync health
-                      <ArrowRight className="size-4" />
-                    </Link>
-                  </Button>
-                </div>
-              </div>
-            </Card>
-          </div>
-        ) : null}
-      </DataState>
+      <InspectorPerformance />
+      <QuotationAnalytics />
     </div>
   );
+}
+
+/**
+ * How stale the page is, in the words somebody would use.
+ *
+ * Ticks on its own rather than on a render, so the figure keeps up
+ * without any section having to re-render to move it.
+ */
+function LastUpdated({ refreshing }: { refreshing: boolean }) {
+  // Read on a timer rather than during render: the cache and the clock
+  // are both mutable state outside React, and reading them while
+  // rendering makes the output depend on when the render happened.
+  const [label, setLabel] = useState<string | null>(null);
+
+  useEffect(() => {
+    const describe = () => {
+      const at = lastFetchedAt();
+      if (at === null) {
+        setLabel(null);
+        return;
+      }
+      const minutes = Math.floor((Date.now() - at) / 60_000);
+      setLabel(minutes < 1 ? "just now" : minutes === 1 ? "1m ago" : `${minutes}m ago`);
+    };
+
+    describe();
+    const timer = window.setInterval(describe, 30_000);
+    return () => window.clearInterval(timer);
+  }, [refreshing]);
+
+  if (refreshing) return <span className="text-muted-foreground text-sm">Updating…</span>;
+  if (!label) return null;
+  return <span className="text-muted-foreground text-sm">Last updated {label}</span>;
 }

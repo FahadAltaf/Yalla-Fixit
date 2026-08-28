@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { StatCardGrid } from "@/components/dashboard/shared/kaizen";
 
 /**
  * The four data states, in one vocabulary.
@@ -42,16 +43,24 @@ import { cn } from "@/lib/utils";
 
 /* ────────────────────────────── skeletons ────────────────────────────── */
 
-/** A row of stat cards, matching StatCard's padding and type scale. */
+/**
+ * A row of stat cards, matching StatCard's padding and type scale.
+ *
+ * It renders through StatCardGrid rather than repeating the grid, so the
+ * skeleton sits on the same columns the real cards land on and the row
+ * does not reflow the moment the data arrives.
+ */
 export function StatGridSkeleton({
   count = 4,
+  columns,
   className,
 }: {
   count?: number;
+  columns?: 3 | 4 | 5;
   className?: string;
 }) {
   return (
-    <div className={cn("grid gap-4 sm:grid-cols-2 lg:grid-cols-4", className)}>
+    <StatCardGrid columns={columns ?? (count === 3 || count === 5 ? count : 4)} className={className}>
       {Array.from({ length: count }).map((_, index) => (
         <Card key={index} className="h-full">
           <div className="flex items-start justify-between gap-2 px-4">
@@ -67,7 +76,7 @@ export function StatGridSkeleton({
           </div>
         </Card>
       ))}
-    </div>
+    </StatCardGrid>
   );
 }
 

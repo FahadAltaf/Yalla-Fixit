@@ -11,9 +11,12 @@ import {
 } from "@dnd-kit/core";
 import { useDraggable } from "@dnd-kit/core";
 import {
+  ArrowUpDown,
   CalendarClock,
+  Check,
   CheckCircle2,
   ChevronDown,
+  ChevronUp,
   CircleAlert,
   CirclePause,
   Clock,
@@ -33,7 +36,14 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import MultipleSelector, { Option } from "@/components/ui/multiselect";
@@ -55,7 +65,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dialog";
 import StatusBadge from "@/components/ui/status-badge";
-import { PageHeading } from "@/components/dashboard/shared/kaizen";
+import DateFilter from "./date-filter";
 import { useAuth } from "@/context/AuthContext";
 import {
   canDeleteTodoRecord,
@@ -210,7 +220,10 @@ function userLabel(user?: User | null) {
 function statusIcon(status: TodoStatus) {
   if (status === "done") return <CheckCircle2 className="size-4 text-success" />;
   if (status === "blocked") return <CircleAlert className="size-4 text-warning" />;
-  if (status === "canceled") return <CirclePause className="size-4 text-destructive" />;
+  // Canceled is closed, not broken -- neutral slate keeps it from competing
+  // with Blocked for attention. The CirclePause icon still tells it apart
+  // from To-do, so this does not lean on colour alone.
+  if (status === "canceled") return <CirclePause className="size-4 text-muted-foreground/70" />;
   if (status === "in_progress") return <Clock className="size-4 text-warning" />;
   return <ListTodo className="size-4 text-muted-foreground" />;
 }
@@ -248,7 +261,7 @@ function DroppableColumn({
   return (
     <section
       ref={setNodeRef}
-      className={`min-h-[420px] rounded-lg border bg-muted/20 transition-colors ${isOver ? "border-primary bg-primary/5" : ""
+      className={`flex min-h-[420px] flex-col rounded-lg border bg-muted/20 transition-colors ${isOver ? "border-primary bg-primary/5" : ""
         }`}
     >
       {children}
@@ -524,13 +537,16 @@ export default function TodosPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(filters)]);
 
-  const openCreateDialog = () => {
+  // `status` is passed by a column's quick-add so the new todo lands in the
+  // column it was started from; the header button omits it and gets the
+  // default.
+  const openCreateDialog = (status?: TodoStatus) => {
     if (!canCreate) {
       toast.error("You do not have permission to create todos");
       return;
     }
     setEditingTodo(null);
-    setForm(emptyForm);
+    setForm(status ? { ...emptyForm, status } : emptyForm);
     setCommentBody("");
     setDialogOpen(true);
   };
@@ -582,6 +598,21 @@ export default function TodosPage() {
       sortDirection: current.sortDirection,
     }));
   };
+
+  // Sort is not a filter, so an empty board that is merely sorted should
+  // still read as "nothing here yet" rather than "nothing matched".
+  const hasActiveFilters = useMemo(
+    () =>
+      Object.entries(filters).some(
+        ([key, value]) =>
+          key !== "sortBy" &&
+          key !== "sortDirection" &&
+          value !== undefined &&
+          value !== "" &&
+          value !== "all",
+      ),
+    [filters],
+  );
 
   const resetTagForm = () => {
     setTagForm(emptyTagForm);
@@ -803,256 +834,283 @@ export default function TodosPage() {
   const isDialogReadOnly = Boolean(editingTodo && !canEditTodo(editingTodo));
 
   return (
-    <div className="w-full min-w-0 space-y-4">
-      <PageHeading
-        eyebrow="Work management"
-        title="Todos"
-        description="Track portal work by owner, assignee, deadline, and follow-up."
-        actions={
-          <div className="flex flex-wrap gap-2">
-            <div className="flex h-11 rounded-full border p-1">
-              <Button
-                type="button"
-                size="sm"
-                variant={viewMode === "kanban" ? "secondary" : "ghost"}
-                onClick={() => setViewMode("kanban")}
-              >
-                <LayoutGrid className="size-3.5 sm:mr-1.5" />
-                <span className="hidden sm:inline">Kanban</span>
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant={viewMode === "list" ? "secondary" : "ghost"}
-                onClick={() => setViewMode("list")}
-              >
-                <List className="size-3.5 sm:mr-1.5" />
-                <span className="hidden sm:inline">List</span>
-              </Button>
-            </div>
-            {canEdit && (
-              <Button type="button" variant="outline" size="sm" onClick={() => setTagsDialogOpen(true)}>
-                <Palette className="size-3.5 sm:mr-1.5" />
-                <span className="hidden sm:inline">Tags</span>
-              </Button>
-            )}
-            <Button variant="outline" size="sm" onClick={loadTodos} disabled={loading}>
-              <RefreshCw className={`size-3.5 sm:mr-1.5 ${loading ? "animate-spin" : ""}`} />
-              <span className="hidden sm:inline">Refresh</span>
+    <div className="flex w-full min-w-0 flex-col gap-4">
+      {/* Header, toolbar and filters follow the Daily schedule layout: a
+          plain heading block, one flowing toolbar row, and a small text
+          toggle over an uncarded filter grid -- rather than a heading with
+          the whole toolbar crammed into its right-hand actions slot and the
+          filters boxed in a Card. */}
+      <div>
+        <p className="eyebrow">Work management</p>
+        <h1 className="mt-1.5 text-3xl">Todos</h1>
+        <p className="text-muted-foreground mt-1 text-[0.9375rem]">
+          Track portal work by owner, assignee, deadline, and follow-up.
+        </p>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {/* Left: what you are looking at, and how it is arranged. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex rounded-full border p-1">
+            <Button
+              type="button"
+              size="sm"
+              variant={viewMode === "kanban" ? "secondary" : "ghost"}
+              onClick={() => setViewMode("kanban")}
+            >
+              <LayoutGrid className="size-3.5 sm:mr-1.5" />
+              <span className="hidden sm:inline">Kanban</span>
             </Button>
-            {canCreate && (
-              <Button size="sm" onClick={openCreateDialog}>
-                <Plus className="size-3.5 sm:mr-1.5" />
-                <span className="hidden sm:inline">New Todo</span>
-              </Button>
-            )}
+            <Button
+              type="button"
+              size="sm"
+              variant={viewMode === "list" ? "secondary" : "ghost"}
+              onClick={() => setViewMode("list")}
+            >
+              <List className="size-3.5 sm:mr-1.5" />
+              <span className="hidden sm:inline">List</span>
+            </Button>
           </div>
-        }
-      />
 
-      <Card className="w-full min-w-0 p-4">
-        <div className="flex items-center justify-between gap-3">
-          <Button
-            type="button"
-            variant="ghost"
-            className="h-8 px-2"
-            onClick={() => setFiltersOpen((open) => !open)}
-            aria-expanded={filtersOpen}
+          <Select
+            value={filters.sortBy || "deadline"}
+            onValueChange={(value) =>
+              setFilters((current) => ({ ...current, sortBy: value as TodosFilters["sortBy"] }))
+            }
           >
-            <SlidersHorizontal className="size-4 sm:mr-2" />
-            <span className="hidden sm:inline">Filters</span>
-            <ChevronDown className={`ml-1 size-4 transition-transform ${filtersOpen ? "rotate-180" : ""}`} />
-          </Button>
-          <Button variant="outline" size="sm" onClick={clearFilters}>
-            <X className="size-4 sm:mr-2" />
-            <span className="hidden sm:inline">Clear</span>
-          </Button>
+            <SelectTrigger size="sm" className="w-[188px] rounded-full" aria-label="Sort by">
+              <ArrowUpDown className="size-3.5 shrink-0" />
+              <SelectValue placeholder="Sort by" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="deadline">Deadline / due date</SelectItem>
+              <SelectItem value="created">Created date</SelectItem>
+              <SelectItem value="todoKey">Todo ID</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select
+            value={filters.sortDirection || "asc"}
+            onValueChange={(value) =>
+              setFilters((current) => ({ ...current, sortDirection: value as TodosFilters["sortDirection"] }))
+            }
+          >
+            <SelectTrigger size="sm" className="w-[148px] rounded-full" aria-label="Sort order">
+              <SelectValue placeholder="Sort order" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="asc">Earliest first</SelectItem>
+              <SelectItem value="desc">Latest first</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
-        <div
-          className={`grid transition-[grid-template-rows,opacity,margin] duration-300 ease-in-out ${filtersOpen ? "mt-4 grid-rows-[1fr] opacity-100" : "mt-0 grid-rows-[0fr] opacity-0"
-            }`}
+        {/* Right: utilities, then the one primary action. */}
+        <div className="flex flex-wrap items-center gap-2">
+          {canEdit && (
+            <Button type="button" variant="outline" size="sm" onClick={() => setTagsDialogOpen(true)}>
+              <Palette className="size-3.5 sm:mr-1.5" />
+              <span className="hidden sm:inline">Tags</span>
+            </Button>
+          )}
+          <Button variant="outline" size="sm" onClick={loadTodos} disabled={loading}>
+            <RefreshCw className={`size-3.5 sm:mr-1.5 ${loading ? "animate-spin" : ""}`} />
+            <span className="hidden sm:inline">Refresh</span>
+          </Button>
+          {canCreate && (
+            <Button size="sm" onClick={() => openCreateDialog()}>
+              <Plus className="size-3.5 sm:mr-1.5" />
+              <span className="hidden sm:inline">New Todo</span>
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {/* The whole search + filter area collapses behind a text toggle, as
+          on the schedule board. Clear only appears when there is something
+          to clear. */}
+      <div className="flex items-center justify-between gap-3">
+        <button
+          type="button"
+          onClick={() => setFiltersOpen((open) => !open)}
+          aria-expanded={filtersOpen}
+          className="text-muted-foreground hover:text-foreground flex items-center gap-1.5 text-xs font-medium"
         >
-          <div className="min-h-0 overflow-hidden">
-            <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-              <div className="grid gap-1">
-                <Label className="text-xs text-muted-foreground">Search</Label>
-                <div className="relative">
-                  <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-                  <Input
-                    className="pl-8"
-                    placeholder="ID, title, description, or related ID"
-                    value={filters.search || ""}
-                    onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))}
-                  />
-                </div>
-              </div>
-              <div className="grid gap-1">
-                <Label className="text-xs text-muted-foreground">Status</Label>
-                <Select
-                  value={filters.status || "all"}
-                  onValueChange={(value) => setFilters((current) => ({ ...current, status: value as TodoStatus | "all" }))}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Status" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All statuses</SelectItem>
-                    {TODO_STATUSES.map((status) => (
-                      <SelectItem key={status} value={status}>
-                        {TODO_STATUS_LABELS[status]}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-1">
-                <Label className="text-xs text-muted-foreground">Assignee</Label>
-                <Select
-                  value={filters.assigneeId || "all"}
-                  onValueChange={(value) => setFilters((current) => ({ ...current, assigneeId: value === "all" ? undefined : value }))}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Assignee" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All assignees</SelectItem>
-                    {users.map((user) => (
-                      <SelectItem key={user.id} value={user.id}>
-                        {userLabel(user)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              {canViewAllRecords && (
-                <div className="grid gap-1">
-                  <Label className="text-xs text-muted-foreground">Owner</Label>
-                  <Select
-                    value={filters.ownerId || "all"}
-                    onValueChange={(value) => setFilters((current) => ({ ...current, ownerId: value === "all" ? undefined : value }))}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="Owner" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All owners</SelectItem>
-                      {users.map((user) => (
-                        <SelectItem key={user.id} value={user.id}>
-                          {userLabel(user)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-              <div className="grid gap-1">
-                <Label className="text-xs text-muted-foreground">Related Type</Label>
-                <Select
-                  value={filters.relatedType || "all"}
-                  onValueChange={(value) => setFilters((current) => ({ ...current, relatedType: value as TodoRelatedType | "all" }))}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Related type" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All related types</SelectItem>
-                    {RELATED_TYPES.map((type) => (
-                      <SelectItem key={type} value={type}>
-                        {type.replace("_", " ")}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-1">
-                <Label className="text-xs text-muted-foreground">Tags</Label>
-                <Select
-                  value={filters.tag || "all"}
-                  onValueChange={(value) => setFilters((current) => ({ ...current, tag: value === "all" ? undefined : value }))}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Tag" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All tags</SelectItem>
-                    {uniqueTags.map((tag) => (
-                      <SelectItem key={tag} value={tag}>
-                        {tag}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-1">
-                <Label className="text-xs text-muted-foreground">Deadline</Label>
-                <Input
-                  type="date"
-                  value={filters.deadlineDate || ""}
-                  onChange={(event) => setFilters((current) => ({ ...current, deadlineDate: event.target.value }))}
-                />
-              </div>
-              <div className="grid gap-1">
-                <Label className="text-xs text-muted-foreground">Reminder</Label>
-                <Input
-                  type="date"
-                  value={filters.reminderDate || ""}
-                  onChange={(event) => setFilters((current) => ({ ...current, reminderDate: event.target.value }))}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-      </Card>
+          <SlidersHorizontal className="size-3.5" />
+          Search &amp; filters
+          {filtersOpen ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+        </button>
+        {hasActiveFilters && (
+          <Button variant="ghost" size="sm" onClick={clearFilters}>
+            <X className="size-3.5" />
+            Clear
+          </Button>
+        )}
+      </div>
 
-      <Card className="w-full min-w-0 p-4">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <div className="grid gap-1">
-            <Label className="text-xs text-muted-foreground">Sort By</Label>
-            <Select
-              value={filters.sortBy || "deadline"}
-              onValueChange={(value) =>
-                setFilters((current) => ({
-                  ...current,
-                  sortBy: value as TodosFilters["sortBy"],
-                }))
-              }
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Sort by" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="deadline">Deadline / due date</SelectItem>
-                <SelectItem value="created">Created date</SelectItem>
-                <SelectItem value="todoKey">Todo ID</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="grid gap-1">
-            <Label className="text-xs text-muted-foreground">Sort Order</Label>
-            <Select
-              value={filters.sortDirection || "asc"}
-              onValueChange={(value) =>
-                setFilters((current) => ({
-                  ...current,
-                  sortDirection: value as TodosFilters["sortDirection"],
-                }))
-              }
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Sort order" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="asc">Earliest first</SelectItem>
-                <SelectItem value="desc">Latest first</SelectItem>
-              </SelectContent>
-            </Select>
+      <div className={`flex flex-col gap-2 ${filtersOpen ? "" : "hidden"}`}>
+        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+        <div className="grid gap-1">
+          <Label className="text-xs text-muted-foreground">Search</Label>
+          <div className="relative">
+            <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+            <Input
+              className="pl-8"
+              placeholder="ID, title, description, or related ID"
+              value={filters.search || ""}
+              onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))}
+            />
           </div>
         </div>
-      </Card>
+        <div className="grid gap-1">
+          <Label className="text-xs text-muted-foreground">Status</Label>
+          <Select
+            value={filters.status || "all"}
+            onValueChange={(value) => setFilters((current) => ({ ...current, status: value as TodoStatus | "all" }))}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All statuses</SelectItem>
+              {TODO_STATUSES.map((status) => (
+                <SelectItem key={status} value={status}>
+                  {TODO_STATUS_LABELS[status]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="grid gap-1">
+          <Label className="text-xs text-muted-foreground">Assignee</Label>
+          <Select
+            value={filters.assigneeId || "all"}
+            onValueChange={(value) => setFilters((current) => ({ ...current, assigneeId: value === "all" ? undefined : value }))}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Assignee" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All assignees</SelectItem>
+              {users.map((user) => (
+                <SelectItem key={user.id} value={user.id}>
+                  {userLabel(user)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        {canViewAllRecords && (
+          <div className="grid gap-1">
+            <Label className="text-xs text-muted-foreground">Owner</Label>
+            <Select
+              value={filters.ownerId || "all"}
+              onValueChange={(value) => setFilters((current) => ({ ...current, ownerId: value === "all" ? undefined : value }))}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Owner" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All owners</SelectItem>
+                {users.map((user) => (
+                  <SelectItem key={user.id} value={user.id}>
+                    {userLabel(user)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+        <div className="grid gap-1">
+          <Label className="text-xs text-muted-foreground">Related Type</Label>
+          <Select
+            value={filters.relatedType || "all"}
+            onValueChange={(value) => setFilters((current) => ({ ...current, relatedType: value as TodoRelatedType | "all" }))}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Related type" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All related types</SelectItem>
+              {RELATED_TYPES.map((type) => (
+                <SelectItem key={type} value={type}>
+                  {type.replace("_", " ")}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="grid gap-1">
+          <Label className="text-xs text-muted-foreground">Tags</Label>
+          <Select
+            value={filters.tag || "all"}
+            onValueChange={(value) => setFilters((current) => ({ ...current, tag: value === "all" ? undefined : value }))}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Tag" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All tags</SelectItem>
+              {uniqueTags.map((tag) => (
+                <SelectItem key={tag} value={tag}>
+                  {tag}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="grid gap-1">
+          <Label className="text-xs text-muted-foreground">Deadline</Label>
+          <DateFilter
+            ariaLabel="Filter by deadline"
+            value={filters.deadlineDate || ""}
+            onChange={(value) => setFilters((current) => ({ ...current, deadlineDate: value }))}
+          />
+        </div>
+        <div className="grid gap-1">
+          <Label className="text-xs text-muted-foreground">Reminder</Label>
+          <DateFilter
+            ariaLabel="Filter by reminder"
+            value={filters.reminderDate || ""}
+            onChange={(value) => setFilters((current) => ({ ...current, reminderDate: value }))}
+          />
+        </div>
+        </div>
+      </div>
 
       <div className="w-full min-w-0">
-        {viewMode === "kanban" ? (
+        {viewMode === "kanban" && !loading && todos.length === 0 ? (
+          // With nothing on the board at all, five identical "No todos"
+          // placeholders say the same thing five times and bury the one
+          // action that helps. Show it once, with the way out.
+          <Card className="flex min-h-[420px] w-full min-w-0 flex-col items-center justify-center gap-3 p-8 text-center">
+            <div className="bg-muted text-muted-foreground flex size-12 items-center justify-center rounded-full">
+              <ListTodo className="size-6" />
+            </div>
+            <div className="space-y-1">
+              <h2 className="text-lg font-semibold">
+                {hasActiveFilters ? "No todos match these filters" : "No todos yet"}
+              </h2>
+              <p className="text-muted-foreground text-sm">
+                {hasActiveFilters
+                  ? "Try widening or clearing the filters to see more."
+                  : "Create the first one and it will show up in the To-do column."}
+              </p>
+            </div>
+            {hasActiveFilters ? (
+              <Button variant="outline" onClick={clearFilters}>
+                <X className="size-4" />
+                Clear filters
+              </Button>
+            ) : (
+              canCreate && (
+                <Button onClick={() => openCreateDialog()}>
+                  <Plus className="size-4" />
+                  New Todo
+                </Button>
+              )
+            )}
+          </Card>
+        ) : viewMode === "kanban" ? (
           <DndContext sensors={sensors} onDragEnd={onDragEnd}>
             <div className="grid min-w-0 gap-4 xl:grid-cols-5">
               {TODO_STATUSES.map((status) => (
@@ -1064,18 +1122,40 @@ export default function TodosPage() {
                     </div>
                     <Badge variant="outline">{todosByStatus[status].length}</Badge>
                   </div>
-                  <div className="space-y-3 p-3">
-                    {todosByStatus[status].map((todo) => (
-                      <TodoCard
-                        key={todo.id}
-                        todo={todo}
-                        onEdit={openEditDialog}
-                        canDrag={canEditTodo(todo)}
-                      />
-                    ))}
-                    {!loading && todosByStatus[status].length === 0 && (
-                      <div className="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground">
-                        No todos
+
+                  {/* flex-1 on the card area lets an empty column centre its
+                      placeholder instead of pinning it to the top of a tall
+                      blank box, and keeps quick-add at the bottom either way. */}
+                  <div className="flex min-h-0 flex-1 flex-col">
+                    <div className="flex-1 space-y-3 p-3">
+                      {todosByStatus[status].map((todo) => (
+                        <TodoCard
+                          key={todo.id}
+                          todo={todo}
+                          onEdit={openEditDialog}
+                          canDrag={canEditTodo(todo)}
+                        />
+                      ))}
+                      {!loading && todosByStatus[status].length === 0 && (
+                        <div className="text-muted-foreground flex h-full flex-col items-center justify-center gap-2 py-6 text-center">
+                          {statusIcon(status)}
+                          <span className="text-sm">No todos</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {canCreate && (
+                      <div className="p-2 pt-0">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="text-muted-foreground hover:text-foreground w-full justify-start"
+                          onClick={() => openCreateDialog(status)}
+                        >
+                          <Plus className="size-3.5" />
+                          Add task
+                        </Button>
                       </div>
                     )}
                   </div>
@@ -1096,9 +1176,12 @@ export default function TodosPage() {
       </div>
 
       <Dialog open={tagsDialogOpen} onOpenChange={setTagsDialogOpen}>
-        <DialogContent className="grid max-h-[86vh] grid-rows-[auto_minmax(0,1fr)] overflow-hidden sm:max-w-4xl">
+        <DialogContent className="grid max-h-[86vh] w-[calc(100%-2rem)] grid-rows-[auto_minmax(0,1fr)] overflow-hidden sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Manage Tags</DialogTitle>
+            <DialogDescription>
+              Tags are shared across every todo. Renaming a colour here updates it everywhere the tag appears.
+            </DialogDescription>
           </DialogHeader>
 
           <div className={`min-h-0 overflow-y-auto pr-2 ${dialogScrollClass}`}>
@@ -1109,35 +1192,46 @@ export default function TodosPage() {
                   <Input
                     value={tagForm.name}
                     onChange={(event) => setTagForm((current) => ({ ...current, name: event.target.value }))}
-                    placeholder="priority, client, billing"
+                    placeholder="e.g. priority"
                   />
                 </div>
                 <div className="grid gap-1.5">
                   <Label>Color</Label>
-                  <div className="grid grid-cols-9 gap-2 sm:grid-cols-18">
-                    {MATERIAL_TAG_COLORS.map((color) => (
-                      <button
-                        key={color}
-                        type="button"
-                        className={`size-7 rounded-full border transition-transform hover:scale-110 ${tagForm.color.toLowerCase() === color.toLowerCase()
-                            ? "ring-2 ring-primary ring-offset-2"
-                            : ""
+                  {/* `sm:grid-cols-18` is not a real utility, so the row was
+                      relying on the 4xl dialog width to fit. A wrapping flex
+                      row holds any number of swatches at any dialog width. */}
+                  <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Tag colour">
+                    {MATERIAL_TAG_COLORS.map((color) => {
+                      const selected = tagForm.color.toLowerCase() === color.toLowerCase();
+                      return (
+                        <button
+                          key={color}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          className={`flex size-7 items-center justify-center rounded-full border transition-transform hover:scale-110 ${
+                            selected ? "ring-primary ring-2 ring-offset-2" : ""
                           }`}
-                        style={{ backgroundColor: color }}
-                        onClick={() => setTagForm((current) => ({ ...current, color }))}
-                        aria-label={`Use color ${color}`}
-                      />
-                    ))}
+                          style={{ backgroundColor: color }}
+                          onClick={() => setTagForm((current) => ({ ...current, color }))}
+                          aria-label={`Use color ${color}`}
+                        >
+                          {/* A ring alone is easy to miss against a saturated
+                              fill; the tick says which one is chosen. */}
+                          {selected && <Check className="size-3.5 text-white drop-shadow" />}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {canEdit && (
-                    <Button type="button" size="sm" className="h-10" onClick={saveTagDefinition} disabled={isSavingTag}>
+                    <Button type="button" onClick={saveTagDefinition} disabled={isSavingTag}>
                       {tagForm.id ? "Update" : "Add"}
                     </Button>
                   )}
                   {tagForm.id && (
-                    <Button type="button" size="sm" className="h-10" variant="outline" onClick={resetTagForm} disabled={isSavingTag}>
+                    <Button type="button" variant="outline" onClick={resetTagForm} disabled={isSavingTag}>
                       Cancel
                     </Button>
                   )}

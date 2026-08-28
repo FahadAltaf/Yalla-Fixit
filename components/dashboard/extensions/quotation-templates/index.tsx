@@ -332,7 +332,7 @@ export function QuotationTemplatesPage() {
   return (
 
     <Card className="w-full flex-1  relative top-px right-px gap-6">
-      <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      {/* <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex  gap-1 flex-col">
           <CardTitle className="text-xl flex items-center gap-2">
             <FileText className="size-5 text-primary" />
@@ -342,7 +342,16 @@ export function QuotationTemplatesPage() {
             Search a quotation by number or customer name, pick a template, preview it, and send it via email.
           </CardDescription>
         </div>
-      </CardHeader>
+      </CardHeader> */}
+
+      <div className="print:hidden px-4">
+        <p className="eyebrow">Extension</p>
+        <h1 className="mt-1.5 text-3xl">Quotation Templates</h1>
+        <p className="text-muted-foreground mt-1 text-[0.9375rem]">
+          Search a quotation by number or customer name, pick a template, preview it, and send it via email.
+        </p>
+      </div>
+
 
       <CardContent className="space-y-4">
 

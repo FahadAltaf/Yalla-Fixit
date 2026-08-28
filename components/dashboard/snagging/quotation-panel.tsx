@@ -1,7 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2, Clock, Copy, Download, FileText, Send, XCircle } from "lucide-react";
+import {
+  CheckCircle2,
+  Clock,
+  Copy,
+  Download,
+  FileText,
+  Send,
+  XCircle,
+} from "lucide-react";
 import { saveAs } from "file-saver";
 import { toast } from "sonner";
 
@@ -104,7 +112,11 @@ export function QuotationPanel({
   onChanged: () => void;
 }) {
   const { userProfile } = useAuth();
-  const canEdit = hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.EDIT);
+  const canEdit = hasResourceAction(
+    userProfile,
+    ResourceType.SNAGGING,
+    ActionType.EDIT,
+  );
   const { confirm, dialog } = useConfirm();
   const [quote, setQuote] = useState<SnaggingQuotation | null>(null);
   const [loading, setLoading] = useState(true);
@@ -129,7 +141,9 @@ export function QuotationPanel({
       setQuote(await snaggingService.getQuotation(task.id));
     } catch (err) {
       setQuote(null);
-      setError(err instanceof Error ? err.message : "Could not load the quotation");
+      setError(
+        err instanceof Error ? err.message : "Could not load the quotation",
+      );
     } finally {
       setLoading(false);
     }
@@ -152,7 +166,11 @@ export function QuotationPanel({
       await load();
       toast.success("Quotation generated");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not update the quotation");
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Could not update the quotation",
+      );
     } finally {
       setWorking(false);
     }
@@ -194,7 +212,10 @@ export function QuotationPanel({
       saveAs(blob, `Quotation-${quote.quote_number}.pdf`);
       toast.success("PDF downloaded", { id: t });
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not generate the PDF", { id: t });
+      toast.error(
+        e instanceof Error ? e.message : "Could not generate the PDF",
+        { id: t },
+      );
     } finally {
       setDownloading(false);
     }
@@ -214,17 +235,21 @@ export function QuotationPanel({
       toast.success("Quotation emailed to the client");
       await load();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not send the quotation");
+      toast.error(
+        error instanceof Error ? error.message : "Could not send the quotation",
+      );
     } finally {
       setWorking(false);
     }
   }
 
-  const isDecided = quote?.status === "approved" || quote?.status === "rejected";
+  const isDecided =
+    quote?.status === "approved" || quote?.status === "rejected";
 
   return (
     <SectionCard
       title="Quotation"
+      icon={<FileText />}
       description={
         error
           ? "The quotation could not be loaded."
@@ -258,7 +283,10 @@ export function QuotationPanel({
                 <Skeleton className="h-3 w-20" />
               </div>
               {Array.from({ length: 2 }).map((_, index) => (
-                <div key={index} className="flex items-center gap-4 border-b px-4 py-3.5">
+                <div
+                  key={index}
+                  className="flex items-center gap-4 border-b px-4 py-3.5"
+                >
                   <Skeleton className="h-4 flex-1" />
                   <Skeleton className="h-4 w-16" />
                   <Skeleton className="h-4 w-20" />
@@ -269,7 +297,9 @@ export function QuotationPanel({
                 {[0, 1, 2].map((index) => (
                   <div key={index} className="flex justify-end gap-4">
                     <Skeleton className="h-4 w-20" />
-                    <Skeleton className={cn("h-4", index === 2 ? "w-24" : "w-20")} />
+                    <Skeleton
+                      className={cn("h-4", index === 2 ? "w-24" : "w-20")}
+                    />
                   </div>
                 ))}
               </div>
@@ -327,9 +357,13 @@ export function QuotationPanel({
                   <CheckCircle2 />
                   <AlertTitle>Approved by the client</AlertTitle>
                   <AlertDescription>
-                    {quote.approved_by_name ? `${quote.approved_by_name} approved this` : "Approved"}
-                    {quote.decided_at ? ` on ${formatGstDateTime(quote.decided_at)}` : ""}. Inspector
-                    assignment is unlocked.
+                    {quote.approved_by_name
+                      ? `${quote.approved_by_name} approved this`
+                      : "Approved"}
+                    {quote.decided_at
+                      ? ` on ${formatGstDateTime(quote.decided_at)}`
+                      : ""}
+                    . Inspector assignment is unlocked.
                   </AlertDescription>
                 </Alert>
               ) : null}
@@ -338,7 +372,9 @@ export function QuotationPanel({
                   <XCircle />
                   <AlertTitle>Rejected by the client</AlertTitle>
                   <AlertDescription>
-                    {quote.approved_by_name ? `${quote.approved_by_name}: ` : ""}
+                    {quote.approved_by_name
+                      ? `${quote.approved_by_name}: `
+                      : ""}
                     {quote.rejected_reason || "No reason was given."}
                   </AlertDescription>
                 </Alert>
@@ -398,14 +434,21 @@ export function QuotationPanel({
                       <Button
                         size="sm"
                         onClick={() => {
-                          const s = (quote.property_snapshot ?? {}) as Record<string, unknown>;
-                          setRecipient((s.client_email as string) ?? quote.sent_to ?? "");
+                          const s = (quote.property_snapshot ?? {}) as Record<
+                            string,
+                            unknown
+                          >;
+                          setRecipient(
+                            (s.client_email as string) ?? quote.sent_to ?? "",
+                          );
                           setSendOpen(true);
                         }}
                         disabled={busy}
                       >
                         <Send className="size-4" />{" "}
-                        {quote.status === "sent" ? "Resend to client" : "Send to client"}
+                        {quote.status === "sent"
+                          ? "Resend to client"
+                          : "Send to client"}
                       </Button>
                     </>
                   ) : (
@@ -427,12 +470,17 @@ export function QuotationPanel({
           <DialogHeader>
             <DialogTitle>Regenerate this quotation?</DialogTitle>
             <DialogDescription>
-              This rebuilds the quotation from the current pricing, scope and terms, replacing the
-              existing draft figures. Only draft quotations can be regenerated.
+              This rebuilds the quotation from the current pricing, scope and
+              terms, replacing the existing draft figures. Only draft quotations
+              can be regenerated.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setRegenOpen(false)} disabled={working}>
+            <Button
+              variant="outline"
+              onClick={() => setRegenOpen(false)}
+              disabled={working}
+            >
               Cancel
             </Button>
             <SubmitButton
@@ -455,8 +503,8 @@ export function QuotationPanel({
           <DialogHeader>
             <DialogTitle>Send quotation to the client</DialogTitle>
             <DialogDescription>
-              Emails the PDF and a secure approve/reject link to the client via Resend. The job
-              stays a draft until the client approves.
+              Emails the PDF and a secure approve/reject link to the client via
+              Resend. The job stays a draft until the client approves.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-2 py-2">
@@ -470,7 +518,11 @@ export function QuotationPanel({
             />
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setSendOpen(false)} disabled={working}>
+            <Button
+              variant="outline"
+              onClick={() => setSendOpen(false)}
+              disabled={working}
+            >
               Cancel
             </Button>
             <SubmitButton
@@ -490,4 +542,3 @@ export function QuotationPanel({
     </SectionCard>
   );
 }
-

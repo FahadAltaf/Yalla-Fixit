@@ -47,6 +47,19 @@ export interface MenuItem {
   isActive?: boolean;
   resource?: ResourceType;
   unreadCount?: number;
+  /**
+   * Highlight this entry only on its own path, never on what sits under
+   * it. A section landing page needs this, or it stays lit on every
+   * child page and the sidebar stops saying where you are.
+   */
+  exact?: boolean;
+  /**
+   * Extra path prefixes this entry owns. A record's detail page lives
+   * under the section root rather than under the list it was opened
+   * from, so the list claims it here and stays selected while you read
+   * the record.
+   */
+  match?: string[];
   items?: MenuItem[];
 }
 
@@ -622,41 +635,6 @@ export interface SnaggingTaskSummary {
 }
 
 /** Payload behind the "Today at a glance" dashboard. */
-export interface SnaggingOverview {
-  counts: {
-    assigned: number;
-    inProgress: number;
-    submitted: number;
-    approved: number;
-    needsCorrection: number;
-    overdue: number;
-  };
-  waitingOnReview: Array<{
-    id: string;
-    code: string;
-    unit_label: string;
-    building_name?: string | null;
-    client_name: string;
-    submitted_at?: string | null;
-    approval_due_at?: string | null;
-    high_severity_count: number;
-    snag_count: number;
-    photo_count: number;
-  }>;
-  // No portfolio-wide severity split: it compares nothing useful
-  // across projects and belongs in the client report (FR-7.02,
-  // FR-10.05). The per-job high_severity_count above stays — a reviewer
-  // picking up a submission does need to know it carries high items.
-  openSnagTotal: number;
-  snagTotal: number;
-  roundsOutstanding: number;
-  passRate: number | null;
-  sync: {
-    photosReceived: number;
-    stuckInError: number;
-  };
-}
-
 /** Day / week / month, the three grains FR-10.01 asks the throughput chart for. */
 export type SnaggingAnalyticsGranularity = "day" | "week" | "month";
 
@@ -672,8 +650,11 @@ export type SnaggingAnalyticsGranularity = "day" | "week" | "month";
  *   inspector's snags rewards whoever walks the worst buildings.
  */
 export interface SnaggingAnalytics {
-  /** FR-10.01 — every status the jobs raised in the period sit in. */
-  byStatus: Array<{ status: SnaggingTaskStatus; count: number }>;
+  /**
+   * FR-10.01 — every status the jobs raised in the period sit in, with
+   * the movement against the window before it.
+   */
+  byStatus: Array<{ status: SnaggingTaskStatus; count: number; trend: number | null }>;
   /**
    * FR-10.01 — the review queue by submission time. Live, not scoped to
    * the date range: a queue filtered by an arbitrary window would show a
@@ -684,11 +665,20 @@ export interface SnaggingAnalytics {
     oldestSubmittedAt: string | null;
     buckets: Array<{ bucket: "under_24h" | "h24_48" | "over_48h"; count: number }>;
   };
-  /** FR-10.01 — jobs completed, counted at approval. */
+  /**
+   * FR-10.01 — jobs completed, counted at approval.
+   *
+   * All three grains come back together. They are the same rows bucketed
+   * three ways, so computing them costs nothing extra, and it means
+   * switching between day, week and month is a local state change rather
+   * than a round trip that empties the whole page into a skeleton.
+   */
   completed: {
-    granularity: SnaggingAnalyticsGranularity;
     total: number;
-    points: Array<{ period: string; label: string; count: number }>;
+    series: Record<
+      SnaggingAnalyticsGranularity,
+      Array<{ period: string; label: string; count: number }>
+    >;
   };
   /** FR-10.02 — the five time metrics, each with the sample it was taken over. */
   timeMetrics: {
@@ -704,8 +694,13 @@ export interface SnaggingAnalytics {
     overdueApprovals: number;
   };
   /** FR-10.03 — developer view. */
+  /** FR-10.03 — defect categories across every developer in the range. */
+  defectCategories: Array<{ category: string; count: number }>;
   byDeveloper: Array<{
     developer_name: string;
+    /** Units this period against the one before, as a signed count. */
+    unit_trend: number | null;
+    last_inspection_at: string | null;
     unit_count: number;
     snag_count: number;
     snags_per_unit: number;
@@ -724,6 +719,14 @@ export interface SnaggingAnalytics {
     inspection_count: number;
     avgMinutesPerInspection: number | null;
     timedSample: number;
+    /**
+     * The two office-side measures, per inspector. Portfolio-wide they
+     * are already in the stat row; per person is what makes this table
+     * say something the rest of the page does not.
+     */
+    firstTimeApprovalRate: number | null;
+    approvalSample: number;
+    avgSubmitToApprovalMinutes: number | null;
   }>;
 }
 
