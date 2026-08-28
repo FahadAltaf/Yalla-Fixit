@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
 
     const { data: entry, error: entryError } = await admin
       .from("schedule_entries")
-      .select("*, schedule_versions!inner(id, status, is_current, daily_schedule_id)")
+      .select("*, schedule_versions!inner(id, status, is_current, schedule_date)")
       .eq("id", entryId)
       .single();
     if (entryError || !entry) {
@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
     }
 
     const version = (entry as any).schedule_versions;
-    const publishedLike = ["published", "published_fsm_changed", "partially_synced"].includes(version.status);
+    const publishedLike = ["published", "partially_synced"].includes(version.status);
     if (!version.is_current || !publishedLike) {
       return NextResponse.json(
         { error: "This entry is not on a published day. Edit it in the draft instead." },
@@ -133,10 +133,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // There used to be a day-level has_fsm_changes flag cleared here, but
-    // nothing ever set it to TRUE -- reconcile now adopts FSM's values
-    // silently rather than marking a day as drifted -- so the column is gone.
-    // Per-entry drift still lives on schedule_entries.changed_in_fsm_at.
+    // There used to be a day-level has_fsm_changes flag cleared here, and
+    // per-entry changed_in_fsm_at/_fields alongside it. Nothing ever set any
+    // of them: reconcile adopts FSM's values silently rather than marking a
+    // day or entry as drifted, so the whole drift model has been removed.
 
     return NextResponse.json({ data: { synced: true } });
   } catch (error) {

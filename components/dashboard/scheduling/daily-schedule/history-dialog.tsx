@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import {
   scheduleService,
   type ScheduleEntry,
-  type ScheduleVersionWithActions,
+  type ScheduleVersion,
   type AuditResponse,
 } from "@/modules/scheduling";
 import StatusBadge from "@/components/ui/status-badge";
@@ -33,14 +33,13 @@ const STATUS_LABELS: Record<string, string> = {
   published: "Published",
   sync_failed: "Sync Failed",
   partially_synced: "Partially Synced",
-  published_fsm_changed: "Published",
 };
 
 // A single merged timeline row.
 type TimelineItem = { at: number; kind: string; who: string; detail?: string; tone?: "ok" | "bad" | "muted" };
 
 export default function HistoryDialog({ date, onOpenChange }: Props) {
-  const [versions, setVersions] = useState<ScheduleVersionWithActions[]>([]);
+  const [versions, setVersions] = useState<ScheduleVersion[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [audit, setAudit] = useState<AuditResponse | null>(null);
@@ -80,40 +79,32 @@ export default function HistoryDialog({ date, onOpenChange }: Props) {
     };
   }, [selectedVersionId]);
 
-  const selected = versions.find((v) => v.id === selectedVersionId);
-
-  // Merge approval actions + audit events + sync operations into one ordered
-  // timeline so the panel reads chronologically instead of three stacked lists.
+  // Approval decisions and FSM sync attempts are audit events now, so the
+  // timeline reads from one stream instead of merging three stacked lists.
   const timeline = useMemo<TimelineItem[]>(() => {
-    const items: TimelineItem[] = [];
-    (selected?.schedule_approval_actions ?? []).forEach((a) =>
-      items.push({
-        at: new Date(a.created_at).getTime(),
-        kind: a.action.replace(/_/g, " "),
-        who: a.user_profile?.full_name ?? a.user_profile?.email ?? "Unknown",
-        detail: a.comment ?? undefined,
-        tone: a.action === "rejected" ? "bad" : "ok",
-      }),
-    );
-    (audit?.events ?? []).forEach((e) =>
-      items.push({
-        at: new Date(e.created_at).getTime(),
-        kind: e.event_type.replace(/_/g, " "),
-        who: e.user_profile?.full_name ?? e.user_profile?.email ?? e.origin,
-        tone: "muted",
-      }),
-    );
-    (audit?.syncOperations ?? []).forEach((s) =>
-      items.push({
-        at: new Date(s.created_at).getTime(),
-        kind: `FSM ${s.operation_type.replace(/_/g, " ")} — ${s.status}`,
-        who: "Zoho FSM",
-        detail: s.error_message ?? undefined,
-        tone: s.status === "failed" ? "bad" : "ok",
-      }),
-    );
-    return items.sort((a, b) => b.at - a.at);
-  }, [selected, audit]);
+    return (audit?.events ?? [])
+      .map((e) => {
+        const isSync = e.event_type.startsWith("sync_");
+        const comment = (e.after_value as { comment?: string } | null)?.comment;
+
+        let tone: TimelineItem["tone"] = "muted";
+        if (e.status === "failed" || e.event_type === "version_rejected") tone = "bad";
+        else if (e.status === "succeeded" || e.event_type.startsWith("version_")) tone = "ok";
+
+        return {
+          at: new Date(e.created_at).getTime(),
+          kind: isSync
+            ? `FSM ${e.event_type.replace(/^sync_/, "").replace(/_/g, " ")}${e.status ? ` — ${e.status}` : ""}`
+            : e.event_type.replace(/_/g, " "),
+          who: isSync
+            ? "Zoho FSM"
+            : (e.user_profile?.full_name ?? e.user_profile?.email ?? e.origin),
+          detail: e.error_message ?? comment ?? undefined,
+          tone,
+        };
+      })
+      .sort((a, b) => b.at - a.at);
+  }, [audit]);
 
   return (
     <Dialog open onOpenChange={onOpenChange}>

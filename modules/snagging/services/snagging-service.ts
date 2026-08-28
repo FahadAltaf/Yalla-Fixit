@@ -2,6 +2,9 @@ import { executeRESTBackend } from "@/lib/rest-server";
 import type { CreateAreaInput, UpdateAreaInput } from "@/modules/snagging/schemas";
 import type {
   SnaggingAnalytics,
+  SnaggingAnalyticsDrilldown,
+  SnaggingAnalyticsGranularity,
+  SnaggingAnalyticsMetric,
   SnaggingArea,
   SnaggingAuditEvent,
   SnaggingFloorPlan,
@@ -420,12 +423,39 @@ export const snaggingService = {
       body: { id, active },
     }),
 
-  getAnalytics: async (range: { from?: string; to?: string } = {}): Promise<SnaggingAnalytics> =>
+  getAnalytics: async (
+    range: {
+      from?: string;
+      to?: string;
+      granularity?: SnaggingAnalyticsGranularity;
+    } = {},
+  ): Promise<SnaggingAnalytics> =>
     executeRESTBackend<SnaggingAnalytics>("/api/snagging/analytics", {
       method: "GET",
       params: {
         ...(range.from ? { from: range.from } : {}),
         ...(range.to ? { to: range.to } : {}),
+        ...(range.granularity ? { granularity: range.granularity } : {}),
+      },
+    }),
+
+  /** The records behind one figure on the analytics page (FR-10.06). */
+  getAnalyticsRecords: async (query: {
+    metric: SnaggingAnalyticsMetric;
+    /** Which slice of the metric: a status, a period key, a developer name. */
+    value?: string | null;
+    from?: string;
+    to?: string;
+    granularity?: SnaggingAnalyticsGranularity;
+  }): Promise<SnaggingAnalyticsDrilldown> =>
+    executeRESTBackend<SnaggingAnalyticsDrilldown>("/api/snagging/analytics/records", {
+      method: "GET",
+      params: {
+        metric: query.metric,
+        ...(query.value ? { value: query.value } : {}),
+        ...(query.from ? { from: query.from } : {}),
+        ...(query.to ? { to: query.to } : {}),
+        ...(query.granularity ? { granularity: query.granularity } : {}),
       },
     }),
 };

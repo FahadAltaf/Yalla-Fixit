@@ -171,7 +171,15 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
           </SidebarContent>
           <SidebarFooter className="[[data-state=collapsed]_&]:hidden"></SidebarFooter>
         </Sidebar>
-        <div className="flex flex-1 flex-col">
+        {/*
+          min-w-0 stops this column being sized by its widest child. A
+          flex item defaults to min-width:auto, so one wide element
+          inside a page — a chart that measures its own container, a
+          table of nowrap columns — pushed the whole shell past the
+          viewport and made the window scroll sideways instead of the
+          element scrolling inside its own box.
+        */}
+        <div className="flex min-w-0 flex-1 flex-col">
           {/* <header className="bg-card sticky top-0 z-50 h-13.75 border-b">
             <div className="mx-auto flex h-full max-w-[1500px] items-center justify-between gap-6 px-4 sm:px-6">
               <SidebarTrigger className="[&_svg]:!size-5" />

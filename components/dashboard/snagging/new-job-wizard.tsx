@@ -19,6 +19,8 @@ import {
 import { format, parseISO } from "date-fns";
 import { toast } from "sonner";
 
+import { LocationPicker } from "./location-picker";
+
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Card } from "@/components/ui/card";
@@ -986,6 +988,33 @@ function PropertyStep({
     };
   }, [draft.client_id]);
 
+
+  /**
+   * Accepts a pasted "lat, lng" pair in either box.
+   *
+   * Copying a coordinate out of Google Maps gives you both numbers at
+   * once; pasting that into a single number field used to silently drop
+   * half of it.
+   */
+  function setCoordinate(field: "location_lat" | "location_lng", raw: string) {
+    const pair = raw.match(/^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$/);
+    if (pair) {
+      set("location_lat", pair[1]);
+      set("location_lng", pair[2]);
+      return;
+    }
+    set(field, raw.trim());
+  }
+
+  // The draft holds strings so a half-typed coordinate is not destroyed;
+  // the map needs numbers, and only when both are actually valid.
+  const parsedLat = Number.isFinite(Number(draft.location_lat.trim())) && draft.location_lat.trim()
+    ? Number(draft.location_lat.trim())
+    : null;
+  const parsedLng = Number.isFinite(Number(draft.location_lng.trim())) && draft.location_lng.trim()
+    ? Number(draft.location_lng.trim())
+    : null;
+
   return (
     <div className="space-y-5">
       <div>
@@ -1139,25 +1168,48 @@ function PropertyStep({
         </label>
       ) : null}
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Location latitude" hint="(optional pin)">
-          <Input
-            type="number"
-            inputMode="decimal"
-            value={draft.location_lat}
-            onChange={(event) => set("location_lat", event.target.value)}
-            placeholder="e.g. 25.0772"
-          />
-        </Field>
-        <Field label="Location longitude" hint="(optional pin)">
-          <Input
-            type="number"
-            inputMode="decimal"
-            value={draft.location_lng}
-            onChange={(event) => set("location_lng", event.target.value)}
-            placeholder="e.g. 55.1345"
-          />
-        </Field>
+      {/*
+        The map is the input. The two number boxes stay underneath
+        because a coordinator sometimes has a coordinate from a
+        developer and nothing to search for, but nobody should have to
+        type one to say where a building is.
+      */}
+      <div className="space-y-3">
+        <p className="text-sm font-medium">
+          Location <span className="text-muted-foreground font-normal">(optional pin)</span>
+        </p>
+
+        <LocationPicker
+          lat={parsedLat}
+          lng={parsedLng}
+          onPick={(nextLat, nextLng) => {
+            set("location_lat", String(nextLat));
+            set("location_lng", String(nextLng));
+          }}
+          onClear={() => {
+            set("location_lat", "");
+            set("location_lng", "");
+          }}
+        />
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Latitude" hint="(or paste a lat, lng pair)">
+            <Input
+              inputMode="decimal"
+              value={draft.location_lat}
+              onChange={(event) => setCoordinate("location_lat", event.target.value)}
+              placeholder="e.g. 25.0772"
+            />
+          </Field>
+          <Field label="Longitude">
+            <Input
+              inputMode="decimal"
+              value={draft.location_lng}
+              onChange={(event) => setCoordinate("location_lng", event.target.value)}
+              placeholder="e.g. 55.1345"
+            />
+          </Field>
+        </div>
       </div>
 
       <label className="border-border flex items-center gap-3 rounded-lg border px-3 py-2.5 text-sm">
@@ -1226,6 +1278,12 @@ function FloorPlansStep({
     setPlans((current) => [...current, ...next]);
   }
 
+  function rename(id: string, label: string) {
+    setPlans((current) =>
+      current.map((plan) => (plan.id === id ? { ...plan, label } : plan)),
+    );
+  }
+
   function remove(id: string) {
     setPlans((current) => {
       const target = current.find((plan) => plan.id === id);
@@ -1262,8 +1320,10 @@ function FloorPlansStep({
         className="border-border hover:border-brand/40 hover:bg-mist-soft/50 flex w-full flex-col items-center gap-2 rounded-lg border border-dashed px-6 py-10 text-center transition-colors"
       >
         <Upload className="text-muted-foreground size-6" />
-        <span className="font-medium">Add a plan image</span>
-        <span className="text-muted-foreground text-sm">PNG, JPG, WEBP or PDF · up to 15MB</span>
+        <span className="font-medium">Add plan images</span>
+        <span className="text-muted-foreground text-sm">
+          PNG, JPG, WEBP or PDF · up to 15MB · add one per floor
+        </span>
       </button>
 
       {plans.length > 0 ? (
@@ -1281,13 +1341,24 @@ function FloorPlansStep({
                   <ImageIcon className="text-muted-foreground size-5" />
                 )}
               </span>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium">{plan.label}</p>
-                <p className="text-muted-foreground text-xs">
-                  {plan.width && plan.height
-                    ? `${plan.width}×${plan.height}px`
-                    : "PDF"}{" "}
-                  · {(plan.file.size / 1024 / 1024).toFixed(1)}MB
+              <div className="min-w-0 flex-1 space-y-1">
+                {/*
+                  The label defaults to the filename, which is how plans
+                  ended up called things like "images" — a name that
+                  means nothing to an inspector choosing between plans on
+                  site. It is editable here, before the job is created.
+                */}
+                <Input
+                  value={plan.label}
+                  onChange={(event) => rename(plan.id, event.target.value)}
+                  placeholder="e.g. Ground floor"
+                  aria-label="Plan name"
+                  className="h-8"
+                />
+                <p className="text-muted-foreground truncate text-xs">
+                  {plan.file.name} ·{" "}
+                  {plan.width && plan.height ? `${plan.width}×${plan.height}px` : "PDF"} ·{" "}
+                  {(plan.file.size / 1024 / 1024).toFixed(1)}MB
                 </p>
               </div>
               <Button variant="ghost" size="icon" onClick={() => remove(plan.id)} aria-label="Remove">

@@ -80,9 +80,9 @@ function describeError(json: any, httpStatus: number): string {
 
 // Writes one FSM-backed entry to Zoho FSM (create for new_appointment,
 // reschedule for existing/already-synced), records the attempt on
-// schedule_sync_operations, and updates the entry with the fresh
-// Modified_Time marker + snapshot so the reconcile job never mistakes this
-// write for an external change. Free-text entries are skipped.
+// schedule_audit_events, and updates the entry with the fresh Modified_Time
+// marker so the reconcile job never mistakes this write for an external
+// change. Free-text entries are skipped.
 //
 // Shared by approval (first attempt), retry (AC-006), and published-edit
 // (AC-016) so all three stay consistent.
@@ -137,16 +137,21 @@ export async function syncEntryToFsm(
 
   const completedAt = new Date().toISOString();
 
-  await admin.from("schedule_sync_operations").insert({
+  // Sync attempts used to go to their own schedule_sync_operations table,
+  // which duplicated what schedule_audit_events already recorded. They are
+  // now one event stream; per-entry current state still lives on
+  // schedule_entries (sync_status / last_sync_error / last_synced_at).
+  await admin.from("schedule_audit_events").insert({
+    event_type: `sync_${operationType}`,
+    origin: "system",
     schedule_version_id: scheduleVersionId,
     schedule_entry_id: entry.id,
-    operation_type: operationType,
+    affected_entity_type: "schedule_entry",
+    affected_entity_id: entry.id,
     status: result.ok ? "succeeded" : "failed",
     correlation_id: entry.id,
     error_message: result.ok ? null : JSON.stringify(result.json),
-    response_summary: result.json,
-    started_at: startedAt,
-    completed_at: completedAt,
+    after_value: { response: result.json, startedAt, completedAt },
   });
 
   if (!result.ok) {
@@ -168,8 +173,6 @@ export async function syncEntryToFsm(
     last_sync_error: null,
     last_synced_at: completedAt,
     needs_sync: false,
-    changed_in_fsm_at: null,
-    changed_in_fsm_fields: null,
     origin: "portal",
     updated_at: completedAt,
   };
@@ -194,16 +197,17 @@ async function recordFailure(
   responseSummary: unknown,
 ) {
   const now = new Date().toISOString();
-  await admin.from("schedule_sync_operations").insert({
+  await admin.from("schedule_audit_events").insert({
+    event_type: `sync_${operationType}`,
+    origin: "system",
     schedule_version_id: scheduleVersionId,
     schedule_entry_id: entry.id,
-    operation_type: operationType,
+    affected_entity_type: "schedule_entry",
+    affected_entity_id: entry.id,
     status: "failed",
     correlation_id: entry.id,
     error_message: error,
-    response_summary: responseSummary,
-    started_at: now,
-    completed_at: now,
+    after_value: { response: responseSummary, startedAt: now, completedAt: now },
   });
   await admin
     .from("schedule_entries")

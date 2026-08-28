@@ -6,6 +6,10 @@ import { ActionType, ResourceType } from "@/types/types";
 
 // AUD-001/AUD-004: authorised users can view every version of a daily
 // schedule, including historical ones, without editing them.
+//
+// Versions now carry schedule_date directly, so this no longer resolves a
+// daily_schedules row first. The per-version approval trail comes from
+// /api/scheduling/audit rather than a separate approval-actions table.
 export async function GET(req: NextRequest) {
   try {
     const { profile, accessUser } = await getAuthenticatedUserAccess();
@@ -20,20 +24,10 @@ export async function GET(req: NextRequest) {
     if (!date) return NextResponse.json({ error: "Missing field: date" }, { status: 400 });
 
     const admin = await createAdminServerClient();
-    const { data: dailySchedule, error: dsError } = await admin
-      .from("daily_schedules")
-      .select("id")
-      .eq("schedule_date", date)
-      .maybeSingle();
-    if (dsError) throw new Error(dsError.message);
-    if (!dailySchedule) return NextResponse.json({ data: [] });
-
     const { data: versions, error: versionsError } = await admin
       .from("schedule_versions")
-      .select(
-        "*, schedule_approval_actions(id, action, actor_id, comment, created_at, user_profile(full_name, email))",
-      )
-      .eq("daily_schedule_id", dailySchedule.id)
+      .select("*")
+      .eq("schedule_date", date)
       .order("version_number", { ascending: false });
     if (versionsError) throw new Error(versionsError.message);
 

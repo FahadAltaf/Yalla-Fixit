@@ -5,8 +5,10 @@ import { hasResourceAction } from "@/lib/role-permissions";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
 import { ActionType, ResourceType } from "@/types/types";
 
+// The day is identified by its operating date now that daily_schedules is
+// gone; the current version for that date is resolved server-side.
 const reviseSchema = z.object({
-  dailyScheduleId: z.string().uuid(),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 });
 
 // Section 7.3/APR-011: adding work to a Published day requires a Draft
@@ -25,27 +27,20 @@ export async function POST(req: NextRequest) {
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
     }
-    const { dailyScheduleId } = parsed.data;
+    const { date } = parsed.data;
 
     const admin = await createAdminServerClient();
-    const { data: dailySchedule, error: dsError } = await admin
-      .from("daily_schedules")
-      .select("*")
-      .eq("id", dailyScheduleId)
-      .single();
-    if (dsError || !dailySchedule) {
-      return NextResponse.json({ error: "Daily schedule not found" }, { status: 404 });
-    }
-
     const { data: currentVersion, error: cvError } = await admin
       .from("schedule_versions")
       .select("*")
-      .eq("id", dailySchedule.current_version_id)
-      .single();
-    if (cvError || !currentVersion) {
-      return NextResponse.json({ error: "Current version not found" }, { status: 404 });
+      .eq("schedule_date", date)
+      .eq("is_current", true)
+      .maybeSingle();
+    if (cvError) throw new Error(cvError.message);
+    if (!currentVersion) {
+      return NextResponse.json({ error: "No schedule exists for this date" }, { status: 404 });
     }
-    if (!["published", "published_fsm_changed", "partially_synced"].includes(currentVersion.status)) {
+    if (!["published", "partially_synced"].includes(currentVersion.status)) {
       return NextResponse.json(
         { error: `Cannot create a revision from status ${currentVersion.status}` },
         { status: 409 },
@@ -69,7 +64,7 @@ export async function POST(req: NextRequest) {
     const { data: revision, error: revisionError } = await admin
       .from("schedule_versions")
       .insert({
-        daily_schedule_id: dailyScheduleId,
+        schedule_date: date,
         version_number: currentVersion.version_number + 1,
         status: "draft_revision",
         parent_version_id: currentVersion.id,
@@ -109,11 +104,6 @@ export async function POST(req: NextRequest) {
         if (assignError) throw new Error(assignError.message);
       }
     }
-
-    await admin
-      .from("daily_schedules")
-      .update({ current_version_id: revision.id })
-      .eq("id", dailyScheduleId);
 
     await admin.from("schedule_audit_events").insert({
       event_type: "revision_created",

@@ -4,6 +4,7 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
+import { loadJobFamily } from "@/lib/server/snagging/job-family";
 import { signMediaPaths } from "@/lib/server/snagging/media";
 import { assertTransition } from "@/lib/server/snagging/workflow";
 import { updateTaskSchema } from "@/modules/snagging/schemas";
@@ -55,6 +56,15 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       .order("sort_order", { ascending: true });
     if (checklistError) throw new Error(checklistError.message);
 
+    // FR-9.03 — an additional visit is a return to the same property, so
+    // what it finds belongs to the original inspection record rather
+    // than to a report of its own. Its snags are read alongside this
+    // job's; a de-snag round keeps its own list, because a round is a
+    // re-verification of defects already reported.
+    const family = await loadJobFamily(admin, id);
+    const snagJobIds =
+      id === family.rootId ? [id, ...family.additionalVisitIds] : [id];
+
     const { data: snagRows, error: snagError } = await admin
       .from("snagging_snags")
       .select(
@@ -63,7 +73,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
          photos:snagging_snag_photos(id, snag_id, job_id, storage_path, media_type,
            bytes, width, height, taken_at, round_number, gps_lat, gps_lng, exif)`,
       )
-      .eq("job_id", id)
+      .in("job_id", snagJobIds)
       // Newest first for the working views. The client report has its
       // own route and still orders by code within each area, so the
       // delivered document is unaffected.

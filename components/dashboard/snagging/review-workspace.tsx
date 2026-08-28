@@ -91,6 +91,18 @@ export default function ReviewWorkspace() {
         description="Walk the snags, then approve or send it back with a reason."
       />
 
+      {!loadingQueue && !queueError && queue.length === 0 ? (
+        // Nothing is waiting, so there is no queue to sit beside and
+        // nothing to select. Two panels each saying so was the same fact
+        // twice, with an empty column between them.
+        <Card className="p-0">
+          <EmptyState
+            icon={<ClipboardCheck className="size-6" />}
+            title="Nothing waiting for review"
+            description="Submitted inspections appear here, oldest first."
+          />
+        </Card>
+      ) : (
       <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
         <Card className="gap-0 self-start p-0">
           <p className="eyebrow px-4 pt-4 pb-2">Queue · {queue.length}</p>
@@ -108,13 +120,6 @@ export default function ReviewWorkspace() {
                 onRetry={() => void loadQueue()}
               />
             </div>
-          ) : queue.length === 0 ? (
-            <EmptyState
-              icon={<ClipboardCheck className="size-6" />}
-              title="Nothing waiting"
-              description="Submitted inspections appear here, oldest first."
-              className="px-4 py-10"
-            />
           ) : (
             <ul className="border-t">
               {queue.map((row) => {
@@ -188,6 +193,7 @@ export default function ReviewWorkspace() {
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }

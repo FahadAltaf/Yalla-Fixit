@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
+import { LOOKUP_KEYS } from "@/lib/server/attribute-list-route";
 import { ActionType, ResourceType } from "@/types/types";
 
 const assignmentSchema = z.object({
@@ -24,14 +25,17 @@ export async function GET() {
 
     const admin = await createAdminServerClient();
     const { data, error } = await admin
-      .from("technician_tag_assignments")
-      .select("technician_fsm_id, tag_id, technician_tags(id, name)");
+      .from("technician_lookup_assignments")
+      .select("technician_fsm_id, lookup_id, lookup_options(id, name, list_key)");
     if (error) throw new Error(error.message);
 
     const byTechnician = new Map<string, Array<{ id: string; name: string }>>();
     (data ?? []).forEach((row: any) => {
+      // The assignment table is generic; only surface the tag list here.
+      const option = row.lookup_options;
+      if (!option || option.list_key !== LOOKUP_KEYS.technicianTag) return;
       const list = byTechnician.get(row.technician_fsm_id) ?? [];
-      if (row.technician_tags) list.push(row.technician_tags);
+      list.push({ id: option.id, name: option.name });
       byTechnician.set(row.technician_fsm_id, list);
     });
 
@@ -59,13 +63,13 @@ export async function POST(req: NextRequest) {
     }
 
     const admin = await createAdminServerClient();
-    const { error } = await admin.from("technician_tag_assignments").upsert(
+    const { error } = await admin.from("technician_lookup_assignments").upsert(
       {
         technician_fsm_id: parsed.data.technicianFsmId,
-        tag_id: parsed.data.tagId,
+        lookup_id: parsed.data.tagId,
         assigned_by: profile.id,
       },
-      { onConflict: "technician_fsm_id,tag_id", ignoreDuplicates: true },
+      { onConflict: "technician_fsm_id,lookup_id", ignoreDuplicates: true },
     );
     if (error) throw new Error(error.message);
 
@@ -103,10 +107,10 @@ export async function DELETE(req: NextRequest) {
 
     const admin = await createAdminServerClient();
     const { error } = await admin
-      .from("technician_tag_assignments")
+      .from("technician_lookup_assignments")
       .delete()
       .eq("technician_fsm_id", technicianFsmId)
-      .eq("tag_id", tagId);
+      .eq("lookup_id", tagId);
     if (error) throw new Error(error.message);
 
     await admin.from("schedule_audit_events").insert({

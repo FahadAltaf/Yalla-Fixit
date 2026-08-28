@@ -78,6 +78,8 @@ export function StatCard({
   trend,
   tone = "neutral",
   href,
+  onSelect,
+  selectLabel,
 }: {
   label: string;
   value: React.ReactNode;
@@ -89,14 +91,25 @@ export function StatCard({
   trend?: { value: string; direction: "up" | "down" };
   tone?: StatTone;
   href?: string;
+  /**
+   * Opens the records behind the figure in place, for a card whose
+   * detail is a panel rather than another page. Ignored when `href` is
+   * set — a tile that both navigates and opens a panel is a tile nobody
+   * can predict.
+   */
+  onSelect?: () => void;
+  /** What the button announces, when the label alone is not a sentence. */
+  selectLabel?: string;
 }) {
   const TrendIcon = trend?.direction === "down" ? TrendingDown : TrendingUp;
+
+  const interactive = Boolean(href) || Boolean(onSelect);
 
   const body = (
     <Card
       className={cn(
         "@container/card h-full",
-        href && "kz-card-interactive hover:border-brand/30 cursor-pointer",
+        interactive && "kz-card-interactive hover:border-brand/30 cursor-pointer",
       )}
     >
       <CardHeader>
@@ -127,16 +140,31 @@ export function StatCard({
     </Card>
   );
 
-  return href ? (
-    <Link
-      href={href}
-      className="focus-visible:ring-ring block rounded-lg focus-visible:ring-2 focus-visible:outline-none"
-    >
-      {body}
-    </Link>
-  ) : (
-    body
-  );
+  if (href) {
+    return (
+      <Link
+        href={href}
+        className="focus-visible:ring-ring block rounded-lg focus-visible:ring-2 focus-visible:outline-none"
+      >
+        {body}
+      </Link>
+    );
+  }
+
+  if (onSelect) {
+    return (
+      <button
+        type="button"
+        onClick={onSelect}
+        aria-label={selectLabel ?? `${label}: show the records behind this figure`}
+        className="focus-visible:ring-ring block w-full rounded-lg text-left focus-visible:ring-2 focus-visible:outline-none"
+      >
+        {body}
+      </button>
+    );
+  }
+
+  return body;
 }
 
 /** Section card with a title row and an optional trailing action. */

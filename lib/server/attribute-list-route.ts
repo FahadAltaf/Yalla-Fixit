@@ -5,13 +5,22 @@ import { hasResourceAction } from "@/lib/role-permissions";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
 import { ActionType, ResourceType } from "@/types/types";
 
-// Shared CRUD handlers for a managed lookup list (technician_roles /
-// technician_service_types). Both have {id, name, sort_order} and a
-// case-insensitive unique name (#16 no duplicates). `label` personalises the
-// error/audit text; `foreignKey` is the technician_reference column pointing
-// at this list, so a delete can report how many technicians it clears.
+// Every managed dropdown in the portal lives in public.lookup_options,
+// separated by list_key. These are the keys the scheduling module uses.
+export const LOOKUP_KEYS = {
+  technicianRole: "technician_role",
+  technicianServiceType: "technician_service_type",
+  technicianTag: "technician_tag",
+} as const;
+
+export type LookupKey = (typeof LOOKUP_KEYS)[keyof typeof LOOKUP_KEYS];
+
+// Shared CRUD handlers for one managed lookup list. `listKey` selects the
+// list within lookup_options; `label` personalises the error text; and
+// `foreignKey` is the technician_reference column pointing at this list, so
+// GET can report how many technicians each option is attached to.
 export function makeAttributeListRoute(opts: {
-  table: "technician_roles" | "technician_service_types";
+  listKey: LookupKey;
   foreignKey: "role_id" | "service_type_id";
   label: string;
 }) {
@@ -35,8 +44,9 @@ export function makeAttributeListRoute(opts: {
       if (g.error) return g.error;
       const admin = await createAdminServerClient();
       const { data: rows, error } = await admin
-        .from(opts.table)
+        .from("lookup_options")
         .select("*")
+        .eq("list_key", opts.listKey)
         .order("sort_order", { ascending: true })
         .order("name", { ascending: true });
       if (error) throw new Error(error.message);
@@ -55,7 +65,7 @@ export function makeAttributeListRoute(opts: {
       }));
       return NextResponse.json({ data: list });
     } catch (error) {
-      console.error(`${opts.table} GET error:`, error);
+      console.error(`${opts.listKey} GET error:`, error);
       return NextResponse.json({ error: `Failed to load ${opts.label}s` }, { status: 500 });
     }
   }
@@ -68,14 +78,14 @@ export function makeAttributeListRoute(opts: {
       if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
       const admin = await createAdminServerClient();
       const { data, error } = await admin
-        .from(opts.table)
-        .insert({ name: parsed.data.name })
+        .from("lookup_options")
+        .insert({ list_key: opts.listKey, name: parsed.data.name, created_by: g.profile?.id ?? null })
         .select("*")
         .single();
       if (error) return error.code === "23505" ? dup() : (() => { throw new Error(error.message); })();
       return NextResponse.json({ data: { ...data, technician_count: 0 } });
     } catch (error) {
-      console.error(`${opts.table} POST error:`, error);
+      console.error(`${opts.listKey} POST error:`, error);
       return NextResponse.json({ error: `Failed to create ${opts.label}` }, { status: 500 });
     }
   }
@@ -88,15 +98,21 @@ export function makeAttributeListRoute(opts: {
       if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
       const admin = await createAdminServerClient();
       const { data, error } = await admin
-        .from(opts.table)
-        .update({ name: parsed.data.name, updated_at: new Date().toISOString() })
+        .from("lookup_options")
+        .update({
+          name: parsed.data.name,
+          updated_by: g.profile?.id ?? null,
+          updated_at: new Date().toISOString(),
+        })
         .eq("id", parsed.data.id)
+        // Scope by list_key so an id from another list can't be edited here.
+        .eq("list_key", opts.listKey)
         .select("*")
         .single();
       if (error) return error.code === "23505" ? dup() : (() => { throw new Error(error.message); })();
       return NextResponse.json({ data });
     } catch (error) {
-      console.error(`${opts.table} PUT error:`, error);
+      console.error(`${opts.listKey} PUT error:`, error);
       return NextResponse.json({ error: `Failed to update ${opts.label}` }, { status: 500 });
     }
   }
@@ -110,11 +126,15 @@ export function makeAttributeListRoute(opts: {
       const admin = await createAdminServerClient();
       // FK is ON DELETE SET NULL, so technicians keep their row and just lose
       // this attribute.
-      const { error } = await admin.from(opts.table).delete().eq("id", id);
+      const { error } = await admin
+        .from("lookup_options")
+        .delete()
+        .eq("id", id)
+        .eq("list_key", opts.listKey);
       if (error) throw new Error(error.message);
       return NextResponse.json({ data: { success: true } });
     } catch (error) {
-      console.error(`${opts.table} DELETE error:`, error);
+      console.error(`${opts.listKey} DELETE error:`, error);
       return NextResponse.json({ error: `Failed to delete ${opts.label}` }, { status: 500 });
     }
   }

@@ -20,7 +20,6 @@ import {
   FieldsSkeleton,
   ListSkeleton,
   PageHeading,
-  SEVERITY_LABELS,
   SectionCard,
   SectionSkeleton,
   StatCard,
@@ -225,45 +224,20 @@ export default function SnaggingOverviewDashboard() {
                 )}
               </SectionCard>
 
+              {/*
+                No severity breakdown here. A portfolio-wide split of
+                high / medium / low compares nothing useful across
+                projects, and severity is the client report's job
+                (FR-7.02, FR-10.05). What is left are the two figures
+                that were sitting underneath it, which are about the
+                state of the work rather than the shape of the defects.
+              */}
               <SectionCard
-                title="Snags by severity"
-                description={`Open snags across the portfolio. ${data.openSnagTotal} of ${data.snagTotal} recorded.`}
+                title="Where the work stands"
+                description="De-snag activity still open, and how much comes back verified."
                 bodyClassName="px-5 pb-5"
               >
-                <div className="space-y-4">
-                  {data.severity.map((row) => {
-                    const share = data.openSnagTotal
-                      ? Math.round((row.count / data.openSnagTotal) * 100)
-                      : 0;
-                    const bar =
-                      row.severity === "high"
-                        ? "bg-danger"
-                        : row.severity === "medium"
-                          ? "bg-warning"
-                          : "bg-ink/25";
-                    const dot = bar;
-
-                    return (
-                      <div key={row.severity}>
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="flex items-center gap-2">
-                            <span className={`size-2 rounded-full ${dot}`} aria-hidden />
-                            {SEVERITY_LABELS[row.severity]} severity
-                          </span>
-                          <span className="font-medium tabular-nums">{row.count}</span>
-                        </div>
-                        <div className="bg-mist mt-2 h-1.5 w-full overflow-hidden rounded-full">
-                          <div
-                            className={`h-full rounded-full ${bar}`}
-                            style={{ width: `${share}%` }}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                <div className="mt-6 grid grid-cols-2 gap-4 border-t pt-5">
+                <div className="grid grid-cols-2 gap-4">
                   <div>
                     <p className="eyebrow">De-snag rounds</p>
                     <p className="mt-1 text-2xl font-semibold tabular-nums">
@@ -278,6 +252,16 @@ export default function SnaggingOverviewDashboard() {
                     </p>
                     <p className="text-muted-foreground text-xs">verified closed, last 30d</p>
                   </div>
+                </div>
+
+                <div className="mt-6 border-t pt-5">
+                  <p className="text-muted-foreground text-sm">
+                    Snags recorded across the portfolio:{" "}
+                    <span className="text-foreground font-medium tabular-nums">
+                      {data.openSnagTotal}
+                    </span>{" "}
+                    open of {data.snagTotal}.
+                  </p>
                 </div>
               </SectionCard>
             </div>

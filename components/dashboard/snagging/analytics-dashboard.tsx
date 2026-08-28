@@ -2,23 +2,34 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle,
   CalendarIcon,
-  ClipboardList,
-  Clock,
+  ChevronDown,
   Download,
+  FileSpreadsheet,
   HardHat,
-  ThumbsUp,
-  Timer,
+  Hourglass,
+  Inbox,
   UserRound,
 } from "lucide-react";
 import { format, parseISO } from "date-fns";
+import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
-import { Card } from "@/components/ui/card";
+import {
+  type ChartConfig,
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+} from "@/components/ui/chart";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { cn } from "@/lib/utils";
 import { Progress } from "@/components/ui/progress";
 import { DataTable } from "@/components/data-table";
 import {
@@ -27,17 +38,27 @@ import {
 } from "@/components/data-table/columns/column-snagging-analytics";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
+import { exportFilename, exportTable, type ExportFormat } from "@/lib/snagging/export-table";
+import { cn } from "@/lib/utils";
 import { snaggingService } from "@/modules/snagging";
-import { ActionType, ResourceType, type SnaggingAnalytics } from "@/types/types";
+import {
+  ActionType,
+  ResourceType,
+  type SnaggingAnalytics,
+  type SnaggingAnalyticsGranularity,
+} from "@/types/types";
 
-import { EmptyState } from "@/components/ui/empty-state";
-
+import { AnalyticsDrilldown, type DrilldownRequest } from "./analytics-drilldown";
 import {
   DataState,
   PageHeading,
+  PillTabs,
+  SectionCard,
   SectionSkeleton,
-  SeverityBadge,
+  StatCard,
   StatGridSkeleton,
+  TaskStatusBadge,
+  timeAgo,
 } from "./shared";
 
 /** A shadcn date picker (Popover + Calendar) writing a YYYY-MM-DD string. */
@@ -81,12 +102,62 @@ function DateField({
   );
 }
 
+/** CSV or Excel, for one table (FR-10.06). */
+function ExportMenu({ onExport, disabled }: { onExport: (format: ExportFormat) => void; disabled?: boolean }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm" disabled={disabled}>
+          <Download className="size-4" />
+          Export
+          <ChevronDown className="size-3.5" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onClick={() => onExport("csv")}>
+          <Download className="size-4" />
+          CSV
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => onExport("xlsx")}>
+          <FileSpreadsheet className="size-4" />
+          Excel
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+const GRANULARITY_TABS = [
+  { value: "day" as const, label: "Day" },
+  { value: "week" as const, label: "Week" },
+  { value: "month" as const, label: "Month" },
+];
+
+const QUEUE_BANDS = [
+  { bucket: "under_24h" as const, label: "Under 24 hours", tone: "text-success" },
+  { bucket: "h24_48" as const, label: "24 to 48 hours", tone: "text-warning" },
+  { bucket: "over_48h" as const, label: "Over 48 hours", tone: "text-danger" },
+];
+
+const completedChartConfig = {
+  count: { label: "Completed", color: "var(--chart-1)" },
+} satisfies ChartConfig;
+
 /**
- * Operational analytics (§6.7) and the KPI targets from §2.3.
+ * Operations analytics (FR-10.01 to FR-10.06).
  *
- * The KPI row is deliberately first: those four numbers are what the
- * sponsor signed the business case on, and burying them under defect
- * distributions would be answering a question nobody asked first.
+ * The order is the order an ops lead asks the questions in: how long is
+ * everything taking, what is waiting, how much went out, and only then
+ * who and which developer.
+ *
+ * Two things are deliberately not on this page. There is no severity or
+ * element distribution (FR-10.05) — those compare nothing across
+ * projects and belong in the client report — and there is no snag count
+ * against an inspector (FR-10.04), because snag volume measures the
+ * building somebody was sent to, not how well they walked it.
+ *
+ * Every figure opens the records behind it (FR-10.06), and every list
+ * exports as CSV or Excel.
  */
 export default function SnaggingAnalyticsDashboard() {
   const { userProfile } = useAuth();
@@ -99,6 +170,8 @@ export default function SnaggingAnalyticsDashboard() {
     return date.toISOString().slice(0, 10);
   });
   const [to, setTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const [granularity, setGranularity] = useState<SnaggingAnalyticsGranularity>("day");
+  const [drilldown, setDrilldown] = useState<DrilldownRequest | null>(null);
   const [developerPage, setDeveloperPage] = useState(0);
   const [developerPageSize, setDeveloperPageSize] = useState(10);
   const [inspectorPage, setInspectorPage] = useState(0);
@@ -114,7 +187,7 @@ export default function SnaggingAnalyticsDashboard() {
     setDeveloperPage(0);
     setInspectorPage(0);
     try {
-      setData(await snaggingService.getAnalytics({ from, to }));
+      setData(await snaggingService.getAnalytics({ from, to, granularity }));
     } catch (err) {
       // A toast here left the page on a permanent skeleton, which reads
       // as "still working" rather than "the request failed".
@@ -122,58 +195,26 @@ export default function SnaggingAnalyticsDashboard() {
     } finally {
       setLoading(false);
     }
-  }, [from, to]);
+  }, [from, to, granularity]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  /** FR-7.03 — CSV export of whatever is on screen. */
-  function exportCsv() {
-    if (!data) return;
+  /** Opens the records behind a figure, in the dates currently selected. */
+  const open = useCallback(
+    (request: Omit<DrilldownRequest, "from" | "to" | "granularity">) => {
+      setDrilldown({ ...request, from, to, granularity });
+    },
+    [from, to, granularity],
+  );
 
-    const rows: string[][] = [
-      ["Developer quality"],
-      ["Developer", "Building", "Units", "Snags", "Snags per unit", "Outstanding"],
-      ...data.byDeveloper.map((row) => [
-        row.developer_name,
-        row.building_name ?? "",
-        String(row.unit_count),
-        String(row.snag_count),
-        String(row.snags_per_unit),
-        String(row.outstanding_count),
-      ]),
-      [],
-      ["Defects by element"],
-      ["Element", "Count"],
-      ...data.byElement.map((row) => [row.element_label, String(row.count)]),
-      [],
-      ["Inspector activity"],
-      ["Inspector", "Inspections", "Snags captured"],
-      ...data.byInspector.map((row) => [row.name, String(row.task_count), String(row.snag_count)]),
-    ];
-
-    const csv = rows
-      .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
-      .join("\n");
-
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `snagging-analytics-${from}-to-${to}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
-  }
-
-  const totalSnags = (data?.bySeverity ?? []).reduce((sum, row) => sum + row.count, 0);
+  const developerRows = useMemo(() => data?.byDeveloper ?? [], [data]);
+  const inspectorRows = useMemo(() => data?.byInspector ?? [], [data]);
 
   // Both breakdowns arrive whole with the analytics payload, so the page
   // is sliced here rather than round-tripping — the same shape the
   // catalogue and roles tables use against the shared DataTable.
-  const developerRows = useMemo(() => data?.byDeveloper ?? [], [data]);
-  const inspectorRows = useMemo(() => data?.byInspector ?? [], [data]);
-
   const developerPageRows = useMemo(() => {
     const start = developerPage * developerPageSize;
     return developerRows.slice(start, start + developerPageSize);
@@ -184,22 +225,53 @@ export default function SnaggingAnalyticsDashboard() {
     return inspectorRows.slice(start, start + inspectorPageSize);
   }, [inspectorRows, inspectorPage, inspectorPageSize]);
 
+  function exportDevelopers(format: ExportFormat) {
+    exportTable({
+      columns: [
+        { key: "developer_name", label: "Developer" },
+        { key: "unit_count", label: "Units inspected" },
+        { key: "snag_count", label: "Snags" },
+        { key: "snags_per_unit", label: "Snags per unit" },
+        { key: "outstanding_count", label: "Still outstanding" },
+        { key: "defect_mix", label: "Defect mix" },
+      ],
+      rows: developerRows.map((row) => ({
+        ...row,
+        defect_mix: row.defect_mix.map((entry) => `${entry.label} (${entry.count})`).join("; "),
+      })),
+      filename: exportFilename(["snagging", "developers", from, to]),
+      format,
+      sheetName: "Developers",
+    });
+  }
+
+  function exportInspectors(format: ExportFormat) {
+    exportTable({
+      columns: [
+        { key: "name", label: "Inspector" },
+        { key: "inspection_count", label: "Inspections" },
+        { key: "avgMinutesPerInspection", label: "Average minutes per inspection" },
+        { key: "timedSample", label: "Inspections timed" },
+      ],
+      rows: inspectorRows,
+      filename: exportFilename(["snagging", "inspectors", from, to]),
+      format,
+      sheetName: "Inspectors",
+    });
+  }
+
+  const statusTotal = (data?.byStatus ?? []).reduce((sum, row) => sum + row.count, 0);
+
   return (
     <div className="flex flex-col gap-6">
       <PageHeading
         eyebrow="Operations"
         title="Snagging analytics"
-        description="Throughput, quality, and developer performance across the period."
+        description="Throughput, turnaround, and where the work is sitting. Every figure opens the jobs behind it."
         actions={
           <div className="flex flex-wrap items-end gap-2">
             <DateField label="From" value={from} onChange={setFrom} />
             <DateField label="To" value={to} onChange={setTo} />
-            {canExport ? (
-              <Button variant="outline" onClick={exportCsv} disabled={!data}>
-                <Download className="size-4" />
-                Export CSV
-              </Button>
-            ) : null}
           </div>
         }
       />
@@ -211,19 +283,19 @@ export default function SnaggingAnalyticsDashboard() {
         retrying={loading}
         errorTitle="Could not load analytics"
         skeleton={
-          // The whole page, not just the KPI row: the charts and tables
+          // The whole page, not just the top row: the charts and tables
           // used to pop in under a settled header and shift the layout.
           <div className="flex flex-col gap-6">
-            <StatGridSkeleton count={4} />
-            <StatGridSkeleton count={4} />
+            <StatGridSkeleton count={5} />
             <div className="grid gap-4 lg:grid-cols-2">
               <SectionSkeleton />
               <SectionSkeleton />
             </div>
+            <SectionSkeleton />
             {/*
-              No table-shaped placeholder here: the two breakdowns below
-              are DataTables and render their own in-body skeleton rows,
-              so a second, differently-shaped table skeleton would only
+              No table-shaped placeholder for the two breakdowns below:
+              they are DataTables and render their own in-body skeleton
+              rows, so a second, differently-shaped skeleton would only
               make the load flicker between two looks.
             */}
             <SectionSkeleton />
@@ -233,115 +305,199 @@ export default function SnaggingAnalyticsDashboard() {
       >
         {data ? (
           <div className="flex flex-col gap-6">
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <KpiCard
-                icon={<Timer className="size-4" />}
-                label="Avg submit to approval"
-                value={
-                  data.kpis.avgPreparationMinutes === null
-                    ? "—"
-                    : formatMinutes(data.kpis.avgPreparationMinutes)
-                }
-                target="Target: under 30 min for a studio or 1BR"
+            {/* FR-10.02 — the five time metrics. */}
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+              <StatCard
+                label="Average time on site"
+                value={formatMinutes(data.timeMetrics.avgMinutesOnSite)}
+                headline="Arrival to submission"
+                caption={sampleCaption(data.timeMetrics.onSiteSample, "walk")}
+                onSelect={() => open({ metric: "time_on_site" })}
               />
-              <KpiCard
-                icon={<ThumbsUp className="size-4" />}
+              <StatCard
+                label="Average submit to approval"
+                value={formatMinutes(data.timeMetrics.avgSubmitToApprovalMinutes)}
+                headline="How long the office took"
+                caption={sampleCaption(data.timeMetrics.submitToApprovalSample, "approval")}
+                onSelect={() => open({ metric: "submit_to_approval" })}
+              />
+              <StatCard
                 label="First-time approval"
-                value={
-                  data.kpis.firstTimeApprovalRate === null
-                    ? "—"
-                    : `${data.kpis.firstTimeApprovalRate}%`
+                value={percent(data.timeMetrics.firstTimeApprovalRate)}
+                headline={
+                  data.timeMetrics.firstTimeApprovalRate === null
+                    ? "Nothing approved yet"
+                    : "Approved without being sent back"
                 }
-                target="Target: above 90%"
-                progress={data.kpis.firstTimeApprovalRate ?? undefined}
-                good={(data.kpis.firstTimeApprovalRate ?? 0) >= 90}
+                caption={sampleCaption(data.timeMetrics.firstTimeApprovalSample, "approval")}
+                tone={(data.timeMetrics.firstTimeApprovalRate ?? 0) >= 90 ? "good" : "neutral"}
+                onSelect={() => open({ metric: "first_time_approval", value: "first_time" })}
               />
-              <KpiCard
-                icon={<Clock className="size-4" />}
-                label="Delivered within 24h"
-                value={
-                  data.kpis.deliveredWithinSlaRate === null
-                    ? "—"
-                    : `${data.kpis.deliveredWithinSlaRate}%`
+              <StatCard
+                label="Delivered within 24 hours"
+                value={percent(data.timeMetrics.deliveredWithin24hRate)}
+                headline={
+                  data.timeMetrics.deliveredWithin24hRate === null
+                    ? "Nothing delivered yet"
+                    : "Approval to the client"
                 }
-                target="Target: every report"
-                progress={data.kpis.deliveredWithinSlaRate ?? undefined}
-                good={(data.kpis.deliveredWithinSlaRate ?? 0) >= 95}
+                caption={sampleCaption(data.timeMetrics.deliveredSample, "report")}
+                tone={(data.timeMetrics.deliveredWithin24hRate ?? 0) >= 95 ? "good" : "neutral"}
+                onSelect={() => open({ metric: "delivered_sla", value: "within" })}
               />
-              <KpiCard
-                icon={<AlertTriangle className="size-4" />}
+              <StatCard
                 label="Approvals overdue"
-                value={String(data.counts.overdueApprovals)}
-                target="Past the 48-hour escalation point"
-                danger={data.counts.overdueApprovals > 0}
+                value={data.timeMetrics.overdueApprovals}
+                headline="Past the 48-hour escalation point"
+                caption="Live — not filtered by the dates above"
+                tone={data.timeMetrics.overdueApprovals > 0 ? "bad" : "good"}
+                onSelect={() => open({ metric: "overdue_approvals" })}
               />
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <CountCard label="In the field" value={data.counts.open} />
-              <CountCard label="Awaiting approval" value={data.counts.pendingApproval} />
-              <CountCard label="Approved today" value={data.counts.approvedToday} />
-              <CountCard label="Delivered" value={data.counts.delivered} />
             </div>
 
             <div className="grid gap-4 lg:grid-cols-2">
-              <Card className="p-4">
-                <h2 className="font-semibold">Defects by severity</h2>
-                <p className="text-muted-foreground mb-4 text-sm">
-                  {totalSnags} captured this period
-                </p>
-                <div className="space-y-3">
-                  {data.bySeverity.map((row) => (
-                    <div key={row.severity} className="flex items-center gap-3">
-                      <div className="w-20">
-                        <SeverityBadge severity={row.severity} />
-                      </div>
-                      <Progress
-                        value={totalSnags ? (row.count / totalSnags) * 100 : 0}
-                        className="flex-1"
-                      />
-                      <span className="w-12 text-right text-sm tabular-nums">{row.count}</span>
-                    </div>
-                  ))}
-                </div>
-              </Card>
-
-              <Card className="p-4">
-                <h2 className="font-semibold">Most common elements</h2>
-                <p className="text-muted-foreground mb-4 text-sm">
-                  Where defects cluster across the portfolio
-                </p>
-                <div className="space-y-2">
-                  {data.byElement.length === 0 ? (
-                    <EmptyState
-                      icon={<ClipboardList className="size-6" />}
-                      title="Nothing captured yet"
-                      description="No defects were logged in this period, so there is no element to rank. Widen the dates to look further back."
-                      className="py-8"
-                    />
-                  ) : (
-                    data.byElement.map((row) => (
-                      <div key={row.element_code} className="flex items-center gap-3">
-                        <span className="w-32 truncate text-sm">{row.element_label}</span>
+              {/* FR-10.01 — jobs by status. */}
+              <SectionCard
+                title="Jobs by status"
+                description={`${statusTotal} raised in this period`}
+                bodyClassName="px-5 pb-5"
+              >
+                {data.byStatus.length === 0 ? (
+                  <EmptyState
+                    icon={<Inbox />}
+                    title="No jobs raised in this period"
+                    description="Widen the dates to look further back."
+                    className="py-8"
+                  />
+                ) : (
+                  <div className="space-y-3">
+                    {data.byStatus.map((row) => (
+                      <button
+                        key={row.status}
+                        type="button"
+                        onClick={() => open({ metric: "status", value: row.status })}
+                        className="focus-visible:ring-ring hover:bg-muted/50 -mx-2 flex w-[calc(100%+1rem)] items-center gap-3 rounded-md px-2 py-1 text-left focus-visible:ring-2 focus-visible:outline-none"
+                      >
+                        <span className="w-28 shrink-0">
+                          <TaskStatusBadge status={row.status} />
+                        </span>
                         <Progress
-                          value={(row.count / (data.byElement[0]?.count || 1)) * 100}
+                          value={statusTotal ? (row.count / statusTotal) * 100 : 0}
                           className="flex-1"
                         />
-                        <span className="w-12 text-right text-sm tabular-nums">{row.count}</span>
-                      </div>
-                    ))
-                  )}
+                        <span className="w-10 text-right text-sm tabular-nums">{row.count}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </SectionCard>
+
+              {/* FR-10.01 — the review queue by submission time. */}
+              <SectionCard
+                title="Waiting on review"
+                description={
+                  data.reviewQueue.oldestSubmittedAt
+                    ? `${data.reviewQueue.total} submitted and unapproved. Oldest ${timeAgo(data.reviewQueue.oldestSubmittedAt)}.`
+                    : "Nothing is waiting on a reviewer."
+                }
+                bodyClassName="px-5 pb-5"
+              >
+                <div className="space-y-3">
+                  {QUEUE_BANDS.map((band) => {
+                    const count =
+                      data.reviewQueue.buckets.find((entry) => entry.bucket === band.bucket)
+                        ?.count ?? 0;
+                    return (
+                      <button
+                        key={band.bucket}
+                        type="button"
+                        disabled={count === 0}
+                        onClick={() => open({ metric: "review_queue", value: band.bucket })}
+                        className="focus-visible:ring-ring hover:bg-muted/50 -mx-2 flex w-[calc(100%+1rem)] items-center gap-3 rounded-md px-2 py-1 text-left focus-visible:ring-2 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-60"
+                      >
+                        <span className="w-36 shrink-0 text-sm">{band.label}</span>
+                        <Progress
+                          value={
+                            data.reviewQueue.total ? (count / data.reviewQueue.total) * 100 : 0
+                          }
+                          className="flex-1"
+                        />
+                        <span
+                          className={cn(
+                            "w-10 text-right text-sm font-medium tabular-nums",
+                            count > 0 && band.tone,
+                          )}
+                        >
+                          {count}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
-              </Card>
+                <p className="text-muted-foreground mt-4 text-xs">
+                  A live queue, so it ignores the dates above. Time bands are labelled as well as
+                  coloured.
+                </p>
+              </SectionCard>
             </div>
 
-            <Card className="gap-0 py-0">
-              <div className="p-4">
-                <h2 className="font-semibold">Developer quality</h2>
-                <p className="text-muted-foreground text-sm">
-                  Internal view. Snag rate per unit by developer and building.
-                </p>
-              </div>
+            {/* FR-10.01 — jobs completed by day, week or month. */}
+            <SectionCard
+              title="Jobs completed"
+              description={`${data.completed.total} counted at approval. Click a bar for the jobs in that period.`}
+              action={
+                <PillTabs
+                  tabs={GRANULARITY_TABS}
+                  value={granularity}
+                  onChange={setGranularity}
+                />
+              }
+              bodyClassName="px-5 pb-5"
+            >
+              {data.completed.total === 0 ? (
+                <EmptyState
+                  icon={<Hourglass />}
+                  title="Nothing approved in this period"
+                  description="A job counts as completed when it is approved. Widen the dates, or check the review queue above."
+                  className="py-8"
+                />
+              ) : (
+                <ChartContainer config={completedChartConfig} className="h-64 w-full">
+                  <BarChart data={data.completed.points} margin={{ left: -20, right: 8 }}>
+                    <CartesianGrid vertical={false} />
+                    <XAxis
+                      dataKey="label"
+                      tickLine={false}
+                      axisLine={false}
+                      tickMargin={8}
+                      minTickGap={16}
+                    />
+                    <YAxis tickLine={false} axisLine={false} allowDecimals={false} width={40} />
+                    <ChartTooltip content={<ChartTooltipContent labelKey="label" />} />
+                    <Bar
+                      dataKey="count"
+                      fill="var(--color-count)"
+                      radius={[4, 4, 0, 0]}
+                      className="cursor-pointer"
+                      onClick={(entry: { period?: string }) =>
+                        entry.period ? open({ metric: "completed", value: entry.period }) : undefined
+                      }
+                    />
+                  </BarChart>
+                </ChartContainer>
+              )}
+            </SectionCard>
+
+            {/* FR-10.03 — developer view. */}
+            <SectionCard
+              title="Developer view"
+              description="Units inspected, snags per unit, and what those units keep failing on."
+              action={
+                canExport ? (
+                  <ExportMenu onExport={exportDevelopers} disabled={developerRows.length === 0} />
+                ) : null
+              }
+            >
               <DataTable
                 data={developerPageRows}
                 columns={getSnaggingDeveloperColumns()}
@@ -359,6 +515,9 @@ export default function SnaggingAnalyticsDashboard() {
                 rowCount={developerRows.length}
                 type="snagging-analytics-developer"
                 isPagination={true}
+                handleRowClick={(row) =>
+                  open({ metric: "developer", value: row.developer_name })
+                }
                 emptyState={
                   <EmptyState
                     icon={<HardHat />}
@@ -367,12 +526,18 @@ export default function SnaggingAnalyticsDashboard() {
                   />
                 }
               />
-            </Card>
+            </SectionCard>
 
-            <Card className="gap-0 py-0">
-              <div className="p-4">
-                <h2 className="font-semibold">Inspector activity</h2>
-              </div>
+            {/* FR-10.04 — inspector view. */}
+            <SectionCard
+              title="Inspector view"
+              description="Inspections carried out and how long each took. Snag count is not shown: it measures the building, not the inspector."
+              action={
+                canExport ? (
+                  <ExportMenu onExport={exportInspectors} disabled={inspectorRows.length === 0} />
+                ) : null
+              }
+            >
               <DataTable
                 data={inspectorPageRows}
                 columns={getSnaggingInspectorColumns()}
@@ -388,6 +553,7 @@ export default function SnaggingAnalyticsDashboard() {
                 rowCount={inspectorRows.length}
                 type="snagging-analytics-inspector"
                 isPagination={true}
+                handleRowClick={(row) => open({ metric: "inspector", value: row.user_id })}
                 emptyState={
                   <EmptyState
                     icon={<UserRound />}
@@ -396,66 +562,39 @@ export default function SnaggingAnalyticsDashboard() {
                   />
                 }
               />
-            </Card>
+            </SectionCard>
           </div>
         ) : null}
       </DataState>
+
+      <AnalyticsDrilldown
+        request={drilldown}
+        onClose={() => setDrilldown(null)}
+        canExport={canExport}
+      />
     </div>
   );
 }
 
-function KpiCard({
-  icon,
-  label,
-  value,
-  target,
-  progress,
-  good,
-  danger,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  target: string;
-  progress?: number;
-  good?: boolean;
-  danger?: boolean;
-}) {
-  return (
-    <Card className="p-4">
-      <div className="text-muted-foreground flex items-center gap-2 text-sm">
-        {icon}
-        {label}
-      </div>
-      <p
-        className={
-          danger
-            ? "mt-2 text-2xl font-semibold text-danger"
-            : good
-              ? "mt-2 text-2xl font-semibold text-success"
-              : "mt-2 text-2xl font-semibold"
-        }
-      >
-        {value}
-      </p>
-      {progress !== undefined ? <Progress value={progress} className="mt-2" /> : null}
-      <p className="text-muted-foreground mt-2 text-xs">{target}</p>
-    </Card>
-  );
-}
-
-function CountCard({ label, value }: { label: string; value: number }) {
-  return (
-    <Card className="p-4">
-      <p className="text-muted-foreground text-sm">{label}</p>
-      <p className="mt-1 text-2xl font-semibold">{value}</p>
-    </Card>
-  );
-}
-
-function formatMinutes(minutes: number): string {
+function formatMinutes(minutes: number | null): string {
+  if (minutes === null) return "—";
   if (minutes < 60) return `${minutes} min`;
   const hours = Math.floor(minutes / 60);
   const rest = minutes % 60;
   return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
+}
+
+function percent(value: number | null): string {
+  return value === null ? "—" : `${value}%`;
+}
+
+/**
+ * How many records the average was taken over.
+ *
+ * An average of one job and an average of ninety look identical on a
+ * card, and only one of them is a measurement.
+ */
+function sampleCaption(sample: number, noun: string): string {
+  if (sample === 0) return `No ${noun}s in this period`;
+  return `Over ${sample} ${sample === 1 ? noun : `${noun}s`}`;
 }

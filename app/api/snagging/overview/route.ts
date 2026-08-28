@@ -51,7 +51,7 @@ export async function GET(req: NextRequest) {
         .order("submitted_at", { ascending: true, nullsFirst: false })
         .limit(6),
 
-      admin.from("snagging_snags").select("severity, status"),
+      admin.from("snagging_snags").select("status"),
 
       // De-snag rounds opened and not yet signed off. Scoped to visit_type
       // so an additional visit (also round_number > 1) is not counted here.
@@ -119,11 +119,6 @@ export async function GET(req: NextRequest) {
     ]);
     const openSnags = snags.filter((snag) => openStatuses.has(snag.status));
 
-    const severity = (["high", "medium", "low"] as const).map((level) => ({
-      severity: level,
-      count: openSnags.filter((snag) => snag.severity === level).length,
-    }));
-
     const data: SnaggingOverview = {
       counts: {
         assigned,
@@ -148,7 +143,6 @@ export async function GET(req: NextRequest) {
         snag_count: snagCountByJob.get(row.id) ?? 0,
         photo_count: photoCountByJob.get(row.id) ?? 0,
       })),
-      severity,
       openSnagTotal: openSnags.length,
       snagTotal: snags.length,
       roundsOutstanding: roundsOutstanding.count ?? 0,

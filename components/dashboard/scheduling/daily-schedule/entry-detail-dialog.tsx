@@ -43,7 +43,7 @@ function toLocalHhmm(iso: string) {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-const PUBLISHED_LIKE: ScheduleVersionStatus[] = ["published", "published_fsm_changed", "partially_synced"];
+const PUBLISHED_LIKE: ScheduleVersionStatus[] = ["published", "partially_synced"];
 
 export default function EntryDetailDialog({
   entry,

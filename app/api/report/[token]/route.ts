@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { signMediaPaths, signPaths } from "@/lib/server/snagging/media";
+import { loadJobFamily } from "@/lib/server/snagging/job-family";
 import { hashReportToken } from "@/lib/server/snagging/report-token";
 
 /**
@@ -85,6 +86,13 @@ async function assembleReport(admin: Admin, jobId: string) {
   if (error) throw new Error(error.message);
   if (!job) return null;
 
+  // FR-9.03 — the client gets one report. Anything an additional visit
+  // found is part of this inspection's record, so it is read alongside
+  // the original job's snags rather than issued as a second document.
+  const family = await loadJobFamily(admin, jobId);
+  const snagJobIds =
+    jobId === family.rootId ? [jobId, ...family.additionalVisitIds] : [jobId];
+
   const [{ data: checklist }, { data: snagRows }] = await Promise.all([
     admin
       .from("snagging_job_checklist")
@@ -99,7 +107,7 @@ async function assembleReport(admin: Admin, jobId: string) {
          area:snagging_areas(id, name),
          photos:snagging_snag_photos(id, snag_id, storage_path, taken_at)`,
       )
-      .eq("job_id", jobId)
+      .in("job_id", snagJobIds)
       .neq("status", "withdrawn")
       .order("snag_code", { ascending: true }),
   ]);

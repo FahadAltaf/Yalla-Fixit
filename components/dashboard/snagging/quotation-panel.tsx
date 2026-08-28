@@ -220,8 +220,6 @@ export function QuotationPanel({
     }
   }
 
-  const money = (n: number) =>
-    `${quote?.currency ?? "AED"} ${Number(n).toLocaleString("en-AE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const isDecided = quote?.status === "approved" || quote?.status === "rejected";
 
   return (

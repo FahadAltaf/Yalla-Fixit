@@ -643,7 +643,10 @@ export interface SnaggingOverview {
     snag_count: number;
     photo_count: number;
   }>;
-  severity: Array<{ severity: SnaggingSeverity; count: number }>;
+  // No portfolio-wide severity split: it compares nothing useful
+  // across projects and belongs in the client report (FR-7.02,
+  // FR-10.05). The per-job high_severity_count above stays — a reviewer
+  // picking up a submission does need to know it carries high items.
   openSnagTotal: number;
   snagTotal: number;
   roundsOutstanding: number;
@@ -654,31 +657,104 @@ export interface SnaggingOverview {
   };
 }
 
+/** Day / week / month, the three grains FR-10.01 asks the throughput chart for. */
+export type SnaggingAnalyticsGranularity = "day" | "week" | "month";
+
+/**
+ * Operations analytics (FR-10.01 to FR-10.06).
+ *
+ * Two deliberate absences, both required rather than incidental:
+ *
+ * - No severity or element distribution (FR-10.05). Those breakdowns
+ *   say nothing once you compare one project against another, and the
+ *   client report is where they belong (FR-7.02).
+ * - No snag count against an inspector (FR-10.04). Counting an
+ *   inspector's snags rewards whoever walks the worst buildings.
+ */
 export interface SnaggingAnalytics {
-  counts: {
-    open: number;
-    pendingApproval: number;
-    approvedToday: number;
-    delivered: number;
+  /** FR-10.01 — every status the jobs raised in the period sit in. */
+  byStatus: Array<{ status: SnaggingTaskStatus; count: number }>;
+  /**
+   * FR-10.01 — the review queue by submission time. Live, not scoped to
+   * the date range: a queue filtered by an arbitrary window would show a
+   * reviewer less work than is actually waiting.
+   */
+  reviewQueue: {
+    total: number;
+    oldestSubmittedAt: string | null;
+    buckets: Array<{ bucket: "under_24h" | "h24_48" | "over_48h"; count: number }>;
+  };
+  /** FR-10.01 — jobs completed, counted at approval. */
+  completed: {
+    granularity: SnaggingAnalyticsGranularity;
+    total: number;
+    points: Array<{ period: string; label: string; count: number }>;
+  };
+  /** FR-10.02 — the five time metrics, each with the sample it was taken over. */
+  timeMetrics: {
+    avgMinutesOnSite: number | null;
+    onSiteSample: number;
+    avgSubmitToApprovalMinutes: number | null;
+    submitToApprovalSample: number;
+    firstTimeApprovalRate: number | null;
+    firstTimeApprovalSample: number;
+    deliveredWithin24hRate: number | null;
+    deliveredSample: number;
+    /** Live count, like the queue above — not scoped to the date range. */
     overdueApprovals: number;
   };
-  bySeverity: Array<{ severity: SnaggingSeverity; count: number }>;
-  byElement: Array<{ element_code: string; element_label: string; count: number }>;
+  /** FR-10.03 — developer view. */
   byDeveloper: Array<{
     developer_name: string;
-    building_name?: string | null;
     unit_count: number;
     snag_count: number;
     snags_per_unit: number;
     outstanding_count: number;
+    /**
+     * FR-10.03 defect mix: which defects this developer's units keep
+     * failing on. Scoped to one developer on purpose — the portfolio-wide
+     * version of this chart is what FR-10.05 rules out.
+     */
+    defect_mix: Array<{ label: string; count: number }>;
   }>;
-  byInspector: Array<{ user_id: string; name: string; task_count: number; snag_count: number }>;
-  /** O2/O4/O5 from §2.3, computed from the audit timestamps. */
-  kpis: {
-    avgPreparationMinutes: number | null;
-    firstTimeApprovalRate: number | null;
-    deliveredWithinSlaRate: number | null;
-  };
+  /** FR-10.04 — inspector view. Inspections and time, never snag volume. */
+  byInspector: Array<{
+    user_id: string;
+    name: string;
+    inspection_count: number;
+    avgMinutesPerInspection: number | null;
+    timedSample: number;
+  }>;
+}
+
+/** The figures on the analytics page a reader can open (FR-10.06). */
+export type SnaggingAnalyticsMetric =
+  | "status"
+  | "review_queue"
+  | "completed"
+  | "time_on_site"
+  | "submit_to_approval"
+  | "first_time_approval"
+  | "delivered_sla"
+  | "overdue_approvals"
+  | "developer"
+  | "inspector";
+
+/**
+ * The records behind one figure (FR-10.06).
+ *
+ * The server names the columns as well as the rows, so the drill-down
+ * table and the CSV / Excel file it exports cannot drift apart, and each
+ * metric can show the fields that actually explain it — a duration for a
+ * time metric, a rejection count for first-time approval.
+ */
+export interface SnaggingAnalyticsDrilldown {
+  metric: SnaggingAnalyticsMetric;
+  title: string;
+  description: string;
+  columns: Array<{ key: string; label: string; align?: "left" | "right" }>;
+  rows: Array<Record<string, string | number | null> & { id: string }>;
+  totalCount: number;
 }
 
 export interface Settings {

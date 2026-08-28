@@ -3,6 +3,7 @@
 import { AlertTriangle, Clock } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { TASK_STATUS_LABELS } from "@/lib/snagging/status-labels";
 import { cn } from "@/lib/utils";
 import {
   REJECTION_LABELS as REJECTION_RULES,
@@ -109,17 +110,10 @@ export function SeverityCounts({
   );
 }
 
-export const TASK_STATUS_LABELS: Record<SnaggingTaskStatus, string> = {
-  draft: "Draft",
-  assigned: "Assigned",
-  in_progress: "In progress",
-  submitted: "Submitted",
-  in_review: "In review",
-  rejected: "Sent back",
-  approved: "Approved",
-  delivered: "Delivered",
-  cancelled: "Cancelled",
-};
+// Defined in lib so the analytics API can name a status without pulling
+// a client module into the server bundle; re-exported so every screen
+// keeps importing it from here.
+export { TASK_STATUS_LABELS } from "@/lib/snagging/status-labels";
 
 const TASK_STATUS_STYLES: Record<SnaggingTaskStatus, string> = {
   draft: "bg-mist text-ink-soft",

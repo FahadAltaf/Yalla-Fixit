@@ -17,9 +17,13 @@ export async function listTechnicians(): Promise<TechnicianReference[]> {
 
   const { data, error } = await supabase
     .from("technician_reference")
+    // role_id and service_type_id BOTH point at lookup_options, so each
+    // embed must name its foreign key explicitly -- PostgREST can't pick
+    // between two relationships to the same table on its own.
     .select(
       "fsm_resource_id, display_name, is_active, last_synced_at, role_id, service_type_id, shift, team_leader_fsm_id, " +
-        "technician_roles(name), technician_service_types(name)",
+        "role:lookup_options!technician_reference_role_id_fkey(name), " +
+        "service_type:lookup_options!technician_reference_service_type_id_fkey(name)",
     )
     .order("display_name", { ascending: true });
 
@@ -30,8 +34,8 @@ export async function listTechnicians(): Promise<TechnicianReference[]> {
   rows.forEach((r) => nameByFsmId.set(r.fsm_resource_id as string, r.display_name as string));
 
   return rows.map((r) => {
-    const role = r.technician_roles as { name?: string } | { name?: string }[] | null;
-    const service = r.technician_service_types as { name?: string } | { name?: string }[] | null;
+    const role = r.role as { name?: string } | { name?: string }[] | null;
+    const service = r.service_type as { name?: string } | { name?: string }[] | null;
     const roleName = Array.isArray(role) ? role[0]?.name : role?.name;
     const serviceName = Array.isArray(service) ? service[0]?.name : service?.name;
     return {

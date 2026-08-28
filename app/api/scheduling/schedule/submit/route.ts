@@ -55,11 +55,12 @@ export async function POST(req: NextRequest) {
 
     // ----- Path A: no approval needed -> publish straight to FSM (E1). -----
     if (skipApproval) {
-      await admin.from("schedule_approval_actions").insert({
-        schedule_version_id: scheduleVersionId,
-        action: "submitted",
+      await admin.from("schedule_audit_events").insert({
+        event_type: "version_submitted",
         actor_id: profile.id,
-        comment: "Submitted without approval",
+        origin: "portal",
+        schedule_version_id: scheduleVersionId,
+        after_value: { comment: "Submitted without approval", skipApproval: true },
       });
       const { version: published, results } = await publishVersionToFsm(admin, scheduleVersionId, profile.id, {
         comment: "No approval required",
@@ -81,11 +82,6 @@ export async function POST(req: NextRequest) {
       .single();
     if (updateError) throw new Error(updateError.message);
 
-    await admin.from("schedule_approval_actions").insert({
-      schedule_version_id: scheduleVersionId,
-      action: "submitted",
-      actor_id: profile.id,
-    });
     await admin.from("schedule_audit_events").insert({
       event_type: "version_submitted",
       actor_id: profile.id,
@@ -94,13 +90,9 @@ export async function POST(req: NextRequest) {
       after_value: { requested_approver_id: approverId ?? null },
     });
 
-    const { data: ds } = await admin
-      .from("daily_schedules")
-      .select("schedule_date")
-      .eq("id", version.daily_schedule_id)
-      .maybeSingle();
     await notifyApproversOfSubmission(admin, {
-      date: ds?.schedule_date ?? "",
+      // The operating date lives on the version itself now.
+      date: version.schedule_date ?? "",
       submitterName: profile.full_name ?? profile.email ?? "A scheduler",
       approverId: approverId ?? null,
     });

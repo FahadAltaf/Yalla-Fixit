@@ -230,9 +230,15 @@ export function ReportView({ taskId }: { taskId: string }) {
         </div>
       ) : null}
 
-      {/* The report itself. Centered, on its own white sheet. */}
-      <div className="snag-report-print overflow-x-auto rounded-lg border bg-white shadow-sm">
-        <InspectionReport ref={reportRef} task={task} quotation={quotation} />
+      {/*
+        The report itself, on its own white sheet. The sheet is a fixed
+        794px (A4 at 96dpi), so it is centred inside the scroller rather
+        than left in a wide column with dead space beside it.
+      */}
+      <div className="overflow-x-auto">
+        <div className="snag-report-print mx-auto w-fit rounded-lg border bg-white shadow-sm">
+          <InspectionReport ref={reportRef} task={task} quotation={quotation} />
+        </div>
       </div>
 
       <Dialog open={deliverOpen} onOpenChange={setDeliverOpen}>

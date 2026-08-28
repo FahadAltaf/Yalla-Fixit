@@ -24,48 +24,37 @@ export async function GET(req: NextRequest) {
 
     const admin = await createAdminServerClient();
 
-    const { data: dsRow, error: dsError } = await admin
-      .from("daily_schedules")
+    // The day IS its current version now -- there is no separate
+    // daily_schedules row, and no current_version_id pointer to keep in step
+    // with is_current. BR-017's partial unique index guarantees at most one.
+    const { data: currentRow, error: currentError } = await admin
+      .from("schedule_versions")
       .select("*")
       .eq("schedule_date", date)
+      .eq("is_current", true)
       .maybeSingle();
-    if (dsError) throw new Error(dsError.message);
-    let dailySchedule = dsRow;
+    if (currentError) throw new Error(currentError.message);
+    let version = currentRow;
 
-    const today = new Date().toISOString().slice(0, 10);
-    const isPastDate = date < today;
-
-    if (!dailySchedule) {
+    if (!version) {
       // BR-016: past dates are read-only and never auto-create a draft.
-      if (isPastDate) {
-        return NextResponse.json({ data: { dailySchedule: null, version: null, entries: [] } });
+      const today = new Date().toISOString().slice(0, 10);
+      if (date < today) {
+        return NextResponse.json({ data: { version: null, entries: [] } });
       }
 
       const { data: created, error: createError } = await admin
-        .from("daily_schedules")
-        .insert({ schedule_date: date })
-        .select("*")
-        .single();
-      if (createError) throw new Error(createError.message);
-      dailySchedule = created;
-
-      const { data: version, error: versionError } = await admin
         .from("schedule_versions")
         .insert({
-          daily_schedule_id: dailySchedule.id,
+          schedule_date: date,
           version_number: 1,
           status: "draft",
           created_by: profile.id,
         })
         .select("*")
         .single();
-      if (versionError) throw new Error(versionError.message);
-
-      await admin
-        .from("daily_schedules")
-        .update({ current_version_id: version.id })
-        .eq("id", dailySchedule.id);
-      dailySchedule.current_version_id = version.id;
+      if (createError) throw new Error(createError.message);
+      version = created;
 
       await admin.from("schedule_audit_events").insert({
         event_type: "draft_created",
@@ -75,15 +64,8 @@ export async function GET(req: NextRequest) {
         schedule_version_id: version.id,
       });
 
-      return NextResponse.json({ data: { dailySchedule, version, entries: [] } });
+      return NextResponse.json({ data: { version, entries: [] } });
     }
-
-    const { data: version, error: versionError } = await admin
-      .from("schedule_versions")
-      .select("*")
-      .eq("id", dailySchedule.current_version_id)
-      .maybeSingle();
-    if (versionError) throw new Error(versionError.message);
 
     const { data: entries, error: entriesError } = await admin
       .from("schedule_entries")
@@ -92,12 +74,12 @@ export async function GET(req: NextRequest) {
           "created_by_user:user_profile!schedule_entries_created_by_fkey(full_name, email), " +
           "updated_by_user:user_profile!schedule_entries_updated_by_fkey(full_name, email)",
       )
-      .eq("schedule_version_id", version?.id ?? "00000000-0000-0000-0000-000000000000")
+      .eq("schedule_version_id", version.id)
       .order("shift", { ascending: true })
       .order("start_at", { ascending: true });
     if (entriesError) throw new Error(entriesError.message);
 
-    return NextResponse.json({ data: { dailySchedule, version, entries: entries ?? [] } });
+    return NextResponse.json({ data: { version, entries: entries ?? [] } });
   } catch (error) {
     console.error("Schedule GET error:", error);
     return NextResponse.json({ error: "Failed to load schedule" }, { status: 500 });

@@ -58,6 +58,29 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       );
     }
 
+    // FR-9.04 — an additional visit is a chargeable pass, so it cannot be
+    // scheduled until the client has approved a quotation covering it.
+    // Checked here rather than in the UI because the charge is the point:
+    // booking one without an approved quote commits an inspector to work
+    // nobody has agreed to pay for.
+    const { data: visitQuote, error: quoteError } = await admin
+      .from("snagging_quotations")
+      .select("id, status")
+      .eq("job_id", parent.id)
+      .eq("status", "approved")
+      .limit(1)
+      .maybeSingle();
+    if (quoteError) throw new Error(quoteError.message);
+    if (!visitQuote) {
+      return NextResponse.json(
+        {
+          error:
+            "This visit needs an approved quotation before it can be scheduled. Send the quotation to the client and book once they approve it.",
+        },
+        { status: 409 },
+      );
+    }
+
     const nextRound = (parent.round_number ?? 1) + 1;
 
     // The charge is fixed at booking time from the current config.
@@ -98,22 +121,47 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
     if (visitError) throw new Error(visitError.message);
 
-    // Copy the parent's areas so the inspector walks the same rooms, but
-    // start every area clean — this is a fresh pass, not a verification.
+    /*
+     * FR-9.02 — pre-load the rooms the earlier visit could not finish.
+     *
+     * The visit exists because something was unreachable, so it opens on
+     * exactly that: the areas marked not accessible or limited, carrying
+     * the reason and the elements that went unchecked so the inspector
+     * knows what they are going back for. Every room was copied before,
+     * which turned a targeted return into a full re-inspection.
+     *
+     * If nothing was flagged, the visit was booked for another reason
+     * and falls back to the full room list rather than opening empty.
+     */
     const { data: parentAreas, error: areaLoadError } = await admin
       .from("snagging_areas")
-      .select("name, catalogue_area_code, sort_order")
+      .select("name, catalogue_area_code, sort_order, access_state, access_reason, elements_not_checked")
       .eq("job_id", parent.id)
       .order("sort_order", { ascending: true });
     if (areaLoadError) throw new Error(areaLoadError.message);
 
-    if (parentAreas && parentAreas.length > 0) {
+    const unfinished = (parentAreas ?? []).filter(
+      (area) => area.access_state && area.access_state !== "accessible",
+    );
+    const carryAreas = unfinished.length > 0 ? unfinished : (parentAreas ?? []);
+
+    if (carryAreas.length > 0) {
       const { error: areaInsertError } = await admin.from("snagging_areas").insert(
-        parentAreas.map((area) => ({
+        carryAreas.map((area) => ({
           job_id: visit.id,
           name: area.name,
           catalogue_area_code: area.catalogue_area_code,
           sort_order: area.sort_order,
+          // Why the inspector is returning, carried across as a note so
+          // it is in front of them on site. The area itself starts
+          // clean — this is a fresh pass, not a verification.
+          note:
+            [
+              area.access_reason ? `Previously ${area.access_state === "not_accessible" ? "no access" : "limited access"}: ${area.access_reason}` : null,
+              area.elements_not_checked ? `Not checked last visit: ${area.elements_not_checked}` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ") || null,
         })),
       );
       if (areaInsertError) throw new Error(areaInsertError.message);

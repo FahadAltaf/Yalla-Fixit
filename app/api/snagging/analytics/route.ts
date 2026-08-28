@@ -3,31 +3,62 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import { APPROVAL_SLA_HOURS, DELIVERY_SLA_HOURS } from "@/lib/server/snagging/workflow";
-import { ActionType, ResourceType, SnaggingAnalytics } from "@/types/types";
+import {
+  average,
+  inRange,
+  loadInspectorNames,
+  loadJobsTouchingRange,
+  loadReviewQueue,
+  loadSnagsForJobs,
+  minutesBetween,
+  OUTSTANDING_SNAG_STATUSES,
+  percentage,
+  periodKey,
+  periodLabel,
+  periodSeries,
+  queueBucketOf,
+  resolveRange,
+  type AnalyticsJob,
+  type DateRange,
+} from "@/lib/server/snagging/analytics";
+import { DELIVERY_SLA_HOURS } from "@/lib/server/snagging/workflow";
+import {
+  ActionType,
+  ResourceType,
+  type SnaggingAnalytics,
+  type SnaggingAnalyticsGranularity,
+  type SnaggingTaskStatus,
+} from "@/types/types";
 
 /**
- * Operational analytics (§6.7) and the KPIs from §2.3.
+ * Operations analytics (FR-10.01 to FR-10.04).
  *
- * The lean rebuild dropped the snagging_task_summaries and
- * snagging_developer_quality views, so the distributions and the KPI
- * block are computed here from snagging_jobs + snagging_snags directly
- * and aggregated in JS.
+ * What this endpoint no longer returns is as much the requirement as
+ * what it does. The severity and element distributions are gone
+ * (FR-10.05): they compare nothing useful across projects, and the
+ * client report is where a severity split belongs (FR-7.02). The
+ * inspector's snag count is gone too (FR-10.04) — counting snags per
+ * inspector measures the building, not the person walking it.
  *
- * The only column the lean schema genuinely lost is approval_due_at;
- * the approval SLA is therefore derived from submitted_at rather than
- * read from a stored deadline, exactly as the review queue does it.
- * rejection_count and delivered_at survived the rebuild, so the
- * first-time-approval and delivery KPIs are computed, not stubbed.
+ * Two figures are deliberately live rather than scoped to the selected
+ * dates: the review queue and the overdue count. Both are worklists, and
+ * a worklist narrowed to last month tells a reviewer there is less
+ * waiting than there is.
  */
 
-/** Snag statuses that still count as outstanding (open work). */
-const OUTSTANDING_STATUSES = new Set([
-  "open",
-  "pending_verification",
-  "verified_poor_quality",
-  "verified_not_done",
-]);
+const GRANULARITIES: SnaggingAnalyticsGranularity[] = ["day", "week", "month"];
+
+const STATUS_ORDER: SnaggingTaskStatus[] = [
+  "draft",
+  "assigned",
+  "in_progress",
+  "submitted",
+  "in_review",
+  "rejected",
+  "approved",
+  "delivered",
+  "cancelled",
+];
 
 export async function GET(req: NextRequest) {
   try {
@@ -40,292 +71,252 @@ export async function GET(req: NextRequest) {
     }
 
     const params = req.nextUrl.searchParams;
-    const from = params.get("from") ?? defaultFrom();
-    const to = params.get("to") ?? new Date().toISOString().slice(0, 10);
-    const fromTs = `${from}T00:00:00.000Z`;
-    const toTs = `${to}T23:59:59.999Z`;
+    const range = resolveRange(params.get("from"), params.get("to"));
+    const granularityParam = params.get("granularity") as SnaggingAnalyticsGranularity | null;
+    const granularity =
+      granularityParam && GRANULARITIES.includes(granularityParam) ? granularityParam : "day";
 
     const admin = await createAdminServerClient();
-    const todayStart = `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
+    const [jobs, queue] = await Promise.all([
+      loadJobsTouchingRange(admin, range),
+      loadReviewQueue(admin),
+    ]);
 
-    // FR-6.07 — the same 48h rule the review queue applies, asked as a
-    // count. Derived from submitted_at because approval_due_at did not
-    // survive the lean rebuild.
-    const approvalCutoff = new Date(Date.now() - APPROVAL_SLA_HOURS * 60 * 60 * 1000).toISOString();
-
-    const [openCount, pendingApproval, approvedToday, deliveredCount, overdueApprovals, snagRows, jobRows] =
-      await Promise.all([
-        countJobs(admin, (q) => q.in("status", ["assigned", "in_progress", "rejected"])),
-        countJobs(admin, (q) => q.in("status", ["submitted", "in_review"])),
-        countJobs(admin, (q) => q.eq("status", "approved").gte("approved_at", todayStart)),
-        countJobs(admin, (q) => q.eq("status", "delivered")),
-        countJobs(admin, (q) =>
-          q.in("status", ["submitted", "in_review"]).lt("submitted_at", approvalCutoff),
-        ),
-        // Distribution source: severity + element live on the snag row.
-        admin
-          .from("snagging_snags")
-          .select("severity, catalogue_code, element_label")
-          .gte("created_at", fromTs)
-          .lte("created_at", toTs),
-        // The jobs in range carry the developer, the inspector, and the
-        // submit/approve timestamps the KPI block needs.
-        admin
-          .from("snagging_jobs")
-          .select(
-            "id, developer_name, building_name, inspector_id, status, submitted_at, approved_at, delivered_at, rejection_count",
-          )
-          .gte("created_at", fromTs)
-          .lte("created_at", toTs),
-      ]);
-
-    if (snagRows.error) throw new Error(snagRows.error.message);
-    if (jobRows.error) throw new Error(jobRows.error.message);
-
-    const snags = snagRows.data ?? [];
-    const jobs = jobRows.data ?? [];
-
-    const bySeverity = (["low", "medium", "high"] as const).map((severity) => ({
-      severity,
-      count: snags.filter((snag) => snag.severity === severity).length,
-    }));
-
-    const elementCounts = new Map<string, { element_label: string; count: number }>();
-    for (const snag of snags) {
-      // No standalone element_code column any more; the element prefix of
-      // the catalogue code (e.g. "WL" in "WL-CRK") stands in for it.
-      const elementCode = snag.catalogue_code?.split("-")[0] ?? snag.element_label ?? "unknown";
-      const existing = elementCounts.get(elementCode);
-      if (existing) existing.count += 1;
-      else elementCounts.set(elementCode, { element_label: snag.element_label ?? elementCode, count: 1 });
-    }
-
-    const byElement = [...elementCounts.entries()]
-      .map(([element_code, value]) => ({ element_code, ...value }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 12);
-
-    // Per-job snags for the developer / inspector breakdowns, resolved
-    // through the job (snags belong to the job now).
-    const jobIds = jobs.map((job) => job.id);
-    const { data: jobSnagRows, error: jobSnagError } = jobIds.length
-      ? await admin.from("snagging_snags").select("job_id, status").in("job_id", jobIds)
-      : { data: [] as Array<{ job_id: string; status: string }>, error: null };
-    if (jobSnagError) throw new Error(jobSnagError.message);
+    // Intake — the jobs raised in the period — is what the status split,
+    // the developer view and the inspector view are counted over.
+    const raised = jobs.filter((job) => inRange(job.created_at, range));
+    const snags = await loadSnagsForJobs(
+      admin,
+      raised.map((job) => job.id),
+    );
 
     const snagsByJob = new Map<string, { total: number; outstanding: number }>();
-    for (const snag of jobSnagRows ?? []) {
-      const entry = snagsByJob.get(snag.job_id) ?? { total: 0, outstanding: 0 };
-      entry.total += 1;
-      if (OUTSTANDING_STATUSES.has(snag.status)) entry.outstanding += 1;
-      snagsByJob.set(snag.job_id, entry);
+    const defectsByJob = new Map<string, string[]>();
+    for (const snag of snags) {
+      const tally = snagsByJob.get(snag.job_id) ?? { total: 0, outstanding: 0 };
+      tally.total += 1;
+      if (OUTSTANDING_SNAG_STATUSES.has(snag.status)) tally.outstanding += 1;
+      snagsByJob.set(snag.job_id, tally);
+
+      const labels = defectsByJob.get(snag.job_id) ?? [];
+      labels.push(snag.defect_label ?? "Unclassified");
+      defectsByJob.set(snag.job_id, labels);
     }
 
-    const byDeveloper = computeDeveloperQuality(jobs, snagsByJob);
-    const byInspector = await computeInspectorTotals(admin, jobs, snagsByJob);
+    const data: SnaggingAnalytics = {
+      byStatus: computeByStatus(raised),
+      reviewQueue: computeReviewQueue(queue),
+      completed: computeCompleted(jobs, range, granularity),
+      timeMetrics: computeTimeMetrics(jobs, queue, range),
+      byDeveloper: computeByDeveloper(raised, snagsByJob, defectsByJob),
+      byInspector: await computeByInspector(admin, raised),
+    };
 
-    return NextResponse.json({
-      data: {
-        counts: {
-          open: openCount,
-          pendingApproval,
-          approvedToday,
-          delivered: deliveredCount,
-          // The approval SLA clock (approval_due_at) was dropped in the
-          // lean schema, so there is nothing to measure "overdue" against.
-          overdueApprovals,
-        },
-        bySeverity,
-        byElement,
-        byDeveloper,
-        byInspector,
-        kpis: computeKpis(jobs),
-      } satisfies SnaggingAnalytics,
-    });
+    return NextResponse.json({ data });
   } catch (error) {
     console.error("Snagging analytics error:", error);
     return NextResponse.json({ error: "Failed to load analytics" }, { status: 500 });
   }
 }
 
-type Admin = Awaited<ReturnType<typeof createAdminServerClient>>;
-type JobQuery = ReturnType<ReturnType<Admin["from"]>["select"]>;
+/** FR-10.01 — jobs by status, every status the period actually used. */
+function computeByStatus(raised: AnalyticsJob[]): SnaggingAnalytics["byStatus"] {
+  return STATUS_ORDER.map((status) => ({
+    status,
+    count: raised.filter((job) => job.status === status).length,
+  })).filter((entry) => entry.count > 0);
+}
 
-type JobRow = {
-  id: string;
-  developer_name: string | null;
-  building_name: string | null;
-  inspector_id: string | null;
-  status: string;
-  submitted_at: string | null;
-  approved_at: string | null;
-  delivered_at: string | null;
-  rejection_count: number | null;
-};
+/** FR-10.01 — the review queue, aged by how long it has been submitted. */
+function computeReviewQueue(queue: AnalyticsJob[]): SnaggingAnalytics["reviewQueue"] {
+  const buckets = (["under_24h", "h24_48", "over_48h"] as const).map((bucket) => ({
+    bucket,
+    count: queue.filter((job) => queueBucketOf(job.submitted_at) === bucket).length,
+  }));
 
-async function countJobs(admin: Admin, refine: (query: JobQuery) => JobQuery): Promise<number> {
-  const { count, error } = await refine(
-    admin.from("snagging_jobs").select("id", { count: "exact", head: true }) as JobQuery,
-  );
-  if (error) throw new Error(error.message);
-  return count ?? 0;
+  // The queue arrives oldest-first, so the first row with a submission
+  // time is the one that has been waiting longest.
+  const oldest = queue.find((job) => job.submitted_at)?.submitted_at ?? null;
+
+  return { total: queue.length, oldestSubmittedAt: oldest, buckets };
 }
 
 /**
- * FR-7 developer quality breakdown, rebuilt from jobs + snags now that
- * the snagging_developer_quality view is gone. One row per developer,
- * ordered by the worst snags-per-unit first.
- */
-function computeDeveloperQuality(
-  jobs: JobRow[],
-  snagsByJob: Map<string, { total: number; outstanding: number }>,
-): SnaggingAnalytics["byDeveloper"] {
-  const byDeveloper = new Map<
-    string,
-    { unit_count: number; snag_count: number; outstanding_count: number }
-  >();
-
-  for (const job of jobs) {
-    const developer = job.developer_name?.trim();
-    if (!developer) continue;
-    const tally = snagsByJob.get(job.id) ?? { total: 0, outstanding: 0 };
-    const existing = byDeveloper.get(developer) ?? {
-      unit_count: 0,
-      snag_count: 0,
-      outstanding_count: 0,
-    };
-    existing.unit_count += 1;
-    existing.snag_count += tally.total;
-    existing.outstanding_count += tally.outstanding;
-    byDeveloper.set(developer, existing);
-  }
-
-  return [...byDeveloper.entries()]
-    .map(([developer_name, value]) => ({
-      developer_name,
-      building_name: null,
-      unit_count: value.unit_count,
-      snag_count: value.snag_count,
-      snags_per_unit: value.unit_count
-        ? Math.round((value.snag_count / value.unit_count) * 100) / 100
-        : 0,
-      outstanding_count: value.outstanding_count,
-    }))
-    .sort((a, b) => b.snags_per_unit - a.snags_per_unit)
-    .slice(0, 20);
-}
-
-/**
- * FR-7.01 — distribution by inspector. The single jobs.inspector_id
- * replaces the old snagging_task_assignees join; snag counts come from
- * the inspector's jobs.
- */
-async function computeInspectorTotals(
-  admin: Admin,
-  jobs: JobRow[],
-  snagsByJob: Map<string, { total: number; outstanding: number }>,
-): Promise<SnaggingAnalytics["byInspector"]> {
-  const byInspector = new Map<string, { task_count: number; snag_count: number }>();
-  for (const job of jobs) {
-    if (!job.inspector_id) continue;
-    const tally = snagsByJob.get(job.id) ?? { total: 0, outstanding: 0 };
-    const existing = byInspector.get(job.inspector_id) ?? { task_count: 0, snag_count: 0 };
-    existing.task_count += 1;
-    existing.snag_count += tally.total;
-    byInspector.set(job.inspector_id, existing);
-  }
-
-  if (byInspector.size === 0) return [];
-
-  const inspectorIds = [...byInspector.keys()];
-  const { data: profiles, error } = await admin
-    .from("user_profile")
-    .select("id, full_name, email")
-    .in("id", inspectorIds);
-  if (error) throw new Error(error.message);
-
-  const nameById = new Map(
-    ((profiles ?? []) as Array<{ id: string; full_name: string | null; email: string | null }>).map(
-      (row) => [row.id, row.full_name ?? row.email ?? "Unknown"] as const,
-    ),
-  );
-
-  return [...byInspector.entries()]
-    .map(([user_id, value]) => ({
-      user_id,
-      name: nameById.get(user_id) ?? "Unknown",
-      task_count: value.task_count,
-      snag_count: value.snag_count,
-    }))
-    .sort((a, b) => b.task_count - a.task_count);
-}
-
-/**
- * §2.3 KPIs.
+ * FR-10.01 — jobs completed by day, week and month.
  *
- * - Preparation time is submit-to-approval, the BRD's measurable proxy
- *   for the 80% reduction target (O2); both timestamps still live on the
- *   job.
- * - First-time approval (O5) and the delivery SLA (O4) relied on the
- *   rejection history and a delivered_at timestamp the lean schema no
- *   longer keeps, so they report null rather than a misleading number.
+ * Completion is counted at approval, not at submission: an inspection
+ * that has been sent back for correction is not finished, and counting
+ * it at submission would let the same job land in the chart twice.
  */
-function computeKpis(jobs: JobRow[]): SnaggingAnalytics["kpis"] {
-  const approved = jobs.filter((job) => job.approved_at && job.submitted_at);
+function computeCompleted(
+  jobs: AnalyticsJob[],
+  range: DateRange,
+  granularity: SnaggingAnalyticsGranularity,
+): SnaggingAnalytics["completed"] {
+  const completedJobs = jobs.filter((job) => inRange(job.approved_at, range));
 
-  const preparationMinutes = approved.map(
-    (job) =>
-      (new Date(job.approved_at!).getTime() - new Date(job.submitted_at!).getTime()) / 60000,
-  );
-
-  const avgPreparationMinutes = preparationMinutes.length
-    ? Math.round(
-        preparationMinutes.reduce((sum, value) => sum + value, 0) / preparationMinutes.length,
-      )
-    : null;
-
-  // §2.3 — how often an inspection is accepted without ever being sent
-  // back. rejection_count is incremented by the reject route, so a job
-  // that reached approval with a count of zero was right first time.
-  // Delivered jobs count too: they were approved on the way through.
-  const everApproved = jobs.filter(
-    (job) => job.approved_at !== null && job.approved_at !== undefined,
-  );
-  const firstTimeApprovalRate = everApproved.length
-    ? Math.round(
-        (everApproved.filter((job) => (job.rejection_count ?? 0) === 0).length /
-          everApproved.length) *
-          100,
-      )
-    : null;
-
-  // §2.3 — of the reports that went out, how many made the 24h window
-  // between approval and delivery. Jobs still undelivered are not
-  // counted as misses here: they have not failed the window yet, and
-  // folding them in would make the figure drift with queue depth rather
-  // than with delivery performance.
-  const delivered = jobs.filter((job) => job.delivered_at && job.approved_at);
-  const deliveredWithinSlaRate = delivered.length
-    ? Math.round(
-        (delivered.filter(
-          (job) =>
-            new Date(job.delivered_at!).getTime() - new Date(job.approved_at!).getTime() <=
-            DELIVERY_SLA_HOURS * 60 * 60 * 1000,
-        ).length /
-          delivered.length) *
-          100,
-      )
-    : null;
+  const counts = new Map<string, number>();
+  for (const job of completedJobs) {
+    const key = periodKey(job.approved_at as string, granularity);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
 
   return {
-    avgPreparationMinutes,
-    firstTimeApprovalRate,
-    deliveredWithinSlaRate,
+    granularity,
+    total: completedJobs.length,
+    points: periodSeries(range, granularity).map((period) => ({
+      period,
+      label: periodLabel(period, granularity),
+      count: counts.get(period) ?? 0,
+    })),
   };
 }
 
-function defaultFrom(): string {
-  const date = new Date();
-  date.setDate(date.getDate() - 30);
-  return date.toISOString().slice(0, 10);
+/**
+ * FR-10.02 — the five time metrics.
+ *
+ * Each carries the sample it was taken over. An average of one job and
+ * an average of ninety read identically on a card, and the first is not
+ * a measurement.
+ */
+function computeTimeMetrics(
+  jobs: AnalyticsJob[],
+  queue: AnalyticsJob[],
+  range: DateRange,
+): SnaggingAnalytics["timeMetrics"] {
+  // Time on site: arrival to submission, anchored on the day the walk
+  // was submitted.
+  const onSite = jobs
+    .filter((job) => inRange(job.submitted_at, range))
+    .map((job) => minutesBetween(job.started_at, job.submitted_at))
+    .filter((value): value is number => value !== null);
+
+  // Submit to approval: how long the office took, anchored on approval.
+  const approvedInRange = jobs.filter((job) => inRange(job.approved_at, range));
+  const submitToApproval = approvedInRange
+    .map((job) => minutesBetween(job.submitted_at, job.approved_at))
+    .filter((value): value is number => value !== null);
+
+  // First-time approval: of the jobs approved in the period, how many
+  // were never sent back. rejection_count is incremented by the reject
+  // route, so zero means it was right the first time.
+  const firstTime = approvedInRange.filter((job) => (job.rejection_count ?? 0) === 0).length;
+
+  // Delivery SLA: of the reports that went out, how many made the
+  // window. Jobs still undelivered are not counted as misses — they have
+  // not failed yet, and folding them in would make the figure move with
+  // queue depth rather than with delivery performance.
+  const delivered = jobs.filter(
+    (job) => inRange(job.delivered_at, range) && job.approved_at !== null,
+  );
+  const onTime = delivered.filter((job) => {
+    const minutes = minutesBetween(job.approved_at, job.delivered_at);
+    return minutes !== null && minutes <= DELIVERY_SLA_HOURS * 60;
+  }).length;
+
+  return {
+    avgMinutesOnSite: average(onSite),
+    onSiteSample: onSite.length,
+    avgSubmitToApprovalMinutes: average(submitToApproval),
+    submitToApprovalSample: submitToApproval.length,
+    firstTimeApprovalRate: percentage(firstTime, approvedInRange.length),
+    firstTimeApprovalSample: approvedInRange.length,
+    deliveredWithin24hRate: percentage(onTime, delivered.length),
+    deliveredSample: delivered.length,
+    overdueApprovals: queue.filter((job) => queueBucketOf(job.submitted_at) === "over_48h").length,
+  };
+}
+
+/**
+ * FR-10.03 — developer view: units inspected, snags per unit, defect mix.
+ *
+ * The mix is by defect, and it is scoped to one developer. That is the
+ * distinction FR-10.05 draws: a portfolio-wide chart of severities or
+ * elements says nothing, whereas "this developer's units keep failing on
+ * the same three things" is the conversation the view exists to start.
+ */
+function computeByDeveloper(
+  raised: AnalyticsJob[],
+  snagsByJob: Map<string, { total: number; outstanding: number }>,
+  defectsByJob: Map<string, string[]>,
+): SnaggingAnalytics["byDeveloper"] {
+  const developers = new Map<
+    string,
+    { units: Set<string>; snag_count: number; outstanding_count: number; defects: Map<string, number> }
+  >();
+
+  for (const job of raised) {
+    const name = job.developer_name?.trim();
+    if (!name) continue;
+
+    const entry =
+      developers.get(name) ??
+      {
+        units: new Set<string>(),
+        snag_count: 0,
+        outstanding_count: 0,
+        defects: new Map<string, number>(),
+      };
+    const tally = snagsByJob.get(job.id) ?? { total: 0, outstanding: 0 };
+    // Units, not job rows. A de-snag round and an additional visit are
+    // their own rows against the same flat, so counting rows would show
+    // a developer two units where there is one and halve the snag rate
+    // on the unit that needed going back to.
+    entry.units.add(job.parent_job_id ?? job.id);
+    entry.snag_count += tally.total;
+    entry.outstanding_count += tally.outstanding;
+    for (const label of defectsByJob.get(job.id) ?? []) {
+      entry.defects.set(label, (entry.defects.get(label) ?? 0) + 1);
+    }
+    developers.set(name, entry);
+  }
+
+  return [...developers.entries()]
+    .map(([developer_name, value]) => ({
+      developer_name,
+      unit_count: value.units.size,
+      snag_count: value.snag_count,
+      snags_per_unit: value.units.size
+        ? Math.round((value.snag_count / value.units.size) * 100) / 100
+        : 0,
+      outstanding_count: value.outstanding_count,
+      defect_mix: [...value.defects.entries()]
+        .map(([label, count]) => ({ label, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 5),
+    }))
+    .sort((a, b) => b.snags_per_unit - a.snags_per_unit);
+}
+
+/**
+ * FR-10.04 — inspector view: how many inspections, and how long each
+ * took. Snag count is absent by requirement, not by oversight.
+ */
+async function computeByInspector(
+  admin: Awaited<ReturnType<typeof createAdminServerClient>>,
+  raised: AnalyticsJob[],
+): Promise<SnaggingAnalytics["byInspector"]> {
+  const inspectors = new Map<string, { inspection_count: number; minutes: number[] }>();
+
+  for (const job of raised) {
+    if (!job.inspector_id) continue;
+    const entry = inspectors.get(job.inspector_id) ?? { inspection_count: 0, minutes: [] };
+    entry.inspection_count += 1;
+    const minutes = minutesBetween(job.started_at, job.submitted_at);
+    if (minutes !== null) entry.minutes.push(minutes);
+    inspectors.set(job.inspector_id, entry);
+  }
+
+  if (inspectors.size === 0) return [];
+  const names = await loadInspectorNames(admin, [...inspectors.keys()]);
+
+  return [...inspectors.entries()]
+    .map(([user_id, value]) => ({
+      user_id,
+      name: names.get(user_id) ?? "Unknown",
+      inspection_count: value.inspection_count,
+      avgMinutesPerInspection: average(value.minutes),
+      timedSample: value.minutes.length,
+    }))
+    .sort((a, b) => b.inspection_count - a.inspection_count);
 }

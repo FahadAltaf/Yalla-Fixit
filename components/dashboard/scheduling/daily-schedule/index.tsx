@@ -150,7 +150,6 @@ const STATUS_LABELS: Record<string, string> = {
   published: "Published",
   sync_failed: "Sync Failed",
   partially_synced: "Partially Synced",
-  published_fsm_changed: "Published",
 };
 
 // Sub-100% steps let a whole shift be seen at once (YFI v1.5); 100% is the
@@ -173,7 +172,6 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
   const [access, setAccess] = useState<SchedulingAccess | null>(null);
   const [version, setVersion] = useState<ScheduleVersion | null>(null);
   const [entries, setEntries] = useState<ScheduleEntry[]>([]);
-  const [dailyScheduleId, setDailyScheduleId] = useState<string | null>(null);
   const [tags, setTags] = useState<TechnicianTag[]>([]);
   const [roles, setRoles] = useState<TechnicianRole[]>([]);
   const [services, setServices] = useState<TechnicianServiceType[]>([]);
@@ -284,7 +282,6 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
     if (options?.reset) {
       setVersion(null);
       setEntries([]);
-      setDailyScheduleId(null);
     }
     try {
       const [result, leave] = await Promise.all([
@@ -293,7 +290,6 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
       ]);
       setVersion(result.version);
       setEntries(result.entries);
-      setDailyScheduleId(result.dailySchedule?.id ?? null);
       setLeaveRecords(leave);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to load schedule");
@@ -552,10 +548,11 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
   };
 
   const handleCreateRevision = async () => {
-    if (!dailyScheduleId) return;
     setSubmitting(true);
     try {
-      const revision = await scheduleService.createRevision(dailyScheduleId);
+      // The day is addressed by its operating date now; the server resolves
+      // which version is current.
+      const revision = await scheduleService.createRevision(date);
       setVersion(revision);
       toast.success("Draft revision created -- add new work, then submit for approval");
       loadDay(date);
@@ -877,9 +874,7 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
               </Button>
             </div>
           )}
-          {(version?.status === "published" ||
-            version?.status === "published_fsm_changed" ||
-            version?.status === "partially_synced") && (
+          {(version?.status === "published" || version?.status === "partially_synced") && (
             <Button variant="outline" onClick={handleCreateRevision} disabled={submitting}>
               Add Work (Create Revision)
             </Button>

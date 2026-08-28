@@ -32,7 +32,11 @@ const FILTERS = [
   { value: "all", label: "All", statuses: "all" },
   { value: "assigned", label: "Assigned", statuses: "assigned" },
   { value: "in_progress", label: "In progress", statuses: "in_progress" },
-  { value: "submitted", label: "Submitted", statuses: "submitted,in_review" },
+  // Submitted and In review are separate stops on the approval chain
+  // (FR-6.01): submitted is waiting to be picked up, in_review has been.
+  // They used to share one pill, which hid whether anyone had started.
+  { value: "submitted", label: "Submitted", statuses: "submitted" },
+  { value: "in_review", label: "In review", statuses: "in_review" },
   { value: "approved", label: "Approved", statuses: "approved,delivered" },
   { value: "rejected", label: "Needs correction", statuses: "rejected" },
 ] as const;

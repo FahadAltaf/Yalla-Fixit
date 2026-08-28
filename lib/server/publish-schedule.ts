@@ -75,12 +75,11 @@ export async function publishVersionToFsm(
     .single();
   if (finalUpdateError) throw new Error(finalUpdateError.message);
 
-  if (finalStatus === "published") {
-    await admin
-      .from("daily_schedules")
-      .update({ current_version_id: scheduleVersionId })
-      .eq("id", version.daily_schedule_id);
-  }
+  // Pointing the day at this version used to mean writing
+  // daily_schedules.current_version_id here. That pointer is gone: the
+  // version being published is already the date's is_current row (revise is
+  // what flips it), and the partial unique index on (schedule_date) WHERE
+  // is_current keeps that true. Nothing to update.
 
   await admin.from("schedule_audit_events").insert({
     event_type: "version_published",
