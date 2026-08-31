@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { toast } from "sonner";
 import {
   scheduleService,
@@ -22,29 +22,29 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import StatusBadge from "@/components/ui/status-badge";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dialog";
 import {
   AlertTriangle,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   ChevronUp,
   CircleCheck,
   Clock,
   Eraser,
   Eye,
   Layers,
-  Loader2,
   Plus,
   Printer,
   RefreshCw,
   SlidersHorizontal,
-  Users,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import SchedulingNav from "../scheduling-nav";
+import ScheduleBoardSkeleton from "./board-skeleton";
+import DateNav from "./date-nav";
+import TechnicianPicker from "./technician-picker";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import AddEntryDialog from "./add-entry-dialog";
 import SubmitDialog from "./submit-dialog";
 import EntryDetailDialog from "./entry-detail-dialog";
@@ -150,7 +150,6 @@ const STATUS_LABELS: Record<string, string> = {
   published: "Published",
   sync_failed: "Sync Failed",
   partially_synced: "Partially Synced",
-  published_fsm_changed: "Published",
 };
 
 // Sub-100% steps let a whole shift be seen at once (YFI v1.5); 100% is the
@@ -165,15 +164,16 @@ const FIELD_DEFAULT: FieldVis = { tags: false, roles: false, ids: false, address
 const FIELD_STORAGE_KEY = "yfi.scheduling.fields";
 const FILTERS_STORAGE_KEY = "yfi.scheduling.filtersOpen";
 const HIDDEN_TECH_STORAGE_KEY = "yfi.scheduling.hiddenTechs";
+const SHIFT_TAB_STORAGE_KEY = "yfi.scheduling.shiftTab";
 type ExportShift = "both" | "day" | "night";
 
 export default function DailyScheduleDashboard({ technicians }: Props) {
   const [date, setDate] = useState(todayIso());
+  const [shiftTab, setShiftTab] = useState<"night" | "day">("night");
   const [config, setConfig] = useState<SchedulingConfig | null>(null);
   const [access, setAccess] = useState<SchedulingAccess | null>(null);
   const [version, setVersion] = useState<ScheduleVersion | null>(null);
   const [entries, setEntries] = useState<ScheduleEntry[]>([]);
-  const [dailyScheduleId, setDailyScheduleId] = useState<string | null>(null);
   const [tags, setTags] = useState<TechnicianTag[]>([]);
   const [roles, setRoles] = useState<TechnicianRole[]>([]);
   const [services, setServices] = useState<TechnicianServiceType[]>([]);
@@ -191,7 +191,7 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
   const [zoomIndex, setZoomIndex] = useState(ZOOM_DEFAULT_INDEX);
   const [fieldVis, setFieldVis] = useState<FieldVis>(FIELD_DEFAULT);
   const [fieldMenuOpen, setFieldMenuOpen] = useState(false);
-  const [filtersOpen, setFiltersOpen] = useState(true);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [hiddenTechIds, setHiddenTechIds] = useState<Set<string>>(new Set());
 
@@ -234,7 +234,12 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
     } catch {
       /* keep defaults */
     }
-    if (window.localStorage.getItem(FILTERS_STORAGE_KEY) === "closed") setFiltersOpen(false);
+    // Collapsed by default now, so an explicit "open" has to be restored too.
+    const storedFilters = window.localStorage.getItem(FILTERS_STORAGE_KEY);
+    if (storedFilters === "open") setFiltersOpen(true);
+    else if (storedFilters === "closed") setFiltersOpen(false);
+    const tab = window.localStorage.getItem(SHIFT_TAB_STORAGE_KEY);
+    if (tab === "night" || tab === "day") setShiftTab(tab);
     try {
       const h = JSON.parse(window.localStorage.getItem(HIDDEN_TECH_STORAGE_KEY) || "[]");
       if (Array.isArray(h)) setHiddenTechIds(new Set(h));
@@ -284,7 +289,6 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
     if (options?.reset) {
       setVersion(null);
       setEntries([]);
-      setDailyScheduleId(null);
     }
     try {
       const [result, leave] = await Promise.all([
@@ -293,7 +297,6 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
       ]);
       setVersion(result.version);
       setEntries(result.entries);
-      setDailyScheduleId(result.dailySchedule?.id ?? null);
       setLeaveRecords(leave);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to load schedule");
@@ -344,6 +347,16 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
     });
     return map;
   }, [entries]);
+
+  // Appointment count per shift, shown on the tabs so the shift you are not
+  // looking at never hides work silently.
+  const shiftCounts = useMemo(
+    () => ({
+      night: entries.filter((e) => e.shift === "night").length,
+      day: entries.filter((e) => e.shift === "day").length,
+    }),
+    [entries],
+  );
 
   const driverIds = useMemo(() => computeDriverIds(technicians), [technicians]);
 
@@ -444,10 +457,13 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
 
   const handleRefresh = async () => {
     try {
-      // Reconcile still runs (it refreshes snapshots and flags genuine
-      // external edits), but we don't announce "updated in FSM" -- Zoho's
-      // automation bumps every appointment, so that message was just noise.
-      await scheduleService.reconcile();
+      // Adopt any direct FSM edits for THIS day before reloading. Scoped to
+      // the visible date so a refresh costs one FSM read per entry on screen
+      // rather than one per entry across every scheduled day.
+      //
+      // We don't announce "updated in FSM" -- Zoho's automation bumps every
+      // appointment, so that message was just noise.
+      await scheduleService.reconcile(date);
     } catch {
       // Non-fatal: still reload the local view even if reconciliation fails.
     }
@@ -549,10 +565,11 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
   };
 
   const handleCreateRevision = async () => {
-    if (!dailyScheduleId) return;
     setSubmitting(true);
     try {
-      const revision = await scheduleService.createRevision(dailyScheduleId);
+      // The day is addressed by its operating date now; the server resolves
+      // which version is current.
+      const revision = await scheduleService.createRevision(date);
       setVersion(revision);
       toast.success("Draft revision created -- add new work, then submit for approval");
       loadDay(date);
@@ -613,28 +630,30 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
 
   return (
     <>
-      <div className="print:hidden">
-        <SchedulingNav />
-      </div>
-      <div className="flex flex-col gap-4 p-4 md:p-6 print:gap-2 print:p-0">
+      <div className="flex flex-col gap-4 print:gap-2">
+        <div className="print:hidden">
+          <p className="eyebrow">Scheduling</p>
+          <h1 className="mt-1.5 text-3xl">Daily schedule</h1>
+          <p className="text-muted-foreground mt-1 text-[0.9375rem]">
+            Day and night shifts, synced with Zoho FSM and versioned through approval.
+          </p>
+        </div>
         <div className="flex flex-wrap items-center justify-between gap-3 print:hidden">
-          <div className="flex items-center gap-2">
-            <Button size="icon" variant="outline" onClick={() => setDate(addDaysIso(date, -1))} title="Previous day">
-              <ChevronLeft className="size-4" />
-            </Button>
-            <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-40" />
-            <Button size="icon" variant="outline" onClick={() => setDate(addDaysIso(date, 1))} title="Next day">
-              <ChevronRight className="size-4" />
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => setDate(todayIso())}>
-              Today
-            </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <DateNav
+              date={date}
+              onChange={setDate}
+              onStep={(delta) => setDate(addDaysIso(date, delta))}
+              onToday={() => setDate(todayIso())}
+              isToday={date === todayIso()}
+            />
             <Button variant="ghost" size="icon" onClick={handleRefresh} title="Refresh from FSM">
               <RefreshCw className="size-4" />
             </Button>
           </div>
 
-          <div className="flex items-center gap-2">
+          {/* Wraps on narrow screens so the toolbar never widens the page. */}
+          <div className="flex flex-wrap items-center gap-2">
             {/* Zoom widens the time track so entry text stops being clipped. */}
             <div className="flex items-center gap-0.5 rounded-md border px-1">
               <Button
@@ -752,18 +771,22 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
               No scheduled work
             </Button>
 
+            {/* Sort is one choice out of four, so it is a select rather than
+                four competing buttons -- those read as filters you can
+                combine, which is exactly what they are not. */}
             <div className="ml-auto flex items-center gap-1.5">
-              <span className="text-muted-foreground text-xs">Sort:</span>
-              {(["default", "name", "role", "service"] as SortMode[]).map((m) => (
-                <Button
-                  key={m}
-                  size="sm"
-                  variant={sortMode === m ? "default" : "outline"}
-                  onClick={() => setSortMode(m)}
-                >
-                  {m === "default" ? "Default" : m[0].toUpperCase() + m.slice(1)}
-                </Button>
-              ))}
+              <span className="text-muted-foreground text-xs">Sort</span>
+              <Select value={sortMode} onValueChange={(v) => setSortMode(v as SortMode)}>
+                <SelectTrigger size="sm" className="w-[130px]" aria-label="Sort technicians">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="default">Default</SelectItem>
+                  <SelectItem value="name">Name</SelectItem>
+                  <SelectItem value="role">Role</SelectItem>
+                  <SelectItem value="service">Service</SelectItem>
+                </SelectContent>
+              </Select>
               {viewCustomised && (
                 <Button size="sm" variant="ghost" onClick={resetView} title="Return to the default view">
                   Reset view
@@ -867,16 +890,14 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
               </Button>
             </div>
           )}
-          {(version?.status === "published" ||
-            version?.status === "published_fsm_changed" ||
-            version?.status === "partially_synced") && (
+          {(version?.status === "published" || version?.status === "partially_synced") && (
             <Button variant="outline" onClick={handleCreateRevision} disabled={submitting}>
               Add Work (Create Revision)
             </Button>
           )}
           {(version?.status === "sync_failed" || version?.status === "partially_synced") && (
             <div className="flex flex-wrap items-center gap-2">
-              <span className={version.status === "sync_failed" ? "text-destructive text-sm" : "text-amber-600 dark:text-amber-400 text-sm"}>
+              <span className={version.status === "sync_failed" ? "text-destructive text-sm" : "text-warning text-sm"}>
                 {version.status === "sync_failed"
                   ? "Sync failed — no appointments were written."
                   : "Partially synced — some appointments failed."}{" "}
@@ -893,56 +914,85 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
         </div>
 
         {loading || !shiftBounds ? (
-          <div className="flex justify-center py-12">
-            <Loader2 className="size-6 animate-spin text-muted-foreground" />
-          </div>
+          <ScheduleBoardSkeleton />
         ) : (
-          <>
-            <ShiftSection
-              title="Night Shift"
-              shift="night"
-              bounds={shiftBounds.night}
-              zoom={zoom}
-              fieldVis={fieldVis}
-              // #10: only night-shift technicians (plus those with no shift set).
-              technicians={visibleTechnicians.filter((t) => t.shift === "night" || !t.shift)}
-              pickTechnicians={technicians.filter((t) => t.is_active && (t.shift === "night" || !t.shift))}
-              hiddenTechIds={hiddenTechIds}
-              onToggleHidden={toggleHiddenTech}
-              onSetTechsHidden={setTechsHidden}
-              driverIds={driverIds}
-              tagsByTechnician={assignments}
-              entriesByTechnician={entriesByTechnician}
-              leaveByTechnician={leaveByTechnician}
-              isEditable={isEditable}
-              onAddEntry={(technicianFsmId, slot) =>
-                setAddEntryFor({ shift: "night", technicianFsmId, ...slot })
-              }
-              onEntryClick={setSelectedEntry}
-              onEntryMoved={() => loadDay(date)}
-            />
-            <ShiftSection
-              title="Morning Shift"
-              shift="day"
-              bounds={shiftBounds.day}
-              zoom={zoom}
-              fieldVis={fieldVis}
-              technicians={visibleTechnicians.filter((t) => t.shift === "morning" || !t.shift)}
-              pickTechnicians={technicians.filter((t) => t.is_active && (t.shift === "morning" || !t.shift))}
-              hiddenTechIds={hiddenTechIds}
-              onToggleHidden={toggleHiddenTech}
-              onSetTechsHidden={setTechsHidden}
-              driverIds={driverIds}
-              tagsByTechnician={assignments}
-              entriesByTechnician={entriesByTechnician}
-              leaveByTechnician={leaveByTechnician}
-              isEditable={isEditable}
-              onAddEntry={(technicianFsmId, slot) => setAddEntryFor({ shift: "day", technicianFsmId, ...slot })}
-              onEntryClick={setSelectedEntry}
-              onEntryMoved={() => loadDay(date)}
-            />
-          </>
+          <Tabs
+            value={shiftTab}
+            onValueChange={(v) => {
+              const next = v as "night" | "day";
+              setShiftTab(next);
+              window.localStorage.setItem(SHIFT_TAB_STORAGE_KEY, next);
+            }}
+            className="gap-4 print:hidden"
+          >
+            {/* Counts sit on the tab so the shift you are not looking at
+                never hides work silently. */}
+            <TabsList className="h-auto! w-full p-1 sm:w-auto">
+              <TabsTrigger value="night" className="gap-2 px-4 ">
+                Night Shift
+                <Badge variant="secondary" className="px-1.5 py-0 text-[11px] font-normal tabular-nums">
+                  {shiftCounts.night}
+                </Badge>
+              </TabsTrigger>
+              <TabsTrigger value="day" className="gap-2 px-4">
+                Morning Shift
+                <Badge variant="secondary" className="px-1.5 py-0 text-[11px] font-normal tabular-nums">
+                  {shiftCounts.day}
+                </Badge>
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="night" className="mt-0">
+              <ShiftSection
+                title="Night Shift"
+                shift="night"
+                bounds={shiftBounds.night}
+                zoom={zoom}
+                fieldVis={fieldVis}
+                // #10: only night-shift technicians (plus those with no shift set).
+                technicians={visibleTechnicians.filter((t) => t.shift === "night" || !t.shift)}
+                pickTechnicians={technicians.filter((t) => t.is_active && (t.shift === "night" || !t.shift))}
+                hiddenTechIds={hiddenTechIds}
+                onToggleHidden={toggleHiddenTech}
+                onSetTechsHidden={setTechsHidden}
+                driverIds={driverIds}
+                tagsByTechnician={assignments}
+                entriesByTechnician={entriesByTechnician}
+                leaveByTechnician={leaveByTechnician}
+                isEditable={isEditable}
+                onAddEntry={(technicianFsmId, slot) =>
+                  setAddEntryFor({ shift: "night", technicianFsmId, ...slot })
+                }
+                onEntryClick={setSelectedEntry}
+                onEntryMoved={() => loadDay(date)}
+              />
+            </TabsContent>
+
+            <TabsContent value="day" className="mt-0">
+              <ShiftSection
+                title="Morning Shift"
+                shift="day"
+                bounds={shiftBounds.day}
+                zoom={zoom}
+                fieldVis={fieldVis}
+                technicians={visibleTechnicians.filter((t) => t.shift === "morning" || !t.shift)}
+                pickTechnicians={technicians.filter((t) => t.is_active && (t.shift === "morning" || !t.shift))}
+                hiddenTechIds={hiddenTechIds}
+                onToggleHidden={toggleHiddenTech}
+                onSetTechsHidden={setTechsHidden}
+                driverIds={driverIds}
+                tagsByTechnician={assignments}
+                entriesByTechnician={entriesByTechnician}
+                leaveByTechnician={leaveByTechnician}
+                isEditable={isEditable}
+                onAddEntry={(technicianFsmId, slot) => setAddEntryFor({ shift: "day", technicianFsmId, ...slot })}
+                onEntryClick={setSelectedEntry}
+                onEntryMoved={() => loadDay(date)}
+              />
+            </TabsContent>
+          </Tabs>
         )}
+
       </div>
 
       {addEntryFor && version && config && (
@@ -986,14 +1036,16 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
 
       {exportOpen && (
         <Dialog open onOpenChange={(o) => !o && setExportOpen(false)}>
-          <DialogContent className="max-w-sm">
+          <DialogContent className="w-[calc(100%-2rem)] sm:max-w-sm">
             <DialogHeader>
               <DialogTitle>Export as PDF</DialogTitle>
+              {/* Was a loose <p>; as the description it is announced with the
+                  dialog and Radix stops warning about a missing one. */}
+              <DialogDescription>
+                Which shifts to include? The PDF uses your current filters, field choices and visible
+                technicians, then downloads.
+              </DialogDescription>
             </DialogHeader>
-            <p className="text-muted-foreground text-sm">
-              Which shifts to include? A PDF is generated from your current filters, field choices, and visible
-              technicians, then downloaded.
-            </p>
             <div className="flex flex-col gap-2">
               {([
                 ["both", "Both shifts"],
@@ -1094,21 +1146,6 @@ function ShiftSection({
   // we hold its live snapped start here so it follows the pointer; on release
   // we push the new time to FSM-backed storage via updateEntry.
   const [drag, setDrag] = useState<{ id: string; newStartMin: number } | null>(null);
-
-  // S1: per-shift show/hide picker, anchored to the button in the Technician
-  // column header. Positioned as `fixed` (measured from the button) so the
-  // scroll pane's overflow can't clip it.
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [pickerSearch, setPickerSearch] = useState("");
-  const [pickerPos, setPickerPos] = useState<{ left: number; top: number } | null>(null);
-  const pickerBtnRef = useRef<HTMLButtonElement>(null);
-  const hiddenHere = pickTechnicians.filter((t) => hiddenTechIds.has(t.fsm_resource_id)).length;
-  const allIds = pickTechnicians.map((t) => t.fsm_resource_id);
-  const openPicker = () => {
-    const r = pickerBtnRef.current?.getBoundingClientRect();
-    setPickerPos(r ? { left: r.left, top: r.bottom + 4 } : null);
-    setPickerOpen((v) => !v);
-  };
 
   // Explicit percentage widths (rather than flex-1) so the frozen header
   // cells and the body gridlines stay aligned even when the shift window
@@ -1278,7 +1315,7 @@ function ShiftSection({
       </div>
 
       {outOfWindow.length > 0 && (
-        <div className="flex items-start gap-2 border-b bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+        <div className="flex items-start gap-2 border-b bg-warning/10 px-3 py-2 text-xs text-warning">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
           <span>
             {outOfWindow.length} entr{outOfWindow.length === 1 ? "y is" : "ies are"} outside the{" "}
@@ -1302,22 +1339,22 @@ function ShiftSection({
             >
               <span className="text-muted-foreground text-xs font-medium">Technician</span>
               {/* S1: show / hide this shift's technicians. */}
-              <button
-                ref={pickerBtnRef}
-                type="button"
-                onClick={openPicker}
-                className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] font-medium"
-                title="Show / hide technicians"
-              >
-                <Users className="size-3.5" />
-                {hiddenHere > 0 ? `${hiddenHere} hidden` : "All"}
-              </button>
+              <TechnicianPicker
+                title={title}
+                technicians={pickTechnicians}
+                hiddenIds={hiddenTechIds}
+                onToggle={onToggleHidden}
+                onSetHidden={onSetTechsHidden}
+              />
             </div>
             <div className="relative min-w-0 flex-1">
               {hourCells.map((cell) => (
                 <div
                   key={cell.start}
-                  className="text-muted-foreground absolute top-0 border-l px-1.5 py-1.5 text-[11px] tabular-nums"
+                  // inset-y-0 + items-center so the hour sits on the same
+                  // baseline as the "Technician" label in the frozen column;
+                  // pinned to top-0 it rode ~9px high above it.
+                  className="text-muted-foreground absolute inset-y-0 flex items-center border-l px-1.5 text-[11px] tabular-nums"
                   style={{ left: `${cell.leftPct}%`, width: `${cell.widthPct}%` }}
                 >
                   {formatHourLabel(cell.start)}
@@ -1366,8 +1403,8 @@ function ShiftSection({
               // group; the technicians assigned to a driver sit underneath.
               const isDriver = driverIds.has(technician.fsm_resource_id);
               const roleLabel = technician.role_name;
-              const rowTint = isDriver ? "bg-sky-500/10" : "";
-              const nameColor = isDriver ? "font-semibold text-sky-700 dark:text-sky-400" : "";
+              const rowTint = isDriver ? "bg-brand-50" : "";
+              const nameColor = isDriver ? "font-semibold text-brand" : "";
 
               return (
                 <div
@@ -1375,20 +1412,19 @@ function ShiftSection({
                   className={`flex items-stretch border-b last:border-0 ${rowTint}`}
                 >
                   <div
-                    className={`sticky left-0 z-30 flex shrink-0 flex-col justify-center gap-0.5 border-r px-2 py-2 ${
-                      rowTint || "bg-background"
-                    }`}
+                    className={`sticky left-0 z-30 flex shrink-0 flex-col justify-center gap-0.5 border-r px-2 py-2 ${rowTint || "bg-background"
+                      }`}
                     style={{ width: TECH_COL_WIDTH }}
                   >
                     <div className="flex items-center gap-1.5">
                       <span className={`truncate text-sm font-medium ${nameColor}`}>{technician.display_name}</span>
                       {isDriver && (
-                        <span className="rounded bg-sky-500/15 px-1 py-0.5 text-[9px] font-semibold tracking-wide text-sky-700 uppercase dark:text-sky-400">
+                        <span className="rounded bg-brand-100 px-1 py-0.5 text-[9px] font-semibold tracking-wide text-brand uppercase">
                           Driver
                         </span>
                       )}
                       {leave && (
-                        <span className="rounded bg-amber-500/15 px-1 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                        <span className="rounded bg-warning/15 px-1 py-0.5 text-[10px] font-medium text-warning">
                           Unavailable
                         </span>
                       )}
@@ -1410,7 +1446,7 @@ function ShiftSection({
                   </div>
 
                   <div
-                    className={`relative min-w-0 flex-1 ${leave ? "bg-amber-500/10" : ""}`}
+                    className={`relative min-w-0 flex-1 ${leave ? "bg-warning/10" : ""}`}
                     style={{ height: rowHeight }}
                   >
                     {/* One clickable cell per hour: clicking 5–6 AM opens the
@@ -1426,9 +1462,8 @@ function ShiftSection({
                             endTime: minutesToHhmm(cell.end),
                           })
                         }
-                        className={`border-border/40 absolute top-0 bottom-0 border-l ${
-                          isEditable && !leave ? "hover:bg-primary/5 cursor-pointer" : "cursor-default"
-                        }`}
+                        className={`border-border/40 absolute top-0 bottom-0 border-l ${isEditable && !leave ? "hover:bg-primary/5 cursor-pointer" : "cursor-default"
+                          }`}
                         style={{ left: `${cell.leftPct}%`, width: `${cell.widthPct}%` }}
                         title={
                           leave
@@ -1441,7 +1476,7 @@ function ShiftSection({
                     ))}
 
                     {leave && (
-                      <span className="pointer-events-none absolute top-1 left-2 z-10 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                      <span className="pointer-events-none absolute top-1 left-2 z-10 text-[11px] font-medium text-warning">
                         On Leave: {leave.leave_type} ({new Date(leave.start_at).toLocaleDateString()}–
                         {new Date(leave.end_at).toLocaleDateString()})
                       </span>
@@ -1463,16 +1498,16 @@ function ShiftSection({
                       // red ring on a coloured box). Free-text stays slate,
                       // everything else is the brand colour.
                       const boxColour = syncFailed
-                        ? "bg-red-600 text-white"
+                        ? "bg-danger text-white"
                         : isFreeText
-                          ? "border border-dashed border-slate-300 bg-slate-500 text-white"
+                          ? "border border-dashed border-border bg-ink/40 text-white"
                           : "bg-primary text-white";
 
                       // Rings only mark real, actionable states: an out-of-window
                       // time, or a leave conflict. (The "changed in FSM" review
                       // flag was dropped — the board just stays synced.)
                       let ring = "";
-                      if (outside) ring = "ring-2 ring-amber-500 ring-offset-1";
+                      if (outside) ring = "ring-2 ring-warning ring-offset-1";
                       else if (conflictsWithLeave) ring = "ring-2 ring-destructive";
 
                       const tooltip = syncFailed
@@ -1483,13 +1518,12 @@ function ShiftSection({
                             ? `Outside the ${title} window — scheduled ${timeLabel}. Open to change the time or move it to the other shift.`
                             : conflictsWithLeave
                               ? `Conflict: ${technician.display_name} is on leave during this appointment (${timeLabel})`
-                              : `${label} — ${timeLabel}${
-                                    !isFreeText && entry.fsm_appointment_id && entry.sync_status === "synced"
-                                      ? " · Synced to Zoho FSM"
-                                      : entry.entry_type === "new_appointment" && !entry.fsm_appointment_id
-                                        ? " · Will be created in FSM on approval"
-                                        : ""
-                                  }${overlaps ? " · Overlaps another appointment for this technician" : ""}`;
+                              : `${label} — ${timeLabel}${!isFreeText && entry.fsm_appointment_id && entry.sync_status === "synced"
+                                ? " · Synced to Zoho FSM"
+                                : entry.entry_type === "new_appointment" && !entry.fsm_appointment_id
+                                  ? " · Will be created in FSM on approval"
+                                  : ""
+                              }${overlaps ? " · Overlaps another appointment for this technician" : ""}`;
 
                       // N1: sync-status icon (replaces the changed-in-FSM flag).
                       const synced = !isFreeText && Boolean(entry.fsm_appointment_id) && entry.sync_status === "synced";
@@ -1536,9 +1570,8 @@ function ShiftSection({
                           onClick={(e) => {
                             if (e.detail === 0) onEntryClick(entry);
                           }}
-                          className={`absolute flex flex-col justify-center gap-0.5 overflow-hidden rounded border-r border-black/15 px-2 text-left shadow-sm select-none ${boxColour} ${
-                            isDragging ? "z-20 opacity-90 ring-2 ring-primary" : `z-10 ${ring}`
-                          } ${draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"}`}
+                          className={`absolute flex flex-col justify-center gap-0.5 overflow-hidden rounded border-r border-black/15 px-2 text-left shadow-sm select-none ${boxColour} ${isDragging ? "z-20 opacity-90 ring-2 ring-primary" : `z-10 ${ring}`
+                            } ${draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"}`}
                           style={{
                             // Fill the full time span (flexes with zoom). The
                             // thin ring separates back-to-back bars without
@@ -1576,64 +1609,6 @@ function ShiftSection({
         </div>
       </div>
 
-      {/* S1 picker — fixed position (measured off the header button) so the
-          scroll pane can't clip it. Lists only this shift's technicians. */}
-      {pickerOpen && pickerPos && (
-        <>
-          <div className="fixed inset-0 z-[60]" onClick={() => setPickerOpen(false)} />
-          <div
-            className="bg-popover fixed z-[61] w-64 rounded-md border p-2 shadow-md"
-            style={{ left: pickerPos.left, top: pickerPos.top }}
-          >
-            <div className="mb-1 flex items-center justify-between gap-2">
-              <span className="text-muted-foreground text-[11px]">{title} · show on the board</span>
-            </div>
-            <div className="mb-2 flex items-center gap-3">
-              <button
-                type="button"
-                className="text-primary text-[11px] hover:underline"
-                onClick={() => onSetTechsHidden(allIds, false)}
-              >
-                Select all
-              </button>
-              <button
-                type="button"
-                className="text-primary text-[11px] hover:underline"
-                onClick={() => onSetTechsHidden(allIds, true)}
-              >
-                Deselect all
-              </button>
-            </div>
-            <Input
-              placeholder="Filter…"
-              value={pickerSearch}
-              onChange={(e) => setPickerSearch(e.target.value)}
-              className="mb-2 h-8"
-            />
-            <div className="flex max-h-64 flex-col gap-0.5 overflow-y-auto">
-              {pickTechnicians
-                .filter((t) => t.display_name.toLowerCase().includes(pickerSearch.toLowerCase()))
-                .sort((a, b) => a.display_name.localeCompare(b.display_name))
-                .map((t) => (
-                  <label
-                    key={t.fsm_resource_id}
-                    className="hover:bg-muted/50 flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-sm"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={!hiddenTechIds.has(t.fsm_resource_id)}
-                      onChange={() => onToggleHidden(t.fsm_resource_id)}
-                    />
-                    <span className="truncate">{t.display_name}</span>
-                  </label>
-                ))}
-              {pickTechnicians.length === 0 && (
-                <span className="text-muted-foreground px-1 py-2 text-xs">No technicians in this shift.</span>
-              )}
-            </div>
-          </div>
-        </>
-      )}
     </div>
   );
 }

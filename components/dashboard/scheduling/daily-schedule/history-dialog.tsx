@@ -5,11 +5,11 @@ import { toast } from "sonner";
 import {
   scheduleService,
   type ScheduleEntry,
-  type ScheduleVersionWithActions,
+  type ScheduleVersion,
   type AuditResponse,
 } from "@/modules/scheduling";
 import StatusBadge from "@/components/ui/status-badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Loader2 } from "lucide-react";
 
 type Props = {
@@ -33,14 +33,26 @@ const STATUS_LABELS: Record<string, string> = {
   published: "Published",
   sync_failed: "Sync Failed",
   partially_synced: "Partially Synced",
-  published_fsm_changed: "Published",
 };
+
+// The operating date arrives as YYYY-MM-DD; show it the way the board does
+// rather than as a raw ISO string in the title.
+function formatDate(iso: string) {
+  const [y, m, d] = iso.split("-").map(Number);
+  if (!y || !m || !d) return iso;
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, {
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
 
 // A single merged timeline row.
 type TimelineItem = { at: number; kind: string; who: string; detail?: string; tone?: "ok" | "bad" | "muted" };
 
 export default function HistoryDialog({ date, onOpenChange }: Props) {
-  const [versions, setVersions] = useState<ScheduleVersionWithActions[]>([]);
+  const [versions, setVersions] = useState<ScheduleVersion[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [audit, setAudit] = useState<AuditResponse | null>(null);
@@ -80,46 +92,41 @@ export default function HistoryDialog({ date, onOpenChange }: Props) {
     };
   }, [selectedVersionId]);
 
-  const selected = versions.find((v) => v.id === selectedVersionId);
-
-  // Merge approval actions + audit events + sync operations into one ordered
-  // timeline so the panel reads chronologically instead of three stacked lists.
+  // Approval decisions and FSM sync attempts are audit events now, so the
+  // timeline reads from one stream instead of merging three stacked lists.
   const timeline = useMemo<TimelineItem[]>(() => {
-    const items: TimelineItem[] = [];
-    (selected?.schedule_approval_actions ?? []).forEach((a) =>
-      items.push({
-        at: new Date(a.created_at).getTime(),
-        kind: a.action.replace(/_/g, " "),
-        who: a.user_profile?.full_name ?? a.user_profile?.email ?? "Unknown",
-        detail: a.comment ?? undefined,
-        tone: a.action === "rejected" ? "bad" : "ok",
-      }),
-    );
-    (audit?.events ?? []).forEach((e) =>
-      items.push({
-        at: new Date(e.created_at).getTime(),
-        kind: e.event_type.replace(/_/g, " "),
-        who: e.user_profile?.full_name ?? e.user_profile?.email ?? e.origin,
-        tone: "muted",
-      }),
-    );
-    (audit?.syncOperations ?? []).forEach((s) =>
-      items.push({
-        at: new Date(s.created_at).getTime(),
-        kind: `FSM ${s.operation_type.replace(/_/g, " ")} — ${s.status}`,
-        who: "Zoho FSM",
-        detail: s.error_message ?? undefined,
-        tone: s.status === "failed" ? "bad" : "ok",
-      }),
-    );
-    return items.sort((a, b) => b.at - a.at);
-  }, [selected, audit]);
+    return (audit?.events ?? [])
+      .map((e) => {
+        const isSync = e.event_type.startsWith("sync_");
+        const comment = (e.after_value as { comment?: string } | null)?.comment;
+
+        let tone: TimelineItem["tone"] = "muted";
+        if (e.status === "failed" || e.event_type === "version_rejected") tone = "bad";
+        else if (e.status === "succeeded" || e.event_type.startsWith("version_")) tone = "ok";
+
+        return {
+          at: new Date(e.created_at).getTime(),
+          kind: isSync
+            ? `FSM ${e.event_type.replace(/^sync_/, "").replace(/_/g, " ")}${e.status ? ` — ${e.status}` : ""}`
+            : e.event_type.replace(/_/g, " "),
+          who: isSync
+            ? "Zoho FSM"
+            : (e.user_profile?.full_name ?? e.user_profile?.email ?? e.origin),
+          detail: e.error_message ?? comment ?? undefined,
+          tone,
+        };
+      })
+      .sort((a, b) => b.at - a.at);
+  }, [audit]);
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[86vh] w-[calc(100%-2rem)] overflow-hidden sm:max-w-4xl">
         <DialogHeader>
-          <DialogTitle>Schedule history — {date}</DialogTitle>
+          <DialogTitle>Schedule history — {formatDate(date)}</DialogTitle>
+          <DialogDescription>
+            Every version of this day, with the appointments it held and a timeline of what happened to it.
+          </DialogDescription>
         </DialogHeader>
 
         {loading ? (
@@ -212,7 +219,7 @@ export default function HistoryDialog({ date, onOpenChange }: Props) {
                           <li key={i} className="relative pb-3 last:pb-0">
                             <span
                               className={`absolute top-1.5 -left-[21px] size-2.5 rounded-full ring-2 ring-[var(--background)] ${
-                                t.tone === "bad" ? "bg-red-500" : t.tone === "muted" ? "bg-slate-400" : "bg-emerald-500"
+                                t.tone === "bad" ? "bg-danger" : t.tone === "muted" ? "bg-ink/40" : "bg-success"
                               }`}
                             />
                             <div className="text-sm font-medium capitalize">{t.kind}</div>

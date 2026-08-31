@@ -105,12 +105,8 @@ export async function POST(req: NextRequest) {
       .single();
     if (updateError) throw new Error(updateError.message);
 
-    if (overall === "published") {
-      await admin
-        .from("daily_schedules")
-        .update({ current_version_id: scheduleVersionId })
-        .eq("id", version.daily_schedule_id);
-    }
+    // No daily_schedules.current_version_id to update any more -- the version
+    // being retried is already the date's is_current row.
 
     await admin.from("schedule_audit_events").insert({
       event_type: "sync_retried",

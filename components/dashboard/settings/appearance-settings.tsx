@@ -26,6 +26,14 @@ export function AppearanceSettings({ settings }: { settings?: Settings }) {
 
   // Define color options with proper color values using inline styles
   const colorOptions = [
+    // The design system's brand red leads the list and is the default,
+    // so "brand" is a choice an admin can make by name rather than by
+    // pasting a hex.
+    {
+      name: "Kaizen Red",
+      style: { backgroundColor: "#8C1D24", borderColor: "#8C1D24" },
+      value: "#8C1D24",
+    },
     {
       name: "Ocean Blue",
       style: { backgroundColor: "#3B82F6", borderColor: "#3B82F6" },

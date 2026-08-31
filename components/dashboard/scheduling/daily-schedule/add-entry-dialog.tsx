@@ -15,8 +15,17 @@ import {
 import type { LeaveRecord, TechnicianTag } from "@/types/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertTriangle, Loader2, Search } from "lucide-react";
 import TimeSelect, { formatTimeAmPm } from "./time-select";
 import {
@@ -346,6 +355,9 @@ export default function AddEntryDialog({
       <DialogContent className="max-h-[92vh] w-[calc(100%-2rem)] sm:max-w-3xl lg:max-w-6xl overflow-y-auto [scrollbar-gutter:stable] [scrollbar-width:thin]">
         <DialogHeader>
           <DialogTitle>Add Schedule Entry — {effectiveShift === "night" ? "Night" : "Morning"} Shift</DialogTitle>
+          <DialogDescription>
+            Attach an existing Zoho FSM work order or appointment, or drop a free-text note on the board.
+          </DialogDescription>
         </DialogHeader>
 
         <div className="flex gap-2">
@@ -460,21 +472,34 @@ export default function AddEntryDialog({
                     )}
                     <div className="mt-1 flex flex-col gap-1">
                       <span className="text-muted-foreground text-xs font-medium">Appointment</span>
-                      {workOrder.appointments.map((a) => (
-                        <label key={a.id} className="hover:bg-muted/50 flex cursor-pointer items-center gap-2 rounded border px-2 py-1.5">
-                          <input type="radio" name="appointment" checked={appointmentChoice === a.id} onChange={() => chooseAppointment(a.id)} />
+                      <RadioGroup
+                        value={appointmentChoice}
+                        onValueChange={chooseAppointment}
+                        className="gap-1"
+                      >
+                        {workOrder.appointments.map((a) => (
+                          <Label
+                            key={a.id}
+                            htmlFor={`appointment-${a.id}`}
+                            className="hover:bg-muted/50 flex cursor-pointer items-center gap-2 rounded border px-2 py-1.5 font-normal"
+                          >
+                            <RadioGroupItem id={`appointment-${a.id}`} value={a.id} />
+                            <span>
+                              Use existing appointment <b>{a.name}</b>
+                            </span>
+                          </Label>
+                        ))}
+                        <Label
+                          htmlFor="appointment-new"
+                          className="hover:bg-muted/50 flex cursor-pointer items-center gap-2 rounded border px-2 py-1.5 font-normal"
+                        >
+                          <RadioGroupItem id="appointment-new" value={NEW_APPOINTMENT} />
                           <span>
-                            Use existing appointment <b>{a.name}</b>
+                            Create a new appointment
+                            <span className="text-muted-foreground"> — scheduled &amp; assigned when the day is approved</span>
                           </span>
-                        </label>
-                      ))}
-                      <label className="hover:bg-muted/50 flex cursor-pointer items-center gap-2 rounded border px-2 py-1.5">
-                        <input type="radio" name="appointment" checked={appointmentChoice === NEW_APPOINTMENT} onChange={() => chooseAppointment(NEW_APPOINTMENT)} />
-                        <span>
-                          Create a new appointment
-                          <span className="text-muted-foreground"> — scheduled &amp; assigned when the day is approved</span>
-                        </span>
-                      </label>
+                        </Label>
+                      </RadioGroup>
                     </div>
                   </div>
                 )}
@@ -497,7 +522,7 @@ export default function AddEntryDialog({
                       <Loader2 className="size-3.5 animate-spin" /> Loading service lines from FSM…
                     </div>
                   ) : selectableLines.length === 0 ? (
-                    <div className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
+                    <div className="rounded border border-warning/40 bg-warning/10 px-2 py-1.5 text-[11px] text-warning">
                       Every service line on this work order already has an appointment. Use the existing appointment
                       instead.
                     </div>
@@ -521,20 +546,23 @@ export default function AddEntryDialog({
                   )}
                 </div>
 
-                <label className="flex flex-col gap-1 text-xs font-medium">
-                  Appointment type
-                  <select
-                    value={appointmentType}
-                    onChange={(e) => setAppointmentType(e.target.value)}
-                    className="border-input bg-transparent dark:bg-input/30 h-9 rounded-md border px-3 text-sm"
-                  >
-                    {APPOINTMENT_TYPES.map((t) => (
-                      <option key={t} value={t}>
-                        {t}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="appointment-type" className="text-xs">
+                    Appointment type
+                  </Label>
+                  <Select value={appointmentType} onValueChange={setAppointmentType}>
+                    <SelectTrigger id="appointment-type" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {APPOINTMENT_TYPES.map((t) => (
+                        <SelectItem key={t} value={t}>
+                          {t}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
 
                 <div>
                   <span className="mb-1 block text-xs font-medium">Schedule type</span>
@@ -577,7 +605,7 @@ export default function AddEntryDialog({
             )}
 
             {shiftMoved && (
-              <div className="flex items-start gap-2 rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-xs text-sky-700 dark:text-sky-300">
+              <div className="flex items-start gap-2 rounded-md border border-brand/40 bg-brand-50 px-3 py-2 text-xs text-brand">
                 <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
                 <span>
                   {formatTimeAmPm(startTime)} falls in the{" "}
@@ -588,7 +616,7 @@ export default function AddEntryDialog({
             )}
 
             {!isAllDay && resolvedShift === null && (
-              <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+              <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
                 <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
                 <span>
                   {formatTimeAmPm(startTime)} is outside both shift windows (Night {shiftWindowLabel("night", config)},
@@ -646,7 +674,7 @@ export default function AddEntryDialog({
                     />
                     <span className="flex-1">{t.display_name}</span>
                     {leave && (
-                      <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                      <span className="rounded bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium text-warning">
                         On leave: {leave.leave_type}
                       </span>
                     )}

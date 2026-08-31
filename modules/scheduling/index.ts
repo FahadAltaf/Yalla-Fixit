@@ -15,18 +15,14 @@ export type {
   ScheduleEntryType,
   ScheduleVersion,
   ScheduleVersionStatus,
-  DailySchedule,
   DayScheduleResponse,
   CreateEntryInput,
   UpdateEntryInput,
   ShiftType,
   SchedulingAccess,
   SchedulingConfig,
-  ScheduleVersionWithActions,
-  ApprovalAction,
   AuditEvent,
   AuditResponse,
-  SyncOperation,
 } from "./services/schedule-service";
 export { fsmLookupService } from "./services/fsm-lookup-service";
 export type {

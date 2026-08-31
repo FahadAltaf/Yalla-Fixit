@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import StatusBadge from "@/components/ui/status-badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dialog";
 import { AlertTriangle, ExternalLink, Loader2, RefreshCw, Trash2 } from "lucide-react";
 import TimeSelect, { formatTimeAmPm } from "./time-select";
@@ -43,7 +43,7 @@ function toLocalHhmm(iso: string) {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-const PUBLISHED_LIKE: ScheduleVersionStatus[] = ["published", "published_fsm_changed", "partially_synced"];
+const PUBLISHED_LIKE: ScheduleVersionStatus[] = ["published", "partially_synced"];
 
 export default function EntryDetailDialog({
   entry,
@@ -209,6 +209,11 @@ export default function EntryDetailDialog({
             <DialogTitle>
               {entry.entry_type === "free_text" ? entry.title || "Text entry" : `${workOrderLabel} · ${appointmentLabel}`}
             </DialogTitle>
+            <DialogDescription>
+              {entry.entry_type === "free_text"
+                ? "A note on the board. Free-text entries are never written to Zoho FSM."
+                : "Appointment detail, its Zoho FSM sync state, and who last touched it."}
+            </DialogDescription>
           </DialogHeader>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -259,7 +264,7 @@ export default function EntryDetailDialog({
 
           {/* AC-015: a failed sync says WHY, and offers a retry in place. */}
           {entry.sync_status === "failed" && (
-            <div className="flex flex-col gap-2 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2.5 text-xs text-red-700 dark:text-red-300">
+            <div className="flex flex-col gap-2 rounded-md border border-danger/40 bg-danger/10 px-3 py-2.5 text-xs text-danger">
               <div className="flex items-start gap-2">
                 <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
                 <span>
@@ -276,7 +281,7 @@ export default function EntryDetailDialog({
           )}
 
           {outOfWindow && (
-            <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+            <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
               <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
               <span>
                 This entry is filed under the {entry.shift === "night" ? "Night" : "Morning"} shift (
@@ -302,11 +307,11 @@ export default function EntryDetailDialog({
                 </label>
               </div>
               {resolvedShift === null ? (
-                <span className="text-[11px] text-amber-600 dark:text-amber-400">
+                <span className="text-[11px] text-warning">
                   {formatTimeAmPm(startTime)} is outside both shift windows — it will stay flagged on the grid.
                 </span>
               ) : resolvedShift !== entry.shift ? (
-                <span className="text-[11px] text-sky-600 dark:text-sky-400">
+                <span className="text-[11px] text-brand">
                   Saving moves this entry to the {resolvedShift === "night" ? "Night" : "Morning"} shift.
                 </span>
               ) : null}
@@ -339,7 +344,7 @@ export default function EntryDetailDialog({
                         />
                         <span className="flex-1">{t.display_name}</span>
                         {leave && (
-                          <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                          <span className="rounded bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium text-warning">
                             On leave
                           </span>
                         )}

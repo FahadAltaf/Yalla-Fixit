@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
+import { EXTENSIONS_NAV_COOKIE } from "@/lib/extensions/nav-preference";
 
 import { siteConfig } from "@/lib/site-config";
 import Extensions from "@/components/dashboard/extensions";
@@ -31,7 +33,13 @@ export const metadata: Metadata = {
   },
 };
 
-export default function ExtensionsPage() {
-  return <Extensions />;
+// The section-nav collapsed state is read here, on the server, so the nav
+// renders at its correct width on the first paint instead of correcting
+// itself after mount.
+export default async function ExtensionsPage() {
+  const store = await cookies();
+  const navOpen = store.get(EXTENSIONS_NAV_COOKIE)?.value === "open";
+
+  return <Extensions defaultNavOpen={navOpen} />;
 }
 

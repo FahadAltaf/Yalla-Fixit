@@ -4,8 +4,39 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { scheduleService } from "@/modules/scheduling";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/actions/utils";
 import { Loader2, MailCheck, Zap } from "lucide-react";
+
+// The operating date arrives as YYYY-MM-DD; show it the way the rest of the
+// board does rather than as a raw ISO string in the title.
+function formatDate(iso: string) {
+  const [y, m, d] = iso.split("-").map(Number);
+  if (!y || !m || !d) return iso;
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, {
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
 
 type Approver = { id: string; name: string; email: string };
 
@@ -77,82 +108,97 @@ export default function SubmitDialog({ scheduleVersionId, date, onOpenChange, on
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="w-[calc(100%-2rem)] sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Submit {date}</DialogTitle>
+          <DialogTitle>Submit {formatDate(date)}</DialogTitle>
+          <DialogDescription>
+            Choose whether this day needs sign-off, or publish it to Zoho FSM straight away.
+          </DialogDescription>
         </DialogHeader>
 
         {approvers === null ? (
-          <div className="text-muted-foreground flex items-center gap-2 py-6 text-sm">
-            <Loader2 className="size-4 animate-spin" /> Loading approvers…
+          // Mirrors the option cards below, so the dialog does not resize
+          // when the approver list lands.
+          <div className="flex flex-col gap-3">
+            {[0, 1].map((i) => (
+              <div key={i} className="flex items-start gap-3 rounded-md border p-3">
+                <Skeleton className="mt-0.5 size-4 rounded-full" />
+                <div className="flex flex-1 flex-col gap-2">
+                  <Skeleton className="h-4 w-40" />
+                  <Skeleton className="h-3 w-full max-w-[15rem]" />
+                </div>
+              </div>
+            ))}
           </div>
         ) : (
-          <div className="flex flex-col gap-3">
+          <RadioGroup
+            value={mode}
+            onValueChange={(v) => setMode(v as "approve" | "skip")}
+            className="gap-3"
+          >
             {/* Route to an approver */}
-            <label
-              className={`flex cursor-pointer items-start gap-3 rounded-md border p-3 ${
-                mode === "approve" ? "border-primary bg-primary/5" : "hover:bg-muted/40"
-              } ${noApprovers ? "cursor-not-allowed opacity-55" : ""}`}
+            <Label
+              htmlFor="submit-mode-approve"
+              className={cn(
+                "flex cursor-pointer items-start gap-3 rounded-md border p-3 font-normal transition-colors",
+                mode === "approve" ? "border-primary bg-primary/5" : "hover:bg-muted/40",
+                noApprovers && "cursor-not-allowed opacity-55",
+              )}
             >
-              <input
-                type="radio"
-                name="submitmode"
-                className="mt-1"
-                checked={mode === "approve"}
-                disabled={noApprovers}
-                onChange={() => setMode("approve")}
-              />
+              <RadioGroupItem id="submit-mode-approve" value="approve" disabled={noApprovers} className="mt-0.5" />
               <div className="flex-1">
-                <div className="flex items-center gap-1.5 text-sm font-medium">
+                <span className="flex items-center gap-1.5 text-sm font-medium">
                   <MailCheck className="size-4" /> Send for approval
-                </div>
+                </span>
                 <p className="text-muted-foreground mt-0.5 text-xs">
                   The day waits as Pending Approval and the chosen person is emailed.
                 </p>
                 {noApprovers ? (
-                  <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                  <p className="text-warning mt-2 text-xs">
                     No approvers set. Turn on “Schedule approval emails” for a user in the Users module first.
                   </p>
                 ) : (
-                  <select
+                  <Select
                     value={approverId}
-                    onChange={(e) => setApproverId(e.target.value)}
-                    onFocus={() => setMode("approve")}
-                    className="border-input bg-transparent dark:bg-input/30 mt-2 h-9 w-full rounded-md border px-2 text-sm"
+                    onValueChange={(v) => {
+                      setApproverId(v);
+                      setMode("approve");
+                    }}
                   >
-                    {approvers.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.name}
-                      </option>
-                    ))}
-                  </select>
+                    <SelectTrigger className="mt-2 w-full" aria-label="Approver">
+                      <SelectValue placeholder="Choose an approver" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {approvers.map((a) => (
+                        <SelectItem key={a.id} value={a.id}>
+                          {a.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 )}
               </div>
-            </label>
+            </Label>
 
             {/* Publish now, no approval */}
-            <label
-              className={`flex cursor-pointer items-start gap-3 rounded-md border p-3 ${
-                mode === "skip" ? "border-primary bg-primary/5" : "hover:bg-muted/40"
-              }`}
+            <Label
+              htmlFor="submit-mode-skip"
+              className={cn(
+                "flex cursor-pointer items-start gap-3 rounded-md border p-3 font-normal transition-colors",
+                mode === "skip" ? "border-primary bg-primary/5" : "hover:bg-muted/40",
+              )}
             >
-              <input
-                type="radio"
-                name="submitmode"
-                className="mt-1"
-                checked={mode === "skip"}
-                onChange={() => setMode("skip")}
-              />
+              <RadioGroupItem id="submit-mode-skip" value="skip" className="mt-0.5" />
               <div className="flex-1">
-                <div className="flex items-center gap-1.5 text-sm font-medium">
+                <span className="flex items-center gap-1.5 text-sm font-medium">
                   <Zap className="size-4" /> No approval needed — publish now
-                </div>
+                </span>
                 <p className="text-muted-foreground mt-0.5 text-xs">
                   Creates and reschedules the appointments in Zoho FSM straight away.
                 </p>
               </div>
-            </label>
-          </div>
+            </Label>
+          </RadioGroup>
         )}
 
         <DialogFooter>

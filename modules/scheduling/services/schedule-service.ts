@@ -35,9 +35,11 @@ export interface ScheduleEntry {
   address: string | null;
   notes: string | null;
   origin: "portal" | "fsm" | "system";
-  sync_status: "not_ready" | "ready" | "syncing" | "synced" | "failed" | "review_required";
-  changed_in_fsm_at: string | null;
-  changed_in_fsm_fields: Record<string, unknown> | null;
+  sync_status: "not_ready" | "ready" | "syncing" | "synced" | "failed";
+  // Raw Zoho FSM job status, refreshed by reconcile. Drives the display
+  // board's colour coding; NULL until FSM has been read for this entry.
+  fsm_status: string | null;
+  fsm_status_checked_at: string | null;
   created_by?: string | null;
   updated_by?: string | null;
   created_by_user?: { full_name: string | null; email: string } | { full_name: string | null; email: string }[] | null;
@@ -53,12 +55,11 @@ export type ScheduleVersionStatus =
   | "published"
   | "sync_failed"
   | "partially_synced"
-  | "published_fsm_changed"
   | "draft_revision";
 
 export interface ScheduleVersion {
   id: string;
-  daily_schedule_id: string;
+  schedule_date: string;
   version_number: number;
   status: ScheduleVersionStatus;
   parent_version_id: string | null;
@@ -70,15 +71,7 @@ export interface ScheduleVersion {
   published_at: string | null;
 }
 
-export interface DailySchedule {
-  id: string;
-  schedule_date: string;
-  current_version_id: string | null;
-  has_fsm_changes: boolean;
-}
-
 export interface DayScheduleResponse {
-  dailySchedule: DailySchedule | null;
   version: ScheduleVersion | null;
   entries: ScheduleEntry[];
 }
@@ -225,16 +218,20 @@ export const scheduleService = {
     });
   },
 
-  createRevision: async (dailyScheduleId: string): Promise<ScheduleVersion> => {
+  createRevision: async (date: string): Promise<ScheduleVersion> => {
     return executeRESTBackend<ScheduleVersion>("/api/scheduling/schedule/revise", {
       method: "POST",
-      body: { dailyScheduleId },
+      body: { date },
     });
   },
 
-  reconcile: async (): Promise<{ checked: number; changed: number }> => {
+  // Adopt any direct Zoho FSM changes into the portal. Pass the operating
+  // date to reconcile just that day (what the Refresh button does); omit it
+  // to sweep every current version.
+  reconcile: async (date?: string): Promise<{ checked: number; changed: number }> => {
     return executeRESTBackend<{ checked: number; changed: number }>("/api/scheduling/reconcile", {
       method: "POST",
+      body: date ? { date } : {},
     });
   },
 
@@ -264,8 +261,8 @@ export const scheduleService = {
     });
   },
 
-  getHistory: async (date: string): Promise<ScheduleVersionWithActions[]> => {
-    return executeRESTBackend<ScheduleVersionWithActions[]>("/api/scheduling/history", {
+  getHistory: async (date: string): Promise<ScheduleVersion[]> => {
+    return executeRESTBackend<ScheduleVersion[]>("/api/scheduling/history", {
       method: "GET",
       params: { date },
     });
@@ -287,19 +284,9 @@ export const scheduleService = {
   },
 };
 
-export interface ApprovalAction {
-  id: string;
-  action: "submitted" | "approved" | "rejected" | "withdrawn";
-  actor_id: string | null;
-  comment: string | null;
-  created_at: string;
-  user_profile?: { full_name: string | null; email: string } | null;
-}
-
-export interface ScheduleVersionWithActions extends ScheduleVersion {
-  schedule_approval_actions: ApprovalAction[];
-}
-
+// One event stream: portal actions, approval decisions and FSM sync attempts
+// all land in schedule_audit_events. Sync events fill status / error_message /
+// correlation_id; approval events carry their comment in after_value.
 export interface AuditEvent {
   id: string;
   event_type: string;
@@ -307,22 +294,16 @@ export interface AuditEvent {
   origin: "portal" | "fsm" | "system";
   affected_entity_type: string | null;
   affected_entity_id: string | null;
+  schedule_entry_id: string | null;
+  status: string | null;
+  error_message: string | null;
+  correlation_id: string | null;
   before_value: unknown;
   after_value: unknown;
   created_at: string;
   user_profile?: { full_name: string | null; email: string } | null;
 }
 
-export interface SyncOperation {
-  id: string;
-  schedule_entry_id: string | null;
-  operation_type: string;
-  status: string;
-  error_message: string | null;
-  created_at: string;
-}
-
 export interface AuditResponse {
   events: AuditEvent[];
-  syncOperations: SyncOperation[];
 }

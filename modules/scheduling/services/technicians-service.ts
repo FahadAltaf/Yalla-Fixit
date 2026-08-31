@@ -4,6 +4,12 @@ import type { TechnicianReference, TechnicianShift } from "@/types/types";
 
 export type { TechnicianReference } from "@/types/types";
 
+// NOTE: this module is re-exported by the @/modules/scheduling barrel, which
+// "use client" components import for techniciansService. Keep server-only
+// machinery (admin client, Zoho calls) OUT of here or it lands in the client
+// bundle -- the roster refresh lives in the page instead, via
+// refreshTechniciansIfStale() from @/lib/server/zoho/service-resources.
+
 // Server component loader. Resolves the managed attribute names (role,
 // service type, team leader) alongside the raw ids so the UI needn't join.
 export async function listTechnicians(): Promise<TechnicianReference[]> {
@@ -11,9 +17,13 @@ export async function listTechnicians(): Promise<TechnicianReference[]> {
 
   const { data, error } = await supabase
     .from("technician_reference")
+    // role_id and service_type_id BOTH point at lookup_options, so each
+    // embed must name its foreign key explicitly -- PostgREST can't pick
+    // between two relationships to the same table on its own.
     .select(
       "fsm_resource_id, display_name, is_active, last_synced_at, role_id, service_type_id, shift, team_leader_fsm_id, " +
-        "technician_roles(name), technician_service_types(name)",
+        "role:lookup_options!technician_reference_role_id_fkey(name), " +
+        "service_type:lookup_options!technician_reference_service_type_id_fkey(name)",
     )
     .order("display_name", { ascending: true });
 
@@ -24,8 +34,8 @@ export async function listTechnicians(): Promise<TechnicianReference[]> {
   rows.forEach((r) => nameByFsmId.set(r.fsm_resource_id as string, r.display_name as string));
 
   return rows.map((r) => {
-    const role = r.technician_roles as { name?: string } | { name?: string }[] | null;
-    const service = r.technician_service_types as { name?: string } | { name?: string }[] | null;
+    const role = r.role as { name?: string } | { name?: string }[] | null;
+    const service = r.service_type as { name?: string } | { name?: string }[] | null;
     const roleName = Array.isArray(role) ? role[0]?.name : role?.name;
     const serviceName = Array.isArray(service) ? service[0]?.name : service?.name;
     return {
@@ -61,5 +71,15 @@ export const techniciansService = {
       method: "PUT",
       body: { fsmResourceIds, attributes },
     });
+  },
+
+  // SYNC-013: pull the roster from Zoho FSM on demand. The page also
+  // self-refreshes when the cache is older than 6h, so this is the manual
+  // "I know someone just joined/left" escape hatch.
+  refreshFromFsm: async (): Promise<{
+    resources: unknown[];
+    removed: { deleted: string[]; referenced: string[] };
+  }> => {
+    return executeRESTBackend("/api/service-resources", { method: "POST" });
   },
 };

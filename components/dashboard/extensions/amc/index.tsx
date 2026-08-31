@@ -257,7 +257,7 @@ export function AmcContractsPage({
         if (!isValid) {
           toast.error(
             STEP_VALIDATION_MESSAGES[currentStep] ??
-              "Please complete all required fields before continuing.",
+            "Please complete all required fields before continuing.",
           );
           return;
         }
@@ -360,7 +360,7 @@ export function AmcContractsPage({
 
   return (
     <Card ref={wizardRef} className="w-full flex-1 relative top-px right-px gap-6">
-      <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      {/* <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex flex-col gap-1">
           <CardTitle className="text-xl flex items-center gap-2">
             <ClipboardList className="size-5 text-primary" />
@@ -377,7 +377,15 @@ export function AmcContractsPage({
             Saving draft...
           </span>
         )}
-      </CardHeader>
+      </CardHeader> */}
+
+      <div className="print:hidden px-4">
+        <p className="eyebrow">Extension</p>
+        <h1 className="mt-1.5 text-3xl">AMC Proposals</h1>
+        <p className="text-muted-foreground mt-1 text-[0.9375rem]">
+          Build annual maintenance contract proposals, manage submissions, and
+          generate proposal or contract PDFs.        </p>
+      </div>
 
       <CardContent className="space-y-4">
         <Tabs
@@ -413,12 +421,12 @@ export function AmcContractsPage({
                     className={cn(
                       "flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs transition-colors",
                       isActive &&
-                        "border-primary bg-primary/10 text-primary font-medium",
+                      "border-primary bg-primary/10 text-primary font-medium",
                       isComplete &&
-                        "border-primary/30 bg-primary/5 text-primary hover:bg-primary/10 cursor-pointer",
+                      "border-primary/30 bg-primary/5 text-primary hover:bg-primary/10 cursor-pointer",
                       !isActive &&
-                        !isComplete &&
-                        "border-border text-muted-foreground opacity-70 cursor-default",
+                      !isComplete &&
+                      "border-border text-muted-foreground opacity-70 cursor-default",
                     )}
                   >
                     {isComplete ? (

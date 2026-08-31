@@ -1,4 +1,5 @@
 import type { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
+import { createFsmAppointment, updateFsmAppointment } from "@/lib/server/zoho/appointments";
 
 type Admin = Awaited<ReturnType<typeof createAdminServerClient>>;
 
@@ -64,33 +65,7 @@ export type SyncEntryResult = {
   label?: string;
 };
 
-// Calls a scheduling Edge Function with the shared anon credentials. Returns
-// the parsed body regardless of HTTP status so the caller can log failures.
-export async function callEdgeFunction(fnName: string, body: Record<string, unknown>) {
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const anonKey = process.env.SUPABASE_ANON_KEY;
-  if (!supabaseUrl || !anonKey) throw new Error("Supabase environment is not configured");
-
-  const res = await fetch(`${supabaseUrl}/functions/v1/${fnName}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${anonKey}`,
-      apikey: anonKey,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-  const text = await res.text();
-  let json: any;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    json = { raw: text };
-  }
-  return { ok: res.ok, status: res.status, json };
-}
-
-// A readable one-line reason from an Edge Function's error body (AC-015).
+// A readable one-line reason from an FSM call's error body (AC-015).
 function describeError(json: any, httpStatus: number): string {
   if (json?.error && typeof json.error === "string") {
     // FSM validation details are often nested; surface the first message.
@@ -105,9 +80,9 @@ function describeError(json: any, httpStatus: number): string {
 
 // Writes one FSM-backed entry to Zoho FSM (create for new_appointment,
 // reschedule for existing/already-synced), records the attempt on
-// schedule_sync_operations, and updates the entry with the fresh
-// Modified_Time marker + snapshot so the reconcile job never mistakes this
-// write for an external change. Free-text entries are skipped.
+// schedule_audit_events, and updates the entry with the fresh Modified_Time
+// marker so the reconcile job never mistakes this write for an external
+// change. Free-text entries are skipped.
 //
 // Shared by approval (first attempt), retry (AC-006), and published-edit
 // (AC-016) so all three stay consistent.
@@ -138,8 +113,8 @@ export async function syncEntryToFsm(
 
   const scheduleType = entry.fsm_schedule_type === "All Day" ? "All Day" : "Time-bound";
   const result = creating
-    ? await callEdgeFunction("zoho-fsm-appointment-create", {
-        workOrderId: entry.fsm_work_order_id,
+    ? await createFsmAppointment({
+        workOrderId: entry.fsm_work_order_id as string,
         scheduledStart: entry.start_at,
         scheduledEnd: entry.end_at,
         serviceResourceIds,
@@ -151,8 +126,8 @@ export async function syncEntryToFsm(
         scheduleType,
         appointmentDate: entry.operating_date,
       })
-    : await callEdgeFunction("zoho-fsm-appointment-update", {
-        appointmentId: entry.fsm_appointment_id,
+    : await updateFsmAppointment({
+        appointmentId: entry.fsm_appointment_id as string,
         scheduledStart: entry.start_at,
         scheduledEnd: entry.end_at,
         serviceResourceIds,
@@ -162,16 +137,21 @@ export async function syncEntryToFsm(
 
   const completedAt = new Date().toISOString();
 
-  await admin.from("schedule_sync_operations").insert({
+  // Sync attempts used to go to their own schedule_sync_operations table,
+  // which duplicated what schedule_audit_events already recorded. They are
+  // now one event stream; per-entry current state still lives on
+  // schedule_entries (sync_status / last_sync_error / last_synced_at).
+  await admin.from("schedule_audit_events").insert({
+    event_type: `sync_${operationType}`,
+    origin: "system",
     schedule_version_id: scheduleVersionId,
     schedule_entry_id: entry.id,
-    operation_type: operationType,
+    affected_entity_type: "schedule_entry",
+    affected_entity_id: entry.id,
     status: result.ok ? "succeeded" : "failed",
     correlation_id: entry.id,
     error_message: result.ok ? null : JSON.stringify(result.json),
-    response_summary: result.json,
-    started_at: startedAt,
-    completed_at: completedAt,
+    after_value: { response: result.json, startedAt, completedAt },
   });
 
   if (!result.ok) {
@@ -193,8 +173,6 @@ export async function syncEntryToFsm(
     last_sync_error: null,
     last_synced_at: completedAt,
     needs_sync: false,
-    changed_in_fsm_at: null,
-    changed_in_fsm_fields: null,
     origin: "portal",
     updated_at: completedAt,
   };
@@ -202,20 +180,10 @@ export async function syncEntryToFsm(
   if (creating && result.json?.appointmentName) entryUpdate.fsm_appointment_name = result.json.appointmentName;
   if (modifiedTime) entryUpdate.fsm_last_modified_marker = modifiedTime;
 
+  // The reconcile baseline is entry.fsm_last_modified_marker, set just above.
+  // There was a parallel copy in fsm_appointment_snapshots, but nothing ever
+  // read it -- reconcile compares against the entry -- so that table is gone.
   await admin.from("schedule_entries").update(entryUpdate).eq("id", entry.id);
-
-  // Keep the reconcile baseline in step with what we just wrote.
-  if (newAppointmentId && modifiedTime) {
-    await admin.from("fsm_appointment_snapshots").upsert(
-      {
-        fsm_appointment_id: newAppointmentId,
-        fsm_work_order_id: entry.fsm_work_order_id,
-        last_modified_marker: modifiedTime,
-        last_checked_at: completedAt,
-      },
-      { onConflict: "fsm_appointment_id" },
-    );
-  }
 
   return { entryId: entry.id, status: "succeeded", label: syncEntryLabel(entry) };
 }
@@ -229,16 +197,17 @@ async function recordFailure(
   responseSummary: unknown,
 ) {
   const now = new Date().toISOString();
-  await admin.from("schedule_sync_operations").insert({
+  await admin.from("schedule_audit_events").insert({
+    event_type: `sync_${operationType}`,
+    origin: "system",
     schedule_version_id: scheduleVersionId,
     schedule_entry_id: entry.id,
-    operation_type: operationType,
+    affected_entity_type: "schedule_entry",
+    affected_entity_id: entry.id,
     status: "failed",
     correlation_id: entry.id,
     error_message: error,
-    response_summary: responseSummary,
-    started_at: now,
-    completed_at: now,
+    after_value: { response: responseSummary, startedAt: now, completedAt: now },
   });
   await admin
     .from("schedule_entries")

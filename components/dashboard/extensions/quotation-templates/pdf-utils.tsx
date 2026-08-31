@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import html2canvas from "html2canvas";
 import { jsPDF } from "jspdf";
 
+import { sanitizeUnsupportedColors } from "@/lib/pdf/sanitize-colors";
+
 import { QuotationData } from "./quotation-templates";
 import { YallaClassicTemplate } from "./templates/YallaClassicTemplate";
 import { ModernBoldTemplate } from "./templates/ModernBoldTemplate";
@@ -107,7 +109,7 @@ export async function generateQuotationPDFBlob(
       logging: false,
       width: 794,
       height: fullHeight,
-      ...({ scale } as object),
+      ...({ scale, onclone: (doc: Document) => sanitizeUnsupportedColors(doc) } as object),
     });
 
     const PAGE_W_MM = 210;

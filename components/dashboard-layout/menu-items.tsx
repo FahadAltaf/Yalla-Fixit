@@ -8,6 +8,7 @@ import {
 } from "@/types/types";
 import {
   CalendarClock,
+  ClipboardCheck,
   LayoutDashboard,
   ListTodo,
   Puzzle,
@@ -38,17 +39,28 @@ const hasViewPermission = (
   }
 };
 
+const isItemVisible = (item: MenuItem, userProfile: User): boolean => {
+  if (
+    !item.resource ||
+    item?.resource === ResourceType.DASHBOARD ||
+    userProfile?.roles?.name === UserRoles.ADMIN
+  ) {
+    return true;
+  }
+  return hasViewPermission(userProfile, item.resource);
+};
+
 const filterMenuItems = (items: MenuItem[], userProfile: User): MenuItem[] => {
-  return items.filter((item) => {
-    if (
-      !item.resource ||
-      item?.resource === ResourceType.DASHBOARD ||
-      userProfile?.roles?.name === UserRoles.ADMIN
-    ) {
-      return true;
-    }
-    return hasViewPermission(userProfile, item.resource);
-  });
+  return items
+    // Sub-items carry their own resource — the snag catalogue is
+    // restricted to Ops while the rest of Snagging is not — so the
+    // filter has to reach into them rather than stopping at the group.
+    .map((item) =>
+      item.items?.length
+        ? { ...item, items: item.items.filter((subItem) => isItemVisible(subItem, userProfile)) }
+        : item,
+    )
+    .filter((item) => isItemVisible(item, userProfile));
 };
 
 const filterMenuSections = (
@@ -92,6 +104,55 @@ export const baseSectionsItems: MenuItem[] = [
     icon: <CalendarClock className="size-4 text-primary" />,
     isActive: false,
     resource: ResourceType.SCHEDULING,
+  },
+  {
+    title: "Snagging",
+    url: "/snagging",
+    icon: <ClipboardCheck className="size-4 text-primary" />,
+    isActive: false,
+    resource: ResourceType.SNAGGING,
+    items: [
+      {
+        title: "Overview",
+        url: "/snagging",
+        // The section landing page, so it lights up on /snagging alone.
+        exact: true,
+        resource: ResourceType.SNAGGING,
+      },
+      {
+        title: "Jobs",
+        url: "/snagging/jobs",
+        // An inspection opens at /snagging/<id>, not under /snagging/jobs,
+        // so Jobs claims those too and stays selected while a job is open.
+        match: ["/snagging"],
+        resource: ResourceType.SNAGGING,
+      },
+      {
+        title: "New job",
+        url: "/snagging/jobs/new",
+        resource: ResourceType.SNAGGING,
+      },
+      {
+        title: "Review",
+        url: "/snagging/review",
+        resource: ResourceType.SNAGGING,
+      },
+      {
+        title: "Pricing",
+        url: "/snagging/pricing",
+        resource: ResourceType.SNAGGING_CATALOGUE,
+      },
+      {
+        title: "Analytics",
+        url: "/snagging/analytics",
+        resource: ResourceType.SNAGGING,
+      },
+      {
+        title: "Snag catalogue",
+        url: "/snagging/catalogue",
+        resource: ResourceType.SNAGGING_CATALOGUE,
+      },
+    ],
   },
 ] as MenuItem[];
 

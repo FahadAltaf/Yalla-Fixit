@@ -22,6 +22,11 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Missing field: scheduleVersionId" }, { status: 400 });
     }
 
+    // One stream now: approval actions and FSM sync attempts used to live in
+    // schedule_approval_actions / schedule_sync_operations, which recorded the
+    // same events this table already did. Sync events carry status,
+    // error_message and correlation_id; approval events carry the comment in
+    // after_value.
     const admin = await createAdminServerClient();
     const { data: events, error } = await admin
       .from("schedule_audit_events")
@@ -30,14 +35,7 @@ export async function GET(req: NextRequest) {
       .order("created_at", { ascending: false });
     if (error) throw new Error(error.message);
 
-    const { data: syncOps, error: syncError } = await admin
-      .from("schedule_sync_operations")
-      .select("*")
-      .eq("schedule_version_id", scheduleVersionId)
-      .order("created_at", { ascending: false });
-    if (syncError) throw new Error(syncError.message);
-
-    return NextResponse.json({ data: { events: events ?? [], syncOperations: syncOps ?? [] } });
+    return NextResponse.json({ data: { events: events ?? [] } });
   } catch (error) {
     console.error("Scheduling audit GET error:", error);
     return NextResponse.json({ error: "Failed to load audit history" }, { status: 500 });

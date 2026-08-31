@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ChevronRightIcon, SearchIcon } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
-import { MenuSection, User } from "@/types/types";
+import { MenuItem, MenuSection, User } from "@/types/types";
 import { getNavData } from "./menu-items";
 import Image from "next/image";
 import { Input } from "@/components/ui/input";
@@ -35,6 +35,24 @@ import {
 import DashboardHeader from "./dashboatd-header";
 import CompanyLogo from "@/public/site-logo.webp";
 
+/**
+ * How specifically a sub-item claims the current path, as the length of
+ * the prefix it matched. 0 means it does not claim it at all.
+ *
+ * A `match` prefix only applies further down the tree, never on the
+ * prefix itself, so a list claiming its section root cannot steal the
+ * highlight from the landing page that lives there.
+ */
+function claimedDepth(pathname: string, item: MenuItem): number {
+  if (pathname === item.url) return item.url.length;
+  if (!item.exact && pathname.startsWith(`${item.url}/`)) return item.url.length;
+
+  for (const prefix of item.match ?? []) {
+    if (pathname.startsWith(`${prefix}/`)) return prefix.length;
+  }
+  return 0;
+}
+
 const SidebarGroupedMenuItems = ({ section }: { section: MenuSection }) => {
   const pathname = usePathname();
 
@@ -49,17 +67,34 @@ const SidebarGroupedMenuItems = ({ section }: { section: MenuSection }) => {
       {section.title && <SidebarGroupLabel>{section.title}</SidebarGroupLabel>}
       <SidebarGroupContent>
         <SidebarMenu>
-          {section.items.map((item) =>
-            item.items && item.items.length > 0 ? (
+          {section.items.map((item) => {
+            // Within a group, exactly one sub-item is selected: the one
+            // whose claimed path is the longest prefix of where you are.
+            // Plain startsWith lit up every ancestor at once (on
+            // /snagging/jobs/new it marked Overview, Jobs and New job all
+            // active), so the selection never told you where you were.
+            //
+            // `exact` keeps a section landing page from claiming its own
+            // children; `match` lets a list claim the record pages that
+            // open outside its own url, so opening an inspection keeps
+            // Jobs selected rather than jumping the highlight to Overview.
+            const activeSubUrl =
+              item.items
+                ?.map((subItem) => ({
+                  url: subItem.url,
+                  depth: claimedDepth(pathname, subItem),
+                }))
+                .filter((entry) => entry.depth > 0)
+                .sort((a, b) => b.depth - a.depth)[0]?.url ?? null;
+
+            return item.items && item.items.length > 0 ? (
               <Collapsible className="group/collapsible" key={item.title}>
                 <SidebarMenuItem>
                   <CollapsibleTrigger asChild>
                     <SidebarMenuButton
                       tooltip={item.title}
                       className="truncate"
-                      isActive={item.items.some((subItem) =>
-                        pathname.startsWith(subItem.url)
-                      )}
+                      isActive={activeSubUrl !== null}
                     >
                       {renderIcon(item.icon)}
                       <span>{item.title}</span>
@@ -73,7 +108,7 @@ const SidebarGroupedMenuItems = ({ section }: { section: MenuSection }) => {
                           <SidebarMenuSubButton
                             className="justify-between"
                             asChild
-                            isActive={pathname.startsWith(subItem.url)}
+                            isActive={subItem.url === activeSubUrl}
                           >
                             <Link href={subItem.url}>
                               {subItem.title}
@@ -108,17 +143,32 @@ const SidebarGroupedMenuItems = ({ section }: { section: MenuSection }) => {
                   </SidebarMenuBadge>
                 )}
               </SidebarMenuItem>
-            )
-          )}
+            );
+          })}
         </SidebarMenu>
       </SidebarGroupContent>
     </SidebarGroup>
   );
 };
 
+const CHROMELESS_ROUTES = ["/scheduling/display"];
+
 const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
   const { userProfile } = useAuth();
   const { navMain } = getNavData(userProfile || ({} as User));
+  const layoutPathname = usePathname();
+
+  // Full-bleed routes (the scheduling wall display) still need the auth gate
+  // this layout sits inside, but none of its chrome -- a TV showing the day's
+  // board has nobody to navigate with.
+  if (
+    CHROMELESS_ROUTES.some(
+      (route) => layoutPathname === route || layoutPathname.startsWith(`${route}/`),
+    )
+  ) {
+    return <>{children}</>;
+  }
+
 
   return (
     <div className="flex min-h-dvh w-full">
@@ -160,7 +210,15 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
           </SidebarContent>
           <SidebarFooter className="[[data-state=collapsed]_&]:hidden"></SidebarFooter>
         </Sidebar>
-        <div className="flex flex-1 flex-col">
+        {/*
+          min-w-0 stops this column being sized by its widest child. A
+          flex item defaults to min-width:auto, so one wide element
+          inside a page — a chart that measures its own container, a
+          table of nowrap columns — pushed the whole shell past the
+          viewport and made the window scroll sideways instead of the
+          element scrolling inside its own box.
+        */}
+        <div className="flex min-w-0 flex-1 flex-col">
           {/* <header className="bg-card sticky top-0 z-50 h-13.75 border-b">
             <div className="mx-auto flex h-full max-w-[1500px] items-center justify-between gap-6 px-4 sm:px-6">
               <SidebarTrigger className="[&_svg]:!size-5" />
@@ -168,7 +226,7 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
           </header> */}
           <DashboardHeader />
 
-          <main className="mx-auto size-full flex-1 px-4 py-6 sm:px-6">
+          <main className="@container/main mx-auto size-full flex-1 px-4 py-6 sm:px-6">
             {children}
           </main>
         </div>

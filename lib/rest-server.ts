@@ -29,7 +29,7 @@ function extractErrorMessage(payload: unknown, status: number): string {
 export async function executeRESTBackend<T = unknown>(
   endpoint: string,
   options: {
-    method?: "GET" | "POST" | "PUT" | "DELETE";
+    method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
     params?: Record<string, string | number>;
     body?: Record<string, unknown>;
   } = {}
@@ -60,7 +60,7 @@ export async function executeRESTBackend<T = unknown>(
       },
     };
 
-    if (body && (method === "POST" || method === "PUT")) {
+    if (body && (method === "POST" || method === "PUT" || method === "PATCH")) {
       requestOptions.body = JSON.stringify(body);
     }
 

@@ -3,7 +3,11 @@ import { z } from "zod";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
+import { LOOKUP_KEYS } from "@/lib/server/attribute-list-route";
 import { ActionType, ResourceType, TechnicianTag } from "@/types/types";
+
+// Tags are one list inside the shared lookup_options table.
+const LIST_KEY = LOOKUP_KEYS.technicianTag;
 
 const createTagSchema = z.object({
   name: z.string().trim().min(1),
@@ -35,19 +39,20 @@ export async function GET() {
 
     const admin = await createAdminServerClient();
     const { data: tagRows, error } = await admin
-      .from("technician_tags")
+      .from("lookup_options")
       .select("*")
+      .eq("list_key", LIST_KEY)
       .order("name", { ascending: true });
     if (error) throw new Error(error.message);
 
     const { data: assignmentRows, error: assignmentError } = await admin
-      .from("technician_tag_assignments")
-      .select("tag_id");
+      .from("technician_lookup_assignments")
+      .select("lookup_id");
     if (assignmentError) throw new Error(assignmentError.message);
 
     const countByTag = new Map<string, number>();
-    (assignmentRows ?? []).forEach((row: { tag_id: string }) => {
-      countByTag.set(row.tag_id, (countByTag.get(row.tag_id) ?? 0) + 1);
+    (assignmentRows ?? []).forEach((row: { lookup_id: string }) => {
+      countByTag.set(row.lookup_id, (countByTag.get(row.lookup_id) ?? 0) + 1);
     });
 
     const tags: TechnicianTag[] = (tagRows ?? []).map((row: TagRow) => ({
@@ -84,8 +89,9 @@ export async function POST(req: NextRequest) {
 
     const admin = await createAdminServerClient();
     const { data: created, error } = await admin
-      .from("technician_tags")
+      .from("lookup_options")
       .insert({
+        list_key: LIST_KEY,
         name: parsed.data.name,
         created_by: profile.id,
         updated_by: profile.id,
@@ -134,18 +140,20 @@ export async function PUT(req: NextRequest) {
 
     const admin = await createAdminServerClient();
     const { data: existing, error: existingError } = await admin
-      .from("technician_tags")
+      .from("lookup_options")
       .select("id, name")
       .eq("id", parsed.data.id)
+      .eq("list_key", LIST_KEY)
       .single();
     if (existingError || !existing) {
       return NextResponse.json({ error: "Tag not found" }, { status: 404 });
     }
 
     const { data: updated, error } = await admin
-      .from("technician_tags")
+      .from("lookup_options")
       .update({ name: parsed.data.name, updated_by: profile.id, updated_at: new Date().toISOString() })
       .eq("id", parsed.data.id)
+      .eq("list_key", LIST_KEY)
       .select("*")
       .single();
 
@@ -157,7 +165,7 @@ export async function PUT(req: NextRequest) {
     }
 
     // TAG-003: renamed tag must be reflected everywhere it's referenced --
-    // it is, because every consumer joins on tag_id and reads the current
+    // it is, because every consumer joins on lookup_id and reads the current
     // name from this row rather than storing a denormalised copy.
     await admin.from("schedule_audit_events").insert({
       event_type: "tag_renamed",
@@ -191,22 +199,27 @@ export async function DELETE(req: NextRequest) {
 
     const admin = await createAdminServerClient();
     const { data: existing, error: existingError } = await admin
-      .from("technician_tags")
+      .from("lookup_options")
       .select("id, name")
       .eq("id", id)
+      .eq("list_key", LIST_KEY)
       .single();
     if (existingError || !existing) {
       return NextResponse.json({ error: "Tag not found" }, { status: 404 });
     }
 
     const { count } = await admin
-      .from("technician_tag_assignments")
+      .from("technician_lookup_assignments")
       .select("*", { count: "exact", head: true })
-      .eq("tag_id", id);
+      .eq("lookup_id", id);
 
     // TAG-004: assignments cascade-delete with the tag (FK ON DELETE CASCADE);
     // the audit event preserves how many technicians were affected.
-    const { error } = await admin.from("technician_tags").delete().eq("id", id);
+    const { error } = await admin
+      .from("lookup_options")
+      .delete()
+      .eq("id", id)
+      .eq("list_key", LIST_KEY);
     if (error) throw new Error(error.message);
 
     await admin.from("schedule_audit_events").insert({

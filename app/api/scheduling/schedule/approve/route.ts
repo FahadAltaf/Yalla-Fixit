@@ -49,11 +49,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    await admin.from("schedule_approval_actions").insert({
-      schedule_version_id: scheduleVersionId,
-      action: "approved",
+    // The approval decision itself; publishVersionToFsm then records the
+    // separate version_published event with the sync outcome.
+    await admin.from("schedule_audit_events").insert({
+      event_type: "version_approved",
       actor_id: profile.id,
-      comment: comment || null,
+      origin: "portal",
+      schedule_version_id: scheduleVersionId,
+      after_value: { comment: comment || null },
     });
 
     const { version: updated, results } = await publishVersionToFsm(admin, scheduleVersionId, profile.id, {
