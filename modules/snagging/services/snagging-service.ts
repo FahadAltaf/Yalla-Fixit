@@ -1,5 +1,8 @@
 import { executeRESTBackend } from "@/lib/rest-server";
-import type { CreateAreaInput, UpdateAreaInput } from "@/modules/snagging/schemas";
+import type {
+  CreateAreaInput,
+  UpdateAreaInput,
+} from "@/modules/snagging/schemas";
 import type {
   SnaggingAnalytics,
   SnaggingAnalyticsDrilldown,
@@ -62,7 +65,11 @@ export interface SnaggingTaskListResponse {
 export interface CatalogueResponse {
   entries: SnaggingCatalogueEntry[];
   areas: SnaggingCatalogueArea[];
-  area_elements: Array<{ area_code: string; element_code: string; sort_order: number }>;
+  area_elements: Array<{
+    area_code: string;
+    element_code: string;
+    sort_order: number;
+  }>;
   total?: number;
 }
 
@@ -88,7 +95,10 @@ export interface SnaggingQuoteLine {
 }
 
 export interface SnaggingQuotation {
-  id: string;
+  /** Null on a preview: nothing has been written for it yet. */
+  id: string | null;
+  /** True when this is what the job *would* be quoted, not a saved one. */
+  preview?: boolean;
   job_id: string;
   quote_number: string;
   status: "draft" | "sent" | "approved" | "rejected";
@@ -127,10 +137,19 @@ export interface SnaggingClientOption {
   property_count?: number;
 }
 
-function toParams(filters: SnaggingTaskFilters, page: number, pageSize: number) {
+function toParams(
+  filters: SnaggingTaskFilters,
+  page: number,
+  pageSize: number,
+) {
   const params: Record<string, string | number> = { page, pageSize };
   Object.entries(filters).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== "" && value !== "all") {
+    if (
+      value !== undefined &&
+      value !== null &&
+      value !== "" &&
+      value !== "all"
+    ) {
       params[key] = String(value);
     }
   });
@@ -149,12 +168,19 @@ export const snaggingService = {
     }),
 
   getTask: async (id: string): Promise<SnaggingTask> =>
-    executeRESTBackend<SnaggingTask>(`/api/snagging/tasks/${id}`, { method: "GET" }),
+    executeRESTBackend<SnaggingTask>(`/api/snagging/tasks/${id}`, {
+      method: "GET",
+    }),
 
   getAudit: async (id: string): Promise<SnaggingAuditEvent[]> =>
-    executeRESTBackend<SnaggingAuditEvent[]>(`/api/snagging/tasks/${id}/audit`, { method: "GET" }),
+    executeRESTBackend<SnaggingAuditEvent[]>(
+      `/api/snagging/tasks/${id}/audit`,
+      { method: "GET" },
+    ),
 
-  createTask: async (input: CreateTaskInput): Promise<{ id: string; code: string }> =>
+  createTask: async (
+    input: CreateTaskInput,
+  ): Promise<{ id: string; code: string }> =>
     executeRESTBackend(`/api/snagging/tasks`, {
       method: "POST",
       body: input as unknown as Record<string, unknown>,
@@ -168,28 +194,47 @@ export const snaggingService = {
 
   // ── Quotation (F1-F13) ────────────────────────────────────────────────
   getPricing: async (): Promise<SnaggingPricingConfig> =>
-    executeRESTBackend<SnaggingPricingConfig>("/api/snagging/pricing", { method: "GET" }),
+    executeRESTBackend<SnaggingPricingConfig>("/api/snagging/pricing", {
+      method: "GET",
+    }),
 
-  updatePricing: async (input: Partial<SnaggingPricingConfig>): Promise<SnaggingPricingConfig> =>
+  updatePricing: async (
+    input: Partial<SnaggingPricingConfig>,
+  ): Promise<SnaggingPricingConfig> =>
     executeRESTBackend<SnaggingPricingConfig>("/api/snagging/pricing", {
       method: "PUT",
       body: input as unknown as Record<string, unknown>,
     }),
 
-  getQuotation: async (taskId: string): Promise<SnaggingQuotation | null> =>
-    executeRESTBackend<SnaggingQuotation | null>(`/api/snagging/tasks/${taskId}/quotation`, {
-      method: "GET",
-    }),
+  /**
+   * The job's quotation. With `preview`, a job that has never been quoted
+   * comes back with the document it *would* be quoted — priced by the
+   * same code the generate action runs, and saved nowhere.
+   */
+  getQuotation: async (
+    taskId: string,
+    options: { preview?: boolean } = {},
+  ): Promise<SnaggingQuotation | null> =>
+    executeRESTBackend<SnaggingQuotation | null>(
+      `/api/snagging/tasks/${taskId}/quotation`,
+      {
+        method: "GET",
+        params: options.preview ? { preview: "1" } : {},
+      },
+    ),
 
   quotationAction: async (
     taskId: string,
     action: "generate" | "send" | "approve" | "reject",
     extra?: Record<string, unknown>,
   ): Promise<SnaggingQuotation> =>
-    executeRESTBackend<SnaggingQuotation>(`/api/snagging/tasks/${taskId}/quotation`, {
-      method: "POST",
-      body: { action, ...(extra ?? {}) },
-    }),
+    executeRESTBackend<SnaggingQuotation>(
+      `/api/snagging/tasks/${taskId}/quotation`,
+      {
+        method: "POST",
+        body: { action, ...(extra ?? {}) },
+      },
+    ),
 
   /** Persists a brand-new client and returns it (with its id). */
   createClient: async (input: {
@@ -209,13 +254,18 @@ export const snaggingService = {
       params: clientId ? { client_id: clientId } : {},
     }),
 
-  createProperty: async (input: SnaggingPropertyInput): Promise<SnaggingProperty> =>
+  createProperty: async (
+    input: SnaggingPropertyInput,
+  ): Promise<SnaggingProperty> =>
     executeRESTBackend<SnaggingProperty>("/api/snagging/properties", {
       method: "POST",
       body: input as unknown as Record<string, unknown>,
     }),
 
-  updateProperty: async (id: string, input: SnaggingPropertyInput): Promise<SnaggingProperty> =>
+  updateProperty: async (
+    id: string,
+    input: SnaggingPropertyInput,
+  ): Promise<SnaggingProperty> =>
     executeRESTBackend<SnaggingProperty>("/api/snagging/properties", {
       method: "PATCH",
       body: { id, ...input } as unknown as Record<string, unknown>,
@@ -238,7 +288,10 @@ export const snaggingService = {
     if (meta.width) form.append("width", String(meta.width));
     if (meta.height) form.append("height", String(meta.height));
 
-    const response = await fetch("/api/snagging/floor-plans", { method: "POST", body: form });
+    const response = await fetch("/api/snagging/floor-plans", {
+      method: "POST",
+      body: form,
+    });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       throw new Error(payload?.error ?? "Failed to upload the floor plan");
@@ -265,23 +318,37 @@ export const snaggingService = {
       body: { order },
     }),
 
-  renameFloorPlan: async (id: string, label: string): Promise<{ id: string; label: string }> =>
-    executeRESTBackend<{ id: string; label: string }>("/api/snagging/floor-plans", {
-      method: "PATCH",
-      body: { id, label },
-    }),
+  renameFloorPlan: async (
+    id: string,
+    label: string,
+  ): Promise<{ id: string; label: string }> =>
+    executeRESTBackend<{ id: string; label: string }>(
+      "/api/snagging/floor-plans",
+      {
+        method: "PATCH",
+        body: { id, label },
+      },
+    ),
 
   // Area management (FR-3.05 / FR-3.07).
   listAreas: async (taskId: string): Promise<SnaggingArea[]> =>
-    executeRESTBackend<SnaggingArea[]>(`/api/snagging/tasks/${taskId}/areas`, { method: "GET" }),
+    executeRESTBackend<SnaggingArea[]>(`/api/snagging/tasks/${taskId}/areas`, {
+      method: "GET",
+    }),
 
-  createArea: async (taskId: string, input: CreateAreaInput): Promise<SnaggingArea> =>
+  createArea: async (
+    taskId: string,
+    input: CreateAreaInput,
+  ): Promise<SnaggingArea> =>
     executeRESTBackend<SnaggingArea>(`/api/snagging/tasks/${taskId}/areas`, {
       method: "POST",
       body: input as unknown as Record<string, unknown>,
     }),
 
-  updateArea: async (taskId: string, input: UpdateAreaInput): Promise<SnaggingArea> =>
+  updateArea: async (
+    taskId: string,
+    input: UpdateAreaInput,
+  ): Promise<SnaggingArea> =>
     executeRESTBackend<SnaggingArea>(`/api/snagging/tasks/${taskId}/areas`, {
       method: "PATCH",
       body: input as unknown as Record<string, unknown>,
@@ -303,13 +370,20 @@ export const snaggingService = {
     form.append("file", file);
     form.append("task_id", taskId);
     form.append("kind", kind);
-    const response = await fetch("/api/snagging/documents", { method: "POST", body: form });
+    const response = await fetch("/api/snagging/documents", {
+      method: "POST",
+      body: form,
+    });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload?.error ?? "Failed to upload the document");
+    if (!response.ok)
+      throw new Error(payload?.error ?? "Failed to upload the document");
     return payload.data;
   },
 
-  updateTask: async (id: string, input: UpdateTaskInput): Promise<{ id: string }> =>
+  updateTask: async (
+    id: string,
+    input: UpdateTaskInput,
+  ): Promise<{ id: string }> =>
     executeRESTBackend(`/api/snagging/tasks/${id}`, {
       method: "PATCH",
       body: input as unknown as Record<string, unknown>,
@@ -372,10 +446,15 @@ export const snaggingService = {
       approval_manager_id?: string | null;
     },
   ) =>
-    executeRESTBackend<{ id: string; code: string; round_number: number; carried_snags: number }>(
-      `/api/snagging/tasks/${id}/rounds`,
-      { method: "POST", body: input as unknown as Record<string, unknown> },
-    ),
+    executeRESTBackend<{
+      id: string;
+      code: string;
+      round_number: number;
+      carried_snags: number;
+    }>(`/api/snagging/tasks/${id}/rounds`, {
+      method: "POST",
+      body: input as unknown as Record<string, unknown>,
+    }),
 
   scheduleVisit: async (
     id: string,
@@ -387,17 +466,23 @@ export const snaggingService = {
       approval_manager_id?: string | null;
     },
   ) =>
-    executeRESTBackend<{ id: string; code: string; round_number: number; visit_charge: number | null }>(
-      `/api/snagging/tasks/${id}/visits`,
-      { method: "POST", body: input as unknown as Record<string, unknown> },
-    ),
+    executeRESTBackend<{
+      id: string;
+      code: string;
+      round_number: number;
+      visit_charge: number | null;
+    }>(`/api/snagging/tasks/${id}/visits`, {
+      method: "POST",
+      body: input as unknown as Record<string, unknown>,
+    }),
 
   listCatalogue: async (
     filters: { search?: string; element?: string; activeOnly?: boolean } = {},
   ): Promise<CatalogueResponse> => {
     const params: Record<string, string | number> = {};
     if (filters.search) params.search = filters.search;
-    if (filters.element && filters.element !== "all") params.element = filters.element;
+    if (filters.element && filters.element !== "all")
+      params.element = filters.element;
     if (filters.activeOnly) params.activeOnly = "true";
 
     return executeRESTBackend<CatalogueResponse>("/api/snagging/catalogue", {
@@ -406,7 +491,9 @@ export const snaggingService = {
     });
   },
 
-  createCatalogueEntry: async (input: CatalogueEntryInput): Promise<SnaggingCatalogueEntry> =>
+  createCatalogueEntry: async (
+    input: CatalogueEntryInput,
+  ): Promise<SnaggingCatalogueEntry> =>
     executeRESTBackend("/api/snagging/catalogue", {
       method: "POST",
       body: input as unknown as Record<string, unknown>,
@@ -444,14 +531,17 @@ export const snaggingService = {
     to?: string;
     granularity?: SnaggingAnalyticsGranularity;
   }): Promise<SnaggingAnalyticsDrilldown> =>
-    executeRESTBackend<SnaggingAnalyticsDrilldown>("/api/snagging/analytics/records", {
-      method: "GET",
-      params: {
-        metric: query.metric,
-        ...(query.value ? { value: query.value } : {}),
-        ...(query.from ? { from: query.from } : {}),
-        ...(query.to ? { to: query.to } : {}),
-        ...(query.granularity ? { granularity: query.granularity } : {}),
+    executeRESTBackend<SnaggingAnalyticsDrilldown>(
+      "/api/snagging/analytics/records",
+      {
+        method: "GET",
+        params: {
+          metric: query.metric,
+          ...(query.value ? { value: query.value } : {}),
+          ...(query.from ? { from: query.from } : {}),
+          ...(query.to ? { to: query.to } : {}),
+          ...(query.granularity ? { granularity: query.granularity } : {}),
+        },
       },
-    }),
+    ),
 };

@@ -151,9 +151,24 @@ const SidebarGroupedMenuItems = ({ section }: { section: MenuSection }) => {
   );
 };
 
+const CHROMELESS_ROUTES = ["/scheduling/display"];
+
 const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
   const { userProfile } = useAuth();
   const { navMain } = getNavData(userProfile || ({} as User));
+  const layoutPathname = usePathname();
+
+  // Full-bleed routes (the scheduling wall display) still need the auth gate
+  // this layout sits inside, but none of its chrome -- a TV showing the day's
+  // board has nobody to navigate with.
+  if (
+    CHROMELESS_ROUTES.some(
+      (route) => layoutPathname === route || layoutPathname.startsWith(`${route}/`),
+    )
+  ) {
+    return <>{children}</>;
+  }
+
 
   return (
     <div className="flex min-h-dvh w-full">

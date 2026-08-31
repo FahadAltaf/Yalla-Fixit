@@ -35,6 +35,10 @@ export default function SchedulingShell({ children }: { children: React.ReactNod
   const pathname = usePathname();
   const active = NAV.find((item) => item.href === pathname)?.name ?? NAV[0].name;
 
+  // The wall display is a full-bleed screen inside this route subtree; it
+  // must not inherit the section sidebar.
+  if (pathname.startsWith("/scheduling/display")) return <>{children}</>;
+
   return (
     <SidebarProvider className="min-h-auto items-start">
       <Sidebar collapsible="none" className="hidden md:flex print:hidden">

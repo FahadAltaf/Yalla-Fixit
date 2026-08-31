@@ -605,7 +605,15 @@ export function JobSetupPanel({
                     </a>
                   </Button>
                 ) : null}
-                {canEdit ? (
+                {/*
+                  Nothing to upload when the unit does not need one. An
+                  Upload button beside the words "This unit does not
+                  require one" invites somebody to attach a document
+                  nobody asked for. Replacing an existing NOC stays
+                  available either way, since a file that is on file is
+                  presumably there for a reason.
+                */}
+                {canEdit && (nocRequired || nocOnFile) ? (
                   <SubmitButton
                     size="sm"
                     variant={nocOnFile ? "outline" : "default"}
@@ -634,9 +642,11 @@ export function JobSetupPanel({
           }}
         />
 
-        <p className="text-muted-foreground mt-2 text-xs">
-          PNG, JPG, WEBP or PDF, up to 15MB.
-        </p>
+        {canEdit && (nocRequired || nocOnFile) ? (
+          <p className="text-muted-foreground mt-2 text-xs">
+            PNG, JPG, WEBP or PDF, up to 15MB.
+          </p>
+        ) : null}
 
         {nocRequired && !nocOnFile ? (
           <Alert variant="destructive" className="border-destructive/30 mt-4">

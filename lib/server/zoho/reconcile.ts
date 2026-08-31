@@ -133,13 +133,19 @@ export async function reconcileFsmAppointments(
 
         // Keep the marker in step even on a non-material bump so we don't
         // re-evaluate the same automation change every cycle.
+        // Even when the window is unchanged, the job status may have moved
+        // (dispatched -> in progress -> completed). The display board colours
+        // by that, so it is always written back.
+        const statusUpdate: Record<string, unknown> = {
+          fsm_status: current.Status ?? null,
+          fsm_status_checked_at: new Date().toISOString(),
+        };
+
         if (!materiallyChanged) {
           if (markerChanged && current.Modified_Time) {
-            await admin
-              .from("schedule_entries")
-              .update({ fsm_last_modified_marker: current.Modified_Time })
-              .eq("id", entry.id);
+            statusUpdate.fsm_last_modified_marker = current.Modified_Time;
           }
+          await admin.from("schedule_entries").update(statusUpdate).eq("id", entry.id);
           continue;
         }
 
@@ -148,6 +154,7 @@ export async function reconcileFsmAppointments(
         // FSM is authoritative: adopt its scheduled window straight into the
         // portal entry so the board reflects FSM after a Refresh.
         const syncUpdate: Record<string, unknown> = {
+          ...statusUpdate,
           fsm_last_modified_marker: current.Modified_Time ?? entry.fsm_last_modified_marker,
           updated_at: new Date().toISOString(),
         };

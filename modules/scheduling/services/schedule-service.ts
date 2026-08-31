@@ -36,6 +36,10 @@ export interface ScheduleEntry {
   notes: string | null;
   origin: "portal" | "fsm" | "system";
   sync_status: "not_ready" | "ready" | "syncing" | "synced" | "failed";
+  // Raw Zoho FSM job status, refreshed by reconcile. Drives the display
+  // board's colour coding; NULL until FSM has been read for this entry.
+  fsm_status: string | null;
+  fsm_status_checked_at: string | null;
   created_by?: string | null;
   updated_by?: string | null;
   created_by_user?: { full_name: string | null; email: string } | { full_name: string | null; email: string }[] | null;

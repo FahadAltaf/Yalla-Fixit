@@ -40,12 +40,13 @@ import { ActionType, ResourceType, type SnaggingTask } from "@/types/types";
 
 import { EmptyState } from "@/components/ui/empty-state";
 
-import { QuotationLinesTable } from "./quotation-lines-table";
+import { YallaClassicTemplate } from "@/components/dashboard/extensions/quotation-templates/templates/YallaClassicTemplate";
 
 import {
   DataState,
   QuotationStatusBadge,
   SectionCard,
+  SubHeading,
   SubmitButton,
   formatGstDateTime,
   useConfirm,
@@ -138,7 +139,9 @@ export function QuotationPanel({
       // down" look identical to "no quotation yet" — and the panel then
       // offered Generate, which numbers a second financial document
       // against a job that already has one.
-      setQuote(await snaggingService.getQuotation(task.id));
+      // Ask for the preview too: a job that has never been quoted still
+      // opens on the document it would be quoted, rather than on a button.
+      setQuote(await snaggingService.getQuotation(task.id, { preview: true }));
     } catch (err) {
       setQuote(null);
       setError(
@@ -243,6 +246,7 @@ export function QuotationPanel({
     }
   }
 
+  const isPreview = Boolean(quote?.preview);
   const isDecided =
     quote?.status === "approved" || quote?.status === "rejected";
 
@@ -319,9 +323,9 @@ export function QuotationPanel({
               action={
                 canEdit
                   ? {
-                      label: working ? "Generating…" : "Generate quotation",
-                      onClick: () => void generate(),
-                    }
+                    label: working ? "Generating…" : "Generate quotation",
+                    onClick: () => void generate(),
+                  }
                   : undefined
               }
             />
@@ -329,14 +333,91 @@ export function QuotationPanel({
         >
           {quote ? (
             <div className="space-y-5">
-              <QuotationLinesTable
-                lines={quote.lines}
-                currency={quote.currency ?? "AED"}
-                subtotal={quote.subtotal}
-                taxRate={quote.tax_rate}
-                taxAmount={quote.tax_amount}
-                total={quote.total}
-              />
+              {/*
+                What you can do with the document, above the document.
+
+                The tab opens on the quotation as the client will receive
+                it, so the controls belong at the top where they are read
+                before the page is scrolled — not at the foot of an A4
+                sheet somebody has to reach the bottom of first.
+              */}
+              {canEdit ? (
+                <div className="flex flex-wrap items-center justify-end gap-2 pb-2">
+                  {isPreview ? (
+                    /*
+                      Nothing is saved yet, so the only thing to do is
+                      commit it. Download and Send would both be promising
+                      a document that does not exist.
+                    */
+                    <SubmitButton
+                      size="sm"
+                      onClick={() => void generate()}
+                      disabled={busy}
+                      pending={working}
+                      pendingLabel="Generating…"
+                      icon={<FileText className="size-4" />}
+                    >
+                      Generate quotation
+                    </SubmitButton>
+                  ) : (
+                    <>
+                      <SubmitButton
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void download()}
+                        disabled={busy}
+                        pending={downloading}
+                        pendingLabel="Preparing…"
+                        icon={<Download className="size-4" />}
+                      >
+                        Download PDF
+                      </SubmitButton>
+                      {!isDecided ? (
+                        <>
+                          {quote.status !== "draft" ? null : (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setRegenOpen(true)}
+                              disabled={busy}
+                            >
+                              <FileText className="size-4" /> Regenerate
+                            </Button>
+                          )}
+                          <Button
+                            size="sm"
+                            onClick={() => {
+                              const s = (quote.property_snapshot ??
+                                {}) as Record<string, unknown>;
+                              setRecipient(
+                                (s.client_email as string) ??
+                                quote.sent_to ??
+                                "",
+                              );
+                              setSendOpen(true);
+                            }}
+                            disabled={busy}
+                          >
+                            <Send className="size-4" />{" "}
+                            {quote.status === "sent"
+                              ? "Resend to client"
+                              : "Send to client"}
+                          </Button>
+                        </>
+                      ) : (
+                        <Badge
+                          variant="secondary"
+                          className="bg-muted border-0"
+                        >
+                          {quote.status === "approved"
+                            ? "Approved by client — locked"
+                            : "Rejected by client"}
+                        </Badge>
+                      )}
+                    </>
+                  )}
+                </div>
+              ) : null}
 
               {/* Where it stands with the client. */}
               {quote.status === "sent" ? (
@@ -403,63 +484,33 @@ export function QuotationPanel({
                 </div>
               ) : null}
 
-              {/* Actions sit on their own line under a rule, so the
-                  destructive-adjacent "Send to client" is never mistaken
-                  for part of the figures above it. */}
-              {canEdit ? (
-                <div className="flex flex-wrap items-center justify-end gap-2 border-t pt-4">
-                  <SubmitButton
-                    variant="outline"
-                    size="sm"
-                    onClick={() => void download()}
-                    disabled={busy}
-                    pending={downloading}
-                    pendingLabel="Preparing…"
-                    icon={<Download className="size-4" />}
-                  >
-                    Download PDF
-                  </SubmitButton>
-                  {!isDecided ? (
-                    <>
-                      {quote.status !== "draft" ? null : (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setRegenOpen(true)}
-                          disabled={busy}
-                        >
-                          <FileText className="size-4" /> Regenerate
-                        </Button>
-                      )}
-                      <Button
-                        size="sm"
-                        onClick={() => {
-                          const s = (quote.property_snapshot ?? {}) as Record<
-                            string,
-                            unknown
-                          >;
-                          setRecipient(
-                            (s.client_email as string) ?? quote.sent_to ?? "",
-                          );
-                          setSendOpen(true);
-                        }}
-                        disabled={busy}
-                      >
-                        <Send className="size-4" />{" "}
-                        {quote.status === "sent"
-                          ? "Resend to client"
-                          : "Send to client"}
-                      </Button>
-                    </>
-                  ) : (
-                    <Badge variant="secondary" className="bg-muted border-0">
-                      {quote.status === "approved"
-                        ? "Approved by client — locked"
-                        : "Rejected by client"}
-                    </Badge>
-                  )}
+              {/*
+                The quotation as the client receives it — rendered from the
+                same YallaClassicTemplate the PDF is built from, so what is
+                approved on screen is what lands in their inbox. The figures
+                used to be shown as a separate table above this, which meant
+                reading the same totals twice in two different shapes.
+              */}
+              <div className="space-y-2">
+                {/* <SubHeading>
+                  {isPreview
+                    ? "Draft preview — not yet generated"
+                    : "Document preview"}
+                </SubHeading> */}
+                <div className="bg-muted/40 overflow-x-auto rounded-lg border p-4">
+                  <div className="mx-auto w-fit bg-white shadow-sm">
+                    <YallaClassicTemplate
+                      data={snaggingQuoteToTemplateData(toDocData(quote))}
+                      hideDiscount
+                    />
+                  </div>
                 </div>
-              ) : null}
+                <p className="text-muted-foreground text-xs">
+                  {isPreview
+                    ? "Priced by the same rules the generated quotation uses, but nothing is saved until you generate it."
+                    : "Rendered from the same template as the PDF. Download it for the exact file the client is sent."}
+                </p>
+              </div>
             </div>
           ) : null}
         </DataState>
