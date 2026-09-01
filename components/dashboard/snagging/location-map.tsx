@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { Map as LeafletMap } from "leaflet";
-import { ExternalLink, Loader2 } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 /**
@@ -153,9 +154,14 @@ export function LocationMap({
           }
         />
         {!ready && !failed ? (
-          <div className="bg-muted/60 text-muted-foreground absolute inset-0 flex items-center justify-center gap-2 text-sm">
-            <Loader2 className="size-4 animate-spin" />
-            Loading map…
+          // A skeleton the shape of the map, rather than a spinner on a
+          // grey wash: the tiles fill this whole box, so the placeholder
+          // should too.
+          <div className="absolute inset-0">
+            <Skeleton className="size-full rounded-none" />
+            <span className="text-muted-foreground absolute inset-0 flex items-center justify-center text-sm">
+              Loading map…
+            </span>
           </div>
         ) : null}
         {failed ? (

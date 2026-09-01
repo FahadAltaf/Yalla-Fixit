@@ -50,7 +50,7 @@ import SubmitDialog from "./submit-dialog";
 import EntryDetailDialog from "./entry-detail-dialog";
 import RejectDialog from "./reject-dialog";
 import HistoryDialog from "./history-dialog";
-import { formatTimeAmPm } from "./time-select";
+import { formatTimeAmPm } from "@/components/ui/time-select";
 
 type Props = {
   technicians: TechnicianReference[];

@@ -75,11 +75,23 @@ export async function GET(req: NextRequest) {
         .in("status", ["submitted", "in_review"])
         .order("submitted_at", { ascending: true, nullsFirst: false });
     } else {
-      const sortByRaw = params.get("sortBy") ?? "scheduled_date";
-      // Columns that no longer exist fall back to scheduled_date.
+      /*
+        Newest first, by when the job was raised.
+
+        The default was scheduled_date ascending, which put the oldest
+        appointment at the top and buried a job created this morning
+        somewhere in the middle of the list. Creation order is the one
+        thing every record has, never changes, and matches what someone
+        means by "the job I just made". A column the caller asks for
+        still wins; this is only the default.
+      */
+      const sortByRaw = params.get("sortBy") ?? "created_at";
       const allowed = new Set(["scheduled_date", "code", "status", "created_at", "updated_at"]);
-      const sortBy = allowed.has(sortByRaw) ? sortByRaw : "scheduled_date";
-      const ascending = params.get("sortDirection") !== "desc";
+      const sortBy = allowed.has(sortByRaw) ? sortByRaw : "created_at";
+      // Newest first for a date, A-Z for a label.
+      const dateLike = sortBy === "created_at" || sortBy === "updated_at";
+      const direction = params.get("sortDirection");
+      const ascending = direction ? direction !== "desc" : !dateLike;
       query = query.order(sortBy, { ascending, nullsFirst: false });
     }
 

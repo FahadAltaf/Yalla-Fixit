@@ -1,5 +1,5 @@
 import type { SchedulingConfig, ShiftType } from "@/modules/scheduling";
-import { formatTimeAmPm } from "./time-select";
+import { formatTimeAmPm } from "@/components/ui/time-select";
 
 // FSM Service Appointment Type picklist (per YFI + FSM). "-None-" is the
 // unset value; the team must choose a real type before saving.

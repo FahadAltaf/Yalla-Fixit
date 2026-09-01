@@ -444,7 +444,7 @@ export function DataRow({
         </span>
       ) : null}
       <div className="min-w-0 flex-1">
-        <div className="truncate font-medium">{title}</div>
+        <div className={cn("truncate font-medium", active && "text-brand")}>{title}</div>
         {subtitle ? (
           <div className="text-muted-foreground truncate text-sm">
             {subtitle}
@@ -459,7 +459,12 @@ export function DataRow({
 
   const shared = cn(
     "flex w-full items-center gap-3 px-5 py-3 text-left",
-    active && "bg-brand-50/40",
+    active &&
+      // --brand-50 is #fbf2f3 -- barely off-white, and at 40% opacity over a
+      // white card the selected row was effectively invisible. A stronger
+      // tint plus a solid left accent bar makes it unmistakable, and the bar
+      // means selection is not carried by a faint tint alone.
+      "bg-brand-100/70 relative before:absolute before:inset-y-0 before:left-0 before:w-1 before:bg-brand",
     className,
   );
 
@@ -470,7 +475,8 @@ export function DataRow({
       aria-current={active ? "true" : undefined}
       className={cn(
         shared,
-        "hover:bg-muted/50 focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none focus-visible:-outline-offset-2",
+        active ? "hover:bg-brand-100" : "hover:bg-muted/50",
+        "focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none focus-visible:-outline-offset-2",
       )}
     >
       {content}

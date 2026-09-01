@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { emailService } from "@/lib/email-service";
+import { emailMasthead } from "@/lib/email-brand";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
@@ -181,8 +182,7 @@ function reportEmailHtml(opts: { unit: string; reportUrl: string; expiresAt: str
   });
   return `
   <div style="font-family:Arial,Helvetica,sans-serif;color:#1f2937;max-width:560px;margin:0 auto">
-    <div style="font-size:20px;font-weight:800;color:#0f766e">YALLA FIXIT</div>
-    <div style="font-size:12px;color:#6b7280;margin-bottom:20px">Property Care · Snagging</div>
+    ${emailMasthead()}
     <p>Your snagging inspection report for <strong>${escapeHtml(opts.unit)}</strong> is ready.</p>
     <p>
       <a href="${escapeHtml(opts.reportUrl)}"

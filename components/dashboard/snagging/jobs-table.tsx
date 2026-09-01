@@ -75,7 +75,15 @@ export default function JobsTable() {
       search: debouncedSearchTerm || undefined,
       // Sorting is resolved by the API; the table only reports which
       // column was clicked. Updated-desc stays the default view.
-      sortBy: sorting.sortBy ?? "updated_at",
+      /*
+        Newest first, by when the job was raised.
+
+        updated_at reshuffled the table on every edit, sync and status
+        change, so a job was never twice in the same place and a
+        coordinator lost their spot each time the list refreshed.
+        Creation order never moves.
+      */
+      sortBy: sorting.sortBy ?? "created_at",
       sortDirection: sorting.sortOrder ?? "desc",
     };
   }, [filter, debouncedSearchTerm, sorting]);

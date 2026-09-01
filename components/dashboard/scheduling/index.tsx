@@ -66,7 +66,7 @@ import {
   TechnicianRowSkeleton,
   Unset,
 } from "./technician-cells";
-import TimeSelect from "./daily-schedule/time-select";
+import TimeSelect from "@/components/ui/time-select";
 
 type Props = { technicians: TechnicianReference[] };
 

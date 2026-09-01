@@ -40,7 +40,14 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ data });
     }
 
-    let query = admin.from("snagging_properties").select(SELECT).order("updated_at", { ascending: false }).limit(200);
+    // Newest first by when the property was added. updated_at reshuffled
+    // the list every time anyone touched a record, so the same property
+    // was never twice in the same place.
+    let query = admin
+      .from("snagging_properties")
+      .select(SELECT)
+      .order("created_at", { ascending: false })
+      .limit(200);
     if (clientId) query = query.eq("client_id", clientId);
     const { data, error } = await query;
     if (error) throw new Error(error.message);

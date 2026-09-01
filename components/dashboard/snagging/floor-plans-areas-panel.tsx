@@ -53,6 +53,9 @@ import {
 } from "@/types/types";
 
 import { EmptyState } from "@/components/ui/empty-state";
+import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/actions/utils";
+import AddFloorPlanDialog from "./add-floor-plan-dialog";
 
 import {
   DataRow,
@@ -131,7 +134,6 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
     ActionType.EDIT,
   );
   const { confirm, dialog } = useConfirm();
-  const fileRef = useRef<HTMLInputElement>(null);
   const imgWrapRef = useRef<HTMLDivElement>(null);
 
   const [plans, setPlans] = useState<SnaggingFloorPlan[]>([]);
@@ -144,7 +146,9 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
   const [running, setRunning] = useState<
     null | "upload" | "pin" | "area" | "rename"
   >(null);
-  const [label, setLabel] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [overIndex, setOverIndex] = useState<number | null>(null);
   const [activePlanId, setActivePlanId] = useState<string | null>(null);
 
   // Pending pin (a click position awaiting an area choice).
@@ -157,7 +161,7 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
   );
 
   const load = useCallback(async () => {
-    setLoading(true);
+    // setLoading(true);
     setError(null);
     try {
       const [p, a] = await Promise.all([
@@ -190,17 +194,19 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
     (a) => a.pin_x == null || a.floor_plan_id == null,
   );
 
-  async function upload(file: File) {
+  async function upload(planLabel: string, file: File) {
     setBusy(true);
     setRunning("upload");
     try {
       const prepared = await toPinnablePlan(file);
       await snaggingService.uploadFloorPlan(taskId, prepared.file, {
-        label: label.trim() || `Floor ${plans.length + 1}`,
+        // The dialog requires a label, so there is no "Floor N"
+        // fallback producing plans nobody can tell apart.
+        label: planLabel,
         width: prepared.width,
         height: prepared.height,
       });
-      setLabel("");
+      setAddOpen(false);
       toast.success(
         file.type === "application/pdf"
           ? "PDF converted and added"
@@ -214,7 +220,7 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
     } finally {
       setBusy(false);
       setRunning(null);
-      if (fileRef.current) fileRef.current.value = "";
+
     }
   }
 
@@ -245,11 +251,9 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
     }
   }
 
-  async function move(index: number, dir: -1 | 1) {
-    const next = [...plans];
-    const target = index + dir;
-    if (target < 0 || target >= next.length) return;
-    [next[index], next[target]] = [next[target], next[index]];
+  // Both the Move up/down menu items and drag-and-drop end here, so the
+  // optimistic update and its rollback exist in one place.
+  async function applyOrder(next: SnaggingFloorPlan[]) {
     setPlans(next);
     setBusy(true);
     try {
@@ -262,6 +266,24 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function move(index: number, dir: -1 | 1) {
+    const target = index + dir;
+    if (target < 0 || target >= plans.length) return;
+    const next = [...plans];
+    [next[index], next[target]] = [next[target], next[index]];
+    await applyOrder(next);
+  }
+
+  // Drag-and-drop reordering. Move up/down stays in the row menu:
+  // dragging is not reachable by keyboard, so it must not be the only way.
+  async function dropPlan(from: number, to: number) {
+    if (from === to || from < 0 || to < 0) return;
+    const next = [...plans];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    await applyOrder(next);
   }
 
   function onPlanClick(e: React.MouseEvent<HTMLDivElement>) {
@@ -426,18 +448,21 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
         onRetry={() => void load()}
         retrying={loading}
         errorTitle="Could not load floor plans and areas"
-        // Two bordered columns, so the plan list and the area list do not
-        // jump into place when the fetch lands.
+        // Mirrors the real two-column body: each side is a SubHeading
+        // above a bordered list, and the left column carries the
+        // Add-plan button underneath. Without those the heading and
+        // button popped in and pushed the lists down on load.
         skeleton={
           <div className="grid gap-6 lg:grid-cols-2">
-            <ListSkeleton
-              rows={3}
-              className="overflow-hidden rounded-lg border"
-            />
-            <ListSkeleton
-              rows={5}
-              className="overflow-hidden rounded-lg border"
-            />
+            <div className="space-y-4">
+              <Skeleton className="h-3 w-28" />
+              <ListSkeleton rows={3} className="overflow-hidden rounded-lg border" />
+              <Skeleton className="h-9 w-28 rounded-full" />
+            </div>
+            <div className="space-y-4">
+              <Skeleton className="h-3 w-20" />
+              <ListSkeleton rows={5} className="overflow-hidden rounded-lg border" />
+            </div>
           </div>
         }
       >
@@ -445,7 +470,19 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
           {/* Left: floors + the active plan with pins */}
           <div className="space-y-4">
             {/* Floor list with ordering */}
-            <SubHeading count={plans.length}>Floor plans</SubHeading>
+            <SubHeading
+              count={plans.length}
+              action={
+                canEdit ? (
+                  <Button variant="outline" size="sm" onClick={() => setAddOpen(true)} disabled={busy}>
+                    <Upload className="size-4" />
+                    Add plan
+                  </Button>
+                ) : null
+              }
+            >
+              Floor plans
+            </SubHeading>
             <div className="overflow-hidden rounded-lg border">
               {plans.length === 0 ? (
                 <EmptyState
@@ -465,7 +502,39 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
                       (a) => a.floor_plan_id === plan.id && a.pin_x != null,
                     ).length;
                     return (
-                      <div key={plan.id} className="flex items-center">
+                      <div
+                        key={plan.id}
+                        // The tint lives on the WRAPPER, not just the
+                        // DataRow: the kebab sits outside the row, so a
+                        // highlight on the row alone left a white strip at
+                        // the right of the selected item.
+                        draggable={canEdit && !busy}
+                        onDragStart={() => setDragIndex(i)}
+                        onDragEnd={() => {
+                          setDragIndex(null);
+                          setOverIndex(null);
+                        }}
+                        onDragOver={(e) => {
+                          if (dragIndex === null) return;
+                          e.preventDefault();
+                          setOverIndex(i);
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          if (dragIndex !== null) void dropPlan(dragIndex, i);
+                          setDragIndex(null);
+                          setOverIndex(null);
+                        }}
+                        className={cn(
+                          "flex items-center transition-colors",
+                          plan.id === activePlanId && "bg-brand-100",
+                          canEdit && !busy && "cursor-grab active:cursor-grabbing",
+                          dragIndex === i && "opacity-50",
+                          // A line where the row would land, rather than
+                          // guessing from a floating ghost.
+                          overIndex === i && dragIndex !== i && "border-t-brand border-t-2",
+                        )}
+                      >
                         <DataRow
                           className="flex-1 py-2.5"
                           active={plan.id === activePlanId}
@@ -533,39 +602,6 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
                 </div>
               )}
             </div>
-
-            {canEdit ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <Input
-                  value={label}
-                  onChange={(e) => setLabel(e.target.value)}
-                  placeholder="Label (e.g. Ground floor)"
-                  className="max-w-48"
-                />
-                <input
-                  ref={fileRef}
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp,application/pdf"
-                  hidden
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) void upload(file);
-                  }}
-                />
-                {/* A PDF is rasterised in the browser, which is slow enough
-                    that the button has to say it is working. */}
-                <SubmitButton
-                  variant="outline"
-                  onClick={() => fileRef.current?.click()}
-                  disabled={busy}
-                  pending={running === "upload"}
-                  pendingLabel="Processing…"
-                  icon={<Upload className="size-4" />}
-                >
-                  Add plan
-                </SubmitButton>
-              </div>
-            ) : null}
 
             {/* Active plan with pins */}
             {activePlan?.signed_url ? (
@@ -750,7 +786,7 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value={NEW_AREA}>+ Create a new area</SelectItem>
+                  <SelectItem value={NEW_AREA}>Create a new area</SelectItem>
                   {unpinnedAreas.map((a) => (
                     <SelectItem key={a.id} value={a.id}>
                       {a.name}
@@ -836,6 +872,13 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AddFloorPlanDialog
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        pending={running === "upload"}
+        onSubmit={(planLabel, file) => upload(planLabel, file)}
+      />
 
       {dialog}
     </SectionCard>

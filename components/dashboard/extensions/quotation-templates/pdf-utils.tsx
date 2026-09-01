@@ -51,6 +51,57 @@ function findSafePageBreakOffset(
   return target;
 }
 
+/**
+ * The last canvas row carrying any ink, or -1 if the canvas is blank.
+ *
+ * html2canvas renders the template's whole box, bottom padding included, so
+ * the canvas overshoots the content by a band of white. Paginating against
+ * the raw height opened a final, entirely blank page.
+ *
+ * Scans bottom-up in coarse chunks and refines inside the chunk that hits,
+ * so the usual case costs a handful of getImageData calls rather than one
+ * per row. Callers pad the result by more than COARSE_STEP, which covers the
+ * one case the coarse pass can miss: a hairline sitting between two samples.
+ */
+const COARSE_STEP = 8;
+
+function findLastInkedRow(
+  ctx: CanvasRenderingContext2D,
+  canvasWidth: number,
+  canvasHeight: number
+): number {
+  const rowHasInk = (y: number) => {
+    const row = ctx.getImageData(0, y, canvasWidth, 1).data;
+    let darkPixels = 0;
+
+    for (let i = 0; i < row.length; i += 4) {
+      const a = row[i + 3];
+      if (a > 10 && (row[i] < 245 || row[i + 1] < 245 || row[i + 2] < 245)) {
+        darkPixels++;
+        // A handful of stray pixels is anti-aliasing, not content.
+        if (darkPixels / canvasWidth > 0.004) return true;
+      }
+    }
+
+    return false;
+  };
+
+  for (let y = canvasHeight - 1; y >= 0; y -= COARSE_STEP) {
+    if (!rowHasInk(y)) continue;
+
+    // The true last row is inside the chunk the coarse pass stepped over.
+    const upper = Math.min(canvasHeight - 1, y + COARSE_STEP - 1);
+    for (let fine = upper; fine > y; fine--) {
+      if (rowHasInk(fine)) return fine;
+    }
+
+    return y;
+  }
+
+  return -1;
+}
+
+
 export async function generateQuotationPDFBlob(
   templateId: string,
   data: QuotationData,
@@ -133,16 +184,30 @@ export async function generateQuotationPDFBlob(
       format: [PAGE_W_MM, PAGE_H_MM],
     });
 
+    /*
+      Paginate against where the content actually ends, not where the canvas
+      does. The old guard stopped only once under 2mm remained, so the
+      template's bottom padding was enough to open a final blank page.
+
+      The pad keeps a little white under the last line rather than cutting
+      flush to it, and is comfortably wider than COARSE_STEP.
+    */
+    const lastInkedRow = findLastInkedRow(canvasCtx, canvas.width, canvas.height);
+    const contentHeight =
+      lastInkedRow < 0
+        ? 0
+        : Math.min(canvas.height, lastInkedRow + 1 + Math.round(3 * PX_PER_MM));
+
     let sourceY = 0;
     let isFirstPage = true;
 
-    while (sourceY < canvas.height - 2 * PX_PER_MM) {
+    while (sourceY < contentHeight) {
       if (!isFirstPage) {
         pdf.addPage([PAGE_W_MM, PAGE_H_MM], "portrait");
       }
 
-      const idealSliceH = Math.min(CONTENT_H_PX, canvas.height - sourceY);
-      const remainingAfterIdeal = canvas.height - (sourceY + idealSliceH);
+      const idealSliceH = Math.min(CONTENT_H_PX, contentHeight - sourceY);
+      const remainingAfterIdeal = contentHeight - (sourceY + idealSliceH);
 
       let sliceH = idealSliceH;
       if (remainingAfterIdeal > MIN_SLICE_H_PX) {

@@ -27,7 +27,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertTriangle, Loader2, Search } from "lucide-react";
-import TimeSelect, { formatTimeAmPm } from "./time-select";
+import TimeSelect, { formatTimeAmPm } from "@/components/ui/time-select";
 import {
   resolveShift,
   shiftWindowLabel,

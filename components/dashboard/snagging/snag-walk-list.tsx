@@ -3,16 +3,15 @@
 import { useMemo, useState } from "react";
 import Image from "next/image";
 import {
+  ArrowRight,
   CheckCircle2,
   DoorClosed,
-  Flag,
   ImageOff,
   ListChecks,
   MapPin,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -22,6 +21,9 @@ import {
 } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { cn } from "@/lib/utils";
+import { coverPhoto, splitEvidence } from "@/lib/snagging/evidence";
+
+import { SnagHistory } from "./snag-history";
 import type {
   SnaggingFloorPlan,
   SnaggingPhoto,
@@ -43,9 +45,13 @@ type Snag = NonNullable<SnaggingTask["snags"]>[number];
  *
  * Split out of the review panel so the same list can be the body of a
  * tab on the job detail page and the lower half of the approvals
- * workspace, without the two drifting apart. Flagging is a reviewer's
- * scratch pad: it tallies what to mention when sending back, and clears
- * when the panel reloads.
+ * workspace, without the two drifting apart.
+ *
+ * There was a per-snag "Flag" button here. It looked like an action but
+ * was component state and nothing more — no request, no column — so a
+ * reviewer who flagged their way down a long list lost the lot on the
+ * next reload. Notes for a send-back belong in the send-back reason,
+ * which is persisted and reaches the inspector.
  */
 /** The plan a snag was pinned on, if it can be resolved. */
 function planForSnag(
@@ -58,8 +64,38 @@ function planForSnag(
   );
 }
 
+/**
+ * What the list actually holds.
+ *
+ * On an initial inspection every snag was captured on the walk. On a
+ * round most of them were carried in to be re-checked and only a few —
+ * sometimes none — are new, so "12 snags captured on this walk" was
+ * telling a manager the developer had created twelve fresh defects.
+ */
+function describeWalk(
+  snags: { round_created?: number | null }[],
+  round: number,
+  failedChecks: number,
+): string {
+  const plural = (n: number) => (n === 1 ? "snag" : "snags");
+  if (round <= 1) return `${snags.length} ${plural(snags.length)} captured on this walk`;
+
+  const found = snags.filter((snag) => (snag.round_created ?? 1) === round).length;
+  const carried = snags.length - found;
+  const parts = [`${carried} carried in to re-check`];
+  if (found > 0) parts.push(`${found} found on this round`);
+  /*
+    A failed check is outstanding work too, and it does not appear in this
+    list — it lives on the Checklist tab. Naming it here is what stops a
+    round reading as "snags only" and the failed checks going unnoticed.
+  */
+  if (failedChecks > 0) {
+    parts.push(`${failedChecks} failed ${failedChecks === 1 ? "check" : "checks"}`);
+  }
+  return parts.join(" · ");
+}
+
 export function SnagWalkList({ task }: { task: SnaggingTask }) {
-  const [flagged, setFlagged] = useState<Set<string>>(new Set());
   const [preview, setPreview] = useState<SnaggingPhoto | null>(null);
   const [detail, setDetail] = useState<Snag | null>(null);
 
@@ -72,20 +108,6 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
   const accessIssues = areas.filter(
     (area) => area.access_state && area.access_state !== "accessible",
   );
-  // Flagging is only useful while a decision is still open; once the job
-  // is approved or delivered the list is a record, not a worklist.
-  const awaitingDecision =
-    task.status === "submitted" || task.status === "in_review";
-
-  function toggleFlag(id: string) {
-    setFlagged((current) => {
-      const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
   return (
     <div className="flex flex-col gap-6">
       {accessIssues.length > 0 ? (
@@ -130,7 +152,13 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
       <SectionCard
         title="Walk the snags"
         icon={<ListChecks />}
-        description={`${snags.length} snags · ${flagged.size} flagged`}
+        description={describeWalk(
+          snags,
+          task.round_number ?? 1,
+          (task.checklist ?? []).filter(
+            (item) => item.status === "failed" || item.status === "not_checked",
+          ).length,
+        )}
         bodyClassName="border-t"
       >
         {snags.length === 0 ? (
@@ -143,8 +171,13 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
           <ul>
             {snags.map((snag, index) => {
               const photoCount = snag.photos?.length ?? 0;
-              const cover =
-                (snag.photos ?? []).find((photo) => photo.signed_url) ?? null;
+              const evidence = splitEvidence(snag.photos, task.round_number ?? 1);
+              // On a round this is the newest AFTER shot: the current state
+              // of the defect is what a reviewer scanning the list wants.
+              const cover = coverPhoto(evidence);
+              const isRound = (task.round_number ?? 1) > 1;
+              const beforeShot = evidence.before.filter((p) => p.signed_url).at(-1) ?? null;
+              const afterShot = evidence.after.filter((p) => p.signed_url).at(-1) ?? null;
               const pinned =
                 snag.pin_x !== null &&
                 snag.pin_x !== undefined &&
@@ -153,10 +186,7 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
               return (
                 <li
                   key={snag.id}
-                  className={cn(
-                    "flex flex-wrap items-start gap-3 border-b px-5 py-4 last:border-b-0",
-                    flagged.has(snag.id) && "bg-warning/5",
-                  )}
+                  className="flex flex-wrap items-start gap-3 border-b px-5 py-4 last:border-b-0"
                 >
                   <SnagIndex index={index + 1} severity={snag.severity} />
 
@@ -182,8 +212,18 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
                       {snag.created_at ? (
                         <span>· {formatGstDateTime(snag.created_at)}</span>
                       ) : null}
-                      {(snag.round_created ?? 1) > 1 ? (
-                        <span>· Round {snag.round_created}</span>
+                      {/*
+                        FR-6.03 — a round mixes two kinds of defect: the
+                        ones it was opened to re-check, and anything the
+                        inspector found while they were there. Reading a
+                        round's list without that distinction turns eleven
+                        re-checks and one new find into twelve new defects.
+                      */}
+                      {(snag.round_created ?? 1) === (task.round_number ?? 1) &&
+                      (task.round_number ?? 1) > 1 ? (
+                        <span className="text-brand font-medium">· New this round</span>
+                      ) : (snag.round_created ?? 1) > 1 ? (
+                        <span>· Found on round {snag.round_created}</span>
                       ) : null}
                       <span>
                         · {photoCount} {photoCount === 1 ? "photo" : "photos"}
@@ -215,7 +255,41 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
                           <SnagPlanPin snag={snag} plans={plans} compact />
                         </button>
                       ) : null}
-                      {cover ? (
+                      {/*
+                        On a round the pair IS the record: the defect as it
+                        was raised, and the state the inspector found it in.
+                        Showing one thumbnail meant a reviewer had to open
+                        every snag to see whether anything had changed.
+                      */}
+                      {isRound ? (
+                        <div className="flex items-center gap-2">
+                          <EvidenceThumb
+                            label="Before"
+                            photo={beforeShot}
+                            snagCode={snag.snag_code}
+                            onOpen={setPreview}
+                          />
+                          <ArrowRight
+                            className="text-muted-foreground/50 size-3.5 shrink-0"
+                            aria-hidden
+                          />
+                          <EvidenceThumb
+                            label="After"
+                            photo={afterShot}
+                            snagCode={snag.snag_code}
+                            onOpen={setPreview}
+                          />
+                          {photoCount > 2 ? (
+                            <button
+                              type="button"
+                              onClick={() => setDetail(snag)}
+                              className="text-muted-foreground hover:text-foreground text-xs hover:underline"
+                            >
+                              +{photoCount - 2} more
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : cover ? (
                         <div className="flex items-center gap-2">
                           <button
                             type="button"
@@ -272,16 +346,6 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
                         No photo
                       </Badge>
                     ) : null}
-                    {awaitingDecision ? (
-                      <Button
-                        variant={flagged.has(snag.id) ? "secondary" : "outline"}
-                        size="sm"
-                        onClick={() => toggleFlag(snag.id)}
-                      >
-                        <Flag className="size-3.5" />
-                        {flagged.has(snag.id) ? "Flagged" : "Flag"}
-                      </Button>
-                    ) : null}
                   </div>
                 </li>
               );
@@ -326,6 +390,7 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
       <SnagDetailDialog
         snag={detail}
         plans={task.floor_plans ?? []}
+        visitRound={task.round_number ?? 1}
         onClose={() => setDetail(null)}
         onOpenPhoto={(photo) => setPreview(photo)}
       />
@@ -337,15 +402,19 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
 function SnagDetailDialog({
   snag,
   plans,
+  visitRound,
   onClose,
   onOpenPhoto,
 }: {
   snag: Snag | null;
   plans: SnaggingFloorPlan[];
+  /** The round being viewed, which is what makes a photo "before" or "after". */
+  visitRound: number;
   onClose: () => void;
   onOpenPhoto: (photo: SnaggingPhoto) => void;
 }) {
-  const photos = (snag?.photos ?? []).filter((p) => p.signed_url);
+  const evidence = splitEvidence(snag?.photos, visitRound);
+  const photos = [...evidence.before, ...evidence.after].filter((p) => p.signed_url);
   return (
     <Dialog open={Boolean(snag)} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[88vh] overflow-x-hidden overflow-y-auto sm:max-w-2xl">
@@ -366,7 +435,13 @@ function SnagDetailDialog({
                 label="Severity"
                 value={<SeverityBadge severity={snag.severity} />}
               />
-              <Detail label="Status" value={snag.status} />
+              {/* The §5.2 label, not the database value: a reviewer
+                  should read "Poor quality fix", not
+                  "verified_poor_quality". */}
+              <Detail
+                label="Status"
+                value={<SnagStatusBadge status={snag.status} />}
+              />
               <Detail
                 label="Round"
                 value={snag.round_created ? `Round ${snag.round_created}` : "1"}
@@ -394,6 +469,13 @@ function SnagDetailDialog({
               <SnagPlanPin snag={snag} plans={plans} />
             </div>
 
+            {/* FR-8.05 — the whole journey, so a reviewer can see that
+                this is the third time the defect has come back. */}
+            <div>
+              <p className="text-muted-foreground mb-2 text-xs">Status history</p>
+              <SnagHistory snagId={snag.id} />
+            </div>
+
             {snag.note ? (
               <div>
                 <p className="text-muted-foreground text-xs">Note</p>
@@ -401,37 +483,48 @@ function SnagDetailDialog({
               </div>
             ) : null}
 
-            <div>
-              <p className="text-muted-foreground mb-1.5 text-xs">
-                Evidence ({photos.length}{" "}
-                {photos.length === 1 ? "file" : "files"})
-              </p>
-              {photos.length > 0 ? (
-                <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-                  {photos.map((photo) => (
-                    <button
-                      key={photo.id}
-                      type="button"
-                      onClick={() => onOpenPhoto(photo)}
-                      className="focus-visible:ring-ring relative aspect-square overflow-hidden rounded-md border focus-visible:ring-2 focus-visible:outline-none"
-                    >
-                      <Image
-                        src={photo.signed_url as string}
-                        alt=""
-                        fill
-                        unoptimized
-                        sizes="120px"
-                        className="object-cover"
-                      />
-                    </button>
-                  ))}
-                </div>
-              ) : (
+            {/*
+              Before and after, side by side and labelled.
+
+              On a round these two answer the only question the visit
+              exists to ask, and they were rendered as one undifferentiated
+              pile — a reviewer could not tell the shot of the broken
+              handle from the shot of the repaired one. On the original
+              inspection there is no "before", so it stays a plain list.
+            */}
+            {photos.length === 0 ? (
+              <div>
+                <p className="text-muted-foreground mb-1.5 text-xs">Evidence</p>
                 <p className="text-muted-foreground flex items-center gap-2 py-4">
                   <ImageOff className="size-4" /> No photo uploaded yet.
                 </p>
-              )}
-            </div>
+              </div>
+            ) : visitRound > 1 ? (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <EvidenceGroup
+                  label="Before"
+                  hint="As the defect was raised"
+                  photos={evidence.before}
+                  onOpenPhoto={onOpenPhoto}
+                  emptyHint="No photo carried from the earlier visit."
+                />
+                <EvidenceGroup
+                  label="After"
+                  hint={`Shot on round ${visitRound}`}
+                  photos={evidence.after}
+                  onOpenPhoto={onOpenPhoto}
+                  emptyHint="Nothing shot on this round yet."
+                />
+              </div>
+            ) : (
+              <EvidenceGroup
+                label={`Evidence (${photos.length} ${photos.length === 1 ? "file" : "files"})`}
+                photos={evidence.after}
+                onOpenPhoto={onOpenPhoto}
+                emptyHint="No photo uploaded yet."
+                columns={4}
+              />
+            )}
           </div>
         ) : null}
       </DialogContent>
@@ -527,6 +620,127 @@ function Detail({ label, value }: { label: string; value: React.ReactNode }) {
     <div>
       <dt className="text-muted-foreground text-xs">{label}</dt>
       <dd className="mt-0.5">{value || "—"}</dd>
+    </div>
+  );
+}
+
+/**
+ * A captioned thumbnail in the before/after pair.
+ *
+ * Renders an explicit placeholder when the half is missing rather than
+ * collapsing, so the pair keeps its shape down the list and a defect with
+ * no after shot reads as work outstanding rather than as a layout glitch.
+ */
+function EvidenceThumb({
+  label,
+  photo,
+  snagCode,
+  onOpen,
+}: {
+  label: string;
+  photo: SnaggingPhoto | null;
+  snagCode: string;
+  onOpen: (photo: SnaggingPhoto) => void;
+}) {
+  return (
+    <figure className="flex flex-col items-center gap-0.5">
+      {photo ? (
+        <button
+          type="button"
+          onClick={() => onOpen(photo)}
+          className="focus-visible:ring-ring relative size-12 shrink-0 overflow-hidden rounded-md border focus-visible:ring-2 focus-visible:outline-none"
+          aria-label={`${label} photo for ${snagCode}`}
+        >
+          <Image
+            src={photo.signed_url as string}
+            alt=""
+            fill
+            unoptimized
+            sizes="48px"
+            className="object-cover"
+          />
+        </button>
+      ) : (
+        <span
+          className="border-muted-foreground/25 text-muted-foreground/50 flex size-12 shrink-0 items-center justify-center rounded-md border border-dashed"
+          aria-label={`No ${label.toLowerCase()} photo for ${snagCode}`}
+        >
+          <ImageOff className="size-4" aria-hidden />
+        </span>
+      )}
+      <figcaption className="text-muted-foreground text-[10px] leading-none">
+        {label}
+      </figcaption>
+    </figure>
+  );
+}
+
+/**
+ * One labelled set of evidence.
+ *
+ * Shared by the before and after columns and by the single list an
+ * original inspection shows, so all three get the same tile, the same
+ * focus ring and the same empty line — and a change to any of it lands
+ * everywhere at once.
+ */
+function EvidenceGroup({
+  label,
+  hint,
+  photos,
+  onOpenPhoto,
+  emptyHint,
+  columns = 3,
+}: {
+  label: string;
+  hint?: string;
+  photos: SnaggingPhoto[];
+  onOpenPhoto: (photo: SnaggingPhoto) => void;
+  emptyHint: string;
+  columns?: 3 | 4;
+}) {
+  const usable = photos.filter((p) => p.signed_url);
+  return (
+    <div>
+      <p className="text-muted-foreground mb-1.5 text-xs">
+        {label}
+        {hint ? <span className="text-muted-foreground/70"> · {hint}</span> : null}
+      </p>
+      {usable.length > 0 ? (
+        <div
+          className={cn(
+            "grid gap-2",
+            columns === 4 ? "grid-cols-3 sm:grid-cols-4" : "grid-cols-3",
+          )}
+        >
+          {usable.map((photo) => (
+            <button
+              key={photo.id}
+              type="button"
+              onClick={() => onOpenPhoto(photo)}
+              className="focus-visible:ring-ring relative aspect-square overflow-hidden rounded-md border focus-visible:ring-2 focus-visible:outline-none"
+            >
+              <Image
+                src={photo.signed_url as string}
+                alt=""
+                fill
+                unoptimized
+                sizes="120px"
+                className="object-cover"
+              />
+              {/* A clip and a still look identical as a poster frame. */}
+              {photo.media_type === "video" ? (
+                <span className="absolute right-1 bottom-1 rounded bg-black/65 px-1 py-0.5 text-[10px] leading-none font-medium text-white">
+                  Video
+                </span>
+              ) : null}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="text-muted-foreground/80 border-muted-foreground/20 rounded-md border border-dashed px-3 py-4 text-xs">
+          {emptyHint}
+        </p>
+      )}
     </div>
   );
 }
