@@ -4,6 +4,7 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
+import { INHERITED_SELECT, inheritedFields, type InheritableJob } from "@/lib/server/snagging/inherit";
 import { visitCode } from "@/lib/server/snagging/workflow";
 import { createVisitSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType } from "@/types/types";
@@ -37,14 +38,18 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
     const admin = await createAdminServerClient();
 
-    const { data: parent, error: parentError } = await admin
+    /*
+      The column list is shared with the other return-trip route rather
+      than spelled out here, which costs the generated row type —
+      PostgREST can only infer one from a literal string. The shape is
+      asserted back below; INHERITED_COLUMNS is what keeps them honest.
+    */
+    const { data: parentRow, error: parentError } = await admin
       .from("snagging_jobs")
-      .select(
-        `id, code, status, round_number, client_id, property_id, unit_label, building_name, community,
-         property_type, developer_name, inspector_id, approval_manager_id, scheduled_date`,
-      )
+      .select(INHERITED_SELECT)
       .eq("id", id)
       .maybeSingle();
+    const parent = parentRow as unknown as InheritableJob | null;
 
     if (parentError) throw new Error(parentError.message);
     if (!parent) return NextResponse.json({ error: "Inspection not found" }, { status: 404 });
@@ -94,6 +99,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const inspectorId =
       input.technician_ids.length > 0 ? input.technician_ids[0] : parent.inspector_id;
 
+    const scheduledDate = input.scheduled_date?.trim() || parent.scheduled_date;
+
     const { data: visit, error: visitError } = await admin
       .from("snagging_jobs")
       .insert({
@@ -103,13 +110,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         visit_charge: visitCharge,
         round_number: nextRound,
         parent_job_id: parent.id,
-        client_id: parent.client_id,
-        property_id: parent.property_id,
-        unit_label: parent.unit_label,
-        building_name: parent.building_name,
-        community: parent.community,
-        property_type: parent.property_type,
-        developer_name: parent.developer_name,
+        ...inheritedFields(parent),
         inspector_id: inspectorId,
         approval_manager_id: input.approval_manager_id ?? parent.approval_manager_id,
         scheduled_date: input.scheduled_date?.trim() || parent.scheduled_date,

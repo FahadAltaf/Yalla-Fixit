@@ -45,6 +45,7 @@ import { snaggingService } from "@/modules/snagging";
 import { usersService } from "@/modules/users/services/users-service";
 
 import { LocationMap } from "./location-map";
+import { GoogleLocationMap, hasGoogleMapsKey } from "./google-location-map";
 import {
   ActionType,
   ResourceType,
@@ -72,6 +73,18 @@ function splitAppointment(iso: string | null): { date: string; time: string } {
   if (Number.isNaN(shifted.getTime())) return { date: "", time: "" };
   const s = shifted.toISOString();
   return { date: s.slice(0, 10), time: s.slice(11, 16) };
+}
+
+// Which map the Setup tab draws. Google when a key is configured,
+// Leaflet otherwise -- so a missing env var degrades to the old map
+// rather than an empty box.
+function MapForSetupTab(props: {
+  lat: number;
+  lng: number;
+  label?: string | null;
+  className?: string;
+}) {
+  return hasGoogleMapsKey() ? <GoogleLocationMap {...props} /> : <LocationMap {...props} />;
 }
 
 /**
@@ -418,7 +431,12 @@ export function JobSetupPanel({
           <div className="flex min-w-0 flex-col space-y-3">
             <SubHeading>Location</SubHeading>
             {property?.location_lat && property?.location_lng ? (
-              <LocationMap
+              // Google Maps here only -- this Setup tab is the one place the
+              // team asked for it. Every other map in the app (the picker,
+              // the snag GPS links) stays on Leaflet. Falls back to Leaflet
+              // when no key is configured, so a missing env var degrades to
+              // the old map rather than an empty box.
+              <MapForSetupTab
                 className="flex-1"
                 lat={property.location_lat}
                 lng={property.location_lng}

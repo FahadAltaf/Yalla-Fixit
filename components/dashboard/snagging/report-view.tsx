@@ -20,7 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
-import { hasResourceAction } from "@/lib/role-permissions";
+import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { elementToPdfBlob } from "@/lib/snagging/report-pdf";
 import { snaggingService, type SnaggingQuotation } from "@/modules/snagging";
 import { ActionType, ResourceType, type SnaggingTask } from "@/types/types";
@@ -49,7 +49,8 @@ export function ReportView({ taskId }: { taskId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [deliverOpen, setDeliverOpen] = useState(false);
-  const [channel, setChannel] = useState<(typeof CHANNELS)[number]["key"]>("email");
+  const [channel, setChannel] =
+    useState<(typeof CHANNELS)[number]["key"]>("email");
   const [recipient, setRecipient] = useState("");
   const [reportUrl, setReportUrl] = useState<string | null>(null);
 
@@ -68,7 +69,9 @@ export function ReportView({ taskId }: { taskId: string }) {
       // Kept on screen with a retry: a toast that has faded leaves this
       // page reading as "this inspection could not be found", which sends
       // a coordinator hunting for a report that exists.
-      setError(err instanceof Error ? err.message : "Could not load the inspection");
+      setError(
+        err instanceof Error ? err.message : "Could not load the inspection",
+      );
     } finally {
       setLoading(false);
     }
@@ -78,7 +81,18 @@ export function ReportView({ taskId }: { taskId: string }) {
     void load();
   }, [load]);
 
-  const canDeliver = hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.APPROVE);
+  /*
+    Delivering runs through the same guard as approving: only this job's
+    named approval manager, or an admin. Following the permission alone
+    would offer a button the server answers with a 403.
+  */
+  const canDeliver =
+    hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.APPROVE) &&
+    (isAdminUser(userProfile) ||
+      Boolean(
+        task?.approval_manager_id &&
+        userProfile?.id === task.approval_manager_id,
+      ));
 
   async function downloadPdf() {
     if (!reportRef.current || !task) return;
@@ -91,7 +105,10 @@ export function ReportView({ taskId }: { taskId: string }) {
       saveAs(blob, `${task.code}-snagging-report.pdf`);
       toast.success("PDF downloaded", { id: t });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not generate the PDF", { id: t });
+      toast.error(
+        error instanceof Error ? error.message : "Could not generate the PDF",
+        { id: t },
+      );
     } finally {
       setBusy(false);
     }
@@ -109,11 +126,17 @@ export function ReportView({ taskId }: { taskId: string }) {
         recipient: recipient.trim(),
       });
       setReportUrl(res.report_url);
-      toast.success(res.email_sent ? "Report emailed to the client" : "Report link ready to share");
+      toast.success(
+        res.email_sent
+          ? "Report emailed to the client"
+          : "Report link ready to share",
+      );
       setDeliverOpen(false);
       await load();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not deliver the report");
+      toast.error(
+        error instanceof Error ? error.message : "Could not deliver the report",
+      );
     } finally {
       setBusy(false);
     }
@@ -132,7 +155,16 @@ export function ReportView({ taskId }: { taskId: string }) {
   if (loading) {
     return (
       <div className="flex flex-col gap-4">
-        <Skeleton className="h-9 w-40" />
+        {/* The toolbar is a justify-between row -- back link on the left,
+            Print and export on the right. A single left-hand bar let the
+            right-hand buttons pop in once the report loaded. */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <Skeleton className="h-9 w-40" />
+          <div className="flex flex-wrap items-center gap-2">
+            <Skeleton className="h-9 w-24 rounded-full" />
+            <Skeleton className="h-9 w-32 rounded-full" />
+          </div>
+        </div>
         <Skeleton className="h-[600px] w-full max-w-[794px]" />
       </div>
     );
@@ -152,7 +184,9 @@ export function ReportView({ taskId }: { taskId: string }) {
   if (!task) {
     return (
       <Card className="p-8 text-center">
-        <p className="text-muted-foreground">This inspection could not be found.</p>
+        <p className="text-muted-foreground">
+          This inspection could not be found.
+        </p>
       </Card>
     );
   }
@@ -178,7 +212,11 @@ export function ReportView({ taskId }: { taskId: string }) {
         </Button>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" onClick={() => window.print()} disabled={busy}>
+          <Button
+            variant="outline"
+            onClick={() => window.print()}
+            disabled={busy}
+          >
             <Printer className="size-4" />
             Print
           </Button>
@@ -190,7 +228,8 @@ export function ReportView({ taskId }: { taskId: string }) {
           >
             Download PDF
           </SubmitButton>
-          {canDeliver && (task.status === "approved" || task.status === "delivered") ? (
+          {canDeliver &&
+          (task.status === "approved" || task.status === "delivered") ? (
             <Button onClick={() => setDeliverOpen(true)} disabled={busy}>
               <Send className="size-4" />
               {task.status === "delivered" ? "Re-issue link" : "Deliver report"}
@@ -201,14 +240,17 @@ export function ReportView({ taskId }: { taskId: string }) {
 
       {notReady ? (
         <div className="snag-report-noprint border-warning/30 bg-warning/5 rounded-md border px-4 py-2 text-sm">
-          This inspection is not finished yet — the report reflects only what has been captured so
-          far.
+          This inspection is not finished yet — the report reflects only what
+          has been captured so far.
         </div>
       ) : null}
       {task.status === "delivered" ? (
         <div className="snag-report-noprint border-success/30 bg-success/5 flex flex-col gap-2 rounded-md border px-4 py-2 text-sm">
           <div>
-            Delivered {task.delivered_at ? new Date(task.delivered_at).toLocaleDateString() : ""}
+            Delivered{" "}
+            {task.delivered_at
+              ? new Date(task.delivered_at).toLocaleDateString()
+              : ""}
             {task.delivery_recipient ? ` to ${task.delivery_recipient}` : ""}
             {task.delivery_channel ? ` · ${task.delivery_channel}` : ""}.
           </div>
@@ -217,7 +259,11 @@ export function ReportView({ taskId }: { taskId: string }) {
               <code className="bg-muted min-w-0 flex-1 truncate rounded px-2 py-1 text-xs">
                 {reportUrl}
               </code>
-              <Button size="sm" variant="outline" onClick={() => void copyLink()}>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void copyLink()}
+              >
                 <Copy className="size-3.5" />
                 Copy link
               </Button>
@@ -246,9 +292,10 @@ export function ReportView({ taskId }: { taskId: string }) {
           <DialogHeader>
             <DialogTitle>Deliver report to client</DialogTitle>
             <DialogDescription>
-              Generates a private client link and moves the job to delivered. On the email channel
-              the client is emailed the moment you confirm — that cannot be taken back. On the other
-              channels, copy the link and send it yourself.
+              Generates a private client link and moves the job to delivered. On
+              the email channel the client is emailed the moment you confirm —
+              that cannot be taken back. On the other channels, copy the link
+              and send it yourself.
             </DialogDescription>
           </DialogHeader>
 
@@ -281,7 +328,11 @@ export function ReportView({ taskId }: { taskId: string }) {
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDeliverOpen(false)} disabled={busy}>
+            <Button
+              variant="outline"
+              onClick={() => setDeliverOpen(false)}
+              disabled={busy}
+            >
               Cancel
             </Button>
             <SubmitButton
@@ -291,7 +342,9 @@ export function ReportView({ taskId }: { taskId: string }) {
               pendingLabel={channel === "email" ? "Emailing…" : "Delivering…"}
               icon={<Send className="size-4" />}
             >
-              {channel === "email" ? "Email the report now" : "Confirm delivery"}
+              {channel === "email"
+                ? "Email the report now"
+                : "Confirm delivery"}
             </SubmitButton>
           </DialogFooter>
         </DialogContent>

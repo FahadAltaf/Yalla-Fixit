@@ -114,11 +114,7 @@ export enum ResourceType {
 }
 
 export type TodoStatus =
-  | "todo"
-  | "in_progress"
-  | "done"
-  | "canceled"
-  | "blocked";
+  "todo" | "in_progress" | "done" | "canceled" | "blocked";
 
 export type TodoRelatedType = "work_order" | "quotation" | "appointment";
 
@@ -188,7 +184,7 @@ export const TODO_STATUS_LABELS: Record<TodoStatus, string> = {
 };
 
 export interface Attachment {
-  "$file_id": string;
+  $file_id: string;
   File_Name: string;
 }
 
@@ -299,12 +295,15 @@ export type SnaggingTaskType = "single_unit" | "full_building";
 /** Which kind of visit a job is (Q1-Q6). */
 export type SnaggingVisitType = "initial" | "desnag" | "additional";
 
-export type SnaggingPropertyType = "apartment" | "villa" | "townhouse" | "commercial";
+export type SnaggingPropertyType =
+  "apartment" | "villa" | "townhouse" | "commercial";
 
-export type SnaggingServiceTier = "essential" | "comfort" | "full" | "b2b_building";
+export type SnaggingServiceTier =
+  "essential" | "comfort" | "full" | "b2b_building";
 
 /** §5.3 — each category carries its own remediation path and SLA. */
-export type SnaggingRejectionCategory = "minor" | "data_correction" | "critical";
+export type SnaggingRejectionCategory =
+  "minor" | "data_correction" | "critical";
 
 /** §5.2 — the persistent snag status model. */
 export type SnaggingSnagStatus =
@@ -399,7 +398,8 @@ export interface SnaggingArea {
   access_reason?: string | null;
 }
 
-export type SnaggingAreaAccessState = "accessible" | "not_accessible" | "limited_access";
+export type SnaggingAreaAccessState =
+  "accessible" | "not_accessible" | "limited_access";
 
 export interface SnaggingPhoto {
   id: string;
@@ -468,7 +468,10 @@ export interface SnaggingAssignee {
   task_id: string;
   user_id: string;
   role: "technician" | "supervisor";
-  user_profile?: Pick<User, "id" | "full_name" | "email" | "profile_image"> | null;
+  user_profile?: Pick<
+    User,
+    "id" | "full_name" | "email" | "profile_image"
+  > | null;
 }
 
 export interface SnaggingApprovalAction {
@@ -518,6 +521,15 @@ export interface SnaggingTask {
   client_contact_phone?: string | null;
   supervisor_id?: string | null;
   approval_manager_id?: string | null;
+  /**
+   * Joined from approval_manager_id, so a screen can name who has to
+   * sign an inspection off rather than only knowing that somebody must.
+   */
+  manager?: {
+    id: string;
+    full_name?: string | null;
+    email?: string | null;
+  } | null;
   notes?: string | null;
   catalogue_version: string;
   locked: boolean;
@@ -573,7 +585,8 @@ export interface SnaggingSubmission {
   signature_url?: string | null;
 }
 
-export type SnaggingChecklistStatus = "pending" | "passed" | "failed" | "not_checked";
+export type SnaggingChecklistStatus =
+  "pending" | "passed" | "failed" | "not_checked";
 
 export interface SnaggingChecklistItem {
   id: string;
@@ -654,7 +667,11 @@ export interface SnaggingAnalytics {
    * FR-10.01 — every status the jobs raised in the period sit in, with
    * the movement against the window before it.
    */
-  byStatus: Array<{ status: SnaggingTaskStatus; count: number; trend: number | null }>;
+  byStatus: Array<{
+    status: SnaggingTaskStatus;
+    count: number;
+    trend: number | null;
+  }>;
   /**
    * FR-10.01 — the review queue by submission time. Live, not scoped to
    * the date range: a queue filtered by an arbitrary window would show a
@@ -663,7 +680,10 @@ export interface SnaggingAnalytics {
   reviewQueue: {
     total: number;
     oldestSubmittedAt: string | null;
-    buckets: Array<{ bucket: "under_24h" | "h24_48" | "over_48h"; count: number }>;
+    buckets: Array<{
+      bucket: "under_24h" | "h24_48" | "over_48h";
+      count: number;
+    }>;
   };
   /**
    * FR-10.01 — jobs completed, counted at approval.

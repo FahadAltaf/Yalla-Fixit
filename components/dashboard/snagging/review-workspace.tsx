@@ -107,11 +107,19 @@ export default function ReviewWorkspace() {
         <Card className="gap-0 self-start p-0">
           <p className="eyebrow px-4 pt-4 pb-2">Queue · {queue.length}</p>
           {loadingQueue ? (
-            <div className="space-y-2 p-4">
-              {Array.from({ length: 3 }).map((_, index) => (
-                <Skeleton key={index} className="h-12 w-full" />
+            // Real queue rows are edge-to-edge and bordered with two
+            // lines of text -- not free-floating bars inside p-4 padding.
+            <ul className="border-t">
+              {Array.from({ length: 4 }).map((_, index) => (
+                <li
+                  key={index}
+                  className="space-y-2 border-b border-l-2 border-l-transparent px-4 py-3 last:border-b-0"
+                >
+                  <Skeleton className="h-3 w-20" />
+                  <Skeleton className="h-4 w-3/4" />
+                </li>
               ))}
-            </div>
+            </ul>
           ) : queueError ? (
             <div className="p-4">
               <ErrorState

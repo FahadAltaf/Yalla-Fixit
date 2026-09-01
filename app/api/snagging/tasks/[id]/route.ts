@@ -4,6 +4,7 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
+import { byCreation } from "@/lib/snagging/creation-order";
 import { loadJobFamily } from "@/lib/server/snagging/job-family";
 import { signMediaPaths } from "@/lib/server/snagging/media";
 import { assertTransition } from "@/lib/server/snagging/workflow";
@@ -49,18 +50,37 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     if (error) throw new Error(error.message);
     if (!job) return NextResponse.json({ error: "Inspection not found" }, { status: 404 });
 
-    const { data: checklist, error: checklistError } = await admin
-      .from("snagging_job_checklist")
-      .select("id, code, group_name, label, mandatory, status, reason, sort_order")
-      .eq("job_id", id)
-      .order("sort_order", { ascending: true });
-    if (checklistError) throw new Error(checklistError.message);
+    /*
+      Ordered by creation, in code rather than in the query.
 
-    // FR-9.03 — an additional visit is a return to the same property, so
-    // what it finds belongs to the original inspection record rather
-    // than to a report of its own. Its snags are read alongside this
-    // job's; a de-snag round keeps its own list, because a round is a
-    // re-verification of defects already reported.
+      snagging_job_checklist gained created_at in a later migration, so a
+      SQL `order("created_at")` would be a 400 on any environment that has
+      not run it yet and would take the whole job record down with it.
+      Selecting the row and sorting here works either way, and starts
+      ordering by creation the moment the column exists.
+
+      See byCreation for why sort_order still breaks the tie.
+    */
+    const { data: checklistRows, error: checklistError } = await admin
+      .from("snagging_job_checklist")
+      .select("*")
+      .eq("job_id", id);
+    if (checklistError) throw new Error(checklistError.message);
+    const checklist = byCreation(checklistRows ?? []);
+
+    /*
+      Which jobs' snags this record shows.
+
+      FR-9.03 — an additional visit is a return to the same property, so
+      what it finds belongs to the original inspection record rather than
+      to a report of its own. Its snags are read alongside the parent's.
+
+      A de-snag round keeps its own list: it is a re-verification pass,
+      and its rows carry the verdicts given during that round. The row
+      that survives as the defect's lasting record is the parent's — the
+      round writes its verdict through to it (BRD 5.2), so the two never
+      disagree even though both exist.
+    */
     const family = await loadJobFamily(admin, id);
     const snagJobIds =
       id === family.rootId ? [id, ...family.additionalVisitIds] : [id];
@@ -91,9 +111,11 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       };
     });
 
-    const areas = ((job.areas ?? []) as Array<{ sort_order: number }>)
-      .slice()
-      .sort((a, b) => a.sort_order - b.sort_order);
+    // Creation order, with sort_order breaking the tie for the rooms a
+    // job is set up with, which are all written in one batch.
+    const areas = byCreation(
+      (job.areas ?? []) as Array<{ created_at?: string | null; sort_order?: number | null }>,
+    );
 
     const client = firstOf(job.client as { name?: string; email?: string; phone?: string } | null);
     const inspector = firstOf(

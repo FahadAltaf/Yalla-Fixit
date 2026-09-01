@@ -27,12 +27,38 @@ import { SectionCard, StatCard, StatCardGrid, SubHeading } from "./shared";
 export function ChecklistPanel({ task }: { task: SnaggingTask }) {
   const items = task.checklist ?? [];
 
-  const answered = items.filter((item) => item.status !== "pending").length;
+  /*
+    An item is answered when it is not pending — and, on a round, when it is
+    not sitting at a carried failure either.
+
+    Counting a carried "failed" as answered made the tab read
+    "47 / 47 · Complete · 100%" over a list of twenty-five checks nobody
+    had been back to. The number a reviewer trusts has to agree with the
+    re-check group directly beneath it.
+  */
+  const isRound = (task.round_number ?? 1) > 1;
+  const outstanding = (item: SnaggingChecklistItem) =>
+    item.status === "pending" ||
+    (isRound && (item.status === "failed" || item.status === "not_checked"));
+
+  const answered = items.filter((item) => !outstanding(item)).length;
   const mandatory = items.filter((item) => item.mandatory);
-  const mandatoryDone = mandatory.filter(
-    (item) => item.status !== "pending",
-  ).length;
+  const mandatoryDone = mandatory.filter((item) => !outstanding(item)).length;
   const failed = items.filter((item) => item.status === "failed").length;
+
+  /*
+    What this round is going back for.
+
+    A round carries the previous visit's answers, so an item sitting at
+    failed or not-checked is the checklist half of the outstanding work --
+    the same standing as a snag that was not fixed. It was buried in its
+    alphabetical group among forty items that had already passed, which
+    left the office reading the round as "snags only" and the failed
+    checks quietly unaddressed.
+  */
+  const needsRecheck = items.filter(
+    (item) => item.status === "failed" || item.status === "not_checked",
+  );
 
   const groups = new Map<string, SnaggingChecklistItem[]>();
   for (const item of items) {
@@ -103,6 +129,41 @@ export function ChecklistPanel({ task }: { task: SnaggingTask }) {
               />
             </StatCardGrid>
           </div>
+
+          {isRound && needsRecheck.length > 0 ? (
+            <div className="border-t px-5 py-4">
+              <SubHeading count={needsRecheck.length} className="mb-2">
+                Carried in to re-check
+              </SubHeading>
+              <p className="text-muted-foreground mb-3 text-xs">
+                Failed or not checked on the previous visit. Each has to be
+                answered again on this round before it can be signed off.
+              </p>
+              <ul className="divide-y">
+                {needsRecheck.map((item) => (
+                  <li
+                    key={`recheck-${item.id}`}
+                    className="flex items-start gap-3 py-2 text-sm"
+                  >
+                    <span className="min-w-0 flex-1">
+                      {item.label}
+                      {item.mandatory ? (
+                        <span className="text-danger" title="Mandatory">
+                          {" "}
+                          *
+                        </span>
+                      ) : null}
+                      <span className="text-muted-foreground block text-xs">
+                        {item.group_name}
+                        {item.reason ? ` — ${item.reason}` : ""}
+                      </span>
+                    </span>
+                    <StatusPill status={item.status} />
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
 
           <div className="divide-y">
             {[...groups.entries()].map(([group, list]) => (

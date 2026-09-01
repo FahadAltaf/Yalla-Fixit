@@ -34,6 +34,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import TimeSelect from "@/components/ui/time-select";
 import { PhoneInput } from "@/components/ui/phone-input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -1564,10 +1565,16 @@ function AssignStep({
         </Field>
 
         <Field label="Appointment time">
-          <Input
-            type="time"
+          {/* The design-system picker rather than <input type="time">,
+              whose popup is drawn by the browser and matched nothing
+              else on the form. Steps in 30 minutes, in step with how
+              the scheduling board books; an off-step time already on a
+              record stays selectable. */}
+          <TimeSelect
             value={draft.appointment_time}
-            onChange={(event) => set("appointment_time", event.target.value)}
+            onChange={(value) => set("appointment_time", value)}
+            placeholder="Select a time"
+            aria-label="Appointment time"
           />
         </Field>
       </div>

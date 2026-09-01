@@ -419,11 +419,26 @@ async function applyVerification(admin: Admin, ctx: Ctx, payload: Record<string,
   const allowed: SnaggingVerdict[] = ["verified_closed", "verified_poor_quality", "verified_not_done", "withdrawn"];
   if (!allowed.includes(verdict)) throw new Error(`Unknown verdict ${verdict}`);
 
+  const status = statusFromVerdict(verdict);
+  const snagId = payload.snag_id as string;
+
   const { error } = await admin
     .from("snagging_snags")
-    .update({ status: statusFromVerdict(verdict) })
-    .eq("id", payload.snag_id as string);
+    .update({ status })
+    .eq("id", snagId);
   if (error) throw new Error(error.message);
+
+  /*
+    BRD 5.2 — the defect is one lasting record, and the round's row is a
+    working copy of it. Writing the verdict only onto the copy left the
+    original sitting open forever, so the parent still claimed three open
+    defects after a round closed all three, and the status history a
+    developer is measured on was split across two rows.
+
+    The pair is matched on snag_code, which the round copies verbatim and
+    which is unique within a job.
+  */
+  await writeVerdictThroughToOrigin(admin, snagId, status);
 
   // A verdict closes or re-opens a defect on the record, so it is a
   // status change in its own right.
@@ -442,24 +457,56 @@ async function applySubmission(admin: Admin, ctx: Ctx, payload: Record<string, u
   const job = writableJob(ctx, payload.task_id);
 
   // Every snag must carry at least one photo, and every mandatory checklist
-  // item must be answered, before the visit can close (BR-5, BR-12).
-  const [snagRows, photoRows, checklistRows] = await Promise.all([
-    admin.from("snagging_snags").select("id, snag_code").eq("job_id", job.id).neq("status", "withdrawn"),
-    admin.from("snagging_snag_photos").select("snag_id").eq("job_id", job.id),
-    admin.from("snagging_job_checklist").select("code, status, reason").eq("job_id", job.id).eq("mandatory", true),
+  // item must be answered, before the visit can close (BR-5, BR-12). A
+  // de-snag round asks for more than that -- see the after-photo rule below.
+  const [visit, snagRows, photoRows, checklistRows] = await Promise.all([
+    admin
+      .from("snagging_jobs")
+      .select("round_number, visit_type, created_at")
+      .eq("id", job.id)
+      .maybeSingle(),
+    admin.from("snagging_snags").select("id, snag_code, status").eq("job_id", job.id).neq("status", "withdrawn"),
+    admin.from("snagging_snag_photos").select("snag_id, round_number").eq("job_id", job.id),
+    admin
+      .from("snagging_job_checklist")
+      .select("code, status, reason, updated_at")
+      .eq("job_id", job.id)
+      .eq("mandatory", true),
   ]);
+  // Unchecked, a failure here left `visit.data` null, which quietly turned
+  // the round rules below into the rules for an initial inspection.
+  if (visit.error) throw new Error(visit.error.message);
   if (snagRows.error) throw new Error(snagRows.error.message);
   if (photoRows.error) throw new Error(photoRows.error.message);
   if (checklistRows.error) throw new Error(checklistRows.error.message);
 
-  // FR-4.13 / FR-4.15 (BRD §8): a mandatory item is only "answered" when it is
-  // passed, failed, or explicitly marked not-checked WITH a reason. A pending
-  // item, or a not-checked item with no reason, still blocks submission.
-  const pendingChecks = (checklistRows.data ?? []).filter((c) => {
-    if (c.status === "pending") return true;
-    if (c.status === "not_checked") return !(c.reason && String(c.reason).trim().length > 0);
-    return false;
-  });
+  /*
+    FR-4.13 / FR-4.15 (BRD §8): a mandatory item is only "answered" when it is
+    passed, failed, or explicitly marked not-checked WITH a reason. A pending
+    item, or a not-checked item with no reason, still blocks submission.
+
+    A de-snag round is exempt. Its checklist is carried context rather than
+    a fresh set of questions, and a re-check that genuinely cannot be done
+    on the day — a room still locked, a service still not energised — must
+    not strand the inspector with a round they are unable to submit. The
+    app shows what is outstanding as an advisory; the office sees it on the
+    Checklist tab. Nothing is hidden, but it does not hold the sign-off.
+
+    Kept in step with the mobile review screen deliberately: a rule the
+    client does not enforce and the server does is a submission that fails
+    after the inspector has signed and left.
+  */
+  const isRound = (visit.data?.visit_type ?? "initial") === "desnag";
+
+  const pendingChecks = isRound
+    ? []
+    : (checklistRows.data ?? []).filter((c) => {
+        if (c.status === "pending") return true;
+        if (c.status === "not_checked") {
+          return !(c.reason && String(c.reason).trim().length > 0);
+        }
+        return false;
+      });
   if (pendingChecks.length > 0) {
     throw new Error(
       `${pendingChecks.length} mandatory checklist item(s) still need an answer (or a reason for not checking)`,
@@ -471,6 +518,52 @@ async function applySubmission(admin: Admin, ctx: Ctx, payload: Record<string, u
   if (missing.length > 0) {
     const sample = missing.slice(0, 3).map((s) => s.snag_code).join(", ");
     throw new Error(`${missing.length} snag(s) still have no photo uploaded (${sample}${missing.length > 3 ? ", …" : ""})`);
+  }
+
+  /*
+    BR-5 on a de-snag round: the verdict needs an AFTER photo, not just a
+    photo.
+
+    "Every snag has a photo" was enough while a round carried no evidence
+    with it — the only way to satisfy it was to shoot the defect again.
+    Now that a round carries the original shot forward so the inspector
+    can see what they are re-checking, that same rule would pass on the
+    before photo alone, and "verified, closed" could be recorded with no
+    picture of the fix. So a round asks for a photo taken on THIS round.
+
+    A defect still sitting at pending_verification is held to it too. It
+    was carried in precisely to be re-checked, so submitting a round with
+    it untouched closes a visit that never answered the question it was
+    opened to ask.
+
+    Withdrawn is already excluded above — the client dropped the item, so
+    there is nothing to photograph.
+
+    A video counts: both are rows in snagging_snag_photos, and a
+    walkthrough clip is often the better evidence of a fix.
+  */
+  const round = (visit.data?.round_number as number | null) ?? 1;
+  if (visit.data?.visit_type === "desnag" && round > 1) {
+    const shotThisRound = new Set(
+      (photoRows.data ?? [])
+        .filter((r) => ((r.round_number as number | null) ?? 1) === round)
+        .map((r) => r.snag_id),
+    );
+    const ruled = new Set([
+      "verified_closed",
+      "verified_poor_quality",
+      "verified_not_done",
+      "pending_verification",
+    ]);
+    const unevidenced = (snagRows.data ?? []).filter(
+      (s) => ruled.has(s.status as string) && !shotThisRound.has(s.id),
+    );
+    if (unevidenced.length > 0) {
+      const sample = unevidenced.slice(0, 3).map((s) => s.snag_code).join(", ");
+      throw new Error(
+        `${unevidenced.length} carried defect(s) still need an after photo or video from this round (${sample}${unevidenced.length > 3 ? ", …" : ""})`,
+      );
+    }
   }
 
   const submittedAt = new Date().toISOString();
@@ -533,4 +626,38 @@ function toNumber(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * Applies a round's verdict to the defect's lasting record on the parent.
+ *
+ * Silent when there is nothing to write through — a defect first found
+ * during the round has no earlier row, which is normal (FR-8.04).
+ */
+async function writeVerdictThroughToOrigin(
+  admin: Admin,
+  snagId: string,
+  status: string,
+): Promise<void> {
+  const { data: copy, error: copyError } = await admin
+    .from("snagging_snags")
+    .select("snag_code, job:job_id(parent_job_id, visit_type)")
+    .eq("id", snagId)
+    .maybeSingle();
+  if (copyError) throw new Error(copyError.message);
+
+  const job = (Array.isArray(copy?.job) ? copy?.job[0] : copy?.job) as
+    | { parent_job_id: string | null; visit_type: string | null }
+    | undefined;
+
+  // Only a de-snag round re-verifies an earlier defect. An additional
+  // visit finds new ones, and its snags are already the original.
+  if (!copy || !job?.parent_job_id || job.visit_type !== "desnag") return;
+
+  const { error } = await admin
+    .from("snagging_snags")
+    .update({ status })
+    .eq("job_id", job.parent_job_id)
+    .eq("snag_code", copy.snag_code);
+  if (error) throw new Error(error.message);
 }

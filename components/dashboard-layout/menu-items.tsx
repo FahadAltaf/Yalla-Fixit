@@ -132,11 +132,11 @@ export const baseSectionsItems: MenuItem[] = [
         url: "/snagging/jobs/new",
         resource: ResourceType.SNAGGING,
       },
-      {
-        title: "Review",
-        url: "/snagging/review",
-        resource: ResourceType.SNAGGING,
-      },
+      // {
+      //   title: "Review",
+      //   url: "/snagging/review",
+      //   resource: ResourceType.SNAGGING,
+      // },
       {
         title: "Pricing",
         url: "/snagging/pricing",

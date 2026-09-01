@@ -18,7 +18,7 @@ import StatusBadge from "@/components/ui/status-badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dialog";
 import { AlertTriangle, ExternalLink, Loader2, RefreshCw, Trash2 } from "lucide-react";
-import TimeSelect, { formatTimeAmPm } from "./time-select";
+import TimeSelect, { formatTimeAmPm } from "@/components/ui/time-select";
 import { resolveShift, shiftWindowLabel, fsmRecordUrl } from "./shift-utils";
 
 function firstProfile(p: ScheduleEntry["created_by_user"]) {

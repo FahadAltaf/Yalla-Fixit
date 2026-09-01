@@ -24,6 +24,7 @@ const TIME_OPTIONS = (() => {
 
 export function formatTimeAmPm(hhmm: string) {
   const [h, min] = hhmm.split(":").map(Number);
+  if (!Number.isFinite(h) || !Number.isFinite(min)) return "";
   const ampm = h < 12 ? "AM" : "PM";
   const h12 = h % 12 === 0 ? 12 : h % 12;
   return `${h12}:${String(min).padStart(2, "0")} ${ampm}`;
@@ -33,11 +34,14 @@ export default function TimeSelect({
   value,
   onChange,
   className,
+  placeholder = "Select a time",
   "aria-label": ariaLabel,
 }: {
   value: string;
   onChange: (value: string) => void;
   className?: string;
+  /** Shown when no time is set yet; the value stays "". */
+  placeholder?: string;
   "aria-label"?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -45,7 +49,9 @@ export default function TimeSelect({
   const rootRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const known = TIME_OPTIONS.some((o) => o.value === value);
+  // An off-step value (07:40 from an older record) is kept selectable by
+  // slotting it into the list; an empty value simply has no option.
+  const known = !value || TIME_OPTIONS.some((o) => o.value === value);
   const options = known
     ? TIME_OPTIONS
     : [{ value, label: formatTimeAmPm(value) }, ...TIME_OPTIONS].sort((a, b) => a.value.localeCompare(b.value));
@@ -96,7 +102,9 @@ export default function TimeSelect({
           className,
         )}
       >
-        <span>{formatTimeAmPm(value)}</span>
+        <span className={cn(!value && "text-muted-foreground")}>
+          {value ? formatTimeAmPm(value) : placeholder}
+        </span>
         <ChevronDown className="size-4 opacity-60" />
       </button>
 

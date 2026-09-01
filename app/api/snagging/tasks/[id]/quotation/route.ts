@@ -4,6 +4,7 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { emailService } from "@/lib/email-service";
+import { emailMasthead } from "@/lib/email-brand";
 import { recordAudit } from "@/lib/server/snagging/audit";
 import {
   computeQuotation,
@@ -452,8 +453,7 @@ function quotationEmailHtml(o: {
 }): string {
   return `
   <div style="font-family:Arial,Helvetica,sans-serif;color:#1f2937;max-width:560px;margin:0 auto">
-    <div style="font-size:20px;font-weight:800;color:#9f2b23">YALLA FIX IT</div>
-    <div style="font-size:12px;color:#6b7280;margin-bottom:18px">Property Care · Snagging</div>
+    ${emailMasthead()}
     <p>Dear ${escapeHtml(o.clientName)},</p>
     <p>Please find attached your snagging inspection quotation <strong>#${escapeHtml(o.quoteNumber)}</strong>
        for <strong>${escapeHtml(o.unit)}</strong>. The total is <strong>${escapeHtml(o.total)}</strong>.</p>

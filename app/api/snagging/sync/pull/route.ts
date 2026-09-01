@@ -71,9 +71,14 @@ export async function GET(req: NextRequest) {
       .from("snagging_jobs")
       .select(
         `id, code, status, round_number, visit_type, visit_charge, parent_job_id, scheduled_date, notes,
-         locked, rejection_reason, rejection_category, remediation_due_at, updated_at,
+         locked, rejection_reason, rejection_category, remediation_due_at, updated_at, created_at,
          unit_label, building_name, community, property_type, developer_name,
+         appointment_at, bedrooms, built_up_area_sqft, plot_area_sqft, floors,
+         external_areas_in_scope, location_lat, location_lng, noc_required,
+         developer_contact_name, developer_contact_phone,
+         client_contact_name, client_contact_phone,
          floor_plan_path, floor_plan_width, floor_plan_height,
+         property_record:property_id(*),
          client:client_id(name, email, phone),
          inspector:inspector_id(full_name, email)`,
       )
@@ -86,6 +91,16 @@ export async function GET(req: NextRequest) {
       const j = job as JobRow;
       const client = firstOf(j.client);
       const insp = firstOf(j.inspector);
+      /*
+        BR-1 — the property record is canonical and the job carries a
+        snapshot for anything raised before the link existed. The portal
+        already resolved it this way; the app was reading the snapshot
+        only, which is why a unit with a pinned location still reached
+        the phone with no coordinates.
+      */
+      const rec = firstOf(j.property_record) as Record<string, unknown> | null;
+      const pick = (key: string) =>
+        (rec?.[key] ?? (j as unknown as Record<string, unknown>)[key]) ?? null;
       const team = [insp?.full_name || insp?.email].filter((n): n is string => Boolean(n));
       return {
         id: j.id,
@@ -104,17 +119,46 @@ export async function GET(req: NextRequest) {
         rejection_reason: j.rejection_reason,
         remediation_due_at: j.remediation_due_at,
         updated_at: j.updated_at,
+        // When the job was raised. The device sorts its list on this, so
+        // a job never moves just because something about it changed.
+        created_at: j.created_at,
+        /*
+          Everything an inspector needs to find the unit, get into it and
+          call someone when they cannot.
+
+          This used to stop at the unit label and the client's name, so
+          the app could say which flat but not where it was, who to ring
+          at the gate, or how big the place they were about to walk is.
+          The columns were already on the job; only the wire shape was
+          short.
+        */
         property: {
           client_name: client?.name ?? "",
           client_email: client?.email ?? null,
           client_phone: client?.phone ?? null,
-          unit_label: j.unit_label,
-          building_name: j.building_name,
-          community: j.community,
+          unit_label: pick("unit_label"),
+          building_name: pick("building_name"),
+          community: pick("community"),
           city: "Dubai",
-          property_type: j.property_type,
-          developer_name: j.developer_name,
+          property_type: pick("property_type"),
+          developer_name: pick("developer_name"),
+          bedrooms: pick("bedrooms"),
+          built_up_area_sqft: pick("built_up_area_sqft"),
+          plot_area_sqft: pick("plot_area_sqft"),
+          floors: pick("floors"),
+          external_areas_in_scope: pick("external_areas_in_scope"),
+          // FR-3.03 — the two people an inspector actually calls: the
+          // developer's rep who opens the unit and the client who owns it.
+          developer_contact_name: j.developer_contact_name,
+          developer_contact_phone: j.developer_contact_phone,
+          client_contact_name: j.client_contact_name,
+          client_contact_phone: j.client_contact_phone,
+          // Where it is, so the app can show a map instead of an address.
+          location_lat: pick("location_lat"),
+          location_lng: pick("location_lng"),
+          noc_required: pick("noc_required"),
         },
+        appointment_at: j.appointment_at,
         team,
       };
     });
@@ -133,6 +177,8 @@ export async function GET(req: NextRequest) {
       name: a.name,
       catalogue_area_code: a.catalogue_area_code,
       sort_order: a.sort_order,
+      // The device orders rooms on this, with sort_order as the tie-break.
+      created_at: a.created_at ?? null,
       status: a.status,
       note: a.note,
       confirmed_at: a.confirmed_at,
@@ -209,6 +255,7 @@ export async function GET(req: NextRequest) {
       .from("snagging_floor_plans")
       .select("id, job_id, label, storage_path, width, height, sort_order")
       .in("job_id", jobIds)
+      .order("created_at", { ascending: true })
       .order("sort_order", { ascending: true });
     if (planError) throw new Error(planError.message);
 
@@ -266,14 +313,29 @@ type JobRow = {
   rejection_category: string | null;
   remediation_due_at: string | null;
   updated_at: string;
+  created_at: string;
   unit_label: string;
   building_name: string | null;
   community: string | null;
   property_type: string | null;
   developer_name: string | null;
+  appointment_at: string | null;
+  bedrooms: number | null;
+  built_up_area_sqft: number | null;
+  plot_area_sqft: number | null;
+  floors: number | null;
+  external_areas_in_scope: boolean | null;
+  location_lat: number | null;
+  location_lng: number | null;
+  noc_required: boolean | null;
+  developer_contact_name: string | null;
+  developer_contact_phone: string | null;
+  client_contact_name: string | null;
+  client_contact_phone: string | null;
   floor_plan_path: string | null;
   floor_plan_width: number | null;
   floor_plan_height: number | null;
+  property_record: Record<string, unknown> | Record<string, unknown>[] | null;
   client: { name: string | null; email: string | null; phone: string | null } | { name: string | null; email: string | null; phone: string | null }[] | null;
   inspector: Joined;
 };

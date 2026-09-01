@@ -47,6 +47,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       .from("snagging_areas")
       .select(AREA_COLUMNS)
       .eq("job_id", id)
+      // Creation first, sort_order to break the tie within a batch.
+      .order("created_at", { ascending: true })
       .order("sort_order", { ascending: true });
     if (error) throw new Error(error.message);
     return NextResponse.json({ data: data ?? [] });

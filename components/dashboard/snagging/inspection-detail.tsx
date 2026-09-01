@@ -18,7 +18,6 @@ import type { SnaggingTask } from "@/types/types";
 import {
   ErrorState,
   FieldsSkeleton,
-  ListSkeleton,
   SectionSkeleton,
 } from "./shared";
 
@@ -102,13 +101,19 @@ export default function InspectionDetail({ taskId }: { taskId: string }) {
 
   if (loading) {
     return (
+      // Back link, then the tab row, then ONE panel -- the page shows a
+      // single tab at a time. The old skeleton had no tab bar (so the whole
+      // row appeared and shoved the content down) and stacked two cards the
+      // page never renders together.
       <div className="flex flex-col gap-4">
         <Skeleton className="h-8 w-24" />
+        <div className="flex flex-wrap gap-1">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Skeleton key={i} className="h-8 w-24 rounded-md" />
+          ))}
+        </div>
         <SectionSkeleton>
           <FieldsSkeleton fields={6} columns={3} />
-        </SectionSkeleton>
-        <SectionSkeleton>
-          <ListSkeleton rows={6} />
         </SectionSkeleton>
       </div>
     );

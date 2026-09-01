@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
-import { hasResourceAction } from "@/lib/role-permissions";
+import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { snaggingService } from "@/modules/snagging";
 import { ActionType, ResourceType, type SnaggingTask } from "@/types/types";
 
@@ -72,12 +72,44 @@ export function InspectionHeaderCard({
     ActionType.CREATE,
   );
 
+  /*
+    Who may actually decide this inspection.
+
+    All four decision endpoints — review, approve, reject, deliver —
+    refuse anyone who is not this job's named approval manager, admins
+    aside: "the `approve` permission alone is not enough" (FR-6.01).
+    The buttons used to follow only the permission, so a colleague with
+    approve rights on other jobs saw Approve here, pressed it, and got a
+    403 that read like a fault rather than a rule. They now apply the
+    same test the server does, and the card names who it waits on.
+  */
+  const isApprovalManager = Boolean(
+    task.approval_manager_id && userProfile?.id === task.approval_manager_id,
+  );
+  const canDecide =
+    canApprove && (isAdminUser(userProfile) || isApprovalManager);
+  const managerName = task.manager?.full_name ?? task.manager?.email ?? null;
+
   const snags = useMemo(() => task.snags ?? [], [task]);
   const areas = task.areas ?? [];
 
   const highCount = snags.filter((snag) => snag.severity === "high").length;
   const confirmedAreas = areas.filter((area) => area.confirmed_at).length;
   const pendingArea = areas.find((area) => !area.confirmed_at);
+
+  /*
+    What a de-snag round is measured on: the carried defects, and how many
+    of them have been given a verdict. A defect raised ON this round is not
+    counted — it is a new find, not something the round went back for.
+  */
+  const isRound = (task.round_number ?? 1) > 1;
+  const carried = snags.filter(
+    (snag) => (snag.round_created ?? 1) < (task.round_number ?? 1),
+  );
+  const carriedCount = carried.length;
+  const ruledCount = carried.filter(
+    (snag) => snag.status !== "pending_verification",
+  ).length;
   const accessIssues = areas.filter(
     (area) => area.access_state && area.access_state !== "accessible",
   );
@@ -185,7 +217,7 @@ export function InspectionHeaderCard({
       toast.success(
         `Round ${round.round_number} opened with ${round.carried_snags} snag(s)`,
       );
-      window.location.href = `/snagging/${round.id}/desnag`;
+      window.location.href = `/snagging/${round.id}?tab=snags`;
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Could not open a round",
@@ -208,7 +240,7 @@ export function InspectionHeaderCard({
                 <Badge variant="outline">Round {task.round_number}</Badge>
               ) : null}
               {task.visit_type === "additional" &&
-              (task.visit_charge ?? 0) > 0 ? (
+                (task.visit_charge ?? 0) > 0 ? (
                 <span className="text-muted-foreground text-xs">
                   Charge AED {task.visit_charge!.toLocaleString()}
                 </span>
@@ -258,7 +290,7 @@ export function InspectionHeaderCard({
                 </Link>
               </Button>
             ) : null}
-            {awaitingDecision && canApprove ? (
+            {awaitingDecision && canDecide ? (
               <>
                 <Button
                   variant="outline"
@@ -291,9 +323,21 @@ export function InspectionHeaderCard({
                   </SubmitButton>
                 )}
               </>
+            ) : awaitingDecision ? (
+              /*
+                Waiting on somebody else. Naming them turns a missing set
+                of buttons into an answer — otherwise a coordinator is
+                left wondering whether the page is broken or they simply
+                are not the person.
+              */
+              <span className="text-muted-foreground text-sm">
+                {managerName
+                  ? `Awaiting sign-off by ${managerName}`
+                  : "Awaiting sign-off by this job's approval manager"}
+              </span>
             ) : null}
             {(task.status === "approved" || task.status === "delivered") &&
-            canCreate ? (
+              canCreate ? (
               <>
                 <SubmitButton
                   variant="outline"
@@ -363,7 +407,11 @@ export function InspectionHeaderCard({
           label="Snags"
           value={snags.length}
           headline={`Across ${areas.length} ${areas.length === 1 ? "area" : "areas"}`}
-          caption="Captured on this walk"
+          /* A round's list is mostly defects carried in to be re-checked,
+             not new finds, so the caption cannot claim otherwise. */
+          caption={
+            (task.round_number ?? 1) > 1 ? "Carried in, plus new finds" : "Captured on this walk"
+          }
         />
         <StatCard
           label="High severity"
@@ -374,15 +422,39 @@ export function InspectionHeaderCard({
           caption="Severity as recorded on site"
           tone={highCount > 0 ? "bad" : "good"}
         />
-        <StatCard
-          label="Areas confirmed"
-          value={`${confirmedAreas} / ${areas.length}`}
-          headline={
-            pendingArea ? `${pendingArea.name} still pending` : "All walked"
-          }
-          caption="Rooms the inspector signed off"
-          tone={pendingArea ? "progress" : "good"}
-        />
+        {/*
+          On an initial inspection, walking every room IS the job, so the
+          rooms signed off is the progress worth showing.
+
+          On a de-snag round it is not. The round's work is the verdict on
+          each carried defect, and the inspector never confirms rooms there
+          — so this card sat at "0 / 2 · Entrance still pending" on every
+          round that ever ran, reading as work outstanding when the round
+          could be complete. A round shows what it is actually measured on.
+        */}
+        {isRound ? (
+          <StatCard
+            label="Defects re-checked"
+            value={`${ruledCount} / ${carriedCount}`}
+            headline={
+              ruledCount === carriedCount
+                ? "Every carried defect answered"
+                : `${carriedCount - ruledCount} still to check`
+            }
+            caption="Carried in from the previous visit"
+            tone={ruledCount === carriedCount ? "good" : "progress"}
+          />
+        ) : (
+          <StatCard
+            label="Areas confirmed"
+            value={`${confirmedAreas} / ${areas.length}`}
+            headline={
+              pendingArea ? `${pendingArea.name} still pending` : "All walked"
+            }
+            caption="Rooms the inspector signed off"
+            tone={pendingArea ? "progress" : "good"}
+          />
+        )}
         <StatCard
           label="Media"
           value={`${snagsWithPhoto} / ${snags.length}`}
