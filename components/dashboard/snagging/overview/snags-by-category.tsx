@@ -37,7 +37,9 @@ export function SnagsByCategory() {
     { staleMs: 600_000 },
   );
 
-  const unmapped = (data?.categories ?? []).filter((row) => !row.mapped).map((row) => row.category);
+  const unmapped = (data?.categories ?? [])
+    .filter((row) => !row.mapped)
+    .map((row) => row.category);
 
   return (
     <SectionShell
@@ -59,9 +61,18 @@ export function SnagsByCategory() {
       skeleton={<ChartSkeleton bars={6} />}
     >
       <ChartContainer config={config} className="h-64 w-full">
-        <BarChart data={data?.categories ?? []} layout="vertical" margin={{ left: 8, right: 16 }}>
+        <BarChart
+          data={data?.categories ?? []}
+          layout="vertical"
+          margin={{ left: 8, right: 16 }}
+        >
           <CartesianGrid horizontal={false} />
-          <XAxis type="number" tickLine={false} axisLine={false} allowDecimals={false} />
+          <XAxis
+            type="number"
+            tickLine={false}
+            axisLine={false}
+            allowDecimals={false}
+          />
           <YAxis
             type="category"
             dataKey="category"
@@ -82,9 +93,10 @@ export function SnagsByCategory() {
 
       {unmapped.length > 0 ? (
         <p className="text-muted-foreground mt-3 text-xs">
-          {unmapped.join(" and ")} {unmapped.length === 1 ? "has" : "have"} no defects in the
-          current catalogue yet, so {unmapped.length === 1 ? "it reads" : "they read"} as zero
-          rather than being hidden.
+          {unmapped.join(" and ")} {unmapped.length === 1 ? "has" : "have"} no
+          defects in the current catalogue yet, so{" "}
+          {unmapped.length === 1 ? "it reads" : "they read"} as zero rather than
+          being hidden.
         </p>
       ) : null}
     </SectionShell>

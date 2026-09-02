@@ -11,7 +11,13 @@ import { SectionShell, TableSkeleton } from "./section-shell";
 import { useInView, useSection } from "./use-section";
 
 type Performance = {
-  rows: Array<{ id: string; name: string; assigned: number; inProgress: number; completed: number }>;
+  rows: Array<{
+    id: string;
+    name: string;
+    assigned: number;
+    inProgress: number;
+    completed: number;
+  }>;
   rowCount: number;
 };
 

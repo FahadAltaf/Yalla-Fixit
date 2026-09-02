@@ -5,11 +5,14 @@ import { Download, Loader2 } from "lucide-react";
 import { saveAs } from "file-saver";
 
 import { InspectionReport } from "@/components/dashboard/snagging/inspection-report";
-import { elementToPdfBlob } from "@/lib/snagging/report-pdf";
+import { renderReactToPdfBlob } from "@/lib/snagging/report-pdf";
 import type { SnaggingQuotation } from "@/modules/snagging";
 import type { SnaggingTask } from "@/types/types";
 
-type ReportPayload = { task: SnaggingTask; quotation: SnaggingQuotation | null };
+type ReportPayload = {
+  task: SnaggingTask;
+  quotation: SnaggingQuotation | null;
+};
 
 /**
  * The public, login-free client report page (FR-5.04-06).
@@ -36,7 +39,9 @@ export function PublicReport({ token }: { token: string }) {
       }
       setPayload(body.data as ReportPayload);
     } catch {
-      setError("Could not load the report. Please check your connection and try again.");
+      setError(
+        "Could not load the report. Please check your connection and try again.",
+      );
     } finally {
       setLoading(false);
     }
@@ -47,10 +52,22 @@ export function PublicReport({ token }: { token: string }) {
   }, [load]);
 
   async function downloadPdf() {
-    if (!reportRef.current || !payload) return;
+    if (!payload) return;
     setBusy(true);
     try {
-      const blob = await elementToPdfBlob(reportRef.current);
+      // Rendered fresh with forPDF rather than rasterising the node on
+      // screen: the two need different vertical padding (html2canvas puts a
+      // box's background where the browser does not), which is the same
+      // split the quotation template makes.
+      const blob = await renderReactToPdfBlob(
+        <InspectionReport
+          task={payload.task}
+          quotation={payload.quotation}
+          forPDF
+        />,
+        2,
+        { footerLabel: `${payload.task.code} — Snagging inspection report` },
+      );
       saveAs(blob, `${payload.task.code}-snagging-report.pdf`);
     } catch {
       // Swallow: the client can still read the report on screen.
@@ -62,7 +79,10 @@ export function PublicReport({ token }: { token: string }) {
   if (loading) {
     return (
       <div style={centered}>
-        <Loader2 style={{ width: 28, height: 28, color: "#0f766e" }} className="animate-spin" />
+        <Loader2
+          style={{ width: 28, height: 28, color: "#0f766e" }}
+          className="animate-spin"
+        />
       </div>
     );
   }
@@ -71,15 +91,25 @@ export function PublicReport({ token }: { token: string }) {
     return (
       <div style={centered}>
         <div style={{ textAlign: "center", maxWidth: 360 }}>
-          <div style={{ fontSize: 20, fontWeight: 800, color: "#0f766e" }}>YALLA FIXIT</div>
-          <p style={{ color: "#6b7280", marginTop: 12 }}>{error ?? "Report not found."}</p>
+          <div style={{ fontSize: 20, fontWeight: 800, color: "#0f766e" }}>
+            YALLA FIXIT
+          </div>
+          <p style={{ color: "#6b7280", marginTop: 12 }}>
+            {error ?? "Report not found."}
+          </p>
         </div>
       </div>
     );
   }
 
   return (
-    <div style={{ minHeight: "100vh", background: "#f3f4f6", padding: "24px 16px" }}>
+    <div
+      style={{
+        minHeight: "100vh",
+        background: "#f3f4f6",
+        padding: "24px 16px",
+      }}
+    >
       <style>{`@media print {
         .pr-bar { display: none !important; }
         .pr-sheet { box-shadow: none !important; }
@@ -96,7 +126,9 @@ export function PublicReport({ token }: { token: string }) {
           gap: 12,
         }}
       >
-        <div style={{ fontSize: 16, fontWeight: 800, color: "#0f766e" }}>YALLA FIXIT</div>
+        <div style={{ fontSize: 16, fontWeight: 800, color: "#0f766e" }}>
+          YALLA FIXIT
+        </div>
         <button
           type="button"
           onClick={() => void downloadPdf()}
@@ -117,7 +149,10 @@ export function PublicReport({ token }: { token: string }) {
           }}
         >
           {busy ? (
-            <Loader2 style={{ width: 16, height: 16 }} className="animate-spin" />
+            <Loader2
+              style={{ width: 16, height: 16 }}
+              className="animate-spin"
+            />
           ) : (
             <Download style={{ width: 16, height: 16 }} />
           )}
@@ -136,7 +171,11 @@ export function PublicReport({ token }: { token: string }) {
           overflow: "hidden",
         }}
       >
-        <InspectionReport ref={reportRef} task={payload.task} quotation={payload.quotation} />
+        <InspectionReport
+          ref={reportRef}
+          task={payload.task}
+          quotation={payload.quotation}
+        />
       </div>
     </div>
   );

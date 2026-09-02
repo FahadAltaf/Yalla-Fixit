@@ -13,7 +13,13 @@ import {
   ChartTooltipContent,
 } from "@/components/ui/chart";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 import { CHART_COLOR } from "@/lib/snagging/chart-palette";
 
@@ -22,7 +28,12 @@ import { useSection } from "./use-section";
 
 type Activity = {
   periodDays: number;
-  points: Array<{ day: string; label: string; created: number; completed: number }>;
+  points: Array<{
+    day: string;
+    label: string;
+    created: number;
+    completed: number;
+  }>;
 };
 
 /*
@@ -52,7 +63,10 @@ export function InspectionActivity() {
     { staleMs: 300_000 },
   );
 
-  const total = (data?.points ?? []).reduce((sum, point) => sum + point.created + point.completed, 0);
+  const total = (data?.points ?? []).reduce(
+    (sum, point) => sum + point.created + point.completed,
+    0,
+  );
 
   return (
     <SectionShell
@@ -86,10 +100,24 @@ export function InspectionActivity() {
       skeleton={<ChartSkeleton bars={14} />}
     >
       <ChartContainer config={config} className="h-56 w-full">
-        <LineChart data={data?.points ?? []} margin={{ left: -20, right: 8, top: 8 }}>
+        <LineChart
+          data={data?.points ?? []}
+          margin={{ left: -20, right: 8, top: 8 }}
+        >
           <CartesianGrid vertical={false} />
-          <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} />
-          <YAxis tickLine={false} axisLine={false} allowDecimals={false} width={36} />
+          <XAxis
+            dataKey="label"
+            tickLine={false}
+            axisLine={false}
+            tickMargin={8}
+            minTickGap={24}
+          />
+          <YAxis
+            tickLine={false}
+            axisLine={false}
+            allowDecimals={false}
+            width={36}
+          />
           <ChartTooltip content={<ChartTooltipContent labelKey="label" />} />
           <ChartLegend content={<ChartLegendContent />} />
           <Line

@@ -243,6 +243,14 @@ export const createVisitSchema = z.object({
   reason: z.string().trim().max(4000).optional().or(z.literal("")),
 });
 
+/** FR-9.04 — what booking an approved additional visit needs. */
+export const scheduleVisitSchema = z.object({
+  scheduled_date: isoDate,
+  /** The confirmed slot, when one has been agreed with the occupier. */
+  appointment_at: z.string().datetime().optional().nullable(),
+  inspector_id: z.string().uuid().optional().nullable(),
+});
+
 export const deliverReportSchema = z.object({
   channel: z.enum(["email", "whatsapp", "manual"]).default("email"),
   recipient: z.string().trim().min(3, "Recipient is required"),

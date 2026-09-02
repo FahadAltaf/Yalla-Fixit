@@ -240,7 +240,7 @@ export function InspectionHeaderCard({
                 <Badge variant="outline">Round {task.round_number}</Badge>
               ) : null}
               {task.visit_type === "additional" &&
-                (task.visit_charge ?? 0) > 0 ? (
+              (task.visit_charge ?? 0) > 0 ? (
                 <span className="text-muted-foreground text-xs">
                   Charge AED {task.visit_charge!.toLocaleString()}
                 </span>
@@ -337,7 +337,7 @@ export function InspectionHeaderCard({
               </span>
             ) : null}
             {(task.status === "approved" || task.status === "delivered") &&
-              canCreate ? (
+            canCreate ? (
               <>
                 <SubmitButton
                   variant="outline"
@@ -410,7 +410,9 @@ export function InspectionHeaderCard({
           /* A round's list is mostly defects carried in to be re-checked,
              not new finds, so the caption cannot claim otherwise. */
           caption={
-            (task.round_number ?? 1) > 1 ? "Carried in, plus new finds" : "Captured on this walk"
+            (task.round_number ?? 1) > 1
+              ? "Carried in, plus new finds"
+              : "Captured on this walk"
           }
         />
         <StatCard
@@ -455,11 +457,30 @@ export function InspectionHeaderCard({
             tone={pendingArea ? "progress" : "good"}
           />
         )}
+        {/*
+          Labelled by what the ratio counts. "Media · 3 / 3" left the reader
+          to work out what was being divided by what, with the answer in the
+          caption two lines below -- and a snag with no photo is a hole in
+          the report, so it is worth reading at a glance.
+        */}
         <StatCard
-          label="Media"
+          label="Snags with photos"
           value={`${snagsWithPhoto} / ${snags.length}`}
-          headline={`${photoTotal} ${photoTotal === 1 ? "file" : "files"} received`}
-          caption="Snags carrying at least one photo"
+          headline={
+            snags.length === 0
+              ? "No snags recorded"
+              : snagsWithPhoto === snags.length
+                ? "Every snag has evidence"
+                : `${snags.length - snagsWithPhoto} with no photo`
+          }
+          caption={`${photoTotal} ${photoTotal === 1 ? "file" : "files"} across the inspection`}
+          tone={
+            snags.length === 0
+              ? "neutral"
+              : snagsWithPhoto === snags.length
+                ? "good"
+                : "bad"
+          }
         />
       </StatCardGrid>
 

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { ArrowRight, CalendarDays } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 
 import { LinesSkeleton, SectionShell } from "./section-shell";
@@ -40,6 +41,16 @@ export function UpcomingInspections() {
       title="Upcoming inspections"
       description="The next appointments, in the order the day happens."
       icon={<CalendarDays />}
+      action={
+        data && data.items.length > 0 ? (
+          <Badge
+            variant="secondary"
+            className="bg-mist text-ink-soft border-0 font-medium"
+          >
+            {data.items.length}
+          </Badge>
+        ) : null
+      }
       loading={loading}
       error={error}
       onRetry={reload}
@@ -52,6 +63,7 @@ export function UpcomingInspections() {
           className="py-10"
         />
       }
+
       skeleton={<LinesSkeleton rows={4} />}
       bodyClassName="px-0 pb-0"
     >
@@ -70,10 +82,13 @@ export function UpcomingInspections() {
                       {item.time ?? "—"}
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium">{item.code}</span>
+                      <span className="block truncate text-sm font-medium">
+                        {item.code}
+                      </span>
                       <span className="text-muted-foreground block truncate text-xs">
-                        {[item.propertyType, item.place].filter(Boolean).join(" · ") ||
-                          "No property detail"}
+                        {[item.propertyType, item.place]
+                          .filter(Boolean)
+                          .join(" · ") || "No property detail"}
                       </span>
                     </span>
                     <span className="text-muted-foreground shrink-0 truncate text-xs">
@@ -85,15 +100,6 @@ export function UpcomingInspections() {
             </ul>
           </div>
         ))}
-      </div>
-      <div className="border-t px-5 py-3">
-        <Link
-          href="/scheduling"
-          className="text-brand inline-flex items-center gap-1 text-sm font-medium hover:underline"
-        >
-          View schedule
-          <ArrowRight className="size-3.5" aria-hidden />
-        </Link>
       </div>
     </SectionShell>
   );

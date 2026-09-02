@@ -17,7 +17,10 @@ import { SEVERITY_COLOR } from "@/lib/snagging/chart-palette";
 import { DonutSkeleton, SectionShell } from "./section-shell";
 import { useSection } from "./use-section";
 
-type Severity = { total: number; levels: Array<{ severity: string; count: number }> };
+type Severity = {
+  total: number;
+  levels: Array<{ severity: string; count: number }>;
+};
 
 const config = {
   count: { label: "Open snags" },
@@ -70,14 +73,24 @@ export function SnagSeverity() {
       <div className="flex flex-col items-center gap-4 sm:flex-row">
         <ChartContainer config={config} className="h-52 min-w-0 flex-1">
           <PieChart>
-            <ChartTooltip content={<ChartTooltipContent nameKey="label" hideLabel />} />
-            <Pie data={rows} dataKey="count" nameKey="label" innerRadius={52} strokeWidth={2}>
+            <ChartTooltip
+              content={<ChartTooltipContent nameKey="label" hideLabel />}
+            />
+            <Pie
+              data={rows}
+              dataKey="count"
+              nameKey="label"
+              innerRadius={52}
+              strokeWidth={2}
+            >
               {rows.map((row) => (
                 <Cell
                   key={row.severity}
                   fill={FILL[row.severity]}
                   className="cursor-pointer"
-                  onClick={() => router.push(`/snagging/jobs?severity=${row.severity}`)}
+                  onClick={() =>
+                    router.push(`/snagging/jobs?severity=${row.severity}`)
+                  }
                 />
               ))}
               <Label

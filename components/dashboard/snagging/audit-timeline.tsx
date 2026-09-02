@@ -23,7 +23,20 @@ import {
 } from "lucide-react";
 
 import { EmptyState } from "@/components/ui/empty-state";
-import { DataRow, DataState, ListSkeleton, SectionCard } from "./shared";
+import {
+  DataRow,
+  DataState,
+  ListPager,
+  ListSkeleton,
+  SectionCard,
+} from "./shared";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { snaggingService } from "@/modules/snagging";
 import type { SnaggingAuditEvent } from "@/types/types";
 
@@ -77,6 +90,50 @@ function metaFor(eventType: string) {
   );
 }
 
+const ACCESS_WORDS: Record<string, string> = {
+  accessible: "reachable",
+  limited_access: "limited access",
+  not_accessible: "no access",
+};
+
+function text(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/**
+ * What the event happened to, for the title.
+ *
+ * Every entry used to read as its bare action -- eleven rows of "Area
+ * confirmed" told a reviewer that eleven areas had been confirmed and
+ * nothing about which, so the trail could not be checked against the
+ * inspection. The subject is the difference between a log and a record.
+ */
+function subjectFor(event: SnaggingAuditEvent): string | null {
+  const p = event.payload ?? {};
+
+  if (event.entity_type === "area") return text(p.area_name);
+
+  if (event.event_type === "checklist_not_checked") {
+    return text(p.label) ?? text(p.code);
+  }
+
+  if (event.event_type.startsWith("snag_")) {
+    return text(p.snag_code) ?? text(p.code);
+  }
+
+  if (event.event_type === "floor_plan_added") return text(p.label);
+
+  if (
+    event.event_type === "round_created" ||
+    event.event_type === "additional_visit_created" ||
+    event.event_type.startsWith("catalogue_entry_")
+  ) {
+    return text(p.code);
+  }
+
+  return null;
+}
+
 /** A one-line human summary pulled from the event's payload, when useful. */
 function detailFor(event: SnaggingAuditEvent): string | null {
   const p = event.payload ?? {};
@@ -88,11 +145,19 @@ function detailFor(event: SnaggingAuditEvent): string | null {
       ? p.category.replace(/_/g, " ")
       : null;
   }
-  if (
-    event.event_type === "round_created" ||
-    event.event_type === "additional_visit_created"
-  ) {
-    return typeof p.code === "string" ? p.code : null;
+  if (event.entity_type === "area") {
+    // "Area access recorded" says nothing on its own -- recorded as what?
+    const state = text(p.access_state);
+    return state ? (ACCESS_WORDS[state] ?? state.replace(/_/g, " ")) : null;
+  }
+  if (event.event_type === "checklist_not_checked") {
+    return text(p.group_name);
+  }
+  if (event.event_type.startsWith("snag_")) {
+    return (
+      [text(p.severity), text(p.catalogue_code)].filter(Boolean).join(" · ") ||
+      null
+    );
   }
   return null;
 }
@@ -112,14 +177,26 @@ function formatWhen(value: string): string {
  */
 export function AuditTimeline({ taskId }: { taskId: string }) {
   const [events, setEvents] = useState<SnaggingAuditEvent[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Paged on the server: the trail is unbounded, so the alternative was a
+  // hard limit that silently dropped the older half of a busy job.
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(25);
+  const [order, setOrder] = useState<"desc" | "asc">("desc");
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      setEvents(await snaggingService.getAudit(taskId));
+      const result = await snaggingService.getAudit(taskId, {
+        page,
+        pageSize,
+        order,
+      });
+      setEvents(result.data);
+      setTotal(result.totalCount);
     } catch (e) {
       // A reviewer signing off has to tell "nothing happened yet" from
       // "the trail did not load" — this used to render as no card at all.
@@ -127,7 +204,7 @@ export function AuditTimeline({ taskId }: { taskId: string }) {
     } finally {
       setLoading(false);
     }
-  }, [taskId]);
+  }, [taskId, page, pageSize, order]);
 
   useEffect(() => {
     void load();
@@ -139,6 +216,31 @@ export function AuditTimeline({ taskId }: { taskId: string }) {
       icon={<History />}
       description="Every recorded action on this inspection"
       bodyClassName="border-t"
+      action={
+        <div className="flex items-center gap-1.5">
+          {/* <span className="text-muted-foreground text-xs">Sort</span> */}
+          <Select
+            value={order}
+            onValueChange={(value) => {
+              setOrder(value as "desc" | "asc");
+              // A different order makes page four a different four rows.
+              setPage(0);
+            }}
+          >
+            <SelectTrigger
+              size="sm"
+              className="w-[130px]"
+              aria-label="Sort history"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="desc">Newest first</SelectItem>
+              <SelectItem value="asc">Oldest first</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      }
     >
       {/* Only the alert needs the card's padding; the skeleton and the
           empty panel carry their own. */}
@@ -162,12 +264,15 @@ export function AuditTimeline({ taskId }: { taskId: string }) {
           <ol className="divide-y">
             {events.map((event) => {
               const { label, Icon } = metaFor(event.event_type);
+              const subject = subjectFor(event);
               const detail = detailFor(event);
               return (
                 <li key={event.id}>
                   <DataRow
                     icon={<Icon aria-hidden />}
-                    title={label}
+                    // The subject is part of the headline, not a footnote:
+                    // it is what a reviewer scans the column for.
+                    title={subject ? `${label} · ${subject}` : label}
                     subtitle={
                       <>
                         {event.actor_label ?? "System"}
@@ -191,6 +296,18 @@ export function AuditTimeline({ taskId }: { taskId: string }) {
             })}
           </ol>
         </DataState>
+
+        {!loading && !error && events.length > 0 ? (
+          <ListPager
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+            noun="entries"
+            className="border-t"
+          />
+        ) : null}
       </div>
     </SectionCard>
   );

@@ -172,10 +172,27 @@ export const snaggingService = {
       method: "GET",
     }),
 
-  getAudit: async (id: string): Promise<SnaggingAuditEvent[]> =>
-    executeRESTBackend<SnaggingAuditEvent[]>(
+  /**
+   * One page of the audit trail, newest first by default.
+   *
+   * Carries the total alongside the rows: the trail on a job that has been
+   * through rounds runs to hundreds of entries, and a pager that cannot say
+   * how many there are can only offer "next" until it runs out.
+   */
+  getAudit: async (
+    id: string,
+    options?: { page?: number; pageSize?: number; order?: "asc" | "desc" },
+  ): Promise<{ data: SnaggingAuditEvent[]; totalCount: number }> =>
+    executeRESTBackend<{ data: SnaggingAuditEvent[]; totalCount: number }>(
       `/api/snagging/tasks/${id}/audit`,
-      { method: "GET" },
+      {
+        method: "GET",
+        params: {
+          page: options?.page ?? 0,
+          pageSize: options?.pageSize ?? 25,
+          order: options?.order ?? "desc",
+        },
+      },
     ),
 
   createTask: async (

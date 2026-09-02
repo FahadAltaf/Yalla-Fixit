@@ -13,7 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
+import DateSelect from "@/components/ui/date-select";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { snaggingService } from "@/modules/snagging";
@@ -58,7 +58,9 @@ export function AdditionalVisitDialog({
       onOpenChange(false);
       window.location.href = `/snagging/${visit.id}`;
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not schedule the visit");
+      toast.error(
+        error instanceof Error ? error.message : "Could not schedule the visit",
+      );
     } finally {
       setWorking(false);
     }
@@ -70,9 +72,9 @@ export function AdditionalVisitDialog({
         <DialogHeader>
           <DialogTitle>Schedule an additional visit</DialogTitle>
           <DialogDescription>
-            A fresh, chargeable inspection pass on this property. It copies the same areas but
-            carries no snags forward, and the additional-visit charge is taken from the current
-            pricing.
+            A fresh, chargeable inspection pass on this property. It copies the
+            same areas but carries no snags forward, and the additional-visit
+            charge is taken from the current pricing.
           </DialogDescription>
         </DialogHeader>
 
@@ -89,17 +91,25 @@ export function AdditionalVisitDialog({
           </div>
           <div className="grid gap-2">
             <Label htmlFor="visit-date">Scheduled date (optional)</Label>
-            <Input
+            {/* A visit is booked forwards, so yesterday is not a choice. */}
+            <DateSelect
               id="visit-date"
-              type="date"
               value={scheduledDate}
-              onChange={(e) => setScheduledDate(e.target.value)}
+              onChange={setScheduledDate}
+              disabledDates={{
+                before: new Date(new Date().setHours(0, 0, 0, 0)),
+              }}
+              aria-label="Scheduled date"
             />
           </div>
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={working}>
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={working}
+          >
             Cancel
           </Button>
           <SubmitButton

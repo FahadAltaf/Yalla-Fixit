@@ -21,7 +21,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
-import { elementToPdfBlob } from "@/lib/snagging/report-pdf";
+import { renderReactToPdfBlob } from "@/lib/snagging/report-pdf";
 import { snaggingService, type SnaggingQuotation } from "@/modules/snagging";
 import { ActionType, ResourceType, type SnaggingTask } from "@/types/types";
 
@@ -95,13 +95,21 @@ export function ReportView({ taskId }: { taskId: string }) {
       ));
 
   async function downloadPdf() {
-    if (!reportRef.current || !task) return;
+    if (!task) return;
     setBusy(true);
     // Rasterising a multi-page report takes seconds; the toast holds the
     // place so the download does not land with no explanation.
     const t = toast.loading("Preparing the PDF…");
     try {
-      const blob = await elementToPdfBlob(reportRef.current);
+      // Rendered fresh with forPDF rather than rasterising the node on
+      // screen: the two need different vertical padding (html2canvas puts a
+      // box's background where the browser does not), which is the same
+      // split the quotation template makes.
+      const blob = await renderReactToPdfBlob(
+        <InspectionReport task={task} quotation={quotation} forPDF />,
+        2,
+        { footerLabel: `${task.code} — Snagging inspection report` },
+      );
       saveAs(blob, `${task.code}-snagging-report.pdf`);
       toast.success("PDF downloaded", { id: t });
     } catch (error) {
@@ -165,7 +173,72 @@ export function ReportView({ taskId }: { taskId: string }) {
             <Skeleton className="h-9 w-32 rounded-full" />
           </div>
         </div>
-        <Skeleton className="h-[600px] w-full max-w-[794px]" />
+        {/*
+          Shaped like the report, not a 600px grey slab. The document is an
+          A4 sheet -- masthead, two property/client cards, a dark visit
+          strip, a row of summary figures, then defect sections -- so the
+          placeholder is that sheet with its contents greyed, and nothing
+          jumps when the real one arrives.
+        */}
+        <div className="bg-card w-full max-w-[794px] space-y-5 rounded-lg border p-8 mx-auto">
+          <div className="flex items-start justify-between gap-6">
+            <div className="space-y-2">
+              <Skeleton className="size-12 rounded-md" />
+              <Skeleton className="h-3 w-32" />
+            </div>
+            <div className="space-y-2 text-right">
+              <Skeleton className="ml-auto h-4 w-40" />
+              <Skeleton className="ml-auto h-3 w-24" />
+            </div>
+          </div>
+
+          <div className="flex gap-3">
+            {[0, 1].map((card) => (
+              <div
+                key={card}
+                className="flex-1 space-y-2 rounded-lg border p-3"
+              >
+                <Skeleton className="h-2.5 w-16" />
+                <Skeleton className="h-4 w-3/5" />
+                <Skeleton className="h-2.5 w-4/5" />
+                <Skeleton className="h-2.5 w-2/5" />
+              </div>
+            ))}
+          </div>
+
+          <Skeleton className="h-7 w-full rounded-lg" />
+
+          <div className="space-y-2">
+            <Skeleton className="h-3 w-24" />
+            <div className="flex gap-2">
+              {[0, 1, 2, 3, 4].map((stat) => (
+                <div
+                  key={stat}
+                  className="flex-1 space-y-2 rounded-lg border p-3"
+                >
+                  <Skeleton className="h-2.5 w-12" />
+                  <Skeleton className="h-5 w-8" />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {[0, 1].map((section) => (
+            <div key={section} className="space-y-2.5">
+              <Skeleton className="h-3 w-32" />
+              {[0, 1, 2].map((row) => (
+                <div key={row} className="flex items-start gap-3">
+                  <Skeleton className="size-12 shrink-0 rounded-md" />
+                  <div className="flex-1 space-y-1.5 pt-1">
+                    <Skeleton className="h-3 w-2/5" />
+                    <Skeleton className="h-2.5 w-3/5" />
+                  </div>
+                  <Skeleton className="h-4 w-16 shrink-0 rounded-full" />
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
       </div>
     );
   }

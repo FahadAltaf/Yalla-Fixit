@@ -43,7 +43,10 @@ export function ChecklistPanel({ task }: { task: SnaggingTask }) {
 
   const answered = items.filter((item) => !outstanding(item)).length;
   const mandatory = items.filter((item) => item.mandatory);
-  const mandatoryDone = mandatory.filter((item) => !outstanding(item)).length;
+  const passed = items.filter((item) => item.status === "passed").length;
+  const notChecked = items.filter(
+    (item) => item.status === "not_checked",
+  ).length;
   const failed = items.filter((item) => item.status === "failed").length;
 
   /*
@@ -91,7 +94,7 @@ export function ChecklistPanel({ task }: { task: SnaggingTask }) {
             a reason to invent a fourth way of drawing a number.
           */}
           <div className="border-b p-5">
-            <StatCardGrid columns={3}>
+            <StatCardGrid columns={4}>
               <StatCard
                 label="Answered"
                 value={`${answered} / ${items.length}`}
@@ -104,21 +107,13 @@ export function ChecklistPanel({ task }: { task: SnaggingTask }) {
                 tone={answered === items.length ? "good" : "progress"}
               />
               <StatCard
-                label="Mandatory"
-                value={`${mandatoryDone} / ${mandatory.length}`}
+                label="Passed"
+                value={passed}
                 headline={
-                  mandatory.length === 0
-                    ? "None marked mandatory"
-                    : mandatoryDone === mandatory.length
-                      ? "All answered"
-                      : "Must be answered before sign-off"
+                  passed === 0 ? "Nothing passed yet" : "Checked and clear"
                 }
-                caption={`${percent(mandatoryDone, mandatory.length)}% of the mandatory items`}
-                tone={
-                  mandatory.length && mandatoryDone < mandatory.length
-                    ? "bad"
-                    : "good"
-                }
+                caption="Items the inspector marked as passing"
+                tone={passed === 0 ? "neutral" : "good"}
               />
               <StatCard
                 label="Failed"
@@ -126,6 +121,15 @@ export function ChecklistPanel({ task }: { task: SnaggingTask }) {
                 headline={failed === 0 ? "Nothing failed" : "Raised as defects"}
                 caption="Items the inspector marked as failing"
                 tone={failed > 0 ? "bad" : "good"}
+              />
+              <StatCard
+                label="Not checked"
+                value={notChecked}
+                headline={
+                  notChecked === 0 ? "Nothing skipped" : "Skipped on site"
+                }
+                caption="Items the inspector could not check"
+                tone={notChecked > 0 ? "progress" : "good"}
               />
             </StatCardGrid>
           </div>

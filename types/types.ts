@@ -714,8 +714,6 @@ export interface SnaggingAnalytics {
     overdueApprovals: number;
   };
   /** FR-10.03 — developer view. */
-  /** FR-10.03 — defect categories across every developer in the range. */
-  defectCategories: Array<{ category: string; count: number }>;
   byDeveloper: Array<{
     developer_name: string;
     /** Units this period against the one before, as a signed count. */

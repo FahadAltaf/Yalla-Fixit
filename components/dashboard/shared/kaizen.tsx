@@ -1,9 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { TrendingDown, TrendingUp } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  TrendingDown,
+  TrendingUp,
+} from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Card,
   CardAction,
@@ -119,7 +132,7 @@ export function StatCard({
       className={cn(
         "@container/card h-full",
         interactive &&
-          "kz-card-interactive hover:border-brand/30 cursor-pointer",
+        "kz-card-interactive hover:border-brand/30 cursor-pointer",
       )}
     >
       <CardHeader>
@@ -281,7 +294,7 @@ export function SectionCard({
 }) {
   return (
     <Card className={cn("gap-0 overflow-hidden p-0", className)}>
-      <div className="flex flex-wrap items-start justify-between gap-3 px-5 pt-5 pb-4">
+      <div className="flex flex-wrap items-end justify-between gap-3 px-5 pt-5 pb-4">
         <div className="min-w-0">
           <h2 className="flex items-center gap-2 text-lg">
             {icon ? (
@@ -347,6 +360,110 @@ export function PillTabs<T extends string>({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * Pager for a list that is not a DataTable.
+ *
+ * The snag walk and the audit trail are both lists that grow without
+ * limit -- an inspection can carry a hundred defects, and a job that has
+ * been through rounds carries an audit entry for every one of them. Both
+ * used to render the lot: a hundred rows, each mounting its own
+ * thumbnails and plan pin. This is the one control both use, so page
+ * size and wording cannot drift between them.
+ *
+ * Renders nothing when there is only one page to show.
+ */
+export function ListPager({
+  page,
+  pageSize,
+  total,
+  onPageChange,
+  onPageSizeChange,
+  pageSizes = [10, 25, 50],
+  /** Plural noun for the range line, e.g. "snags". */
+  noun = "items",
+  className,
+}: {
+  page: number;
+  pageSize: number;
+  total: number;
+  onPageChange: (page: number) => void;
+  onPageSizeChange?: (size: number) => void;
+  pageSizes?: number[];
+  noun?: string;
+  className?: string;
+}) {
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  if (total <= pageSizes[0] && page === 0) return null;
+
+  const first = total === 0 ? 0 : page * pageSize + 1;
+  const last = Math.min(total, (page + 1) * pageSize);
+
+  return (
+    <div
+      className={cn(
+        "flex flex-wrap items-center justify-between gap-3 px-5 py-3",
+        className,
+      )}
+    >
+      <p className="text-muted-foreground text-xs tabular-nums">
+        {first}&ndash;{last} of {total} {noun}
+      </p>
+
+      <div className="flex items-center gap-2">
+        {onPageSizeChange ? (
+          <Select
+            value={String(pageSize)}
+            onValueChange={(value) => {
+              // Back to the first page: the row that was at the top of page
+              // four is nowhere near it once the page size changes.
+              onPageSizeChange(Number(value));
+              onPageChange(0);
+            }}
+          >
+            <SelectTrigger
+              size="sm"
+              className="w-[110px]"
+              aria-label="Rows per page"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {pageSizes.map((size) => (
+                <SelectItem key={size} value={String(size)}>
+                  {size} per page
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : null}
+
+        <div className="flex items-center gap-1">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={page === 0}
+            onClick={() => onPageChange(page - 1)}
+            aria-label="Previous page"
+          >
+            <ChevronLeft className="size-4" />
+            Previous
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={page >= pageCount - 1}
+            onClick={() => onPageChange(page + 1)}
+            aria-label="Next page"
+          >
+            Next
+            <ChevronRight className="size-4" />
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -444,7 +561,9 @@ export function DataRow({
         </span>
       ) : null}
       <div className="min-w-0 flex-1">
-        <div className={cn("truncate font-medium", active && "text-brand")}>{title}</div>
+        <div className={cn("truncate font-medium", active && "text-brand")}>
+          {title}
+        </div>
         {subtitle ? (
           <div className="text-muted-foreground truncate text-sm">
             {subtitle}
@@ -460,11 +579,11 @@ export function DataRow({
   const shared = cn(
     "flex w-full items-center gap-3 px-5 py-3 text-left",
     active &&
-      // --brand-50 is #fbf2f3 -- barely off-white, and at 40% opacity over a
-      // white card the selected row was effectively invisible. A stronger
-      // tint plus a solid left accent bar makes it unmistakable, and the bar
-      // means selection is not carried by a faint tint alone.
-      "bg-brand-100/70 relative before:absolute before:inset-y-0 before:left-0 before:w-1 before:bg-brand",
+    // --brand-50 is #fbf2f3 -- barely off-white, and at 40% opacity over a
+    // white card the selected row was effectively invisible. A stronger
+    // tint plus a solid left accent bar makes it unmistakable, and the bar
+    // means selection is not carried by a faint tint alone.
+    "bg-brand-100/70 relative before:absolute before:inset-y-0 before:left-0 before:w-1 before:bg-brand",
     className,
   );
 

@@ -44,10 +44,38 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       PostgREST can only infer one from a literal string. The shape is
       asserted back below; INHERITED_COLUMNS is what keeps them honest.
     */
+    const { data: openedFrom, error: openedFromError } = await admin
+      .from("snagging_jobs")
+      .select("id, code, status, parent_job_id")
+      .eq("id", id)
+      .maybeSingle();
+    if (openedFromError) throw new Error(openedFromError.message);
+    if (!openedFrom) return NextResponse.json({ error: "Inspection not found" }, { status: 404 });
+
+    /*
+      FR-9.01 / FR-9.05 — every visit hangs off the ORIGINAL inspection.
+
+      A visit took whichever job it was opened from as its parent and
+      numbered itself one above that job, which breaks the moment there is
+      more than one of anything:
+
+        - opened from the original twice, both visits number themselves 2
+          and both are coded "-V2"
+        - opened from a de-snag round, the visit chains off the round, so
+          the family becomes a tree and every consumer that walks
+          parent_job_id one level up stops seeing the whole story
+        - numbering off one job ignores the rounds, so a family with R2 and
+          R3 hands its first visit round_number 2 as well
+
+      Rooting here, and numbering across the whole family, is what makes
+      "more than one additional visit" actually work.
+    */
+    const rootId = (openedFrom.parent_job_id as string | null) ?? openedFrom.id;
+
     const { data: parentRow, error: parentError } = await admin
       .from("snagging_jobs")
       .select(INHERITED_SELECT)
-      .eq("id", id)
+      .eq("id", rootId)
       .maybeSingle();
     const parent = parentRow as unknown as InheritableJob | null;
 
@@ -56,7 +84,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
     // A visit is booked once the previous work is signed off, mirroring the
     // de-snag round guard — the property is between visits, not mid-flight.
-    if (!["approved", "delivered"].includes(parent.status)) {
+    if (!["approved", "delivered"].includes(openedFrom.status as string)) {
       return NextResponse.json(
         { error: "Approve the current inspection before scheduling an additional visit" },
         { status: 409 },
@@ -86,7 +114,22 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       );
     }
 
-    const nextRound = (parent.round_number ?? 1) + 1;
+    /*
+      The next number counts every visit in the family — rounds included —
+      so a visit can never take a number a de-snag round already holds and
+      a second visit can never reuse the first one's code.
+    */
+    const { data: siblings, error: siblingError } = await admin
+      .from("snagging_jobs")
+      .select("round_number")
+      .eq("parent_job_id", rootId);
+    if (siblingError) throw new Error(siblingError.message);
+
+    const nextRound =
+      Math.max(
+        parent.round_number ?? 1,
+        ...(siblings ?? []).map((row) => (row.round_number as number | null) ?? 1),
+      ) + 1;
 
     // The charge is fixed at booking time from the current config.
     const { data: pricing } = await admin
@@ -105,15 +148,25 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       .from("snagging_jobs")
       .insert({
         code: visitCode(parent.code, nextRound),
-        status: "assigned",
+        /*
+          A request, not a booking.
+
+          Creating the visit commits nothing: no date, no inspector, no
+          appointment. POST /visits/[visitId]/schedule is what books it,
+          and it refuses until the client has approved a quotation raised
+          against THIS visit (FR-9.04). Assigning here would have meant
+          scheduling before anyone had agreed to pay.
+        */
+        status: "draft",
         visit_type: "additional",
         visit_charge: visitCharge,
         round_number: nextRound,
         parent_job_id: parent.id,
         ...inheritedFields(parent),
-        inspector_id: inspectorId,
+        inspector_id: null,
         approval_manager_id: input.approval_manager_id ?? parent.approval_manager_id,
-        scheduled_date: input.scheduled_date?.trim() || parent.scheduled_date,
+        scheduled_date: null,
+        appointment_at: null,
         notes: [input.reason?.trim(), input.notes?.trim()].filter(Boolean).join("\n\n") || null,
         created_by: profile.id,
       })

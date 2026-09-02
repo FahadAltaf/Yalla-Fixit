@@ -28,7 +28,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
 import { generateQuotationPDFBlob } from "@/components/dashboard/extensions/quotation-templates/pdf-utils";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
@@ -297,11 +296,15 @@ export function QuotationPanel({
       description={
         error
           ? "The quotation could not be loaded."
-          : quote
-            ? `Quotation ${quote.quote_number}`
-            : task.status === "draft"
-              ? "This job is a draft. Generate and send a quotation to the client to proceed."
-              : "No quotation on this job."
+          : generating
+            ? "Raising a quotation for this job."
+            : loading
+              ? "Loading the quotation."
+              : quote
+                ? `Quotation ${quote.quote_number}`
+                : task.status === "draft"
+                  ? "This job is a draft. Generate and send a quotation to the client to proceed."
+                  : "No quotation on this job."
       }
       // The status belongs in the header as a badge, not as a raw
       // lowercase word appended to the subtitle.
@@ -317,44 +320,50 @@ export function QuotationPanel({
           errorTitle="Could not load the quotation"
           isEmpty={!quote}
           skeleton={
-            // The same single block the quote renders as: a header band,
-            // a couple of lines, then the totals footer. Generating gets a
-            // caption, because a bare skeleton reads as a slow page rather
-            // than as a numbered document being raised right now.
-            <div className="space-y-3">
+            <div className="space-y-4">
               {generating ? (
                 <p className="text-muted-foreground flex items-center gap-2 text-sm">
                   <Loader2 className="size-3.5 animate-spin" />
                   Generating the quotation…
                 </p>
               ) : null}
-              <div className="overflow-hidden rounded-lg border">
-              <div className="bg-muted/50 flex items-center gap-4 border-b px-4 py-2.5">
-                <Skeleton className="h-3 flex-1" />
-                <Skeleton className="h-3 w-16" />
-                <Skeleton className="h-3 w-20" />
-                <Skeleton className="h-3 w-20" />
+
+              {/* The quote number and date sit above the table. */}
+              <div className="flex items-start justify-between gap-4">
+                <Skeleton className="h-4 w-40" />
+                <Skeleton className="h-4 w-24" />
               </div>
-              {Array.from({ length: 2 }).map((_, index) => (
-                <div
-                  key={index}
-                  className="flex items-center gap-4 border-b px-4 py-3.5"
-                >
-                  <Skeleton className="h-4 flex-1" />
-                  <Skeleton className="h-4 w-16" />
-                  <Skeleton className="h-4 w-20" />
-                  <Skeleton className="h-4 w-20" />
+
+              <div className="overflow-hidden rounded-lg border">
+                <div className="bg-muted/50 flex items-center gap-4 border-b px-4 py-2.5">
+                  <Skeleton className="h-3 flex-1" />
+                  <Skeleton className="h-3 w-14" />
+                  <Skeleton className="h-3 w-16" />
+                  <Skeleton className="h-3 w-20" />
                 </div>
-              ))}
-              <div className="bg-muted/50 space-y-2.5 px-4 py-3">
-                {[0, 1, 2].map((index) => (
-                  <div key={index} className="flex justify-end gap-4">
+                {Array.from({ length: 2 }).map((_, index) => (
+                  <div
+                    key={index}
+                    className="flex items-center gap-4 border-b px-4 py-3.5"
+                  >
+                    <Skeleton className="h-4 flex-1" />
+                    <Skeleton className="h-4 w-14" />
+                    <Skeleton className="h-4 w-16" />
                     <Skeleton className="h-4 w-20" />
-                    <Skeleton
-                      className={cn("h-4", index === 2 ? "w-24" : "w-20")}
-                    />
                   </div>
+                ))}
+                {/* Totals are right-aligned under the table, and the grand
+                    total sits on a filled band. */}
+                <div className="space-y-2.5 px-4 py-3">
+                  {[0, 1].map((index) => (
+                    <div key={index} className="flex justify-end gap-4">
+                      <Skeleton className="h-3 w-20" />
+                      <Skeleton className="h-3 w-20" />
+                    </div>
                   ))}
+                  <div className="flex justify-end">
+                    <Skeleton className="h-8 w-56 rounded-md" />
+                  </div>
                 </div>
               </div>
             </div>
@@ -429,8 +438,8 @@ export function QuotationPanel({
                                 {}) as Record<string, unknown>;
                               setRecipient(
                                 (s.client_email as string) ??
-                                quote.sent_to ??
-                                "",
+                                  quote.sent_to ??
+                                  "",
                               );
                               setSendOpen(true);
                             }}
@@ -626,7 +635,6 @@ export function QuotationPanel({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
     </SectionCard>
   );
 }

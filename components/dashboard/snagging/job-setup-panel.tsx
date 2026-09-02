@@ -5,8 +5,6 @@ import {
   AlertTriangle,
   Building2,
   CalendarClock,
-  CalendarIcon,
-  Clock,
   Contact,
   Download,
   FileText,
@@ -17,20 +15,16 @@ import {
   Upload,
   UserCog,
 } from "lucide-react";
-import { format, parseISO } from "date-fns";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Calendar } from "@/components/ui/calendar";
 import { Input } from "@/components/ui/input";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import { Label } from "@/components/ui/label";
+import DateSelect from "@/components/ui/date-select";
+import { InspectorAssignmentAlert } from "./inspector-alert";
+import TimeSelect from "@/components/ui/time-select";
 import { cn } from "@/lib/utils";
 import {
   Select,
@@ -84,7 +78,11 @@ function MapForSetupTab(props: {
   label?: string | null;
   className?: string;
 }) {
-  return hasGoogleMapsKey() ? <GoogleLocationMap {...props} /> : <LocationMap {...props} />;
+  return hasGoogleMapsKey() ? (
+    <GoogleLocationMap {...props} />
+  ) : (
+    <LocationMap {...props} />
+  );
 }
 
 /**
@@ -313,6 +311,15 @@ export function JobSetupPanel({
     // so each gets its own surface and its own header — the same shape
     // the AMC forms use.
     <div className="flex flex-col gap-4">
+      <InspectorAssignmentAlert
+        task={task}
+        onAssign={() =>
+          document
+            .getElementById("inspector-assignment")
+            ?.scrollIntoView({ behavior: "smooth", block: "start" })
+        }
+      />
+
       {/*
         Property and client (BR-1 / FR-1.09).
 
@@ -455,6 +462,177 @@ export function JobSetupPanel({
         </div>
       </SetupSection>
 
+      {/* Inspector assignment (FR-3.08) */}
+      <div id="inspector-assignment" className="scroll-mt-24">
+        <SetupSection
+          icon={UserCog}
+          title="Inspector assignment"
+          description="Who walks the unit, and who signs the report off."
+        >
+          {!quotationApproved ? (
+            <Alert>
+              <Lock />
+              <AlertTitle>
+                Waiting on the client&apos;s quotation approval
+              </AlertTitle>
+              <AlertDescription>
+                An inspector can be assigned once the client approves the
+                quotation above.
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <DataState
+              loading={usersLoading}
+              error={usersError}
+              onRetry={() => void loadUsers()}
+              retrying={usersLoading}
+              errorTitle="Could not load the staff list"
+              // Matches the two selects below, so the inspector picker no
+              // longer renders empty and then pops full.
+              skeleton={
+                <FieldsSkeleton fields={2} columns={2} className="p-0" />
+              }
+            >
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Inspector" htmlFor="assign-inspector">
+                  {/*
+                  A disabled Select renders its value in placeholder grey,
+                  so an inspector who *is* assigned looked exactly like
+                  nobody assigned. When the assignment cannot be changed
+                  the answer is not a greyed-out dropdown at all — it is
+                  the name, stated plainly.
+                */}
+                  {canAssign ? (
+                    <Select
+                      value={inspectorId}
+                      onValueChange={setInspectorId}
+                      disabled={!canAssign}
+                    >
+                      <SelectTrigger id="assign-inspector" className="w-full">
+                        <SelectValue placeholder="Assign an inspector" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={UNASSIGNED}>Unassigned</SelectItem>
+                        {users.map((u) => {
+                          const busyCode = busyMap[u.id];
+                          const isBusy =
+                            Boolean(busyCode) && u.id !== task.inspector_id;
+                          return (
+                            <SelectItem
+                              key={u.id}
+                              value={u.id}
+                              disabled={isBusy}
+                            >
+                              {(u.full_name || u.email) ?? u.id}
+                              {isBusy ? ` — busy (${busyCode})` : ""}
+                            </SelectItem>
+                          );
+                        })}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <ReadOnlyValue
+                      id="assign-inspector"
+                      value={nameFor(users, task.inspector_id)}
+                      empty="No inspector assigned"
+                    />
+                  )}
+                  {canAssign ? (
+                    availabilityError ? (
+                      <p className="text-destructive mt-1 flex flex-wrap items-center gap-1.5 text-xs">
+                        Could not check availability for {apptDate}; booked
+                        inspectors are not flagged.
+                        <button
+                          type="button"
+                          onClick={() => setAvailabilityNonce((n) => n + 1)}
+                          className="inline-flex items-center gap-1 underline underline-offset-2"
+                        >
+                          <RefreshCw className="size-3" /> Try again
+                        </button>
+                      </p>
+                    ) : apptDate ? (
+                      <p className="text-muted-foreground mt-1 text-xs">
+                        Availability shown for {apptDate}. Booked inspectors are
+                        disabled.
+                      </p>
+                    ) : (
+                      <p className="text-muted-foreground mt-1 text-xs">
+                        Set an appointment date to check availability.
+                      </p>
+                    )
+                  ) : null}
+                </Field>
+                <Field
+                  label="Approval manager"
+                  hint="Required before an inspector can be assigned."
+                  htmlFor="assign-manager"
+                >
+                  {canAssign ? (
+                    <Select
+                      value={managerId}
+                      onValueChange={setManagerId}
+                      disabled={!canAssign}
+                    >
+                      <SelectTrigger id="assign-manager" className="w-full">
+                        <SelectValue placeholder="Who signs this off?" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={UNASSIGNED}>None</SelectItem>
+                        {users.map((u) => (
+                          <SelectItem key={u.id} value={u.id}>
+                            {(u.full_name || u.email) ?? u.id}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <ReadOnlyValue
+                      id="assign-manager"
+                      value={nameFor(users, task.approval_manager_id)}
+                      empty="No approval manager set"
+                    />
+                  )}
+                </Field>
+              </div>
+              {canAssign ? (
+                <div className="flex justify-end">
+                  <SubmitButton
+                    size="sm"
+                    onClick={() => void saveAssignment()}
+                    disabled={saving !== null}
+                    pending={saving === "assign"}
+                    pendingLabel="Saving…"
+                    icon={<UserCog className="size-4" />}
+                  >
+                    {task.inspector_id
+                      ? "Update assignment"
+                      : "Assign inspector"}
+                  </SubmitButton>
+                </div>
+              ) : task.locked ? (
+                /*
+                Tinted grey rather than left on the card's own white: this
+                sat directly under the assignment fields wearing the same
+                surface, so a read-only notice looked like one more thing
+                to fill in. Not red — being locked is a settled state, not
+                a fault.
+              */
+                <Alert className="bg-muted/60 text-muted-foreground mt-4 border-transparent">
+                  <Lock className="size-4" />
+                  <AlertTitle className="text-foreground">
+                    This inspection is locked
+                  </AlertTitle>
+                  <AlertDescription className="text-muted-foreground">
+                    The report has been approved, so the assignment can no
+                    longer be changed.
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+            </DataState>
+          )}
+        </SetupSection>
+      </div>
+
       {/* Appointment (FR-3.02) */}
       <SetupSection
         icon={CalendarClock}
@@ -478,19 +656,20 @@ export function JobSetupPanel({
       >
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Date" htmlFor="appt-date">
-            <DateField
+            <DateSelect
               id="appt-date"
               value={apptDate}
               disabled={!canEdit}
               onChange={setApptDate}
+              aria-label="Appointment date"
             />
           </Field>
           <Field label="Time (GST)" htmlFor="appt-time">
-            <TimeField
-              id="appt-time"
+            <TimeSelect
               value={apptTime}
               disabled={!canEdit || !apptDate}
               onChange={setApptTime}
+              aria-label="Appointment time"
             />
           </Field>
         </div>
@@ -678,167 +857,6 @@ export function JobSetupPanel({
         ) : null}
       </SetupSection>
 
-      {/* Inspector assignment (FR-3.08) */}
-      <SetupSection
-        icon={UserCog}
-        title="Inspector assignment"
-        description="Who walks the unit, and who signs the report off."
-      >
-        {!quotationApproved ? (
-          <Alert>
-            <Lock />
-            <AlertTitle>
-              Waiting on the client&apos;s quotation approval
-            </AlertTitle>
-            <AlertDescription>
-              An inspector can be assigned once the client approves the
-              quotation above.
-            </AlertDescription>
-          </Alert>
-        ) : (
-          <DataState
-            loading={usersLoading}
-            error={usersError}
-            onRetry={() => void loadUsers()}
-            retrying={usersLoading}
-            errorTitle="Could not load the staff list"
-            // Matches the two selects below, so the inspector picker no
-            // longer renders empty and then pops full.
-            skeleton={<FieldsSkeleton fields={2} columns={2} className="p-0" />}
-          >
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Inspector" htmlFor="assign-inspector">
-                {/*
-                  A disabled Select renders its value in placeholder grey,
-                  so an inspector who *is* assigned looked exactly like
-                  nobody assigned. When the assignment cannot be changed
-                  the answer is not a greyed-out dropdown at all — it is
-                  the name, stated plainly.
-                */}
-                {canAssign ? (
-                  <Select
-                    value={inspectorId}
-                    onValueChange={setInspectorId}
-                    disabled={!canAssign}
-                  >
-                    <SelectTrigger id="assign-inspector" className="w-full">
-                      <SelectValue placeholder="Assign an inspector" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={UNASSIGNED}>Unassigned</SelectItem>
-                      {users.map((u) => {
-                        const busyCode = busyMap[u.id];
-                        const isBusy =
-                          Boolean(busyCode) && u.id !== task.inspector_id;
-                        return (
-                          <SelectItem key={u.id} value={u.id} disabled={isBusy}>
-                            {(u.full_name || u.email) ?? u.id}
-                            {isBusy ? ` — busy (${busyCode})` : ""}
-                          </SelectItem>
-                        );
-                      })}
-                    </SelectContent>
-                  </Select>
-                ) : (
-                  <ReadOnlyValue
-                    id="assign-inspector"
-                    value={nameFor(users, task.inspector_id)}
-                    empty="No inspector assigned"
-                  />
-                )}
-                {canAssign ? (
-                  availabilityError ? (
-                    <p className="text-destructive mt-1 flex flex-wrap items-center gap-1.5 text-xs">
-                      Could not check availability for {apptDate}; booked
-                      inspectors are not flagged.
-                      <button
-                        type="button"
-                        onClick={() => setAvailabilityNonce((n) => n + 1)}
-                        className="inline-flex items-center gap-1 underline underline-offset-2"
-                      >
-                        <RefreshCw className="size-3" /> Try again
-                      </button>
-                    </p>
-                  ) : apptDate ? (
-                    <p className="text-muted-foreground mt-1 text-xs">
-                      Availability shown for {apptDate}. Booked inspectors are
-                      disabled.
-                    </p>
-                  ) : (
-                    <p className="text-muted-foreground mt-1 text-xs">
-                      Set an appointment date to check availability.
-                    </p>
-                  )
-                ) : null}
-              </Field>
-              <Field
-                label="Approval manager"
-                hint="Required before an inspector can be assigned."
-                htmlFor="assign-manager"
-              >
-                {canAssign ? (
-                  <Select
-                    value={managerId}
-                    onValueChange={setManagerId}
-                    disabled={!canAssign}
-                  >
-                    <SelectTrigger id="assign-manager" className="w-full">
-                      <SelectValue placeholder="Who signs this off?" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={UNASSIGNED}>None</SelectItem>
-                      {users.map((u) => (
-                        <SelectItem key={u.id} value={u.id}>
-                          {(u.full_name || u.email) ?? u.id}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                ) : (
-                  <ReadOnlyValue
-                    id="assign-manager"
-                    value={nameFor(users, task.approval_manager_id)}
-                    empty="No approval manager set"
-                  />
-                )}
-              </Field>
-            </div>
-            {canAssign ? (
-              <div className="flex justify-end">
-                <SubmitButton
-                  size="sm"
-                  onClick={() => void saveAssignment()}
-                  disabled={saving !== null}
-                  pending={saving === "assign"}
-                  pendingLabel="Saving…"
-                  icon={<UserCog className="size-4" />}
-                >
-                  {task.inspector_id ? "Update assignment" : "Assign inspector"}
-                </SubmitButton>
-              </div>
-            ) : task.locked ? (
-              /*
-                Tinted grey rather than left on the card's own white: this
-                sat directly under the assignment fields wearing the same
-                surface, so a read-only notice looked like one more thing
-                to fill in. Not red — being locked is a settled state, not
-                a fault.
-              */
-              <Alert className="bg-muted/60 text-muted-foreground mt-4 border-transparent">
-                <Lock className="size-4" />
-                <AlertTitle className="text-foreground">
-                  This inspection is locked
-                </AlertTitle>
-                <AlertDescription className="text-muted-foreground">
-                  The report has been approved, so the assignment can no longer
-                  be changed.
-                </AlertDescription>
-              </Alert>
-            ) : null}
-          </DataState>
-        )}
-      </SetupSection>
-
       {dialog}
     </div>
   );
@@ -904,127 +922,6 @@ function Field({
       {children}
       {hint ? <p className="text-muted-foreground text-xs">{hint}</p> : null}
     </div>
-  );
-}
-
-/**
- * Date picker, in the shape the rest of the app uses.
- *
- * Was a native <input type="date">, which drew the browser's own
- * calendar glyph and opened the browser's own picker — so the one field
- * on this form looked and behaved like it belonged to a different
- * product. Popover + Calendar, storing the same YYYY-MM-DD string the
- * endpoint already expects.
- */
-function DateField({
-  id,
-  value,
-  disabled,
-  onChange,
-}: {
-  id: string;
-  value: string;
-  disabled?: boolean;
-  onChange: (value: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const selected = value ? parseISO(value) : undefined;
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          id={id}
-          type="button"
-          variant="outline"
-          disabled={disabled}
-          className={cn(
-            "w-full justify-start rounded-[12px] text-left font-normal",
-            !value && "text-muted-foreground",
-          )}
-        >
-          <CalendarIcon className="text-muted-foreground mr-2 size-4" />
-          {selected ? format(selected, "dd MMM yyyy") : "Pick a date"}
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-auto p-0" align="start">
-        <Calendar
-          mode="single"
-          selected={selected}
-          onSelect={(date) => {
-            onChange(date ? format(date, "yyyy-MM-dd") : "");
-            setOpen(false);
-          }}
-          autoFocus
-        />
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-/**
- * Appointment time, on the quarter hour.
- *
- * A site visit is booked to a slot, not to a minute, so a list beats a
- * free-text field: it cannot be half-typed, and it drops the browser's
- * clock glyph. The range covers the working day; an existing
- * appointment outside it is kept as its own option rather than being
- * silently dropped from the list it is supposed to be showing.
- */
-const SLOT_START_HOUR = 6;
-const SLOT_END_HOUR = 21;
-
-function timeSlots(current: string): string[] {
-  const slots: string[] = [];
-  for (let hour = SLOT_START_HOUR; hour <= SLOT_END_HOUR; hour += 1) {
-    for (const minute of [0, 15, 30, 45]) {
-      if (hour === SLOT_END_HOUR && minute > 0) break;
-      slots.push(
-        `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`,
-      );
-    }
-  }
-  if (current && !slots.includes(current)) slots.push(current);
-  return slots.sort();
-}
-
-function TimeField({
-  id,
-  value,
-  disabled,
-  onChange,
-}: {
-  id: string;
-  value: string;
-  disabled?: boolean;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <Select
-      value={value || undefined}
-      onValueChange={onChange}
-      disabled={disabled}
-    >
-      {/*
-        Icon and value share one flex-1 child. The trigger lays its
-        children out with justify-between, so passing the clock and the
-        value as siblings pushed the time into the middle of the field
-        with empty space either side.
-      */}
-      <SelectTrigger id={id} className="w-full rounded-[12px]">
-        <span className="flex flex-1 items-center gap-2 text-left">
-          <Clock className="text-muted-foreground size-4 shrink-0" />
-          <SelectValue placeholder="Pick a time" />
-        </span>
-      </SelectTrigger>
-      <SelectContent className="max-h-72">
-        {timeSlots(value).map((slot) => (
-          <SelectItem key={slot} value={slot}>
-            {slot}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
   );
 }
 

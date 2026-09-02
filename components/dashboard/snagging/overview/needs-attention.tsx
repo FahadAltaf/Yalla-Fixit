@@ -45,7 +45,10 @@ export function NeedsAttention() {
       icon={<AlertCircle />}
       action={
         data && data.total > 0 ? (
-          <Badge variant="secondary" className="bg-danger/10 text-danger border-0 font-medium">
+          <Badge
+            variant="secondary"
+            className="bg-danger/10 text-danger border-0 font-medium"
+          >
             {data.total}
           </Badge>
         ) : null
@@ -76,11 +79,16 @@ export function NeedsAttention() {
                 className="hover:bg-muted/50 flex items-start gap-3 px-5 py-3 transition-colors"
               >
                 <Icon
-                  className={cn("mt-0.5 size-4 shrink-0", urgent ? "text-danger" : "text-warning")}
+                  className={cn(
+                    "mt-0.5 size-4 shrink-0",
+                    urgent ? "text-danger" : "text-warning",
+                  )}
                   aria-hidden
                 />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate font-medium">{item.title}</span>
+                  <span className="block truncate font-medium">
+                    {item.title}
+                  </span>
                   <span className="text-muted-foreground block truncate text-sm">
                     {item.subtitle}
                     {item.at ? <span> · {timeAgo(item.at)}</span> : null}
@@ -95,15 +103,6 @@ export function NeedsAttention() {
           );
         })}
       </ul>
-      <div className="border-t px-5 py-3">
-        <Link
-          href="/snagging/review"
-          className="text-brand inline-flex items-center gap-1 text-sm font-medium hover:underline"
-        >
-          View all
-          <ArrowRight className="size-3.5" aria-hidden />
-        </Link>
-      </div>
     </SectionShell>
   );
 }

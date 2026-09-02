@@ -67,7 +67,6 @@ import {
 } from "./analytics-drilldown";
 import {
   DataState,
-  SubHeading,
   PageHeading,
   PillTabs,
   SectionCard,
@@ -172,10 +171,6 @@ const QUEUE_BANDS = [
   red on this page is reserved for the overdue-approvals figure and for
   a defect that keeps recurring.
 */
-const categoryChartConfig = {
-  count: { label: "Snags", color: CHART_COLOR.neutral },
-} satisfies ChartConfig;
-
 const completedChartConfig = {
   count: { label: "Completed", color: CHART_COLOR.neutral },
 } satisfies ChartConfig;
@@ -311,10 +306,6 @@ export default function SnaggingAnalyticsDashboard() {
   }
 
   const statusTotal = (data?.byStatus ?? []).reduce(
-    (sum, row) => sum + row.count,
-    0,
-  );
-  const defectCategoryTotal = (data?.defectCategories ?? []).reduce(
     (sum, row) => sum + row.count,
     0,
   );
@@ -646,59 +637,6 @@ export default function SnaggingAnalyticsDashboard() {
                 ) : null
               }
             >
-              {/*
-                What the whole portfolio keeps failing on, above the
-                per-developer rows. The pills in each row answer the same
-                question one developer at a time; this answers it once,
-                without the reader assembling it from badges.
-              */}
-              {defectCategoryTotal > 0 ? (
-                <div className="border-b px-5 pb-5">
-                  <SubHeading className="mb-3">
-                    Defect categories, all developers
-                  </SubHeading>
-                  <ChartContainer
-                    config={categoryChartConfig}
-                    className="h-40 w-full"
-                  >
-                    <BarChart
-                      data={data.defectCategories}
-                      layout="vertical"
-                      margin={{ left: 8, right: 16 }}
-                    >
-                      <CartesianGrid horizontal={false} />
-                      <XAxis
-                        type="number"
-                        tickLine={false}
-                        axisLine={false}
-                        allowDecimals={false}
-                        domain={[
-                          0,
-                          (dataMax: number) =>
-                            Math.max(1, Math.ceil(dataMax * 1.2)),
-                        ]}
-                      />
-                      <YAxis
-                        type="category"
-                        dataKey="category"
-                        tickLine={false}
-                        axisLine={false}
-                        width={78}
-                        tickMargin={4}
-                      />
-                      <ChartTooltip
-                        content={<ChartTooltipContent labelKey="category" />}
-                      />
-                      <Bar
-                        dataKey="count"
-                        radius={[0, 4, 4, 0]}
-                        fill={CHART_COLOR.neutral}
-                      />
-                    </BarChart>
-                  </ChartContainer>
-                </div>
-              ) : null}
-
               <DataTable
                 data={developerPageRows}
                 columns={getSnaggingDeveloperColumns()}

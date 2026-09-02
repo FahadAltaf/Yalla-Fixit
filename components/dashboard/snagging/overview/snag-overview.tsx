@@ -9,7 +9,12 @@ import { cn } from "@/lib/utils";
 import { LinesSkeleton, SectionShell } from "./section-shell";
 import { useSection } from "./use-section";
 
-type Summary = { total: number; open: number; resolved: number; reopened: number };
+type Summary = {
+  total: number;
+  open: number;
+  resolved: number;
+  reopened: number;
+};
 
 /**
  * The four snag counts (§5), as a stat list rather than four more cards.
@@ -27,8 +32,18 @@ export function SnagOverview() {
   const rows = data
     ? [
         { label: "Total recorded", value: data.total, href: null, tone: "" },
-        { label: "Open", value: data.open, href: "/snagging/jobs?status=in_progress", tone: "" },
-        { label: "Resolved", value: data.resolved, href: null, tone: "text-success" },
+        {
+          label: "Open",
+          value: data.open,
+          href: "/snagging/jobs?status=in_progress",
+          tone: "",
+        },
+        {
+          label: "Resolved",
+          value: data.resolved,
+          href: null,
+          tone: "text-success",
+        },
         {
           label: "Reopened",
           value: data.reopened,
@@ -63,7 +78,11 @@ export function SnagOverview() {
           const body = (
             <>
               <dt className="text-muted-foreground text-sm">{row.label}</dt>
-              <dd className={cn("text-lg font-semibold tabular-nums", row.tone)}>{row.value}</dd>
+              <dd
+                className={cn("text-lg font-semibold tabular-nums", row.tone)}
+              >
+                {row.value}
+              </dd>
             </>
           );
           return row.href ? (
@@ -75,7 +94,10 @@ export function SnagOverview() {
               {body}
             </Link>
           ) : (
-            <div key={row.label} className="flex items-center justify-between px-5 py-3">
+            <div
+              key={row.label}
+              className="flex items-center justify-between px-5 py-3"
+            >
               {body}
             </div>
           );

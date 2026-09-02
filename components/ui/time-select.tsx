@@ -1,14 +1,35 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { cn } from "@/lib/actions/utils";
-import { ChevronDown } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Check, ChevronDown, Clock } from "lucide-react";
 
-// A 12-hour AM/PM time picker in 30-minute steps (YFI). Built as a custom
-// popover rather than a native <select> because the native dropdown opened
-// UPWARD over the field near the bottom of a dialog (YFI note on O-2). This
-// one always opens downward (flipping up only if there truly isn't room) and
-// scrolls, so the field is never covered.
+import { Button } from "@/components/ui/button";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { cn } from "@/lib/actions/utils";
+
+/**
+ * A 12-hour AM/PM time picker in 30-minute steps.
+ *
+ * Built on the design system's Popover and Command rather than hand-rolled
+ * positioning: the previous version measured the viewport itself to decide
+ * whether to flip up, drew its own listbox, and reimplemented selection --
+ * three things Popover and Command already do, and do with the keyboard
+ * handling and focus trapping this one never had. Typing now filters, which
+ * matters at forty-eight options: "2 pm" reaches the slot in three
+ * keystrokes instead of a scroll.
+ */
 export const TIME_STEP_MINUTES = 30;
 
 const TIME_OPTIONS = (() => {
@@ -34,113 +55,110 @@ export default function TimeSelect({
   value,
   onChange,
   className,
+  disabled,
   placeholder = "Select a time",
   "aria-label": ariaLabel,
 }: {
   value: string;
   onChange: (value: string) => void;
   className?: string;
+  disabled?: boolean;
   /** Shown when no time is set yet; the value stays "". */
   placeholder?: string;
   "aria-label"?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const [flipUp, setFlipUp] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
 
   // An off-step value (07:40 from an older record) is kept selectable by
   // slotting it into the list; an empty value simply has no option.
   const known = !value || TIME_OPTIONS.some((o) => o.value === value);
   const options = known
     ? TIME_OPTIONS
-    : [{ value, label: formatTimeAmPm(value) }, ...TIME_OPTIONS].sort((a, b) => a.value.localeCompare(b.value));
+    : [{ value, label: formatTimeAmPm(value) }, ...TIME_OPTIONS].sort((a, b) =>
+        a.value.localeCompare(b.value),
+      );
 
+  // Opening on a set time should land on it, not at midnight.
   useEffect(() => {
-    if (!open) return;
-    const onDocClick = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
-    document.addEventListener("mousedown", onDocClick);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDocClick);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  // Once open, bring the selected option into view (no state change here, so
-  // it stays out of the "setState in effect" rule).
-  useLayoutEffect(() => {
-    if (!open) return;
-    const el = listRef.current?.querySelector<HTMLElement>('[data-selected="true"]');
-    el?.scrollIntoView({ block: "center" });
-  }, [open]);
-
-  // Prefer opening downward; flip up only when there isn't room below and
-  // there's more room above. Measured at click time, not in an effect.
-  const toggleOpen = () => {
-    if (!open && rootRef.current) {
-      const rect = rootRef.current.getBoundingClientRect();
-      const below = window.innerHeight - rect.bottom;
-      setFlipUp(below < 220 && rect.top > below);
-    }
-    setOpen((v) => !v);
-  };
+    if (!open || !value) return;
+    const id = window.requestAnimationFrame(() => {
+      document
+        .querySelector(`[data-time-option="${value}"]`)
+        ?.scrollIntoView({ block: "center" });
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [open, value]);
 
   return (
-    <div ref={rootRef} className="relative">
-      <button
-        type="button"
-        aria-label={ariaLabel}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        onClick={toggleOpen}
-        className={cn(
-          "border-input bg-transparent dark:bg-input/30 flex h-9 w-full items-center justify-between rounded-md border px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]",
-          className,
-        )}
-      >
-        <span className={cn(!value && "text-muted-foreground")}>
-          {value ? formatTimeAmPm(value) : placeholder}
-        </span>
-        <ChevronDown className="size-4 opacity-60" />
-      </button>
-
-      {open && (
-        <div
-          ref={listRef}
-          role="listbox"
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          aria-label={ariaLabel}
+          disabled={disabled}
           className={cn(
-            "bg-popover absolute z-50 max-h-56 w-full overflow-y-auto rounded-md border p-1 shadow-md",
-            flipUp ? "bottom-full mb-1" : "top-full mt-1",
+            // Matches Input (and DateSelect beside it) rather than the
+            // Button pill: this is a form field, not an action.
+            "h-8 w-full justify-between rounded-[12px] px-2.5 font-normal",
+            !value && "text-muted-foreground",
+            className,
           )}
         >
-          {options.map((o) => {
-            const selected = o.value === value;
-            return (
-              <button
-                key={o.value}
-                type="button"
-                role="option"
-                aria-selected={selected}
-                data-selected={selected}
-                onClick={() => {
-                  onChange(o.value);
-                  setOpen(false);
-                }}
-                className={cn(
-                  "flex w-full items-center rounded px-2 py-1.5 text-left text-sm",
-                  selected ? "bg-primary text-primary-foreground" : "hover:bg-muted",
-                )}
-              >
-                {o.label}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
+          <span className="flex items-center gap-2 truncate">
+            <Clock className="size-4 shrink-0 opacity-60" aria-hidden />
+            {value ? formatTimeAmPm(value) : placeholder}
+          </span>
+          <ChevronDown className="size-4 shrink-0 opacity-60" aria-hidden />
+        </Button>
+      </PopoverTrigger>
+
+      <PopoverContent
+        align="start"
+        // Matches the trigger, so the list never sits narrower than the
+        // field it belongs to.
+        className="w-[var(--radix-popover-trigger-width)] p-0"
+      >
+        <Command
+          // The stored value is 24-hour ("14:30") but the label is 12-hour,
+          // and people type what they see. Searching both means "14:30",
+          // "2:30" and "pm" all find the same slot.
+          filter={(itemValue, search) => {
+            const option = options.find((o) => o.value === itemValue);
+            const haystack =
+              `${itemValue} ${option?.label ?? ""}`.toLowerCase();
+            return haystack.includes(search.trim().toLowerCase()) ? 1 : 0;
+          }}
+        >
+          <CommandInput placeholder="Type a time…" />
+          <CommandList>
+            <CommandEmpty>No time matches.</CommandEmpty>
+            <CommandGroup>
+              {options.map((option) => (
+                <CommandItem
+                  key={option.value}
+                  value={option.value}
+                  data-time-option={option.value}
+                  onSelect={(selected) => {
+                    onChange(selected);
+                    setOpen(false);
+                  }}
+                >
+                  <Check
+                    className={cn(
+                      "size-4",
+                      option.value === value ? "opacity-100" : "opacity-0",
+                    )}
+                  />
+                  {option.label}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }

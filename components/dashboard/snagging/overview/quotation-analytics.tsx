@@ -34,8 +34,12 @@ export function QuotationAnalytics() {
     { staleMs: 600_000, enabled: visible },
   );
 
-  const widest = Math.max(1, ...(data?.stages ?? []).map((stage) => stage.count));
-  const generated = data?.stages.find((stage) => stage.key === "generated")?.count ?? 0;
+  const widest = Math.max(
+    1,
+    ...(data?.stages ?? []).map((stage) => stage.count),
+  );
+  const generated =
+    data?.stages.find((stage) => stage.key === "generated")?.count ?? 0;
 
   return (
     <div ref={anchor}>
@@ -62,7 +66,9 @@ export function QuotationAnalytics() {
           <ul className="min-w-0 space-y-3">
             {(data?.stages ?? []).map((stage) => (
               <li key={stage.key} className="flex items-center gap-3">
-                <span className="text-muted-foreground w-20 shrink-0 text-sm">{stage.label}</span>
+                <span className="text-muted-foreground w-20 shrink-0 text-sm">
+                  {stage.label}
+                </span>
                 {/*
                   Raised and sent are steps rather than verdicts, so they
                   stay neutral; only the three outcomes take a colour.
