@@ -411,6 +411,13 @@ export interface SnaggingPhoto {
   width?: number | null;
   height?: number | null;
   exif?: Record<string, unknown> | null;
+  /**
+   * FR-6.05 — the exact defect spot on the photo (FR-4.06), as a
+   * fraction of the image in each axis so it survives any resize.
+   * All-or-nothing: both are set, or neither is.
+   */
+  marker_x?: number | null;
+  marker_y?: number | null;
   gps_lat?: number | null;
   gps_lng?: number | null;
   taken_at: string;
@@ -423,6 +430,14 @@ export interface SnaggingSnag {
   id: string;
   property_id: string;
   origin_task_id: string;
+  /**
+   * Raised on an earlier visit, not the one being viewed.
+   *
+   * Set when an additional visit shows the original inspection's defects
+   * as context. Those rows are reference only — they belong to the
+   * original and are never edited or re-counted here.
+   */
+  from_earlier_visit?: boolean;
   area_id: string;
   snag_code: string;
   catalogue_entry_id?: string | null;
@@ -521,6 +536,19 @@ export interface SnaggingTask {
   client_contact_phone?: string | null;
   supervisor_id?: string | null;
   approval_manager_id?: string | null;
+  /** FR-6.01 — who checks the work before the approval manager decides. */
+  reviewer_id?: string | null;
+  /** Joined from reviewer_id, so a screen can name them. */
+  reviewer?: {
+    id: string;
+    full_name?: string | null;
+    email?: string | null;
+  } | null;
+  review_started_at?: string | null;
+  /** Set when the reviewer hands the job on; gates approval. */
+  reviewed_at?: string | null;
+  /** FR-6.07 — stamped once when the 48-hour window is breached. */
+  escalated_at?: string | null;
   /**
    * Joined from approval_manager_id, so a screen can name who has to
    * sign an inspection off rather than only knowing that somebody must.
@@ -626,6 +654,14 @@ export interface SnaggingTaskSummary {
   updated_at: string;
   supervisor_id?: string | null;
   approval_manager_id?: string | null;
+  /** FR-6.01 — the review chain, so the queue can say who holds a job. */
+  reviewer_id?: string | null;
+  reviewer?: { id: string; full_name?: string | null; email?: string | null } | null;
+  manager?: { id: string; full_name?: string | null; email?: string | null } | null;
+  review_started_at?: string | null;
+  reviewed_at?: string | null;
+  /** FR-6.07 — stamped once by the escalation sweep. */
+  escalated_at?: string | null;
   property_id: string;
   unit_label: string;
   building_name?: string | null;

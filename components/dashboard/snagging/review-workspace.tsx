@@ -22,6 +22,21 @@ import { ErrorState, PageHeading, timeAgo } from "./shared";
  * each one. The queue reorders itself as decisions land, and the next
  * item is selected automatically when the current one leaves.
  */
+/**
+ * Who is holding the job right now.
+ *
+ * Split out of the row markup because the answer changes at the hand-off:
+ * before it, the reviewer's; after it, the approval manager's.
+ */
+function holderOf(row: {
+  reviewed_at?: string | null;
+  reviewer?: { full_name?: string | null; email?: string | null } | null;
+  manager?: { full_name?: string | null; email?: string | null } | null;
+}): string | null {
+  const holder = row.reviewed_at ? row.manager : row.reviewer;
+  return holder?.full_name ?? holder?.email ?? null;
+}
+
 export default function ReviewWorkspace() {
   const [queue, setQueue] = useState<SnaggingTaskSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -48,7 +63,9 @@ export default function ReviewWorkspace() {
     } catch (error) {
       // Held on screen rather than toasted away: an empty-looking queue
       // must never be mistaken for "nothing is waiting for review".
-      setQueueError(error instanceof Error ? error.message : "Could not load the queue");
+      setQueueError(
+        error instanceof Error ? error.message : "Could not load the queue",
+      );
     } finally {
       setLoadingQueue(false);
     }
@@ -61,7 +78,11 @@ export default function ReviewWorkspace() {
       setTask(await snaggingService.getTask(id));
     } catch (error) {
       setTask(null);
-      setTaskError(error instanceof Error ? error.message : "Could not load the inspection");
+      setTaskError(
+        error instanceof Error
+          ? error.message
+          : "Could not load the inspection",
+      );
     } finally {
       setLoadingTask(false);
     }
@@ -103,104 +124,138 @@ export default function ReviewWorkspace() {
           />
         </Card>
       ) : (
-      <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
-        <Card className="gap-0 self-start p-0">
-          <p className="eyebrow px-4 pt-4 pb-2">Queue · {queue.length}</p>
-          {loadingQueue ? (
-            // Real queue rows are edge-to-edge and bordered with two
-            // lines of text -- not free-floating bars inside p-4 padding.
-            <ul className="border-t">
-              {Array.from({ length: 4 }).map((_, index) => (
-                <li
-                  key={index}
-                  className="space-y-2 border-b border-l-2 border-l-transparent px-4 py-3 last:border-b-0"
-                >
-                  <Skeleton className="h-3 w-20" />
-                  <Skeleton className="h-4 w-3/4" />
-                </li>
-              ))}
-            </ul>
-          ) : queueError ? (
-            <div className="p-4">
-              <ErrorState
-                title="Could not load the queue"
-                message={queueError}
-                onRetry={() => void loadQueue()}
-              />
-            </div>
-          ) : (
-            <ul className="border-t">
-              {queue.map((row) => {
-                const active = row.id === selectedId;
-                return (
-                  <li key={row.id}>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedId(row.id)}
-                      className={cn(
-                        "w-full border-b border-l-2 px-4 py-3 text-left transition-colors last:border-b-0",
-                        active
-                          ? "border-l-brand bg-brand-50"
-                          : "hover:bg-mist-soft border-l-transparent",
-                      )}
-                    >
-                      <span className="flex items-center gap-2">
-                        <span className="text-muted-foreground font-mono text-xs">{row.code}</span>
-                        {row.escalated ? (
-                          <span className="bg-danger/10 text-danger inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase">
-                            <AlertTriangle className="size-3" />
-                            Overdue
-                          </span>
-                        ) : null}
-                      </span>
-                      <span className="mt-0.5 block font-medium">{row.unit_label}</span>
-                      <span className="text-muted-foreground block text-xs">
-                        {[row.building_name, row.client_name].filter(Boolean).join(" · ")}
-                      </span>
-                      <span className="text-muted-foreground mt-1 flex items-center gap-2 text-xs">
-                        {row.high_severity_count > 0 ? (
-                          <span className="text-danger font-medium">
-                            {row.high_severity_count} high
-                          </span>
-                        ) : null}
-                        <span className={cn(row.escalated && "text-danger font-medium")}>
-                          {timeAgo(row.submitted_at)}
-                        </span>
-                      </span>
-                    </button>
+        <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
+          <Card className="gap-0 self-start p-0">
+            <p className="eyebrow px-4 pt-4 pb-2">Queue · {queue.length}</p>
+            {loadingQueue ? (
+              // Real queue rows are edge-to-edge and bordered with two
+              // lines of text -- not free-floating bars inside p-4 padding.
+              <ul className="border-t">
+                {Array.from({ length: 4 }).map((_, index) => (
+                  <li
+                    key={index}
+                    className="space-y-2 border-b border-l-2 border-l-transparent px-4 py-3 last:border-b-0"
+                  >
+                    <Skeleton className="h-3 w-20" />
+                    <Skeleton className="h-4 w-3/4" />
                   </li>
-                );
-              })}
-            </ul>
-          )}
-        </Card>
+                ))}
+              </ul>
+            ) : queueError ? (
+              <div className="p-4">
+                <ErrorState
+                  title="Could not load the queue"
+                  message={queueError}
+                  onRetry={() => void loadQueue()}
+                />
+              </div>
+            ) : (
+              <ul className="border-t">
+                {queue.map((row) => {
+                  const active = row.id === selectedId;
+                  return (
+                    <li key={row.id}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedId(row.id)}
+                        className={cn(
+                          "w-full border-b border-l-2 px-4 py-3 text-left transition-colors last:border-b-0",
+                          active
+                            ? "border-l-brand bg-brand-50"
+                            : "hover:bg-mist-soft border-l-transparent",
+                        )}
+                      >
+                        <span className="flex items-center gap-2">
+                          <span className="text-muted-foreground font-mono text-xs">
+                            {row.code}
+                          </span>
+                          {row.escalated ? (
+                            <span className="bg-danger/10 text-danger inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase">
+                              <AlertTriangle className="size-3" />
+                              Overdue
+                            </span>
+                          ) : null}
+                        </span>
+                        <span className="mt-0.5 block font-medium">
+                          {row.unit_label}
+                        </span>
+                        <span className="text-muted-foreground block text-xs">
+                          {[row.building_name, row.client_name]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </span>
+                        {/*
+                          FR-6.01 — where the job is in the chain, and who
+                          holds it. FR-6.06 — the severity count is written
+                          last and reads as a label, not a rank: this queue
+                          is ordered by submission time and nothing in the
+                          row may imply otherwise.
+                        */}
+                        <span className="text-muted-foreground mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+                          <span
+                            className={cn(
+                              row.escalated && "text-danger font-medium",
+                            )}
+                          >
+                            {timeAgo(row.submitted_at)}
+                          </span>
+                          <span aria-hidden>·</span>
+                          <span>
+                            {row.status === "submitted"
+                              ? "Awaiting review"
+                              : row.reviewed_at
+                                ? "Awaiting sign-off"
+                                : "Under review"}
+                          </span>
+                          {holderOf(row) ? (
+                            <>
+                              <span aria-hidden>·</span>
+                              <span className="truncate">{holderOf(row)}</span>
+                            </>
+                          ) : null}
+                          {row.high_severity_count > 0 ? (
+                            <>
+                              <span aria-hidden>·</span>
+                              <span className="text-danger font-medium">
+                                {row.high_severity_count} high
+                              </span>
+                            </>
+                          ) : null}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </Card>
 
-        <div>
-          {loadingTask && !task ? (
-            <div className="space-y-4">
-              <Skeleton className="h-40 w-full" />
-              <Skeleton className="h-96 w-full" />
-            </div>
-          ) : taskError ? (
-            <ErrorState
-              title="Could not load this inspection"
-              message={taskError}
-              onRetry={() => selectedId && void loadTask(selectedId)}
-              retrying={loadingTask}
-            />
-          ) : task ? (
-            <ReviewPanel task={task} onChanged={() => void onChanged()} />
-          ) : (
-            <Card className="p-0">
-              <EmptyState
-                icon={<ClipboardCheck className="size-6" />}
-                title="Nothing to review"
-                description="Pick an inspection from the queue, or wait for the next one to arrive."
+          <div>
+            {loadingTask && !task ? (
+              <div className="space-y-4">
+                <Skeleton className="h-40 w-full" />
+                <Skeleton className="h-96 w-full" />
+              </div>
+            ) : taskError ? (
+              <ErrorState
+                title="Could not load this inspection"
+                message={taskError}
+                onRetry={() => selectedId && void loadTask(selectedId)}
+                retrying={loadingTask}
               />
-            </Card>
-          )}
+            ) : task ? (
+              <ReviewPanel task={task} onChanged={() => void onChanged()} />
+            ) : (
+              <Card className="p-0">
+                <EmptyState
+                  icon={<ClipboardCheck className="size-6" />}
+                  title="Nothing to review"
+                  description="Pick an inspection from the queue, or wait for the next one to arrive."
+                />
+              </Card>
+            )}
+          </div>
         </div>
-      </div>
       )}
     </div>
   );

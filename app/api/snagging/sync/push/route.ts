@@ -6,7 +6,12 @@ import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAuditBatch, type AuditEntry } from "@/lib/server/snagging/audit";
 import { inParallel, planWaves } from "@/lib/server/snagging/push-plan";
-import { isTaskEditableByInspector, statusFromVerdict } from "@/lib/server/snagging/workflow";
+import {
+  approvalDueAt,
+  assertTransition,
+  isTaskEditableByInspector,
+  statusFromVerdict,
+} from "@/lib/server/snagging/workflow";
 import { syncPushSchema, type SyncPushInput } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType, SnaggingTaskStatus, SnaggingVerdict } from "@/types/types";
 
@@ -620,6 +625,12 @@ async function applySubmission(admin: Admin, ctx: Ctx, payload: Record<string, u
     }
   }
 
+  // The device is allowed to edit a job in assigned, in_progress or
+  // rejected, but only in_progress and rejected may be SUBMITTED. Without
+  // this the editability check was the only gate and a job could jump
+  // straight from assigned to submitted, skipping in_progress entirely.
+  assertTransition(job.status as SnaggingTaskStatus, "submitted");
+
   const submittedAt = new Date().toISOString();
   const { error } = await admin
     .from("snagging_jobs")
@@ -627,6 +638,14 @@ async function applySubmission(admin: Admin, ctx: Ctx, payload: Record<string, u
       status: "submitted",
       locked: true,
       submitted_at: submittedAt,
+      // FR-6.07 — the 48-hour clock starts here and is stored, so the
+      // escalation sweep can index it instead of recomputing it per read.
+      approval_due_at: approvalDueAt(new Date(submittedAt)),
+      // A resubmission is a fresh decision: clear the previous review
+      // pass and any escalation so the job is not born already late.
+      review_started_at: null,
+      reviewed_at: null,
+      escalated_at: null,
       signer_name: (payload.signer_name as string) ?? null,
       signed_at: (payload.signed_at as string) ?? submittedAt,
       signature_path: (payload.signature_path as string) ?? null,
@@ -645,7 +664,15 @@ async function applySubmission(admin: Admin, ctx: Ctx, payload: Record<string, u
     entityId: job.id,
     taskId: job.id,
     eventType: "task_submitted",
-    payload: { code: job.code, signer_name: (payload.signer_name as string) ?? null },
+    payload: {
+      code: job.code,
+      signer_name: (payload.signer_name as string) ?? null,
+      from_status: job.status,
+      to_status: "submitted",
+      // A resubmission after a rejection writes its own row rather than
+      // replacing the last one, so both cycles stay readable in the
+      // history -- the table refuses updates, so this is structural.
+    },
   });
 
   ctx.jobById.set(job.id, { ...job, status: "submitted" });
@@ -656,6 +683,9 @@ async function applyTaskProgress(admin: Admin, ctx: Ctx, payload: Record<string,
   const job = writableJob(ctx, ctx.mutation.entity_id);
   if (payload.status !== "in_progress") throw new Error("The app may only move an inspection to in_progress");
   if (job.status === "in_progress") return;
+  // Same rule as submission: the transition map decides, not just whether
+  // the inspector may edit the record.
+  assertTransition(job.status as SnaggingTaskStatus, "in_progress");
 
   const { error } = await admin
     .from("snagging_jobs")

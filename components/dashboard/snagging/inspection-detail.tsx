@@ -22,6 +22,7 @@ import { ChecklistPanel } from "./checklist-panel";
 import { FloorPlansAreasPanel } from "./floor-plans-areas-panel";
 import { JobSetupPanel } from "./job-setup-panel";
 import { InspectorAssignmentAlert } from "./inspector-alert";
+import { AdditionalVisitsPanel } from "./additional-visits-panel";
 import { QuotationPanel } from "./quotation-panel";
 import { InspectionHeaderCard } from "./inspection-header-card";
 import { SnagWalkList } from "./snag-walk-list";
@@ -95,6 +96,14 @@ export default function InspectionDetail({ taskId }: { taskId: string }) {
     taskId,
     task ? (task.property?.unit_label ?? task.code) : undefined,
   );
+
+  /*
+    Additional visits belong to the ORIGINAL inspection. Showing the
+    section on a round or on a visit itself would invite raising one
+    against a child, which is the chained-family shape the routes now
+    deliberately refuse.
+  */
+  const isOriginal = !task?.parent_task_id;
 
   if (loading) {
     return (
@@ -216,6 +225,12 @@ export default function InspectionDetail({ taskId }: { taskId: string }) {
           </TabsTrigger>
           <TabsTrigger value="setup">Setup</TabsTrigger>
           <TabsTrigger value="quotation">Quotation</TabsTrigger>
+          {/* FR-9.01 — its own section, so a chargeable return trip is
+              never mistaken for a de-snag round. Only on the original
+              inspection: visits hang off it, not off each other. */}
+          {isOriginal ? (
+            <TabsTrigger value="visits">Additional visits</TabsTrigger>
+          ) : null}
           <TabsTrigger value="history">History</TabsTrigger>
         </TabsList>
 
@@ -257,6 +272,11 @@ export default function InspectionDetail({ taskId }: { taskId: string }) {
         <TabsContent value="quotation" className="mt-4">
           <QuotationPanel task={task} onChanged={() => void load()} />
         </TabsContent>
+        {isOriginal ? (
+          <TabsContent value="visits" className="mt-4">
+            <AdditionalVisitsPanel task={task} onChanged={() => void load()} />
+          </TabsContent>
+        ) : null}
         <TabsContent value="history" className="mt-4">
           <AuditTimeline taskId={task.id} />
         </TabsContent>

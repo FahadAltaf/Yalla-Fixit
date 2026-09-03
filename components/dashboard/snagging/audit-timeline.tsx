@@ -46,6 +46,10 @@ const EVENT_META: Record<string, { label: string; Icon: LucideIcon }> = {
   task_in_progress: { label: "Inspection started on site", Icon: PlayCircle },
   task_submitted: { label: "Submitted for review", Icon: Send },
   task_in_review: { label: "Review started", Icon: ClipboardCheck },
+  review_completed: { label: "Review complete — sent to approval", Icon: Send },
+  reviewer_assigned: { label: "Reviewer assigned", Icon: UserCog },
+  approval_manager_assigned: { label: "Approval manager assigned", Icon: UserCog },
+  approval_escalated: { label: "Approval escalated — past 48h", Icon: AlertTriangle },
   task_approved: { label: "Inspection approved", Icon: CheckCircle2 },
   task_rejected: { label: "Sent back for correction", Icon: XCircle },
   report_delivered: { label: "Report delivered", Icon: FileText },
@@ -144,6 +148,17 @@ function detailFor(event: SnaggingAuditEvent): string | null {
     return typeof p.category === "string"
       ? p.category.replace(/_/g, " ")
       : null;
+  }
+  if (event.event_type === "approval_escalated") {
+    const waited = typeof p.waiting_hours === "number" ? `${p.waiting_hours}h waiting` : null;
+    const sent = typeof p.notified === "number" && p.notified > 0
+      ? `${p.notified} notified`
+      : "nobody to notify";
+    return [waited, sent].filter(Boolean).join(" · ") || null;
+  }
+  // FR-6.04 — a status change reads as the move it was, not just its name.
+  if (typeof p.from_status === "string" && typeof p.to_status === "string") {
+    return `${p.from_status.replace(/_/g, " ")} → ${p.to_status.replace(/_/g, " ")}`;
   }
   if (event.entity_type === "area") {
     // "Area access recorded" says nothing on its own -- recorded as what?

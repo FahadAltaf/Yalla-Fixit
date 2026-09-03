@@ -39,10 +39,14 @@ export async function GET(req: NextRequest) {
         `id, code, status, round_number, visit_type, parent_job_id, scheduled_date, locked,
          rejection_reason, rejection_category, rejection_count, remediation_due_at,
          submitted_at, approved_at, created_at, updated_at,
-         approval_manager_id, client_id, unit_label, building_name, community,
+         approval_manager_id, reviewer_id, review_started_at, reviewed_at,
+         approval_due_at, escalated_at,
+         client_id, unit_label, building_name, community,
          property_type, developer_name,
          client:client_id(name),
-         inspector:inspector_id(full_name, email)`,
+         inspector:inspector_id(full_name, email),
+         reviewer:reviewer_id(id, full_name, email),
+         manager:approval_manager_id(id, full_name, email)`,
         { count: "exact" },
       );
 
@@ -134,6 +138,14 @@ type JobRow = {
   created_at: string;
   updated_at: string;
   approval_manager_id: string | null;
+  // FR-6.01 / FR-6.07 — the review chain and its clock.
+  reviewer_id: string | null;
+  review_started_at: string | null;
+  reviewed_at: string | null;
+  approval_due_at: string | null;
+  escalated_at: string | null;
+  reviewer: Joined;
+  manager: Joined;
   client_id: string | null;
   unit_label: string;
   building_name: string | null;
@@ -193,18 +205,27 @@ async function enrichRows(admin: Admin, rows: JobRow[]) {
     const ar = areaAgg.get(row.id) ?? { total: 0, confirmed: 0 };
     const client = firstOf(row.client);
     const insp = firstOf(row.inspector);
-    // FR-6.07 — the 48h approval SLA. Derived from submitted_at at read
-    // time (rather than a stored column and a cron) so an approval that
-    // has waited too long surfaces as escalated the moment the queue is
-    // opened. Only jobs still awaiting a decision can be escalated.
+    /*
+      FR-6.07 — the 48h approval SLA.
+
+      The deadline is now stored on the row when the job is submitted, so
+      the escalation sweep can index it and a job keeps the deadline it was
+      actually given. It is still derived here for rows written before the
+      column existed, so a historical job does not read as having no
+      deadline at all.
+    */
     const submittedMs = row.submitted_at ? Date.parse(row.submitted_at) : NaN;
-    const approvalDueAt = Number.isNaN(submittedMs)
-      ? null
-      : new Date(submittedMs + APPROVAL_SLA_HOURS * 60 * 60 * 1000).toISOString();
+    const approvalDueAt =
+      row.approval_due_at ??
+      (Number.isNaN(submittedMs)
+        ? null
+        : new Date(submittedMs + APPROVAL_SLA_HOURS * 60 * 60 * 1000).toISOString());
+    const awaitingDecision = row.status === "submitted" || row.status === "in_review";
+    // Stamped by the sweep, or past the deadline and not yet swept. Either
+    // way the queue shows it as late rather than waiting on the scheduler.
     const escalated =
-      !Number.isNaN(submittedMs) &&
-      (row.status === "submitted" || row.status === "in_review") &&
-      submittedMs + APPROVAL_SLA_HOURS * 60 * 60 * 1000 < now;
+      Boolean(row.escalated_at) ||
+      (awaitingDecision && approvalDueAt !== null && Date.parse(approvalDueAt) < now);
     return {
       id: row.id,
       code: row.code,
@@ -232,6 +253,12 @@ async function enrichRows(admin: Admin, rows: JobRow[]) {
       updated_at: row.updated_at,
       supervisor_id: null,
       approval_manager_id: row.approval_manager_id,
+      reviewer_id: row.reviewer_id ?? null,
+      reviewer: firstOf(row.reviewer) ?? null,
+      manager: firstOf(row.manager) ?? null,
+      review_started_at: row.review_started_at ?? null,
+      reviewed_at: row.reviewed_at ?? null,
+      escalated_at: row.escalated_at ?? null,
       property_id: row.client_id ?? row.id,
       unit_label: row.unit_label,
       building_name: row.building_name,

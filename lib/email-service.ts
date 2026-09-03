@@ -1,4 +1,5 @@
 import { TODO_STATUS_LABELS, Todo } from "@/types/types";
+import { emailMasthead } from "@/lib/email-brand";
 
 interface EmailOptions {
   to?: string | string[];
@@ -40,6 +41,101 @@ export const emailService = {
       console.error("Email send error:", error);
       throw error;
     }
+  },
+
+
+  /**
+   * FR-6.07 — an approval that has run past its 48-hour window.
+   *
+   * Goes to the people named on the job (approval manager and reviewer)
+   * rather than a fixed address, so escalation follows the assignment
+   * instead of a hard-coded mailbox.
+   */
+  sendSnaggingEscalationEmail: async ({
+    to,
+    code,
+    unit,
+    status,
+    waitingHours,
+    jobUrl,
+  }: {
+    to: string[];
+    code: string;
+    unit: string;
+    status: string;
+    waitingHours: number;
+    jobUrl: string;
+  }) => {
+    const subject = `Overdue approval — ${code} has been waiting ${waitingHours}h`;
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #1f2937;">
+        ${emailMasthead()}
+        <h2 style="margin: 0 0 12px; font-size: 18px;">Approval overdue</h2>
+        <p style="margin: 0 0 16px;">
+          Inspection <strong>${code}</strong> for <strong>${unit}</strong> was submitted
+          ${waitingHours} hours ago and is still <strong>${status.replace(/_/g, " ")}</strong>.
+          The 48-hour approval window has passed.
+        </p>
+        <a href="${jobUrl}" style="display: inline-block; background: #83201e; color: #ffffff; padding: 12px 18px; border-radius: 6px; text-decoration: none;">Open the inspection</a>
+        <p style="margin: 16px 0 0; font-size: 12px; color: #6b7280;">
+          You are receiving this because you are named as the reviewer or approval manager on this job.
+        </p>
+      </div>
+    `;
+    return emailService.sendEmail({ to, subject, html });
+  },
+
+  /**
+   * FR-6.02 / FR-6.03 — work sent back to the inspector.
+   *
+   * Carries the category, the written reason and the remediation deadline,
+   * because an inspector who only learns "rejected" has to open the app to
+   * find out what to fix.
+   */
+  sendSnaggingRejectionEmail: async ({
+    to,
+    code,
+    unit,
+    categoryLabel,
+    remediation,
+    reason,
+    dueAt,
+    jobUrl,
+  }: {
+    to: string;
+    code: string;
+    unit: string;
+    categoryLabel: string;
+    remediation: string;
+    reason: string;
+    dueAt: string;
+    jobUrl: string;
+  }) => {
+    const due = new Date(dueAt).toLocaleString("en-GB", {
+      day: "numeric",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "Asia/Dubai",
+    });
+    const subject = `Sent back for correction — ${code} (${categoryLabel})`;
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #1f2937;">
+        ${emailMasthead()}
+        <h2 style="margin: 0 0 12px; font-size: 18px;">${code} needs correcting</h2>
+        <p style="margin: 0 0 16px;">
+          Your inspection of <strong>${unit}</strong> has been sent back as
+          <strong>${categoryLabel}</strong>. ${remediation}.
+        </p>
+        <div style="border-left: 3px solid #83201e; background: #fbf2f3; padding: 12px 16px; margin-bottom: 16px;">
+          <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: #6b7280; margin-bottom: 4px;">Reason given</div>
+          <div style="white-space: pre-line;">${reason}</div>
+        </div>
+        <p style="margin: 0 0 16px;">Due back by <strong>${due}</strong> (GST).</p>
+        <a href="${jobUrl}" style="display: inline-block; background: #83201e; color: #ffffff; padding: 12px 18px; border-radius: 6px; text-decoration: none;">Open the inspection</a>
+      </div>
+    `;
+    return emailService.sendEmail({ to, subject, html });
   },
 
   sendPaymentConfirmationEmail: async ({

@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
+import { AlertTriangle, Loader2, LogIn, RefreshCw } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -183,6 +183,10 @@ export function SectionSkeleton({
  * because a silent empty screen reads as "there is nothing here" and
  * sends a coordinator looking for data that exists. Retry is part of the
  * state, not a toolbar button somewhere else.
+ *
+ * An expired session is handled separately, because it is the one
+ * failure where retrying cannot work. Offering "Try again" for it sent
+ * someone hunting for a data problem when the real answer was "sign in".
  */
 export function ErrorState({
   title = "Could not load this",
@@ -197,6 +201,35 @@ export function ErrorState({
   retrying?: boolean;
   className?: string;
 }) {
+  /*
+    The message is what the fetch layer produced, so a session error is
+    recognisable here without every caller having to pass a flag. Matching
+    on the sentence SessionExpiredError throws keeps this in one place;
+    callers that already know can simply pass that message through.
+  */
+  const expired = /session has expired/i.test(message ?? "");
+
+  if (expired) {
+    return (
+      <Alert className={cn("border-warning/40 bg-warning/5 items-start p-4", className)}>
+        <LogIn className="text-warning" />
+        <AlertTitle>Your session has expired</AlertTitle>
+        <AlertDescription>
+          <p>
+            You have been signed out, so this could not load. Sign in again to
+            pick up where you left off — nothing you saved has been lost.
+          </p>
+          <Button asChild type="button" variant="outline" size="sm" className="mt-3">
+            <a href={`/auth/login?next=${encodeURIComponent(currentPath())}`}>
+              <LogIn className="size-4" />
+              Sign in again
+            </a>
+          </Button>
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
   return (
     <Alert variant="destructive" className={cn("border-destructive/30 items-start p-4", className)}>
       <AlertTriangle />
@@ -223,6 +256,17 @@ export function ErrorState({
       </AlertDescription>
     </Alert>
   );
+}
+
+/**
+ * Where to come back to after signing in.
+ *
+ * Guarded for the server render, where there is no location — this file
+ * is imported by server components too.
+ */
+function currentPath(): string {
+  if (typeof window === "undefined") return "/";
+  return window.location.pathname + window.location.search;
 }
 
 /* ──────────────────────────── the wrapper ────────────────────────────── */

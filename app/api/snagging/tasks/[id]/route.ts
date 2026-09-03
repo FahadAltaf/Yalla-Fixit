@@ -41,6 +41,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
          client:client_id(id, name, email, phone, company),
          inspector:inspector_id(id, full_name, email, profile_image),
          manager:approval_manager_id(id, full_name, email),
+         reviewer:reviewer_id(id, full_name, email),
          property_record:property_id(*),
          areas:snagging_areas(*)`,
       )
@@ -82,8 +83,28 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       disagree even though both exist.
     */
     const family = await loadJobFamily(admin, id);
+
+    /*
+      Viewing an ADDITIONAL VISIT also shows the original's defects.
+
+      A visit opened with an empty snag list, which reads as a property
+      with no known problems — on a unit that already has three. The
+      inspector is going back to cover rooms the first pass could not
+      reach, and what is already on record is exactly the context they
+      need: it tells them what has been seen, so they log what has not.
+
+      Read-only reference, NOT copied. Copying would duplicate every
+      defect into the visit and double-count it in the merged report,
+      which is the thing FR-9.03 exists to prevent. They are tagged below
+      so the UI can say plainly where each one came from.
+    */
+    const isAdditionalVisit = id !== family.rootId && job.visit_type === "additional";
     const snagJobIds =
-      id === family.rootId ? [id, ...family.additionalVisitIds] : [id];
+      id === family.rootId
+        ? [id, ...family.additionalVisitIds]
+        : isAdditionalVisit
+          ? [id, family.rootId]
+          : [id];
 
     const { data: snagRows, error: snagError } = await admin
       .from("snagging_snags")
@@ -91,7 +112,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         `*,
          area:snagging_areas(id, name),
          photos:snagging_snag_photos(id, snag_id, job_id, storage_path, media_type,
-           bytes, width, height, taken_at, round_number, gps_lat, gps_lng, exif)`,
+           bytes, width, height, taken_at, round_number, gps_lat, gps_lng, exif,
+           marker_x, marker_y)`,
       )
       .in("job_id", snagJobIds)
       // Newest first for the working views. The client report has its
@@ -107,6 +129,14 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       return {
         ...s,
         origin_task_id: s.job_id,
+        /*
+          Where this defect was raised, relative to the record being
+          viewed. On an additional visit the list mixes what is already
+          known with what this visit finds, and the two must never look
+          alike: one is history the inspector reads, the other is their
+          own work.
+        */
+        from_earlier_visit: s.job_id !== id,
         photos: (s.photos ?? []).map((p) => ({ ...p, task_id: p.job_id })),
       };
     });
@@ -249,7 +279,9 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     const admin = await createAdminServerClient();
     const { data: existing, error: loadError } = await admin
       .from("snagging_jobs")
-      .select("id, code, status, locked, inspector_id, approval_manager_id, scheduled_date, appointment_at, parent_job_id")
+      .select(
+        "id, code, status, locked, inspector_id, approval_manager_id, reviewer_id, scheduled_date, appointment_at, parent_job_id",
+      )
       .eq("id", id)
       .maybeSingle();
     if (loadError) throw new Error(loadError.message);
@@ -274,6 +306,8 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     }
     if (input.scheduled_date !== undefined) updates.scheduled_date = input.scheduled_date;
     if (input.approval_manager_id !== undefined) updates.approval_manager_id = input.approval_manager_id;
+    // FR-6.01 — who checks the work before the manager decides.
+    if (input.reviewer_id !== undefined) updates.reviewer_id = input.reviewer_id;
     // Site contacts (FR-3.03), editable after creation.
     if (input.developer_contact_name !== undefined) updates.developer_contact_name = input.developer_contact_name;
     if (input.developer_contact_phone !== undefined) updates.developer_contact_phone = input.developer_contact_phone;
@@ -369,7 +403,49 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
         eventType: "inspector_assigned",
         actorId: profile.id,
         actorLabel: profile.full_name ?? profile.email,
-        payload: { inspector_id: assignedInspectorId, code: existing.code },
+        payload: {
+          inspector_id: assignedInspectorId,
+          old_value: existing.inspector_id,
+          new_value: assignedInspectorId,
+          code: existing.code,
+        },
+      });
+    }
+
+    /*
+      FR-6.04 — reassignment is a change to who is accountable, and it was
+      the one edit on this route that left no trace. Both sides of the
+      review chain are recorded with their old and new holder, so "who was
+      the approval manager when this was signed off" has an answer.
+    */
+    const reassignments: Array<{ event: string; from: string | null; to: string | null }> = [];
+    if (
+      input.approval_manager_id !== undefined &&
+      input.approval_manager_id !== existing.approval_manager_id
+    ) {
+      reassignments.push({
+        event: "approval_manager_assigned",
+        from: existing.approval_manager_id,
+        to: input.approval_manager_id,
+      });
+    }
+    if (input.reviewer_id !== undefined && input.reviewer_id !== existing.reviewer_id) {
+      reassignments.push({
+        event: "reviewer_assigned",
+        from: existing.reviewer_id,
+        to: input.reviewer_id,
+      });
+    }
+
+    for (const change of reassignments) {
+      await recordAudit(admin, {
+        entityType: "task",
+        entityId: id,
+        taskId: id,
+        eventType: change.event,
+        actorId: profile.id,
+        actorLabel: profile.full_name ?? profile.email,
+        payload: { code: existing.code, old_value: change.from, new_value: change.to },
       });
     }
 

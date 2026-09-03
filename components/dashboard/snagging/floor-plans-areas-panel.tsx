@@ -44,6 +44,7 @@ import {
 } from "@/components/ui/select";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
+import { templateFor } from "@/lib/snagging/area-templates";
 import { snaggingService } from "@/modules/snagging";
 import {
   ActionType,
@@ -363,6 +364,42 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
       );
     } finally {
       setBusy(false);
+    }
+  }
+
+  /*
+    The rooms a job of this shape normally has, offered as one tap each.
+
+    Adding a room here meant typing its name, while creating the job had
+    offered exactly the same list as a template — so the one place an area
+    is most often MISSING was the one place the list was not available.
+    Same source as the wizard, so a room added here carries the catalogue
+    code too and the inspector's capture sheet offers the right elements
+    in it.
+  */
+  const suggestions = useMemo(() => {
+    const existing = new Set(areas.map((a) => a.name.trim().toLowerCase()));
+    return templateFor(
+      (task?.property?.property_type as SnaggingPropertyType) ?? "apartment",
+      task?.property?.bedrooms ?? null,
+    ).filter((room) => !existing.has(room.name.toLowerCase()));
+  }, [areas, task?.property?.property_type, task?.property?.bedrooms]);
+
+  async function addSuggested(room: { name: string; code: string }) {
+    setBusy(true);
+    setRunning("area");
+    try {
+      await snaggingService.createArea(taskId, {
+        name: room.name,
+        catalogue_area_code: room.code,
+      });
+      toast.success(`${room.name} added`);
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not add the area");
+    } finally {
+      setBusy(false);
+      setRunning(null);
     }
   }
 
@@ -735,6 +772,28 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
                 </div>
               ))}
             </div>
+            {canEdit && suggestions.length > 0 ? (
+              <div className="mb-3">
+                <p className="text-muted-foreground mb-2 text-xs">
+                  Rooms this property usually has — tap to add
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {suggestions.map((room) => (
+                    <button
+                      key={room.name}
+                      type="button"
+                      onClick={() => void addSuggested(room)}
+                      disabled={busy}
+                      className="border-input hover:bg-accent focus-visible:ring-ring inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs disabled:opacity-50 focus-visible:ring-2 focus-visible:outline-none"
+                    >
+                      <Plus className="size-3" aria-hidden />
+                      {room.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
             {canEdit ? (
               <div className="flex items-center gap-2">
                 <Input

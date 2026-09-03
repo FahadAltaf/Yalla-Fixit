@@ -60,7 +60,11 @@ const TRANSITIONS: Record<SnaggingTaskStatus, SnaggingTaskStatus[]> = {
   draft: ["assigned", "cancelled"],
   assigned: ["in_progress", "cancelled"],
   in_progress: ["submitted", "cancelled"],
-  submitted: ["in_review", "approved", "rejected"],
+  // FR-6.01 — a submitted inspection has exactly one way forward: into
+  // review. Approve and reject used to be reachable straight from here,
+  // which let a manager sign work off without it ever having been checked
+  // and made `in_review` an optional courtesy rather than a step.
+  submitted: ["in_review"],
   in_review: ["approved", "rejected"],
   rejected: ["in_progress", "submitted", "cancelled"],
   approved: ["delivered"],
@@ -93,6 +97,39 @@ export function isDesignatedApprovalManager(
   isAdmin: boolean,
 ): boolean {
   if (isAdmin) return true;
+  return approvalManagerId != null && actorId === approvalManagerId;
+}
+
+/**
+ * FR-6.01 — the reviewer's hand-off gate.
+ *
+ * `in_review` spans two jobs of work: the reviewer checking the evidence,
+ * then the approval manager deciding on it. `reviewed_at` is the line
+ * between them, so a decision taken before the reviewer has finished is
+ * refused rather than quietly accepted.
+ */
+export function isReviewComplete(reviewedAt: string | null | undefined): boolean {
+  return Boolean(reviewedAt);
+}
+
+/**
+ * Who may act as the reviewer on a job.
+ *
+ * The named reviewer, the named approval manager (a manager reviewing their
+ * own queue is the smaller team's normal case, and they are already trusted
+ * with the decision), or an admin. An inspector never qualifies -- they hold
+ * no approve permission, which every review route checks first.
+ */
+export function isDesignatedReviewer(
+  actorId: string,
+  reviewerId: string | null | undefined,
+  approvalManagerId: string | null | undefined,
+  isAdmin: boolean,
+): boolean {
+  if (isAdmin) return true;
+  if (reviewerId) return actorId === reviewerId;
+  // Nobody named: the approval manager owns their own queue by default, so
+  // an unassigned job is never stuck waiting for an assignment nobody made.
   return approvalManagerId != null && actorId === approvalManagerId;
 }
 

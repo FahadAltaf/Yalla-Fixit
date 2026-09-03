@@ -86,9 +86,27 @@ export function InspectionHeaderCard({
   const isApprovalManager = Boolean(
     task.approval_manager_id && userProfile?.id === task.approval_manager_id,
   );
+  /*
+    FR-6.01 — two roles, two gates.
+
+    The reviewer checks the evidence and hands it on; the approval manager
+    decides. Where no reviewer is named the manager owns their own queue, so
+    an unassigned job is never stuck. These mirror `isDesignatedReviewer` and
+    `isDesignatedApprovalManager` on the server exactly — the buttons must
+    not offer an action the API will refuse.
+  */
+  const isReviewer = task.reviewer_id
+    ? userProfile?.id === task.reviewer_id
+    : isApprovalManager;
+  const canReview =
+    canApprove && (isAdminUser(userProfile) || isReviewer || isApprovalManager);
   const canDecide =
     canApprove && (isAdminUser(userProfile) || isApprovalManager);
   const managerName = task.manager?.full_name ?? task.manager?.email ?? null;
+  const reviewerName = task.reviewer?.full_name ?? task.reviewer?.email ?? null;
+  // The reviewer's hand-off. Until this is set the server refuses both
+  // approve and reject, so neither button is offered.
+  const reviewComplete = Boolean(task.reviewed_at);
 
   const snags = useMemo(() => task.snags ?? [], [task]);
   const areas = task.areas ?? [];
@@ -102,7 +120,15 @@ export function InspectionHeaderCard({
     of them have been given a verdict. A defect raised ON this round is not
     counted — it is a new find, not something the round went back for.
   */
-  const isRound = (task.round_number ?? 1) > 1;
+  /*
+    A de-snag round, not merely "not the first visit".
+
+    This read round_number > 1, which is also true of every additional
+    visit — so a visit showed "Defects re-checked 0 / 0", a de-snagging
+    metric, on a workflow that carries no defects to re-check. The two
+    are different jobs and are told apart by visit_type, never by number.
+  */
+  const isRound = task.visit_type === "desnag";
   const carried = snags.filter(
     (snag) => (snag.round_created ?? 1) < (task.round_number ?? 1),
   );
@@ -134,6 +160,25 @@ export function InspectionHeaderCard({
     awaitingDecision &&
     !Number.isNaN(submittedMs) &&
     submittedMs + 48 * 60 * 60 * 1000 < Date.now();
+
+  async function completeReview() {
+    setWorking(true);
+    try {
+      await snaggingService.completeReview(task.id);
+      toast.success(
+        managerName
+          ? `Review complete. ${managerName} can now approve or send it back.`
+          : "Review complete. The approval manager can now decide.",
+      );
+      onChanged();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not complete the review",
+      );
+    } finally {
+      setWorking(false);
+    }
+  }
 
   async function startReview() {
     setWorking(true);
@@ -290,7 +335,34 @@ export function InspectionHeaderCard({
                 </Link>
               </Button>
             ) : null}
-            {awaitingDecision && canDecide ? (
+            {/*
+              FR-6.01 — the chain has three stops, and the card shows the one
+              it is at: pick it up, hand it on, decide. Each button is offered
+              only to the person the server will accept it from, so a missing
+              button is always "not your step" rather than a 403.
+            */}
+            {awaitingDecision && task.status === "submitted" && canReview ? (
+              <SubmitButton
+                onClick={() => void startReview()}
+                pending={working}
+                pendingLabel="Starting…"
+                icon={<ClipboardCheck className="size-4" />}
+              >
+                Start review
+              </SubmitButton>
+            ) : awaitingDecision &&
+              task.status === "in_review" &&
+              !reviewComplete &&
+              canReview ? (
+              <SubmitButton
+                onClick={() => void completeReview()}
+                pending={working}
+                pendingLabel="Sending…"
+                icon={<ClipboardCheck className="size-4" />}
+              >
+                {managerName ? `Send to ${managerName}` : "Send to approval manager"}
+              </SubmitButton>
+            ) : awaitingDecision && reviewComplete && canDecide ? (
               <>
                 <Button
                   variant="outline"
@@ -300,40 +372,34 @@ export function InspectionHeaderCard({
                   <XCircle className="size-4" />
                   Send back
                 </Button>
-                {task.status === "submitted" ? (
-                  // FR-6.01 — the review must be picked up (submitted →
-                  // in_review, audited) before it can be approved. Approve
-                  // only appears once the inspection is under review.
-                  <SubmitButton
-                    onClick={() => void startReview()}
-                    pending={working}
-                    pendingLabel="Starting…"
-                    icon={<ClipboardCheck className="size-4" />}
-                  >
-                    Start review
-                  </SubmitButton>
-                ) : (
-                  <SubmitButton
-                    onClick={() => void approve()}
-                    pending={working}
-                    pendingLabel="Approving…"
-                    icon={<CheckCircle2 className="size-4" />}
-                  >
-                    Approve inspection
-                  </SubmitButton>
-                )}
+                <SubmitButton
+                  onClick={() => void approve()}
+                  pending={working}
+                  pendingLabel="Approving…"
+                  icon={<CheckCircle2 className="size-4" />}
+                >
+                  Approve inspection
+                </SubmitButton>
               </>
             ) : awaitingDecision ? (
               /*
-                Waiting on somebody else. Naming them turns a missing set
-                of buttons into an answer — otherwise a coordinator is
-                left wondering whether the page is broken or they simply
-                are not the person.
+                Waiting on somebody else. Naming them turns a missing set of
+                buttons into an answer — otherwise a coordinator is left
+                wondering whether the page is broken or they simply are not
+                the person it is waiting on.
               */
               <span className="text-muted-foreground text-sm">
-                {managerName
-                  ? `Awaiting sign-off by ${managerName}`
-                  : "Awaiting sign-off by this job's approval manager"}
+                {task.status === "submitted"
+                  ? reviewerName
+                    ? `Awaiting review by ${reviewerName}`
+                    : "Awaiting review"
+                  : !reviewComplete
+                    ? reviewerName
+                      ? `Under review by ${reviewerName}`
+                      : "Under review"
+                    : managerName
+                      ? `Awaiting sign-off by ${managerName}`
+                      : "Awaiting sign-off by this job's approval manager"}
               </span>
             ) : null}
             {(task.status === "approved" || task.status === "delivered") &&

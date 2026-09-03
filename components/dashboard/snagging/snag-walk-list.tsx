@@ -124,7 +124,17 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
 
-  const snags = useMemo(() => task.snags ?? [], [task]);
+  const all = useMemo(() => task.snags ?? [], [task]);
+
+  /*
+    On an additional visit the list carries the original inspection's
+    defects as context. They are split out rather than mixed in: one set
+    is what this visit found, the other is what was already known, and
+    running them together would have the visit appear to have captured
+    defects it never touched.
+  */
+  const snags = useMemo(() => all.filter((s) => !s.from_earlier_visit), [all]);
+  const earlier = useMemo(() => all.filter((s) => s.from_earlier_visit), [all]);
   const plans = useMemo(() => task.floor_plans ?? [], [task]);
   const areas = task.areas ?? [];
 
@@ -485,6 +495,35 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
         )}
       </SectionCard>
 
+      {/*
+        Read-only context on an additional visit. Deliberately below the
+        visit's own list and visually quieter: it is there to tell the
+        inspector what has already been seen, not to be worked through.
+      */}
+      {earlier.length > 0 ? (
+        <SectionCard
+          title="Already on record"
+          icon={<ListChecks />}
+          description={`${earlier.length} defect${earlier.length === 1 ? "" : "s"} from the original inspection. Shown for context — they stay on the original and are not re-counted here.`}
+          bodyClassName="border-t"
+        >
+          <ul className="divide-y">
+            {earlier.map((snag) => (
+              <li key={snag.id} className="flex flex-wrap items-center gap-3 px-5 py-3 text-sm">
+                <span className="text-muted-foreground font-mono text-xs">{snag.snag_code}</span>
+                <span className="min-w-0 flex-1">
+                  {[snag.area?.name ?? snag.area_label, snag.element_label, snag.defect_label]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </span>
+                <SeverityBadge severity={snag.severity} />
+                <SnagStatusBadge status={snag.status} />
+              </li>
+            ))}
+          </ul>
+        </SectionCard>
+      ) : null}
+
       <Dialog
         open={Boolean(preview)}
         onOpenChange={(open) => !open && setPreview(null)}
@@ -502,7 +541,7 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
           {preview?.signed_url ? (
             // A clip plays; a still renders. next/image cannot decode a
             // video, so every video opened here used to be a broken frame.
-            <EvidenceViewer photo={preview} />
+            <MarkedEvidence photo={preview} />
           ) : (
             <div className="text-muted-foreground flex h-64 items-center justify-center">
               <ImageOff className="mr-2 size-5" /> This photo is no longer
@@ -858,6 +897,42 @@ function EvidenceGroup({
 }
 
 /**
+ * FR-6.05 — the photo with the defect spot the inspector marked on it.
+ *
+ * `marker_x` / `marker_y` are stored as fractions of the image, not pixels,
+ * so the same pair lands correctly whatever the photo's dimensions or aspect
+ * ratio: the overlay is positioned in percentages over a wrapper that the
+ * image itself sizes. They were captured and stored but drawn nowhere, which
+ * left an approver reading "there is a defect in this wall" over a photo of
+ * a whole wall.
+ */
+function MarkedEvidence({ photo }: { photo: SnaggingPhoto }) {
+  const x = typeof photo.marker_x === "number" ? photo.marker_x : null;
+  const y = typeof photo.marker_y === "number" ? photo.marker_y : null;
+  // A marker outside the frame is corrupt data, not a spot worth drawing.
+  const placed =
+    x !== null && y !== null && x >= 0 && x <= 1 && y >= 0 && y <= 1;
+
+  if (!placed) return <EvidenceViewer photo={photo} />;
+
+  return (
+    <div className="relative">
+      <EvidenceViewer photo={photo} />
+      <span
+        className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2"
+        style={{ left: `${x! * 100}%`, top: `${y! * 100}%` }}
+        aria-hidden
+      >
+        <span className="border-danger bg-danger/25 block size-7 rounded-full border-2 shadow-[0_0_0_2px_rgba(255,255,255,0.85)]" />
+      </span>
+      <span className="bg-danger absolute top-2 left-2 rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white uppercase">
+        Marked defect
+      </span>
+    </div>
+  );
+}
+
+/**
  * FR-6.05 — the capture metadata behind a photo, so the approver can
  * judge the evidence, not just look at it: when and where it was taken,
  * the device that took it, and the raw dimensions. EXIF is read straight
@@ -926,11 +1001,29 @@ function PhotoExif({ photo }: { photo: SnaggingPhoto }) {
     ),
   });
 
+  /*
+    Did the camera give us anything, or only what the upload knew?
+
+    Dimensions, file size and the upload timestamp exist for every photo, so
+    a panel built from those alone looks like EXIF while carrying none. An
+    approver judging evidence needs to be able to tell the difference.
+  */
+  const hasCameraData = Boolean(
+    camera || lens || shot || software || hasGps || (photo.exif && Object.keys(photo.exif).length > 0),
+  );
+
   return (
     <div className="bg-muted/40 rounded-md border p-4">
       <p className="text-muted-foreground mb-2 text-xs font-medium tracking-wide uppercase">
         Capture data (EXIF)
       </p>
+      {!hasCameraData ? (
+        <p className="text-muted-foreground mb-3 text-xs">
+          This photo carries no camera metadata — the device did not record
+          it, or it was stripped before upload. What follows is what the
+          upload itself knows.
+        </p>
+      ) : null}
       <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-3">
         {rows.map((row) => (
           <Detail key={row.label} label={row.label} value={row.value} />

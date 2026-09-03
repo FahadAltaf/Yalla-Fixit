@@ -135,6 +135,8 @@ export function JobSetupPanel({
   const [managerId, setManagerId] = useState(
     task.approval_manager_id ?? UNASSIGNED,
   );
+  // FR-6.01 — who checks the work before the manager signs it off.
+  const [reviewerId, setReviewerId] = useState(task.reviewer_id ?? UNASSIGNED);
 
   const loadUsers = useCallback(async () => {
     setUsersLoading(true);
@@ -260,6 +262,7 @@ export function JobSetupPanel({
       await snaggingService.updateTask(task.id, {
         technician_ids: inspectorId === UNASSIGNED ? [] : [inspectorId],
         approval_manager_id: managerId === UNASSIGNED ? null : managerId,
+        reviewer_id: reviewerId === UNASSIGNED ? null : reviewerId,
       });
       toast.success(
         inspectorId === UNASSIGNED
@@ -561,6 +564,39 @@ export function JobSetupPanel({
                       </p>
                     )
                   ) : null}
+                </Field>
+                <Field
+                  label="Reviewer"
+                  hint="Checks the evidence before the manager decides. Left empty, the approval manager reviews it themselves."
+                  htmlFor="assign-reviewer"
+                >
+                  {canAssign ? (
+                    <Select
+                      value={reviewerId}
+                      onValueChange={setReviewerId}
+                      disabled={!canAssign}
+                    >
+                      <SelectTrigger id="assign-reviewer" className="w-full">
+                        <SelectValue placeholder="Who checks this?" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={UNASSIGNED}>
+                          None — the approval manager reviews it
+                        </SelectItem>
+                        {users.map((u) => (
+                          <SelectItem key={u.id} value={u.id}>
+                            {(u.full_name || u.email) ?? u.id}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <ReadOnlyValue
+                      id="assign-reviewer"
+                      value={nameFor(users, task.reviewer_id)}
+                      empty="Reviewed by the approval manager"
+                    />
+                  )}
                 </Field>
                 <Field
                   label="Approval manager"

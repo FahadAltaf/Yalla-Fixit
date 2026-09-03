@@ -63,8 +63,35 @@ export async function GET(req: NextRequest) {
       .in("status", ["assigned", "in_progress", "submitted", "in_review", "rejected", "approved", "delivered"]);
     if (assignedError) throw new Error(assignedError.message);
 
-    const jobIds = (assigned ?? []).map((r) => r.id);
-    if (jobIds.length === 0) return NextResponse.json({ data: empty });
+    const assignedIds = (assigned ?? []).map((r) => r.id);
+    if (assignedIds.length === 0) return NextResponse.json({ data: empty });
+
+    /*
+      An additional visit also needs its ORIGINAL inspection on the device.
+
+      The visit exists to cover rooms the first pass could not reach, and
+      an inspector walking it needs to see what is already on record —
+      otherwise the property reads as having no known defects on a unit
+      that has several, and they log the same ones again. The original is
+      frequently assigned to somebody else, so it would never arrive.
+
+      Read-only context: the app shows these as "already on record" and
+      the sync only ever writes back to the job the inspector is on.
+    */
+    const { data: parents, error: parentError } = await admin
+      .from("snagging_jobs")
+      .select("parent_job_id")
+      .in("id", assignedIds)
+      .eq("visit_type", "additional")
+      .not("parent_job_id", "is", null);
+    if (parentError) throw new Error(parentError.message);
+
+    const jobIds = [
+      ...new Set([
+        ...assignedIds,
+        ...(parents ?? []).map((row) => row.parent_job_id as string),
+      ]),
+    ];
 
     // 2. Jobs -> wire "tasks" (with a property sub-object + team list).
     let jobQuery = admin

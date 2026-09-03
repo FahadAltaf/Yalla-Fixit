@@ -5,6 +5,8 @@ import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
 import { INHERITED_SELECT, inheritedFields, type InheritableJob } from "@/lib/server/snagging/inherit";
+import { loadJobFamily } from "@/lib/server/snagging/job-family";
+import { listReportVersions } from "@/lib/server/snagging/report-versions";
 import { visitCode } from "@/lib/server/snagging/workflow";
 import { createVisitSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType } from "@/types/types";
@@ -19,6 +21,116 @@ import { ActionType, ResourceType } from "@/types/types";
  * price from the pricing config onto the new job so the charge is fixed
  * at the moment it was booked.
  */
+/** PostgREST returns an embedded row as an object or a one-element array. */
+function firstOf<T>(value: T | T[] | null): T | null {
+  if (Array.isArray(value)) return value[0] ?? null;
+  return value ?? null;
+}
+
+/**
+ * Every additional visit against this inspection, with the answers the
+ * Additional Visits section has to show.
+ *
+ * One request rather than a list plus a lookup per visit: a coordinator
+ * opening the section wants the whole picture, and n+1 round trips at
+ * ~220ms each is what makes a section feel broken.
+ */
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  try {
+    const { profile, accessUser } = await getRequestUserAccess(req);
+    if (!profile || !accessUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.VIEW)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    const { id } = await ctx.params;
+    const admin = await createAdminServerClient();
+
+    // Asked from a visit or a round, the section still means the family.
+    const family = await loadJobFamily(admin, id);
+
+    const { data: visits, error: visitsError } = await admin
+      .from("snagging_jobs")
+      .select(
+        `id, code, status, round_number, scheduled_date, appointment_at, visit_charge,
+         created_at, inspector:inspector_id(id, full_name, email)`,
+      )
+      .eq("parent_job_id", family.rootId)
+      .eq("visit_type", "additional")
+      .order("round_number", { ascending: true });
+    if (visitsError) throw new Error(visitsError.message);
+
+    const visitIds = (visits ?? []).map((v) => v.id as string);
+    if (visitIds.length === 0) {
+      return NextResponse.json({ data: { visits: [], versions: [] } });
+    }
+
+    const [{ data: quotes }, { data: snags }, versions] = await Promise.all([
+      admin
+        .from("snagging_quotations")
+        .select("id, job_id, status, total, quote_number")
+        .in("job_id", visitIds),
+      admin.from("snagging_snags").select("id, job_id").in("job_id", visitIds),
+      listReportVersions(admin, family.rootId),
+    ]);
+
+    const snagCount = new Map<string, number>();
+    for (const snag of snags ?? []) {
+      const key = snag.job_id as string;
+      snagCount.set(key, (snagCount.get(key) ?? 0) + 1);
+    }
+
+    const quoteFor = new Map<string, Record<string, unknown>>();
+    for (const quote of quotes ?? []) {
+      const key = quote.job_id as string;
+      // An approved quote is the one that matters; otherwise the latest
+      // state is what the coordinator needs to act on.
+      const existing = quoteFor.get(key);
+      if (!existing || quote.status === "approved") quoteFor.set(key, quote);
+    }
+
+    const versionForVisit = new Map<string, number>();
+    for (const version of versions) {
+      if (version.source_visit_id) versionForVisit.set(version.source_visit_id, version.version);
+    }
+
+    return NextResponse.json({
+      data: {
+        visits: (visits ?? []).map((visit) => {
+          const quote = quoteFor.get(visit.id as string) ?? null;
+          return {
+            id: visit.id,
+            code: visit.code,
+            status: visit.status,
+            visit_number: visit.round_number,
+            scheduled_date: visit.scheduled_date,
+            appointment_at: visit.appointment_at,
+            visit_charge: visit.visit_charge,
+            created_at: visit.created_at,
+            inspector: firstOf(visit.inspector),
+            quotation: quote
+              ? {
+                  id: quote.id,
+                  status: quote.status,
+                  total: quote.total,
+                  quote_number: quote.quote_number,
+                }
+              : null,
+            new_snags: snagCount.get(visit.id as string) ?? 0,
+            report_version: versionForVisit.get(visit.id as string) ?? null,
+          };
+        }),
+        versions,
+      },
+    });
+  } catch (error) {
+    console.error("Additional visits GET error:", error);
+    return NextResponse.json({ error: "Failed to load the additional visits" }, { status: 500 });
+  }
+}
+
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
     const { profile, accessUser } = await getRequestUserAccess(req);
@@ -165,7 +277,15 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         ...inheritedFields(parent),
         inspector_id: null,
         approval_manager_id: input.approval_manager_id ?? parent.approval_manager_id,
-        scheduled_date: null,
+        /*
+          The date the coordinator asked for, kept as a plan.
+
+          Blanking it threw away what they had just typed, so the Setup
+          tab opened empty on a visit they had only just dated. It is a
+          request, not a booking: the visit stays `draft` and scheduling
+          is what confirms this date and moves it to assigned.
+        */
+        scheduled_date: input.scheduled_date?.trim() || null,
         appointment_at: null,
         notes: [input.reason?.trim(), input.notes?.trim()].filter(Boolean).join("\n\n") || null,
         created_by: profile.id,
@@ -189,10 +309,49 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
      */
     const { data: parentAreas, error: areaLoadError } = await admin
       .from("snagging_areas")
-      .select("name, catalogue_area_code, sort_order, access_state, access_reason, elements_not_checked")
+      .select(
+        `name, catalogue_area_code, sort_order, access_state, access_reason,
+         elements_not_checked, floor_plan_id, pin_x, pin_y`,
+      )
       .eq("job_id", parent.id)
       .order("sort_order", { ascending: true });
     if (areaLoadError) throw new Error(areaLoadError.message);
+
+    /*
+      The unit's floor plans, copied before the rooms that pin onto them.
+
+      A visit carried its rooms and no plans at all, so an inspector
+      arrived at a property they had already mapped with nothing to pin
+      against and no way to place a new defect. The plans belong to the
+      unit, not to a single visit, so a return trip re-uses them rather
+      than asking anyone to upload them again.
+    */
+    const { data: parentPlans, error: planLoadError } = await admin
+      .from("snagging_floor_plans")
+      .select("id, label, storage_path, width, height, sort_order")
+      .eq("job_id", parent.id)
+      .order("sort_order", { ascending: true });
+    if (planLoadError) throw new Error(planLoadError.message);
+
+    const planIdMap = new Map<string, string>();
+    for (const plan of parentPlans ?? []) {
+      const { data: newPlan, error: planInsertError } = await admin
+        .from("snagging_floor_plans")
+        .insert({
+          job_id: visit.id,
+          label: plan.label,
+          // The same stored image; a plan id belongs to one job, so only
+          // the row is new.
+          storage_path: plan.storage_path,
+          width: plan.width,
+          height: plan.height,
+          sort_order: plan.sort_order,
+        })
+        .select("id")
+        .single();
+      if (planInsertError) throw new Error(planInsertError.message);
+      planIdMap.set(plan.id as string, newPlan.id as string);
+    }
 
     const unfinished = (parentAreas ?? []).filter(
       (area) => area.access_state && area.access_state !== "accessible",
@@ -206,6 +365,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           name: area.name,
           catalogue_area_code: area.catalogue_area_code,
           sort_order: area.sort_order,
+          // Where the room sits on the plan, remapped onto this visit's
+          // copy of it — otherwise the pin points at a plan on another job.
+          floor_plan_id: area.floor_plan_id
+            ? planIdMap.get(area.floor_plan_id as string) ?? null
+            : null,
+          pin_x: area.pin_x,
+          pin_y: area.pin_y,
           // Why the inspector is returning, carried across as a note so
           // it is in front of them on site. The area itself starts
           // clean — this is a fresh pass, not a verification.

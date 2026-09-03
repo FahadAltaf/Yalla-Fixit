@@ -24,6 +24,48 @@ import { useRouter } from "next/navigation";
 
 type LoginMethod = "password" | "otp";
 
+/**
+ * Where to land after signing in.
+ *
+ * A session that lapses mid-task sends the user here with `?next=` set to
+ * the page they were on, so signing back in returns them to it instead of
+ * dumping them on the dashboard to navigate back by hand.
+ *
+ * Only a same-origin path is honoured. Taking the parameter at face value
+ * would let any link of the form /auth/login?next=https://elsewhere send
+ * someone to another site immediately after they typed their password
+ * here — the classic open-redirect phishing setup. Anything that is not a
+ * plain absolute path is discarded rather than sanitised.
+ */
+function destinationAfterLogin(): string {
+  if (typeof window === "undefined") return "/";
+  const next = new URLSearchParams(window.location.search).get("next");
+  if (!next) return "/";
+
+  /*
+    Resolved against this origin rather than pattern-matched.
+
+    Prefix checks look sufficient and are not: "/\evil.example.com"
+    starts with a single slash and passes any startsWith("//") test, but
+    browsers normalise the backslash and resolve it to
+    http://evil.example.com — an open redirect on the page where someone
+    has just typed their password. Letting the URL parser decide, then
+    comparing origins, closes that whole class rather than the examples
+    somebody thought of.
+  */
+  let resolved: URL;
+  try {
+    resolved = new URL(next, window.location.origin);
+  } catch {
+    return "/";
+  }
+  if (resolved.origin !== window.location.origin) return "/";
+  // Never bounce back to login, which would loop.
+  if (resolved.pathname.startsWith("/auth/")) return "/";
+
+  return resolved.pathname + resolved.search;
+}
+
 const LoginForm = () => {
   const router = useRouter();
   // State management (mirrors main login form logic)
@@ -107,7 +149,7 @@ const LoginForm = () => {
         setIsLoading(false);
         return;
       }
-      window.location.href = "/";
+      window.location.href = destinationAfterLogin();
     } catch (err) {
       setIsLoading(false);
       const errorMessage =
@@ -201,7 +243,7 @@ const LoginForm = () => {
       if (data?.session && data?.user) {
         toast.success("Login successful! Redirecting...");
         await new Promise((resolve) => setTimeout(resolve, 1000));
-        window.location.href = "/";
+        window.location.href = destinationAfterLogin();
       } else {
         setError("Failed to create session");
         setIsLoading(false);

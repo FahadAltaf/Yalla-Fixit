@@ -423,6 +423,18 @@ export const snaggingService = {
       body: { comment: comment ?? "" },
     }),
 
+  /**
+   * FR-6.01 — the reviewer handing the job to the approval manager.
+   *
+   * The status stays `in_review`; this is what unlocks the decision, so
+   * approve and reject both refuse until it has been called.
+   */
+  completeReview: async (id: string, comment?: string) =>
+    executeRESTBackend(`/api/snagging/tasks/${id}/review/complete`, {
+      method: "POST",
+      body: { comment: comment ?? "" },
+    }),
+
   approveTask: async (id: string, comment?: string) =>
     executeRESTBackend(`/api/snagging/tasks/${id}/approve`, {
       method: "POST",

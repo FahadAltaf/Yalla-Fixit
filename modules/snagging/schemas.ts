@@ -140,6 +140,8 @@ export const updateTaskSchema = z.object({
   technician_ids: z.array(z.string().uuid()).optional(),
   supervisor_id: z.string().uuid().optional().nullable(),
   approval_manager_id: z.string().uuid().optional().nullable(),
+  // FR-6.01 — who checks the work before the manager decides on it.
+  reviewer_id: z.string().uuid().optional().nullable(),
   // Site contacts (I3/I4) — editable after creation.
   developer_contact_name: z.string().trim().max(120).optional().nullable(),
   developer_contact_phone: z.string().trim().max(32).optional().nullable(),
@@ -158,12 +160,25 @@ export const approveTaskSchema = z.object({
   comment: z.string().trim().max(2000).optional().or(z.literal("")),
 });
 
+/**
+ * FR-6.03 — a rejection carries a written reason, always.
+ *
+ * `.trim()` runs before `.min()`, so "   " is measured as empty and refused
+ * exactly like null or a missing field. The cap matches the approval
+ * comment's, which was previously unbounded here.
+ */
 export const rejectTaskSchema = z.object({
   category: rejectionCategorySchema,
   comment: z
-    .string()
+    .string({ error: "A written reason is required to reject an inspection" })
     .trim()
-    .min(10, "Give the inspector at least a sentence explaining what to fix"),
+    .min(10, "Give the inspector at least a sentence explaining what to fix")
+    .max(2000, "Keep the reason under 2000 characters"),
+});
+
+/** FR-6.01 — the reviewer handing the job to the approval manager. */
+export const completeReviewSchema = z.object({
+  comment: z.string().trim().max(2000).optional().or(z.literal("")),
 });
 
 export type RejectTaskInput = z.infer<typeof rejectTaskSchema>;
