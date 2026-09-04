@@ -118,9 +118,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
     const reportUrl = `${baseUrl}/report/${token.raw}`;
 
-    // Email the link, best-effort: a failed send must not undo delivery,
-    // and the coordinator still gets the link back to send by hand.
+    // Send the link, best-effort: a failed send must not undo delivery, and
+    // the coordinator still gets the link back to pass on by hand.
     let emailSent = false;
+    let whatsappSent = false;
+    let deliveryError: string | null = null;
     if (input.channel === "email" && EMAIL_RE.test(recipient)) {
       try {
         await emailService.sendEmail({
@@ -135,6 +137,38 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         emailSent = true;
       } catch (emailError) {
         console.error("Snagging report email failed:", emailError);
+        deliveryError = emailError instanceof Error ? emailError.message : "Email failed";
+      }
+    }
+
+    /*
+      WhatsApp (FR-7.05).
+
+      Uses the same wa.me hand-off the rest of the product uses rather than a
+      provider API, because this project has no WhatsApp provider configured
+      -- inventing one would be a second integration nobody can send through.
+      The server still mints and records the link, sets the channel, and
+      returns a prefilled URL the coordinator opens to send. That keeps the
+      token lifecycle identical across channels; only the transport differs.
+    */
+    let whatsappUrl: string | null = null;
+    if (input.channel === "whatsapp") {
+      const digits = recipient.replace(/[^0-9]/g, "");
+      if (digits.length >= 8) {
+        const unit =
+          [job.unit_label, job.building_name].filter(Boolean).join(", ") || job.code;
+        const message =
+          `Your snagging inspection report for ${unit} is ready.
+
+` +
+          `${reportUrl}
+
+` +
+          `This private link is valid for 30 days. Please do not share it.`;
+        whatsappUrl = `https://wa.me/${digits}?text=${encodeURIComponent(message)}`;
+        whatsappSent = true;
+      } else {
+        deliveryError = "That does not look like a phone number WhatsApp can reach.";
       }
     }
 
@@ -145,7 +179,17 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       eventType: "report_delivered",
       actorId: profile.id,
       actorLabel: profile.full_name ?? profile.email,
-      payload: { code: job.code, channel: input.channel, recipient, token_hint: token.hint, emailSent },
+      payload: {
+        code: job.code,
+        channel: input.channel,
+        recipient,
+        token_hint: token.hint,
+        emailSent,
+        whatsappSent,
+        // FR-7.05 — a failed send is part of the delivery record, not a log
+        // line nobody reads.
+        delivery_error: deliveryError,
+      },
     });
 
     return NextResponse.json({
@@ -158,6 +202,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         report_url: reportUrl,
         expires_at: expiresAt,
         email_sent: emailSent,
+        whatsapp_sent: whatsappSent,
+        whatsapp_url: whatsappUrl,
+        delivery_error: deliveryError,
       },
     });
   } catch (error) {

@@ -261,7 +261,11 @@ export default function InspectionDetail({ taskId }: { taskId: string }) {
           <SnagWalkList task={task} />
         </TabsContent>
         <TabsContent value="areas" className="mt-4">
-          <FloorPlansAreasPanel taskId={task.id} />
+          <FloorPlansAreasPanel
+            taskId={task.id}
+            propertyType={task.property?.property_type}
+            bedrooms={task.property?.bedrooms}
+          />
         </TabsContent>
         <TabsContent value="checklist" className="mt-4">
           <ChecklistPanel task={task} />

@@ -47,6 +47,7 @@
     "openai": "^6.16.0",
     "papaparse": "^5.5.3",
     "pdfjs-dist": "^4.10.38",
+    "puppeteer-core": "^23.11.1",
     "radix-ui": "^1.4.3",
     "react": "19.2.3",
     "react-day-picker": "^9.13.0",

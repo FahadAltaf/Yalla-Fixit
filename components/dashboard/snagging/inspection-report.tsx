@@ -319,6 +319,30 @@ export const InspectionReport = forwardRef<
     (c) => c.status !== "pending" && c.status !== "not_checked",
   ).length;
 
+  /*
+    FR-7.02 — the sub-categories this inspection kept failing on.
+
+    Counted from this document's own snags, so the cover and the body can
+    never disagree. The v7 catalogue is Category -> Sub-category -> Defect;
+    the live rows still carry that middle level as `element_label`, which is
+    the same level under its previous name, so this needs no change when the
+    rename lands. Area is deliberately not part of the hierarchy.
+  */
+  const subCategoryTally = (() => {
+    const counts = new Map<string, number>();
+    for (const snag of snags) {
+      const label = snag.element_label?.trim();
+      if (!label) continue;
+      counts.set(label, (counts.get(label) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .map(([label, count]) => ({ label, count }))
+      // Ties broken by label so one inspection always renders the same
+      // order: a report that reshuffles between renders is not reproducible.
+      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
+      .slice(0, 5);
+  })();
+
   const propertyLine = [
     property?.building_name,
     property?.community,
@@ -455,9 +479,18 @@ export const InspectionReport = forwardRef<
               {propertyLine || "—"}
             </div>
             <div style={{ fontSize: 9.5, color: C.sub }}>
-              {[property?.property_type, property?.developer_name]
-                .filter(Boolean)
-                .join(" · ") || "—"}
+              {property?.property_type || "—"}
+            </div>
+            {/*
+              FR-7.02 — the developer is a named cover field, not a fragment
+              appended to the property type. It is who the client raises the
+              defects with, so it is labelled.
+            */}
+            <div style={{ fontSize: 9.5, color: C.sub, marginTop: 2 }}>
+              <span style={{ color: C.faint }}>Developer: </span>
+              <span style={{ fontWeight: 600, color: C.ink }}>
+                {property?.developer_name || "Not recorded"}
+              </span>
             </div>
           </Card>
           <Card style={{ flex: 1 }}>
@@ -550,6 +583,72 @@ export const InspectionReport = forwardRef<
             value={`${checklistDone}/${checklist.length}`}
           />
         </div>
+
+        {/* ── FR-7.02: what this unit keeps failing on ── */}
+        {subCategoryTally.length > 0 ? (
+          <>
+            <SectionTitle>Most affected sub-categories</SectionTitle>
+            <Card style={pad(forPDF, 6, 14)}>
+              {subCategoryTally.map((row, index) => {
+                // A bar as well as a number: which one dominates is the
+                // point of this block, and that reads faster as a length.
+                const share = Math.round(
+                  (row.count / Math.max(1, snags.length)) * 100,
+                );
+                return (
+                  <div
+                    key={row.label}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      ...pad(forPDF, 4, 0),
+                      borderTop: index === 0 ? "none" : `1px solid ${C.line}`,
+                    }}
+                  >
+                    <span style={{ width: 12, color: C.sub, fontSize: 9 }}>
+                      {index + 1}
+                    </span>
+                    <span
+                      style={{ flex: 1, fontWeight: 600, fontSize: 10, color: C.ink }}
+                    >
+                      {row.label}
+                    </span>
+                    <span
+                      style={{
+                        width: 90,
+                        height: 6,
+                        background: C.line,
+                        borderRadius: 3,
+                        overflow: "hidden",
+                      }}
+                    >
+                      <span
+                        style={{
+                          display: "block",
+                          width: `${Math.max(4, share)}%`,
+                          height: 6,
+                          background: C.brand,
+                        }}
+                      />
+                    </span>
+                    <span
+                      style={{
+                        width: 26,
+                        textAlign: "right",
+                        fontWeight: 700,
+                        fontSize: 10,
+                        color: C.ink,
+                      }}
+                    >
+                      {row.count}
+                    </span>
+                  </div>
+                );
+              })}
+            </Card>
+          </>
+        ) : null}
 
         {/* ── Areas the inspector could not fully reach ── */}
         {accessIssues.length > 0 ? (

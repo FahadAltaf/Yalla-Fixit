@@ -63,10 +63,18 @@ export async function issueReportVersion(
   input: {
     jobId: string;
     sourceVisitId?: string | null;
+    /** FR-7.07 — set for a de-snag round's own report. */
+    sourceRoundId?: string | null;
+    reportType?: "inspection" | "round" | "cumulative";
     generatedBy?: string | null;
     reason?: string | null;
   },
-): Promise<{ version: number; snagCount: number; created: boolean } | null> {
+): Promise<{
+  id: string;
+  version: number;
+  snagCount: number;
+  created: boolean;
+} | null> {
   if (!(await versioningAvailable(admin))) return null;
 
   const family = await loadJobFamily(admin, input.jobId);
@@ -75,12 +83,13 @@ export async function issueReportVersion(
   if (input.sourceVisitId) {
     const { data: already } = await admin
       .from("snagging_report_versions")
-      .select("version, snag_count")
+      .select("id, version, snag_count")
       .eq("job_id", rootId)
       .eq("source_visit_id", input.sourceVisitId)
       .maybeSingle();
     if (already) {
       return {
+        id: already.id as string,
         version: already.version as number,
         snagCount: already.snag_count as number,
         created: false,
@@ -114,16 +123,30 @@ export async function issueReportVersion(
 
   const nextVersion = ((latest?.version as number | undefined) ?? 0) + 1;
 
-  const { error: insertError } = await admin.from("snagging_report_versions").insert({
-    job_id: rootId,
-    version: nextVersion,
-    source_visit_id: input.sourceVisitId ?? null,
-    snag_count: snagIds.length,
-    snag_ids: snagIds,
-    generated_by: input.generatedBy ?? null,
-    reason: input.reason ?? null,
-  });
+  const { data: inserted, error: insertError } = await admin
+    .from("snagging_report_versions")
+    .insert({
+      job_id: rootId,
+      version: nextVersion,
+      report_type: input.reportType ?? "inspection",
+      source_visit_id: input.sourceVisitId ?? null,
+      source_round_id: input.sourceRoundId ?? null,
+      snag_count: snagIds.length,
+      snag_ids: snagIds,
+      generated_by: input.generatedBy ?? null,
+      reason: input.reason ?? null,
+      // FR-7.01 — the row exists before the PDF does. Nothing may read this
+      // as a deliverable document until generation actually succeeds.
+      generation_status: "pending",
+    })
+    .select("id")
+    .single();
   if (insertError) throw new Error(insertError.message);
 
-  return { version: nextVersion, snagCount: snagIds.length, created: true };
+  return {
+    id: inserted.id as string,
+    version: nextVersion,
+    snagCount: snagIds.length,
+    created: true,
+  };
 }

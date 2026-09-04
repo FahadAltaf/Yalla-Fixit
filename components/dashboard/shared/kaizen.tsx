@@ -166,9 +166,9 @@ export function StatCard({
               {trend ? <TrendIcon className="size-4" aria-hidden /> : null}
             </div>
           ) : null}
-          {caption ? (
+          {/* {caption ? (
             <div className="text-muted-foreground">{caption}</div>
-          ) : null}
+          ) : null} */}
         </CardFooter>
       ) : null}
     </Card>

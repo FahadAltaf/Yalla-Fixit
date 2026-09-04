@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -51,6 +51,7 @@ import {
   ResourceType,
   type SnaggingArea,
   type SnaggingFloorPlan,
+  type SnaggingPropertyType,
 } from "@/types/types";
 
 import { EmptyState } from "@/components/ui/empty-state";
@@ -127,7 +128,16 @@ async function toPinnablePlan(
   throw new Error("Floor plans must be an image (PNG/JPG) or a PDF");
 }
 
-export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
+export function FloorPlansAreasPanel({
+  taskId,
+  propertyType,
+  bedrooms,
+}: {
+  taskId: string;
+  /** Shapes the suggested room list, the same way it does at job creation. */
+  propertyType?: SnaggingPropertyType | null;
+  bedrooms?: number | null;
+}) {
   const { userProfile } = useAuth();
   const canEdit = hasResourceAction(
     userProfile,
@@ -379,11 +389,10 @@ export function FloorPlansAreasPanel({ taskId }: { taskId: string }) {
   */
   const suggestions = useMemo(() => {
     const existing = new Set(areas.map((a) => a.name.trim().toLowerCase()));
-    return templateFor(
-      (task?.property?.property_type as SnaggingPropertyType) ?? "apartment",
-      task?.property?.bedrooms ?? null,
-    ).filter((room) => !existing.has(room.name.toLowerCase()));
-  }, [areas, task?.property?.property_type, task?.property?.bedrooms]);
+    return templateFor(propertyType ?? "apartment", bedrooms ?? null).filter(
+      (room) => !existing.has(room.name.toLowerCase()),
+    );
+  }, [areas, propertyType, bedrooms]);
 
   async function addSuggested(room: { name: string; code: string }) {
     setBusy(true);

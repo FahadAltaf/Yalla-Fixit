@@ -4,6 +4,7 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
+import { generateReportPdf } from "@/lib/server/snagging/report-generate";
 import { issueReportVersion } from "@/lib/server/snagging/report-versions";
 import {
   assertTransition,
@@ -125,7 +126,17 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       verdicts write through to the originals, so it changes the defects'
       status rather than the report's contents.
     */
-    let reportVersion: { version: number; snagCount: number; created: boolean } | null = null;
+    let reportVersion: {
+      id: string;
+      version: number;
+      snagCount: number;
+      created: boolean;
+    } | null = null;
+    // What the caller is told about the client document. Never implies a PDF
+    // exists when rendering failed.
+    let generation:
+      | { status: "generated" | "failed"; version: number; error?: string }
+      | null = null;
     if (job.visit_type !== "desnag") {
       const isVisit = job.visit_type === "additional";
       try {
@@ -141,6 +152,38 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         // The approval is already committed and must not be undone by a
         // bookkeeping failure; the version can be reissued on delivery.
         console.error("Report version could not be issued:", versionError);
+      }
+
+      /*
+        FR-7.01 — the PDF is produced here, on the server, not when somebody
+        next opens the portal.
+
+        Deliberately awaited rather than fired and forgotten: the measured
+        cost is a few seconds even at 200 snags, and awaiting it means the
+        response tells the manager whether the client's document actually
+        exists. A failure is recorded on the version and surfaced as a
+        retryable state -- it never fails the approval, which is already
+        committed by this point.
+      */
+      if (reportVersion) {
+        try {
+          const generated = await generateReportPdf(admin, reportVersion.id, {
+            actorId: profile.id,
+            actorLabel: profile.full_name ?? profile.email,
+          });
+          generation = generated.ok
+            ? { status: "generated", version: reportVersion.version }
+            : { status: "failed", version: reportVersion.version, error: generated.error };
+        } catch (generateError) {
+          generation = {
+            status: "failed",
+            version: reportVersion.version,
+            error:
+              generateError instanceof Error
+                ? generateError.message
+                : "Report generation failed",
+          };
+        }
       }
 
       if (reportVersion?.created) {
@@ -174,14 +217,16 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
 
     // The branded report queue lives outside the lean schema, so no
-    // report row is created here; the response keeps its shape with a
-    // null report_id.
     return NextResponse.json({
       data: {
         id,
         status: "approved",
-        report_id: null,
+        report_id: reportVersion?.id ?? null,
         report_version: reportVersion?.version ?? null,
+        // FR-7.01 — say plainly whether the client's PDF exists. The error
+        // text is the recorded reason, not a stack trace.
+        report_generation: generation?.status ?? null,
+        report_generation_error: generation?.error ?? null,
       },
     });
   } catch (error) {
