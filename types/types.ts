@@ -613,6 +613,23 @@ export interface SnaggingSubmission {
   signature_url?: string | null;
 }
 
+/** One row of the checklist library, as the admin screen reads it (N1). */
+export interface SnaggingChecklistLibraryItem {
+  id: string;
+  code: string;
+  group_name: string;
+  label: string;
+  applies_apartment: boolean;
+  applies_villa: boolean;
+  applies_townhouse: boolean;
+  applies_commercial: boolean;
+  mandatory: boolean;
+  linked_catalogue_codes: string[];
+  active: boolean;
+  sort_order: number;
+  updated_at?: string;
+}
+
 export type SnaggingChecklistStatus =
   "pending" | "passed" | "failed" | "not_checked";
 

@@ -6,6 +6,7 @@ import {
   CalendarPlus,
   CheckCircle2,
   ClipboardCheck,
+  ClipboardList,
   DoorClosed,
   FileImage,
   FileText,
@@ -66,6 +67,15 @@ const EVENT_META: Record<string, { label: string; Icon: LucideIcon }> = {
     label: "Catalogue entry reactivated",
     Icon: Tag,
   },
+  checklist_item_created: { label: "Check added to the library", Icon: ClipboardList },
+  checklist_item_updated: { label: "Check edited", Icon: ClipboardList },
+  checklist_item_deactivated: {
+    // Deliberately not "deleted": the check stays on every job that
+    // already has it, and only stops reaching new inspections.
+    label: "Check taken out of use",
+    Icon: ClipboardList,
+  },
+  checklist_item_reactivated: { label: "Check put back in use", Icon: ClipboardList },
   quotation_generated: { label: "Quotation generated", Icon: FileText },
   quotation_regenerated: { label: "Quotation regenerated", Icon: FileText },
   quotation_sent: { label: "Quotation sent to client", Icon: FileText },
@@ -117,7 +127,9 @@ function subjectFor(event: SnaggingAuditEvent): string | null {
 
   if (event.entity_type === "area") return text(p.area_name);
 
-  if (event.event_type === "checklist_not_checked") {
+  if (event.event_type.startsWith("checklist_")) {
+    // The wording is what an operations reader recognises; the code is
+    // only a fallback for rows written before the label was carried.
     return text(p.label) ?? text(p.code);
   }
 

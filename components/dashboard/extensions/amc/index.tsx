@@ -4,23 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
-import {
-  Check,
-  ClipboardList,
-  FileText,
-  Loader2,
-  Plus,
-  ScrollText,
-} from "lucide-react";
+import { Check, FileText, Loader2, Plus, ScrollText } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Form } from "@/components/ui/form";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
@@ -207,9 +194,17 @@ export function AmcContractsPage({
       saveQueueRef.current = saveQueueRef.current
         .then(async () => {
           const values = form.getValues();
+          const isNew = !values.submissionId;
           const payload = formDataToSubmissionPayload(
             values,
-            markGenerated ? "generated" : "draft",
+            /*
+              Only a generation sets the status forward, and only a brand
+              new row starts at "draft". An autosave on an existing row
+              sends no status at all -- otherwise stepping back from the
+              review screen would knock a finished submission back to
+              draft in the list.
+            */
+            markGenerated ? "generated" : isNew ? "draft" : undefined,
             markGenerated ? [markGenerated] : undefined,
           );
 
@@ -360,31 +355,27 @@ export function AmcContractsPage({
 
   return (
     <Card ref={wizardRef} className="w-full flex-1 relative top-px right-px gap-6">
-      {/* <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div className="flex flex-col gap-1">
-          <CardTitle className="text-xl flex items-center gap-2">
-            <ClipboardList className="size-5 text-primary" />
-            AMC Proposals
-          </CardTitle>
-          <CardDescription>
+      <div className="print:hidden flex flex-wrap items-start justify-between gap-3 px-4">
+        <div>
+          <p className="eyebrow">Extension</p>
+          <h1 className="mt-1.5 text-3xl">AMC Proposals</h1>
+          <p className="text-muted-foreground mt-1 text-[0.9375rem]">
             Build annual maintenance contract proposals, manage submissions, and
             generate proposal or contract PDFs.
-          </CardDescription>
+          </p>
         </div>
-        {isSaving && (
-          <span className="text-xs text-muted-foreground flex items-center gap-1">
+        {/*
+          The wizard saves a draft on every step change. Without this the
+          save is entirely silent, which is the wrong reassurance to give
+          about the one feature whose whole point is that closing the
+          browser does not lose your work.
+        */}
+        {isSaving ? (
+          <span className="text-muted-foreground flex items-center gap-1.5 text-xs">
             <Loader2 className="size-3 animate-spin" />
             Saving draft...
           </span>
-        )}
-      </CardHeader> */}
-
-      <div className="print:hidden px-4">
-        <p className="eyebrow">Extension</p>
-        <h1 className="mt-1.5 text-3xl">AMC Proposals</h1>
-        <p className="text-muted-foreground mt-1 text-[0.9375rem]">
-          Build annual maintenance contract proposals, manage submissions, and
-          generate proposal or contract PDFs.        </p>
+        ) : null}
       </div>
 
       <CardContent className="space-y-4">

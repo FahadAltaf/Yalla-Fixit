@@ -152,6 +152,11 @@ export const baseSectionsItems: MenuItem[] = [
         url: "/snagging/catalogue",
         resource: ResourceType.SNAGGING_CATALOGUE,
       },
+      {
+        title: "Checklist library",
+        url: "/snagging/checklist",
+        resource: ResourceType.SNAGGING_CATALOGUE,
+      },
     ],
   },
 ] as MenuItem[];

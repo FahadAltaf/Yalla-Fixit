@@ -6,7 +6,7 @@ import {
 } from "react";
 import { Inter } from "next/font/google";
 
-import yallaFixit from "@/public/yalla-fixit.png";
+import YallaFixit from "@/public/yalla-fixit.png";
 import type { SnaggingQuotation } from "@/modules/snagging";
 import type {
   SnaggingChecklistItem,
@@ -14,6 +14,7 @@ import type {
   SnaggingTask,
 } from "@/types/types";
 import { isVideo } from "./evidence-media";
+import CompanyLogo from "@/public/site-logo.webp";
 
 /**
  * Whether this tree is being rasterised for the PDF.
@@ -79,15 +80,74 @@ const inter = Inter({
 const FONT = `${inter.style.fontFamily}, "Helvetica Neue", Arial, sans-serif`;
 const SCRIPT = `"Brush Script MT", "Segoe Script", "Bradley Hand", cursive`;
 
+/*
+  Sampled from the issued handover reports, so a client filing this beside
+  one of those does not get two documents from what looks like two firms.
+  `orange` rules and footers, `brand` titles, and the four severity fills
+  ARE the legend those reports print on their cover.
+*/
 const C = {
-  brand: "#b0243c",
+  brand: "#c13d3c",
+  deep: "#aa272b",
+  orange: "#ff7800",
   ink: "#1a1a2e",
-  body: "#333344",
+  body: "#1f3864",
   sub: "#6b7280",
   faint: "#9ca3af",
   line: "#ececf0",
+  rule: "#111111",
   card: "#f8f8fa",
+  /** The one border colour every table and card in the document draws. */
+  grid: "#bfbfbf",
 } as const;
+
+/**
+ * The severity wash behind a defect's description.
+ *
+ * The grade is the cell's own colour rather than a badge beside it, which
+ * is what makes a page of defects scannable: a reader sees how bad the room
+ * is before reading a word of it. Matches the cover legend exactly.
+ */
+const FILL: Record<string, string> = {
+  high: "#ffc0c7",
+  medium: "#ffe4cc",
+  low: "#faf6df",
+  ok: "#d7e7b5",
+};
+
+/**
+ * The unit's number, without the word "Unit" in front of it.
+ *
+ * Labels are entered both ways — "5101" and "Unit 001" — and the lines
+ * that read "Unit: {label}" printed "Unit: Unit 001" for half of them.
+ */
+function unitNumber(label?: string | null): string {
+  if (!label) return "—";
+  return label.replace(/^\s*(unit|apt\.?|apartment)\s+/i, "").trim() || label;
+}
+
+/** "three" rather than "3", which is how the sentence above reads. */
+const NUMBER_WORDS = [
+  "zero", "one", "two", "three", "four", "five",
+  "six", "seven", "eight", "nine", "ten",
+];
+function numberWord(n: number): string {
+  return NUMBER_WORDS[n] ?? String(n);
+}
+
+/** Worst first, wherever defects are listed as an action list. */
+const SEVERITY_RANK = ["high", "medium", "low"];
+
+/** A, B, C … for the area sections, as the issued reports letter them. */
+function areaLetter(index: number): string {
+  let letter = "";
+  let n = index;
+  do {
+    letter = String.fromCharCode(65 + (n % 26)) + letter;
+    n = Math.floor(n / 26) - 1;
+  } while (n >= 0);
+  return letter;
+}
 
 /** Badge palettes. Background and text are always set as a pair. */
 const TONE = {
@@ -190,9 +250,9 @@ function Stat({
     <div
       style={{
         flex: 1,
-        background: t ? t.bg : C.card,
-        border: `1px solid ${C.line}`,
-        borderRadius: 8,
+        // The severity wash the whole document uses, not a second palette.
+        background: t ? (FILL[tone as string] ?? t.bg) : "#ffffff",
+        border: `1px solid ${C.grid}`,
         ...pad(forPDF, 6, 12),
         textAlign: "center",
       }}
@@ -229,12 +289,17 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   const forPDF = useContext(PdfMode);
   return (
     <h2
+      /*
+        Red heading over an orange hairline, as the issued reports set
+        every section. `paddingBottom` carries the whole gap — a symmetric
+        pad drops the rule away from the text once html2canvas has it.
+      */
       style={{
         fontSize: 11,
         fontWeight: 700,
-        color: C.ink,
-        margin: "6px 0 5px",
-        borderBottom: `1.5px solid ${C.brand}`,
+        color: C.brand,
+        margin: "8px 0 5px",
+        borderBottom: `1px solid ${C.orange}`,
         textTransform: "uppercase",
         letterSpacing: 0.5,
         paddingBottom: forPDF ? "10px" : "4px",
@@ -242,6 +307,205 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
     >
       {children}
     </h2>
+  );
+}
+
+/**
+ * One cell of the cover's project table.
+ *
+ * `paddingBottom` carries the row's height on its own — a symmetric pad
+ * puts a filled cell's background above its text once html2canvas has
+ * rasterised it, which is what the whole document's `pad()` exists for.
+ */
+function Cell({
+  children,
+  label = false,
+  strong = false,
+  fill,
+  colSpan,
+}: {
+  children: React.ReactNode;
+  label?: boolean;
+  strong?: boolean;
+  fill?: string;
+  colSpan?: number;
+}) {
+  const forPDF = useContext(PdfMode);
+  return (
+    <td
+      colSpan={colSpan}
+      style={{
+        border: "1px solid #bfbfbf",
+        background: fill ?? (label ? "#f2f2f2" : "#ffffff"),
+        fontWeight: strong ? 700 : 400,
+        color: C.ink,
+        verticalAlign: "middle",
+        paddingTop: 0,
+        paddingBottom: forPDF ? "10px" : "5px",
+        paddingLeft: 6,
+        paddingRight: 6,
+      }}
+    >
+      {children}
+    </td>
+  );
+}
+
+/** A label/value pair on each side of the cover table. */
+function Fact({
+  label,
+  value,
+  label2,
+  value2,
+}: {
+  label: string;
+  value: React.ReactNode;
+  label2: string;
+  value2: React.ReactNode;
+}) {
+  return (
+    <tr>
+      <Cell label colSpan={2}>{label}:</Cell>
+      <Cell colSpan={2}>{value}</Cell>
+      <Cell label colSpan={2}>{label2}:</Cell>
+      <Cell colSpan={2}>{value2}</Cell>
+    </tr>
+  );
+}
+
+/**
+ * The company lockup: the diamond mark with the name set beside it.
+ *
+ * `yalla-fixit.png` is the 85x87 diamond ALONE — there is no wordmark asset
+ * in the repository — so printing it on its own put a bare symbol where the
+ * issued reports carry the full logo. The name is set in type next to it
+ * rather than waiting on an asset, which also means it stays sharp at any
+ * size instead of being an upscaled bitmap.
+ */
+function Wordmark({ small = false }: { small?: boolean }) {
+  const mark = small ? 26 : 52;
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: small ? 6 : 12,
+      }}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={YallaFixit.src}
+        alt="Yalla Fix It"
+        style={{ width: mark, height: mark, objectFit: "contain" }}
+      />
+
+    </div>
+  );
+}
+
+
+function YallaCompanyLogo({ small = false }: { small?: boolean }) {
+  // const mark = small ? 26 : 52;
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: small ? 6 : 12,
+      }}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={CompanyLogo.src}
+        alt="Yalla Fix It"
+        style={{ width: 200, height: 100, objectFit: "contain" }}
+      />
+
+    </div>
+  );
+}
+
+/**
+ * The strip every page after the cover opens with.
+ *
+ * The mark, the document's own name, and the orange rule beneath it —
+ * exactly what the issued reports repeat, so a page pulled out of the
+ * middle of the document still says what it belongs to.
+ *
+ * Rendered per page block rather than as a true running header: the PDF is
+ * one rasterised canvas sliced into A4, and its paginator draws only a
+ * footer. Each block below starts a page, so a head at the top of each
+ * lands in the same place a real running header would.
+ *
+ * PRINT ONLY. On screen the document is one continuous scroll with no page
+ * edges, so a header repeating every eight hundred pixels marks nothing —
+ * it just interrupts the read with the same line over and over.
+ */
+function RunningHead({ subject }: { subject: string }) {
+  const forPDF = useContext(PdfMode);
+  if (!forPDF) return null;
+  return (
+    <div style={{ paddingTop: 0, paddingBottom: forPDF ? "14px" : "10px" }}>
+      <Wordmark small />
+      <div
+        style={{
+          fontSize: 7.5,
+          color: C.orange,
+          letterSpacing: 0.3,
+          textTransform: "uppercase",
+          textAlign: "center",
+          paddingTop: 0,
+          paddingBottom: forPDF ? "8px" : "4px",
+        }}
+      >
+        Property Handover Snagging Report — {subject}
+      </div>
+      <div style={{ height: 1, background: C.orange }} />
+    </div>
+  );
+}
+
+/** A red section heading, as the issued reports set every one. */
+function Heading({ children }: { children: React.ReactNode }) {
+  const forPDF = useContext(PdfMode);
+  return (
+    <div
+      style={{
+        fontSize: 11,
+        color: C.brand,
+        paddingTop: 0,
+        paddingBottom: forPDF ? "10px" : "6px",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/**
+ * A body paragraph.
+ *
+ * Bottom padding only, never a margin pair: html2canvas places a block's
+ * background off its padding box, and an evenly spaced paragraph prints
+ * with its text riding high.
+ */
+function Para({ children }: { children: React.ReactNode }) {
+  const forPDF = useContext(PdfMode);
+  return (
+    <p
+      style={{
+        fontSize: 10,
+        lineHeight: 1.7,
+        color: C.body,
+        margin: 0,
+        paddingTop: 0,
+        paddingBottom: forPDF ? "14px" : "10px",
+      }}
+    >
+      {children}
+    </p>
   );
 }
 
@@ -260,10 +524,15 @@ function Card({
       // up to the top of a card rather than through the middle of one, which
       // is what left page two opening on half a checklist row.
       data-pdf-block
+      /*
+        Square and hairline-bordered, matching the defect tables and the
+        cover's project table. Rounded tinted cards beside a bordered table
+        read as two documents stapled together, which is exactly how the
+        report looked once the cover went in.
+      */
       style={{
-        background: C.card,
-        border: `1px solid ${C.line}`,
-        borderRadius: 8,
+        background: "#ffffff",
+        border: `1px solid ${C.grid}`,
         ...pad(forPDF, 7, 14),
         ...style,
         ...(forPDF ? { paddingBottom: "5px" } : {}),
@@ -343,6 +612,57 @@ export const InspectionReport = forwardRef<
       .slice(0, 5);
   })();
 
+  /* What the running head names on every page after the cover. */
+  const subject = [property?.building_name, property?.unit_label]
+    .filter(Boolean)
+    .join(", ") || "Inspection";
+
+  /*
+    The unit in one sentence, the way the issued reports open.
+
+    Bathrooms and balconies are counted from the areas actually walked
+    rather than stored on the property, so the sentence describes the
+    inspection rather than the brochure.
+  */
+  const countAreas = (needle: string) =>
+    areas.filter((area) => area.name?.toLowerCase().includes(needle)).length;
+  const propertyDescription = [
+    property?.bedrooms
+      ? `${numberWord(property.bedrooms)}-bedroom ${property.property_type ?? "property"}`
+      : (property?.property_type ?? "Property"),
+    countAreas("bath") > 0
+      ? `with ${numberWord(countAreas("bath"))} bathroom${countAreas("bath") === 1 ? "" : "s"}`
+      : null,
+    countAreas("balcon") > 0
+      ? `and ${numberWord(countAreas("balcon"))} balcony`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  /* Cover facts, derived once so the table stays readable. */
+  const apptTime = task.appointment_at
+    ? new Date(task.appointment_at).toLocaleTimeString("en-GB", {
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "Asia/Dubai",
+    })
+    : "—";
+  const visitTypeLabel =
+    task.visit_type === "additional"
+      ? "Additional visit"
+      : task.visit_type === "desnag"
+        ? `De-snag round ${task.round_number}`
+        : "Snagging";
+  const recordedBy = [
+    inspector?.full_name ?? inspector?.email,
+    submission?.signed_at ? fmtDate(submission.signed_at) : null,
+  ]
+    .filter(Boolean)
+    .join(" — ");
+  /* The unit's plan, used as the cover image where one is on file. */
+  const coverPlan = (task.floor_plans ?? []).find((plan) => plan.signed_url);
+
   const propertyLine = [
     property?.building_name,
     property?.community,
@@ -368,201 +688,327 @@ export const InspectionReport = forwardRef<
           position: "relative",
         }}
       >
-        {/* ── Header: same mark and company block as the quotation ── */}
+        {/*
+          ── Page 1: the cover, as the issued handover reports set it ──
+
+          A block of its own with a full page's height, so the sheet the
+          client opens on is the cover and nothing else: the paginator keeps
+          a [data-pdf-block] whole, and the height pushes what follows onto
+          page two.
+        */}
         <div
+          data-pdf-block
           style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "flex-start",
-            paddingBottom: "20px",
+            position: "relative",
+            minHeight: forPDF ? 1020 : 980,
+            breakAfter: "page",
+            paddingTop: 0,
+            paddingBottom: forPDF ? "24px" : "12px",
           }}
         >
-          <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={yallaFixit.src}
-              alt="Yalla Fixit"
-              style={{
-                width: 50,
-                height: 50,
-                objectFit: "contain",
-                objectPosition: "left",
-                // ...(forPDF ? { marginBottom: "5px" } : {}),
-              }}
-            />
-            <div style={{ marginTop: forPDF ? "-5px" : "" }}>
-              <div
-                style={{
-                  fontSize: 15,
-                  fontWeight: 800,
-                  color: C.ink,
-                  letterSpacing: -0.3,
-                }}
-              >
-                Yalla Fix It
-              </div>
-              <div
-                style={{
-                  fontSize: 8,
-                  color: C.sub,
-                  lineHeight: 1.5,
-                  marginTop: 2,
-                }}
-              >
-                Office 102, Building 6, Gold &amp; Diamond Park, Dubai
-                <br />
-                https://www.yallafixit.ae
-              </div>
-            </div>
+          <div style={{ paddingTop: 0, paddingBottom: "16px" }}>
+            <YallaCompanyLogo />
           </div>
-          <div style={{ textAlign: "right" }}>
+
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              fontSize: 13,
+              color: C.brand,
+              textTransform: "uppercase",
+              paddingBottom: "22px",
+            }}
+          >
+            <span>Property Handover Snagging Report</span>
+            <span style={{ paddingRight: 40 }}>Call: 800-Perfect</span>
+          </div>
+
+          <div
+            style={{
+              fontSize: 13,
+              color: C.ink,
+              paddingBottom: "6px",
+            }}
+          >
+            PROJECT INFORMATION
+          </div>
+
+          <table
+            style={{
+              width: "100%",
+              borderCollapse: "collapse",
+              fontSize: 9,
+              color: C.body,
+            }}
+          >
+            <tbody>
+              <Fact label="Date of inspection" value={fmtDate(task.scheduled_date)} label2="Client name" value2={property?.client_name ?? "—"} />
+              <tr>
+                <Cell label>Location:</Cell>
+                <Cell strong colSpan={7}>
+                  {[property?.building_name, property?.unit_label]
+                    .filter(Boolean)
+                    .join(" — ") || "—"}
+                </Cell>
+              </tr>
+              <Fact label="Time of inspection" value={apptTime} label2="Client contact number" value2={property?.client_phone ?? "—"} />
+              <Fact label="Type of inspection" value={visitTypeLabel} label2="Client email address" value2={property?.client_email ?? "—"} />
+              <Fact label="Recorded by/date" value={recordedBy} label2="Package" value2="Handover snagging" />
+              <Fact label="Report prepared by/date" value={fmtDate(generatedAt ?? new Date().toISOString())} label2="Property type" value2={property?.property_type ?? "—"} />
+              <tr>
+                <Cell label colSpan={8}>Legends: (severity grade)</Cell>
+              </tr>
+              {/* All four grades on one row, the way the cover legend reads. */}
+              <tr>
+                <Cell label>High:</Cell>
+                <Cell fill={FILL.high}>&nbsp;</Cell>
+                <Cell label>Medium:</Cell>
+                <Cell fill={FILL.medium}>&nbsp;</Cell>
+                <Cell label>Low:</Cell>
+                <Cell fill={FILL.low}>&nbsp;</Cell>
+                <Cell label>Conformity:</Cell>
+                <Cell fill={FILL.ok}>&nbsp;</Cell>
+              </tr>
+            </tbody>
+          </table>
+
+          {/* The heavy orange bar that separates the table from the project. */}
+          <div style={{ height: 5, background: C.orange, marginTop: 22 }} />
+
+          <div style={{ paddingTop: 0, paddingBottom: "10px", marginTop: 12 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>
+              {[property?.building_name, property?.community]
+                .filter(Boolean)
+                .join(" — ") || "Property"}
+            </div>
+            <div style={{ fontSize: 13, color: C.ink, marginTop: 4 }}>
+              Unit:{" "}
+              <span style={{ color: C.deep, fontWeight: 700 }}>
+                {unitNumber(property?.unit_label)}
+              </span>
+            </div>
             <div
               style={{
                 fontSize: 13,
-                fontWeight: 800,
-                color: C.brand,
+                fontWeight: 700,
+                color: C.ink,
+                marginTop: 4,
                 textTransform: "uppercase",
-                letterSpacing: 0.4,
               }}
             >
-              Snagging Inspection Report
-            </div>
-            <div style={{ fontSize: 7.5, color: C.faint, marginTop: 2 }}>
-              {fmtDate(generatedAt ?? new Date().toISOString())}
+              {[
+                property?.bedrooms ? `${property.bedrooms}-bedroom` : null,
+                property?.property_type ?? "property",
+              ]
+                .filter(Boolean)
+                .join(" ")}
             </div>
           </div>
-        </div>
-        <div
-          style={{
-            height: 2,
-            background: C.brand,
-            borderRadius: 2,
-            margin: "6px 0 8px",
-          }}
-        />
 
-        {/* ── Property + client, as two cards ── */}
-        <div style={{ display: "flex", gap: 10 }}>
-          <Card style={{ flex: 1 }}>
-            <div
+          {/*
+            The unit's own plan, where one is on file. The issued reports
+            print a building photograph here; nothing in an inspection
+            record holds one, and a defect close-up as the cover image
+            would misrepresent the whole document.
+          */}
+          {coverPlan?.signed_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={coverPlan.signed_url}
+              alt=""
+              crossOrigin="anonymous"
               style={{
-                fontSize: 7.5,
-                fontWeight: 600,
-                color: C.sub,
-                textTransform: "uppercase",
-                letterSpacing: 0.5,
+                display: "block",
+                margin: "0 auto",
+                maxWidth: "70%",
+                maxHeight: 420,
+                objectFit: "contain",
               }}
-            >
-              Property
-            </div>
-            <div
-              style={{
-                fontSize: 12,
-                fontWeight: 700,
-                color: C.ink,
-                marginTop: 3,
-              }}
-            >
-              {property?.unit_label || task.code}
-            </div>
-            <div style={{ fontSize: 9.5, color: C.sub, marginTop: 2 }}>
-              {propertyLine || "—"}
-            </div>
-            <div style={{ fontSize: 9.5, color: C.sub }}>
-              {property?.property_type || "—"}
-            </div>
-            {/*
-              FR-7.02 — the developer is a named cover field, not a fragment
-              appended to the property type. It is who the client raises the
-              defects with, so it is labelled.
-            */}
-            <div style={{ fontSize: 9.5, color: C.sub, marginTop: 2 }}>
-              <span style={{ color: C.faint }}>Developer: </span>
-              <span style={{ fontWeight: 600, color: C.ink }}>
-                {property?.developer_name || "Not recorded"}
-              </span>
-            </div>
-          </Card>
-          <Card style={{ flex: 1 }}>
-            <div
-              style={{
-                fontSize: 7.5,
-                fontWeight: 600,
-                color: C.sub,
-                textTransform: "uppercase",
-                letterSpacing: 0.5,
-              }}
-            >
-              Client
-            </div>
-            <div
-              style={{
-                fontSize: 12,
-                fontWeight: 700,
-                color: C.ink,
-                marginTop: 3,
-              }}
-            >
-              {property?.client_name || "—"}
-            </div>
-            <div style={{ fontSize: 9.5, color: C.sub, marginTop: 2 }}>
-              {property?.client_email || ""}
-            </div>
-            <div style={{ fontSize: 9.5, color: C.sub }}>
-              {property?.client_phone || ""}
-            </div>
-          </Card>
+            />
+          ) : null}
         </div>
 
-        {/* Visit strip — dark so it separates the two card rows. */}
+        {/*
+          ── Page 2: what the property is, and what a snagging is ──
+
+          The issued reports describe the unit and define the exercise
+          before any defect appears, so a client reads the findings already
+          knowing what was looked at and what the words mean.
+        */}
         <div
+          data-pdf-block
           style={{
-            display: "flex",
-            gap: 18,
-            background: C.ink,
-            borderRadius: 8,
-            ...pad(forPDF, 5, 14),
-            marginTop: 6,
-            fontSize: 9,
-            color: "#ffffff",
+            minHeight: forPDF ? 1000 : "auto",
+            breakAfter: "page",
+            paddingTop: 0,
+            paddingBottom: forPDF ? "24px" : "12px",
           }}
         >
-          <span style={{ flex: 1 }}>
-            <span style={{ color: "#a5a5b8" }}>Visit: </span>
-            <span style={{ fontWeight: 600 }}>{visitLabel(task)}</span>
-          </span>
-          <span style={{ flex: 1 }}>
-            <span style={{ color: "#a5a5b8" }}>Inspected: </span>
-            <span style={{ fontWeight: 600 }}>
-              {fmtDate(task.scheduled_date ?? submission?.signed_at)}
-            </span>
-          </span>
-          <span style={{ flex: 1 }}>
-            <span style={{ color: "#a5a5b8" }}>Inspector: </span>
-            <span style={{ fontWeight: 600 }}>
-              {inspector?.full_name || "—"}
-            </span>
-          </span>
+          <RunningHead subject={subject} />
+
+          <Heading>Property description:</Heading>
+          <Para>{propertyDescription}</Para>
+
+          {/* The rooms walked, lettered as the defect sections letter them. */}
+          <div style={{ paddingTop: 0, paddingBottom: forPDF ? "18px" : "10px" }}>
+            {areas.map((area, index) => (
+              <div
+                key={area.id}
+                style={{
+                  fontSize: 10,
+                  color: C.ink,
+                  paddingLeft: 26,
+                  paddingTop: 0,
+                  paddingBottom: forPDF ? "10px" : "5px",
+                }}
+              >
+                {areaLetter(index)}.&nbsp;&nbsp;{area.name}
+              </div>
+            ))}
+          </div>
+
+          <Heading>Definition:</Heading>
+          <Para>
+            Snagging is identifying internal and external defects before the
+            developer hands over the property to you. The purpose of a
+            snagging is to report any defects of your property to the
+            developer prior to formal handover, to record the handover
+            condition and/or fix the defects as reported.
+          </Para>
+          <Para>
+            The YFI trained team inspected the property and prepared this
+            report with reference pictures, to gauge the overall workmanship
+            and the quality of the material used against standard
+            construction norms. Where the approved design and technical
+            parameters of MEP services are shared prior to inspection, the
+            current specification is compared against them. Otherwise the
+            visual inspection is based on construction industry standards,
+            with no comment on design perspective, assuming the contractor
+            follows the design given by the consultant of the project.
+          </Para>
         </div>
 
+        {/*
+          ── Page 3: the limits of the exercise, and what it found ──
+        */}
+        <div
+          data-pdf-block
+          style={{
+            minHeight: forPDF ? 1000 : "auto",
+            breakAfter: "page",
+            paddingTop: 0,
+            paddingBottom: forPDF ? "24px" : "12px",
+          }}
+        >
+          <RunningHead subject={subject} />
+
+          <Para>
+            The inspection is limited to the parts of the building which are
+            visible and/or accessible. YALLA FIX IT have not removed any
+            panelling, furniture or floor coverings. External features are
+            viewed and inspected from available areas at ground level;
+            therefore we are not able to report on any unexposed or
+            inaccessible areas of the property to confirm their condition.
+          </Para>
+
+          <Heading>Overview:</Heading>
+          <Para>
+            During the inspection, {propertyDescription.toLowerCase()}{" "}
+            <strong>unit number </strong>
+            <strong style={{ color: C.deep }}>
+              {unitNumber(property?.unit_label)}
+            </strong>
+            {property?.building_name ? (
+              <strong>, {property.building_name}</strong>
+            ) : null}{" "}
+            was overall found{" "}
+            <strong>
+              {high > 0
+                ? "not yet acceptable, with the comments below"
+                : "in acceptable condition with comments,"}
+            </strong>{" "}
+            below listed:
+          </Para>
+
+          <Heading>General remarks:</Heading>
+          {/*
+            The grades, worst first, each with the rooms it was found in.
+            The issued reports write this by hand; the same summary read off
+            the record cannot disagree with the defect pages that follow.
+          */}
+          <div style={{ paddingTop: 0, paddingBottom: forPDF ? "18px" : "10px" }}>
+            {(["high", "medium", "low"] as const)
+              .map((grade) => ({
+                grade,
+                items: snags.filter((snag) => snag.severity === grade),
+              }))
+              .filter((group) => group.items.length > 0)
+              .map((group, index) => (
+                <div
+                  key={group.grade}
+                  style={{
+                    fontSize: 10,
+                    color: C.body,
+                    paddingLeft: 26,
+                    paddingTop: 0,
+                    paddingBottom: forPDF ? "12px" : "6px",
+                  }}
+                >
+                  {index + 1}-&nbsp;&nbsp;
+                  <strong>
+                    {SEVERITY[group.grade].label} severity — {group.items.length}{" "}
+                    defect{group.items.length === 1 ? "" : "s"}
+                  </strong>
+                  <div style={{ paddingLeft: 18, paddingBottom: "2px" }}>
+                    {[
+                      ...new Set(
+                        group.items.map(
+                          (snag) =>
+                            snag.area?.name ?? snag.area_label ?? "Unassigned",
+                        ),
+                      ),
+                    ].join(", ")}
+                  </div>
+                </div>
+              ))}
+            {snags.length === 0 ? (
+              <div style={{ fontSize: 10, color: C.body, paddingLeft: 26 }}>
+                No defects were recorded at this inspection.
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        {/*
+          The masthead, property/client cards and visit bar that used to
+          open the document are gone: the cover page states every one of
+          those facts — client, contact, location, inspector, visit type,
+          date — in the project table, and printing them twice made the
+          first two sheets read as the same page done differently.
+
+          The body picks up from the summary, under its own running head.
+        */}
+        <RunningHead subject={subject} />
+
         {/* ── Summary: five colour-coded figures ── */}
-        <SectionTitle>Summary</SectionTitle>
+        <Heading>Summary</Heading>
         <div style={{ display: "flex", gap: 8 }}>
           <Stat label="Total snags" value={String(snags.length)} />
           <Stat
             label="High"
             value={String(high)}
-            tone={high > 0 ? "high" : undefined}
+            tone={undefined}
           />
           <Stat
             label="Medium"
             value={String(medium)}
-            tone={medium > 0 ? "medium" : undefined}
+            tone={undefined}
           />
           <Stat
             label="Low"
             value={String(low)}
-            tone={low > 0 ? "low" : undefined}
+            tone={undefined}
           />
           <Stat
             label="Areas walked"
@@ -574,10 +1020,12 @@ export const InspectionReport = forwardRef<
           />
         </div>
 
+
+
         {/* ── FR-7.02: what this unit keeps failing on ── */}
         {subCategoryTally.length > 0 ? (
-          <>
-            <SectionTitle>Most affected sub-categories</SectionTitle>
+          <div style={{ marginTop: '15px' }}>
+            <Heading>Most affected sub-categories</Heading>
             <Card style={pad(forPDF, 6, 14)}>
               {subCategoryTally.map((row, index) => {
                 // A bar as well as a number: which one dominates is the
@@ -637,13 +1085,13 @@ export const InspectionReport = forwardRef<
                 );
               })}
             </Card>
-          </>
+          </div>
         ) : null}
 
         {/* ── Areas the inspector could not fully reach ── */}
         {accessIssues.length > 0 ? (
-          <>
-            <SectionTitle>Areas not fully inspected</SectionTitle>
+          <div style={{ marginTop: '15px' }}>
+            <Heading>Areas not fully inspected</Heading>
             <Card style={pad(forPDF, 6, 14)}>
               {accessIssues.map((area, index) => (
                 <div
@@ -677,187 +1125,223 @@ export const InspectionReport = forwardRef<
                 </div>
               ))}
             </Card>
-          </>
+          </div>
         ) : null}
 
         {/* ── Defects, grouped by area, one card per area ── */}
-        <SectionTitle>Defects by area</SectionTitle>
+        {/*
+          The defect pages open the way the issued reports open theirs:
+          the property named once, with the unit picked out, and the area
+          sections lettered beneath it.
+        */}
+        <div
+          style={{
+            fontSize: 12,
+            color: C.ink,
+            paddingTop: '20px',
+            paddingBottom: forPDF ? "18px" : "10px",
+          }}
+        >
+          {property?.building_name ?? "Property"}, Apartment Number{" "}
+          <span style={{ color: C.deep, fontWeight: 700 }}>
+            {unitNumber(property?.unit_label)}
+          </span>
+        </div>
+
         {areas.length === 0 ? (
           <div style={{ color: C.sub, fontSize: 9.5 }}>No areas recorded.</div>
         ) : (
-          areas.map((area) => {
-            const areaSnags = byArea.get(area.id) ?? [];
-            return (
-              <Card
-                key={area.id}
-                style={{
-                  padding: 0,
-                  marginBottom: 5,
-                  breakInside: "avoid",
-                  background: "#ffffff",
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    background: C.card,
-                    borderBottom:
-                      areaSnags.length > 0 ? `1px solid ${C.line}` : "none",
-                    borderRadius: areaSnags.length > 0 ? "8px 8px 0 0" : 8,
-                    ...pad(forPDF, 6, 14),
-                  }}
-                >
-                  <span
-                    style={{ fontWeight: 700, fontSize: 10.5, color: C.ink }}
-                  >
-                    {area.name}
-                  </span>
-                  <span style={{ fontSize: 8, color: C.sub }}>
-                    {areaSnags.length === 0
-                      ? area.access_state === "not_accessible"
-                        ? "Not inspected"
-                        : "No defects found"
-                      : `${areaSnags.length} defect${areaSnags.length === 1 ? "" : "s"}`}
-                  </span>
-                </div>
+          (() => {
+            /*
+              Defects are numbered once, straight through the document.
 
-                {areaSnags.map((snag, index) => {
-                  const photos = (snag.photos ?? []).filter(
-                    (p) => p.signed_url,
-                  );
-                  return (
-                    <div
-                      key={snag.id}
-                      style={{
-                        ...pad(forPDF, 6, 14),
-                        borderTop: index === 0 ? "none" : `1px solid ${C.line}`,
-                        breakInside: "avoid",
-                      }}
-                    >
+              The issued reports label every shot `001-A-01`: the running
+              number across the whole inspection, the area's letter, and the
+              index within that area. A client quoting "number 14" on the
+              phone means the same defect whichever page it is on, which a
+              per-area count cannot promise.
+            */
+            let running = 0;
+            return areas.map((area, areaIndex) => {
+              const areaSnags = byArea.get(area.id) ?? [];
+              const letter = areaLetter(areaIndex);
+              return (
+                <div key={area.id} style={{ marginBottom: 10 }}>
+                  <div
+                    style={{
+                      fontSize: 10.5,
+                      fontWeight: 600,
+                      color: C.ink,
+                      ...pad(forPDF, 4, 0),
+                    }}
+                  >
+                    {letter}. {area.name}
+                    {areaSnags.length === 0 ? (
+                      <span style={{ color: C.sub, fontWeight: 400 }}>
+                        {" "}
+                        —{" "}
+                        {area.access_state === "not_accessible"
+                          ? "not inspected"
+                          : "no defects found"}
+                      </span>
+                    ) : null}
+                  </div>
+
+                  {areaSnags.map((snag, index) => {
+                    running += 1;
+                    const photos = (snag.photos ?? []).filter(
+                      (p) => p.signed_url,
+                    );
+                    const cover = photos[0];
+                    const grade = SEVERITY[snag.severity] ?? SEVERITY.low;
+                    const ref = `${String(running).padStart(3, "0")}-${letter}-${String(
+                      index + 1,
+                    ).padStart(2, "0")}`;
+
+                    return (
                       <div
+                        key={snag.id}
                         style={{
                           display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "flex-start",
-                          gap: 10,
+                          alignItems: "stretch",
+                          border: `1px solid ${C.grid}`,
+                          borderTop: index === 0 ? `1px solid ${C.grid}` : "none",
+                          // A defect with no photo keeps a row's height, so a
+                          // column of them stays a table rather than a ladder
+                          // of different-sized boxes.
+                          minHeight: 118,
+                          breakInside: "avoid",
                         }}
                       >
-                        <div style={{ flex: 1 }}>
-                          <span
-                            style={{
-                              fontWeight: 600,
-                              fontSize: 10,
-                              color: C.ink,
-                            }}
-                          >
-                            {[snag.element_label, snag.defect_label]
-                              .filter(Boolean)
-                              .join(" · ") || "Defect"}
-                          </span>
-                          {snag.note ? (
-                            <div
-                              style={{
-                                color: C.sub,
-                                fontSize: 9.5,
-                                marginTop: 1,
-                              }}
-                            >
-                              {snag.note}
-                            </div>
-                          ) : null}
-                          {photos[0]?.taken_at ? (
-                            <div
-                              style={{
-                                fontSize: 7.5,
-                                color: C.faint,
-                                marginTop: 2,
-                                paddingBottom: "4px",
-                              }}
-                            >
-                              Captured {fmtDateTime(photos[0].taken_at)}
-                            </div>
-                          ) : null}
-                        </div>
-                        <Pill
-                          tone={(SEVERITY[snag.severity] ?? SEVERITY.low).tone}
-                        >
-                          {(SEVERITY[snag.severity] ?? SEVERITY.low).label}
-                        </Pill>
-                      </div>
-
-                      {photos.length > 0 ? (
+                        {/* Evidence, with its reference above it. */}
                         <div
                           style={{
-                            display: "flex",
-                            gap: 5,
-                            marginTop: 6,
-                            flexWrap: "wrap",
+                            width: "55%",
+                            borderRight: `1px solid ${C.grid}`,
+                            ...pad(forPDF, 4, 6),
                           }}
                         >
-                          {photos.slice(0, 6).map((photo) =>
-                            /*
-                            A printed report cannot play a clip, and an
-                            <img> pointed at an mp4 renders as a broken
-                            tile — which read to the client as missing
-                            evidence rather than as evidence they need to
-                            open the portal for. A labelled tile says the
-                            footage exists and where it lives.
-                          */
-                            isVideo(photo) ? (
+                          <div
+                            style={{
+                              fontSize: 7,
+                              fontWeight: 700,
+                              color: C.ink,
+                              letterSpacing: 0.3,
+                              paddingBottom: "4px",
+                            }}
+                          >
+                            {ref}
+                          </div>
+                          {cover ? (
+                            isVideo(cover) ? (
                               <div
-                                key={photo.id}
                                 style={{
-                                  width: 46,
-                                  height: 46,
-                                  borderRadius: 6,
+                                  width: "72%",
+                                  height: 96,
+                                  margin: "0 auto",
                                   border: `1px solid ${C.line}`,
                                   background: C.card,
                                   display: "flex",
                                   alignItems: "center",
                                   justifyContent: "center",
-                                  fontSize: 7,
+                                  fontSize: 8,
                                   fontWeight: 600,
                                   color: C.sub,
-                                  textAlign: "center",
-                                  lineHeight: 1.2,
                                 }}
                               >
-                                Video
+                                Video evidence
                               </div>
                             ) : (
                               // eslint-disable-next-line @next/next/no-img-element
                               <img
-                                key={photo.id}
-                                src={photo.signed_url ?? ""}
+                                src={cover.signed_url ?? ""}
                                 alt=""
                                 crossOrigin="anonymous"
                                 style={{
-                                  width: 46,
-                                  height: 46,
+                                  width: "72%",
+                                  height: 96,
                                   objectFit: "cover",
-                                  borderRadius: 6,
-                                  border: `1px solid ${C.line}`,
+                                  margin: "0 auto",
                                   display: "block",
                                 }}
                               />
-                            ),
+                            )
+                          ) : (
+                            <div
+                              style={{
+                                fontSize: 8,
+                                color: C.faint,
+                                paddingBottom: "6px",
+                              }}
+                            >
+                              No photo recorded.
+                            </div>
                           )}
                         </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </Card>
-            );
-          })
+
+                        {/*
+                          The description, washed in its own severity.
+
+                          `paddingBottom` alone, never a symmetric vertical
+                          pad: html2canvas puts a filled box's background
+                          where the padding is not, so an evenly padded cell
+                          prints with its tint riding above the text.
+                        */}
+                        <div
+                          style={{
+                            width: "45%",
+                            background: FILL[grade.tone] ?? FILL.low,
+                            fontSize: 9.5,
+                            color: C.body,
+                            lineHeight: 1.45,
+                            ...pad(forPDF, 5, 8),
+                          }}
+                        >
+                          <span style={{ fontWeight: 600 }}>{running}-</span>{" "}
+                          {[snag.element_label, snag.defect_label]
+                            .filter(Boolean)
+                            .join(" · ") || "Defect"}
+                          {snag.note ? (
+                            <div
+                              style={{
+                                marginTop: 4,
+                                color: C.body,
+                                paddingBottom: "2px",
+                              }}
+                            >
+                              <span style={{ fontWeight: 600 }}>Comment: </span>
+                              {snag.note}
+                            </div>
+                          ) : null}
+                          {snag.status === "verified_poor_quality" ||
+                            snag.status === "verified_not_done" ? (
+                            <div
+                              style={{
+                                marginTop: 3,
+                                fontWeight: 600,
+                                color: C.deep,
+                                paddingBottom: "2px",
+                              }}
+                            >
+                              {snag.status === "verified_not_done"
+                                ? "Re-inspected: not done"
+                                : "Re-inspected: poor quality fix"}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            });
+          })()
         )}
 
         {/* ── Checklist, two columns by category ── */}
         {checklist.length > 0 ? (
           <>
-            <SectionTitle>Inspection checklist</SectionTitle>
+            <Heading>Inspection checklist</Heading>
             <ChecklistBlock items={checklist} />
           </>
         ) : null}
@@ -865,7 +1349,7 @@ export const InspectionReport = forwardRef<
         {/* ── Commercial summary ── */}
         {quotation ? (
           <>
-            <SectionTitle>Commercial summary</SectionTitle>
+            <Heading>Commercial summary</Heading>
             <Card style={{ ...pad(forPDF, 8, 14), breakInside: "avoid" }}>
               <table
                 style={{
@@ -960,75 +1444,118 @@ export const InspectionReport = forwardRef<
           </>
         ) : null}
 
-        {/* ── Sign-off, and the disclaimer directly beneath it ── */}
-        <SectionTitle>Sign-off</SectionTitle>
-        <Card style={{ breakInside: "avoid" }}>
+        {/*
+          ── Outlines: the report's closing page ──
+
+          The issued reports end on a plain-language summary and the
+          company stamp, not on a signature grid. The grid is gone: an
+          inspection report is issued BY Yalla Fix It, and asking the
+          client to counter-sign the findings inside the document was
+          never what the handover reports do.
+        */}
+        <div
+          data-pdf-block
+          style={{
+            breakBefore: "page",
+            paddingTop: 0,
+            paddingBottom: forPDF ? "24px" : "12px",
+          }}
+        >
+          <RunningHead subject={subject} />
+
+          <Heading>Outlines:</Heading>
+          <Para>
+            {snags.length === 0 ? (
+              <>
+                The property was found in acceptable condition, with no
+                defects recorded at this inspection.
+              </>
+            ) : (
+              <>
+                The property was found in{" "}
+                {high > 0
+                  ? "acceptable condition with comments"
+                  : "acceptable condition"}
+                , with {snags.length} finishing and workmanship comment
+                {snags.length === 1 ? "" : "s"}, highlighted below.
+              </>
+            )}
+          </Para>
+
+          {/*
+            The defects themselves, worst first — the client's action list.
+            Read off the record rather than typed, so it cannot drift from
+            the pages above it.
+          */}
+          <div style={{ paddingTop: 0, paddingBottom: forPDF ? "18px" : "10px" }}>
+            {[...snags]
+              .sort(
+                (a, b) =>
+                  SEVERITY_RANK.indexOf(a.severity) -
+                  SEVERITY_RANK.indexOf(b.severity),
+              )
+              .map((snag) => (
+                <div
+                  key={snag.id}
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    fontSize: 10,
+                    lineHeight: 1.6,
+                    color: C.body,
+                    paddingLeft: 20,
+                    paddingTop: 0,
+                    paddingBottom: forPDF ? "10px" : "5px",
+                  }}
+                >
+                  <span aria-hidden>-</span>
+                  <span>
+                    {[
+                      snag.area?.name ?? snag.area_label,
+                      snag.element_label,
+                      snag.defect_label,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                    {snag.note ? (
+                      <span style={{ color: C.sub }}> — {snag.note}</span>
+                    ) : null}
+                  </span>
+                </div>
+              ))}
+          </div>
+
+          {/* Who inspected it, and when it was signed off internally. */}
           <div
             style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "flex-end",
-              gap: 20,
+              fontSize: 9.5,
+              color: C.body,
+              paddingTop: 0,
+              paddingBottom: forPDF ? "14px" : "8px",
             }}
           >
-            <div>
-              <div
-                style={{
-                  fontSize: 7.5,
-                  fontWeight: 600,
-                  color: C.sub,
-                  textTransform: "uppercase",
-                  letterSpacing: 0.5,
-                }}
-              >
-                Signed by
-              </div>
-              <div
-                style={{
-                  fontSize: 12,
-                  fontWeight: 700,
-                  color: C.ink,
-                  marginTop: 3,
-                }}
-              >
-                {submission?.signer_name || "—"}
-              </div>
-              <div style={{ fontSize: 8, color: C.faint, marginTop: 1 }}>
-                {submission?.signed_at
-                  ? fmtDate(submission.signed_at)
-                  : "Not yet signed off"}
-              </div>
-            </div>
-            <div style={{ textAlign: "right" }}>
-              {submission?.signature_url ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={submission.signature_url}
-                  alt="Signature"
-                  crossOrigin="anonymous"
-                  style={{ maxHeight: 46, maxWidth: 200, objectFit: "contain" }}
-                />
-              ) : submission?.signer_name ? (
-                <span
-                  style={{ fontFamily: SCRIPT, fontSize: 22, color: C.ink }}
-                >
-                  {submission.signer_name}
-                </span>
-              ) : null}
-              <div
-                style={{
-                  borderTop: `1px solid ${C.line}`,
-                  marginTop: 3,
-                  paddingTop: 2,
-                  fontSize: 7.5,
-                  color: C.faint,
-                }}
-              >
-                Client signature
-              </div>
-            </div>
+            Inspected by{" "}
+            <strong>{inspector?.full_name ?? inspector?.email ?? "—"}</strong>
+            {submission?.signed_at ? (
+              <> · signed off {fmtDate(submission.signed_at)}</>
+            ) : null}
           </div>
-        </Card>
+
+          {submission?.signature_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={submission.signature_url}
+              alt=""
+              crossOrigin="anonymous"
+              style={{
+                display: "block",
+                maxHeight: 120,
+                maxWidth: 240,
+                objectFit: "contain",
+              }}
+            />
+          ) : null}
+        </div>
 
         <div
           style={{
@@ -1043,6 +1570,27 @@ export const InspectionReport = forwardRef<
           Defects are classified by severity for prioritisation and do not
           constitute a structural or legal certification. Yalla Fixit Property
           Care.
+        </div>
+
+        {/*
+          The contact strip every issued report closes on: an orange rule,
+          the company line centred beneath it. Bottom padding only — a
+          symmetric pad here prints the rule sitting on the text.
+        */}
+        <div
+          style={{
+            borderTop: `1px solid ${C.orange}`,
+            marginTop: 10,
+            textAlign: "center",
+            fontSize: 7,
+            letterSpacing: 0.3,
+            color: C.orange,
+            paddingTop: 0,
+            paddingBottom: forPDF ? "12px" : "6px",
+          }}
+        >
+          YALLA FIX IT, PO BOX 550312 | TEL 800 - PERFECT |
+          INFO@YALLAFIXIT.AE | WWW.YALLAFIXIT.AE
         </div>
       </div>
     </PdfMode.Provider>
@@ -1116,10 +1664,10 @@ function ChecklistBlock({ items }: { items: SnaggingChecklistItem[] }) {
               // PDF is a rasterised canvas and html2canvas drops it -- this
               // is the attribute the paginator actually reads.
               data-pdf-block
+              // Square and hairline, like every other block in the report.
               style={{
-                background: C.card,
-                border: `1px solid ${C.line}`,
-                borderRadius: 8,
+                background: "#ffffff",
+                border: `1px solid ${C.grid}`,
                 ...pad(forPDF, 6, 10),
                 marginBottom: 6,
                 breakInside: "avoid",

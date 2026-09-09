@@ -3,6 +3,7 @@ export type {
   SnaggingTaskFilters,
   SnaggingTaskListResponse,
   CatalogueResponse,
+  ChecklistLibraryResponse,
   SnaggingClientOption,
   SnaggingPricingConfig,
   SnaggingQuotation,

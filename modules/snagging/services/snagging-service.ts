@@ -15,6 +15,7 @@ import type {
   SnaggingPropertyType,
   SnaggingCatalogueArea,
   SnaggingCatalogueEntry,
+  SnaggingChecklistLibraryItem,
   SnaggingTask,
   SnaggingTaskSummary,
 } from "@/types/types";
@@ -40,6 +41,7 @@ export interface SnaggingPropertyInput {
 }
 import type {
   CatalogueEntryInput,
+  ChecklistItemInput,
   CreateTaskInput,
   RejectTaskInput,
   UpdateTaskInput,
@@ -60,6 +62,16 @@ export interface SnaggingTaskFilters {
 export interface SnaggingTaskListResponse {
   data: SnaggingTaskSummary[];
   totalCount: number;
+}
+
+/** What the checklist library screen reads (N1). */
+export interface ChecklistLibraryResponse {
+  items: SnaggingChecklistLibraryItem[];
+  /** Every group in the library, not just the filtered page. */
+  groups: string[];
+  totalCount: number;
+  activeCount: number;
+  mandatoryCount: number;
 }
 
 export interface CatalogueResponse {
@@ -535,6 +547,58 @@ export const snaggingService = {
   /** BR-8: retire rather than delete, so historical reports resolve. */
   setCatalogueEntryActive: async (id: string, active: boolean) =>
     executeRESTBackend("/api/snagging/catalogue", {
+      method: "PATCH",
+      body: { id, active },
+    }),
+
+  // ---------------------------------------------------------------
+  // Checklist library (N1, FR-4.13)
+  // ---------------------------------------------------------------
+
+  listChecklistLibrary: async (
+    filters: {
+      search?: string;
+      group?: string;
+      propertyType?: string;
+      activeOnly?: boolean;
+    } = {},
+  ): Promise<ChecklistLibraryResponse> => {
+    const params: Record<string, string | number> = {};
+    if (filters.search) params.search = filters.search;
+    if (filters.group && filters.group !== "all") params.group = filters.group;
+    if (filters.propertyType && filters.propertyType !== "all")
+      params.propertyType = filters.propertyType;
+    if (filters.activeOnly) params.activeOnly = "true";
+
+    return executeRESTBackend<ChecklistLibraryResponse>("/api/snagging/checklist", {
+      method: "GET",
+      params,
+    });
+  },
+
+  createChecklistItem: async (
+    input: ChecklistItemInput,
+  ): Promise<SnaggingChecklistLibraryItem> =>
+    executeRESTBackend("/api/snagging/checklist", {
+      method: "POST",
+      body: input as unknown as Record<string, unknown>,
+    }),
+
+  updateChecklistItem: async (
+    id: string,
+    changes: Partial<Omit<ChecklistItemInput, "code">>,
+  ): Promise<SnaggingChecklistLibraryItem> =>
+    executeRESTBackend("/api/snagging/checklist", {
+      method: "PATCH",
+      body: { id, ...changes } as unknown as Record<string, unknown>,
+    }),
+
+  /**
+   * Deactivate rather than delete: a job checklist row still points at this
+   * item, so removing it would blank the link on inspections already sent.
+   */
+  setChecklistItemActive: async (id: string, active: boolean) =>
+    executeRESTBackend("/api/snagging/checklist", {
       method: "PATCH",
       body: { id, active },
     }),

@@ -471,9 +471,9 @@ export default function SnaggingAnalyticsDashboard() {
                         <span className="w-10 text-right text-sm tabular-nums">
                           {row.count}
                         </span>
-                        <span className="w-20 shrink-0 text-right">
+                        {/* <span className="w-20 shrink-0 text-right">
                           <StatusTrend value={row.trend} />
-                        </span>
+                        </span> */}
                       </button>
                     ))}
                   </div>
@@ -642,7 +642,7 @@ export default function SnaggingAnalyticsDashboard() {
                 columns={getSnaggingDeveloperColumns()}
                 // A breakdown, not a list to search: the heading above
                 // already says what these rows are, so no toolbar.
-                onGlobalFilterChange={() => {}}
+                onGlobalFilterChange={() => { }}
                 onPageChange={setDeveloperPage}
                 onPageSizeChange={(size) => {
                   setDeveloperPageSize(size);
@@ -682,7 +682,7 @@ export default function SnaggingAnalyticsDashboard() {
               }
             >
               {inspectorRows.length > 0 &&
-              inspectorRows.length < inspectorPageSize ? (
+                inspectorRows.length < inspectorPageSize ? (
                 /*
                   One or two inspectors do not need a header row, a page
                   size selector and a pager to be read. Below a full page
@@ -749,7 +749,7 @@ export default function SnaggingAnalyticsDashboard() {
                 <DataTable
                   data={inspectorPageRows}
                   columns={getSnaggingInspectorColumns()}
-                  onGlobalFilterChange={() => {}}
+                  onGlobalFilterChange={() => { }}
                   onPageChange={setInspectorPage}
                   onPageSizeChange={(size) => {
                     setInspectorPageSize(size);

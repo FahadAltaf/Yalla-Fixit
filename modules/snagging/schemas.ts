@@ -183,6 +183,41 @@ export const completeReviewSchema = z.object({
 
 export type RejectTaskInput = z.infer<typeof rejectTaskSchema>;
 
+/**
+ * The checklist library (N1, FR-4.13).
+ *
+ * `code` is the analytics key and the join back to every job checklist row
+ * already written, so it is set once at creation and never rewritten. Every
+ * other field is editable, and an item is deactivated rather than deleted.
+ */
+export const checklistItemSchema = z.object({
+  code: z
+    .string()
+    .trim()
+    .regex(/^CHK-[0-9]{3,4}$/, "Code looks like CHK-048"),
+  group_name: z.string().trim().min(2, "Give the check a group"),
+  label: z.string().trim().min(3, "Describe what the inspector checks"),
+  applies_apartment: z.boolean().default(true),
+  applies_villa: z.boolean().default(true),
+  applies_townhouse: z.boolean().default(true),
+  applies_commercial: z.boolean().default(true),
+  mandatory: z.boolean().default(true),
+  sort_order: z.coerce.number().int().min(0).default(0),
+});
+
+export const checklistToggleSchema = z.object({
+  id: z.string().uuid(),
+  active: z.boolean(),
+});
+
+/** Editing an existing item: the code is deliberately not accepted. */
+export const checklistItemUpdateSchema = checklistItemSchema
+  .omit({ code: true })
+  .partial()
+  .extend({ id: z.string().uuid() });
+
+export type ChecklistItemInput = z.infer<typeof checklistItemSchema>;
+
 export const catalogueEntrySchema = z.object({
   element_code: z
     .string()

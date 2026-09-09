@@ -10,9 +10,17 @@ import type {
   AmcSubmissionServiceRow,
 } from "./amc-types";
 
+/**
+ * Builds the API payload for a submission.
+ *
+ * `status` is deliberately allowed to be undefined, meaning "leave whatever
+ * the row already has". A submission that has produced a document is
+ * "generated", and an ordinary autosave -- stepping backwards through the
+ * wizard, say -- must not quietly demote it back to a draft.
+ */
 export function formDataToSubmissionPayload(
   data: AmcFormData,
-  status: "draft" | "generated" = "draft",
+  status: "draft" | "generated" | undefined,
   generatedDocuments?: AmcDocumentType[],
 ) {
   const services: AmcSubmissionServiceRow[] = data.serviceRows.map((row) => ({

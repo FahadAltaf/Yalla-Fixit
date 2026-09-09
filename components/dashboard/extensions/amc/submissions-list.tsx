@@ -174,8 +174,8 @@ export function SubmissionsList({
               </div>
             </div>
           </TableCell>
-          <TableCell className="text-right">
-            <Skeleton className="ml-auto h-4 w-20" />
+          <TableCell className="">
+            <Skeleton className=" h-4 w-20" />
           </TableCell>
           <TableCell>
             <Skeleton className="h-5 w-16 rounded-sm" />
@@ -184,7 +184,7 @@ export function SubmissionsList({
             <Skeleton className="h-4 w-32" />
           </TableCell>
           <TableCell>
-            <Skeleton className="ml-auto size-8 rounded-md" />
+            <Skeleton className=" size-8 rounded-md" />
           </TableCell>
         </TableRow>
       ));
@@ -244,7 +244,7 @@ export function SubmissionsList({
             />
           </TableCell>
           {/* Currency right-aligns so the magnitudes line up down the column. */}
-          <TableCell className="text-right text-sm tabular-nums">
+          <TableCell className=" text-sm tabular-nums">
             {formatCurrencyAED(Number(submission.final_price))}
           </TableCell>
           <TableCell>
@@ -253,7 +253,7 @@ export function SubmissionsList({
           <TableCell className="text-muted-foreground text-sm">
             {format(new Date(submission.updated_at), "dd MMM yyyy, HH:mm")}
           </TableCell>
-          <TableCell className="text-right">
+          <TableCell className="">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -340,10 +340,10 @@ export function SubmissionsList({
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Customer / Property</TableHead>
-              <TableHead className="text-right">Final Price</TableHead>
+              <TableHead className="">Final Price</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Last Updated</TableHead>
-              <TableHead className="w-[1%] text-right">Actions</TableHead>
+              <TableHead className="">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>{body()}</TableBody>
