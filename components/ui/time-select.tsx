@@ -71,13 +71,20 @@ export default function TimeSelect({
         disabled={disabled}
         aria-label={ariaLabel ?? placeholder ?? "Time"}
         /*
-          pl-9 clears the icon. The appearance reset drops WebKit's own
-          inner spin buttons, which sit on top of the field's padding and
-          look like a second, broken control next to ours.
+          The shadcn time-field recipe: the browser's own clock glyph is
+          hidden outright rather than faded, because a 0-opacity button is
+          still a click target sitting on top of the field.
+
+          `step` is deliberately left at its default of 60 seconds. The
+          recipe uses step="1", which turns the control into HH:MM:SS — and
+          seconds on a site appointment are noise the value contract cannot
+          carry anyway: every caller builds an instant from `${date}T${time}`,
+          so a seconds component would produce an invalid timestamp.
         */
         className={cn(
-          "pl-9",
-          "[&::-webkit-calendar-picker-indicator]:opacity-0",
+          "bg-background appearance-none pl-9",
+          "[&::-webkit-calendar-picker-indicator]:hidden",
+          "[&::-webkit-calendar-picker-indicator]:appearance-none",
           "[&::-webkit-inner-spin-button]:appearance-none",
           "[&::-webkit-clear-button]:hidden",
         )}

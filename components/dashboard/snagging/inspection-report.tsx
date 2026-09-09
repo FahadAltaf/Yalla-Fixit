@@ -427,16 +427,6 @@ export const InspectionReport = forwardRef<
             >
               Snagging Inspection Report
             </div>
-            <div
-              style={{
-                fontSize: 10,
-                fontWeight: 700,
-                color: C.ink,
-                marginTop: 4,
-              }}
-            >
-              {task.code}
-            </div>
             <div style={{ fontSize: 7.5, color: C.faint, marginTop: 2 }}>
               {fmtDate(generatedAt ?? new Date().toISOString())}
             </div>
@@ -674,7 +664,7 @@ export const InspectionReport = forwardRef<
                     </span>
                     {area.access_reason ? (
                       <span style={{ color: C.sub, fontSize: 9.5 }}>
-                        — {area.access_reason}
+                        · {area.access_reason}
                       </span>
                     ) : null}
                   </div>
@@ -765,16 +755,6 @@ export const InspectionReport = forwardRef<
                             {[snag.element_label, snag.defect_label]
                               .filter(Boolean)
                               .join(" · ") || "Defect"}
-                          </span>
-                          <span
-                            style={{
-                              fontFamily: "monospace",
-                              fontSize: 7.5,
-                              color: C.faint,
-                              marginLeft: 6,
-                            }}
-                          >
-                            {snag.snag_code}
                           </span>
                           {snag.note ? (
                             <div

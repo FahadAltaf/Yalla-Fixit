@@ -53,6 +53,8 @@ export type DrilldownRequest = {
  * and buys back the width the metric's own columns actually need.
  */
 const IDENTITY_KEYS = ["code", "unit", "status"];
+// `code` stays in the key list so the drilldown still consumes it from the
+// payload rather than rendering it as a column of its own.
 
 /**
  * The records behind a figure (FR-10.06).
@@ -220,8 +222,11 @@ export function AnalyticsDrilldown({
                     <TableCell className="py-3 pl-6">
                       <IdentityCell
                         seed={row.id}
-                        title={String(row.code ?? "—")}
-                        subtitle={row.unit ? String(row.unit) : null}
+                        // The unit names the row; the job code that used to
+                        // sit here is an internal handle and read as noise
+                        // above the thing people actually recognise.
+                        title={row.unit ? String(row.unit) : "—"}
+                        subtitle={null}
                         badge={
                           row.status ? (
                             <TaskStatusBadge status={statusFor(row.status)} />

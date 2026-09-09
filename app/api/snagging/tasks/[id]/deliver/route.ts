@@ -127,7 +127,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       try {
         await emailService.sendEmail({
           to: recipient,
-          subject: `Your snagging inspection report — ${job.unit_label ?? job.code}`,
+          subject: `Your snagging inspection report for ${job.unit_label ?? job.code}`,
           html: reportEmailHtml({
             unit: [job.unit_label, job.building_name].filter(Boolean).join(", ") || job.code,
             reportUrl,

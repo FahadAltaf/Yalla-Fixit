@@ -468,7 +468,9 @@ export const snaggingService = {
   openRound: async (
     id: string,
     input: {
-      scheduled_date?: string;
+      /** Required: a round is a new site visit and books its own slot. */
+      scheduled_date: string;
+      appointment_at?: string | null;
       technician_ids?: string[];
       notes?: string;
       snag_ids?: string[];
@@ -488,7 +490,9 @@ export const snaggingService = {
   scheduleVisit: async (
     id: string,
     input: {
-      scheduled_date?: string;
+      /** Required: a visit is a trip and is requested for a specific slot. */
+      scheduled_date: string;
+      appointment_at?: string | null;
       technician_ids?: string[];
       notes?: string;
       reason?: string;

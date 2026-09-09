@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { dedupeDefects } from "./defect-set";
 import { loadJobFamily } from "./job-family";
 
 /**
@@ -98,20 +99,29 @@ export async function issueReportVersion(
   }
 
   /*
-    What the client's report contains: the original inspection's snags
-    plus everything found on its additional visits. De-snag rounds are
-    excluded — their rows are working copies whose verdicts write through
-    to the originals, so counting them would double every carried defect.
+    What the client's report contains: the original inspection's snags, plus
+    everything found on its additional visits, plus the defects first raised
+    during a de-snag round.
+
+    De-snag rounds used to be excluded outright, on the reasoning that their
+    rows are working copies whose verdicts write through to the originals —
+    true of a carried defect, and false of one BORN on a round, which has no
+    original to write through to. Those were left out of the client's
+    document entirely. Reading the family and collapsing by snag_code keeps
+    the carried copies from doubling while letting the round-born ones
+    through, which is what the exclusion was really trying to achieve.
   */
-  const reportJobIds = [rootId, ...family.additionalVisitIds];
   const { data: snags, error: snagError } = await admin
     .from("snagging_snags")
-    .select("id")
-    .in("job_id", reportJobIds)
+    .select("id, job_id, snag_code")
+    .in("job_id", family.allIds)
     .neq("status", "withdrawn");
   if (snagError) throw new Error(snagError.message);
 
-  const snagIds = (snags ?? []).map((s) => s.id as string);
+  const snagIds = dedupeDefects(snags ?? [], {
+    preferredJobIds: [rootId, ...family.additionalVisitIds],
+    roundOf: family.roundOf,
+  }).map((s) => s.id as string);
 
   const { data: latest } = await admin
     .from("snagging_report_versions")

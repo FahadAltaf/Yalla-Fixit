@@ -46,10 +46,10 @@ const EVENT_META: Record<string, { label: string; Icon: LucideIcon }> = {
   task_in_progress: { label: "Inspection started on site", Icon: PlayCircle },
   task_submitted: { label: "Submitted for review", Icon: Send },
   task_in_review: { label: "Review started", Icon: ClipboardCheck },
-  review_completed: { label: "Review complete — sent to approval", Icon: Send },
+  review_completed: { label: "Review complete, sent to approval", Icon: Send },
   reviewer_assigned: { label: "Reviewer assigned", Icon: UserCog },
   approval_manager_assigned: { label: "Approval manager assigned", Icon: UserCog },
-  approval_escalated: { label: "Approval escalated — past 48h", Icon: AlertTriangle },
+  approval_escalated: { label: "Approval escalated after 48 hours", Icon: AlertTriangle },
   task_approved: { label: "Inspection approved", Icon: CheckCircle2 },
   task_rejected: { label: "Sent back for correction", Icon: XCircle },
   report_delivered: { label: "Report delivered", Icon: FileText },
@@ -295,7 +295,7 @@ export function AuditTimeline({ taskId }: { taskId: string }) {
                         {event.justification ? (
                           <span className="text-foreground/80">
                             {" "}
-                            — “{event.justification}”
+                            &middot; &quot;{event.justification}&quot;
                           </span>
                         ) : null}
                       </>

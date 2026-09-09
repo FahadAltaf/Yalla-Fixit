@@ -271,7 +271,7 @@ export function LocationPicker({
       <div className="text-muted-foreground flex flex-wrap items-center justify-between gap-2 text-xs">
         <span>
           {hasPin
-            ? `Pinned at ${lat.toFixed(5)}, ${lng.toFixed(5)} — click the map or drag the pin to move it.`
+            ? `Pinned at ${lat.toFixed(5)}, ${lng.toFixed(5)}. Click the map or drag the pin to move it.`
             : "Click the map to drop a pin, or search for the address above."}
         </span>
         {hasPin ? (

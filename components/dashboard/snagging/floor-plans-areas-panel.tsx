@@ -16,6 +16,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { compressImage } from "@/lib/media/compress-image";
+
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -80,22 +82,15 @@ async function toPinnablePlan(
   file: File,
 ): Promise<{ file: File; width?: number; height?: number }> {
   if (file.type.startsWith("image/")) {
-    const size = await new Promise<{ width?: number; height?: number }>(
-      (resolve) => {
-        const url = URL.createObjectURL(file);
-        const img = new window.Image();
-        img.onload = () => {
-          resolve({ width: img.naturalWidth, height: img.naturalHeight });
-          URL.revokeObjectURL(url);
-        };
-        img.onerror = () => {
-          resolve({});
-          URL.revokeObjectURL(url);
-        };
-        img.src = url;
-      },
-    );
-    return { file, ...size };
+    // Downscaled and re-encoded before it leaves the device. The returned
+    // dimensions are the ones actually uploaded, so the pin coordinates the
+    // panel stores are relative to the image the report will show.
+    const compressed = await compressImage(file);
+    return {
+      file: compressed.file,
+      width: compressed.width ?? undefined,
+      height: compressed.height ?? undefined,
+    };
   }
 
   if (file.type === "application/pdf") {
@@ -119,10 +114,17 @@ async function toPinnablePlan(
       canvas.toBlob(res, "image/png"),
     );
     if (!blob) throw new Error("Could not convert the PDF to an image");
+    // A page rasterised at scale 2 is a large PNG; run it through the same
+    // compressor so a PDF plan does not cost several times an image one.
     const png = new File([blob], file.name.replace(/\.pdf$/i, ".png"), {
       type: "image/png",
     });
-    return { file: png, width: canvas.width, height: canvas.height };
+    const compressed = await compressImage(png);
+    return {
+      file: compressed.file,
+      width: compressed.width ?? canvas.width,
+      height: compressed.height ?? canvas.height,
+    };
   }
 
   throw new Error("Floor plans must be an image (PNG/JPG) or a PDF");
@@ -239,7 +241,7 @@ export function FloorPlansAreasPanel({
     // The file is deleted outright, and every pin placed on it is left
     // without a plan to sit on.
     const ok = await confirm({
-      title: `Remove “${plan.label}”?`,
+      title: `Remove "${plan.label}"?`,
       description:
         "The uploaded plan is deleted. Areas pinned to this floor keep their names but lose their plan and pin position, and will need re-pinning.",
       confirmText: "Remove plan",
@@ -350,7 +352,7 @@ export function FloorPlansAreasPanel({
   async function clearPin(area: SnaggingArea) {
     // The position is not recoverable — the plan has to be clicked again.
     const ok = await confirm({
-      title: `Remove the pin for “${area.name}”?`,
+      title: `Remove the pin for "${area.name}"?`,
       description:
         "The area stays on the job, but it will no longer be marked on any floor plan. You can pin it again by clicking the plan.",
       confirmText: "Remove pin",
@@ -456,7 +458,7 @@ export function FloorPlansAreasPanel({
   async function removeArea(area: SnaggingArea) {
     // An area is not just a label: snags are recorded against it.
     const ok = await confirm({
-      title: `Remove “${area.name}”?`,
+      title: `Remove "${area.name}"?`,
       description:
         "The area and its pin are deleted. Any snag already recorded in this area loses the area it was logged against, and it cannot be undone from here.",
       confirmText: "Remove area",
@@ -784,7 +786,7 @@ export function FloorPlansAreasPanel({
             {canEdit && suggestions.length > 0 ? (
               <div className="mb-3">
                 <p className="text-muted-foreground mb-2 text-xs">
-                  Rooms this property usually has — tap to add
+                  Rooms this property usually has. Tap to add.
                 </p>
                 <div className="flex flex-wrap gap-1.5">
                   {suggestions.map((room) => (
@@ -843,7 +845,7 @@ export function FloorPlansAreasPanel({
             <DialogTitle>Which area is this pin?</DialogTitle>
             <DialogDescription>
               Every pin represents one area. Pick an existing area or create a
-              new one — the pin is never auto-assigned.
+              new one. The pin is never auto-assigned.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 py-2">
@@ -905,7 +907,7 @@ export function FloorPlansAreasPanel({
           <DialogHeader>
             <DialogTitle>Rename area</DialogTitle>
             <DialogDescription>
-              The new name is used everywhere this area appears — its pin, the
+              The new name is used everywhere this area appears: its pin, the
               snags recorded in it, and the report.
             </DialogDescription>
           </DialogHeader>

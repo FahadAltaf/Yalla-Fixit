@@ -142,7 +142,6 @@ function snagBlock(snag: ReportSnag): string {
       </div>
       <div class="snag__meta">
         ${severityChip(snag.severity)}
-        ${snag.code ? `<span class="mono">${esc(snag.code)}</span>` : ""}
       </div>
     </header>
     ${
@@ -195,7 +194,7 @@ function coverageSection(data: ReportData): string {
         <div class="gap__head">
           <span class="gap__name">
             <strong>${esc(area.name)}</strong>
-            ${area.reason ? `<span class="gap__why">— ${esc(area.reason)}</span>` : ""}
+            ${area.reason ? `<span class="gap__why">&middot; ${esc(area.reason)}</span>` : ""}
           </span>
           <span class="tag tag--${area.accessState === "not_accessible" ? "none" : "limited"}">${esc(
             ACCESS_LABEL[area.accessState] ?? area.accessState,
@@ -260,7 +259,6 @@ function coverBlock(data: ReportData, version: number | null): string {
     </div>
     <div class="masthead__doc">
       <div class="doc__type">Snagging inspection report</div>
-      <div class="doc__code mono">${esc(data.code)}</div>
       <div class="doc__date">${fmtDate(data.generatedAt)}${version ? ` · Version ${version}` : ""}</div>
     </div>
   </header>
@@ -360,9 +358,9 @@ export function renderReportHtml(
 
   const roundBanner =
     reportType === "round"
-      ? `<div class="banner">De-snag round ${data.roundNumber} — findings from this return visit only.</div>`
+      ? `<div class="banner">De-snag round ${data.roundNumber}. Findings from this return visit only.</div>`
       : reportType === "cumulative"
-        ? `<div class="banner">Cumulative report — the current state of every defect raised on this property.</div>`
+        ? `<div class="banner">Cumulative report. The current state of every defect raised on this property.</div>`
         : "";
 
   const styles = `<style>
@@ -562,7 +560,7 @@ export function renderReportHtml(
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${esc(data.code)} — Snagging inspection report</title>
+<title>${esc(data.cover.unit)} · Snagging inspection report</title>
 ${styles}
 </head>
 <body>

@@ -40,6 +40,35 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
     const input = parsed.data;
 
+    /*
+      A round is a visit that has not happened yet.
+
+      Backdating one silently rewrites the record a developer's remediation
+      window is measured from, and an appointment in the past is not a
+      booking anybody can attend. The date is compared in Gulf time, since
+      that is the day an inspector means when they pick one; the appointment
+      is compared as an instant, so "today at 09:00" is refused at 14:00.
+    */
+    const nowMs = Date.now();
+    if (input.appointment_at) {
+      if (new Date(input.appointment_at).getTime() <= nowMs) {
+        return NextResponse.json(
+          { error: "Pick an appointment time in the future for this round." },
+          { status: 400 },
+        );
+      }
+    } else {
+      const today = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Dubai",
+      }).format(new Date());
+      if (input.scheduled_date.trim() < today) {
+        return NextResponse.json(
+          { error: "Pick a date in the future for this round." },
+          { status: 400 },
+        );
+      }
+    }
+
     const admin = await createAdminServerClient();
 
     /*
@@ -143,23 +172,104 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       .sort((a, b) => ((b.round_number as number) ?? 1) - ((a.round_number as number) ?? 1))[0];
     const answersFromId = (lastCompleted?.id as string | undefined) ?? parent.id;
 
-    // FR-6.02: everything still outstanding on the parent job, unless the
-    // reviewer narrowed the list to a chosen subset.
+    /*
+      FR-6.02 — everything still outstanding anywhere in the FAMILY, unless
+      the reviewer narrowed the list to a chosen subset.
+
+      This used to read the original alone, on the reasoning that the
+      original holds the lasting record and a verdict writes through to it.
+      That is true only of a defect the original knows about. A defect first
+      raised DURING a round is created on that round's row and has no
+      counterpart on the original at all — so reading the original could
+      never see it, and it silently stopped existing the moment the next
+      round opened. Round 2 found a new unlabelled distribution board,
+      round 3 was opened, and the board was gone: still open, on a round
+      nobody would look at again.
+
+      Reading the whole family finds it. The same defect appears once per
+      round it was carried into, so the rows are collapsed by snag_code --
+      unique within a job, and copied verbatim by this route, which is what
+      makes it the link between a defect's copies.
+    */
+    const familyIds = (siblings ?? []).map((row) => row.id as string);
     let snagQuery = admin
       .from("snagging_snags")
       .select(
-        `id, area_id, snag_code, catalogue_entry_id, catalogue_code, element_label,
+        `id, job_id, area_id, snag_code, catalogue_entry_id, catalogue_code, element_label,
          defect_label, severity, note, floor_plan_id, pin_x, pin_y, status, round_created`,
       )
-      .eq("job_id", parent.id)
+      .in("job_id", [parent.id, ...familyIds])
       .in("status", CARRY_FORWARD_STATUSES);
 
     if (input.snag_ids && input.snag_ids.length > 0) {
       snagQuery = snagQuery.in("id", input.snag_ids);
     }
 
-    const { data: openSnags, error: snagError } = await snagQuery;
+    const { data: familySnags, error: snagError } = await snagQuery;
     if (snagError) throw new Error(snagError.message);
+
+    /*
+      One row per defect, preferring the copy that IS the lasting record.
+
+      The original's row wins where there is one, because that is what a
+      verdict writes through to and therefore what is current. Failing
+      that -- a defect born on a round -- the earliest round holding it
+      wins, so the same row stays authoritative as further rounds open
+      rather than the record hopping forward each time.
+    */
+    const roundNumberOf = new Map<string, number>(
+      [
+        [parent.id, (parent.round_number as number | null) ?? 1] as const,
+        ...(siblings ?? []).map(
+          (row) => [row.id as string, (row.round_number as number | null) ?? 1] as const,
+        ),
+      ],
+    );
+    const bestByCode = new Map<string, (typeof familySnags)[number]>();
+    for (const snag of familySnags ?? []) {
+      const current = bestByCode.get(snag.snag_code as string);
+      if (!current) {
+        bestByCode.set(snag.snag_code as string, snag);
+        continue;
+      }
+      const isOriginal = snag.job_id === parent.id;
+      const currentIsOriginal = current.job_id === parent.id;
+      if (isOriginal && !currentIsOriginal) {
+        bestByCode.set(snag.snag_code as string, snag);
+      } else if (isOriginal === currentIsOriginal) {
+        const mine = roundNumberOf.get(snag.job_id as string) ?? Number.MAX_SAFE_INTEGER;
+        const theirs = roundNumberOf.get(current.job_id as string) ?? Number.MAX_SAFE_INTEGER;
+        if (mine < theirs) bestByCode.set(snag.snag_code as string, snag);
+      }
+    }
+    const openSnags = [...bestByCode.values()];
+
+    /*
+      What the ids on a carried defect mean, across every round.
+
+      Only needed to place a defect that came from a round other than the
+      original; loaded once here rather than per snag.
+    */
+    const familyAreaNameById = new Map<string, string>();
+    const familyPlanPathById = new Map<string, string>();
+    if (openSnags.some((snag) => snag.job_id !== parent.id)) {
+      const [{ data: famAreas }, { data: famPlans }] = await Promise.all([
+        admin
+          .from("snagging_areas")
+          .select("id, name")
+          .in("job_id", [parent.id, ...familyIds]),
+        admin
+          .from("snagging_floor_plans")
+          .select("id, storage_path")
+          .in("job_id", [parent.id, ...familyIds]),
+      ]);
+      for (const area of famAreas ?? []) {
+        familyAreaNameById.set(area.id as string, area.name as string);
+      }
+      for (const plan of famPlans ?? []) {
+        familyPlanPathById.set(plan.id as string, plan.storage_path as string);
+      }
+    }
 
     /*
       A round is not only about snags.
@@ -190,7 +300,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const inspectorId =
       input.technician_ids.length > 0 ? input.technician_ids[0] : parent.inspector_id;
 
-    const scheduledDate = input.scheduled_date?.trim() || parent.scheduled_date;
+    const scheduledDate = input.scheduled_date.trim();
 
     const { data: round, error: roundError } = await admin
       .from("snagging_jobs")
@@ -206,14 +316,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         inspector_id: inspectorId,
         approval_manager_id: input.approval_manager_id ?? parent.approval_manager_id,
         scheduled_date: scheduledDate,
-        /*
-          The appointment slot belongs to the date it was booked for. A
-          return trip that keeps the parent's date keeps its slot; one
-          moved to a new date starts unbooked, rather than showing a
-          confirmed time that nobody agreed to.
-        */
-        appointment_at:
-          scheduledDate === parent.scheduled_date ? parent.appointment_at : null,
+        // The slot the coordinator actually booked for this round, never
+        // the parent's. A round with no time given is dated but unbooked.
+        appointment_at: input.appointment_at ?? null,
         notes: input.notes?.trim() || (parent.notes as string | null),
         created_by: profile.id,
       })
@@ -239,6 +344,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     if (planLoadError) throw new Error(planLoadError.message);
 
     const planIdMap = new Map<string, string>();
+    /* Plans and areas are re-created per round, so an id only means
+       anything within its own round. A carried defect may come from a
+       DIFFERENT round, whose ids this round has never seen — these index
+       the new copies by something stable instead: a plan by the image it
+       points at, an area by its name. Both are copied verbatim by this
+       route, which is what makes them usable as identity. */
+    const newPlanIdByPath = new Map<string, string>();
+    const newAreaIdByName = new Map<string, string>();
     for (const plan of parentPlans ?? []) {
       const { data: newPlan, error: planInsertError } = await admin
         .from("snagging_floor_plans")
@@ -256,6 +369,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         .single();
       if (planInsertError) throw new Error(planInsertError.message);
       planIdMap.set(plan.id, newPlan.id);
+      if (plan.storage_path) newPlanIdByPath.set(plan.storage_path as string, newPlan.id);
     }
 
     /*
@@ -337,6 +451,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         .single();
       if (areaInsertError) throw new Error(areaInsertError.message);
       areaIdMap.set(area.id, newArea.id);
+      newAreaIdByName.set(area.name as string, newArea.id);
     }
 
 
@@ -354,10 +469,34 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       snag_code, which is what links the two — a code is unique within a
       job, so the pair is unambiguous.
     */
+    /*
+      Where a carried defect lands on this round.
+
+      A defect from the original translates through the id maps built while
+      copying. One carried from another round does not — those ids belong to
+      that round — so it falls back to the area's name and the plan's image,
+      which every copy shares. Without this a round-born defect arrived with
+      no room and no pin, which is a defect nobody can walk to.
+    */
+    const areaFor = (areaId: string | null): string | null => {
+      if (!areaId) return null;
+      const direct = areaIdMap.get(areaId);
+      if (direct) return direct;
+      const name = familyAreaNameById.get(areaId);
+      return (name ? newAreaIdByName.get(name) : null) ?? null;
+    };
+    const planFor = (planId: string | null): string | null => {
+      if (!planId) return null;
+      const direct = planIdMap.get(planId);
+      if (direct) return direct;
+      const path = familyPlanPathById.get(planId);
+      return (path ? newPlanIdByPath.get(path) : null) ?? null;
+    };
+
     const carriedRows = openSnags.map((snag) => ({
       job_id: round.id,
-      area_id: snag.area_id ? areaIdMap.get(snag.area_id) ?? null : null,
-      floor_plan_id: snag.floor_plan_id ? planIdMap.get(snag.floor_plan_id) ?? null : null,
+      area_id: areaFor(snag.area_id as string | null),
+      floor_plan_id: planFor(snag.floor_plan_id as string | null),
       snag_code: snag.snag_code,
       catalogue_entry_id: snag.catalogue_entry_id,
       catalogue_code: snag.catalogue_code,
@@ -403,26 +542,79 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       const newSnagId = new Map(
         (carried ?? []).map((row) => [row.snag_code, row.id] as const),
       );
+
+      /*
+        The defect's whole evidence history, not one round's slice of it.
+
+        Photos hang off a snag ROW, and every round gets its own row, so the
+        shots taken on round 2 belong to round 2's copy. Loading them from
+        the single row this round carried from — the original's — meant a
+        round only ever inherited the first capture: on round 3 an inspector
+        saw the day-one photo and nothing of the fix round 2 had already
+        rejected, which is precisely the comparison they are there to make.
+
+        So the photos come from every row in the family carrying this code.
+      */
+      const carriedCodes = openSnags.map((snag) => snag.snag_code as string);
+      const { data: historyRows, error: historyError } = await admin
+        .from("snagging_snags")
+        .select("id, snag_code")
+        .in("job_id", [parent.id, ...familyIds])
+        .in("snag_code", carriedCodes);
+      if (historyError) throw new Error(historyError.message);
+
+      const codeOf = new Map(
+        (historyRows ?? []).map((row) => [row.id as string, row.snag_code as string] as const),
+      );
+
       const { data: parentPhotos, error: photoLoadError } = await admin
         .from("snagging_snag_photos")
         .select(
           `snag_id, storage_path, media_type, bytes, width, height, taken_at,
            round_number, gps_lat, gps_lng, exif, marker_x, marker_y`,
         )
-        .in("snag_id", openSnags.map((snag) => snag.id));
+        .in("snag_id", (historyRows ?? []).map((row) => row.id as string))
+        // Oldest first, so the de-duplication below keeps the earliest copy
+        // of a shot and the round's evidence reads in the order it happened.
+        .order("round_number", { ascending: true })
+        .order("taken_at", { ascending: true });
       if (photoLoadError) throw new Error(photoLoadError.message);
 
-      const codeOf = new Map(openSnags.map((snag) => [snag.id, snag.snag_code] as const));
+      /*
+        One copy of each shot.
+
+        A photo taken on round 1 already exists twice by round 3 — once on
+        the original and once on round 2's copy of it — and copying the
+        family wholesale would carry the same image in twice over. Copies
+        keep the leaf filename of the object they came from (see the path
+        rewrite below), which is unique, so the leaf identifies a shot no
+        matter which round's row is holding it.
+      */
+      const seen = new Set<string>();
       for (const photo of parentPhotos ?? []) {
-        const snagId = newSnagId.get(codeOf.get(photo.snag_id) ?? "");
+        const code = codeOf.get(photo.snag_id) ?? "";
+        const leaf = photo.storage_path.split("/").pop() ?? photo.storage_path;
+        const identity = `${code}|${leaf}`;
+        if (seen.has(identity)) continue;
+        seen.add(identity);
+        const snagId = newSnagId.get(code);
         if (!snagId) continue;
 
-        // Objects are filed under the job they belong to, so swapping the
-        // job segment keeps the round's copies in the round's folder and
-        // keeps the leaf name — already unique — unique.
-        const destination = photo.storage_path.includes(parent.id)
-          ? photo.storage_path.replace(parent.id, round.id)
-          : `tasks/${round.id}/carried/${photo.storage_path.split("/").pop()}`;
+        /*
+          Objects are filed under the job they belong to, so swapping the
+          job segment keeps the round's copies in the round's folder and
+          keeps the leaf name — already unique — unique.
+
+          Any job in the family, not just the original: a shot carried from
+          round 2 is filed under round 2, and matching only the original
+          sent every one of those to the fallback folder instead.
+        */
+        const owner = [parent.id, ...familyIds].find((jobId) =>
+          photo.storage_path.includes(jobId),
+        );
+        const destination = owner
+          ? photo.storage_path.replace(owner, round.id)
+          : `tasks/${round.id}/carried/${leaf}`;
 
         const { error: copyError } = await admin.storage
           .from("snagging")

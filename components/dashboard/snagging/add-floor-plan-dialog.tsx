@@ -21,12 +21,6 @@ function isAccepted(file: File) {
   return FLOOR_PLAN_ACCEPT.split(",").includes(file.type);
 }
 
-function humanSize(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 /**
  * Add-a-floor-plan flow.
  *
@@ -138,7 +132,9 @@ export default function AddFloorPlanDialog({
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">{file.name}</p>
-                  <p className="text-muted-foreground text-xs">{humanSize(file.size)}</p>
+                  <p className="text-muted-foreground text-xs">
+                    {file.type === "application/pdf" ? "PDF" : "Image"}
+                  </p>
                 </div>
                 <Button
                   type="button"

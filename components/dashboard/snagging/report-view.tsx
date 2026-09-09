@@ -19,6 +19,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { renderReactToPdfBlob } from "@/lib/snagging/report-pdf";
@@ -44,6 +45,16 @@ export function ReportView({ taskId }: { taskId: string }) {
   const reportRef = useRef<HTMLDivElement>(null);
 
   const [task, setTask] = useState<SnaggingTask | null>(null);
+
+  /*
+    Name this page in the breadcrumb.
+
+    The trail is built from the URL, so without this the crumb was the job's
+    UUID title-cased into "B32c501d 1ac5 42e6 A208 …" — a raw id sitting
+    exactly where the unit's name belongs. The job detail page already does
+    this; the report page was simply missed.
+  */
+  useBreadcrumbLabel(taskId, task?.property?.unit_label ?? undefined);
   const [quotation, setQuotation] = useState<SnaggingQuotation | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -108,9 +119,14 @@ export function ReportView({ taskId }: { taskId: string }) {
       const blob = await renderReactToPdfBlob(
         <InspectionReport task={task} quotation={quotation} forPDF />,
         2,
-        { footerLabel: `${task.code} — Snagging inspection report` },
+        {
+          footerLabel: `${task.property?.unit_label ?? "Inspection"} · Snagging inspection report`,
+        },
       );
-      saveAs(blob, `${task.code}-snagging-report.pdf`);
+      saveAs(
+        blob,
+        `${(task.property?.unit_label ?? "inspection").replace(/\s+/g, "-")}-snagging-report.pdf`,
+      );
       toast.success("PDF downloaded", { id: t });
     } catch (error) {
       toast.error(
@@ -313,7 +329,7 @@ export function ReportView({ taskId }: { taskId: string }) {
 
       {notReady ? (
         <div className="snag-report-noprint border-warning/30 bg-warning/5 rounded-md border px-4 py-2 text-sm">
-          This inspection is not finished yet — the report reflects only what
+          This inspection is not finished yet. The report reflects only what
           has been captured so far.
         </div>
       ) : null}
@@ -343,7 +359,7 @@ export function ReportView({ taskId }: { taskId: string }) {
             </div>
           ) : (
             <div className="text-muted-foreground text-xs">
-              Use “Re-issue link” to generate a fresh client link.
+              Use &quot;Re-issue link&quot; to generate a fresh client link.
             </div>
           )}
         </div>
@@ -366,7 +382,7 @@ export function ReportView({ taskId }: { taskId: string }) {
             <DialogTitle>Deliver report to client</DialogTitle>
             <DialogDescription>
               Generates a private client link and moves the job to delivered. On
-              the email channel the client is emailed the moment you confirm —
+              the email channel the client is emailed the moment you confirm, and
               that cannot be taken back. On the other channels, copy the link
               and send it yourself.
             </DialogDescription>

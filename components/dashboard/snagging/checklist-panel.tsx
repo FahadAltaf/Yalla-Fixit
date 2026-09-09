@@ -159,7 +159,7 @@ export function ChecklistPanel({ task }: { task: SnaggingTask }) {
                       ) : null}
                       <span className="text-muted-foreground block text-xs">
                         {item.group_name}
-                        {item.reason ? ` — ${item.reason}` : ""}
+                        {item.reason ? ` · ${item.reason}` : ""}
                       </span>
                     </span>
                     <StatusPill status={item.status} />
@@ -191,7 +191,7 @@ export function ChecklistPanel({ task }: { task: SnaggingTask }) {
                         ) : null}
                         {item.status === "not_checked" && item.reason ? (
                           <span className="text-muted-foreground block text-xs">
-                            Not checked — {item.reason}
+                            Not checked. {item.reason}
                           </span>
                         ) : null}
                       </span>

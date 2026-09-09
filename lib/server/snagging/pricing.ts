@@ -63,7 +63,7 @@ export function computeQuotation(job: QuoteJob, config: PricingConfig) {
           ? `${job.bedrooms} BR`
           : null;
   lines.push({
-    description: `Snagging inspection — ${TYPE_LABEL[type] ?? type}${bedrooms ? `, ${bedrooms}` : ""} (${bua} sq ft)`,
+    description: `Snagging inspection: ${TYPE_LABEL[type] ?? type}${bedrooms ? `, ${bedrooms}` : ""} (${bua} sq ft)`,
     qty: bua,
     unit: "sq ft",
     unit_price: buaRate,

@@ -235,7 +235,18 @@ export type CreateAreaInput = z.infer<typeof createAreaSchema>;
 export type UpdateAreaInput = z.infer<typeof updateAreaSchema>;
 
 export const createRoundSchema = z.object({
-  scheduled_date: isoDate.optional().or(z.literal("")),
+  /*
+    Required, not inherited.
+
+    A round used to take the original's date, so every round on a job read
+    back as having happened on the day of the first inspection — the record
+    said an inspector attended twice on one morning, and nobody could tell
+    when a re-check was actually due. A round is a new site visit and gets
+    its own appointment, which the server also refuses to place in the past.
+  */
+  scheduled_date: isoDate,
+  /** Full appointment instant, when a time was given with the date. */
+  appointment_at: z.string().datetime().optional().nullable(),
   technician_ids: z.array(z.string().uuid()).default([]),
   approval_manager_id: z.string().uuid().optional().nullable(),
   notes: z.string().trim().max(4000).optional().or(z.literal("")),
@@ -251,7 +262,17 @@ export const createRoundSchema = z.object({
  * fresh inspection pass — so there is no snag_ids field.
  */
 export const createVisitSchema = z.object({
-  scheduled_date: isoDate.optional().or(z.literal("")),
+  /*
+    Required, like a round's.
+
+    A visit raised with no date was a request nobody could plan around, and
+    the row inherited the original inspection's date instead — so the record
+    claimed a return trip had happened on the day of the first visit. This
+    is the date and time being ASKED for; the visit is still created as a
+    draft, and FR-9.04 keeps the actual booking behind quotation approval.
+  */
+  scheduled_date: isoDate,
+  appointment_at: z.string().datetime().optional().nullable(),
   technician_ids: z.array(z.string().uuid()).default([]),
   approval_manager_id: z.string().uuid().optional().nullable(),
   notes: z.string().trim().max(4000).optional().or(z.literal("")),

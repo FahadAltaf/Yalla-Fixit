@@ -22,6 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { compressImage } from "@/lib/media/compress-image";
 import DateSelect from "@/components/ui/date-select";
 import { InspectorAssignmentAlert } from "./inspector-alert";
 import TimeSelect from "@/components/ui/time-select";
@@ -291,7 +292,10 @@ export function JobSetupPanel({
   async function uploadNoc(file: File) {
     setSaving("noc");
     try {
-      await snaggingService.uploadDocument(task.id, file, "noc");
+      // Shrunk before it leaves the browser; an NOC photographed on a
+      // phone is routinely several megabytes of nothing useful.
+      const { file: prepared } = await compressImage(file);
+      await snaggingService.uploadDocument(task.id, prepared, "noc");
       toast.success("NOC uploaded");
       onChanged();
     } catch (error) {
@@ -527,7 +531,7 @@ export function JobSetupPanel({
                               disabled={isBusy}
                             >
                               {(u.full_name || u.email) ?? u.id}
-                              {isBusy ? ` — busy (${busyCode})` : ""}
+                              {isBusy ? ` · busy (${busyCode})` : ""}
                             </SelectItem>
                           );
                         })}
@@ -581,7 +585,7 @@ export function JobSetupPanel({
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value={UNASSIGNED}>
-                          None — the approval manager reviews it
+                          None. The approval manager reviews it
                         </SelectItem>
                         {users.map((u) => (
                           <SelectItem key={u.id} value={u.id}>
@@ -801,7 +805,7 @@ export function JobSetupPanel({
             {nocOnFile
               ? "On file"
               : nocRequired
-                ? "Required — missing"
+                ? "Required, missing"
                 : "Not required"}
           </Badge>
         }
@@ -821,7 +825,7 @@ export function JobSetupPanel({
               nocOnFile
                 ? "On file and available to the inspector"
                 : nocRequired
-                  ? "Not uploaded — access may be refused on the day"
+                  ? "Not uploaded. Access may be refused on the day."
                   : "Not uploaded. This unit does not require one."
             }
             trailing={

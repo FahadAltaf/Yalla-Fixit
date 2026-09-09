@@ -166,9 +166,6 @@ export default function ReviewWorkspace() {
                         )}
                       >
                         <span className="flex items-center gap-2">
-                          <span className="text-muted-foreground font-mono text-xs">
-                            {row.code}
-                          </span>
                           {row.escalated ? (
                             <span className="bg-danger/10 text-danger inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase">
                               <AlertTriangle className="size-3" />

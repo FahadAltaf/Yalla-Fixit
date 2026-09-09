@@ -404,7 +404,7 @@ export function QuotationPanel({
                       an action.
                     */
                     <p className="text-muted-foreground text-xs">
-                      Preview only — this quotation has not been numbered yet.
+                      Preview only. This quotation has not been numbered yet.
                     </p>
                   ) : (
                     <>
@@ -457,7 +457,7 @@ export function QuotationPanel({
                           className="bg-muted border-0"
                         >
                           {quote.status === "approved"
-                            ? "Approved by client — locked"
+                            ? "Approved by client, locked"
                             : "Rejected by client"}
                         </Badge>
                       )}

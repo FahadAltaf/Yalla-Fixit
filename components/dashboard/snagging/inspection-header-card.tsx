@@ -30,6 +30,7 @@ import { snaggingService } from "@/modules/snagging";
 import { ActionType, ResourceType, type SnaggingTask } from "@/types/types";
 
 import { AdditionalVisitDialog } from "./additional-visit-dialog";
+import { OpenRoundDialog } from "./open-round-dialog";
 import { RejectInspectionDialog } from "./reject-inspection-dialog";
 import {
   StatCard,
@@ -58,6 +59,7 @@ export function InspectionHeaderCard({
   const { userProfile } = useAuth();
   const { confirm, dialog } = useConfirm();
   const [working, setWorking] = useState(false);
+  const [roundOpen, setRoundOpen] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [visitOpen, setVisitOpen] = useState(false);
 
@@ -215,7 +217,7 @@ export function InspectionHeaderCard({
     ].filter(Boolean);
 
     const ok = await confirm({
-      title: `Approve ${task.code}?`,
+      title: `Approve ${task.property?.unit_label ?? "this inspection"}?`,
       description: outstanding.length
         ? `This accepts the inspection and lets the report go to the client. Still outstanding: ${outstanding.join(", ")}.`
         : "This accepts the inspection and lets the report go to the client.",
@@ -237,28 +239,29 @@ export function InspectionHeaderCard({
     }
   }
 
-  async function openRound() {
-    // Opening a round creates a new inspection and navigates away from
-    // this one; a reviewer who meant to open the report should not lose
-    // their place to a mis-click.
-    const carrying = snags.filter(
-      (snag) =>
-        snag.status === "open" ||
-        snag.status === "pending_verification" ||
-        snag.status === "verified_poor_quality" ||
-        snag.status === "verified_not_done",
-    ).length;
+  /*
+    How many defects carry into the round.
 
-    const ok = await confirm({
-      title: `Open a de-snag round for ${task.code}?`,
-      description: `This creates round ${task.round_number + 1} with the ${carrying} still-open snag(s) carried into it, and takes you to the new round.`,
-      confirmText: "Open round",
-    });
-    if (!ok) return;
+    Only counted for the dialog's summary — the server decides what
+    actually carries, and now reads the whole family rather than this job
+    alone, so a defect first raised on an earlier round is included there
+    even though this list cannot see it.
+  */
+  const carryingCount = snags.filter(
+    (snag) =>
+      snag.status === "open" ||
+      snag.status === "pending_verification" ||
+      snag.status === "verified_poor_quality" ||
+      snag.status === "verified_not_done",
+  ).length;
 
+  async function openRound(input: {
+    scheduled_date: string;
+    appointment_at: string | null;
+  }) {
     setWorking(true);
     try {
-      const round = await snaggingService.openRound(task.id, {});
+      const round = await snaggingService.openRound(task.id, input);
       toast.success(
         `Round ${round.round_number} opened with ${round.carried_snags} snag(s)`,
       );
@@ -278,7 +281,6 @@ export function InspectionHeaderCard({
         <div className="flex flex-wrap items-center justify-between gap-4 p-5">
           <div className="space-y-1">
             <div className="flex items-center gap-2">
-              {/* <span className="text-muted-foreground font-mono text-xs">{task.code}</span> */}
               {task.visit_type === "additional" ? (
                 <Badge variant="outline">Additional visit</Badge>
               ) : task.round_number > 1 ? (
@@ -301,13 +303,12 @@ export function InspectionHeaderCard({
               <h2 className="text-2xl">{task.property?.unit_label}</h2>
               <TaskStatusBadge status={task.status} />
               {/*
-                The job code is what people quote to each other; the id is
-                what support needs. The code reads inline, the id hides
-                behind a copy button rather than taking a line of its own.
+                No job code. It is an internal handle, and the unit label
+                beside it is what people actually recognise; the round or
+                visit badge above carries the one thing the code's suffix
+                was telling anybody. The id stays behind a copy button
+                because support still needs it.
               */}
-              <span className="text-muted-foreground font-mono text-xs">
-                {task.code}
-              </span>
               <CopyId id={task.id} />
             </div>
             <p className="text-muted-foreground text-sm">
@@ -407,7 +408,7 @@ export function InspectionHeaderCard({
               <>
                 <SubmitButton
                   variant="outline"
-                  onClick={() => void openRound()}
+                  onClick={() => setRoundOpen(true)}
                   pending={working}
                   pendingLabel="Opening…"
                   icon={<RotateCcw className="size-4" />}
@@ -563,6 +564,16 @@ export function InspectionHeaderCard({
         onOpenChange={setVisitOpen}
       />
 
+      <OpenRoundDialog
+        open={roundOpen}
+        onOpenChange={setRoundOpen}
+        roundNumber={task.round_number + 1}
+        from={task.property?.unit_label ?? "this inspection"}
+        carrying={carryingCount}
+        busy={working}
+        onConfirm={openRound}
+      />
+
       {dialog}
     </>
   );
@@ -588,7 +599,7 @@ function RemediationDue({ due }: { due: string }) {
         overdue ? "text-danger font-medium" : "text-muted-foreground",
       )}
     >
-      {overdue ? `Fix overdue — was due ${when}` : `Fix due by ${when}`}
+      {overdue ? `Fix overdue, was due ${when}` : `Fix due by ${when}`}
     </p>
   );
 }

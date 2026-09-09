@@ -142,7 +142,6 @@ export function AdditionalVisitsPanel({
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-medium">Visit #{visit.visit_number}</span>
-                    <span className="text-muted-foreground font-mono text-xs">{visit.code}</span>
                     <Badge variant="secondary" className="border-0 font-medium">
                       {visit.status}
                     </Badge>

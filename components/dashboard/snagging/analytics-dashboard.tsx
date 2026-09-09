@@ -420,7 +420,7 @@ export default function SnaggingAnalyticsDashboard() {
                 label="Approvals overdue"
                 value={data.timeMetrics.overdueApprovals}
                 headline="Past the 48-hour escalation point"
-                caption="Live — not filtered by the dates above"
+                caption="Live figures, not filtered by the dates above"
                 tone={data.timeMetrics.overdueApprovals > 0 ? "bad" : "good"}
                 onSelect={() => open({ metric: "overdue_approvals" })}
               />

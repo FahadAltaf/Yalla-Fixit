@@ -337,12 +337,8 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
                             .join(" · ")}
                         </button>
                         <p className="text-muted-foreground mt-0.5 flex flex-wrap items-center gap-x-2 text-xs">
-                          <span className="font-mono">{snag.snag_code}</span>
-                          {snag.catalogue_code ? (
-                            <span>· {snag.catalogue_code}</span>
-                          ) : null}
                           {snag.created_at ? (
-                            <span>· {formatGstDateTime(snag.created_at)}</span>
+                            <span>{formatGstDateTime(snag.created_at)}</span>
                           ) : null}
                           {/*
                         FR-6.03 — a round mixes two kinds of defect: the
@@ -386,7 +382,7 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
                               type="button"
                               onClick={() => setDetail(snag)}
                               className="focus-visible:ring-ring shrink-0 rounded-md focus-visible:ring-2 focus-visible:outline-none"
-                              aria-label={`Show ${snag.snag_code} on the plan`}
+                              aria-label={`Show ${snag.defect_label ?? "this snag"} on the plan`}
                             >
                               <SnagPlanPin snag={snag} plans={plans} compact />
                             </button>
@@ -402,7 +398,7 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
                               <EvidenceThumb
                                 label="Before"
                                 photo={beforeShot}
-                                snagCode={snag.snag_code}
+                                snagLabel={snag.defect_label ?? "this snag"}
                                 onOpen={setPreview}
                               />
                               <ArrowRight
@@ -412,7 +408,7 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
                               <EvidenceThumb
                                 label="After"
                                 photo={afterShot}
-                                snagCode={snag.snag_code}
+                                snagLabel={snag.defect_label ?? "this snag"}
                                 onOpen={setPreview}
                               />
                               {photoCount > 2 ? (
@@ -431,7 +427,7 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
                                 type="button"
                                 onClick={() => setPreview(cover)}
                                 className="focus-visible:ring-ring relative size-12 shrink-0 overflow-hidden rounded-md border focus-visible:ring-2 focus-visible:outline-none"
-                                aria-label={`Photo evidence for ${snag.snag_code}`}
+                                aria-label={`Photo evidence for ${snag.defect_label ?? "this snag"}`}
                               >
                                 <EvidenceThumbnail photo={cover} />
                               </button>
@@ -504,13 +500,12 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
         <SectionCard
           title="Already on record"
           icon={<ListChecks />}
-          description={`${earlier.length} defect${earlier.length === 1 ? "" : "s"} from the original inspection. Shown for context — they stay on the original and are not re-counted here.`}
+          description={`${earlier.length} defect${earlier.length === 1 ? "" : "s"} from the original inspection. Shown for context. They stay on the original and are not re-counted here.`}
           bodyClassName="border-t"
         >
           <ul className="divide-y">
             {earlier.map((snag) => (
               <li key={snag.id} className="flex flex-wrap items-center gap-3 px-5 py-3 text-sm">
-                <span className="text-muted-foreground font-mono text-xs">{snag.snag_code}</span>
                 <span className="min-w-0 flex-1">
                   {[snag.area?.name ?? snag.area_label, snag.element_label, snag.defect_label]
                     .filter(Boolean)
@@ -588,7 +583,9 @@ function SnagDetailDialog({
         <DialogHeader>
           <DialogTitle>{snag?.defect_label ?? "Snag"}</DialogTitle>
           <DialogDescription>
-            <span className="font-mono text-xs">{snag?.snag_code}</span>
+            {[snag?.area?.name ?? snag?.area_label, snag?.element_label]
+              .filter(Boolean)
+              .join(" · ") || "Snag detail"}
           </DialogDescription>
         </DialogHeader>
 
@@ -616,14 +613,6 @@ function SnagDetailDialog({
               <Detail
                 label="Captured"
                 value={formatGstDateTime(snag.created_at)}
-              />
-              <Detail
-                label="Code"
-                value={
-                  <span className="font-mono text-xs">
-                    {snag.catalogue_code}
-                  </span>
-                }
               />
             </dl>
 
@@ -672,7 +661,16 @@ function SnagDetailDialog({
               <div className="grid gap-4 sm:grid-cols-2">
                 <EvidenceGroup
                   label="Before"
-                  hint="As the defect was raised"
+                  /*
+                    Accurate once a defect has been through more than one
+                    round: by round 3 this column is the whole history, not
+                    just the day the defect was raised.
+                  */
+                  hint={
+                    new Set(evidence.before.map((p) => p.round_number ?? 1)).size > 1
+                      ? "Every earlier round"
+                      : "As the defect was raised"
+                  }
                   photos={evidence.before}
                   onOpenPhoto={onOpenPhoto}
                   emptyHint="No photo carried from the earlier visit."
@@ -742,7 +740,7 @@ function SnagPlanPin({
     return (
       <p className="text-muted-foreground rounded-md border px-3 py-3 text-sm">
         Pinned at {Math.round(Number(x) * 100)}%, {Math.round(Number(y) * 100)}%
-        — the plan is not available to display.
+        . The plan is not available to display.
       </p>
     );
   }
@@ -803,12 +801,13 @@ function Detail({ label, value }: { label: string; value: React.ReactNode }) {
 function EvidenceThumb({
   label,
   photo,
-  snagCode,
+  snagLabel,
   onOpen,
 }: {
   label: string;
   photo: SnaggingPhoto | null;
-  snagCode: string;
+  /** Named for a screen reader; a code read aloud tells nobody anything. */
+  snagLabel: string;
   onOpen: (photo: SnaggingPhoto) => void;
 }) {
   return (
@@ -818,14 +817,14 @@ function EvidenceThumb({
           type="button"
           onClick={() => onOpen(photo)}
           className="focus-visible:ring-ring relative size-12 shrink-0 overflow-hidden rounded-md border focus-visible:ring-2 focus-visible:outline-none"
-          aria-label={`${label} photo for ${snagCode}`}
+          aria-label={`${label} photo for ${snagLabel}`}
         >
           <EvidenceThumbnail photo={photo} />
         </button>
       ) : (
         <span
           className="border-muted-foreground/25 text-muted-foreground/50 flex size-12 shrink-0 items-center justify-center rounded-md border border-dashed"
-          aria-label={`No ${label.toLowerCase()} photo for ${snagCode}`}
+          aria-label={`No ${label.toLowerCase()} photo for ${snagLabel}`}
         >
           <ImageOff className="size-4" aria-hidden />
         </span>
@@ -861,6 +860,18 @@ function EvidenceGroup({
   columns?: 3 | 4;
 }) {
   const usable = photos.filter((p) => p.signed_url);
+
+  /*
+    Which round each shot came from, once there is more than one answer.
+
+    By round 3 the "before" column holds the original capture AND round 2's
+    re-check, and side by side those are two photos of the same defect with
+    nothing to say which is which. The badge only appears when the group
+    actually spans rounds, so the common single-round case stays clean.
+  */
+  const rounds = new Set(usable.map((photo) => photo.round_number ?? 1));
+  const showRound = rounds.size > 1;
+
   return (
     <div>
       <p className="text-muted-foreground mb-1.5 text-xs">
@@ -884,6 +895,11 @@ function EvidenceGroup({
               className="focus-visible:ring-ring relative aspect-square overflow-hidden rounded-md border focus-visible:ring-2 focus-visible:outline-none"
             >
               <EvidenceThumbnail photo={photo} />
+              {showRound ? (
+                <span className="bg-foreground/75 text-background absolute top-1 left-1 rounded px-1 py-0.5 text-[10px] leading-none font-medium tabular-nums">
+                  R{photo.round_number ?? 1}
+                </span>
+              ) : null}
             </button>
           ))}
         </div>
@@ -960,10 +976,6 @@ function PhotoExif({ photo }: { photo: SnaggingPhoto }) {
   const iso = str("ISOSpeedRatings", "ISO", "iso");
   const dims =
     photo.width && photo.height ? `${photo.width} × ${photo.height}` : null;
-  const size =
-    photo.bytes && photo.bytes > 0
-      ? `${(photo.bytes / (1024 * 1024)).toFixed(1)} MB`
-      : null;
   const hasGps = photo.gps_lat != null && photo.gps_lng != null;
 
   const rows: Array<{ label: string; value: React.ReactNode }> = [];
@@ -978,7 +990,6 @@ function PhotoExif({ photo }: { photo: SnaggingPhoto }) {
     .join(" · ");
   if (shot) rows.push({ label: "Exposure", value: shot });
   if (dims) rows.push({ label: "Dimensions", value: dims });
-  if (size) rows.push({ label: "File size", value: size });
   if (software) rows.push({ label: "Software", value: software });
   rows.push({
     label: "Captured",
@@ -1019,7 +1030,7 @@ function PhotoExif({ photo }: { photo: SnaggingPhoto }) {
       </p>
       {!hasCameraData ? (
         <p className="text-muted-foreground mb-3 text-xs">
-          This photo carries no camera metadata — the device did not record
+          This photo carries no camera metadata. The device did not record
           it, or it was stripped before upload. What follows is what the
           upload itself knows.
         </p>

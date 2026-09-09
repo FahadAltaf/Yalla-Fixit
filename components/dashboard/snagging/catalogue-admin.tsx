@@ -169,13 +169,13 @@ export default function CatalogueAdmin() {
     const ok = await confirm(
       active
         ? {
-          title: `Put ${entry.code} back in use?`,
+          title: `Put "${entry.defect_label}" back in use?`,
           description: `Inspectors will be able to choose "${entry.defect_label}" again when capturing new snags.`,
           confirmText: "Reinstate",
         }
         : {
           title: "Retire this defect type?",
-          description: `Inspectors can no longer choose "${entry.defect_label}" on new inspections. Snags already recorded against ${entry.code} keep it, and issued reports still resolve.`,
+          description: `Inspectors can no longer choose "${entry.defect_label}" on new inspections. Snags already recorded against it keep it, and issued reports still resolve.`,
           confirmText: "Retire",
           variant: "destructive",
         },
@@ -195,7 +195,11 @@ export default function CatalogueAdmin() {
           }
           : current,
       );
-      toast.success(active ? `${entry.code} is back in use` : `${entry.code} retired`);
+      toast.success(
+        active
+          ? `"${entry.defect_label}" is back in use`
+          : `"${entry.defect_label}" retired`,
+      );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not update the entry");
     } finally {

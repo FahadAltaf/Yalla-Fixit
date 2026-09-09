@@ -148,6 +148,31 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
     const input = parsed.data;
 
+    /*
+      A visit is a trip that has not happened yet, so it cannot be requested
+      for a moment that has already gone. Same two-part rule as a de-snag
+      round: an appointment is compared as an instant, a bare date as the
+      Gulf day an inspector means when they pick one.
+    */
+    if (input.appointment_at) {
+      if (new Date(input.appointment_at).getTime() <= Date.now()) {
+        return NextResponse.json(
+          { error: "Pick an appointment time in the future for this visit." },
+          { status: 400 },
+        );
+      }
+    } else {
+      const today = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Dubai",
+      }).format(new Date());
+      if (input.scheduled_date.trim() < today) {
+        return NextResponse.json(
+          { error: "Pick a date in the future for this visit." },
+          { status: 400 },
+        );
+      }
+    }
+
     const admin = await createAdminServerClient();
 
     /*
@@ -254,7 +279,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const inspectorId =
       input.technician_ids.length > 0 ? input.technician_ids[0] : parent.inspector_id;
 
-    const scheduledDate = input.scheduled_date?.trim() || parent.scheduled_date;
+    const scheduledDate = input.scheduled_date.trim();
 
     const { data: visit, error: visitError } = await admin
       .from("snagging_jobs")
@@ -285,8 +310,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           request, not a booking: the visit stays `draft` and scheduling
           is what confirms this date and moves it to assigned.
         */
-        scheduled_date: input.scheduled_date?.trim() || null,
-        appointment_at: null,
+        scheduled_date: scheduledDate,
+        /*
+          The slot being REQUESTED, not one that has been agreed. The visit
+          is still created as a draft and FR-9.04 keeps the real booking
+          behind quotation approval — this is what the coordinator asked
+          for, carried so the scheduling step opens on it instead of blank.
+        */
+        appointment_at: input.appointment_at ?? null,
         notes: [input.reason?.trim(), input.notes?.trim()].filter(Boolean).join("\n\n") || null,
         created_by: profile.id,
       })

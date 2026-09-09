@@ -13,7 +13,7 @@ import { useSection } from "./use-section";
 type Upcoming = {
   items: Array<{
     id: string;
-    code: string;
+    unit: string | null;
     day: string | null;
     time: string | null;
     propertyType: string | null;
@@ -83,7 +83,7 @@ export function UpcomingInspections() {
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium">
-                        {item.code}
+                        {item.unit ?? "Unnamed unit"}
                       </span>
                       <span className="text-muted-foreground block truncate text-xs">
                         {[item.propertyType, item.place]

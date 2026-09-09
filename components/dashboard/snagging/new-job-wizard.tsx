@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ImageIcon,
   LayoutGrid,
+  Loader2,
   MapPin,
   Plus,
   Search,
@@ -19,6 +20,7 @@ import {
 import { format, parseISO } from "date-fns";
 import { toast } from "sonner";
 
+import { compressImage, readImageSize } from "@/lib/media/compress-image";
 import { LocationPicker } from "./location-picker";
 
 import { Button } from "@/components/ui/button";
@@ -146,7 +148,8 @@ function propertyErrors(draft: Draft): Partial<Record<PropertyErrorKey, string>>
   return errors;
 }
 
-const AREAS_ERROR = "Tick at least one area — a job with no rooms gives the inspector nothing to walk.";
+const AREAS_ERROR =
+  "Tick at least one area. A job with no rooms gives the inspector nothing to walk.";
 
 export default function NewJobWizard() {
   const router = useRouter();
@@ -367,20 +370,22 @@ export default function NewJobWizard() {
       // block it — a failure is reported and the job still opens.
       if (titleDeedFile) {
         try {
-          await snaggingService.uploadDocument(created.id, titleDeedFile, "title_deed");
+          const { file: deed } = await compressImage(titleDeedFile);
+          await snaggingService.uploadDocument(created.id, deed, "title_deed");
         } catch {
           toast.warning("The title deed did not upload. Add it from the job.");
         }
       }
       if (nocFile) {
         try {
-          await snaggingService.uploadDocument(created.id, nocFile, "noc");
+          const { file: noc } = await compressImage(nocFile);
+          await snaggingService.uploadDocument(created.id, noc, "noc");
         } catch {
           toast.warning("The NOC did not upload. Add it from the job.");
         }
       }
 
-      toast.success(`Job ${created.code} created`);
+      toast.success("Job created");
       router.push(`/snagging/${created.id}`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not create the job");
@@ -912,22 +917,56 @@ function PropertyStep({
   const isVilla = draft.property_type === "villa";
   const hasPlot = isVilla || draft.property_type === "townhouse";
 
-  // The client's properties on file, so an existing one can be reused (BR-1).
-  const [clientProperties, setClientProperties] = useState<SnaggingProperty[]>([]);
-  useEffect(() => {
-    if (!draft.client_id) {
-      setClientProperties([]);
-      return;
-    }
+  /*
+    The client's properties on file, so an existing one can be reused (BR-1).
+
+    The lookup is tracked, not just its result. The field used to be gated on
+    `clientProperties.length > 0`, so between picking a client and the rows
+    arriving there was nothing on screen at all and the whole field then
+    appeared from nowhere. Whether the list is still loading, came back empty,
+    or failed are three different things and the form now says which.
+
+    One piece of state carries the client it belongs to, so a result for the
+    previously selected client is never shown against the current one. That
+    also means no reset effect: a lookup whose `clientId` does not match the
+    draft is stale by definition, which reads as loading without anything
+    having to write state on the way in.
+  */
+  const [lookup, setLookup] = useState<{
+    clientId: string | null;
+    state: "loading" | "ready" | "error";
+    rows: SnaggingProperty[];
+  }>({ clientId: null, state: "loading", rows: [] });
+
+  const fresh = Boolean(draft.client_id) && lookup.clientId === draft.client_id;
+  const propertiesState: "idle" | "loading" | "ready" | "error" = !draft.client_id
+    ? "idle"
+    : fresh
+      ? lookup.state
+      : "loading";
+  const clientProperties = fresh ? lookup.rows : [];
+
+  const loadClientProperties = useCallback((clientId: string) => {
     let active = true;
     snaggingService
-      .listProperties(draft.client_id)
-      .then((rows) => active && setClientProperties(rows))
-      .catch(() => active && setClientProperties([]));
+      .listProperties(clientId)
+      .then((rows) => {
+        if (active) setLookup({ clientId, state: "ready", rows });
+      })
+      .catch(() => {
+        // Not the same as "this client has none": an empty list here would
+        // quietly push the coordinator into creating a duplicate property.
+        if (active) setLookup({ clientId, state: "error", rows: [] });
+      });
     return () => {
       active = false;
     };
-  }, [draft.client_id]);
+  }, []);
+
+  useEffect(() => {
+    if (!draft.client_id) return;
+    return loadClientProperties(draft.client_id);
+  }, [draft.client_id, loadClientProperties]);
 
 
   /**
@@ -970,7 +1009,45 @@ function PropertyStep({
         <ClientPicker draft={draft} set={set} />
       </Field>
 
-      {draft.client_id && clientProperties.length > 0 ? (
+      {draft.client_id && propertiesState === "loading" ? (
+        <Field label="Property" hint="checking what this client already has">
+          {/*
+            Shaped like the select it becomes, so the form does not jump when
+            the rows land.
+          */}
+          <div className="border-input text-muted-foreground flex h-9 w-full items-center gap-2 rounded-[12px] border px-3 text-sm">
+            <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
+            Loading properties on file...
+          </div>
+        </Field>
+      ) : null}
+
+      {draft.client_id && propertiesState === "error" ? (
+        <Field label="Property" hint="reuse one on file, or start a new one">
+          <div className="border-input flex flex-wrap items-center justify-between gap-2 rounded-[12px] border px-3 py-2 text-sm">
+            <span className="text-muted-foreground">
+              Could not load this client&apos;s properties.
+            </span>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => loadClientProperties(draft.client_id)}
+            >
+              Try again
+            </Button>
+          </div>
+        </Field>
+      ) : null}
+
+      {draft.client_id && propertiesState === "ready" && clientProperties.length === 0 ? (
+        <p className="text-muted-foreground text-xs">
+          No properties on file for this client yet. The details below will
+          create the first one.
+        </p>
+      ) : null}
+
+      {draft.client_id && propertiesState === "ready" && clientProperties.length > 0 ? (
         <Field label="Property" hint="reuse one on file, or start a new one">
           <Select
             value={draft.property_id || "new"}
@@ -982,7 +1059,7 @@ function PropertyStep({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="new">+ New property</SelectItem>
+              <SelectItem value="new">New property</SelectItem>
               {clientProperties.map((p) => (
                 <SelectItem key={p.id} value={p.id}>
                   {[p.unit_label, p.building_name].filter(Boolean).join(", ") || p.unit_label}
@@ -1158,20 +1235,20 @@ function PropertyStep({
           checked={draft.noc_required}
           onCheckedChange={(v) => set("noc_required", Boolean(v))}
         />
-        <span>The person requesting the inspection is not the owner — an NOC / authorization letter is required</span>
+        <span>The person requesting the inspection is not the owner, so an NOC or authorization letter is required</span>
       </label>
 
       <div className="grid gap-4 sm:grid-cols-2">
         <DocumentField
           label="Title deed"
-          hint="(optional — confirms unit and area)"
+          hint="(optional, confirms unit and area)"
           file={titleDeedFile}
           onPick={setTitleDeedFile}
         />
         {draft.noc_required ? (
           <DocumentField
             label="NOC / authorization letter"
-            hint="(optional — never blocks the job)"
+            hint="(optional, never blocks the job)"
             file={nocFile}
             onPick={setNocFile}
           />
@@ -1204,11 +1281,23 @@ function FloorPlansStep({
     const next: PendingPlan[] = [];
 
     for (const file of Array.from(files)) {
-      const url = URL.createObjectURL(file);
-      const dims = await readDimensions(file, url);
+      /*
+        Compressed at pick time, not at submit.
+
+        The preview, the dimensions stored against the plan, and the bytes
+        that eventually upload then all describe one image. Doing it at
+        submit instead would mean the pin coordinates were measured against
+        a picture the job never receives.
+      */
+      const { file: prepared, width, height } = await compressImage(file);
+      const url = URL.createObjectURL(prepared);
+      const dims =
+        width && height
+          ? { width, height }
+          : (await readImageSize(prepared)) ?? (await readDimensions(prepared, url));
       next.push({
-        id: `${file.name}-${file.size}-${Math.random().toString(36).slice(2)}`,
-        file,
+        id: `${prepared.name}-${prepared.size}-${Math.random().toString(36).slice(2)}`,
+        file: prepared,
         label: file.name.replace(/\.[^.]+$/, ""),
         width: dims?.width,
         height: dims?.height,
@@ -1239,7 +1328,7 @@ function FloorPlansStep({
         <h2 className="text-xl">Floor plans</h2>
         <p className="text-muted-foreground mt-1 text-sm">
           Plans let the inspector pin each snag to a coordinate. They download with the pack for
-          offline use. Optional — you can add them from the job later.
+          offline use. Optional: you can add them from the job later.
         </p>
       </div>
 
@@ -1296,10 +1385,16 @@ function FloorPlansStep({
                   aria-label="Plan name"
                   className="h-8"
                 />
+                {/*
+                  Dimensions, not bytes. A file size tells the coordinator
+                  nothing they can act on, and rounding it to one decimal
+                  printed "0.0MB" for anything under 50KB.
+                */}
                 <p className="text-muted-foreground truncate text-xs">
-                  {plan.file.name} ·{" "}
-                  {plan.width && plan.height ? `${plan.width}×${plan.height}px` : "PDF"} ·{" "}
-                  {(plan.file.size / 1024 / 1024).toFixed(1)}MB
+                  {plan.file.name}
+                  {plan.width && plan.height
+                    ? ` · ${plan.width}×${plan.height}px`
+                    : " · PDF"}
                 </p>
               </div>
               <Button variant="ghost" size="icon" onClick={() => remove(plan.id)} aria-label="Remove">
@@ -1548,12 +1643,14 @@ function AssignStep({
         </Field>
       </div>
 
-      {draft.noc_required ? (
+      {/* {draft.noc_required ? (
         <p className="bg-warning/10 text-warning rounded-md px-3 py-2 text-sm">
           This job needs an NOC / authorization letter.{" "}
-          {draft.noc_path ? "It is on file." : "It is not on file yet — add it on the property step."}
+          {draft.noc_path
+            ? "It is on file."
+            : "It is not on file yet. Add it on the property step."}
         </p>
-      ) : null}
+      ) : null} */}
     </div>
   );
 }

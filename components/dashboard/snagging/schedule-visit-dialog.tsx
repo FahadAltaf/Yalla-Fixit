@@ -112,8 +112,7 @@ export function ScheduleVisitDialog({
         <DialogHeader>
           <DialogTitle>Schedule visit #{visit?.visit_number}</DialogTitle>
           <DialogDescription>
-            <span className="font-mono text-xs">{visit?.code}</span> — bookable
-            once the client has approved this visit&apos;s quotation.
+            Bookable once the client has approved this visit&apos;s quotation.
           </DialogDescription>
         </DialogHeader>
 

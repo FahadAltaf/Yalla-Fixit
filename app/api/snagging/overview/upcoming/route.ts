@@ -55,11 +55,17 @@ export async function GET(req: NextRequest) {
       const inspector = Array.isArray(row.inspector) ? row.inspector[0] : row.inspector;
       return {
         id: row.id,
-        code: row.code,
         day: row.scheduled_date,
         time: row.appointment_at ? row.appointment_at.slice(11, 16) : null,
         propertyType: row.property_type,
-        place: [row.unit_label, row.building_name].filter(Boolean).join(", ") || null,
+        /*
+          The unit names the row now that the job code no longer does, so it
+          is its own field rather than being folded into the address line
+          underneath — a row whose headline is the building would read the
+          same for every unit in it.
+        */
+        unit: row.unit_label,
+        place: row.building_name,
         inspector: inspector?.full_name ?? inspector?.email ?? null,
         href: `/snagging/${row.id}`,
       };

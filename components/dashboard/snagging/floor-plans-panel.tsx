@@ -5,6 +5,8 @@ import Image from "next/image";
 import { Loader2, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 
+import { compressImage } from "@/lib/media/compress-image";
+
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/context/AuthContext";
@@ -66,7 +68,8 @@ export function FloorPlansPanel({ taskId }: { taskId: string }) {
     setBusy(true);
     try {
       const size = await readImageSize(file);
-      await snaggingService.uploadFloorPlan(taskId, file, {
+      const { file: prepared } = await compressImage(file);
+      await snaggingService.uploadFloorPlan(taskId, prepared, {
         label: label.trim() || `Floor ${plans.length + 1}`,
         width: size.width,
         height: size.height,

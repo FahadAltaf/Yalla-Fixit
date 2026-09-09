@@ -725,23 +725,46 @@ async function writeVerdictThroughToOrigin(
 ): Promise<void> {
   const { data: copy, error: copyError } = await admin
     .from("snagging_snags")
-    .select("snag_code, job:job_id(parent_job_id, visit_type)")
+    .select("snag_code, job:job_id(id, parent_job_id, visit_type)")
     .eq("id", snagId)
     .maybeSingle();
   if (copyError) throw new Error(copyError.message);
 
   const job = (Array.isArray(copy?.job) ? copy?.job[0] : copy?.job) as
-    | { parent_job_id: string | null; visit_type: string | null }
+    | { id: string; parent_job_id: string | null; visit_type: string | null }
     | undefined;
 
   // Only a de-snag round re-verifies an earlier defect. An additional
   // visit finds new ones, and its snags are already the original.
   if (!copy || !job?.parent_job_id || job.visit_type !== "desnag") return;
 
+  /*
+    Every copy of this defect, not just the original's.
+
+    Writing only to the original was right for a defect the original knows
+    about, and a no-op for one that was first raised on an earlier round --
+    that defect has no row on the original, so the update matched nothing
+    and the verdict lived only on the round that gave it. The round the
+    defect was BORN on kept saying "open" no matter how many times a later
+    round fixed and closed it.
+
+    Updating the whole family keeps the copies in agreement wherever the
+    lasting record happens to sit, which is what "one lasting record per
+    defect" has to mean once a defect can be born on a round.
+  */
+  const rootId = job.parent_job_id;
+  const { data: family, error: familyError } = await admin
+    .from("snagging_jobs")
+    .select("id")
+    .eq("parent_job_id", rootId);
+  if (familyError) throw new Error(familyError.message);
+
   const { error } = await admin
     .from("snagging_snags")
     .update({ status })
-    .eq("job_id", job.parent_job_id)
-    .eq("snag_code", copy.snag_code);
+    .in("job_id", [rootId, ...(family ?? []).map((row) => row.id as string)])
+    .eq("snag_code", copy.snag_code)
+    // The row that was just given the verdict already holds it.
+    .neq("id", snagId);
   if (error) throw new Error(error.message);
 }

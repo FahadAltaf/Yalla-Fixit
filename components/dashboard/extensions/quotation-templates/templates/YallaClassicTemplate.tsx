@@ -140,7 +140,7 @@ export function YallaClassicTemplate({
           {data.customerContact && <div style={{ marginTop: "2px" }}>{data.customerContact}</div>}
           {data.customerPhone && <div style={{}}>{data.customerPhone}</div>}
           {data.customerEmail && <div style={{}}>{data.customerEmail}</div>}
-          {data.customerId && <div style={{}}>{data.customerId}</div>}
+          {/* {data.customerId && <div style={{}}>{data.customerId}</div>} */}
         </div>
 
         {data.serviceAddress && (

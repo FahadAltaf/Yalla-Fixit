@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { signMediaPaths, signPaths } from "./media";
+import { dedupeDefects } from "./defect-set";
 import { loadJobFamily } from "./job-family";
 
 /**
@@ -259,14 +260,25 @@ export async function buildReportData(
   if (!job) return null;
 
   const family = await loadJobFamily(admin, jobId);
+  /*
+    An inspection's report reads the whole family, not just the original.
+
+    It used to read `[root, ...additionalVisits]`, which is right for every
+    defect the original knows about and silently loses the ones it does not:
+    a defect first raised during a de-snag round lives only on that round's
+    row, so it never reached the client's report at all. The unit was handed
+    a document that omitted a defect YFI had found and recorded.
+
+    Reading the family brings those in; `dedupeDefects` then collapses the
+    per-round working copies so a carried defect is still counted once.
+  */
   const snagJobIds =
     scope === "round"
       ? [jobId]
       : scope === "cumulative"
         ? family.allIds
-        : // An inspection's report carries what its additional visits added.
-          jobId === family.rootId
-          ? [jobId, ...family.additionalVisitIds]
+        : jobId === family.rootId
+          ? family.allIds
           : [jobId];
 
   const [{ data: checklist }, { data: snagRows }, { data: catalogue }] =
@@ -290,11 +302,22 @@ export async function buildReportData(
       admin.from("snagging_catalogue_entries").select("code, guidance"),
     ]);
 
+  /*
+    Collapse the per-round copies before anything else looks at them, so
+    the counts, the body and the signed photo URLs all describe the same
+    set. Done here rather than after signing because signing a defect's
+    duplicate copies is wasted work on a two-hundred-photo report.
+  */
+  const defects = dedupeDefects(snagRows ?? [], {
+    preferredJobIds: [family.rootId, ...family.additionalVisitIds],
+    roundOf: family.roundOf,
+  });
+
   // Signed once, in one pass: a report with two hundred snags would
   // otherwise mint a URL per photo in series.
   const signed = (await signMediaPaths(
     admin,
-    snagRows ?? [],
+    defects,
     PHOTO_TTL_SECONDS,
   )) as Array<Record<string, unknown>>;
 
