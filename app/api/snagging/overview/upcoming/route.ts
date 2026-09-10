@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import { cacheHeaders } from "@/lib/server/snagging/overview-queries";
+import { cacheHeaders, countJobs } from "@/lib/server/snagging/overview-queries";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
@@ -11,8 +11,14 @@ import { ActionType, ResourceType } from "@/types/types";
  *
  * Limited in the query rather than sliced afterwards, and ordered by
  * appointment time so "Today" reads in the order the day happens.
+ *
+ * `?scope=all` lifts the ceiling for the dialog behind "View all" —
+ * bigger, not unbounded, because a full diary is a schedule rather than
+ * something to read in a dialog. The total is counted separately either
+ * way, so the card can name a number its own list is not carrying.
  */
 const LIMIT = 6;
+const ALL_LIMIT = 100;
 
 export async function GET(req: NextRequest) {
   try {
@@ -26,17 +32,32 @@ export async function GET(req: NextRequest) {
 
     const admin = await createAdminServerClient();
     const today = new Date().toISOString().slice(0, 10);
+    const limit =
+      req.nextUrl.searchParams.get("scope") === "all" ? ALL_LIMIT : LIMIT;
 
-    const { data, error } = await admin
-      .from("snagging_jobs")
-      .select(
-        "id, code, scheduled_date, appointment_at, property_type, unit_label, building_name, inspector:inspector_id(full_name, email)",
-      )
-      .gte("scheduled_date", today)
-      .in("status", ["assigned", "in_progress"])
+    /*
+      What counts as booked, asked once.
+
+      The count and the list have to agree exactly -- a footer reading
+      "showing 6 of 23" is a lie the moment the two predicates drift --
+      so the filter is written here and both queries are refined through
+      it rather than each spelling it out.
+    */
+    const booked = (q: any) =>
+      q.gte("scheduled_date", today).in("status", ["assigned", "in_progress"]);
+
+    const total = await countJobs(admin, booked);
+
+    const { data, error } = await booked(
+      admin
+        .from("snagging_jobs")
+        .select(
+          "id, code, scheduled_date, appointment_at, property_type, unit_label, building_name, inspector:inspector_id(full_name, email)",
+        ),
+    )
       .order("scheduled_date", { ascending: true })
       .order("appointment_at", { ascending: true, nullsFirst: false })
-      .limit(LIMIT);
+      .limit(limit);
     if (error) throw new Error(error.message);
 
     type Joined = { full_name: string | null; email: string | null };
@@ -71,7 +92,10 @@ export async function GET(req: NextRequest) {
       };
     });
 
-    return NextResponse.json({ data: { items } }, { headers: cacheHeaders(300) });
+    return NextResponse.json(
+      { data: { total, items } },
+      { headers: cacheHeaders(300) },
+    );
   } catch (error) {
     console.error("Upcoming inspections error:", error);
     return NextResponse.json({ error: "Failed to load upcoming inspections" }, { status: 500 });

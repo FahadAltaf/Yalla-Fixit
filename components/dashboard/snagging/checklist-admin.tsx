@@ -99,6 +99,19 @@ export default function ChecklistAdmin() {
   const [search, setSearch] = useState("");
   const [group, setGroup] = useState("all");
   const [propertyType, setPropertyType] = useState("all");
+  /*
+    Which of the two lists is on screen (Action Points N1).
+
+    The technician list is the default because it is the one in daily use
+    — copied onto every job and answered on site. The client list is the
+    published document, stored once and shared on request (N7), and is
+    never copied onto a job.
+
+    One at a time, never interleaved: they are different documents for
+    different readers, and mixing them would let somebody retire a
+    client-facing line believing they were changing what inspectors see.
+  */
+  const [audience, setAudience] = useState<"technician" | "client">("technician");
   const [currentPage, setCurrentPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
   // Which row is mid-flight, so the switch cannot fire twice across the
@@ -124,7 +137,7 @@ export default function ChecklistAdmin() {
     setLoading(true);
     setError(null);
     try {
-      setData(await snaggingService.listChecklistLibrary());
+      setData(await snaggingService.listChecklistLibrary({ audience }));
     } catch (err) {
       // Held on screen rather than toasted: an empty library and a library
       // that failed to load look identical otherwise.
@@ -134,7 +147,7 @@ export default function ChecklistAdmin() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [audience]);
 
   useEffect(() => {
     void load();
@@ -234,8 +247,52 @@ export default function ChecklistAdmin() {
       <PageHeading
         eyebrow="Master data"
         title="Checklist library"
-        description="The checks an inspector works through on site. Owned by Operations."
+        description={
+          audience === "technician"
+            ? "The checks an inspector works through on site, copied onto every job. Owned by Operations."
+            : "The published list, stored once and shared with clients on request. Never copied onto a job."
+        }
       />
+
+      {/*
+        Which list is being edited, stated rather than implied.
+
+        The two are different documents for different readers and the rows
+        look alike, so the screen names the one it is showing — otherwise
+        retiring a client-facing line reads as changing what inspectors
+        see, and the mistake is invisible until an inspection is missing a
+        check.
+      */}
+      {/* <div className="flex flex-wrap items-center gap-2">
+        {(
+          [
+            ["technician", "Technician", "Answered on site"],
+            ["client", "Client", "Shared on request"],
+          ] as const
+        ).map(([value, title, hint]) => (
+          <Button
+            key={value}
+            type="button"
+            variant={audience === value ? "default" : "outline"}
+            onClick={() => {
+              setAudience(value);
+              setCurrentPage(0);
+            }}
+            aria-pressed={audience === value}
+          >
+            {title}
+            <span
+              className={
+                audience === value
+                  ? "text-primary-foreground/70 text-xs"
+                  : "text-muted-foreground text-xs"
+              }
+            >
+              {hint}
+            </span>
+          </Button>
+        ))}
+      </div> */}
 
       {error ? (
         <ErrorState
@@ -317,6 +374,10 @@ export default function ChecklistAdmin() {
       <ChecklistItemDialog
         open={formOpen}
         item={editing}
+        // A new check joins the list currently on screen. Creating one
+        // while reading the client list and having it appear on the
+        // technician list is the mistake this closes.
+        audience={audience}
         groups={data?.groups ?? []}
         onOpenChange={(open) => {
           setFormOpen(open);
@@ -452,12 +513,15 @@ function GroupCombobox({
  * already reference it.
  */
 function ChecklistItemDialog({
+  audience,
   open,
   item,
   groups,
   onOpenChange,
   onSaved,
 }: {
+  /** Which list a newly created check joins. */
+  audience: "technician" | "client";
   open: boolean;
   item: SnaggingChecklistLibraryItem | null;
   /** Every group already in use, so the field can offer them back. */
@@ -544,7 +608,7 @@ function ChecklistItemDialog({
         await snaggingService.updateChecklistItem(item.id, changes);
         toast.success(`"${values.label}" updated`);
       } else {
-        await snaggingService.createChecklistItem(values);
+        await snaggingService.createChecklistItem({ ...values, audience });
         toast.success(`"${values.label}" added`);
       }
       onOpenChange(false);

@@ -130,7 +130,7 @@ async function generate(admin: Admin, jobId: string, userId: string) {
         .from("snagging_jobs")
         .select(
           `id, code, client:client_id(id, name, email, phone),
-         property:property_id(property_type, built_up_area_sqft, plot_area_sqft, external_areas_in_scope,
+         property:property_id(property_type, furnished, built_up_area_sqft, plot_area_sqft, external_areas_in_scope,
            bedrooms, unit_label, building_name, community, developer_name)`,
         )
         .eq("id", jobId)
@@ -180,6 +180,7 @@ async function generate(admin: Admin, jobId: string, userId: string) {
     community: property.community ?? null,
     developer_name: property.developer_name ?? null,
     property_type: property.property_type ?? null,
+    furnished: property.furnished ?? false,
     bedrooms: property.bedrooms ?? null,
     built_up_area_sqft: property.built_up_area_sqft ?? null,
     client_name: client?.name ?? null,
@@ -187,10 +188,16 @@ async function generate(admin: Admin, jobId: string, userId: string) {
     client_phone: client?.phone ?? null,
     client_ref: client?.id ?? null,
   };
+  /*
+    The card as it stood when this quotation was priced (FR-2.03, §10).
+
+    Snapshotted whole rather than as the few figures that happened to be
+    used, so a quotation issued today still reprices identically after
+    Operations moves a band tomorrow.
+  */
   const pricingSnapshot = {
-    rate_per_sqft: cfg.rate_per_sqft,
-    external_rate_per_sqft: cfg.external_rate_per_sqft,
-    multipliers: cfg.multipliers,
+    rate_card: cfg.rate_card,
+    out_of_hours_percent: cfg.out_of_hours_percent,
     tax_rate: cfg.tax_rate,
     currency: cfg.currency,
   };
@@ -482,7 +489,7 @@ async function previewQuotation(admin: Admin, jobId: string) {
         .from("snagging_jobs")
         .select(
           `id, code, client:client_id(id, name, email, phone),
-           property:property_id(property_type, built_up_area_sqft, plot_area_sqft, external_areas_in_scope,
+           property:property_id(property_type, furnished, built_up_area_sqft, plot_area_sqft, external_areas_in_scope,
              bedrooms, unit_label, building_name, community, developer_name)`,
         )
         .eq("id", jobId)
@@ -534,6 +541,7 @@ async function previewQuotation(admin: Admin, jobId: string) {
         community: property.community ?? null,
         developer_name: property.developer_name ?? null,
         property_type: property.property_type ?? null,
+        furnished: property.furnished ?? false,
         bedrooms: property.bedrooms ?? null,
         built_up_area_sqft: property.built_up_area_sqft ?? null,
         client_name: client?.name ?? null,

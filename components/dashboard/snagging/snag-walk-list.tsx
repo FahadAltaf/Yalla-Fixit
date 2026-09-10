@@ -330,6 +330,7 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
                         >
                           {[
                             snag.area?.name ?? snag.area_label,
+                            snag.category_label,
                             snag.element_label,
                             snag.defect_label,
                           ]
@@ -593,7 +594,8 @@ function SnagDetailDialog({
           <div className="space-y-4 text-sm">
             <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
               <Detail label="Area" value={snag.area?.name ?? snag.area_label} />
-              <Detail label="Element" value={snag.element_label} />
+              <Detail label="Category" value={snag.category_label ?? "—"} />
+              <Detail label="Sub-category" value={snag.element_label} />
               <Detail label="Defect" value={snag.defect_label} />
               <Detail
                 label="Severity"

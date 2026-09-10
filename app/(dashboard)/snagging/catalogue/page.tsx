@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 
-import CatalogueAdmin from "@/components/dashboard/snagging/catalogue-admin";
+import CatalogueTreeAdmin from "@/components/dashboard/snagging/catalogue-tree-admin";
 
 const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
 const title = "Snag catalogue | Property Care";
@@ -17,5 +17,5 @@ export const metadata: Metadata = {
 };
 
 export default function SnaggingCataloguePage() {
-  return <CatalogueAdmin />;
+  return <CatalogueTreeAdmin />;
 }

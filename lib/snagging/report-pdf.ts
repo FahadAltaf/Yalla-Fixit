@@ -17,7 +17,11 @@ import { sanitizeUnsupportedColors } from "@/lib/pdf/sanitize-colors";
 export async function elementToPdfBlob(
   node: HTMLElement,
   scale = 2,
-  options: { footerLabel?: string } = {},
+  options: {
+    footerLabel?: string;
+    /** Drawn at the top of every page but the cover — see paginate. */
+    header?: NonNullable<Parameters<typeof canvasToPdfBlob>[1]>["header"];
+  } = {},
 ): Promise<Blob> {
   const canvas = await html2canvas(node, {
     useCORS: true,
@@ -27,10 +31,11 @@ export async function elementToPdfBlob(
     ...({ scale, onclone: (doc: Document) => sanitizeUnsupportedColors(doc) } as object),
   });
 
-  const { footerLabel } = options;
+  const { footerLabel, header } = options;
 
   return canvasToPdfBlob(canvas, {
     blocks: collectPdfBlocks(node, canvas),
+    header,
     footer: (page, pageCount) =>
       [footerLabel, `Page ${page} of ${pageCount}`].filter(Boolean).join("  \u00b7  "),
   });
@@ -73,7 +78,7 @@ async function waitForImages(root: HTMLElement, timeoutMs = 10_000): Promise<voi
 export async function renderReactToPdfBlob(
   element: import("react").ReactElement,
   scale = 2,
-  options: { footerLabel?: string } = {},
+  options: Parameters<typeof elementToPdfBlob>[2] = {},
 ): Promise<Blob> {
   const { createRoot } = await import("react-dom/client");
   const holder = document.createElement("div");

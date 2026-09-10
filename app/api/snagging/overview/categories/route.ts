@@ -5,18 +5,26 @@ import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import {
   cacheHeaders,
-  CATEGORY_ELEMENTS,
   countSnags,
+  legacyElementsFor,
 } from "@/lib/server/snagging/overview-queries";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
- * Snags per trade category, biggest first (FR-10 / BRD v7 catalogue).
+ * Snags per category, biggest first (FR-10 / restructured catalogue).
  *
- * One COUNT(*) per category. The catalogue code reads AREA-ELEMENT-DEFECT,
- * so each category matches on its element codes in the middle segment —
- * see CATEGORY_ELEMENTS for why the mapping lives there and what changes
- * when the restructured catalogue lands.
+ * The categories are read from the catalogue rather than listed here.
+ * They are editable rows now — twenty of them today — so a hard-coded
+ * list would go stale the first time somebody adds the twenty-first, and
+ * the whole point of making every level a row was that it takes no
+ * release to change.
+ *
+ * Each count matches on the leading segment of the snag's catalogue code:
+ * `SN03-02-01` is an SN03 defect. Snags captured before the restructure
+ * carry the old `AREA-ELEMENT-DEFECT` shape instead, so they are matched
+ * on their element segment through LEGACY_ELEMENT_CATEGORY, and the two
+ * halves are counted as one figure. That legacy half is temporary and
+ * documented where the map lives.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -30,24 +38,48 @@ export async function GET(req: NextRequest) {
 
     const admin = await createAdminServerClient();
 
+    const { data: rows, error } = await admin
+      .from("snagging_catalogue_categories")
+      .select("code, label")
+      .eq("active", true)
+      .order("sort_order", { ascending: true });
+    if (error) throw new Error(error.message);
+
+    const catalogue = (rows ?? []) as Array<{ code: string; label: string }>;
+
     const counts = await Promise.all(
-      CATEGORY_ELEMENTS.map(({ elements }) => {
-        if (elements.length === 0) return Promise.resolve(0);
-        const patterns = elements.map((code) => `catalogue_code.like.*-${code}-*`).join(",");
-        return countSnags(admin, (q) => q.or(patterns));
+      catalogue.map(({ code }) => {
+        // A snag matches its category by the first segment of its code, or
+        // — while old snags are still on the system — by the element in the
+        // middle segment of the shape that preceded it.
+        const patterns = [
+          `catalogue_code.like.${code}-*`,
+          ...legacyElementsFor(code).map(
+            (element) => `catalogue_code.like.*-${element}-*`,
+          ),
+        ];
+        return countSnags(admin, (q) => q.or(patterns.join(",")));
       }),
     );
 
-    const categories = CATEGORY_ELEMENTS.map(({ category, elements }, index) => ({
-      category,
-      count: counts[index],
-      // Says out loud that a zero is "nothing maps here yet" rather than
-      // "no defects found", which are very different facts.
-      mapped: elements.length > 0,
-    })).sort((a, b) => b.count - a.count);
+    const categories = catalogue
+      .map(({ code, label }, index) => ({
+        code,
+        category: label,
+        count: counts[index],
+        // Kept so the client can still say out loud that a zero means
+        // "nothing has landed here yet" rather than "no defects found".
+        mapped: true,
+      }))
+      .sort((a, b) => b.count - a.count || a.code.localeCompare(b.code));
 
     return NextResponse.json(
-      { data: { total: counts.reduce((sum, value) => sum + value, 0), categories } },
+      {
+        data: {
+          total: counts.reduce((sum, value) => sum + value, 0),
+          categories,
+        },
+      },
       { headers: cacheHeaders(600) },
     );
   } catch (error) {

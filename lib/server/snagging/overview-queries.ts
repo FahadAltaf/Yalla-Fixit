@@ -107,30 +107,54 @@ export const OPEN_SNAG_STATUSES = [
 export const RESOLVED_SNAG_STATUSES = ["verified_closed", "withdrawn"];
 
 /**
- * The six trade categories the restructured catalogue is built around
- * (BRD v7), and the element codes that feed each one today.
+ * Where a snag captured against the OLD catalogue belongs in the new one.
  *
- * The catalogue in the database is still area / element / defect — the
- * restructure is on hold pending the new content — so there is no
- * category column to group on yet. Rather than ship a section that
- * renders empty until that lands, each category declares the element
- * codes that roll up into it, and the counts are taken per category
- * directly in Postgres.
+ * The restructure replaced area / element / defect with category /
+ * sub-category / defect, and it replaced rather than migrated: the twenty
+ * categories are rows in `snagging_catalogue_categories` and a new snag
+ * code reads `SN03-02-01`, but every snag captured before the new pickers
+ * ship still carries the old `LDY-JN-HNG` shape, whose middle segment is
+ * an element code.
  *
- * When the real category column arrives this map is the only thing that
- * changes: the endpoint groups on the column instead of on these lists,
- * and nothing on the client moves. EHS has no element code today, so it
- * reports zero rather than being hidden — a category that exists in the
- * business but not yet in the data is worth showing as empty.
+ * So a breakdown that only matched the new codes would draw twenty empty
+ * bars while the portfolio plainly has defects in it. This is the bridge
+ * that stops that: fifteen legacy element codes, each pointing at the
+ * category its defects now live under.
+ *
+ * Every line is evidenced by a sub-category that exists in the new tree —
+ * `BL` Balustrade lands on SN12 because "Balustrades & guarding" is a
+ * sub-category of it, `SK` Skirting on SN03 because "Skirting & trims"
+ * is one there. Nothing here is a guess about where the business thinks
+ * a defect belongs.
+ *
+ * It is deletable. Once no snag on the system carries an old-style code,
+ * this map and the legacy half of the query go, and the breakdown reads
+ * the category segment alone.
  */
-export const CATEGORY_ELEMENTS: Array<{ category: string; elements: string[] }> = [
-  { category: "Civil", elements: ["WL", "CL", "FL", "PT", "SK", "DR", "WN", "JN", "BL"] },
-  { category: "Electrical", elements: ["EL", "AP"] },
-  { category: "Plumbing", elements: ["PL", "SN"] },
-  { category: "A/C", elements: ["HV"] },
-  { category: "EHS", elements: [] },
-  { category: "Outdoor", elements: ["EX"] },
-];
+export const LEGACY_ELEMENT_CATEGORY: Record<string, string> = {
+  WL: "SN03", // Walls        -> Walls, Ceilings & Finishes
+  CL: "SN03", // Ceiling      -> Walls, Ceilings & Finishes
+  PT: "SN03", // Paint        -> Walls, Ceilings & Finishes
+  SK: "SN03", // Skirting     -> Walls, Ceilings & Finishes
+  FL: "SN04", // Floor        -> Flooring & Tiling
+  DR: "SN05", // Doors        -> Doors, Windows & Glazing
+  WN: "SN05", // Windows      -> Doors, Windows & Glazing
+  JN: "SN06", // Joinery      -> Joinery, Cabinetry & Furniture
+  SN: "SN08", // Sanitary     -> Bathrooms & Sanitary Fixtures
+  PL: "SN09", // Plumbing     -> Plumbing, Drainage & Water Systems
+  EL: "SN10", // Electrical   -> Electrical, Lighting & Power
+  HV: "SN11", // HVAC         -> Air Conditioning & Ventilation
+  BL: "SN12", // Balustrade   -> Fire, Life Safety & EHS
+  AP: "SN14", // Appliances   -> Appliances & Installed Equipment
+  EX: "SN15", // External Works -> Facade, Balcony, Roof & External Areas
+};
+
+/** The legacy element codes that roll up into one category code. */
+export function legacyElementsFor(categoryCode: string): string[] {
+  return Object.entries(LEGACY_ELEMENT_CATEGORY)
+    .filter(([, code]) => code === categoryCode)
+    .map(([element]) => element);
+}
 
 /**
  * Cache headers per section.

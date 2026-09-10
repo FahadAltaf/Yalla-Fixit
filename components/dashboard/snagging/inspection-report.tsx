@@ -10,6 +10,7 @@ import YallaFixit from "@/public/yalla-fixit.png";
 import type { SnaggingQuotation } from "@/modules/snagging";
 import type {
   SnaggingChecklistItem,
+  SnaggingPhoto,
   SnaggingSnag,
   SnaggingTask,
 } from "@/types/types";
@@ -113,6 +114,8 @@ const FILL: Record<string, string> = {
   medium: "#ffe4cc",
   low: "#faf6df",
   ok: "#d7e7b5",
+  /* The tone key the SEVERITY map uses for a conformity. */
+  pass: "#d7e7b5",
 };
 
 /**
@@ -163,6 +166,8 @@ const SEVERITY: Record<string, { label: string; tone: keyof typeof TONE }> = {
   high: { label: "High", tone: "high" },
   medium: { label: "Medium", tone: "medium" },
   low: { label: "Low", tone: "low" },
+  /* A check that was inspected and found acceptable. */
+  conformity: { label: "Conformity", tone: "pass" },
 };
 
 const GST = "Asia/Dubai";
@@ -405,24 +410,31 @@ function Wordmark({ small = false }: { small?: boolean }) {
 }
 
 
+/**
+ * The company logo, centred.
+ *
+ * `small` is the running-head size: the same asset, not a second one, so
+ * the mark at the top of every page is the mark on the cover.
+ */
 function YallaCompanyLogo({ small = false }: { small?: boolean }) {
-  // const mark = small ? 26 : 52;
   return (
     <div
       style={{
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        gap: small ? 6 : 12,
       }}
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={CompanyLogo.src}
         alt="Yalla Fix It"
-        style={{ width: 200, height: 100, objectFit: "contain" }}
+        style={{
+          width: small ? 92 : 200,
+          height: small ? 40 : 100,
+          objectFit: "contain",
+        }}
       />
-
     </div>
   );
 }
@@ -434,21 +446,19 @@ function YallaCompanyLogo({ small = false }: { small?: boolean }) {
  * exactly what the issued reports repeat, so a page pulled out of the
  * middle of the document still says what it belongs to.
  *
- * Rendered per page block rather than as a true running header: the PDF is
- * one rasterised canvas sliced into A4, and its paginator draws only a
- * footer. Each block below starts a page, so a head at the top of each
- * lands in the same place a real running header would.
- *
- * PRINT ONLY. On screen the document is one continuous scroll with no page
- * edges, so a header repeating every eight hundred pixels marks nothing —
- * it just interrupts the read with the same line over and over.
+ * SUPERSEDED, and kept only for the on-screen preview should it ever want
+ * one. The PDF draws this as a page master instead (see paginate's
+ * `header`), because a head placed in the flowing content is only ever
+ * right by luck: it lands correctly when a section happens to start a
+ * page, and lands mid-page the moment two short sections share a sheet or
+ * one long section runs onto a second. Nothing renders it today.
  */
 function RunningHead({ subject }: { subject: string }) {
   const forPDF = useContext(PdfMode);
   if (!forPDF) return null;
   return (
     <div style={{ paddingTop: 0, paddingBottom: forPDF ? "14px" : "10px" }}>
-      <Wordmark small />
+      <YallaCompanyLogo small />
       <div
         style={{
           fontSize: 7.5,
@@ -506,6 +516,236 @@ function Para({ children }: { children: React.ReactNode }) {
     >
       {children}
     </p>
+  );
+}
+
+/**
+ * Which checklist group a failed check belongs to, as a glyph.
+ *
+ * Drawn from the group name rather than a stored icon: the catalogue's
+ * groups are stable ("Plumbing and heating", "Electrical"), and an
+ * unrecognised one falls back to the clipboard the checklist itself uses.
+ */
+function checklistGlyph(group: string): string {
+  const g = group.toLowerCase();
+  if (g.includes("plumb") || g.includes("heat") || g.includes("drain")) return "🔧";
+  if (g.includes("electric")) return "🔌";
+  if (g.includes("window") || g.includes("door")) return "🪟";
+  if (g.includes("joinery") || g.includes("stair")) return "🪚";
+  if (g.includes("paint") || g.includes("decor")) return "🎨";
+  if (g.includes("vent") || g.includes("ac") || g.includes("air")) return "❄️";
+  if (g.includes("structure") || g.includes("masonry")) return "🧱";
+  if (g.includes("kitchen") || g.includes("fitting")) return "🍳";
+  if (g.includes("level") || g.includes("align")) return "📐";
+  if (g.includes("floor")) return "🪵";
+  return "📋";
+}
+
+/**
+ * One itemised defect, whether or not it has a photograph.
+ *
+ * Manually captured snags and failed checklist items are the same thing to
+ * a client — something found wrong, graded, needing action — and were being
+ * presented as two unrelated formats: snags as evidence cards, checklist
+ * failures as pass/fail rows buried at the back. A reader had to reconcile
+ * two lists to know what the inspection actually found.
+ *
+ * So there is one card with two render states. `noPhoto` swaps the evidence
+ * panel for the check's own category glyph on a tinted ground: deliberately
+ * a different KIND of thing, not a photo that failed to load. A grey box
+ * with a broken-image mark would read as an error in the document rather
+ * than as a check that never had a picture to take.
+ */
+function DefectCard({
+  reference,
+  number,
+  title,
+  severity,
+  note,
+  status,
+  photo,
+  glyph,
+  category,
+  tag,
+  first,
+}: {
+  reference: string;
+  number: number;
+  title: string;
+  severity: string;
+  note?: string | null;
+  status?: string | null;
+  /** The evidence, when the defect was captured with a camera. */
+  photo?: SnaggingPhoto | null;
+  /** Stands in for the photo on a checklist failure. */
+  glyph?: string;
+  /** The check's group, named under the glyph. */
+  category?: string;
+  /** Small corner label naming where the entry came from. */
+  tag?: string;
+  first: boolean;
+}) {
+  const forPDF = useContext(PdfMode);
+  const grade = SEVERITY[severity] ?? SEVERITY.low;
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "stretch",
+        border: `1px solid ${C.grid}`,
+        borderTop: first ? `1px solid ${C.grid}` : "none",
+        // A defect with no photo keeps a row's height, so a column of them
+        // stays a table rather than a ladder of different-sized boxes.
+        minHeight: 108,
+        breakInside: "avoid",
+      }}
+    >
+      <div
+        style={{
+          width: "55%",
+          borderRight: `1px solid ${C.grid}`,
+          ...pad(forPDF, 4, 6),
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            fontSize: 7,
+            fontWeight: 700,
+            color: C.ink,
+            letterSpacing: 0.3,
+            paddingBottom: "4px",
+          }}
+        >
+          <span>{reference}</span>
+          {tag ? (
+            <span style={{ fontWeight: 400, color: C.sub }}>{tag}</span>
+          ) : null}
+        </div>
+
+        {photo ? (
+          isVideo(photo) ? (
+            <div
+              style={{
+                width: "72%",
+                height: 88,
+                margin: "0 auto",
+                border: `1px solid ${C.grid}`,
+                background: C.card,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 8,
+                fontWeight: 600,
+                color: C.sub,
+              }}
+            >
+              Video evidence
+            </div>
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={photo.signed_url ?? ""}
+              alt=""
+              crossOrigin="anonymous"
+              style={{
+                width: "72%",
+                height: 88,
+                objectFit: "cover",
+                margin: "0 auto",
+                display: "block",
+              }}
+            />
+          )
+        ) : (
+          /*
+            The category, not an absence. A checklist failure never had a
+            photograph to take, so this panel says what KIND of check it
+            was rather than apologising for a missing image.
+          */
+          <div
+            style={{
+              width: "72%",
+              height: 88,
+              margin: "0 auto",
+              background: C.card,
+              border: `1px solid ${C.grid}`,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <span aria-hidden style={{ fontSize: 26, lineHeight: 1 }}>
+              {glyph ?? "📋"}
+            </span>
+            {/*
+              Named as well as drawn. If the glyph does not rasterise on
+              some machine, the panel still says what kind of check this
+              was rather than showing an empty square.
+            */}
+            {category ? (
+              <span
+                style={{
+                  fontSize: 6.5,
+                  color: C.sub,
+                  textTransform: "uppercase",
+                  letterSpacing: 0.4,
+                  textAlign: "center",
+                  paddingTop: 0,
+                  paddingBottom: "2px",
+                  marginTop: 6,
+                }}
+              >
+                {category}
+              </span>
+            ) : null}
+          </div>
+        )}
+      </div>
+
+      {/*
+        The description, washed in its own severity.
+
+        `paddingBottom` alone, never a symmetric vertical pad: html2canvas
+        puts a filled box's background where the padding is not, so an
+        evenly padded cell prints with its tint riding above the text.
+      */}
+      <div
+        style={{
+          width: "45%",
+          background: FILL[grade.tone] ?? FILL.low,
+          fontSize: 9.5,
+          color: C.body,
+          lineHeight: 1.45,
+          ...pad(forPDF, 5, 8),
+        }}
+      >
+        <span style={{ fontWeight: 600 }}>{number}-</span> {title}
+        {note ? (
+          <div style={{ marginTop: 4, color: C.body, paddingBottom: "2px" }}>
+            <span style={{ fontWeight: 600 }}>Comment: </span>
+            {note}
+          </div>
+        ) : null}
+        {status === "verified_poor_quality" || status === "verified_not_done" ? (
+          <div
+            style={{
+              marginTop: 3,
+              fontWeight: 600,
+              color: C.deep,
+              paddingBottom: "2px",
+            }}
+          >
+            {status === "verified_not_done"
+              ? "Re-inspected: not done"
+              : "Re-inspected: poor quality fix"}
+          </div>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -612,6 +852,19 @@ export const InspectionReport = forwardRef<
       .slice(0, 5);
   })();
 
+  /*
+    The checks that failed, itemised with the snags rather than left in the
+    pass/fail table. "Not checked" is a coverage gap, not a defect, and is
+    reported as such elsewhere — only an actual FAIL belongs here.
+  */
+  const checklistAnswered = checklist.filter(
+    (item) => item.status === "failed" || item.status === "passed",
+  );
+  /* Never answered: a coverage gap, not a finding, and listed as such. */
+  const checklistUnchecked = checklist.filter(
+    (item) => item.status !== "failed" && item.status !== "passed",
+  );
+
   /* What the running head names on every page after the cover. */
   const subject = [property?.building_name, property?.unit_label]
     .filter(Boolean)
@@ -700,6 +953,7 @@ export const InspectionReport = forwardRef<
           data-pdf-block
           style={{
             position: "relative",
+            // The cover is deliberately a full sheet; the space is the design.
             minHeight: forPDF ? 1020 : 980,
             breakAfter: "page",
             paddingTop: 0,
@@ -839,14 +1093,21 @@ export const InspectionReport = forwardRef<
         <div
           data-pdf-block
           style={{
-            minHeight: forPDF ? 1000 : "auto",
+            /*
+              Sized to its content, not to a page.
+
+              These blocks used to be forced to a full sheet's height, so a
+              short section — three bullets of general remarks — printed as
+              a third of a page of text above two thirds of nothing, with
+              the footer stranded at the bottom. `breakAfter` still starts
+              the next section on a fresh page; the block itself now ends
+              where its content does.
+            */
             breakAfter: "page",
             paddingTop: 0,
             paddingBottom: forPDF ? "24px" : "12px",
           }}
         >
-          <RunningHead subject={subject} />
-
           <Heading>Property description:</Heading>
           <Para>{propertyDescription}</Para>
 
@@ -895,14 +1156,21 @@ export const InspectionReport = forwardRef<
         <div
           data-pdf-block
           style={{
-            minHeight: forPDF ? 1000 : "auto",
+            /*
+              Sized to its content, not to a page.
+
+              These blocks used to be forced to a full sheet's height, so a
+              short section — three bullets of general remarks — printed as
+              a third of a page of text above two thirds of nothing, with
+              the footer stranded at the bottom. `breakAfter` still starts
+              the next section on a fresh page; the block itself now ends
+              where its content does.
+            */
             breakAfter: "page",
             paddingTop: 0,
             paddingBottom: forPDF ? "24px" : "12px",
           }}
         >
-          <RunningHead subject={subject} />
-
           <Para>
             The inspection is limited to the parts of the building which are
             visible and/or accessible. YALLA FIX IT have not removed any
@@ -989,8 +1257,6 @@ export const InspectionReport = forwardRef<
 
           The body picks up from the summary, under its own running head.
         */}
-        <RunningHead subject={subject} />
-
         {/* ── Summary: five colour-coded figures ── */}
         <Heading>Summary</Heading>
         <div style={{ display: "flex", gap: 8 }}>
@@ -1162,188 +1428,194 @@ export const InspectionReport = forwardRef<
               per-area count cannot promise.
             */
             let running = 0;
-            return areas.map((area, areaIndex) => {
-              const areaSnags = byArea.get(area.id) ?? [];
-              const letter = areaLetter(areaIndex);
-              return (
-                <div key={area.id} style={{ marginBottom: 10 }}>
-                  <div
-                    style={{
-                      fontSize: 10.5,
-                      fontWeight: 600,
-                      color: C.ink,
-                      ...pad(forPDF, 4, 0),
-                    }}
-                  >
-                    {letter}. {area.name}
-                    {areaSnags.length === 0 ? (
-                      <span style={{ color: C.sub, fontWeight: 400 }}>
-                        {" "}
-                        —{" "}
-                        {area.access_state === "not_accessible"
-                          ? "not inspected"
-                          : "no defects found"}
-                      </span>
-                    ) : null}
-                  </div>
-
-                  {areaSnags.map((snag, index) => {
-                    running += 1;
-                    const photos = (snag.photos ?? []).filter(
-                      (p) => p.signed_url,
-                    );
-                    const cover = photos[0];
-                    const grade = SEVERITY[snag.severity] ?? SEVERITY.low;
-                    const ref = `${String(running).padStart(3, "0")}-${letter}-${String(
-                      index + 1,
-                    ).padStart(2, "0")}`;
-
-                    return (
+            return (
+              <>
+                {areas.map((area, areaIndex) => {
+                  const areaSnags = byArea.get(area.id) ?? [];
+                  const letter = areaLetter(areaIndex);
+                  return (
+                    <div key={area.id} style={{ marginBottom: 8 }}>
                       <div
-                        key={snag.id}
                         style={{
-                          display: "flex",
-                          alignItems: "stretch",
-                          border: `1px solid ${C.grid}`,
-                          borderTop: index === 0 ? `1px solid ${C.grid}` : "none",
-                          // A defect with no photo keeps a row's height, so a
-                          // column of them stays a table rather than a ladder
-                          // of different-sized boxes.
-                          minHeight: 118,
-                          breakInside: "avoid",
+                          fontSize: 10.5,
+                          fontWeight: 600,
+                          color: C.ink,
+                          ...pad(forPDF, 4, 0),
                         }}
                       >
-                        {/* Evidence, with its reference above it. */}
-                        <div
-                          style={{
-                            width: "55%",
-                            borderRight: `1px solid ${C.grid}`,
-                            ...pad(forPDF, 4, 6),
-                          }}
-                        >
+                        {letter}. {area.name}
+                        {areaSnags.length === 0 ? (
+                          <span style={{ color: C.sub, fontWeight: 400 }}>
+                            {" "}
+                            —{" "}
+                            {area.access_state === "not_accessible"
+                              ? "not inspected"
+                              : "no defects found"}
+                          </span>
+                        ) : null}
+                      </div>
+
+                      {areaSnags.map((snag, index) => {
+                        running += 1;
+                        const photos = (snag.photos ?? []).filter(
+                          (photo) => photo.signed_url,
+                        );
+                        return (
+                          <DefectCard
+                            key={snag.id}
+                            first={index === 0}
+                            reference={`${String(running).padStart(3, "0")}-${letter}-${String(
+                              index + 1,
+                            ).padStart(2, "0")}`}
+                            number={running}
+                            title={
+                              /* Category · sub-category · defect, the
+                                 catalogue's three levels (P1). A snag
+                                 captured before the restructure has no
+                                 category and simply reads as two. */
+                              [
+                                snag.category_label,
+                                snag.element_label,
+                                snag.defect_label,
+                              ]
+                                .filter(Boolean)
+                                .join(" · ") || "Defect"
+                            }
+                            severity={snag.severity}
+                            note={snag.note}
+                            status={snag.status}
+                            photo={photos[0] ?? null}
+                          />
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+
+                {/*
+                  ── Failed checks, itemised alongside the snags ──
+
+                  A failed check is a defect: something the inspector found
+                  wrong, graded, and needing action. It used to appear only
+                  as a FAIL row in the pass/fail table at the back, so a
+                  reader had to reconcile two different lists to know what
+                  the inspection actually found — and the ones with no
+                  photograph were the easiest to miss.
+
+                  They carry no area (the catalogue does not tie a check to
+                  a room), so they group under their own heading and
+                  continue the same numbering: "number 14" means one thing
+                  in this document.
+                */}
+                {checklistAnswered.length > 0
+                  ? (() => {
+                      const letter = areaLetter(areas.length);
+                      return (
+                        <div style={{ marginBottom: 8 }}>
                           <div
                             style={{
-                              fontSize: 7,
-                              fontWeight: 700,
+                              fontSize: 10.5,
+                              fontWeight: 600,
                               color: C.ink,
-                              letterSpacing: 0.3,
-                              paddingBottom: "4px",
+                              ...pad(forPDF, 4, 0),
                             }}
                           >
-                            {ref}
+                            {letter}. Building systems
+                            <span style={{ color: C.sub, fontWeight: 400 }}>
+                              {" "}
+                              — the inspection checklist, item by item
+                            </span>
                           </div>
-                          {cover ? (
-                            isVideo(cover) ? (
-                              <div
-                                style={{
-                                  width: "72%",
-                                  height: 96,
-                                  margin: "0 auto",
-                                  border: `1px solid ${C.line}`,
-                                  background: C.card,
-                                  display: "flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                  fontSize: 8,
-                                  fontWeight: 600,
-                                  color: C.sub,
-                                }}
-                              >
-                                Video evidence
-                              </div>
-                            ) : (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img
-                                src={cover.signed_url ?? ""}
-                                alt=""
-                                crossOrigin="anonymous"
-                                style={{
-                                  width: "72%",
-                                  height: 96,
-                                  objectFit: "cover",
-                                  margin: "0 auto",
-                                  display: "block",
-                                }}
+
+                          {checklistAnswered.map((item, index) => {
+                            running += 1;
+                            return (
+                              <DefectCard
+                                key={item.id}
+                                first={index === 0}
+                                reference={`${String(running).padStart(3, "0")}-${letter}-${String(
+                                  index + 1,
+                                ).padStart(2, "0")}`}
+                                number={running}
+                                title={`${item.group_name} · ${item.label}`}
+                                /*
+                                  A pass is a conformity — the fourth grade
+                                  on the cover legend, and the whole reason
+                                  that colour exists. A failure is graded by
+                                  whether the check was mandatory: the
+                                  checklist carries no severity of its own,
+                                  and colouring every failure alike would
+                                  flatten the one distinction it does record.
+                                */
+                                severity={
+                                  item.status === "passed"
+                                    ? "conformity"
+                                    : item.mandatory
+                                      ? "high"
+                                      : "medium"
+                                }
+                                note={item.reason}
+                                glyph={checklistGlyph(item.group_name)}
+                                category={item.group_name}
+                                tag={item.status === "passed" ? "Checklist · Pass" : "Checklist · Fail"}
                               />
-                            )
-                          ) : (
-                            <div
-                              style={{
-                                fontSize: 8,
-                                color: C.faint,
-                                paddingBottom: "6px",
-                              }}
-                            >
-                              No photo recorded.
-                            </div>
-                          )}
+                            );
+                          })}
                         </div>
-
-                        {/*
-                          The description, washed in its own severity.
-
-                          `paddingBottom` alone, never a symmetric vertical
-                          pad: html2canvas puts a filled box's background
-                          where the padding is not, so an evenly padded cell
-                          prints with its tint riding above the text.
-                        */}
-                        <div
-                          style={{
-                            width: "45%",
-                            background: FILL[grade.tone] ?? FILL.low,
-                            fontSize: 9.5,
-                            color: C.body,
-                            lineHeight: 1.45,
-                            ...pad(forPDF, 5, 8),
-                          }}
-                        >
-                          <span style={{ fontWeight: 600 }}>{running}-</span>{" "}
-                          {[snag.element_label, snag.defect_label]
-                            .filter(Boolean)
-                            .join(" · ") || "Defect"}
-                          {snag.note ? (
-                            <div
-                              style={{
-                                marginTop: 4,
-                                color: C.body,
-                                paddingBottom: "2px",
-                              }}
-                            >
-                              <span style={{ fontWeight: 600 }}>Comment: </span>
-                              {snag.note}
-                            </div>
-                          ) : null}
-                          {snag.status === "verified_poor_quality" ||
-                            snag.status === "verified_not_done" ? (
-                            <div
-                              style={{
-                                marginTop: 3,
-                                fontWeight: 600,
-                                color: C.deep,
-                                paddingBottom: "2px",
-                              }}
-                            >
-                              {snag.status === "verified_not_done"
-                                ? "Re-inspected: not done"
-                                : "Re-inspected: poor quality fix"}
-                            </div>
-                          ) : null}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            });
+                      );
+                    })()
+                  : null}
+              </>
+            );
           })()
         )}
 
-        {/* ── Checklist, two columns by category ── */}
-        {checklist.length > 0 ? (
-          <>
-            <Heading>Inspection checklist</Heading>
-            <ChecklistBlock items={checklist} />
-          </>
+        {/*
+          ── What the checklist never reached ──
+
+          The pass/fail table that used to sit here is gone: every answered
+          check is now a card in the itemised section above, so printing the
+          same results again as a grid of PASS/FAIL words asked the reader to
+          reconcile two versions of one list.
+
+          What the table also carried, and the cards cannot, is the checks
+          nobody answered. Those are a gap in coverage rather than a finding
+          — there is no grade to colour them with — so they stay a list.
+        */}
+        {checklistUnchecked.length > 0 ? (
+          <div data-pdf-block style={{ breakInside: "avoid" }}>
+            <Heading>Checks not completed</Heading>
+            <div
+              style={{
+                fontSize: 9.5,
+                color: C.body,
+                paddingTop: 0,
+                paddingBottom: forPDF ? "12px" : "8px",
+              }}
+            >
+              {checklistUnchecked.length} check
+              {checklistUnchecked.length === 1 ? " was" : "s were"} not answered
+              during this inspection and carry no result either way.
+            </div>
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                fontSize: 9,
+                color: C.body,
+              }}
+            >
+              <tbody>
+                {checklistUnchecked.map((item) => (
+                  <tr key={item.id}>
+                    <Cell label colSpan={3}>{item.group_name}</Cell>
+                    <Cell colSpan={4}>{item.label}</Cell>
+                    <Cell>{item.mandatory ? "Mandatory" : "Optional"}</Cell>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         ) : null}
 
         {/* ── Commercial summary ── */}
@@ -1461,8 +1733,6 @@ export const InspectionReport = forwardRef<
             paddingBottom: forPDF ? "24px" : "12px",
           }}
         >
-          <RunningHead subject={subject} />
-
           <Heading>Outlines:</Heading>
           <Para>
             {snags.length === 0 ? (
@@ -1597,120 +1867,3 @@ export const InspectionReport = forwardRef<
   );
 });
 
-/**
- * The checklist, grouped by category across two columns.
- *
- * Two columns roughly halves the height this section takes, which is
- * what keeps a 45-item list on page one. Line-height is deliberately
- * tighter here than in the rest of the document for the same reason.
- */
-function ChecklistBlock({ items }: { items: SnaggingChecklistItem[] }) {
-  const forPDF = useContext(PdfMode);
-  const groups = new Map<string, SnaggingChecklistItem[]>();
-  for (const item of items) {
-    const list = groups.get(item.group_name) ?? [];
-    list.push(item);
-    groups.set(item.group_name, list);
-  }
-
-  const mark: Record<string, { label: string; tone: keyof typeof TONE }> = {
-    passed: { label: "Pass", tone: "pass" },
-    failed: { label: "Fail", tone: "fail" },
-    not_checked: { label: "N/C", tone: "medium" },
-    pending: { label: "—", tone: "neutral" },
-  };
-
-  /*
-   * Columns are built here rather than with CSS multi-column.
-   *
-   * html2canvas rasterises this document for the PDF and does not
-   * implement CSS columns: it painted the category cards as empty boxes
-   * and dropped every label inside them. The on-screen version looked
-   * right, which is exactly why this had to be checked against a
-   * generated PDF rather than the preview.
-   *
-   * Splitting the categories into explicit flex columns gives the same
-   * layout out of primitives html2canvas does support.
-   */
-  // Largest category first, then each one into whichever column is
-  // currently shortest. Assigning in definition order left the last column
-  // finishing a third of a page above the others; taking the big ones while
-  // there is still room to place them is what evens the three out.
-  const entries = Array.from(groups).sort((a, b) => b[1].length - a[1].length);
-  const columnCount = entries.length > 6 ? 3 : 2;
-  const columns: Array<Array<[string, SnaggingChecklistItem[]]>> = Array.from(
-    { length: columnCount },
-    () => [],
-  );
-  // Balance on item count, plus a constant for each card's own header
-  // and padding, so the columns finish at roughly the same height.
-  const load = new Array<number>(columnCount).fill(0);
-  for (const entry of entries) {
-    let target = 0;
-    for (let i = 1; i < columnCount; i++)
-      if (load[i] < load[target]) target = i;
-    columns[target].push(entry);
-    load[target] += entry[1].length + 2;
-  }
-
-  return (
-    <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-      {columns.map((column, columnIndex) => (
-        <div key={columnIndex} style={{ flex: 1, minWidth: 0 }}>
-          {column.map(([group, groupItems]) => (
-            <div
-              key={group}
-              // breakInside is honoured by the browser's own print, but the
-              // PDF is a rasterised canvas and html2canvas drops it -- this
-              // is the attribute the paginator actually reads.
-              data-pdf-block
-              // Square and hairline, like every other block in the report.
-              style={{
-                background: "#ffffff",
-                border: `1px solid ${C.grid}`,
-                ...pad(forPDF, 6, 10),
-                marginBottom: 6,
-                breakInside: "avoid",
-              }}
-            >
-              <div
-                style={{
-                  fontSize: 8,
-                  fontWeight: 700,
-                  color: C.brand,
-                  textTransform: "uppercase",
-                  letterSpacing: 0.4,
-                  marginBottom: 3,
-                }}
-              >
-                {group}
-              </div>
-              {groupItems.map((item, index) => {
-                const m = mark[item.status] ?? mark.pending;
-                return (
-                  <div
-                    key={item.id}
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      gap: 8,
-                      ...pad(forPDF, 0.5, 0),
-                      // borderTop: index === 0 ? "none" : `1px solid ${C.line}`,
-                      lineHeight: 1.2,
-                    }}
-                  >
-                    <span style={{ fontSize: 9, color: C.body }}>
-                      {item.label}
-                    </span>
-                    <Pill tone={m.tone}>{m.label}</Pill>
-                  </div>
-                );
-              })}
-            </div>
-          ))}
-        </div>
-      ))}
-    </div>
-  );
-}

@@ -190,7 +190,20 @@ export type RejectTaskInput = z.infer<typeof rejectTaskSchema>;
  * already written, so it is set once at creation and never rewritten. Every
  * other field is editable, and an item is deactivated rather than deleted.
  */
+/**
+ * Which list a check belongs to (Action Points N1).
+ *
+ * `technician` is copied onto each job and answered on site; `client` is
+ * the published list, stored once and shared on request (N7). The two are
+ * one library because they are the same shape and the same people edit
+ * them, and only this tells them apart.
+ */
+export const checklistAudienceSchema = z
+  .enum(["technician", "client"])
+  .default("technician");
+
 export const checklistItemSchema = z.object({
+  audience: checklistAudienceSchema,
   code: z
     .string()
     .trim()
@@ -235,6 +248,55 @@ export const catalogueEntrySchema = z.object({
 });
 
 export type CatalogueEntryInput = z.infer<typeof catalogueEntrySchema>;
+
+/*
+  The catalogue's three levels (Action Points P1, P6).
+
+  Each level owns a short code, and the snag code is the three composed:
+  CIV-PNT-DRP. Codes are two to four capitals — long enough to stay
+  readable when a category has sixty sub-categories, short enough that the
+  composed code still fits a report line.
+
+  Every level is editable from the admin screens without a release, which
+  is why none of this is a TypeScript union or a database CHECK.
+*/
+const catalogueCode = z
+  .string()
+  .trim()
+  .regex(/^[A-Z0-9]{2,4}$/, "A code is 2-4 capitals or digits, e.g. CIV");
+
+export const catalogueCategorySchema = z.object({
+  code: catalogueCode,
+  label: z.string().trim().min(2).max(80),
+  sort_order: z.coerce.number().int().min(0).default(0),
+});
+
+export const catalogueSubcategorySchema = z.object({
+  category_id: z.string().uuid(),
+  code: catalogueCode,
+  label: z.string().trim().min(2).max(120),
+  sort_order: z.coerce.number().int().min(0).default(0),
+});
+
+export const catalogueDefectSchema = z.object({
+  subcategory_id: z.string().uuid(),
+  code: catalogueCode,
+  label: z.string().trim().min(2).max(200),
+  default_severity: severitySchema,
+  guidance: z.string().trim().max(1000).optional().or(z.literal("")),
+  sort_order: z.coerce.number().int().min(0).default(0),
+});
+
+export type CatalogueCategoryInput = z.infer<typeof catalogueCategorySchema>;
+export type CatalogueSubcategoryInput = z.infer<typeof catalogueSubcategorySchema>;
+export type CatalogueDefectInput = z.infer<typeof catalogueDefectSchema>;
+
+/** Which level a write targets, so one route serves all three. */
+export const catalogueLevelSchema = z.enum([
+  "category",
+  "subcategory",
+  "defect",
+]);
 
 /** BR-8: entries are deactivated, never deleted. */
 export const catalogueToggleSchema = z.object({

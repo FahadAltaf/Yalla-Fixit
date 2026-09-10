@@ -7,15 +7,22 @@ import { recordAudit } from "@/lib/server/snagging/audit";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
- * Snagging pricing configuration (F7-F10).
+ * Snagging pricing configuration (F7-F10, FR-2.03).
  *
- * A single admin-editable row holds the rate per square foot, the
- * multiplier per property type, the external rate, tax, the de-snag and
- * additional-visit prices, and the scope + terms text. Editing is
- * restricted to master-data admins (F8/F13); every change is logged (F10).
+ * A single admin-editable row holds the rate card Operations issued on
+ * 21 August 2026 — rate per square foot by property type and furnished
+ * state, minimum charge by type, the plot band, and the fixed de-snagging
+ * and additional-visit prices — plus tax, the out-of-hours percentage, and
+ * the scope + terms text. Editing is restricted to master-data admins
+ * (F8/F13, FR-2.11); every change is logged (F10, FR-2.16).
+ *
+ * The pre-card columns are still selected and still written. They price
+ * nothing now, but quotations raised before the card carry them in their
+ * own snapshot, and dropping them while those quotations are still being
+ * rendered would blank the figures on documents already issued.
  */
 const CONFIG_COLUMNS =
-  "currency, rate_per_sqft, external_rate_per_sqft, multipliers, tax_rate, desnag_price, additional_visit_price, scope_of_work, terms, updated_at";
+  "currency, rate_card, out_of_hours_percent, tax_rate, scope_of_work, terms, rate_per_sqft, external_rate_per_sqft, multipliers, desnag_price, additional_visit_price, updated_at";
 
 export async function GET(req: NextRequest) {
   try {
@@ -57,6 +64,12 @@ export async function PUT(req: NextRequest) {
     const num = (v: unknown, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
     const updates = {
       currency: typeof body.currency === "string" ? body.currency : "AED",
+      // The card is written whole or not at all: a partial merge would let
+      // one type's band be saved against another type's stale minimum.
+      ...(body.rate_card && typeof body.rate_card === "object"
+        ? { rate_card: body.rate_card }
+        : {}),
+      out_of_hours_percent: num(body.out_of_hours_percent, 40),
       rate_per_sqft: num(body.rate_per_sqft),
       external_rate_per_sqft: num(body.external_rate_per_sqft),
       multipliers:

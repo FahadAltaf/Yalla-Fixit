@@ -34,6 +34,25 @@ export type PaginateOptions = {
   blocks?: PdfBlock[];
   /** Drawn bottom-left on every page, e.g. "BURTOWPR-KA09 · Page 1 of 2". */
   footer?: (page: number, pageCount: number) => string;
+  /**
+   * Drawn at the top of every page, as a page master.
+   *
+   * The alternative — putting a header block in the flowing content —
+   * only lands correctly when every section happens to start a page. As
+   * soon as one section runs onto a second sheet, or two short ones share
+   * one, the header appears mid-page or not at all. Drawn here it is a
+   * property of the PAGE, so it stays right however the content moves.
+   */
+  header?: {
+    /** The line of text, centred under the mark. */
+    text: string;
+    /** Optional data URI for the logo, drawn centred above the text. */
+    logo?: { dataUrl: string; widthMm: number; heightMm: number };
+    /** The cover carries its own masthead, so page 1 is normally skipped. */
+    skipFirstPage?: boolean;
+    /** Rule and text colour, as [r, g, b]. */
+    rgb?: [number, number, number];
+  };
 };
 
 /** How much ink a row needs before it counts as content rather than a stray pixel. */
@@ -135,6 +154,7 @@ export function canvasToPdfBlob(
     imageQuality = 0.92,
     blocks = [],
     footer,
+    header,
   } = options;
 
   const ctx = canvas.getContext("2d");
@@ -142,7 +162,14 @@ export function canvasToPdfBlob(
 
   const pxPerMm = canvas.width / pageWidthMm;
   const footerMm = footer ? 6 : 0;
-  const contentHpx = (pageHeightMm - marginMm * 2 - footerMm) * pxPerMm;
+  /*
+    Every page gives up the same strip to the header, including the one the
+    header is skipped on — a first page with more room than the rest would
+    reflow the whole document the moment a header was switched on.
+  */
+  const headerMm = header ? (header.logo ? header.logo.heightMm + 5 : 7) : 0;
+  const contentHpx =
+    (pageHeightMm - marginMm * 2 - footerMm - headerMm) * pxPerMm;
   const minSlicePx = 28 * pxPerMm;
   const backtrackPx = 45 * pxPerMm;
 
@@ -207,10 +234,53 @@ export function canvasToPdfBlob(
       pageCanvas.toDataURL(`image/${imageFormat.toLowerCase()}`, imageQuality),
       imageFormat,
       0,
-      marginMm,
+      marginMm + headerMm,
       pageWidthMm,
       slice.height / pxPerMm,
     );
+
+    if (header && !(header.skipFirstPage && index === 0)) {
+      const [r, g, b] = header.rgb ?? [255, 120, 0];
+      const logo = header.logo;
+      const bandH = logo ? logo.heightMm : 4;
+
+      /*
+        Mark first, then the title on the same line — the way the issued
+        reports set their running head. Stacking the two centred it above
+        the text and cost a line of height on every page for no gain.
+      */
+      if (logo) {
+        pdf.addImage(
+          logo.dataUrl,
+          "PNG",
+          marginMm,
+          marginMm,
+          logo.widthMm,
+          logo.heightMm,
+        );
+      }
+
+      pdf.setFontSize(6.5);
+      pdf.setTextColor(r, g, b);
+      pdf.text(
+        header.text,
+        marginMm + (logo ? logo.widthMm + 3 : 0),
+        // Optically centred against the mark rather than sitting on its
+        // baseline, which reads as the text having slipped downwards.
+        marginMm + bandH / 2 + 0.9,
+        { align: "left" },
+      );
+
+      // The rule the issued reports run under the title on every page.
+      pdf.setDrawColor(r, g, b);
+      pdf.setLineWidth(0.3);
+      pdf.line(
+        marginMm,
+        marginMm + bandH + 1.5,
+        pageWidthMm - marginMm,
+        marginMm + bandH + 1.5,
+      );
+    }
 
     if (footer) {
       pdf.setFontSize(7.5);

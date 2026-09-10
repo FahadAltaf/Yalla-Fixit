@@ -291,7 +291,7 @@ export async function buildReportData(
       admin
         .from("snagging_snags")
         .select(
-          `id, job_id, area_id, snag_code, catalogue_code, element_label, defect_label,
+          `id, job_id, area_id, snag_code, catalogue_code, category_label, element_label, defect_label,
            severity, note, status, round_created,
            photos:snagging_snag_photos(id, snag_id, storage_path, media_type, taken_at,
              width, height, gps_lat, gps_lng, exif, marker_x, marker_y)`,

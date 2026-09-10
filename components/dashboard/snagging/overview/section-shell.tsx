@@ -71,6 +71,17 @@ export function SectionShell({
   bodyClassName?: string;
   children: React.ReactNode;
 }) {
+  /*
+    A footer has to sit on the floor of the card, not under the last row.
+
+    These cards are `h-full` in a grid row, so one is routinely taller
+    than its own content -- and a "View all" that stops where the list
+    stops left a band of white space beneath it, reading as the end of
+    nothing. Stretching the content region instead pushes the footer down
+    to the border, which is where the eye goes looking for it.
+  */
+  const stretch = Boolean(footer) && !error;
+
   return (
     <SectionCard
       title={title}
@@ -78,7 +89,10 @@ export function SectionShell({
       icon={icon}
       action={error ? null : action}
       className={cn("h-full", muted && "bg-muted/20", className)}
-      bodyClassName={cn(centerBody && "flex flex-1 flex-col justify-center")}
+      bodyClassName={cn(
+        centerBody && "flex flex-1 flex-col justify-center",
+        stretch && "flex flex-1 flex-col",
+      )}
     >
       {/*
         The inset sits on each state rather than on the card body. A section
@@ -91,11 +105,13 @@ export function SectionShell({
           <InlineError message={error} onRetry={onRetry} />
         </div>
       ) : loading ? (
-        <div className="px-5 pb-5">{skeleton}</div>
+        <div className={cn("px-5 pb-5", stretch && "flex-1")}>{skeleton}</div>
       ) : isEmpty ? (
-        <div className="px-5 pb-5">{empty}</div>
+        <div className={cn("px-5 pb-5", stretch && "flex-1")}>{empty}</div>
       ) : (
-        <div className={cn("px-5 pb-5", bodyClassName)}>{children}</div>
+        <div className={cn("px-5 pb-5", stretch && "flex-1", bodyClassName)}>
+          {children}
+        </div>
       )}
 
       {footer && !error ? (

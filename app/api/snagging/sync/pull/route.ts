@@ -388,48 +388,73 @@ async function loadChanged(
   return (data ?? []) as ChildRow[];
 }
 
+/**
+ * Whether any level of the catalogue has moved since the device last looked.
+ *
+ * All three are checked, not just defects: renaming a category or retiring
+ * a sub-category changes what an inspector may choose just as much as
+ * editing a defect does, and a device that only watched the leaves would
+ * keep offering a branch that had been withdrawn.
+ */
 async function catalogueChangedSince(admin: Admin, since: string): Promise<boolean> {
-  const { count, error } = await admin
-    .from("snagging_catalogue_entries")
-    .select("id", { count: "exact", head: true })
-    .gt("updated_at", since);
-  if (error) throw new Error(error.message);
-  return (count ?? 0) > 0;
+  const tables = [
+    "snagging_catalogue_categories",
+    "snagging_catalogue_subcategories",
+    "snagging_catalogue_defects",
+  ];
+  for (const table of tables) {
+    const { count, error } = await admin
+      .from(table)
+      .select("id", { count: "exact", head: true })
+      .gt("updated_at", since);
+    if (error) throw new Error(error.message);
+    if ((count ?? 0) > 0) return true;
+  }
+  return false;
 }
 
 /**
- * The full controlled vocabulary. The area/element matrix now lives in
- * `snagging_catalogue_areas.element_codes[]`; it is expanded back into the
- * {area_code, element_code} pairs the app already stores.
+ * The full controlled vocabulary, on its three levels (Action Points P1).
+ *
+ * Areas are no longer part of it. Every category applies in every area
+ * (P2), so the {area_code, element_code} matrix the device used to store
+ * has nothing left to narrow and is not sent — the app drops its copy in
+ * migration 18.
+ *
+ * Paged, because the library is larger than one PostgREST response: it
+ * caps a request at 1,000 rows and the seeded catalogue holds more than
+ * that, so a single select would quietly hand the device a short
+ * catalogue with no error to notice.
  */
 async function loadCatalogue(admin: Admin) {
-  const [entries, areas] = await Promise.all([
-    admin
-      .from("snagging_catalogue_entries")
-      .select(`id, code, element_code, element_label, defect_code, defect_label, default_severity, guidance, catalogue_version, active, sort_order`)
-      .eq("active", true)
-      .order("sort_order", { ascending: true }),
-    admin
-      .from("snagging_catalogue_areas")
-      .select("code, label, sort_order, element_codes")
-      .order("sort_order", { ascending: true }),
-  ]);
-
-  if (entries.error) throw new Error(entries.error.message);
-  if (areas.error) throw new Error(areas.error.message);
-
-  const areaRows = (areas.data ?? []) as Array<{ code: string; label: string; sort_order: number; element_codes: string[] | null }>;
-  const area_elements: Array<{ area_code: string; element_code: string; sort_order: number }> = [];
-  for (const area of areaRows) {
-    (area.element_codes ?? []).forEach((element_code, index) => {
-      area_elements.push({ area_code: area.code, element_code, sort_order: index });
-    });
+  async function readAll<T>(table: string, columns: string): Promise<T[]> {
+    const size = 1000;
+    const rows: T[] = [];
+    for (let from = 0; ; from += size) {
+      const { data, error } = await admin
+        .from(table)
+        .select(columns)
+        .eq("active", true)
+        .order("sort_order", { ascending: true })
+        .range(from, from + size - 1);
+      if (error) throw new Error(error.message);
+      const page = (data ?? []) as T[];
+      rows.push(...page);
+      if (page.length < size) return rows;
+    }
   }
 
-  return {
-    version: entries.data?.[0]?.catalogue_version ?? "v1.0",
-    entries: entries.data ?? [],
-    areas: areaRows.map(({ code, label, sort_order }) => ({ code, label, sort_order })),
-    area_elements,
-  };
+  const [categories, subcategories, defects] = await Promise.all([
+    readAll("snagging_catalogue_categories", "id, code, label, sort_order, active"),
+    readAll(
+      "snagging_catalogue_subcategories",
+      "id, category_id, code, label, sort_order, active",
+    ),
+    readAll(
+      "snagging_catalogue_defects",
+      "id, subcategory_id, code, label, default_severity, guidance, sort_order, active",
+    ),
+  ]);
+
+  return { categories, subcategories, defects };
 }

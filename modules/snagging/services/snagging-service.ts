@@ -14,6 +14,9 @@ import type {
   SnaggingProperty,
   SnaggingPropertyType,
   SnaggingCatalogueArea,
+  CatalogueCategory,
+  CatalogueDefect,
+  CatalogueSubcategory,
   SnaggingCatalogueEntry,
   SnaggingChecklistLibraryItem,
   SnaggingTask,
@@ -85,17 +88,43 @@ export interface CatalogueResponse {
   total?: number;
 }
 
+/** One property type's row on the rate card (BRD v7 §9.3). */
+export interface SnaggingRateCardType {
+  unfurnished_min: number;
+  unfurnished_max: number;
+  furnished: number;
+  minimum_charge: number;
+  /** Null where the card says "to be confirmed", as it does for commercial. */
+  desnag_min: number | null;
+  desnag_max: number | null;
+}
+
+export interface SnaggingRateCard {
+  types: Record<string, SnaggingRateCardType>;
+  external_min: number;
+  external_max: number;
+  additional_visit_price: number;
+}
+
 export interface SnaggingPricingConfig {
   currency: string;
-  rate_per_sqft: number;
-  external_rate_per_sqft: number;
-  multipliers: Record<string, number>;
+  /** Null only on a database the rate card migration has not reached. */
+  rate_card: SnaggingRateCard | null;
+  out_of_hours_percent: number;
   tax_rate: number;
-  desnag_price: number;
-  additional_visit_price: number;
   scope_of_work: string | null;
   terms: string | null;
   updated_at?: string;
+  /*
+    The pre-card model. Nothing prices against these any more, but they are
+    still returned and still written, because quotations issued before the
+    card carry them in their own snapshot.
+  */
+  rate_per_sqft?: number;
+  external_rate_per_sqft?: number;
+  multipliers?: Record<string, number>;
+  desnag_price?: number;
+  additional_visit_price?: number;
 }
 
 export interface SnaggingQuoteLine {
@@ -552,6 +581,59 @@ export const snaggingService = {
     }),
 
   // ---------------------------------------------------------------
+  // Catalogue v2: category > sub-category > defect (Action Points P1, P6)
+  // ---------------------------------------------------------------
+
+  /**
+   * The whole tree in one call.
+   *
+   * All three levels together rather than one request per level: a picker
+   * cannot narrow anything until it has all three, and three round trips
+   * on a site connection is the difference between the sheet opening and
+   * the inspector giving up.
+   */
+  getCatalogueTree: async (
+    activeOnly = false,
+  ): Promise<{
+    categories: CatalogueCategory[];
+    subcategories: CatalogueSubcategory[];
+    defects: CatalogueDefect[];
+  }> =>
+    executeRESTBackend("/api/snagging/catalogue/v2", {
+      method: "GET",
+      params: activeOnly ? { activeOnly: "true" } : {},
+    }),
+
+  createCatalogueNode: async (
+    level: "category" | "subcategory" | "defect",
+    input: Record<string, unknown>,
+  ) =>
+    executeRESTBackend("/api/snagging/catalogue/v2", {
+      method: "POST",
+      body: { ...input, level },
+    }),
+
+  updateCatalogueNode: async (
+    level: "category" | "subcategory" | "defect",
+    input: Record<string, unknown>,
+  ) =>
+    executeRESTBackend("/api/snagging/catalogue/v2", {
+      method: "PATCH",
+      body: { ...input, level },
+    }),
+
+  /** BR-8: retire rather than delete, so historical reports resolve. */
+  setCatalogueNodeActive: async (
+    level: "category" | "subcategory" | "defect",
+    id: string,
+    active: boolean,
+  ) =>
+    executeRESTBackend("/api/snagging/catalogue/v2", {
+      method: "PATCH",
+      body: { level, id, active },
+    }),
+
+  // ---------------------------------------------------------------
   // Checklist library (N1, FR-4.13)
   // ---------------------------------------------------------------
 
@@ -561,6 +643,8 @@ export const snaggingService = {
       group?: string;
       propertyType?: string;
       activeOnly?: boolean;
+      /** Which list to read (N1). Defaults to the technician one. */
+      audience?: "technician" | "client";
     } = {},
   ): Promise<ChecklistLibraryResponse> => {
     const params: Record<string, string | number> = {};
@@ -569,6 +653,7 @@ export const snaggingService = {
     if (filters.propertyType && filters.propertyType !== "all")
       params.propertyType = filters.propertyType;
     if (filters.activeOnly) params.activeOnly = "true";
+    if (filters.audience) params.audience = filters.audience;
 
     return executeRESTBackend<ChecklistLibraryResponse>("/api/snagging/checklist", {
       method: "GET",

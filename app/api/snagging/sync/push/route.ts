@@ -260,6 +260,13 @@ async function applySnag(admin: Admin, ctx: Ctx, payload: Record<string, unknown
     snag_code: payload.snag_code as string,
     catalogue_entry_id: (payload.catalogue_entry_id as string) ?? null,
     catalogue_code: payload.catalogue_code as string,
+    /*
+      The catalogue's top level (Action Points P1), sent by devices on
+      build 18 and later. Older ones send nothing here and their snags
+      keep a null category — which reads as "before the restructure"
+      rather than as missing data.
+    */
+    category_label: (payload.category_label as string) ?? null,
     element_label: (payload.element_label as string) ?? null,
     defect_label: (payload.defect_label as string) ?? null,
     severity,

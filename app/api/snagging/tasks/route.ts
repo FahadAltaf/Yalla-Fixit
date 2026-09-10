@@ -443,6 +443,11 @@ async function generateChecklist(admin: Admin, jobId: string, propertyType: stri
     .from("snagging_checklist_items")
     .select("id, code, group_name, label, mandatory, sort_order")
     .eq("active", true)
+    // The technician list only (N1/N7). The client list is one stored
+    // document shared on request, never copied onto a job — including it
+    // here would put a client-facing question in front of an inspector
+    // and block submission on an answer they cannot give (N5).
+    .eq("audience", "technician")
     .eq(appliesColumn, true)
     .order("sort_order", { ascending: true });
   if (error) throw new Error(error.message);

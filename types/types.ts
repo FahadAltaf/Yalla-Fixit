@@ -446,6 +446,10 @@ export interface SnaggingSnag {
   element_code?: string | null;
   defect_code?: string | null;
   area_label?: string | null;
+  /** The catalogue's top level (Action Points P1). Null on snags captured
+      before the restructure. */
+  category_label?: string | null;
+  /** The middle level — the same level `element` always meant. */
   element_label?: string | null;
   defect_label?: string | null;
   severity: SnaggingSeverity;
@@ -632,6 +636,39 @@ export interface SnaggingChecklistLibraryItem {
 
 export type SnaggingChecklistStatus =
   "pending" | "passed" | "failed" | "not_checked";
+
+/*
+  The catalogue's three levels (Action Points P1).
+
+  Each level owns a short code; a snag's code is the three composed, e.g.
+  CIV-PNT-DRP. Areas are not part of it — every category applies in every
+  area (P2), and the area is recorded against the snag instead (P3).
+*/
+export interface CatalogueCategory {
+  id: string;
+  code: string;
+  label: string;
+  sort_order: number;
+  active: boolean;
+}
+
+export interface CatalogueSubcategory extends CatalogueCategory {
+  category_id: string;
+}
+
+export interface CatalogueDefect {
+  id: string;
+  subcategory_id: string;
+  code: string;
+  label: string;
+  default_severity: SnaggingSeverity;
+  guidance?: string | null;
+  /** The defect library's own identifier, e.g. SN-01-01-01, where it came
+      from one. Null for a defect added in the admin screens. */
+  source_code?: string | null;
+  sort_order: number;
+  active: boolean;
+}
 
 export interface SnaggingChecklistItem {
   id: string;

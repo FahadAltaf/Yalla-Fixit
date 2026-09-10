@@ -17,8 +17,15 @@ import { ActionType, ResourceType } from "@/types/types";
  * pulls more than it shows: inspections whose scheduled day has passed
  * without the visit happening, inspections sent back for correction,
  * review that has run past the 48-hour SLA, and review still inside it.
- * The total is counted separately, so "View all" can promise a number the
+ * The total is counted separately, so the card can promise a number the
  * list itself is not carrying.
+ *
+ * `?scope=all` is what that promise pays out: the same four queries with
+ * a bigger ceiling, for the dialog behind "View all". Bigger, not
+ * unbounded -- a backlog of several hundred is a real possibility and
+ * nobody reads past a hundred rows in a dialog anyway. The total keeps
+ * being the true count either way, so the footer can still say how much
+ * is not on screen.
  *
  * The first of those was missing. Every other kind starts at submission,
  * so a job booked for last Tuesday that nobody has been to yet -- the
@@ -28,6 +35,7 @@ import { ActionType, ResourceType } from "@/types/types";
  * inspector on it and no visit to miss.
  */
 const VISIBLE = 4;
+const ALL_LIMIT = 100;
 
 export async function GET(req: NextRequest) {
   try {
@@ -40,6 +48,9 @@ export async function GET(req: NextRequest) {
     ) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
+
+    const limit =
+      req.nextUrl.searchParams.get("scope") === "all" ? ALL_LIMIT : VISIBLE;
 
     const admin = await createAdminServerClient();
     const overdueCutoff = new Date(
@@ -73,27 +84,27 @@ export async function GET(req: NextRequest) {
         .in("status", ON_SITE_STATUSES)
         .lt("scheduled_date", todayGst)
         .order("scheduled_date", { ascending: true })
-        .limit(VISIBLE),
+        .limit(limit),
       admin
         .from("snagging_jobs")
         .select(columns)
         .eq("status", "rejected")
         .order("updated_at", { ascending: false })
-        .limit(VISIBLE),
+        .limit(limit),
       admin
         .from("snagging_jobs")
         .select(columns)
         .in("status", ["submitted", "in_review"])
         .lt("submitted_at", overdueCutoff)
         .order("submitted_at", { ascending: true })
-        .limit(VISIBLE),
+        .limit(limit),
       admin
         .from("snagging_jobs")
         .select(columns)
         .in("status", ["submitted", "in_review"])
         .gte("submitted_at", overdueCutoff)
         .order("submitted_at", { ascending: true })
-        .limit(VISIBLE),
+        .limit(limit),
       countJobs(admin, (q) =>
         q.in("status", ON_SITE_STATUSES).lt("scheduled_date", todayGst),
       ),
@@ -169,7 +180,7 @@ export async function GET(req: NextRequest) {
         at: row.submitted_at ?? row.updated_at,
         href: `/snagging/${row.id}`,
       })),
-    ].slice(0, VISIBLE);
+    ].slice(0, limit);
 
     return NextResponse.json(
       { data: { total: onSiteCount + rejectedCount + waitingCount, items } },

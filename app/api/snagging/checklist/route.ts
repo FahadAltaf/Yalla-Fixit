@@ -46,6 +46,18 @@ export async function GET(req: NextRequest) {
 
     if (params.get("activeOnly") === "true") query = query.eq("active", true);
 
+    /*
+      One audience at a time (N1).
+
+      The two lists are different documents for different readers, and
+      showing them interleaved would let somebody retire a client-facing
+      line believing they were changing what inspectors see. The screen
+      always names which one it is showing; the default is the technician
+      list, because that is the one in daily use.
+    */
+    const audience = params.get("audience") ?? "technician";
+    if (audience !== "all") query = query.eq("audience", audience);
+
     const group = params.get("group");
     if (group && group !== "all") query = query.eq("group_name", group);
 

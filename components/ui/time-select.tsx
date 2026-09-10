@@ -69,6 +69,7 @@ export default function TimeSelect({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         disabled={disabled}
+        // defaultValue={new Date().getTime()}
         aria-label={ariaLabel ?? placeholder ?? "Time"}
         /*
           The shadcn time-field recipe: the browser's own clock glyph is
