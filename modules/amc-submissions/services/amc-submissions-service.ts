@@ -10,7 +10,7 @@ export interface AmcSubmissionInput {
   status?: "draft" | "generated";
   property: AmcSubmission["property"];
   customer: AmcSubmission["customer"];
-  package: AmcSubmission["package"];
+  document_options: AmcSubmission["document_options"];
   services: AmcSubmission["services"];
   discount_percent: number;
   discount_amount: number;

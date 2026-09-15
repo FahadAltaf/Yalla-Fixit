@@ -67,6 +67,7 @@ export function ServiceTable({ form }: ServiceTableProps) {
                     <TableHead>Service</TableHead>
                     <TableHead className="w-[100px]">No. of Units</TableHead>
                     <TableHead className="w-[100px]">Frequency</TableHead>
+                    <TableHead className="w-[120px]">Base Price</TableHead>
                     <TableHead className="w-[120px] text-right">Price</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -135,8 +136,40 @@ export function ServiceTable({ form }: ServiceTableProps) {
                             }
                           />
                         </TableCell>
-                        <TableCell className="text-right text-xs font-medium">
-                          {formatCurrencyAED(price)}
+                        <TableCell>
+                          {/*
+                            FR2.4/FR2.12: entered per proposal, required on
+                            every checked row, and 0 is legitimate (a service
+                            given free). Empty string when unset so the field
+                            reads as blank rather than as a free service, and
+                            an erased value goes back to undefined rather than
+                            collapsing to 0.
+                          */}
+                          <Input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            className="h-8 text-xs"
+                            placeholder="0.00"
+                            disabled={!row.included}
+                            aria-label={`Base price for ${service.label}`}
+                            value={row.basePrice ?? ""}
+                            onChange={(event) =>
+                              updateRow(service.id, {
+                                basePrice:
+                                  event.target.value === ""
+                                    ? undefined
+                                    : Math.max(0, Number(event.target.value)),
+                              })
+                            }
+                          />
+                        </TableCell>
+                        <TableCell className="text-right text-xs font-medium tabular-nums">
+                          {row.included && row.basePrice === undefined ? (
+                            <span className="text-muted-foreground">—</span>
+                          ) : (
+                            formatCurrencyAED(price)
+                          )}
                         </TableCell>
                       </TableRow>
                     );

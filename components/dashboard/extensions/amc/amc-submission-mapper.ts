@@ -1,5 +1,5 @@
 import { calculateAmcTotals, computeServiceRowPrice } from "./amc-pricing";
-import { getDefaultEndDate } from "./amc-constants";
+import { emptyPriceListRow, getDefaultEndDate } from "./amc-constants";
 import type {
   AmcDocumentType,
   AmcFormData,
@@ -48,11 +48,18 @@ export function formDataToSubmissionPayload(
     proposalNumber: data.proposalNumber,
   };
 
+  /* FR3.1 */
+  const documentOptions = {
+    optionalSections: data.optionalSections,
+    priceListRows: data.priceListRows,
+    accountManagers: data.accountManagers,
+  };
+
   return {
     status,
     property,
     customer,
-    package: pkg,
+    document_options: documentOptions,
     services,
     discount_percent: totals.discountPercent,
     discount_amount: totals.discountAmount,
@@ -79,6 +86,23 @@ export function submissionToFormData(submission: AmcSubmission): AmcFormData {
       }),
     ),
     discountPercent: Number(submission.discount_percent) || 0,
+    /*
+      FR3.3. Older submissions predate these fields, so each falls back to
+      the same default a new proposal starts from -- reopening one must
+      not crash on a missing key, and must not silently switch a section
+      on either.
+    */
+    optionalSections: submission.document_options?.optionalSections ?? {
+      supplyInstallPriceList: false,
+      additionalFixedPriceServices: false,
+    },
+    priceListRows: submission.document_options?.priceListRows?.length
+      ? submission.document_options.priceListRows
+      : [emptyPriceListRow(), emptyPriceListRow(), emptyPriceListRow()],
+    accountManagers: submission.document_options?.accountManagers ?? [
+      { name: "", phone: "" },
+      { name: "", phone: "" },
+    ],
     customerName: submission.customer.customerName,
     customerId: submission.customer.customerId ?? "",
     customerPhone: submission.customer.customerPhone,

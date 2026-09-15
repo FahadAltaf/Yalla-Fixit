@@ -209,6 +209,10 @@ export function getDefaultEndDate(startDate: string): string {
   return getDefaultEndDateFromStart(startDate);
 }
 
+export function emptyPriceListRow() {
+  return { category: "", description: "", brand: "", price: "" };
+}
+
 export function getDefaultFormValues(): AmcFormData {
   const today = new Date();
   const startDate = today.toISOString().split("T")[0];
@@ -221,6 +225,18 @@ export function getDefaultFormValues(): AmcFormData {
     propertyDetail: "",
     serviceRows: buildDefaultServiceRows(unitType),
     discountPercent: 0,
+    /* FR4.5: both off by default. A section only prints when the team
+       deliberately switches it on, which is the whole point -- these used
+       to print unconditionally with XXX rows in them. */
+    optionalSections: {
+      supplyInstallPriceList: false,
+      additionalFixedPriceServices: false,
+    },
+    priceListRows: [emptyPriceListRow(), emptyPriceListRow(), emptyPriceListRow()],
+    accountManagers: [
+      { name: "", phone: "" },
+      { name: "", phone: "" },
+    ],
     customerName: "",
     customerId: "",
     customerPhone: "",

@@ -24,7 +24,22 @@ const serviceRowSchema = z.object({
   included: z.boolean(),
   units: z.number().int().min(1),
   frequency: z.number().int().min(1),
+  /* FR2.4. Nullable: a draft row the team has not priced yet is saved
+     unpriced, and must not come back as a free service. */
+  basePrice: z.number().min(0).nullable().optional(),
   price: z.number().min(0).optional(),
+});
+
+const priceListRowSchema = z.object({
+  category: z.string(),
+  description: z.string(),
+  brand: z.string(),
+  price: z.string(),
+});
+
+const accountManagerSchema = z.object({
+  name: z.string(),
+  phone: z.string(),
 });
 
 const submissionPayloadSchema = z.object({
@@ -46,11 +61,18 @@ const submissionPayloadSchema = z.object({
     paymentTerms: z.enum(["monthly", "quarterly", "annual"]),
     proposalNumber: z.string(),
   }),
-  package: z.object({
-    packageId: z.string().optional(),
-    customMonthlyPrice: z.number().optional(),
-    propertyCategory: z.enum(["residential", "commercial"]),
-  }),
+  /* FR3.1/FR4.5/FR4.6. Optional on the payload so a submission saved
+     before these existed still validates on update. */
+  document_options: z
+    .object({
+      optionalSections: z.object({
+        supplyInstallPriceList: z.boolean(),
+        additionalFixedPriceServices: z.boolean(),
+      }),
+      priceListRows: z.array(priceListRowSchema),
+      accountManagers: z.tuple([accountManagerSchema, accountManagerSchema]),
+    })
+    .optional(),
   services: z.array(serviceRowSchema),
   discount_percent: z.number().min(0).max(100),
   discount_amount: z.number().min(0),
@@ -68,7 +90,7 @@ type AmcSubmissionRow = {
   status: AmcSubmissionStatus;
   property: AmcSubmission["property"];
   customer: AmcSubmission["customer"];
-  package: AmcSubmission["package"];
+  document_options: AmcSubmission["document_options"];
   services: AmcSubmission["services"];
   discount_percent: number;
   discount_amount: number;
@@ -85,7 +107,7 @@ function mapRow(row: AmcSubmissionRow): AmcSubmission {
     status: row.status,
     property: row.property,
     customer: row.customer,
-    package: row.package,
+    document_options: row.document_options,
     services: row.services,
     discount_percent: Number(row.discount_percent),
     discount_amount: Number(row.discount_amount),
@@ -186,7 +208,7 @@ export async function POST(req: NextRequest) {
       status: payload.status ?? "draft",
       property: payload.property,
       customer: payload.customer,
-      package: payload.package,
+      document_options: payload.document_options,
       services: payload.services,
       discount_percent: payload.discount_percent,
       discount_amount: payload.discount_amount,

@@ -9,6 +9,63 @@ export interface ScopeSectionContent {
 export const FOOTER_TEXT =
   "Office 102, Commercial Bank of Dubai (Al Quoz Branch), Dubai, UAE Tel. +971 800 7373328 / 800-PERFECT.";
 
+/*
+  FR4.4 / §8.2 — clause 1.1 carried two placeholders:
+  "Direct contact No. 05X XXX XXX - NAME / 05X XXX XXX - NAME."
+  Those are the account managers for that client, entered per proposal, so
+  the clause is built rather than declared.
+
+  FR4.5 / §8.3 — the 24/7 line prints only when the 24/7 Technical Support
+  Hotline service is checked. When it is not, the customer is not buying a
+  24/7 hotline and the contract must not describe one.
+*/
+export function buildClause1Operation(opts: {
+  accountManagers: { name: string; phone: string }[];
+  helpdeskIncluded: boolean;
+}) {
+  const named = opts.accountManagers.filter(
+    (manager) => manager.name.trim() || manager.phone.trim(),
+  );
+
+  const directContactLine =
+    named.length > 0
+      ? `Direct contact No. ${named
+          .map((manager) =>
+            [manager.phone.trim(), manager.name.trim()]
+              .filter(Boolean)
+              .join(" – "),
+          )
+          .join(" / ")}.`
+      : null;
+
+  const listItems = [
+    ...(opts.helpdeskIncluded
+      ? [
+          "Call 800-PERFECT (7373328) for any maintenance inquiry, alternatively contact (Call/WhatsApp) dedicated account manager 24/7 for any emergency/non-emergency inquiries.",
+        ]
+      : [
+          "Call 800-PERFECT (7373328) for any maintenance inquiry, alternatively contact (Call/WhatsApp) the dedicated account manager for any emergency/non-emergency inquiries.",
+        ]),
+    ...(directContactLine ? [directContactLine] : []),
+  ];
+
+  return {
+    ...CLAUSE_1_OPERATION,
+    sections: CLAUSE_1_OPERATION.sections.map((section) =>
+      section.title === "1.1 Helpdesk and Scheduling"
+        ? {
+            ...section,
+            listItems,
+            /* The direct-contact line is the highlighted one. Keyed off
+               its position rather than a fixed index, because the line
+               above it can be absent. */
+            highlightIndex: directContactLine ? listItems.length - 1 : -1,
+          }
+        : section,
+    ),
+  };
+}
+
 export const CLAUSE_1_OPERATION = {
   title: "1- Operation",
   sections: [
@@ -22,10 +79,10 @@ export const CLAUSE_1_OPERATION = {
         "Unlimited non-emergency call-outs (as per definition of non-emergency on Clause No 3.2)",
         "Planned Preventive Maintenance (PPM) to be scheduled (proposal to be shared 15 days after signing of AMC).",
       ],
-      listItems: [
-        "Call 800-PERFECT (7373328) for any maintenance inquiry, alternatively contact (Call/WhatsApp) dedicated account manager 24/7 for any emergency/non-emergency inquiries.",
-        "Direct contact No. 05X XXX XXX – NAME / 05X XXX XXX – NAME.",
-      ],
+      /* Replaced at render time by buildClause1Operation. Kept as the
+         shape the renderer expects; the strings here are never printed. */
+      listItems: [] as string[],
+      highlightIndex: -1,
       listType: "letter" as const,
     },
     {
@@ -49,7 +106,7 @@ export const CLAUSE_1_OPERATION = {
 
 export const CLAUSE_2_INTRO = [
   "2- Scope of Works:",
-  "YALLA FIX IT ONE PERSON COMPANY LLC will respond to maintenance requests and schedule the Planned Preventive Maintenance for the originally installed MEP services in the property (as per the coverage of the selected package).",
+  "YALLA FIX IT ONE PERSON COMPANY LLC will respond to maintenance requests and schedule the Planned Preventive Maintenance for the originally installed MEP services in the property (as per the coverage set out in this contract).",
   "(Building Management Systems (BMS) are not covered in this contract. See Clause No.5 for full list)",
 ];
 
@@ -150,7 +207,7 @@ export const SCOPE_SECTIONS: ScopeSectionContent[] = [
       "Cleaning the interior walls of the water tank with power wash using disinfectant chemical, approved for water tank cleaning by Dubai municipality, in order to remove the slime and dirt build up on the floor, sides and corners of the water tank.",
       "Refilling of the water after the cleaning process to be done by DEWA line.",
       "Test and commissioning of the water supply pressure and factuality of the water pumps after refilling the tank.",
-      "Laboratory water test report is not included in this package, if required to be provided upon approval of the quotation.",
+      "Laboratory water test report is not included, if required to be provided upon approval of the quotation.",
     ],
   },
   {
@@ -189,7 +246,7 @@ export const SCOPE_SECTIONS: ScopeSectionContent[] = [
     sectionNumber: "2.9",
     title: "Free Handyman service (If applicable)",
     intro:
-      "Based on the selected AMC package, limited hours of handyman service to be delivered to the customer, upon request (to be scheduled at least 48 hours ahead of time).\nHandyman is defined as team of two (one technician and one helper) with all necessary standard tools and basic consumables (supply materials and spare parts is not part of the handyman service)\nBelow will be considered as handyman service:",
+      "Handyman service is delivered to the customer up to the number of hours stated for it in this contract, upon request (to be scheduled at least 48 hours ahead of time).\nHandyman is defined as team of two (one technician and one helper) with all necessary standard tools and basic consumables (supply materials and spare parts is not part of the handyman service)\nBelow will be considered as handyman service:",
     bullets: [
       "Repair of the fly screen, aluminum/wooden door adjustment/alignments.",
       "Repair and adjustment of hinges, drawer rails, cabinet/cupboard catches, lock cylinder.",
@@ -231,7 +288,7 @@ export const CLAUSE_3_EMERGENCY = {
       bullets: [
         "Non-Emergency call outs are the inquiries that are not covered under the Planned preventive maintenance, Emergency call-out and handyman definition.",
         "If physical visit is required, schedule of non-emergency visit to be agreed as per available slots and customer request, within 48 hours from the logging the inquiry.",
-        "Non-Emergency visits are designed for inspection and identification of the root cause of the reported issue and/or minor adjustments, rectifications that not required any material replacement and can be done maximum within 2 hours. (number of free non-emergency visits per year to be defined as per the selected AMC package terms and conditions)",
+        "Non-Emergency visits are designed for inspection and identification of the root cause of the reported issue and/or minor adjustments, rectifications that not required any material replacement and can be done maximum within 2 hours. (the number of free non-emergency visits per year is the frequency stated for non-emergency call-outs in this contract)",
         "Where replacement of parts and/or extensive time (more than 2 hours) is required, the quotation, based on estimated material + handling fee and required manpower/hours, along with the job sheet to be shared with the customer for review and approval, within 24 hours from the site visit. Customer's written approval is mandatory prior to scheduling.",
       ],
     },
@@ -256,17 +313,17 @@ export const CLAUSE_5_EXCLUDED = {
   intro: "The following services are expressively excluded from the scope of this contract",
   bullets: [
     "Electricity, water, chilled water, drainage, telephone, internet connections (being the responsibility of the related local authorities) and troubleshooting where the source is out of property perimeter.",
-    "Air duct cleaning, Chilled water strainer cleaning, evaporator coil flush and evaporator coil cleaning, water tank cleaning and drain line jetting, if the service is not specifically selected to be covered under AMC package.",
+    "Air duct cleaning, Chilled water strainer cleaning, evaporator coil flush and evaporator coil cleaning, water tank cleaning and drain line jetting, if the service is not specifically selected to be covered under this AMC.",
     "Gate Barriers, Garage Doors, Automatic Doors repair and maintenance.",
     "Swimming Pools maintenance and cleaning, Garden light, Irrigation Systems and garden, maintenance.",
     "Structural faults/repair to building including failure of roof/foundation waterproofing and structural cracks.",
     "Replacement and repair of any broken window, facade glass, door, skylight roof.",
-    "Carpet, Sofa, Curtain, mattress and any upholstery cleaning/shampooing, glass cleaning, roof cleaning, disposal of waste, deep cleaning, if the service is not specifically selected to be covered under AMC package.",
+    "Carpet, Sofa, Curtain, mattress and any upholstery cleaning/shampooing, glass cleaning, roof cleaning, disposal of waste, deep cleaning, if the service is not specifically selected to be covered under this AMC.",
     "Building Management Systems (BMS).",
     "Any service out of the property limit perimeter with is considered as common area or covered by authorities. However, some of above services can be rendered (to be quoted upon request).",
   ],
   footerParagraphs: [
-    "YALLA FIX IT ONE PERSON COMPANY LLC, being part of TPH GROUP OF COMPANIES is please to deliver wide range of services with special discount (based on the selected package) upon request. e.g.",
+    "YALLA FIX IT ONE PERSON COMPANY LLC, being part of TPH GROUP OF COMPANIES is please to deliver wide range of services with special discount upon request. e.g.",
     "Air duct cleaning, coil cleaning/flushing, Chilled water strainer cleaning, water tank cleaning, drain line jetting, etc.",
     "All kind of upholstery cleaning/shampooing (Dry and Wet), Glass cleaning, façade cleaning, deep cleaning.",
     "Disinfection and sanitization for COVID-19 (preventive and active case) listed as per DM and DHA regulations.",
@@ -290,11 +347,32 @@ export const CLAUSE_6_2_INTRO = [
   "Below pricelist is exclusive to this property and cannot be used as reference rate for any other location.",
 ];
 
-export const PRICE_LIST_ROWS = [
-  { no: "1", category: "XXX", description: "XXX", brand: "XXX", price: "XXX" },
-  { no: "2", category: "XXX", description: "XXX", brand: "XXX", price: "XXX" },
-  { no: "3", category: "XXX", description: "XXX", brand: "XXX", price: "XXX" },
-];
+/*
+  FR4.6 — the price list is filled in per proposal when clause 6.2 is
+  switched on. It used to be three hardcoded rows of XXX that printed on
+  every contract whether or not anyone had priced anything.
+
+  Blank rows are dropped: the team is given three to fill and may use one.
+*/
+export function buildPriceListRows(
+  rows: { category: string; description: string; brand: string; price: string }[],
+) {
+  return rows
+    .filter(
+      (row) =>
+        row.category.trim() ||
+        row.description.trim() ||
+        row.brand.trim() ||
+        row.price.trim(),
+    )
+    .map((row, index) => ({
+      no: String(index + 1),
+      category: row.category.trim(),
+      description: row.description.trim(),
+      brand: row.brand.trim(),
+      price: row.price.trim(),
+    }));
+}
 
 export const BANK_DETAILS = [
   { label: "ACCOUNT NAME", value: "YALLA FIX IT ONE PERSON COMPANY LLC" },

@@ -21,7 +21,7 @@ import { downloadAmcPdf } from "./amc-document-utils";
 import { computeAmcData, syncServiceRowsForUnitType } from "./amc-pricing";
 import { amcFormSchema, type AmcDocumentType, type AmcFormData } from "./amc-types";
 import { PropertyCustomerStep } from "./steps/property-customer-step";
-import { PackageServicesStep } from "./steps/package-services-step";
+import { ServicesPricingStep } from "./steps/services-pricing-step";
 import { ReviewStep } from "./steps/review-step";
 import { SubmissionsList } from "./submissions-list";
 
@@ -33,13 +33,13 @@ const STEPS = [
   },
   {
     id: 2,
-    title: "Package & Services",
-    description: "Package selection and service table",
+    title: "Services & Pricing",
+    description: "Service table, base prices and discount",
   },
   {
     id: 3,
-    title: "Review & Generate",
-    description: "Summary and document generation",
+    title: "Review & Submit",
+    description: "Summary, preview and submit for approval",
   },
 ] as const;
 
@@ -50,6 +50,7 @@ const STEP_FIELDS: Partial<Record<number, (keyof AmcFormData)[]>> = {
     "propertyAddress",
     "propertyDetail",
     "customerName",
+    "customerId",
     "customerPhone",
     "customerEmail",
     "startDate",
@@ -58,7 +59,13 @@ const STEP_FIELDS: Partial<Record<number, (keyof AmcFormData)[]>> = {
     "proposalNumber",
     "coordinationContacts",
   ],
-  2: ["packageId", "customMonthlyPrice", "serviceRows", "discountPercent"],
+  2: [
+    "serviceRows",
+    "discountPercent",
+    "optionalSections",
+    "priceListRows",
+    "accountManagers",
+  ],
 };
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -70,7 +77,7 @@ function getErrorMessage(error: unknown, fallback: string) {
 
 const STEP_VALIDATION_MESSAGES: Record<number, string> = {
   1: "Please complete all property, customer, and contract fields before continuing.",
-  2: "Please select a package, choose at least one service, and complete the service table before continuing.",
+  2: "Choose at least one service, and give every selected service units, a frequency and a base price, before continuing.",
 };
 
 function scrollWizardContainerToTop(element: HTMLElement | null) {
@@ -128,8 +135,6 @@ export function AmcContractsPage({
   });
 
   const unitType = form.watch("unitType");
-  const packageId = form.watch("packageId");
-  const propertyCategory = form.watch("propertyCategory");
   const watchedValues = form.watch();
   const computed = useMemo(
     () => computeAmcData(watchedValues, "proposal"),
@@ -174,18 +179,13 @@ export function AmcContractsPage({
 
   useEffect(() => {
     const currentRows = form.getValues("serviceRows");
-    const synced = syncServiceRowsForUnitType(
-      currentRows,
-      unitType,
-      packageId,
-      propertyCategory,
-    );
+    const synced = syncServiceRowsForUnitType(currentRows, unitType);
     const currentJson = JSON.stringify(currentRows);
     const syncedJson = JSON.stringify(synced);
     if (currentJson !== syncedJson) {
       form.setValue("serviceRows", synced, { shouldValidate: true });
     }
-  }, [unitType, packageId, propertyCategory, form]);
+  }, [unitType, form]);
 
   const persistDraft = useCallback(
     (markGenerated?: AmcDocumentType) => {
@@ -343,7 +343,7 @@ export function AmcContractsPage({
       case 1:
         return <PropertyCustomerStep form={form} />;
       case 2:
-        return <PackageServicesStep form={form} />;
+        return <ServicesPricingStep form={form} />;
       case 3:
         return <ReviewStep form={form} computed={computed} />;
       default:

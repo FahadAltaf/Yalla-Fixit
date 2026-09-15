@@ -8,13 +8,12 @@ import {
   Briefcase,
   FileText,
   Plus,
-  RefreshCw,
-  RotateCcw,
-  Search,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { DataTable } from "@/components/data-table";
+import { SnaggingQuotationsToolbar } from "@/components/data-table/toolbars/snagging-quotations-toolbar";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -27,12 +26,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
+import { IdentityCell } from "@/components/ui/entity-avatar";
 import { Label } from "@/components/ui/label";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupInput,
-} from "@/components/ui/input-group";
 import {
   Select,
   SelectContent,
@@ -42,7 +37,6 @@ import {
 } from "@/components/ui/select";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
-import { cn } from "@/lib/utils";
 import {
   snaggingService,
   type SnaggingQuotationSummary,
@@ -61,7 +55,6 @@ import {
   formatGstDate,
 } from "./shared";
 
-const PAGE_SIZE = 12;
 
 const KIND_LABEL: Record<string, string> = {
   inspection: "Inspection",
@@ -97,6 +90,7 @@ export default function QuotationsAdmin() {
   const [status, setStatus] = useState("all");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
   const [desnagOpen, setDesnagOpen] = useState(false);
 
   const load = useCallback(async () => {
@@ -126,9 +120,26 @@ export default function QuotationsAdmin() {
   }, [rows, search]);
 
   const paginated = useMemo(
-    () => filtered.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE),
-    [filtered, page],
+    () => filtered.slice(page * pageSize, page * pageSize + pageSize),
+    [filtered, page, pageSize],
   );
+
+  /*
+    Status as pills rather than a dropdown, matching the jobs table: a
+    coordinator filters far more often than they search, and a count on
+    each pill answers "how much is waiting" without applying the filter.
+  */
+  const statusTabs = useMemo(() => {
+    const count = (value: string) =>
+      value === "all" ? rows.length : rows.filter((r) => r.status === value).length;
+    return [
+      { value: "all", label: "All", count: count("all") },
+      { value: "draft", label: "Draft", count: count("draft") },
+      { value: "sent", label: "Sent", count: count("sent") },
+      { value: "approved", label: "Approved", count: count("approved") },
+      { value: "rejected", label: "Rejected", count: count("rejected") },
+    ];
+  }, [rows]);
 
   /* The whole point of the section: approved, and nobody has raised it yet. */
   const awaitingJob = useMemo(
@@ -162,14 +173,11 @@ export default function QuotationsAdmin() {
           const q = row.original;
           const place = [q.unit_label, q.building_name].filter(Boolean).join(", ");
           return (
-            <div className="flex min-w-0 flex-col">
-              <span className="truncate font-medium">
-                {q.client_name || "—"}
-              </span>
-              <span className="text-muted-foreground truncate text-sm">
-                {place || "No property recorded"}
-              </span>
-            </div>
+            <IdentityCell
+              title={q.client_name || "—"}
+              subtitle={place || "No property recorded"}
+              seed={q.client_id ?? q.id}
+            />
           );
         },
       },
@@ -267,46 +275,28 @@ export default function QuotationsAdmin() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
         <PageHeading
           eyebrow="Sales"
           title="Quotations"
           description="Price a client's property first. The job is raised once they approve."
         />
-        {canCreate ? (
-          <div className="flex flex-wrap items-center gap-2">
-            {/*
-              De-snagging is quoted like any other work now (BA v2, change
-              31), but it starts from a job rather than a property — the
-              client, unit and price all come off the original — so it gets
-              its own entry rather than a mode inside the property form.
-            */}
-            <Button variant="outline" onClick={() => setDesnagOpen(true)}>
-              <RotateCcw className="size-4" />
-              De-snag quotation
-            </Button>
-            <Button onClick={() => router.push("/snagging/quotations/new")}>
-              <Plus className="size-4" />
-              New quotation
-            </Button>
-          </div>
-        ) : null}
-      </div>
+
 
       {/*
         One line, because one number matters: how much agreed work has not
         been turned into a job yet.
       */}
       {awaitingJob > 0 ? (
-        <Card className="border-primary/30 bg-primary/5 flex-row items-center gap-3 px-4 py-3">
-          <Briefcase className="text-primary size-4 shrink-0" />
-          <p className="text-sm">
-            <span className="font-medium">
-              {awaitingJob} approved quotation{awaitingJob === 1 ? "" : "s"}
-            </span>{" "}
-            {awaitingJob === 1 ? "has" : "have"} no job yet.
-          </p>
-        </Card>
+        <Alert>
+          <Briefcase />
+          <AlertTitle>
+            {awaitingJob} approved quotation{awaitingJob === 1 ? "" : "s"}{" "}
+            {awaitingJob === 1 ? "has" : "have"} no job yet
+          </AlertTitle>
+          <AlertDescription>
+            Raise the job from the row, and the client and property carry over.
+          </AlertDescription>
+        </Alert>
       ) : null}
 
       <Card className="py-0">
@@ -315,7 +305,7 @@ export default function QuotationsAdmin() {
           data={paginated}
           loading={loading}
           rowCount={filtered.length}
-          pageSize={PAGE_SIZE}
+          pageSize={pageSize}
           currentPage={page}
           isPagination
           onPageChange={setPage}
@@ -326,49 +316,29 @@ export default function QuotationsAdmin() {
           }}
           handleRowClick={(row) => router.push(`/snagging/quotations/${row.id}`)}
           toolbar={
-            <div className="flex flex-wrap items-center gap-2 p-3">
-              <InputGroup className="h-9 w-72">
-                <InputGroupAddon>
-                  <Search className="size-4" />
-                </InputGroupAddon>
-                <InputGroupInput
-                  value={search}
-                  onChange={(event) => {
-                    setSearch(event.target.value);
-                    setPage(0);
-                  }}
-                  placeholder="Search number, client, unit, job…"
-                  aria-label="Search quotations"
-                />
-              </InputGroup>
-              <Select
-                value={status}
-                onValueChange={(value) => {
-                  setStatus(value);
-                  setPage(0);
-                }}
-              >
-                <SelectTrigger className="w-44" aria-label="Filter by status">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Any status</SelectItem>
-                  <SelectItem value="draft">Draft</SelectItem>
-                  <SelectItem value="sent">Sent</SelectItem>
-                  <SelectItem value="approved">Approved</SelectItem>
-                  <SelectItem value="rejected">Rejected</SelectItem>
-                </SelectContent>
-              </Select>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => void load()}
-                disabled={loading}
-              >
-                <RefreshCw className={cn("size-4", loading && "animate-spin")} />
-                Refresh
-              </Button>
-            </div>
+            <SnaggingQuotationsToolbar
+              fetchRecords={() => void load()}
+              globalFilter={search}
+              onGlobalFilterChange={(value) => {
+                setSearch(value);
+                setPage(0);
+              }}
+              isSearchLoading={loading}
+              pageSize={pageSize}
+              onPageSizeChange={(size) => {
+                setPageSize(size);
+                setPage(0);
+              }}
+              statusTabs={statusTabs}
+              statusValue={status}
+              onStatusChange={(value) => {
+                setStatus(value);
+                setPage(0);
+              }}
+              canCreate={canCreate}
+              onCreate={() => router.push("/snagging/quotations/new")}
+              onCreateDesnag={() => setDesnagOpen(true)}
+            />
           }
           emptyState={
             <EmptyState

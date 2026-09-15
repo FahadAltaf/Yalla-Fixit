@@ -155,7 +155,7 @@ export const baseSectionsItems: MenuItem[] = [
         resource: ResourceType.SNAGGING,
       },
       {
-        title: "Pricing",
+        title: "Settings",
         url: "/snagging/pricing",
         resource: ResourceType.SNAGGING_CATALOGUE,
       },

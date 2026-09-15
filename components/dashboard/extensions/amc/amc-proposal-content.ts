@@ -37,7 +37,7 @@ const SERVICE_COVERAGE_FALLBACK: Record<string, string> = {
   "coil-cleaning":
     "Deep evaporator coil cleaning, filter and drain pan cleaning, and performance check.",
   handyman:
-    "Minor carpentry, adjustments, furniture assembly support, and light touch-up works within package hours.",
+    "Minor carpentry, adjustments, furniture assembly support, and light touch-up works within the handyman hours covered.",
   emergency:
     "Priority response for critical failures outside standard working hours and holidays.",
   "non-emergency":

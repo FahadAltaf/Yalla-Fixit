@@ -8,15 +8,12 @@ import {
   MoreHorizontal,
   Pencil,
   Phone,
-  Plus,
-  RefreshCw,
-  Search,
   Users,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { DataTable } from "@/components/data-table";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { SnaggingClientsToolbar } from "@/components/data-table/toolbars/snagging-clients-toolbar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -35,11 +32,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { EmptyState } from "@/components/ui/empty-state";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupInput,
-} from "@/components/ui/input-group";
+import { IdentityCell } from "@/components/ui/entity-avatar";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -54,7 +47,6 @@ import { ActionType, ResourceType } from "@/types/types";
 
 import { ErrorState, PageHeading, SubmitButton } from "./shared";
 
-const PAGE_SIZE = 10;
 
 /**
  * The Clients page (BA v2, change 8 / FR-1.11).
@@ -88,6 +80,7 @@ export default function ClientsAdmin() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
   const [editing, setEditing] = useState<SnaggingClientOption | null>(null);
   /** Distinguishes "add a client" from "edit this one" in the same dialog. */
   const [creating, setCreating] = useState(false);
@@ -125,8 +118,8 @@ export default function ClientsAdmin() {
   }, [clients, search]);
 
   const paginated = useMemo(
-    () => filtered.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE),
-    [filtered, page],
+    () => filtered.slice(page * pageSize, page * pageSize + pageSize),
+    [filtered, page, pageSize],
   );
 
   const columns = useMemo<ColumnDef<SnaggingClientOption>[]>(
@@ -135,31 +128,19 @@ export default function ClientsAdmin() {
         id: "client_name",
         header: "Client",
         accessorKey: "client_name",
-        cell: ({ row }) => {
-          const client = row.original;
-          const initials = (client.client_name || "?")
-            .split(" ")
-            .map((part) => part[0])
-            .filter(Boolean)
-            .join("")
-            .toUpperCase()
-            .slice(0, 2);
-          return (
-            <div className="flex items-center gap-3">
-              <Avatar className="size-8">
-                <AvatarFallback className="text-xs">{initials}</AvatarFallback>
-              </Avatar>
-              <div className="flex min-w-0 flex-col">
-                <span className="truncate font-medium">
-                  {client.client_name}
-                </span>
-                <span className="text-muted-foreground truncate text-sm">
-                  {client.company || "No company recorded"}
-                </span>
-              </div>
-            </div>
-          );
-        },
+        cell: ({ row }) => (
+          /*
+            The shared identity cell, not a hand-rolled avatar. It hashes
+            the colour off a stable seed, so a client keeps the same colour
+            on every screen — which a locally built AvatarFallback did not,
+            giving every row the same grey circle.
+          */
+          <IdentityCell
+            title={row.original.client_name}
+            subtitle={row.original.company || "No company recorded"}
+            seed={row.original.id ?? row.original.client_name}
+          />
+        ),
       },
       {
         id: "client_phone",
@@ -253,28 +234,12 @@ export default function ClientsAdmin() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
         <PageHeading
           eyebrow="Master data"
           title="Clients"
           description="Everyone jobs and quotations are raised for. Correct a phone number or an email here and every future document picks it up."
         />
-        {canCreate ? (
-          <Button
-            onClick={() => {
-              setCreating(true);
-              setEditing({
-                client_name: "",
-                client_email: null,
-                client_phone: null,
-              });
-            }}
-          >
-            <Plus className="size-4" />
-            Add client
-          </Button>
-        ) : null}
-      </div>
+
 
       <Card className="py-0">
         <DataTable
@@ -282,46 +247,42 @@ export default function ClientsAdmin() {
           data={paginated}
           loading={loading}
           rowCount={filtered.length}
-          pageSize={PAGE_SIZE}
+          pageSize={pageSize}
           currentPage={page}
           isPagination
           onPageChange={setPage}
-          onPageSizeChange={() => undefined}
+          onPageSizeChange={(size) => {
+            setPageSize(size);
+            setPage(0);
+          }}
           onGlobalFilterChange={(value) => {
             setSearch(value);
             setPage(0);
           }}
           toolbar={
-            <div className="flex flex-wrap items-center gap-2 p-3">
-              <InputGroup className="h-9 w-72">
-                <InputGroupAddon>
-                  <Search className="size-4" />
-                </InputGroupAddon>
-                <InputGroupInput
-                  value={search}
-                  onChange={(event) => {
-                    setSearch(event.target.value);
-                    setPage(0);
-                  }}
-                  placeholder="Search name, phone, email, company…"
-                  aria-label="Search clients"
-                />
-              </InputGroup>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => void load()}
-                disabled={loading}
-              >
-                <RefreshCw className={cn("size-4", loading && "animate-spin")} />
-                Refresh
-              </Button>
-              <span className="text-muted-foreground ml-auto text-sm">
-                {filtered.length === clients.length
-                  ? `${clients.length} client${clients.length === 1 ? "" : "s"}`
-                  : `${filtered.length} of ${clients.length}`}
-              </span>
-            </div>
+            <SnaggingClientsToolbar
+              fetchRecords={() => void load()}
+              globalFilter={search}
+              onGlobalFilterChange={(value) => {
+                setSearch(value);
+                setPage(0);
+              }}
+              isSearchLoading={loading}
+              pageSize={pageSize}
+              onPageSizeChange={(size) => {
+                setPageSize(size);
+                setPage(0);
+              }}
+              canCreate={canCreate}
+              onCreate={() => {
+                setCreating(true);
+                setEditing({
+                  client_name: "",
+                  client_email: null,
+                  client_phone: null,
+                });
+              }}
+            />
           }
           emptyState={
             <EmptyState

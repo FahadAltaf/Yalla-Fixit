@@ -17,6 +17,38 @@ export const coordinationContactSchema = z.object({
   designation: designationSchema,
 });
 
+/*
+  FR4.5 / §8.3 — sections the team switches on per proposal. The other
+  three optional sections in §8.3 (24/7 hotline, water pump, free
+  handyman) are already service rows, so their own checkbox decides
+  whether they print; only these two need a toggle of their own.
+
+  additionalFixedPriceServices maps to clause 6.3, the out-of-hours
+  handyman rates. §8.3 says "thought to be clause 6.3, see OI-5" -- OI-5
+  is in the Open Issues register, which is missing from the PDF, so this
+  mapping is unconfirmed.
+*/
+export const amcOptionalSectionsSchema = z.object({
+  supplyInstallPriceList: z.boolean(),
+  additionalFixedPriceServices: z.boolean(),
+});
+
+/* FR4.6 — the rows behind clause 6.2, filled in when that section is on. */
+export const amcPriceListRowSchema = z.object({
+  category: z.string(),
+  description: z.string(),
+  brand: z.string(),
+  price: z.string(),
+});
+
+/* FR4.4 / §8.2 — the account manager named in clause 1.1, entered per
+   proposal. The other placeholders in §8.2 are standing org values and
+   come from AMC Settings in phase 3. */
+export const amcAccountManagerSchema = z.object({
+  name: z.string(),
+  phone: z.string(),
+});
+
 export const amcServiceRowSchema = z.object({
   serviceId: z.string().min(1),
   included: z.boolean(),
@@ -40,8 +72,13 @@ export const amcFormSchema = z
     propertyDetail: z.string().min(1, "Property detail is required"),
     serviceRows: z.array(amcServiceRowSchema),
     discountPercent: z.coerce.number().min(0).max(100).default(0),
+    optionalSections: amcOptionalSectionsSchema,
+    priceListRows: z.array(amcPriceListRowSchema),
+    accountManagers: z.tuple([amcAccountManagerSchema, amcAccountManagerSchema]),
     customerName: z.string().min(1, "Customer name is required"),
-    customerId: z.string().optional(),
+    /* FR4.4 / §8.2: prints in the contract header, where it used to
+       fall back to "XXX". Required now. */
+    customerId: z.string().min(1, "Customer ID is required"),
     customerPhone: z.string().min(1, "Customer phone is required"),
     customerEmail: z.string().email("Invalid email address"),
     coordinationContacts: z.tuple([
@@ -96,6 +133,24 @@ export const amcFormSchema = z
       }
     }
 
+    if (data.optionalSections.supplyInstallPriceList) {
+      const filled = data.priceListRows.filter(
+        (row) =>
+          row.category.trim() ||
+          row.description.trim() ||
+          row.brand.trim() ||
+          row.price.trim(),
+      );
+      if (filled.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "Add at least one price list row, or switch the supply and installation section off",
+          path: ["priceListRows"],
+        });
+      }
+    }
+
     if (
       data.startDate &&
       data.endDate &&
@@ -115,6 +170,9 @@ export type PaymentTerms = z.infer<typeof paymentTermsSchema>;
 export type Designation = z.infer<typeof designationSchema>;
 export type CoordinationContact = z.infer<typeof coordinationContactSchema>;
 export type AmcServiceRow = z.infer<typeof amcServiceRowSchema>;
+export type AmcOptionalSections = z.infer<typeof amcOptionalSectionsSchema>;
+export type AmcPriceListRow = z.infer<typeof amcPriceListRowSchema>;
+export type AmcAccountManager = z.infer<typeof amcAccountManagerSchema>;
 export type AmcFormData = z.infer<typeof amcFormSchema>;
 
 export type AmcServiceFrequencyType =
@@ -179,6 +237,12 @@ export interface AmcSubmissionProperty {
   propertyDetail: string;
 }
 
+export interface AmcSubmissionDocumentOptions {
+  optionalSections: AmcOptionalSections;
+  priceListRows: AmcPriceListRow[];
+  accountManagers: [AmcAccountManager, AmcAccountManager];
+}
+
 export interface AmcSubmissionCustomer {
   customerName: string;
   customerId?: string;
@@ -191,7 +255,10 @@ export interface AmcSubmissionCustomer {
   proposalNumber: string;
 }
 
-export interface AmcSubmissionServiceRow extends AmcServiceRow {
+/* Omit rather than extend: the form's basePrice is number | undefined
+   (not yet typed), while the persisted one is number | null (not entered).
+   Same idea, different absent-value convention -- JSON has no undefined. */
+export interface AmcSubmissionServiceRow extends Omit<AmcServiceRow, "basePrice"> {
   /*
     FR3.1: the submission stores what was entered, so reopening it
     restores the figures exactly (FR3.3). Nullable on purpose: drafts
@@ -209,6 +276,9 @@ export interface AmcSubmission {
   status: AmcSubmissionStatus;
   property: AmcSubmissionProperty;
   customer: AmcSubmissionCustomer;
+  /* FR3.1: optional sections and placeholder values are part of the
+     submission, so reopening one restores the document exactly. */
+  document_options: AmcSubmissionDocumentOptions;
   services: AmcSubmissionServiceRow[];
   discount_percent: number;
   discount_amount: number;
