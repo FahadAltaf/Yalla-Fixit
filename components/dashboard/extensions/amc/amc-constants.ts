@@ -1,44 +1,7 @@
-import type { AmcFormData, AmcPackage, AmcService, AmcServiceRow } from "./amc-types";
+import type { AmcFormData, AmcService, AmcServiceRow } from "./amc-types";
 import { getDefaultEndDateFromStart } from "./amc-date-utils";
 
-export const AMC_PACKAGES: AmcPackage[] = [
-  {
-    id: "basic",
-    name: "Basic",
-    slug: "basic",
-    monthlyPrice: 95,
-    ppmVisitsPerYear: 1,
-    handymanHoursPerYear: 2,
-    propertyCategory: "residential",
-  },
-  {
-    id: "basic-plus",
-    name: "Basic Plus",
-    slug: "basic-plus",
-    monthlyPrice: 125,
-    ppmVisitsPerYear: 2,
-    handymanHoursPerYear: 6,
-    propertyCategory: "residential",
-  },
-  {
-    id: "executive",
-    name: "Executive",
-    slug: "executive",
-    monthlyPrice: 200,
-    ppmVisitsPerYear: 2,
-    handymanHoursPerYear: 12,
-    propertyCategory: "residential",
-  },
-  {
-    id: "elite",
-    name: "Elite",
-    slug: "elite",
-    monthlyPrice: 250,
-    ppmVisitsPerYear: 3,
-    handymanHoursPerYear: 24,
-    propertyCategory: "residential",
-  },
-];
+
 
 // TODO(pricing): team to fill unit rates from pricing sheet — all default to 0 until then.
 export const AMC_SERVICES: AmcService[] = [
@@ -47,8 +10,7 @@ export const AMC_SERVICES: AmcService[] = [
     label: "24/7 Technical Support Hotline",
     scope: "24/7 Technical Support Hotline",
     reference: "Clause 1.1",
-    frequencyType: "covered",
-    unitRate: 0,
+    frequencyType: "covered",
     villaOnly: false,
     hasScopeSection: false,
   },
@@ -57,8 +19,7 @@ export const AMC_SERVICES: AmcService[] = [
     label: "AC Planned Preventive Maintenance",
     scope: "Planned Preventive Maintenance ~ Air conditioning service",
     reference: "Clause 2.1",
-    frequencyType: "ppm",
-    unitRate: 0,
+    frequencyType: "ppm",
     villaOnly: false,
     sectionNumber: "2.1",
     sectionTitle: "Air Condition Service and Maintenance (PPM)",
@@ -69,8 +30,7 @@ export const AMC_SERVICES: AmcService[] = [
     label: "Electrical PPM",
     scope: "Planned Preventive Maintenance ~ Electrical Service",
     reference: "Clause 2.2",
-    frequencyType: "ppm",
-    unitRate: 0,
+    frequencyType: "ppm",
     villaOnly: false,
     sectionNumber: "2.2",
     sectionTitle: "Electrical Service and Maintenance (PPM)",
@@ -81,8 +41,7 @@ export const AMC_SERVICES: AmcService[] = [
     label: "Plumbing PPM",
     scope: "Planned Preventive Maintenance ~ Plumbing Service",
     reference: "Clause 2.3",
-    frequencyType: "ppm",
-    unitRate: 0,
+    frequencyType: "ppm",
     villaOnly: false,
     sectionNumber: "2.3",
     sectionTitle: "Plumbing Service and Maintenance",
@@ -94,8 +53,7 @@ export const AMC_SERVICES: AmcService[] = [
     scope: "Planned Preventive Maintenance ~ Water Pump Service",
     reference: "Clause 2.4",
     frequencyType: "fixed",
-    frequencyPerYear: 1,
-    unitRate: 0,
+    frequencyPerYear: 1,
     villaOnly: true,
     sectionNumber: "2.4",
     sectionTitle: "Water Pump Maintenance",
@@ -107,8 +65,7 @@ export const AMC_SERVICES: AmcService[] = [
     scope: "Roof drain cleaning",
     reference: "Clause 2.5",
     frequencyType: "fixed",
-    frequencyPerYear: 1,
-    unitRate: 0,
+    frequencyPerYear: 1,
     villaOnly: true,
     sectionNumber: "2.5",
     sectionTitle: "Roof Drain cleaning",
@@ -120,8 +77,7 @@ export const AMC_SERVICES: AmcService[] = [
     scope: "Water tank cleaning and disinfection",
     reference: "Clause 2.6",
     frequencyType: "fixed",
-    frequencyPerYear: 2,
-    unitRate: 0,
+    frequencyPerYear: 2,
     villaOnly: true,
     sectionNumber: "2.6",
     sectionTitle: "Water tank cleaning",
@@ -133,8 +89,7 @@ export const AMC_SERVICES: AmcService[] = [
     scope: "Air duct cleaning and sanitization",
     reference: "Clause 2.7",
     frequencyType: "fixed",
-    frequencyPerYear: 1,
-    unitRate: 0,
+    frequencyPerYear: 1,
     villaOnly: false,
     sectionNumber: "2.7",
     sectionTitle: "Duct cleaning",
@@ -146,8 +101,7 @@ export const AMC_SERVICES: AmcService[] = [
     scope: "Evaporator coil cleaning",
     reference: "Clause 2.8",
     frequencyType: "fixed",
-    frequencyPerYear: 1,
-    unitRate: 0,
+    frequencyPerYear: 1,
     villaOnly: false,
     sectionNumber: "2.8",
     sectionTitle: "Coil cleaning",
@@ -158,8 +112,7 @@ export const AMC_SERVICES: AmcService[] = [
     label: "Free Handyman Service",
     scope: "Free Handyman service",
     reference: "Clause 2.9",
-    frequencyType: "handyman",
-    unitRate: 0,
+    frequencyType: "handyman",
     villaOnly: false,
     sectionNumber: "2.9",
     sectionTitle: "Free Handyman service",
@@ -170,8 +123,7 @@ export const AMC_SERVICES: AmcService[] = [
     label: "Emergency Call-out",
     scope: "Free Emergency Call-out / Visit",
     reference: "Clause 3.1",
-    frequencyType: "unlimited",
-    unitRate: 0,
+    frequencyType: "unlimited",
     villaOnly: false,
     hasScopeSection: false,
   },
@@ -180,8 +132,7 @@ export const AMC_SERVICES: AmcService[] = [
     label: "Non-Emergency Call-out",
     scope: "Free Non-Emergency Call-out",
     reference: "Clause 3.2",
-    frequencyType: "unlimited",
-    unitRate: 0,
+    frequencyType: "unlimited",
     villaOnly: false,
     hasScopeSection: false,
   },
@@ -220,33 +171,19 @@ export function getServicesForUnitType(unitType: string) {
   );
 }
 
-export function getDefaultFrequencyForService(
-  serviceId: string,
-  packageId?: string,
-  propertyCategory: AmcFormData["propertyCategory"] = "residential",
-): number {
+/*
+  FR2.3: the default frequency now comes from the service itself. It used
+  to come from the selected package -- which is why a frequency edited to
+  5 still printed as 1 per year (FR4.2): the package kept overwriting it.
+
+  Services that declare frequencyPerYear supply their own default. PPM and
+  handyman rows do not declare one, because the package used to, so they
+  start at 1 and the team enters the real figure. See OQ-6 in the phase 1
+  report if the catalogue should carry standing defaults instead.
+*/
+export function getDefaultFrequencyForService(serviceId: string): number {
   const service = AMC_SERVICES.find((item) => item.id === serviceId);
-  if (!service) return 1;
-
-  const pkg = AMC_PACKAGES.find((item) => item.id === packageId);
-  const ppmVisits =
-    propertyCategory === "commercial" ? 0 : (pkg?.ppmVisitsPerYear ?? 1);
-  const handymanHours =
-    propertyCategory === "commercial" ? 0 : (pkg?.handymanHoursPerYear ?? 1);
-
-  switch (service.frequencyType) {
-    case "covered":
-    case "unlimited":
-      return 1;
-    case "ppm":
-      return ppmVisits > 0 ? ppmVisits : 1;
-    case "handyman":
-      return handymanHours > 0 ? handymanHours : 1;
-    case "fixed":
-      return service.frequencyPerYear ?? 1;
-    default:
-      return 1;
-  }
+  return service?.frequencyPerYear ?? 1;
 }
 
 export function isFrequencyEditable(frequencyType: AmcService["frequencyType"]) {
@@ -255,18 +192,16 @@ export function isFrequencyEditable(frequencyType: AmcService["frequencyType"]) 
 
 export function buildDefaultServiceRows(
   unitType: AmcFormData["unitType"],
-  packageId?: string,
-  propertyCategory: AmcFormData["propertyCategory"] = "residential",
 ): AmcServiceRow[] {
   return getServicesForUnitType(unitType).map((service) => ({
     serviceId: service.id,
     included: false,
     units: 1,
-    frequency: getDefaultFrequencyForService(
-      service.id,
-      packageId,
-      propertyCategory,
-    ),
+    frequency: getDefaultFrequencyForService(service.id),
+    // FR2.4: entered per proposal. Undefined rather than 0 -- the team
+    // has to type a figure, and "free" has to be typed as 0 on purpose
+    // (FR2.12), which an implicit 0 would hide.
+    basePrice: undefined,
   }));
 }
 
@@ -284,8 +219,6 @@ export function getDefaultFormValues(): AmcFormData {
     unitType,
     propertyAddress: "",
     propertyDetail: "",
-    packageId: "",
-    customMonthlyPrice: undefined,
     serviceRows: buildDefaultServiceRows(unitType),
     discountPercent: 0,
     customerName: "",

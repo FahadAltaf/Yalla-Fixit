@@ -1,11 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
+  AlertTriangle,
   CalendarIcon,
   Check,
   ChevronDown,
+  FileText,
   ImageIcon,
   LayoutGrid,
   Loader2,
@@ -21,8 +23,14 @@ import { format, parseISO } from "date-fns";
 import { toast } from "sonner";
 
 import { compressImage, readImageSize } from "@/lib/media/compress-image";
+import {
+  zoneLabelPoint,
+  type ZonePoint,
+} from "@/lib/snagging/zone-geometry";
+import { PlanZoneCanvas } from "./plan-zone-canvas";
 import { LocationPicker } from "./location-picker";
 
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Card } from "@/components/ui/card";
@@ -51,7 +59,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { snaggingService, type SnaggingClientOption } from "@/modules/snagging";
 import { usersService } from "@/modules/users/services/users-service";
-import { templateFor } from "@/lib/snagging/area-templates";
+import { suggestedFor, templateFor } from "@/lib/snagging/area-templates";
 import type { SnaggingProperty, SnaggingPropertyType, User } from "@/types/types";
 
 import {
@@ -64,13 +72,30 @@ import {
 /**
  * The new-job wizard.
  *
- * Four steps, because the reference pack an inspector pulls has four
- * parts: the property it is for, the plans they pin against, the rooms
- * they walk, and who is assigned. Each step validates before it lets
- * you move on, so a job cannot reach the field half-built.
+ * Three steps, because the reference pack an inspector pulls has three
+ * parts: the property it is for, the plan and the rooms they walk on it,
+ * and who is assigned. Each step validates before it lets you move on, so
+ * a job cannot reach the field half-built.
  */
 
-type AreaChoice = { name: string; code: string | null };
+type AreaChoice = {
+  name: string;
+  code: string | null;
+  /** The PendingPlan this room is pinned to, before either has a real id. */
+  planId?: string | null;
+  /** 0..1 fractions of the plan image, so a pin survives any render size. */
+  pinX?: number;
+  pinY?: number;
+  /**
+   * The room's outline on that plan (BA change 6).
+   *
+   * Sits alongside the pin rather than replacing it: a zone is worth
+   * drawing for the rooms that matter and a pin is faster for the rest, so
+   * a job routinely carries both. The handset prefers the outline when it
+   * has one and falls back to the pin when it does not.
+   */
+  zone?: ZonePoint[] | null;
+};
 type PendingPlan = { id: string; file: File; label: string; width?: number; height?: number; url: string };
 
 type Draft = {
@@ -107,10 +132,17 @@ type Draft = {
   approval_manager_id: string;
 };
 
-const STEPS = [
+/**
+ * The full ladder to a job.
+ *
+ * A quotation walks only the first rung: it needs the client and the
+ * property and nothing else (BA v2, change 2). Running the same component
+ * for both is what stops a quotation and a job ever disagreeing about what
+ * a property is — one form, one set of rules, one validation.
+ */
+const ALL_STEPS = [
   { key: "property", label: "Property", icon: MapPin },
-  { key: "floorplans", label: "Floor plans", icon: LayoutGrid },
-  { key: "areas", label: "Areas", icon: LayoutGrid },
+  { key: "plan_areas", label: "Plan & areas", icon: LayoutGrid },
   { key: "assign", label: "Assign", icon: Users },
 ] as const;
 
@@ -151,8 +183,31 @@ function propertyErrors(draft: Draft): Partial<Record<PropertyErrorKey, string>>
 const AREAS_ERROR =
   "Tick at least one area. A job with no rooms gives the inspector nothing to walk.";
 
-export default function NewJobWizard() {
+export default function NewJobWizard({
+  mode = "job",
+}: {
+  /** "quote" stops after the property step and writes a quotation. */
+  mode?: "job" | "quote";
+} = {}) {
+  const quoteOnly = mode === "quote";
+  const STEPS = useMemo(
+    () => (quoteOnly ? ALL_STEPS.slice(0, 1) : ALL_STEPS),
+    [quoteOnly],
+  );
   const router = useRouter();
+  /*
+    The approved quotation this job is being raised from (BA v2, change 3).
+
+    Present when the coordinator pressed "Create job" on a quotation, which
+    is the ordinary route now: the client and the property are already
+    agreed, so the wizard opens past the step that asks for them and the
+    job is bound back to the quotation on submit.
+  */
+  const searchParams = useSearchParams();
+  const quotationId = searchParams.get("quotation");
+  const [quotationLoading, setQuotationLoading] = useState(Boolean(quotationId));
+  const [quotationError, setQuotationError] = useState<string | null>(null);
+  const [quotationLabel, setQuotationLabel] = useState<string | null>(null);
   const [step, setStep] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [users, setUsers] = useState<User[]>([]);
@@ -190,7 +245,7 @@ export default function NewJobWizard() {
     client_contact_name: "",
     client_contact_phone: "",
     notes: "",
-    areas: templateFor("apartment", 2),
+    areas: suggestedFor("apartment", 2),
     technician_ids: [],
     approval_manager_id: "",
   });
@@ -198,6 +253,81 @@ export default function NewJobWizard() {
   // Tracks whether the inspector list was hand-edited, so re-picking a
   // property type does not wipe a custom room set the user built.
   const areasTouched = useRef(false);
+
+  /*
+    Opened from an approved quotation: fill in what the client already
+    agreed and start at the floor plans (BA v2, change 3).
+
+    The property step is skipped rather than pre-filled-and-shown, because
+    re-presenting agreed figures invites someone to change the built-up
+    area the quotation was priced from — and the document is already with
+    the client. The property is read back from its record rather than the
+    quotation's snapshot: the snapshot is what was quoted, the record is
+    what the job must be built against, and where those differ the record
+    is the one the inspector will walk.
+  */
+  useEffect(() => {
+    if (!quotationId) return;
+    let cancelled = false;
+
+    void (async () => {
+      setQuotationLoading(true);
+      setQuotationError(null);
+      try {
+        const quote = await snaggingService.getQuotationById(quotationId);
+        if (cancelled) return;
+
+        if (quote.status !== "approved") {
+          setQuotationError(
+            "That quotation has not been approved yet, so there is nothing to raise a job against.",
+          );
+          return;
+        }
+
+        const snap = (quote.property_snapshot ?? {}) as Record<string, unknown>;
+        const text = (value: unknown) => (value == null ? "" : String(value));
+
+        setDraft((current) => ({
+          ...current,
+          client_id: text(quote.client_id),
+          property_id: text(quote.property_id),
+          client_name: text(snap.client_name),
+          client_email: text(snap.client_email),
+          client_phone: text(snap.client_phone),
+          unit_label: text(snap.unit_label),
+          building_name: text(snap.building_name),
+          community: text(snap.community),
+          developer_name: text(snap.developer_name),
+          property_type:
+            (snap.property_type as SnaggingPropertyType) ?? current.property_type,
+          bedrooms:
+            typeof snap.bedrooms === "number" ? snap.bedrooms : current.bedrooms,
+          built_up_area: text(snap.built_up_area_sqft),
+          areas: areasTouched.current
+            ? current.areas
+            : suggestedFor(
+                (snap.property_type as SnaggingPropertyType) ?? current.property_type,
+                typeof snap.bedrooms === "number" ? snap.bedrooms : current.bedrooms,
+              ),
+        }));
+        setQuotationLabel(quote.quote_number);
+        // Past the property step; the team adds plans, areas and contacts.
+        setStep(1);
+      } catch (error) {
+        if (!cancelled) {
+          setQuotationError(
+            error instanceof Error ? error.message : "Could not load that quotation",
+          );
+        }
+      } finally {
+        if (!cancelled) setQuotationLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [quotationId]);
 
   // Kept on screen rather than fired as a toast: a failed staff load used
   // to leave the approval-manager picker silently empty, which reads as
@@ -230,7 +360,7 @@ export default function NewJobWizard() {
     setDraft((current) => ({
       ...current,
       property_type: value,
-      areas: areasTouched.current ? current.areas : templateFor(value, current.bedrooms),
+      areas: areasTouched.current ? current.areas : suggestedFor(value, current.bedrooms),
     }));
   }
 
@@ -238,7 +368,7 @@ export default function NewJobWizard() {
     setDraft((current) => ({
       ...current,
       bedrooms: value,
-      areas: areasTouched.current ? current.areas : templateFor(current.property_type, value),
+      areas: areasTouched.current ? current.areas : suggestedFor(current.property_type, value),
     }));
   }
 
@@ -270,7 +400,7 @@ export default function NewJobWizard() {
       title_deed_path: prop?.title_deed_path ?? (prop ? "" : current.title_deed_path),
       noc_required: prop ? Boolean(prop.noc_required) : current.noc_required,
       noc_path: prop?.noc_path ?? (prop ? "" : current.noc_path),
-      areas: areasTouched.current ? current.areas : templateFor(type, prop?.bedrooms ?? current.bedrooms),
+      areas: areasTouched.current ? current.areas : suggestedFor(type, prop?.bedrooms ?? current.bedrooms),
     }));
   }
 
@@ -280,10 +410,9 @@ export default function NewJobWizard() {
     switch (STEPS[step].key) {
       case "property":
         return Object.values(propertyErrors(draft)).filter((m): m is string => Boolean(m));
-      case "floorplans":
-        // Floor plans are optional; the plan can be added from the job later.
-        return [];
-      case "areas":
+      case "plan_areas":
+        // The plan itself stays optional — it can be added from the job
+        // later. The rooms are what the inspector cannot walk without.
         return draft.areas.length > 0 ? [] : [AREAS_ERROR];
       case "assign":
         // Schedule + contacts are optional here; the inspector is assigned from
@@ -292,13 +421,49 @@ export default function NewJobWizard() {
       default:
         return [];
     }
-  }, [step, draft]);
+  }, [step, draft, STEPS]);
 
   const stepValid = blockers.length === 0;
 
   async function submit() {
     setSubmitting(true);
     try {
+      /*
+        Quote-only: write the quotation and stop (BA v2, changes 1-2).
+
+        No job is created, because there is nothing to inspect until the
+        client agrees a price. The same property fields the job would have
+        used are sent, so the two records describe one unit.
+      */
+      if (quoteOnly) {
+        const num0 = (v: string) => (v.trim() && Number(v) ? Number(v) : undefined);
+        const quote = await snaggingService.createQuotation({
+          client_id: draft.client_id || undefined,
+          property_id: draft.property_id || undefined,
+          property: {
+            unit_label: draft.unit_label,
+            building_name: draft.building_name,
+            community: draft.community,
+            client_name: draft.client_name,
+            client_email: draft.client_email,
+            client_phone: draft.client_phone,
+            developer_name: draft.developer_name,
+            property_type: draft.property_type,
+            bedrooms:
+              draft.property_type === "commercial" ? undefined : draft.bedrooms,
+            built_up_area_sqft: num0(draft.built_up_area),
+            plot_area_sqft: num0(draft.plot_area),
+            external_areas_in_scope: draft.external_areas_in_scope,
+            floors: num0(draft.floors),
+            location_lat: num0(draft.location_lat),
+            location_lng: num0(draft.location_lng),
+          },
+        });
+        toast.success(`Quotation ${quote.quote_number} created`);
+        router.push(`/snagging/quotations/${quote.id}`);
+        return;
+      }
+
       // Combine appointment date + time into one instant (GST) when set.
       const appointmentAt = draft.appointment_date
         ? `${draft.appointment_date}T${draft.appointment_time || "09:00"}:00+04:00`
@@ -308,6 +473,7 @@ export default function NewJobWizard() {
       const created = await snaggingService.createTask({
         client_id: draft.client_id || undefined,
         property_id: draft.property_id || undefined,
+        quotation_id: quotationId ?? undefined,
         property: {
           unit_label: draft.unit_label,
           building_name: draft.building_name,
@@ -350,13 +516,15 @@ export default function NewJobWizard() {
       // failed plan does not lose the job — it is reported and the job
       // still opens, where the plan can be re-added.
       let planFailures = 0;
+      const planIdByLocal = new Map<string, string>();
       for (const plan of plans) {
         try {
-          await snaggingService.uploadFloorPlan(created.id, plan.file, {
+          const uploaded = await snaggingService.uploadFloorPlan(created.id, plan.file, {
             label: plan.label,
             width: plan.width,
             height: plan.height,
           });
+          if (uploaded?.id) planIdByLocal.set(plan.id, uploaded.id);
         } catch {
           planFailures += 1;
         }
@@ -364,6 +532,47 @@ export default function NewJobWizard() {
 
       if (planFailures > 0) {
         toast.warning(`${planFailures} floor plan(s) did not upload. Add them from the job.`);
+      }
+
+      /*
+        The pins placed while the job was being created (BA change 5).
+
+        They can only be written once both ends exist: the plan needs the id
+        its upload returned, and the room needs the id the job gave it.
+        Areas are unique by name within a task, which is what makes the name
+        a safe join back to the row that was just created. A failure here
+        costs the pins, not the job, so it warns rather than throws.
+      */
+      const pinned = draft.areas.filter(
+        (area) =>
+          area.planId &&
+          planIdByLocal.has(area.planId) &&
+          area.pinX != null &&
+          area.pinY != null,
+      );
+
+      if (pinned.length > 0) {
+        try {
+          const saved = await snaggingService.listAreas(created.id);
+          const idByName = new Map(
+            saved.map((area) => [area.name.toLowerCase(), area.id]),
+          );
+          for (const area of pinned) {
+            const areaId = idByName.get(area.name.toLowerCase());
+            const planId = area.planId ? planIdByLocal.get(area.planId) : undefined;
+            if (!areaId || !planId) continue;
+            await snaggingService.updateArea(created.id, {
+              id: areaId,
+              floor_plan_id: planId,
+              pin_x: area.pinX,
+              pin_y: area.pinY,
+            });
+          }
+        } catch {
+          toast.warning(
+            "The rooms were created, but their pins did not save. Place them from the job.",
+          );
+        }
       }
 
       // Title deed (E8) and NOC (E10) upload after the job exists, and never
@@ -398,10 +607,47 @@ export default function NewJobWizard() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeading
-        eyebrow="Work"
-        title="New job"
-        description="Four steps to a reference pack an inspector can pull before losing signal."
+        eyebrow={quoteOnly ? "Sales" : "Work"}
+        title={quoteOnly ? "New quotation" : "New job"}
+        description={
+          quoteOnly
+            ? "Price a client's property. The job is raised once they approve it."
+            : quotationLabel
+            ? "The client and property come from the approved quotation. Add the plans, areas and contacts."
+            : "Three steps to a reference pack an inspector can pull before losing signal."
+        }
       />
+
+      {/*
+        Raised from a quotation (BA v2, change 3). Named, not implied — the
+        coordinator needs to see WHICH agreement this job is being built
+        against before they commit an inspector to it.
+      */}
+      {quotationLoading ? (
+        <Alert>
+          <Loader2 className="animate-spin" />
+          <AlertTitle>Loading the quotation…</AlertTitle>
+        </Alert>
+      ) : quotationError ? (
+        <Alert variant="destructive">
+          <AlertTriangle />
+          <AlertTitle>That quotation cannot be used</AlertTitle>
+          <AlertDescription>
+            {quotationError} Start the job from scratch, or go back to
+            Quotations and pick another.
+          </AlertDescription>
+        </Alert>
+      ) : quotationLabel ? (
+        <Alert>
+          <FileText />
+          <AlertTitle>Raising the job for quotation {quotationLabel}</AlertTitle>
+          <AlertDescription>
+            The client and property were agreed on that quotation and are
+            carried over. Changing them here would put the job out of step
+            with what the client approved.
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {STEPS.map((entry, index) => {
@@ -462,14 +708,14 @@ export default function NewJobWizard() {
               nocFile={nocFile}
               setNocFile={setNocFile}
             />
-          ) : STEPS[step].key === "floorplans" ? (
-            <FloorPlansStep plans={plans} setPlans={setPlans} />
-          ) : STEPS[step].key === "areas" ? (
-            <AreasStep
+          ) : STEPS[step].key === "plan_areas" ? (
+            <PlanAreasStep
               propertyType={draft.property_type}
               bedrooms={draft.bedrooms}
               areas={draft.areas}
               setAreas={setAreas}
+              plans={plans}
+              setPlans={setPlans}
             />
           ) : (
             <AssignStep
@@ -486,10 +732,12 @@ export default function NewJobWizard() {
         <div className="flex items-start justify-between gap-4 border-t px-6 py-4">
           <div className="min-w-0">
             <p className="text-muted-foreground text-xs">
-              {STEPS[step].key === "areas"
-                ? `${draft.areas.length} area${draft.areas.length === 1 ? "" : "s"} selected.`
-                : STEPS[step].key === "floorplans"
-                  ? "Floor plans are optional and can be added from the job later."
+              {STEPS[step].key === "plan_areas"
+                ? `${draft.areas.length} area${draft.areas.length === 1 ? "" : "s"} selected, ${
+                    draft.areas.filter((a) => a.pinX != null).length
+                  } pinned. Pinning is optional.`
+                : quoteOnly
+                  ? "The client and the property are all a quotation needs."
                   : "Required fields are marked."}
             </p>
             {/* A greyed-out Continue used to explain nothing; the first
@@ -503,7 +751,11 @@ export default function NewJobWizard() {
           <div className="flex shrink-0 items-center gap-2">
             <Button
               variant="outline"
-              onClick={() => (step === 0 ? router.push("/snagging/jobs") : setStep(step - 1))}
+              onClick={() =>
+                step === 0
+                  ? router.push(quoteOnly ? "/snagging/quotations" : "/snagging/jobs")
+                  : setStep(step - 1)
+              }
               disabled={submitting}
             >
               Back
@@ -515,7 +767,7 @@ export default function NewJobWizard() {
                 pending={submitting}
                 pendingLabel="Creating…"
               >
-                Create job
+                {quoteOnly ? "Create quotation" : "Create job"}
               </SubmitButton>
             ) : (
               <Button onClick={() => setStep(step + 1)} disabled={!stepValid}>
@@ -1267,14 +1519,60 @@ function PropertyStep({
   );
 }
 
-function FloorPlansStep({
+/**
+ * The plan and the rooms, in one step (BA changes 4 and 5).
+ *
+ * These were two screens, and the pins were then placed a third time from
+ * the job's own Areas and Plans tab once the job existed. The coordinator
+ * had to carry the room list across a screen break and then repeat work
+ * they had already done. Here the plan sits beside the list: pick a room,
+ * click the plan, the pin lands, and the next unpinned room takes focus.
+ */
+function PlanAreasStep({
+  propertyType,
+  bedrooms,
+  areas,
+  setAreas,
   plans,
   setPlans,
 }: {
+  propertyType: SnaggingPropertyType;
+  bedrooms: number;
+  areas: AreaChoice[];
+  setAreas: (next: AreaChoice[]) => void;
   plans: PendingPlan[];
   setPlans: React.Dispatch<React.SetStateAction<PendingPlan[]>>;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [custom, setCustom] = useState("");
+  const [activePlanId, setActivePlanId] = useState<string | null>(null);
+  const [activeArea, setActiveArea] = useState<string | null>(null);
+  /*
+    Pin or outline (BA change 6). Pin stays the default because it is one
+    click and it is what every existing job uses; drawing is opt-in for the
+    rooms where edges earn their keep.
+  */
+  const [placeMode, setPlaceMode] = useState<"pin" | "zone">("pin");
+
+  const activePlan =
+    plans.find((plan) => plan.id === activePlanId) ?? plans[0] ?? null;
+  // Only an image can be clicked for a coordinate. A PDF plan still
+  // uploads and still reaches the inspector; it just cannot be pinned here.
+  const canPin = Boolean(activePlan?.file.type.startsWith("image/"));
+
+  // The full option list is the template for this property type, plus any
+  // custom rooms already added, so ticking and unticking never loses a room.
+  const options = useMemo(() => {
+    const template = templateFor(propertyType, bedrooms);
+    const templateNames = new Set(template.map((a) => a.name.toLowerCase()));
+    const extras = areas.filter((a) => !templateNames.has(a.name.toLowerCase()));
+    return [...template, ...extras];
+  }, [propertyType, bedrooms, areas]);
+
+  const selected = useMemo(
+    () => new Map(areas.map((a) => [a.name.toLowerCase(), a])),
+    [areas],
+  );
 
   async function addFiles(files: FileList | null) {
     if (!files) return;
@@ -1306,6 +1604,7 @@ function FloorPlansStep({
     }
 
     setPlans((current) => [...current, ...next]);
+    if (next.length > 0 && !activePlanId) setActivePlanId(next[0].id);
   }
 
   function rename(id: string, label: string) {
@@ -1320,15 +1619,112 @@ function FloorPlansStep({
       if (target) URL.revokeObjectURL(target.url);
       return current.filter((plan) => plan.id !== id);
     });
+    // A pin cannot outlive the plan it was placed on.
+    setAreas(
+      areas.map((a) =>
+        a.planId === id ? { ...a, planId: null, pinX: undefined, pinY: undefined } : a,
+      ),
+    );
+    if (activePlanId === id) setActivePlanId(null);
   }
+
+  function toggle(option: AreaChoice) {
+    const key = option.name.toLowerCase();
+    if (selected.has(key)) {
+      setAreas(areas.filter((a) => a.name.toLowerCase() !== key));
+      if (activeArea?.toLowerCase() === key) setActiveArea(null);
+    } else {
+      setAreas([...areas, option]);
+      setActiveArea(option.name);
+    }
+  }
+
+  function addCustom() {
+    const name = custom.trim();
+    if (!name) return;
+    if (selected.has(name.toLowerCase())) {
+      setCustom("");
+      return;
+    }
+    // A custom room carries no catalogue code; the capture sheet falls
+    // back to the whole catalogue there.
+    setAreas([...areas, { name, code: null }]);
+    setActiveArea(name);
+    setCustom("");
+  }
+
+  /*
+    A pin placed on the plan.
+
+    Takes the coordinate rather than the event: the canvas owns the pointer
+    work now and hands back a 0..1 fraction, which is the only form worth
+    storing — it survives any render size, on any screen.
+  */
+  function placePin(key: string, x: number, y: number) {
+    if (!activePlan) return;
+
+    setAreas(
+      areas.map((a) =>
+        a.name.toLowerCase() === key
+          ? { ...a, planId: activePlan.id, pinX: x, pinY: y }
+          : a,
+      ),
+    );
+
+    // Move to the next room still waiting for a pin, so a coordinator can
+    // work down the list without going back to it between clicks.
+    const next = areas.find((a) => a.name.toLowerCase() !== key && a.pinX == null);
+    setActiveArea(next ? next.name : null);
+  }
+
+  /*
+    An outline finished on the canvas. Stored exactly as a pin is — against
+    the pending plan id, which submit later swaps for the real one — and
+    the pin is kept so the handset still has a fallback point.
+  */
+  function onPlaceZone(key: string, points: ZonePoint[]) {
+    if (!activePlan) return;
+    const centre = zoneLabelPoint(points);
+    setAreas(
+      areas.map((a) =>
+        a.name.toLowerCase() === key.toLowerCase()
+          ? {
+              ...a,
+              planId: activePlan.id,
+              zone: points,
+              // A zone implies a point, so the room is placed either way.
+              pinX: a.pinX ?? centre.x,
+              pinY: a.pinY ?? centre.y,
+            }
+          : a,
+      ),
+    );
+    const next = areas.find(
+      (a) => a.name.toLowerCase() !== key.toLowerCase() && a.zone == null,
+    );
+    setActiveArea(next ? next.name : null);
+  }
+
+  function clearPin(name: string) {
+    const key = name.toLowerCase();
+    setAreas(
+      areas.map((a) =>
+        a.name.toLowerCase() === key
+          ? { ...a, planId: null, pinX: undefined, pinY: undefined, zone: null }
+          : a,
+      ),
+    );
+  }
+
 
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-xl">Floor plans</h2>
+        <h2 className="text-xl">Floor plan and areas</h2>
         <p className="text-muted-foreground mt-1 text-sm">
-          Plans let the inspector pin each snag to a coordinate. They download with the pack for
-          offline use. Optional: you can add them from the job later.
+          Tick the rooms this job needs. To mark where a room sits, pick it in the
+          list and click the plan. The plan and the pins are both optional, and can
+          be added from the job later.
         </p>
       </div>
 
@@ -1344,170 +1740,233 @@ function FloorPlansStep({
         }}
       />
 
-      <button
-        type="button"
-        onClick={() => inputRef.current?.click()}
-        className="border-border hover:border-brand/40 hover:bg-mist-soft/50 flex w-full flex-col items-center gap-2 rounded-lg border border-dashed px-6 py-10 text-center transition-colors"
-      >
-        <Upload className="text-muted-foreground size-6" />
-        <span className="font-medium">Add plan images</span>
-        <span className="text-muted-foreground text-sm">
-          PNG, JPG, WEBP or PDF · up to 15MB · add one per floor
-        </span>
-      </button>
-
-      {plans.length > 0 ? (
-        <ul className="grid gap-3 sm:grid-cols-2">
-          {plans.map((plan) => (
-            <li
-              key={plan.id}
-              className="border-border flex items-center gap-3 rounded-lg border p-2"
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_19rem]">
+        <div className="space-y-3">
+          {plans.length === 0 ? (
+            <button
+              type="button"
+              onClick={() => inputRef.current?.click()}
+              className="border-border hover:border-brand/40 hover:bg-mist-soft/50 flex w-full flex-col items-center gap-2 rounded-lg border border-dashed px-6 py-16 text-center transition-colors"
             >
-              <span className="bg-mist-soft flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-md">
-                {plan.file.type.startsWith("image/") ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={plan.url} alt="" className="size-full object-cover" />
-                ) : (
-                  <ImageIcon className="text-muted-foreground size-5" />
-                )}
+              <Upload className="text-muted-foreground size-6" />
+              <span className="font-medium">Add plan images</span>
+              <span className="text-muted-foreground text-sm">
+                PNG, JPG, WEBP or PDF, up to 15MB, one per floor
               </span>
-              <div className="min-w-0 flex-1 space-y-1">
-                {/*
-                  The label defaults to the filename, which is how plans
-                  ended up called things like "images" — a name that
-                  means nothing to an inspector choosing between plans on
-                  site. It is editable here, before the job is created.
-                */}
-                <Input
-                  value={plan.label}
-                  onChange={(event) => rename(plan.id, event.target.value)}
-                  placeholder="e.g. Ground floor"
-                  aria-label="Plan name"
-                  className="h-8"
-                />
-                {/*
-                  Dimensions, not bytes. A file size tells the coordinator
-                  nothing they can act on, and rounding it to one decimal
-                  printed "0.0MB" for anything under 50KB.
-                */}
-                <p className="text-muted-foreground truncate text-xs">
-                  {plan.file.name}
-                  {plan.width && plan.height
-                    ? ` · ${plan.width}×${plan.height}px`
-                    : " · PDF"}
-                </p>
+            </button>
+          ) : (
+            <>
+              <div className="flex flex-wrap items-center gap-2">
+                {plans.map((plan) => (
+                  <button
+                    key={plan.id}
+                    type="button"
+                    onClick={() => setActivePlanId(plan.id)}
+                    className={cn(
+                      "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                      plan.id === activePlan?.id
+                        ? "border-brand bg-brand-50 text-brand"
+                        : "border-border hover:bg-mist-soft",
+                    )}
+                  >
+                    {plan.label.trim() || "Untitled plan"}
+                  </button>
+                ))}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => inputRef.current?.click()}
+                >
+                  <Plus className="size-4" />
+                  Add plan
+                </Button>
               </div>
-              <Button variant="ghost" size="icon" onClick={() => remove(plan.id)} aria-label="Remove">
-                <X className="size-4" />
-              </Button>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-    </div>
-  );
-}
 
-function AreasStep({
-  propertyType,
-  bedrooms,
-  areas,
-  setAreas,
-}: {
-  propertyType: SnaggingPropertyType;
-  bedrooms: number;
-  areas: AreaChoice[];
-  setAreas: (next: AreaChoice[]) => void;
-}) {
-  const [custom, setCustom] = useState("");
+              {activePlan ? (
+                <>
+                  {/*
+                    Pin or outline (BA change 6). Only offered on an image —
+                    a PDF plan still uploads and still reaches the inspector,
+                    it just cannot be drawn on here.
+                  */}
+                  {canPin ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="bg-muted inline-flex rounded-md p-0.5">
+                        {(["pin", "zone"] as const).map((option) => (
+                          <button
+                            key={option}
+                            type="button"
+                            onClick={() => setPlaceMode(option)}
+                            aria-pressed={placeMode === option}
+                            className={cn(
+                              "rounded px-2.5 py-1 text-xs font-medium transition-colors",
+                              placeMode === option
+                                ? "bg-background text-foreground shadow-sm"
+                                : "text-muted-foreground hover:text-foreground",
+                            )}
+                          >
+                            {option === "pin" ? "Drop a pin" : "Draw the room"}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-muted-foreground text-xs">
+                        {placeMode === "pin"
+                          ? "Pick a room, then click the plan."
+                          : "Pick a room, click each corner, then Enter to close it. Backspace undoes a corner, Esc starts over."}
+                      </p>
+                    </div>
+                  ) : null}
 
-  // The full option list is the template for this property type, plus
-  // any custom rooms already added, so ticking and unticking never
-  // loses a room the user typed.
-  const options = useMemo(() => {
-    const template = templateFor(propertyType, bedrooms);
-    const templateNames = new Set(template.map((a) => a.name.toLowerCase()));
-    const extras = areas.filter((a) => !templateNames.has(a.name.toLowerCase()));
-    return [...template, ...extras];
-  }, [propertyType, bedrooms, areas]);
+                  {canPin ? (
+                    <PlanZoneCanvas
+                      src={activePlan.url}
+                      alt={activePlan.label}
+                      mode={placeMode}
+                      activeKey={activeArea ? activeArea.toLowerCase() : null}
+                      areas={areas
+                        .filter((a) => a.planId === activePlan.id)
+                        .map((a) => ({
+                          key: a.name.toLowerCase(),
+                          name: a.name,
+                          pinX: a.pinX ?? null,
+                          pinY: a.pinY ?? null,
+                          zone: a.zone ?? null,
+                        }))}
+                      onPlacePin={(key, x, y) => placePin(key, x, y)}
+                      onPlaceZone={onPlaceZone}
+                      onPickArea={(key) => {
+                        const hit = areas.find(
+                          (a) => a.name.toLowerCase() === key,
+                        );
+                        if (hit) setActiveArea(hit.name);
+                      }}
+                    />
+                  ) : (
+                    <div className="border-border bg-mist-soft text-muted-foreground flex flex-col items-center justify-center gap-2 rounded-lg border px-6 py-16 text-center">
+                      <ImageIcon className="size-6" />
+                      <p className="max-w-sm text-sm">
+                        A PDF plan still uploads with the job, but it cannot be
+                        drawn on here. Add the floor as an image to place rooms
+                        on it.
+                      </p>
+                    </div>
+                  )}
 
-  const selectedNames = useMemo(
-    () => new Set(areas.map((a) => a.name.toLowerCase())),
-    [areas],
-  );
-
-  function toggle(option: AreaChoice) {
-    const key = option.name.toLowerCase();
-    if (selectedNames.has(key)) {
-      setAreas(areas.filter((a) => a.name.toLowerCase() !== key));
-    } else {
-      setAreas([...areas, option]);
-    }
-  }
-
-  function addCustom() {
-    const name = custom.trim();
-    if (!name) return;
-    if (selectedNames.has(name.toLowerCase())) {
-      setCustom("");
-      return;
-    }
-    // A custom room carries no catalogue code; the capture sheet falls
-    // back to the whole catalogue there.
-    setAreas([...areas, { name, code: null }]);
-    setCustom("");
-  }
-
-  return (
-    <div className="space-y-5">
-      <div>
-        <h2 className="text-xl">Areas to inspect</h2>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Each area becomes a room the inspector confirms on site. Tick the rooms this job needs,
-          and add any the template does not list.
-        </p>
-      </div>
-
-      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-        {options.map((option) => {
-          const checked = selectedNames.has(option.name.toLowerCase());
-          return (
-            <label
-              key={option.name}
-              className={cn(
-                "flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 text-sm transition-colors",
-                checked
-                  ? "border-brand bg-brand-50/60"
-                  : "border-border hover:bg-mist-soft",
-              )}
-            >
-              <Checkbox checked={checked} onCheckedChange={() => toggle(option)} />
-              <span className={cn("font-medium", checked && "text-brand")}>{option.name}</span>
-            </label>
-          );
-        })}
-      </div>
-
-      <div className="flex flex-wrap items-end gap-2">
-        <div className="flex-1">
-          <Field label="Add a custom area">
-            <Input
-              value={custom}
-              onChange={(event) => setCustom(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  addCustom();
-                }
-              }}
-              placeholder="e.g. Roof terrace, Plant room"
-            />
-          </Field>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={activePlan.label}
+                      onChange={(event) => rename(activePlan.id, event.target.value)}
+                      placeholder="e.g. Ground floor"
+                      aria-label="Plan name"
+                      className="h-8"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => remove(activePlan.id)}
+                      aria-label="Remove plan"
+                    >
+                      <X className="size-4" />
+                    </Button>
+                  </div>
+                </>
+              ) : null}
+            </>
+          )}
         </div>
-        <Button type="button" variant="outline" onClick={addCustom} disabled={!custom.trim()}>
-          <Plus className="size-4" />
-          Add area
-        </Button>
+
+        <div className="space-y-3">
+          <div className="flex items-baseline justify-between gap-2">
+            <h3 className="font-medium">Areas to inspect</h3>
+            <span className="text-muted-foreground text-xs">{areas.length} ticked</span>
+          </div>
+
+          {plans.length > 0 ? (
+            <p className="text-muted-foreground text-xs">
+              {activeArea
+                ? `Click the plan to place "${activeArea}".`
+                : "Pick a room to place it on the plan."}
+            </p>
+          ) : null}
+
+          <div className="max-h-[26rem] space-y-1.5 overflow-y-auto pr-1">
+            {options.map((option) => {
+              const key = option.name.toLowerCase();
+              const chosen = selected.get(key);
+              const isActive = activeArea?.toLowerCase() === key;
+              const pinned = chosen?.pinX != null;
+              return (
+                <div
+                  key={option.name}
+                  className={cn(
+                    "flex items-center gap-2 rounded-lg border px-2.5 py-2 text-sm transition-colors",
+                    chosen ? "border-brand/40 bg-brand-50/40" : "border-border",
+                    isActive && "ring-brand/60 ring-2",
+                  )}
+                >
+                  <Checkbox
+                    checked={Boolean(chosen)}
+                    onCheckedChange={() => toggle(option)}
+                    aria-label={option.name}
+                  />
+                  <button
+                    type="button"
+                    disabled={!chosen}
+                    onClick={() => setActiveArea(option.name)}
+                    className="min-w-0 flex-1 text-left disabled:cursor-default"
+                  >
+                    <span
+                      className={cn("block truncate font-medium", chosen && "text-brand")}
+                    >
+                      {option.name}
+                    </span>
+                  </button>
+                  {pinned ? (
+                    <button
+                      type="button"
+                      onClick={() => clearPin(option.name)}
+                      aria-label={`Remove the pin for ${option.name}`}
+                      title="Remove pin"
+                      className="text-brand hover:text-destructive shrink-0"
+                    >
+                      <MapPin className="size-3.5" />
+                    </button>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="flex items-end gap-2">
+            <div className="flex-1">
+              <Field label="Add a custom area">
+                <Input
+                  value={custom}
+                  onChange={(event) => setCustom(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      addCustom();
+                    }
+                  }}
+                  placeholder="e.g. Roof terrace"
+                />
+              </Field>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={addCustom}
+              disabled={!custom.trim()}
+              aria-label="Add area"
+            >
+              <Plus className="size-4" />
+            </Button>
+          </div>
+        </div>
       </div>
     </div>
   );

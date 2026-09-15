@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
+import { recordAudit } from "@/lib/server/snagging/audit";
+import { resolveClient } from "@/lib/server/snagging/client";
 import { APPROVAL_SLA_HOURS, generateTaskCode } from "@/lib/server/snagging/workflow";
 import { propertySnapshot, resolveProperty } from "@/lib/server/snagging/property";
 import { createTaskSchema } from "@/modules/snagging/schemas";
@@ -303,14 +305,13 @@ export async function POST(req: NextRequest) {
 
     // 1. Resolve the client. A client the picker already persisted arrives
     // by id; otherwise find-or-create one from the typed details.
-    const clientId =
-      input.client_id ??
-      (await resolveClient(admin, {
-        name: p.client_name,
-        email: emptyToNull(p.client_email),
-        phone: emptyToNull(p.client_phone),
-        createdBy: profile.id,
-      }));
+    const clientId = await resolveClient(admin, {
+      clientId: input.client_id ?? null,
+      name: p.client_name,
+      email: emptyToNull(p.client_email),
+      phone: emptyToNull(p.client_phone),
+      createdBy: profile.id,
+    });
 
     // 1b. Resolve the property record (BR-1). Reuses the client's property
     // for this unit or creates one; the full attributes live there now. The
@@ -391,36 +392,62 @@ export async function POST(req: NextRequest) {
     // 4. Build the job checklist from the property type (N2, FR-3.10).
     await generateChecklist(admin, job.id, p.property_type);
 
+    /*
+      5. Bind the approved quotation to the job it paid for (BA v2, change 3).
+
+      The quotation came first and has been agreed, so two things follow:
+      the two records point at each other from here on, and the job skips
+      `draft`. Draft exists to mean "waiting on a price the client has not
+      agreed yet" — which is exactly what is no longer true.
+
+      Guarded on `approved` and on the quotation still being unattached, so
+      this cannot silently move a second job onto one client's agreement.
+    */
+    if (input.quotation_id) {
+      const { data: bound, error: bindError } = await admin
+        .from("snagging_quotations")
+        .update({ job_id: job.id, updated_at: new Date().toISOString() })
+        .eq("id", input.quotation_id)
+        .eq("status", "approved")
+        .is("job_id", null)
+        .select("id, quote_number")
+        .maybeSingle();
+      if (bindError) throw new Error(bindError.message);
+
+      if (bound) {
+        const { error: statusError } = await admin
+          .from("snagging_jobs")
+          .update({ status: "assigned" })
+          .eq("id", job.id)
+          .eq("status", "draft");
+        if (statusError) throw new Error(statusError.message);
+
+        await recordAudit(admin, {
+          entityType: "task",
+          entityId: job.id,
+          taskId: job.id,
+          eventType: "job_created_from_quotation",
+          actorId: profile.id,
+          payload: { quote_number: bound.quote_number, quotation_id: bound.id },
+        });
+      } else {
+        /*
+          Not fatal. The job is real and the coordinator is looking at it;
+          refusing to return it because the link could not be made would
+          lose the areas and contacts they just entered. Logged so the
+          mismatch can be chased.
+        */
+        console.warn(
+          `Job ${job.code} could not be bound to quotation ${input.quotation_id} — not approved, or already attached to another job.`,
+        );
+      }
+    }
+
     return NextResponse.json({ data: { id: job.id, code: job.code } }, { status: 201 });
   } catch (error) {
     console.error("Snagging tasks POST error:", error);
     return NextResponse.json({ error: "Failed to create inspection" }, { status: 500 });
   }
-}
-
-/** Finds a client by name+email, or creates one. Returns its id. */
-async function resolveClient(
-  admin: Admin,
-  input: { name: string; email: string | null; phone: string | null; createdBy: string },
-): Promise<string> {
-  const { data: existing } = await admin
-    .from("snagging_clients")
-    .select("id, email")
-    .ilike("name", input.name)
-    .limit(20);
-  const match = (existing ?? []).find(
-    (c: { id: string; email: string | null }) =>
-      (c.email ?? "").toLowerCase() === (input.email ?? "").toLowerCase(),
-  );
-  if (match) return match.id;
-
-  const { data, error } = await admin
-    .from("snagging_clients")
-    .insert({ name: input.name, email: input.email, phone: input.phone, created_by: input.createdBy })
-    .select("id")
-    .single();
-  if (error) throw new Error(error.message);
-  return data.id;
 }
 
 function emptyToNull(value: string | null | undefined): string | null {

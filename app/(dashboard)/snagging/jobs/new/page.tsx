@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 
 import NewJobWizard from "@/components/dashboard/snagging/new-job-wizard";
 
@@ -16,5 +17,14 @@ export const metadata: Metadata = {
 };
 
 export default function NewJobPage() {
-  return <NewJobWizard />;
+  /*
+    The wizard reads `?quotation=` to open pre-filled from an approved
+    quotation (BA v2, change 3), and `useSearchParams` has to sit under a
+    Suspense boundary or the route cannot be prerendered.
+  */
+  return (
+    <Suspense fallback={null}>
+      <NewJobWizard />
+    </Suspense>
+  );
 }

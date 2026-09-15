@@ -71,10 +71,18 @@ export function snaggingQuoteToTemplateData(q: SnaggingQuoteDoc): QuotationData 
     .join(" · ");
   const serviceAddress = [location, propertyMeta ? `(${propertyMeta})` : null].filter(Boolean).join(" ");
 
-  // The template renders termsAndConditions as the numbered "Notes" list, so we
-  // pass the terms verbatim (each "N-" line becomes a note). Scope of work falls
-  // back in only when no terms are configured.
-  const notes = q.terms?.trim() || q.scope_of_work?.trim() || "";
+  /*
+    The template renders termsAndConditions as the numbered "Notes" list, so
+    the terms go through verbatim (each "N-" line becomes a note).
+
+    The scope travels separately. It used to fall back into this same field
+    and only "when no terms are configured" — which, since the terms have
+    been configured all along, meant the scope of work never appeared on a
+    quotation at all. The team's own document prints both: the scope with
+    the priced line, the notes underneath it (BA v2, changes 21 and 22).
+  */
+  const notes = q.terms?.trim() || "";
+  const scope = q.scope_of_work?.trim() || "";
 
   return {
     // Company (sender) — YFI's own details, identical to every other quotation.
@@ -111,5 +119,6 @@ export function snaggingQuoteToTemplateData(q: SnaggingQuoteDoc): QuotationData 
     grandTotal: q.total,
 
     termsAndConditions: notes || undefined,
+    scopeOfWork: scope || undefined,
   };
 }

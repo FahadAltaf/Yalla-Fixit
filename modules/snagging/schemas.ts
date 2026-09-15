@@ -98,6 +98,14 @@ export const createTaskSchema = z
     property_id: z.string().uuid().optional(),
     property: propertyInputSchema.optional(),
 
+    /*
+      The approved quotation this job is being raised against (BA v2,
+      change 3). Present when the wizard was opened from a quotation, which
+      is now the ordinary way a job comes into existence: the client agreed
+      a price, and this is the work they agreed to.
+    */
+    quotation_id: z.string().uuid().optional(),
+
     // Job type is gone from this step (E9): full building is a separate flow.
     scheduled_date: isoDate.optional().or(z.literal("")),
     // Appointment date + time (I2), and the two site contacts (I3, I4).
@@ -311,12 +319,26 @@ export const catalogueToggleSchema = z.object({
  * explicit area — never auto-assigned to the first area.
  */
 const pinFraction = z.number().min(0).max(1);
+
+/*
+  The outline of a room on a plan (BA change 6 / FR-3.05).
+
+  Mirrors `isZone` in lib/snagging/zone-geometry and the database's own
+  check constraint. Three places agree on this shape on purpose: the
+  handset has no way to recover from a malformed polygon that reaches it
+  over sync while the inspector is standing in a basement with no signal.
+*/
+const zonePolygon = z
+  .array(z.object({ x: pinFraction, y: pinFraction }))
+  .min(3, "A zone needs at least three points")
+  .max(64, "That outline has too many points");
 export const createAreaSchema = z.object({
   name: z.string().trim().min(1, "Area name is required").max(120),
   catalogue_area_code: z.string().trim().max(32).optional().nullable(),
   floor_plan_id: z.string().uuid().nullable().optional(),
   pin_x: pinFraction.nullable().optional(),
   pin_y: pinFraction.nullable().optional(),
+  zone: zonePolygon.nullable().optional(),
 });
 
 export const updateAreaSchema = z.object({
@@ -326,12 +348,25 @@ export const updateAreaSchema = z.object({
   floor_plan_id: z.string().uuid().nullable().optional(),
   pin_x: pinFraction.nullable().optional(),
   pin_y: pinFraction.nullable().optional(),
+  zone: zonePolygon.nullable().optional(),
 });
 
 export type CreateAreaInput = z.infer<typeof createAreaSchema>;
 export type UpdateAreaInput = z.infer<typeof updateAreaSchema>;
 
 export const createRoundSchema = z.object({
+  /*
+    The approved de-snag quotation this round is carried out under
+    (BA v2, change 31).
+
+    A de-snag used to be free — a round of the original, at no charge. It
+    is now sold like any other visit, so the round may only be opened
+    against a quotation the client has agreed. Optional on the type and
+    required by the route, so the refusal can explain WHICH state the
+    quotation is in rather than the schema saying only that a field is
+    missing.
+  */
+  quotation_id: z.string().uuid().optional(),
   /*
     Required, not inherited.
 

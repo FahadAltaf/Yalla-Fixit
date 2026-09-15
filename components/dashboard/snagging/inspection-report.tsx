@@ -9,7 +9,6 @@ import { Inter } from "next/font/google";
 import YallaFixit from "@/public/yalla-fixit.png";
 import type { SnaggingQuotation } from "@/modules/snagging";
 import type {
-  SnaggingChecklistItem,
   SnaggingPhoto,
   SnaggingSnag,
   SnaggingTask,
@@ -138,8 +137,109 @@ function numberWord(n: number): string {
   return NUMBER_WORDS[n] ?? String(n);
 }
 
+/**
+ * How tall a piece of evidence is printed.
+ *
+ * Was 88pt at 72% of a 55% column — a photograph about 25mm wide on an A4
+ * page, which is smaller than the thumbnails the team's own report uses and
+ * too small to see the defect being described beside it. The panel is now
+ * the full width of half the card, and this tall (BA v2, change 17).
+ */
+const PHOTO_H = 200;
+
 /** Worst first, wherever defects are listed as an action list. */
 const SEVERITY_RANK = ["high", "medium", "low"];
+
+/**
+ * A ranked bar chart, in nothing but divs (BA v2, change 20).
+ *
+ * No charting library and no SVG: html2canvas rasterises this document for
+ * the PDF, and everything it has to draw is a filled rectangle and a line
+ * of text. Widths are percentages, so the chart is resolution-independent
+ * and needs no measurement pass.
+ *
+ * Every row carries its name and its count beside the bar. That is not
+ * decoration — it is the secondary encoding that makes the severity
+ * colours legal: high and medium sit 7.5 ΔE apart under deuteranopia,
+ * which is inside the 6–8 band that requires identity to be carried by
+ * something other than hue. Do not strip the labels back to a legend.
+ */
+function BarChart({
+  rows,
+  total,
+}: {
+  rows: { label: string; value: number; color: string }[];
+  /** The denominator for the share, when it is not the largest bar. */
+  total?: number;
+}) {
+  const forPDF = useContext(PdfMode);
+  /*
+    The bar is the share, because the share is what the number beside it
+    says. Scaling to the largest bar instead was tried and is wrong here:
+    on a unit with one high, one medium and one low the widths came out
+    full, full, full beside three labels reading 33% — the length and the
+    figure encoding two different quantities on the same row.
+  */
+  const denominator = Math.max(
+    1,
+    total ?? rows.reduce((sum, row) => sum + row.value, 0),
+  );
+
+  return (
+    <div>
+      {rows.map((row) => (
+        <div
+          key={row.label}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            paddingTop: 0,
+            paddingBottom: forPDF ? "8px" : "5px",
+          }}
+        >
+          <div
+            style={{
+              width: "32%",
+              fontSize: 8.5,
+              color: C.body,
+              overflow: "hidden",
+              whiteSpace: "nowrap",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {row.label}
+          </div>
+          {/* The track, so a short bar still reads against a known span. */}
+          <div style={{ flex: 1, height: 9, background: C.line }}>
+            <div
+              style={{
+                width: `${Math.max(2, Math.round((row.value / denominator) * 100))}%`,
+                height: 9,
+                background: row.color,
+              }}
+            />
+          </div>
+          <div
+            style={{
+              width: 52,
+              textAlign: "right",
+              fontSize: 8.5,
+              fontWeight: 700,
+              color: C.ink,
+            }}
+          >
+            {row.value}
+            <span style={{ fontWeight: 400, color: C.sub }}>
+              {"  "}
+              {Math.round((row.value / denominator) * 100)}%
+            </span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 /** A, B, C … for the area sections, as the issued reports letter them. */
 function areaLetter(index: number): string {
@@ -519,27 +619,6 @@ function Para({ children }: { children: React.ReactNode }) {
   );
 }
 
-/**
- * Which checklist group a failed check belongs to, as a glyph.
- *
- * Drawn from the group name rather than a stored icon: the catalogue's
- * groups are stable ("Plumbing and heating", "Electrical"), and an
- * unrecognised one falls back to the clipboard the checklist itself uses.
- */
-function checklistGlyph(group: string): string {
-  const g = group.toLowerCase();
-  if (g.includes("plumb") || g.includes("heat") || g.includes("drain")) return "🔧";
-  if (g.includes("electric")) return "🔌";
-  if (g.includes("window") || g.includes("door")) return "🪟";
-  if (g.includes("joinery") || g.includes("stair")) return "🪚";
-  if (g.includes("paint") || g.includes("decor")) return "🎨";
-  if (g.includes("vent") || g.includes("ac") || g.includes("air")) return "❄️";
-  if (g.includes("structure") || g.includes("masonry")) return "🧱";
-  if (g.includes("kitchen") || g.includes("fitting")) return "🍳";
-  if (g.includes("level") || g.includes("align")) return "📐";
-  if (g.includes("floor")) return "🪵";
-  return "📋";
-}
 
 /**
  * One itemised defect, whether or not it has a photograph.
@@ -567,6 +646,8 @@ function DefectCard({
   glyph,
   category,
   tag,
+  area,
+  floor,
   first,
 }: {
   reference: string;
@@ -583,6 +664,10 @@ function DefectCard({
   category?: string;
   /** Small corner label naming where the entry came from. */
   tag?: string;
+  /** The room, named on the card rather than only in the heading above it. */
+  area?: string | null;
+  /** The floor plan this area sits on, where the job has more than one. */
+  floor?: string | null;
   first: boolean;
 }) {
   const forPDF = useContext(PdfMode);
@@ -595,15 +680,19 @@ function DefectCard({
         alignItems: "stretch",
         border: `1px solid ${C.grid}`,
         borderTop: first ? `1px solid ${C.grid}` : "none",
-        // A defect with no photo keeps a row's height, so a column of them
-        // stays a table rather than a ladder of different-sized boxes.
-        minHeight: 108,
+        /*
+          A defect with no photo keeps a row's height, so a column of them
+          stays a table rather than a ladder of different-sized boxes. Sized
+          to the evidence panel now rather than to the text: the photograph
+          is the point of the card (BA v2, change 17).
+        */
+        minHeight: PHOTO_H + 26,
         breakInside: "avoid",
       }}
     >
       <div
         style={{
-          width: "55%",
+          width: "50%",
           borderRight: `1px solid ${C.grid}`,
           ...pad(forPDF, 4, 6),
         }}
@@ -629,8 +718,8 @@ function DefectCard({
           isVideo(photo) ? (
             <div
               style={{
-                width: "72%",
-                height: 88,
+                width: "100%",
+                height: PHOTO_H,
                 margin: "0 auto",
                 border: `1px solid ${C.grid}`,
                 background: C.card,
@@ -651,8 +740,8 @@ function DefectCard({
               alt=""
               crossOrigin="anonymous"
               style={{
-                width: "72%",
-                height: 88,
+                width: "100%",
+                height: PHOTO_H,
                 objectFit: "cover",
                 margin: "0 auto",
                 display: "block",
@@ -667,8 +756,8 @@ function DefectCard({
           */
           <div
             style={{
-              width: "72%",
-              height: 88,
+              width: "100%",
+              height: PHOTO_H,
               margin: "0 auto",
               background: C.card,
               border: `1px solid ${C.grid}`,
@@ -715,7 +804,7 @@ function DefectCard({
       */}
       <div
         style={{
-          width: "45%",
+          width: "50%",
           background: FILL[grade.tone] ?? FILL.low,
           fontSize: 9.5,
           color: C.body,
@@ -723,7 +812,49 @@ function DefectCard({
           ...pad(forPDF, 5, 8),
         }}
       >
+        {/*
+          Where it is, before what it is (BA v2, change 18).
+
+          The area was named only in the heading above the run of cards, so
+          a reader looking at one defect — or at a card that broke onto the
+          next page — could not tell which room it was in. Floor is printed
+          only where the job has more than one plan; on a flat it would be
+          a line saying nothing.
+        */}
+        {area || floor ? (
+          <div
+            style={{
+              fontSize: 7.5,
+              fontWeight: 700,
+              letterSpacing: 0.3,
+              textTransform: "uppercase",
+              color: C.sub,
+              paddingBottom: "3px",
+            }}
+          >
+            {[floor, area].filter(Boolean).join(" · ")}
+          </div>
+        ) : null}
+
         <span style={{ fontWeight: 600 }}>{number}-</span> {title}
+
+        {/*
+          The grade, said as well as washed. The tint behind this column is
+          the fast read; a client printing in greyscale, or quoting the
+          defect in an email, needs the word.
+        */}
+        <div
+          style={{
+            fontSize: 8,
+            fontWeight: 700,
+            color: grade.tone === "pass" ? TONE.pass.fg : TONE[grade.tone].fg,
+            paddingTop: 0,
+            paddingBottom: "2px",
+            marginTop: 4,
+          }}
+        >
+          {grade.label}
+        </div>
         {note ? (
           <div style={{ marginTop: 4, color: C.body, paddingBottom: "2px" }}>
             <span style={{ fontWeight: 600 }}>Comment: </span>
@@ -806,7 +937,6 @@ export const InspectionReport = forwardRef<
   )?.user_profile;
   const areas = task.areas ?? [];
   const snags = task.snags ?? [];
-  const checklist = task.checklist ?? [];
   const submission = task.submissions?.[0];
 
   const byArea = new Map<string, SnaggingSnag[]>();
@@ -821,13 +951,61 @@ export const InspectionReport = forwardRef<
   const medium = snags.filter((s) => s.severity === "medium").length;
   const low = snags.filter((s) => s.severity === "low").length;
   const confirmedAreas = areas.filter((a) => a.confirmed_at).length;
+
+  /*
+    Defects by catalogue category, worst first (BA v2, change 20).
+
+    These charts used to live on the Overview dashboard, where only the
+    office saw them; change 11 moves them here, to the document the client
+    reads. The category is the top level of the v7 catalogue — a snag
+    captured before the restructure has none, and is counted under the
+    label it does carry rather than dropped.
+
+    Folded at eight. The ninth bar and below become "Other": past that the
+    rows are one or two defects each and the chart stops ranking anything.
+  */
+  const CATEGORY_LIMIT = 8;
+  const categoryCounts = new Map<string, number>();
+  for (const snag of snags) {
+    const key =
+      snag.category_label || snag.element_label || "Uncategorised";
+    categoryCounts.set(key, (categoryCounts.get(key) ?? 0) + 1);
+  }
+  const rankedCategories = [...categoryCounts.entries()].sort(
+    (a, b) => b[1] - a[1],
+  );
+  const categoryRows: { label: string; value: number; color: string }[] =
+    rankedCategories
+      .slice(0, CATEGORY_LIMIT)
+      /*
+        One hue for every category bar, not one hue each. The bar's LENGTH
+        is the measure here; painting eight categories eight colours would
+        add a second encoding that says nothing the ranking does not
+        already say, and is how a chart ends up a rainbow.
+      */
+      .map(([label, value]) => ({ label, value, color: C.brand as string }));
+  const foldedCategories = rankedCategories.slice(CATEGORY_LIMIT);
+  if (foldedCategories.length > 0) {
+    categoryRows.push({
+      label: `Other (${foldedCategories.length})`,
+      value: foldedCategories.reduce((sum, [, n]) => sum + n, 0),
+      color: C.faint,
+    });
+  }
+
+  /*
+    Severity, in the document's own legend colours — the same four fills
+    the cover prints, so the chart and the defect cards cannot disagree
+    about what "high" looks like.
+  */
+  const severityRows = [
+    { label: "High", value: high, color: TONE.high.fg },
+    { label: "Medium", value: medium, color: TONE.medium.fg },
+    { label: "Low", value: low, color: TONE.low.fg },
+  ].filter((row) => row.value > 0);
   const accessIssues = areas.filter(
     (a) => a.access_state && a.access_state !== "accessible",
   );
-  const checklistDone = checklist.filter(
-    (c) => c.status !== "pending" && c.status !== "not_checked",
-  ).length;
-
   /*
     FR-7.02 — the sub-categories this inspection kept failing on.
 
@@ -852,18 +1030,19 @@ export const InspectionReport = forwardRef<
       .slice(0, 5);
   })();
 
-  /*
-    The checks that failed, itemised with the snags rather than left in the
-    pass/fail table. "Not checked" is a coverage gap, not a defect, and is
-    reported as such elsewhere — only an actual FAIL belongs here.
-  */
-  const checklistAnswered = checklist.filter(
-    (item) => item.status === "failed" || item.status === "passed",
-  );
-  /* Never answered: a coverage gap, not a finding, and listed as such. */
-  const checklistUnchecked = checklist.filter(
-    (item) => item.status !== "failed" && item.status !== "passed",
-  );
+
+  /**
+   * The floor a pinned defect sits on, for the line above its description.
+   *
+   * Only where the job has more than one plan. On a flat every defect is on
+   * the same floor, and printing its name on all of them is a column of
+   * repeated words rather than information (BA v2, change 18).
+   */
+  const plans = task.floor_plans ?? [];
+  const floorOf = (planId?: string | null): string | null => {
+    if (!planId || plans.length < 2) return null;
+    return plans.find((plan) => plan.id === planId)?.label ?? null;
+  };
 
   /* What the running head names on every page after the cover. */
   const subject = [property?.building_name, property?.unit_label]
@@ -1280,13 +1459,59 @@ export const InspectionReport = forwardRef<
             label="Areas walked"
             value={`${confirmedAreas}/${areas.length}`}
           />
-          <Stat
-            label="Checklist"
-            value={`${checklistDone}/${checklist.length}`}
-          />
         </div>
 
+        {/*
+          ── Severity and category, as charts (BA v2, changes 11 and 20) ──
 
+          Both of these were cards on the Overview dashboard, seen only by
+          the office. They belong to the client: the figures above say how
+          many defects there are, and these two say what KIND — how serious,
+          and what keeps going wrong — which is the part a client acts on.
+
+          Side by side in one block so the pair reads as one answer, and
+          inside a single `data-pdf-block` so the paginator never splits a
+          chart across two sheets.
+        */}
+        {snags.length > 0 ? (
+          <div data-pdf-block style={{ marginTop: 15, breakInside: "avoid" }}>
+            <Heading>What was found</Heading>
+            <div style={{ display: "flex", gap: 10 }}>
+              <div style={{ width: "50%" }}>
+                <Card style={pad(forPDF, 6, 12)}>
+                  <div
+                    style={{
+                      fontSize: 9,
+                      fontWeight: 700,
+                      color: C.ink,
+                      paddingTop: 0,
+                      paddingBottom: forPDF ? "10px" : "6px",
+                    }}
+                  >
+                    By severity
+                  </div>
+                  <BarChart rows={severityRows} total={snags.length} />
+                </Card>
+              </div>
+              <div style={{ width: "50%" }}>
+                <Card style={pad(forPDF, 6, 12)}>
+                  <div
+                    style={{
+                      fontSize: 9,
+                      fontWeight: 700,
+                      color: C.ink,
+                      paddingTop: 0,
+                      paddingBottom: forPDF ? "10px" : "6px",
+                    }}
+                  >
+                    By category
+                  </div>
+                  <BarChart rows={categoryRows} total={snags.length} />
+                </Card>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {/* ── FR-7.02: what this unit keeps failing on ── */}
         {subCategoryTally.length > 0 ? (
@@ -1485,6 +1710,8 @@ export const InspectionReport = forwardRef<
                             note={snag.note}
                             status={snag.status}
                             photo={photos[0] ?? null}
+                            area={area.name}
+                            floor={floorOf(snag.floor_plan_id)}
                           />
                         );
                       })}
@@ -1492,131 +1719,10 @@ export const InspectionReport = forwardRef<
                   );
                 })}
 
-                {/*
-                  ── Failed checks, itemised alongside the snags ──
-
-                  A failed check is a defect: something the inspector found
-                  wrong, graded, and needing action. It used to appear only
-                  as a FAIL row in the pass/fail table at the back, so a
-                  reader had to reconcile two different lists to know what
-                  the inspection actually found — and the ones with no
-                  photograph were the easiest to miss.
-
-                  They carry no area (the catalogue does not tie a check to
-                  a room), so they group under their own heading and
-                  continue the same numbering: "number 14" means one thing
-                  in this document.
-                */}
-                {checklistAnswered.length > 0
-                  ? (() => {
-                      const letter = areaLetter(areas.length);
-                      return (
-                        <div style={{ marginBottom: 8 }}>
-                          <div
-                            style={{
-                              fontSize: 10.5,
-                              fontWeight: 600,
-                              color: C.ink,
-                              ...pad(forPDF, 4, 0),
-                            }}
-                          >
-                            {letter}. Building systems
-                            <span style={{ color: C.sub, fontWeight: 400 }}>
-                              {" "}
-                              — the inspection checklist, item by item
-                            </span>
-                          </div>
-
-                          {checklistAnswered.map((item, index) => {
-                            running += 1;
-                            return (
-                              <DefectCard
-                                key={item.id}
-                                first={index === 0}
-                                reference={`${String(running).padStart(3, "0")}-${letter}-${String(
-                                  index + 1,
-                                ).padStart(2, "0")}`}
-                                number={running}
-                                title={`${item.group_name} · ${item.label}`}
-                                /*
-                                  A pass is a conformity — the fourth grade
-                                  on the cover legend, and the whole reason
-                                  that colour exists. A failure is graded by
-                                  whether the check was mandatory: the
-                                  checklist carries no severity of its own,
-                                  and colouring every failure alike would
-                                  flatten the one distinction it does record.
-                                */
-                                severity={
-                                  item.status === "passed"
-                                    ? "conformity"
-                                    : item.mandatory
-                                      ? "high"
-                                      : "medium"
-                                }
-                                note={item.reason}
-                                glyph={checklistGlyph(item.group_name)}
-                                category={item.group_name}
-                                tag={item.status === "passed" ? "Checklist · Pass" : "Checklist · Fail"}
-                              />
-                            );
-                          })}
-                        </div>
-                      );
-                    })()
-                  : null}
               </>
             );
           })()
         )}
-
-        {/*
-          ── What the checklist never reached ──
-
-          The pass/fail table that used to sit here is gone: every answered
-          check is now a card in the itemised section above, so printing the
-          same results again as a grid of PASS/FAIL words asked the reader to
-          reconcile two versions of one list.
-
-          What the table also carried, and the cards cannot, is the checks
-          nobody answered. Those are a gap in coverage rather than a finding
-          — there is no grade to colour them with — so they stay a list.
-        */}
-        {checklistUnchecked.length > 0 ? (
-          <div data-pdf-block style={{ breakInside: "avoid" }}>
-            <Heading>Checks not completed</Heading>
-            <div
-              style={{
-                fontSize: 9.5,
-                color: C.body,
-                paddingTop: 0,
-                paddingBottom: forPDF ? "12px" : "8px",
-              }}
-            >
-              {checklistUnchecked.length} check
-              {checklistUnchecked.length === 1 ? " was" : "s were"} not answered
-              during this inspection and carry no result either way.
-            </div>
-            <table
-              style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                fontSize: 9,
-                color: C.body,
-              }}
-            >
-              <tbody>
-                {checklistUnchecked.map((item) => (
-                  <tr key={item.id}>
-                    <Cell label colSpan={3}>{item.group_name}</Cell>
-                    <Cell colSpan={4}>{item.label}</Cell>
-                    <Cell>{item.mandatory ? "Mandatory" : "Optional"}</Cell>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
 
         {/* ── Commercial summary ── */}
         {quotation ? (

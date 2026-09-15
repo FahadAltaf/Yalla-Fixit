@@ -22,6 +22,13 @@ export const amcServiceRowSchema = z.object({
   included: z.boolean(),
   units: z.coerce.number().int().min(1, "Units must be at least 1"),
   frequency: z.coerce.number().int().min(1, "Frequency must be at least 1"),
+  /*
+    FR2.4: entered per proposal, replacing the unitRate constant. Optional
+    here and enforced per row in superRefine, so an unchecked row is never
+    asked for a price. Zero is valid and meaningful -- FR2.12 calls out
+    the free handyman service.
+  */
+  basePrice: z.coerce.number().min(0, "Base price cannot be negative").optional(),
   price: z.coerce.number().min(0).optional(),
 });
 
@@ -31,8 +38,6 @@ export const amcFormSchema = z
     unitType: unitTypeSchema,
     propertyAddress: z.string().min(1, "Property address is required"),
     propertyDetail: z.string().min(1, "Property detail is required"),
-    packageId: z.string().optional(),
-    customMonthlyPrice: z.coerce.number().positive().optional(),
     serviceRows: z.array(amcServiceRowSchema),
     discountPercent: z.coerce.number().min(0).max(100).default(0),
     customerName: z.string().min(1, "Customer name is required"),
@@ -50,23 +55,6 @@ export const amcFormSchema = z
     submissionId: z.string().uuid().optional(),
   })
   .superRefine((data, ctx) => {
-    if (data.propertyCategory === "residential" && !data.packageId) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Please select a package",
-        path: ["packageId"],
-      });
-    }
-    if (data.propertyCategory === "commercial") {
-      if (!data.customMonthlyPrice || data.customMonthlyPrice <= 0) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "Please enter a monthly rate",
-          path: ["customMonthlyPrice"],
-        });
-      }
-    }
-
     const includedRows = data.serviceRows.filter((row) => row.included);
     if (includedRows.length === 0) {
       ctx.addIssue({
@@ -77,6 +65,19 @@ export const amcFormSchema = z
     }
 
     for (const row of includedRows) {
+      /*
+        FR2.12: every checked row needs a base price before submission.
+        Checked explicitly against undefined -- 0 is a valid price (a
+        service given free), and a falsy test would reject it.
+      */
+      if (row.basePrice === undefined || Number.isNaN(row.basePrice)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Enter a base price for every selected service",
+          path: ["serviceRows"],
+        });
+        break;
+      }
       if (row.units < 1) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -116,16 +117,6 @@ export type CoordinationContact = z.infer<typeof coordinationContactSchema>;
 export type AmcServiceRow = z.infer<typeof amcServiceRowSchema>;
 export type AmcFormData = z.infer<typeof amcFormSchema>;
 
-export interface AmcPackage {
-  id: string;
-  name: string;
-  slug: string;
-  monthlyPrice: number;
-  ppmVisitsPerYear: number;
-  handymanHoursPerYear: number;
-  propertyCategory: "residential";
-}
-
 export type AmcServiceFrequencyType =
   | "covered"
   | "unlimited"
@@ -141,8 +132,9 @@ export interface AmcService {
   scope: string;
   reference: string;
   frequencyType: AmcServiceFrequencyType;
+  /* The default the table starts at (FR2.3). No unitRate any more: price
+     comes from the base price entered per proposal (FR2.4). */
   frequencyPerYear?: number;
-  unitRate: number;
   villaOnly: boolean;
   sectionNumber?: string;
   sectionTitle?: string;
@@ -169,8 +161,7 @@ export interface AmcTotals {
 
 export interface AmcComputedData {
   documentType: AmcDocumentType;
-  packageName: string;
-  packageTitle: string;
+  documentTitle: string;
   propertyTypeLabel: string;
   proposalDate: string;
   endDate: string;
@@ -200,13 +191,15 @@ export interface AmcSubmissionCustomer {
   proposalNumber: string;
 }
 
-export interface AmcSubmissionPackage {
-  packageId?: string;
-  customMonthlyPrice?: number;
-  propertyCategory: PropertyCategory;
-}
-
 export interface AmcSubmissionServiceRow extends AmcServiceRow {
+  /*
+    FR3.1: the submission stores what was entered, so reopening it
+    restores the figures exactly (FR3.3). Nullable on purpose: drafts
+    autosave continuously, and a row the team has not priced yet must
+    come back unpriced rather than as a free service. Null is "not
+    entered", 0 is "free".
+  */
+  basePrice: number | null;
   price: number;
 }
 
@@ -216,7 +209,6 @@ export interface AmcSubmission {
   status: AmcSubmissionStatus;
   property: AmcSubmissionProperty;
   customer: AmcSubmissionCustomer;
-  package: AmcSubmissionPackage;
   services: AmcSubmissionServiceRow[];
   discount_percent: number;
   discount_amount: number;

@@ -215,6 +215,12 @@ export async function GET(req: NextRequest) {
       floor_plan_id: a.floor_plan_id ?? null,
       pin_x: a.pin_x ?? null,
       pin_y: a.pin_y ?? null,
+      /*
+        The room's outline, for tap-to-open on the plan (BA change 6).
+        Null on every job drawn before zones existed, so the app falls back
+        to the pin — both paths stay live permanently.
+      */
+      zone: a.zone ?? null,
       // Field inspection (Module 4): area start time + limited-access elements.
       started_at: a.started_at ?? null,
       elements_not_checked: a.elements_not_checked ?? null,

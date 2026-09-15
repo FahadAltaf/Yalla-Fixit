@@ -127,6 +127,36 @@ export interface SnaggingPricingConfig {
   additional_visit_price?: number;
 }
 
+/** One row of the Quotations list. */
+export interface SnaggingQuotationSummary {
+  id: string;
+  quote_number: string;
+  status: "draft" | "sent" | "approved" | "rejected";
+  quote_kind: "inspection" | "visit" | "desnag";
+  currency: string;
+  subtotal: number;
+  tax_amount: number;
+  total: number;
+  sent_at: string | null;
+  approved_at: string | null;
+  decided_at: string | null;
+  rejected_reason: string | null;
+  created_at: string;
+  /** Null until an approved quotation has been turned into a job. */
+  job_id: string | null;
+  job_code: string | null;
+  job_status: string | null;
+  /** The original inspection a de-snag quotation returns to (change 31). */
+  source_job_id: string | null;
+  client_id: string | null;
+  property_id: string | null;
+  client_name: string | null;
+  client_email: string | null;
+  client_phone: string | null;
+  unit_label: string | null;
+  building_name: string | null;
+}
+
 export interface SnaggingQuoteLine {
   description: string;
   qty: number;
@@ -140,7 +170,14 @@ export interface SnaggingQuotation {
   id: string | null;
   /** True when this is what the job *would* be quoted, not a saved one. */
   preview?: boolean;
-  job_id: string;
+  /** Null on an inspection quotation raised before its job exists. */
+  job_id: string | null;
+  /** Who and what is being quoted, carried by the quotation itself. */
+  client_id?: string | null;
+  property_id?: string | null;
+  quote_kind?: "inspection" | "visit" | "desnag";
+  /** The original inspection a de-snag quotation returns to (change 31). */
+  source_job_id?: string | null;
   quote_number: string;
   status: "draft" | "sent" | "approved" | "rejected";
   currency: string;
@@ -176,6 +213,10 @@ export interface SnaggingClientOption {
   company?: string | null;
   developer_name?: string | null;
   property_count?: number;
+  notes?: string | null;
+  created_at?: string | null;
+  /** Only asked for by the Clients page; the picker does not pay for it. */
+  job_count?: number;
 }
 
 function toParams(
@@ -244,10 +285,16 @@ export const snaggingService = {
       body: input as unknown as Record<string, unknown>,
     }),
 
-  searchClients: async (search?: string): Promise<SnaggingClientOption[]> =>
+  searchClients: async (
+    search?: string,
+    options?: { withCounts?: boolean },
+  ): Promise<SnaggingClientOption[]> =>
     executeRESTBackend<SnaggingClientOption[]>("/api/snagging/clients", {
       method: "GET",
-      params: search ? { search } : {},
+      params: {
+        ...(search ? { search } : {}),
+        ...(options?.withCounts ? { with_counts: "true" } : {}),
+      },
     }),
 
   // ── Quotation (F1-F13) ────────────────────────────────────────────────
@@ -283,7 +330,7 @@ export const snaggingService = {
 
   quotationAction: async (
     taskId: string,
-    action: "generate" | "send" | "approve" | "reject",
+    action: "generate" | "send" | "share_link" | "approve" | "reject",
     extra?: Record<string, unknown>,
   ): Promise<SnaggingQuotation> =>
     executeRESTBackend<SnaggingQuotation>(
@@ -294,14 +341,85 @@ export const snaggingService = {
       },
     ),
 
+  // ── Quotations as their own section (BA v2, changes 1-3) ─────────────
+  /**
+   * Every quotation, newest first — including the ones with no job yet,
+   * which is what the Quotations section exists to show.
+   */
+  listQuotations: async (filters?: {
+    status?: string;
+    kind?: string;
+  }): Promise<SnaggingQuotationSummary[]> =>
+    executeRESTBackend<SnaggingQuotationSummary[]>("/api/snagging/quotations", {
+      method: "GET",
+      params: {
+        ...(filters?.status && filters.status !== "all" ? { status: filters.status } : {}),
+        ...(filters?.kind && filters.kind !== "all" ? { kind: filters.kind } : {}),
+      },
+    }),
+
+  /** Quotes a client's property before any job exists (change 1). */
+  createQuotation: async (input: {
+    client_id?: string;
+    property_id?: string;
+    property: Record<string, unknown>;
+  }): Promise<SnaggingQuotationSummary> =>
+    executeRESTBackend<SnaggingQuotationSummary>("/api/snagging/quotations", {
+      method: "POST",
+      body: input as unknown as Record<string, unknown>,
+    }),
+
+  /**
+   * Quotes a return visit to verify fixes on a job already done (change 31).
+   * Everything it needs is on the original, so it takes only that job.
+   */
+  createDesnagQuotation: async (
+    sourceJobId: string,
+  ): Promise<SnaggingQuotationSummary> =>
+    executeRESTBackend<SnaggingQuotationSummary>("/api/snagging/quotations", {
+      method: "POST",
+      body: { quote_kind: "desnag", source_job_id: sourceJobId },
+    }),
+
+  getQuotationById: async (id: string): Promise<SnaggingQuotation> =>
+    executeRESTBackend<SnaggingQuotation>(`/api/snagging/quotations/${id}`, {
+      method: "GET",
+    }),
+
+  /** send / share_link / regenerate / approve / reject, by quotation id. */
+  quotationActionById: async (
+    id: string,
+    action: "send" | "share_link" | "regenerate" | "approve" | "reject",
+    extra?: Record<string, unknown>,
+  ): Promise<SnaggingQuotation> =>
+    executeRESTBackend<SnaggingQuotation>(`/api/snagging/quotations/${id}`, {
+      method: "POST",
+      body: { action, ...(extra ?? {}) },
+    }),
+
   /** Persists a brand-new client and returns it (with its id). */
   createClient: async (input: {
     client_name: string;
     client_email?: string;
     client_phone?: string;
+    company?: string;
   }): Promise<SnaggingClientOption> =>
     executeRESTBackend<SnaggingClientOption>("/api/snagging/clients", {
       method: "POST",
+      body: input as unknown as Record<string, unknown>,
+    }),
+
+  /** Corrects a client's details (FR-1.11). Only what is sent changes. */
+  updateClient: async (input: {
+    id: string;
+    client_name?: string;
+    client_email?: string | null;
+    client_phone?: string | null;
+    company?: string | null;
+    notes?: string | null;
+  }): Promise<SnaggingClientOption> =>
+    executeRESTBackend<SnaggingClientOption>("/api/snagging/clients", {
+      method: "PATCH",
       body: input as unknown as Record<string, unknown>,
     }),
 

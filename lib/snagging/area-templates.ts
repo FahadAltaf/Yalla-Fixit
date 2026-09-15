@@ -1,21 +1,36 @@
 import type { SnaggingPropertyType } from "@/types/types";
 
-/** A room the job starts with, and the catalogue it draws defects from. */
-export type AreaChoice = { name: string; code: string };
+/**
+ * A room a template offers, and the catalogue it draws defects from.
+ *
+ * `suggested` is what separates "this job probably has one of these" from
+ * "this job might have one of these". Both are shown; only the suggested
+ * rooms start ticked (BA change 7).
+ */
+export type AreaChoice = {
+  name: string;
+  code: string;
+  suggested: boolean;
+};
 
 /**
- * Rooms each property-type template seeds, with the catalogue area code
- * each draws its defect list from. The code rides with the area so the
- * inspector's capture sheet offers the right elements in each room.
+ * Builds the room list a job starts from, out of the property type and the
+ * bedroom count. The list is only a starting point; the coordinator ticks
+ * and unticks it, and the inspector can add rooms on site (Action Point H1).
+ *
+ * Bedrooms are numbered rather than named by role, so a three bedroom unit
+ * reads Bedroom 1, Bedroom 2, Bedroom 3 (BA change 7). Bedroom 1 keeps the
+ * master catalogue code, because in every YFI template the first bedroom is
+ * the master and that code is what decides which defects the capture sheet
+ * offers in the room.
  */
-/**
- * Builds the starting room list from the property type and bedroom count.
- * The area list is only a starting point; the coordinator edits it and the
- * inspector can add rooms on site (Action Point H1).
- */
-export function templateFor(type: SnaggingPropertyType, bedrooms: number | null): AreaChoice[] {
+export function templateFor(
+  type: SnaggingPropertyType,
+  bedrooms: number | null,
+): AreaChoice[] {
   const rooms: AreaChoice[] = [];
-  const add = (name: string, code: string) => rooms.push({ name, code });
+  const add = (name: string, code: string, suggested = true) =>
+    rooms.push({ name, code, suggested });
 
   if (type === "commercial") {
     add("Reception", "ENT");
@@ -38,11 +53,21 @@ export function templateFor(type: SnaggingPropertyType, bedrooms: number | null)
   if (bed === 0) {
     add("Bathroom", "BTH");
   } else {
-    add("Master bedroom", "MBR");
-    add("Master bathroom", "MBA");
+    for (let i = 1; i <= bed; i += 1) {
+      add(`Bedroom ${i}`, i === 1 ? "MBR" : "BED");
+    }
+
+    /*
+      One bathroom is suggested, not one per bedroom (BA change 7).
+
+      The old template paired every bedroom with its own bathroom, which
+      invented rooms that do not exist in most apartments and left the
+      coordinator unticking half the list. The extra bathrooms are still
+      offered, up to the bedroom count, they just start unticked.
+    */
+    add("Bathroom 1", "MBA");
     for (let i = 2; i <= bed; i += 1) {
-      add(`Bedroom ${i}`, "BED");
-      add(`Bathroom ${i}`, "BTH");
+      add(`Bathroom ${i}`, "BTH", false);
     }
     add("Guest WC", "WC");
   }
@@ -62,4 +87,12 @@ export function templateFor(type: SnaggingPropertyType, bedrooms: number | null)
   }
 
   return rooms;
+}
+
+/** The rooms a fresh job starts with ticked. */
+export function suggestedFor(
+  type: SnaggingPropertyType,
+  bedrooms: number | null,
+): AreaChoice[] {
+  return templateFor(type, bedrooms).filter((room) => room.suggested);
 }

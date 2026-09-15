@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Clock,
   Copy,
+  MessageCircle,
   Download,
   FileText,
   Loader2,
@@ -263,6 +264,51 @@ export function QuotationPanel({
     }
   }
 
+  /**
+   * The WhatsApp route (BA v2, change 24).
+   *
+   * The team sends plenty of quotations on WhatsApp, by hand — so what they
+   * need from the system is the two pieces they paste into the chat: the
+   * PDF, and a working approval link. Until now the link only existed as a
+   * side effect of emailing, so a WhatsApp send meant emailing the client
+   * first whether or not that was wanted.
+   *
+   * Downloads the PDF and mints the link in one go, because doing either
+   * alone leaves the job half done.
+   */
+  async function shareByHand() {
+    if (!quote) return;
+    if (
+      approvalUrl &&
+      !window.confirm(
+        "A link has already been issued for this quotation. Getting a new one stops the old link working — send the new one instead. Continue?",
+      )
+    ) {
+      return;
+    }
+
+    setWorking(true);
+    try {
+      const res = (await snaggingService.quotationAction(
+        task.id,
+        "share_link",
+      )) as SnaggingQuotation;
+      setApprovalUrl(res.approval_url ?? null);
+      if (res.approval_url) {
+        await navigator.clipboard.writeText(res.approval_url).catch(() => {});
+      }
+      await download();
+      toast.success("Link copied and PDF downloaded — ready to paste");
+      await load();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not prepare the link",
+      );
+    } finally {
+      setWorking(false);
+    }
+  }
+
   async function sendToClient() {
     if (!quote || !recipient.trim()) return;
     setWorking(true);
@@ -431,6 +477,24 @@ export function QuotationPanel({
                               <FileText className="size-4" /> Regenerate
                             </Button>
                           )}
+                          {/*
+                            Two ways out, because the team uses two (BA v2,
+                            change 24). Email is driven end to end here;
+                            WhatsApp is sent by hand, so that button's job
+                            is to hand over the two things they paste — the
+                            PDF and a live approval link.
+                          */}
+                          <SubmitButton
+                            variant="outline"
+                            size="sm"
+                            onClick={() => void shareByHand()}
+                            disabled={busy}
+                            pending={working}
+                            pendingLabel="Preparing…"
+                            icon={<MessageCircle className="size-4" />}
+                          >
+                            Share on WhatsApp
+                          </SubmitButton>
                           <Button
                             size="sm"
                             onClick={() => {
@@ -447,8 +511,8 @@ export function QuotationPanel({
                           >
                             <Send className="size-4" />{" "}
                             {quote.status === "sent"
-                              ? "Resend to client"
-                              : "Send to client"}
+                              ? "Resend by email"
+                              : "Send by email"}
                           </Button>
                         </>
                       ) : (

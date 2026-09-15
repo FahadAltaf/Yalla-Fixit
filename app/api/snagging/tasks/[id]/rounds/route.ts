@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
+import { assertDesnagQuotationApproved } from "@/lib/server/snagging/desnag-quotation";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
@@ -144,6 +145,26 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         { error: `Round ${liveRound.code} is still open. Finish it before opening another.` },
         { status: 409 },
       );
+    }
+
+    /*
+      The client has agreed to pay for this visit (BA v2, change 31).
+
+      Checked against the ROOT, because that is the inspection a de-snag
+      quotation names — opening round three from round two still returns
+      to the same original, and the quotation was raised against it.
+
+      Placed after the live-round check on purpose: "a round is already
+      open" is the more useful thing to be told, and it is true regardless
+      of what has been quoted.
+    */
+    const gate = await assertDesnagQuotationApproved(
+      admin,
+      rootId,
+      input.quotation_id ?? null,
+    );
+    if (!gate.ok) {
+      return NextResponse.json({ error: gate.reason }, { status: 409 });
     }
 
     // The next number counts the whole family, so it keeps rising even
@@ -326,6 +347,20 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       .single();
 
     if (roundError) throw new Error(roundError.message);
+
+    /*
+      Spend the quotation on this round.
+
+      `job_id` is what marks it used, so the same approval cannot open a
+      second round later — the gate above refuses an approved quotation
+      that already carries one.
+    */
+    const { error: bindError } = await admin
+      .from("snagging_quotations")
+      .update({ job_id: round.id, updated_at: new Date().toISOString() })
+      .eq("id", gate.quotationId)
+      .is("job_id", null);
+    if (bindError) throw new Error(bindError.message);
 
     /*
       2) The unit's floor plans, copied first so both the rooms and the

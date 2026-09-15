@@ -62,28 +62,6 @@ export async function PUT(req: NextRequest) {
 
     const body = await req.json().catch(() => ({}));
     const num = (v: unknown, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
-    const updates = {
-      currency: typeof body.currency === "string" ? body.currency : "AED",
-      // The card is written whole or not at all: a partial merge would let
-      // one type's band be saved against another type's stale minimum.
-      ...(body.rate_card && typeof body.rate_card === "object"
-        ? { rate_card: body.rate_card }
-        : {}),
-      out_of_hours_percent: num(body.out_of_hours_percent, 40),
-      rate_per_sqft: num(body.rate_per_sqft),
-      external_rate_per_sqft: num(body.external_rate_per_sqft),
-      multipliers:
-        body.multipliers && typeof body.multipliers === "object"
-          ? body.multipliers
-          : { apartment: 1, villa: 1.25, townhouse: 1.15, commercial: 1.5 },
-      tax_rate: num(body.tax_rate, 5),
-      desnag_price: num(body.desnag_price),
-      additional_visit_price: num(body.additional_visit_price),
-      scope_of_work: typeof body.scope_of_work === "string" ? body.scope_of_work : null,
-      terms: typeof body.terms === "string" ? body.terms : null,
-      updated_by: profile.id,
-      updated_at: new Date().toISOString(),
-    };
 
     const admin = await createAdminServerClient();
 
@@ -93,6 +71,53 @@ export async function PUT(req: NextRequest) {
       .select(CONFIG_COLUMNS)
       .eq("id", true)
       .maybeSingle();
+    const prev = (before ?? {}) as Record<string, unknown>;
+
+    /*
+      The superseded columns are CARRIED, not rewritten.
+
+      The pricing screen has priced against the rate card since it replaced
+      the rate-times-multiplier model, so it never sends these — and this
+      route used to read that silence as zero, writing `rate_per_sqft: 0`
+      and a hardcoded multiplier set on every single save. Nothing prices
+      against them any more, but they are the record of what the old model
+      held, and a save that quietly destroys history is not a save.
+    */
+    const carry = <T,>(sent: unknown, column: string, fallback: T): T =>
+      sent !== undefined ? (sent as T) : ((prev[column] as T) ?? fallback);
+
+    const updates = {
+      currency: typeof body.currency === "string" ? body.currency : "AED",
+      // The card is written whole or not at all: a partial merge would let
+      // one type's band be saved against another type's stale minimum.
+      ...(body.rate_card && typeof body.rate_card === "object"
+        ? { rate_card: body.rate_card }
+        : {}),
+      out_of_hours_percent: num(body.out_of_hours_percent, 40),
+      tax_rate: num(body.tax_rate, 5),
+      rate_per_sqft: carry(body.rate_per_sqft, "rate_per_sqft", 0),
+      external_rate_per_sqft: carry(
+        body.external_rate_per_sqft,
+        "external_rate_per_sqft",
+        0,
+      ),
+      multipliers: carry(body.multipliers, "multipliers", {
+        apartment: 1,
+        villa: 1.25,
+        townhouse: 1.15,
+        commercial: 1.5,
+      }),
+      desnag_price: carry(body.desnag_price, "desnag_price", 0),
+      additional_visit_price: carry(
+        body.additional_visit_price,
+        "additional_visit_price",
+        0,
+      ),
+      scope_of_work: typeof body.scope_of_work === "string" ? body.scope_of_work : null,
+      terms: typeof body.terms === "string" ? body.terms : null,
+      updated_by: profile.id,
+      updated_at: new Date().toISOString(),
+    };
 
     const { data, error } = await admin
       .from("snagging_pricing_config")
@@ -105,11 +130,18 @@ export async function PUT(req: NextRequest) {
 
     // One audit event per kind of change (pricing / scope / terms), with the
     // previous and new value where practical.
-    const prev = (before ?? {}) as Record<string, unknown>;
     const changed = (keys: string[]) =>
       keys.some((k) => JSON.stringify(prev[k]) !== JSON.stringify((updates as Record<string, unknown>)[k]));
     const events: Array<{ eventType: string; keys: string[] }> = [
-      { eventType: "pricing_updated", keys: ["rate_per_sqft", "external_rate_per_sqft", "multipliers", "tax_rate", "desnag_price", "additional_visit_price", "currency"] },
+      /*
+        `rate_card` and `out_of_hours_percent` head this list because they
+        are what an admin actually edits now, and they were both missing
+        from it — so every change to a published rate, a minimum charge or
+        the out-of-hours surcharge went unlogged, while the dead
+        multiplier columns beside them were watched closely. FR-2.16 asks
+        for every pricing change to be recorded; this is what records it.
+      */
+      { eventType: "pricing_updated", keys: ["rate_card", "out_of_hours_percent", "tax_rate", "currency", "rate_per_sqft", "external_rate_per_sqft", "multipliers", "desnag_price", "additional_visit_price"] },
       { eventType: "scope_updated", keys: ["scope_of_work"] },
       { eventType: "terms_updated", keys: ["terms"] },
     ];

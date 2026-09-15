@@ -5,7 +5,6 @@ import type {
   AmcFormData,
   AmcSubmission,
   AmcSubmissionCustomer,
-  AmcSubmissionPackage,
   AmcSubmissionProperty,
   AmcSubmissionServiceRow,
 } from "./amc-types";
@@ -25,6 +24,7 @@ export function formDataToSubmissionPayload(
 ) {
   const services: AmcSubmissionServiceRow[] = data.serviceRows.map((row) => ({
     ...row,
+    basePrice: row.basePrice ?? null,
     price: computeServiceRowPrice(row),
   }));
   const totals = calculateAmcTotals(data);
@@ -48,12 +48,6 @@ export function formDataToSubmissionPayload(
     proposalNumber: data.proposalNumber,
   };
 
-  const pkg: AmcSubmissionPackage = {
-    packageId: data.packageId,
-    customMonthlyPrice: data.customMonthlyPrice,
-    propertyCategory: data.propertyCategory,
-  };
-
   return {
     status,
     property,
@@ -73,14 +67,15 @@ export function submissionToFormData(submission: AmcSubmission): AmcFormData {
     unitType: submission.property.unitType,
     propertyAddress: submission.property.propertyAddress,
     propertyDetail: submission.property.propertyDetail,
-    packageId: submission.package.packageId ?? "",
-    customMonthlyPrice: submission.package.customMonthlyPrice,
+    /* FR3.3: basePrice has to come back too, or reopening a submission
+       silently blanks every price the team entered. */
     serviceRows: submission.services.map(
-      ({ serviceId, included, units, frequency }) => ({
+      ({ serviceId, included, units, frequency, basePrice }) => ({
         serviceId,
         included,
         units,
         frequency,
+        basePrice: basePrice ?? undefined,
       }),
     ),
     discountPercent: Number(submission.discount_percent) || 0,

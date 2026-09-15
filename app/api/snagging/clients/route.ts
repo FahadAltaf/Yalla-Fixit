@@ -6,13 +6,19 @@ import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
- * Clients for the new-job picker.
+ * Clients — for the new-job picker, and for the Clients page.
  *
  * Clients are their own record now (`snagging_clients`), reused across
- * jobs. GET searches them for the picker; POST creates one when the
- * inspector adds someone new from the "+" dialog. The response keeps the
- * client_name/client_email/client_phone shape the wizard already reads,
- * plus the id so a picked client can be linked by id.
+ * jobs. GET searches them; POST creates one when the coordinator adds
+ * someone new from the "+" dialog; PATCH edits one.
+ *
+ * PATCH exists because a client could only be created, never corrected: a
+ * phone number typed wrong in the job wizard stayed wrong on every
+ * quotation and every job that client ever had, and the only way to change
+ * it was to make a second client (BA v2, change 8 / FR-1.11).
+ *
+ * The response keeps the client_name/client_email/client_phone shape the
+ * wizard already reads, plus the id so a picked client can be linked by id.
  */
 
 type ClientRow = {
@@ -21,15 +27,25 @@ type ClientRow = {
   email: string | null;
   phone: string | null;
   company: string | null;
+  notes?: string | null;
+  created_at?: string | null;
 };
 
-function toOption(row: ClientRow) {
+function toOption(row: ClientRow, jobCount?: number) {
   return {
     id: row.id,
     client_name: row.name,
     client_email: row.email,
     client_phone: row.phone,
     company: row.company,
+    notes: row.notes ?? null,
+    created_at: row.created_at ?? null,
+    /*
+      How much work this client has given us. Undefined for the picker,
+      which neither needs it nor should pay for the extra query — it is
+      the Clients page that has a column for it.
+    */
+    job_count: jobCount,
   };
 }
 
@@ -44,25 +60,59 @@ export async function GET(req: NextRequest) {
     }
 
     const search = req.nextUrl.searchParams.get("search")?.trim();
+    /* The Clients page asks for counts; the job picker does not. */
+    const withCounts = req.nextUrl.searchParams.get("with_counts") === "true";
 
     const admin = await createAdminServerClient();
     let query = admin
       .from("snagging_clients")
-      .select("id, name, email, phone, company")
+      .select("id, name, email, phone, company, notes, created_at")
       .order("name", { ascending: true })
       .limit(400);
 
     if (search) {
       const term = `%${search}%`;
       query = query.or(
-        [`name.ilike.${term}`, `email.ilike.${term}`, `phone.ilike.${term}`].join(","),
+        [
+          `name.ilike.${term}`,
+          `email.ilike.${term}`,
+          `phone.ilike.${term}`,
+          `company.ilike.${term}`,
+        ].join(","),
       );
     }
 
     const { data, error } = await query;
     if (error) throw new Error(error.message);
 
-    return NextResponse.json({ data: (data ?? []).map(toOption) });
+    if (!withCounts) {
+      return NextResponse.json({ data: (data ?? []).map((row) => toOption(row)) });
+    }
+
+    /*
+      One query for every client's job count rather than one per row.
+
+      Only the ids on this page are asked for, so a long client list does
+      not turn into a table scan; `head: true` means the rows never come
+      back, only the count.
+    */
+    const ids = (data ?? []).map((row) => row.id);
+    const counts = new Map<string, number>();
+    if (ids.length > 0) {
+      const { data: jobs, error: jobError } = await admin
+        .from("snagging_jobs")
+        .select("client_id")
+        .in("client_id", ids);
+      if (jobError) throw new Error(jobError.message);
+      for (const job of jobs ?? []) {
+        const id = job.client_id as string | null;
+        if (id) counts.set(id, (counts.get(id) ?? 0) + 1);
+      }
+    }
+
+    return NextResponse.json({
+      data: (data ?? []).map((row) => toOption(row, counts.get(row.id) ?? 0)),
+    });
   } catch (error) {
     console.error("Snagging clients GET error:", error);
     return NextResponse.json({ error: "Failed to load clients" }, { status: 500 });
@@ -114,6 +164,81 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ data: toOption(data) }, { status: 201 });
   } catch (error) {
     console.error("Snagging clients POST error:", error);
+    return NextResponse.json({ error: "Failed to save client" }, { status: 500 });
+  }
+}
+
+/**
+ * Corrects a client's details (BA v2, change 8 / FR-1.11).
+ *
+ * Only the fields actually sent are touched, so editing a phone number
+ * from the Clients page cannot blank a company nobody typed into that
+ * form. The name is the one field that may not be emptied — every
+ * quotation and job header prints it.
+ *
+ * Quotations are unaffected by design: each one snapshots the client's
+ * details at the moment it was raised, so a corrected number appears on
+ * the next document rather than silently rewriting one already issued.
+ */
+export async function PATCH(req: NextRequest) {
+  try {
+    const { profile, accessUser } = await getRequestUserAccess(req);
+    if (!profile || !accessUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.EDIT)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    const body = await req.json().catch(() => ({}));
+    const id = String(body?.id ?? "").trim();
+    if (!id) {
+      return NextResponse.json({ error: "Which client?" }, { status: 400 });
+    }
+
+    const updates: Record<string, string | null> = {};
+    const sent = (...keys: string[]) =>
+      keys.find((key) => body?.[key] !== undefined);
+
+    const nameKey = sent("client_name", "name");
+    if (nameKey) {
+      const name = String(body[nameKey] ?? "").trim();
+      if (name.length < 2) {
+        return NextResponse.json(
+          { error: "Client name is required" },
+          { status: 400 },
+        );
+      }
+      updates.name = name;
+    }
+
+    const emailKey = sent("client_email", "email");
+    if (emailKey) updates.email = emptyToNull(body[emailKey]);
+    const phoneKey = sent("client_phone", "phone");
+    if (phoneKey) updates.phone = emptyToNull(body[phoneKey]);
+    if (body?.company !== undefined) updates.company = emptyToNull(body.company);
+    if (body?.notes !== undefined) updates.notes = emptyToNull(body.notes);
+
+    if (Object.keys(updates).length === 0) {
+      return NextResponse.json({ error: "Nothing to change" }, { status: 400 });
+    }
+    updates.updated_at = new Date().toISOString();
+
+    const admin = await createAdminServerClient();
+    const { data, error } = await admin
+      .from("snagging_clients")
+      .update(updates)
+      .eq("id", id)
+      .select("id, name, email, phone, company, notes, created_at")
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!data) {
+      return NextResponse.json({ error: "Client not found" }, { status: 404 });
+    }
+
+    return NextResponse.json({ data: toOption(data) });
+  } catch (error) {
+    console.error("Snagging clients PATCH error:", error);
     return NextResponse.json({ error: "Failed to save client" }, { status: 500 });
   }
 }

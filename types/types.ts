@@ -390,6 +390,14 @@ export interface SnaggingArea {
   floor_plan_id?: string | null;
   pin_x?: number | null;
   pin_y?: number | null;
+  /**
+   * The room's outline on that plan (BA change 6 / FR-3.05).
+   *
+   * Null on every area drawn before zones existed, and there is no way to
+   * derive edges from a point — so the pin above never goes away and the
+   * two coexist for the life of those jobs.
+   */
+  zone?: { x: number; y: number }[] | null;
   note?: string | null;
   confirmed_at?: string | null;
   confirmed_by?: string | null;

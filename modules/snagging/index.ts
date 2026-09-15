@@ -7,6 +7,7 @@ export type {
   SnaggingClientOption,
   SnaggingPricingConfig,
   SnaggingQuotation,
+  SnaggingQuotationSummary,
   SnaggingQuoteLine,
 } from "./services/snagging-service";
 

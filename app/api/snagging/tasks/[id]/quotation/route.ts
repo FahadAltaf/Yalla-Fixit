@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import { emailService } from "@/lib/email-service";
+import { sendEmail } from "@/lib/server/send-email";
 import { emailMasthead } from "@/lib/email-brand";
 import { recordAudit } from "@/lib/server/snagging/audit";
 import {
@@ -89,6 +89,7 @@ export async function POST(
 
     if (action === "generate") return generate(admin, id, profile.id);
     if (action === "send") return send(admin, id, profile.id, body);
+    if (action === "share_link") return shareLink(admin, id, profile.id);
     if (action === "approve")
       return approve(admin, id, profile.id, {
         name: body.approved_by_name ?? null,
@@ -286,10 +287,92 @@ async function quoteCount(admin: Admin, jobId: string): Promise<number> {
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
+ * An approval link, without sending anything (BA v2, change 24).
+ *
+ * The team sends quotations on WhatsApp as well as by email, and WhatsApp
+ * is sent by hand — they download the PDF and paste the approval link into
+ * the chat themselves. There was no way to get that link: it was minted
+ * inside `send`, so the only route to a WhatsApp quotation ran through
+ * emailing the client first.
+ *
+ * This mints and stores one, and marks the quotation sent, because from
+ * the client's side it is: they are about to receive it. `sent_to` is left
+ * alone rather than filled with an address nothing was posted to.
+ *
+ * Each call issues a NEW token and the previous link stops working. That
+ * is the honest behaviour — only the hash is stored, so an existing link
+ * cannot be shown again — and the caller warns before replacing one.
+ */
+async function shareLink(admin: Admin, jobId: string, actorId: string) {
+  const quote = await latestQuote(admin, jobId);
+  if (!quote)
+    return NextResponse.json(
+      { error: "Generate a quotation first" },
+      { status: 400 },
+    );
+  if (quote.status === "approved" || quote.status === "rejected") {
+    return NextResponse.json(
+      { error: "This quotation has already been decided" },
+      { status: 409 },
+    );
+  }
+
+  const token = mintReportToken();
+  const expiresAt = new Date(
+    Date.now() + 30 * 24 * 60 * 60 * 1000,
+  ).toISOString();
+  const approvalUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? ""}/quote/${token.raw}`;
+  const now = new Date().toISOString();
+
+  const { data, error } = await admin
+    .from("snagging_quotations")
+    .update({
+      status: "sent",
+      sent_at: quote.sent_at ?? now,
+      approval_token_hash: token.hash,
+      approval_token_expires_at: expiresAt,
+      updated_at: now,
+    })
+    .eq("id", quote.id)
+    .select("*")
+    .single();
+  if (error) throw new Error(error.message);
+
+  await recordAudit(admin, {
+    entityType: "task",
+    entityId: jobId,
+    taskId: jobId,
+    eventType: "quotation_link_shared",
+    actorId,
+    payload: { quote_number: quote.quote_number, channel: "manual" },
+  });
+
+  return NextResponse.json({ data: { ...data, approval_url: approvalUrl } });
+}
+
+/**
  * Emails the quotation to the client via Resend with the PDF attached and a
  * secure approve/reject link, then marks it sent (FR-2.06). The PDF is
- * generated in the coordinator's browser and posted here as base64. If the
- * email fails, this throws and the quote is NOT marked sent.
+ * generated in the coordinator's browser and posted here as base64.
+ *
+ * The database write happens BEFORE the email, and that ordering is the
+ * whole point (BA v2, change 35).
+ *
+ * It used to run the other way round: mint a token, email the client a link
+ * built from it, then store the token's hash. Two things went wrong with
+ * that. The email call is a server-to-self HTTP request that measured 30
+ * seconds in Sami's log, so by the time the update ran the request had been
+ * open long enough for the connection underneath it to be gone — `fetch
+ * failed`, a 500 at 46 seconds, and the coordinator told "Send request
+ * failed" about an email the client had already received. Worse, the hash
+ * never landed, so the approval link in that email could never validate.
+ * The client held a dead link to a quotation the system still believed had
+ * never been sent.
+ *
+ * Writing first fixes both. The token is valid the moment the link exists,
+ * and the Supabase call is made at the top of the request rather than at
+ * the end of a minute-long one. If the email is then refused, the status
+ * goes back to where it was and the caller gets the real reason.
  */
 async function send(
   admin: Admin,
@@ -328,29 +411,8 @@ async function send(
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
   const approvalUrl = `${baseUrl}/quote/${token.raw}`;
 
-  // Send first; only persist "sent" if Resend accepted it.
-  const res = await emailService.sendEmail({
-    to: recipient,
-    subject: `Yalla Fix It Quotation #${quote.quote_number}`,
-    html: quotationEmailHtml({
-      clientName: (snap.client_name as string) ?? "there",
-      quoteNumber: quote.quote_number,
-      unit:
-        [snap.unit_label, snap.building_name].filter(Boolean).join(", ") ||
-        "your property",
-      total: `${quote.currency} ${Number(quote.total).toLocaleString("en-AE", { minimumFractionDigits: 2 })}`,
-      approvalUrl,
-    }),
-    attachment: pdfBase64
-      ? {
-          filename: `Quotation-${quote.quote_number}.pdf`,
-          content: pdfBase64,
-          contentType: "application/pdf",
-        }
-      : undefined,
-  });
-  const messageId = (res as { data?: { id?: string } })?.data?.id ?? null;
-
+  // 1. Make the link real, and record the send, while the request is still
+  //    young. Nothing in the email is valid until this row says so.
   const now = new Date().toISOString();
   const { data, error } = await admin
     .from("snagging_quotations")
@@ -360,13 +422,72 @@ async function send(
       sent_to: recipient,
       approval_token_hash: token.hash,
       approval_token_expires_at: expiresAt,
-      email_message_id: messageId,
       updated_at: now,
     })
     .eq("id", quote.id)
     .select("*")
     .single();
   if (error) throw new Error(error.message);
+
+  // 2. Send it. A refusal here is the one case that has to undo step 1 —
+  //    the client has nothing, so the quotation must not claim otherwise.
+  let messageId: string | null = null;
+  try {
+    const res = await sendEmail({
+      to: recipient,
+      subject: `Yalla Fix It Quotation #${quote.quote_number}`,
+      html: quotationEmailHtml({
+        clientName: (snap.client_name as string) ?? "there",
+        quoteNumber: quote.quote_number,
+        unit:
+          [snap.unit_label, snap.building_name].filter(Boolean).join(", ") ||
+          "your property",
+        total: `${quote.currency} ${Number(quote.total).toLocaleString("en-AE", { minimumFractionDigits: 2 })}`,
+        approvalUrl,
+      }),
+      attachment: pdfBase64
+        ? {
+            filename: `Quotation-${quote.quote_number}.pdf`,
+            content: pdfBase64,
+            contentType: "application/pdf",
+          }
+        : undefined,
+    });
+    messageId = (res as { data?: { id?: string } })?.data?.id ?? null;
+  } catch (sendError) {
+    await admin
+      .from("snagging_quotations")
+      .update({
+        status: quote.status,
+        sent_at: quote.sent_at ?? null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", quote.id);
+
+    const reason =
+      sendError instanceof Error ? sendError.message : "Unknown error";
+    console.error("Quotation email failed:", reason);
+    return NextResponse.json(
+      { error: `The quotation was not sent: ${reason}` },
+      { status: 502 },
+    );
+  }
+
+  /*
+    3. The provider's id, for tracing a delivery later. Best-effort on
+       purpose — the email is gone and the link works, so failing the whole
+       request over a reference number would report a disaster that did not
+       happen, which is exactly the bug this function is being fixed for.
+  */
+  if (messageId) {
+    const { error: idError } = await admin
+      .from("snagging_quotations")
+      .update({ email_message_id: messageId })
+      .eq("id", quote.id);
+    if (idError) {
+      console.error("Quotation sent but message id not stored:", idError.message);
+    }
+  }
 
   await recordAudit(admin, {
     entityType: "task",

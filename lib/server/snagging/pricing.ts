@@ -15,6 +15,13 @@
  *
  * Every figure is exclusive of VAT (F21). The card lives in
  * `snagging_pricing_config.rate_card`, admin-editable only (FR-2.11).
+ *
+ * PURE ON PURPOSE. Nothing here touches Supabase, `next/headers` or any
+ * other server-only API, and the pricing settings screen imports
+ * `computeQuotation` directly so its live preview is the quotation engine
+ * rather than a second copy of these rules that could drift from them.
+ * Anything server-only added to this file has to go somewhere else, or
+ * that screen stops building.
  */
 
 /** One property type's row on the card. */

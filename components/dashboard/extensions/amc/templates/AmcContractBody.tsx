@@ -251,7 +251,7 @@ export function AmcContractBody({ data, isPdf = false }: Props) {
 
   return (
     <div data-amc-body style={{ width: "100%" }}>
-      <AmcRedBanner title={data.packageTitle} isPdf={isPdf} />
+      <AmcRedBanner title={data.documentTitle} isPdf={isPdf} />
 
       <div style={{ ...text, marginBottom: "6px", fontSize: "12px" }}>
         <span style={{ fontWeight: 700 }}>{dateLabel}</span> {data.proposalDate}
@@ -420,7 +420,7 @@ export function AmcContractBody({ data, isPdf = false }: Props) {
       </div>
       <div style={{ ...clauseSubTitle, fontWeight: 700, marginBottom: CLAUSE_LAYOUT.PARAGRAPH_GAP }}>
         6.1 Scope of work and frequency of the services of annual maintenance contract (
-        {data.packageTitle})
+        {data.documentTitle})
       </div>
       <table
         style={{

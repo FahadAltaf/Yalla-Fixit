@@ -119,6 +119,16 @@ export const baseSectionsItems: MenuItem[] = [
         exact: true,
         resource: ResourceType.SNAGGING,
       },
+      /*
+        Quotations lead, because that is where work now begins (BA v2,
+        changes 1-3): a client is quoted, and the job is raised only once
+        they approve.
+      */
+      {
+        title: "Quotations",
+        url: "/snagging/quotations",
+        resource: ResourceType.SNAGGING,
+      },
       {
         title: "Jobs",
         url: "/snagging/jobs",
@@ -127,16 +137,23 @@ export const baseSectionsItems: MenuItem[] = [
         match: ["/snagging"],
         resource: ResourceType.SNAGGING,
       },
-      {
-        title: "New job",
-        url: "/snagging/jobs/new",
-        resource: ResourceType.SNAGGING,
-      },
+      /*
+        "New job" is deliberately gone. A job exists to carry out work a
+        client has agreed to pay for, so it is raised from the approved
+        quotation that agreed it (BR-2) — the route still exists and the
+        wizard still runs, but reaching it from a menu invited a job with
+        no quotation behind it, which is the thing this change removes.
+      */
       // {
       //   title: "Review",
       //   url: "/snagging/review",
       //   resource: ResourceType.SNAGGING,
       // },
+      {
+        title: "Clients",
+        url: "/snagging/clients",
+        resource: ResourceType.SNAGGING,
+      },
       {
         title: "Pricing",
         url: "/snagging/pricing",

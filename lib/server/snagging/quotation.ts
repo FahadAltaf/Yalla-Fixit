@@ -10,7 +10,13 @@ import { recordAudit } from "@/lib/server/snagging/audit";
  */
 type Admin = SupabaseClient;
 
-export type QuoteRef = { id: string; job_id: string; quote_number: string; status: string };
+export type QuoteRef = {
+  id: string;
+  /** Null on an inspection quotation raised before its job exists. */
+  job_id: string | null;
+  quote_number: string;
+  status: string;
+};
 
 export class QuotationDecisionError extends Error {
   constructor(message: string, readonly status = 409) {
@@ -48,13 +54,23 @@ export async function approveQuotation(
     .single();
   if (error) throw new Error(error.message);
 
-  // BR-2 / F6 / FR-2.07: an approved quote unlocks inspector assignment.
-  const { error: jobError } = await admin
-    .from("snagging_jobs")
-    .update({ status: "assigned" })
-    .eq("id", quote.job_id)
-    .eq("status", "draft");
-  if (jobError) throw new Error(jobError.message);
+  /*
+    BR-2 / F6 / FR-2.07: an approved quote unlocks inspector assignment.
+
+    Only where there is a job to unlock. Since quotations can be raised
+    before one exists (BA v2, change 1), approval is now the moment the
+    team is invited to CREATE the job rather than the moment an existing
+    one changes state — and running this update with a null id would
+    silently match nothing while reporting success.
+  */
+  if (quote.job_id) {
+    const { error: jobError } = await admin
+      .from("snagging_jobs")
+      .update({ status: "assigned" })
+      .eq("id", quote.job_id)
+      .eq("status", "draft");
+    if (jobError) throw new Error(jobError.message);
+  }
 
   await recordAudit(admin, {
     entityType: "task",
