@@ -42,6 +42,7 @@ export interface SnaggingPropertyInput {
   noc_required?: boolean;
   noc_path?: string;
 }
+import type { SnaggingJobVisit } from "@/types/types";
 import type {
   CatalogueEntryInput,
   ChecklistItemInput,
@@ -649,7 +650,20 @@ export const snaggingService = {
       body: input as unknown as Record<string, unknown>,
     }),
 
-  scheduleVisit: async (
+  // ── Additional visits (BA v2, changes 25-30) ─────────────────────────
+  //
+  // A visit is an appointment on the job, not a job of its own, so these
+  // all address a row under `/tasks/:id/visits` rather than a second task.
+
+  listVisits: async (
+    id: string,
+  ): Promise<{ visits: SnaggingJobVisit[]; versions: unknown[] }> =>
+    executeRESTBackend<{ visits: SnaggingJobVisit[]; versions: unknown[] }>(
+      `/api/snagging/tasks/${id}/visits`,
+      { method: "GET" },
+    ),
+
+  createVisit: async (
     id: string,
     input: {
       /** Required: a visit is a trip and is requested for a specific slot. */
@@ -659,17 +673,45 @@ export const snaggingService = {
       notes?: string;
       reason?: string;
       approval_manager_id?: string | null;
+      /** How the client pays for it (change 26). */
+      charge_method?: "quotation" | "payment_link";
+      payment_reference?: string;
     },
   ) =>
     executeRESTBackend<{
       id: string;
-      code: string;
-      round_number: number;
-      visit_charge: number | null;
+      visit_number: number;
+      charge: number | null;
+      charge_method: string;
     }>(`/api/snagging/tasks/${id}/visits`, {
       method: "POST",
       body: input as unknown as Record<string, unknown>,
     }),
+
+  updateVisit: async (
+    id: string,
+    visitId: string,
+    input: Partial<{
+      charge_method: "quotation" | "payment_link";
+      payment_reference: string | null;
+      quotation_id: string | null;
+      scheduled_date: string | null;
+      appointment_at: string | null;
+      inspector_id: string | null;
+      status: "requested" | "scheduled" | "in_progress" | "completed" | "cancelled";
+      notes: string | null;
+    }>,
+  ): Promise<SnaggingJobVisit> =>
+    executeRESTBackend<SnaggingJobVisit>(
+      `/api/snagging/tasks/${id}/visits/${visitId}`,
+      { method: "PATCH", body: input as unknown as Record<string, unknown> },
+    ),
+
+  cancelVisit: async (id: string, visitId: string) =>
+    executeRESTBackend<{ id: string; status: string }>(
+      `/api/snagging/tasks/${id}/visits/${visitId}`,
+      { method: "DELETE" },
+    ),
 
   listCatalogue: async (
     filters: { search?: string; element?: string; activeOnly?: boolean } = {},

@@ -20,6 +20,7 @@ import {
   nextBookableSlot,
   toGulfInstant,
 } from "@/lib/snagging/schedule-defaults";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { snaggingService } from "@/modules/snagging";
@@ -37,14 +38,21 @@ export function AdditionalVisitDialog({
   taskId,
   open,
   onOpenChange,
+  onCreated,
 }: {
   taskId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** The panel reloads itself; the visit is a row on it, not a new page. */
+  onCreated?: () => void;
 }) {
   const [reason, setReason] = useState("");
   const [scheduledDate, setScheduledDate] = useState("");
   const [time, setTime] = useState("");
+  const [chargeMethod, setChargeMethod] = useState<"quotation" | "payment_link">(
+    "quotation",
+  );
+  const [paymentRef, setPaymentRef] = useState("");
   const [working, setWorking] = useState(false);
 
   /*
@@ -71,18 +79,26 @@ export function AdditionalVisitDialog({
     if (working) return;
     setWorking(true);
     try {
-      const visit = await snaggingService.scheduleVisit(taskId, {
+      const visit = await snaggingService.createVisit(taskId, {
         reason: reason.trim() || undefined,
         scheduled_date: scheduledDate,
         appointment_at: appointment ? appointment.toISOString() : null,
+        charge_method: chargeMethod,
+        payment_reference:
+          chargeMethod === "payment_link" ? paymentRef.trim() || undefined : undefined,
       });
       const charge =
-        visit.visit_charge && visit.visit_charge > 0
-          ? ` · AED ${visit.visit_charge.toLocaleString()}`
+        visit.charge && visit.charge > 0
+          ? ` · AED ${visit.charge.toLocaleString()}`
           : "";
-      toast.success(`Additional visit scheduled${charge}`);
+      toast.success(`Visit ${visit.visit_number} added${charge}`);
       onOpenChange(false);
-      window.location.href = `/snagging/${visit.id}`;
+      /*
+        Stays on the job. The visit is an appointment ON this record now
+        (change 25), so there is no second job to navigate to — the panel
+        the dialog was opened from is where it appears.
+      */
+      onCreated?.();
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Could not schedule the visit",
@@ -96,11 +112,11 @@ export function AdditionalVisitDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Schedule an additional visit</DialogTitle>
+          <DialogTitle>Add an additional visit</DialogTitle>
           <DialogDescription>
-            A fresh, chargeable inspection pass on this property. It copies the
-            same areas but carries no snags forward, and the additional-visit
-            charge is taken from the current pricing.
+            A chargeable return trip on this job. It uses the job&apos;s own
+            areas and checklist, and anything found joins this
+            inspection&apos;s report rather than becoming a second one.
           </DialogDescription>
         </DialogHeader>
 
@@ -140,6 +156,62 @@ export function AdditionalVisitDialog({
             </div>
           </div>
 
+          {/*
+            Change 26 / BR-14 — how the client pays for it.
+
+            A return visit is usually a penalty rather than work the client
+            chose to buy, so the team often sends a payment link instead of
+            raising a quotation. Asked here because the two routes diverge
+            straight away: only the quotation one waits for an approval
+            before anybody can be booked.
+          */}
+          <div className="grid gap-2">
+            <Label>Charged by</Label>
+            <div className="bg-muted inline-flex w-fit rounded-md p-0.5">
+              {(
+                [
+                  ["quotation", "Quotation"],
+                  ["payment_link", "Payment link"],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setChargeMethod(value)}
+                  aria-pressed={chargeMethod === value}
+                  className={
+                    chargeMethod === value
+                      ? "bg-background text-foreground rounded px-3 py-1 text-xs font-medium shadow-sm"
+                      : "text-muted-foreground hover:text-foreground rounded px-3 py-1 text-xs font-medium"
+                  }
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <p className="text-muted-foreground text-xs">
+              {chargeMethod === "quotation"
+                ? "Raise the quotation from this job, then book the visit once the client approves it."
+                : "No quotation needed. Send the client a link and book the visit as soon as it is paid."}
+            </p>
+          </div>
+
+          {chargeMethod === "payment_link" ? (
+            <div className="grid gap-2">
+              <Label htmlFor="visit-payment-ref">Payment reference</Label>
+              <Input
+                id="visit-payment-ref"
+                value={paymentRef}
+                onChange={(e) => setPaymentRef(e.target.value)}
+                placeholder="Link reference or receipt number"
+              />
+              <p className="text-muted-foreground text-xs">
+                Optional now, but it is what proves the visit was paid for
+                when somebody asks later.
+              </p>
+            </div>
+          ) : null}
+
           {inPast ? (
             <p className="text-destructive text-sm">
               {appointment
@@ -161,10 +233,10 @@ export function AdditionalVisitDialog({
             onClick={() => void submit()}
             disabled={!ready}
             pending={working}
-            pendingLabel="Scheduling…"
+            pendingLabel="Adding…"
             icon={<CalendarPlus className="size-4" />}
           >
-            Schedule visit
+            Add visit
           </SubmitButton>
         </DialogFooter>
       </DialogContent>

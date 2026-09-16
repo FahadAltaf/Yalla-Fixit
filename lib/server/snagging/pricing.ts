@@ -140,11 +140,18 @@ export function desnagPrice(card: RateCard, type: string): number | null {
  *
  * `outOfHours` adds the surcharge as its own line, which is the coordinator's
  * call rather than something derived from a calendar (F17, F18, FR-2.08).
+ *
+ * `ratePerSqft` is the coordinator's choice of built-up rate (FR-2.04).
+ * The size rule below still produces a figure, but it is a SUGGESTION:
+ * a person decides what the client is charged, and the quotation records
+ * who. Omitted — previewing, or repricing a quotation raised before the
+ * choice existed — the suggestion stands, which is what the system did on
+ * its own before.
  */
 export function computeQuotation(
   job: QuoteJob,
   config: PricingConfig,
-  options: { outOfHours?: boolean } = {},
+  options: { outOfHours?: boolean; ratePerSqft?: number | null } = {},
 ) {
   const lines: QuoteLine[] = [];
   const type = job.property_type ?? "apartment";
@@ -153,17 +160,38 @@ export function computeQuotation(
   const row = card ? rateCardFor(card, type) : null;
 
   if (!card || !row) {
-    // Nothing to price against. Returning empty rather than falling back to
-    // the old multiplier keeps a mispriced quotation from being issued
-    // quietly; the caller surfaces "pricing is not configured".
-    return summarise(lines, config, { minimumApplied: false });
+    /*
+      Nothing to price against. Returning empty rather than falling back
+      to the old multiplier keeps a mispriced quotation from being issued
+      quietly; the caller surfaces "pricing is not configured".
+
+      The rate fields are present and null so this returns the same shape
+      as the priced path — a caller reading `rate_per_sqft` should not
+      have to know which branch produced its result.
+    */
+    return {
+      ...summarise(lines, config, { minimumApplied: false }),
+      rate_per_sqft: null as number | null,
+      rate_suggested: null as number | null,
+      rate_band: null as { min: number; max: number } | null,
+      rate_outside_band: false,
+    };
   }
 
-  // 1. Built-up area, at the card rate for this type and furnished state.
+  /*
+    1. Built-up area.
+
+    Furnished is a single published rate, so there is no band and nothing
+    to choose. Unfurnished is a range: the size rule proposes a point in
+    it and the coordinator's choice, when there is one, wins.
+  */
   const furnished = job.furnished === true;
-  const buaRate = furnished
+  const suggestedRate = furnished
     ? row.furnished
     : pickRateForSize(row.unfurnished_min, row.unfurnished_max, bua);
+  const chosen = options.ratePerSqft;
+  const buaRate =
+    chosen != null && Number.isFinite(chosen) && chosen >= 0 ? chosen : suggestedRate;
 
   const bedrooms =
     type === "commercial"
@@ -248,7 +276,24 @@ export function computeQuotation(
     });
   }
 
-  return summarise(lines, config, { minimumApplied });
+  return {
+    ...summarise(lines, config, { minimumApplied }),
+    /*
+      What the rate WAS, and what it would have been.
+
+      Carried out of the pricing so the caller can record the choice and
+      decide whether it needs an admin, without re-deriving the band and
+      risking a different answer from the one the lines were built with.
+    */
+    rate_per_sqft: buaRate as number | null,
+    rate_suggested: suggestedRate as number | null,
+    rate_band: furnished
+      ? null
+      : { min: row.unfurnished_min, max: row.unfurnished_max },
+    rate_outside_band: furnished
+      ? false
+      : buaRate < row.unfurnished_min || buaRate > row.unfurnished_max,
+  };
 }
 
 export function summarise(

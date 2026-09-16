@@ -450,6 +450,12 @@ async function applyChecklist(admin: Admin, ctx: Ctx, payload: Record<string, un
     .update({
       status,
       reason: (payload.reason as string) ?? null,
+      /*
+        Which return visit answered it (BA v2, change 29), as the handset
+        reported. Null on an ordinary inspection, which is what every
+        answer given before visits existed already carries.
+      */
+      visit_id: (payload.visit_id as string) ?? null,
       updated_at: new Date().toISOString(),
     })
     .eq("id", ctx.mutation.entity_id)

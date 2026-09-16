@@ -299,6 +299,58 @@ export type SnaggingTaskType = "single_unit" | "full_building";
 /** Which kind of visit a job is (Q1-Q6). */
 export type SnaggingVisitType = "initial" | "desnag" | "additional";
 
+/**
+ * A return appointment on an existing job (BA v2, change 25 / FR-9.01).
+ *
+ * Not a job of its own. A visit is another trip to the same property
+ * under the same record, so what it finds lands on the original job and
+ * reaches the client in the one report they were promised.
+ */
+export type SnaggingVisitStatus =
+  | "requested"
+  | "scheduled"
+  | "in_progress"
+  | "completed"
+  | "cancelled";
+
+/**
+ * How the client pays for it (change 26 / BR-14).
+ *
+ * A return visit is usually a penalty rather than work the client chose
+ * to buy, so the team often sends a payment link instead of raising a
+ * quotation. Both are legitimate; the coordinator records which was used.
+ */
+export type SnaggingVisitChargeMethod = "quotation" | "payment_link";
+
+export interface SnaggingJobVisit {
+  id: string;
+  job_id: string;
+  visit_number: number;
+  status: SnaggingVisitStatus;
+  scheduled_date: string | null;
+  appointment_at: string | null;
+  inspector_id: string | null;
+  inspector?: { id: string; full_name?: string | null; email?: string | null } | null;
+  /** Fixed per visit per property (change 30), stamped when it is raised. */
+  charge: number | null;
+  charge_method: SnaggingVisitChargeMethod;
+  quotation_id: string | null;
+  quotation?: {
+    id: string;
+    quote_number: string | null;
+    status: string;
+    total: number | null;
+  } | null;
+  payment_reference: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  notes: string | null;
+  /** Defects this visit raised onto the job it belongs to. */
+  snag_count?: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export type SnaggingPropertyType =
   "apartment" | "villa" | "townhouse" | "commercial";
 

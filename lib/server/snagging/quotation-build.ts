@@ -43,9 +43,29 @@ export function priceQuotation(
   property: QuotedProperty,
   client: QuotedClient | null,
   config: PricingConfig & { currency: string },
-  options: { outOfHours?: boolean } = {},
+  options: {
+    outOfHours?: boolean;
+    ratePerSqft?: number | null;
+    /**
+     * What the client declared for THIS quotation (FR-2.15).
+     *
+     * Not read from the unit. A property can be let furnished to one
+     * client and empty to the next, and the rate follows what is being
+     * inspected on the day. Omitted, the unit's own flag is the
+     * fallback, which is what every quotation raised before the
+     * declaration existed was priced against.
+     */
+    furnished?: boolean | null;
+  } = {},
 ) {
-  const priced = computeQuotation(property as QuoteJob, config, options);
+  const furnished =
+    options.furnished != null ? options.furnished : property.furnished ?? false;
+
+  const priced = computeQuotation(
+    { ...(property as QuoteJob), furnished },
+    config,
+    options,
+  );
 
   /*
     The exact property and client used, frozen onto the document (FR-2.03,
@@ -58,7 +78,8 @@ export function priceQuotation(
     community: property.community ?? null,
     developer_name: property.developer_name ?? null,
     property_type: property.property_type ?? null,
-    furnished: property.furnished ?? false,
+    // The declaration this document was priced with, frozen onto it.
+    furnished,
     bedrooms: property.bedrooms ?? null,
     built_up_area_sqft: property.built_up_area_sqft ?? null,
     client_name: client?.name ?? null,
@@ -90,6 +111,18 @@ export function priceQuotation(
     terms: config.terms,
     property_snapshot: propertySnapshot,
     pricing_snapshot: pricingSnapshot,
+    /*
+      The rate decision, carried out for the caller to record (FR-2.04).
+
+      Kept beside the lines rather than recomputed at the call site: the
+      band and the size rule live in one place, and asking twice is how
+      the stored figure ends up disagreeing with the one the client was
+      charged.
+    */
+    rate_per_sqft: priced.rate_per_sqft,
+    rate_suggested: priced.rate_suggested,
+    rate_outside_band: priced.rate_outside_band,
+    furnished,
   };
 }
 

@@ -63,8 +63,58 @@ export async function GET(req: NextRequest) {
       .in("status", ["assigned", "in_progress", "submitted", "in_review", "rejected", "approved", "delivered"]);
     if (assignedError) throw new Error(assignedError.message);
 
-    const assignedIds = (assigned ?? []).map((r) => r.id);
+    /*
+      An inspector booked onto an additional VISIT gets the job as well
+      (BA v2, change 25).
+
+      A visit is an appointment on the job now, and it carries its own
+      inspector — which may not be the one who did the original pass.
+      Selecting on snagging_jobs.inspector_id alone would hand that
+      inspector an empty device on the morning of a trip they are booked
+      for.
+    */
+    const { data: visitJobs, error: visitJobsError } = await admin
+      .from("snagging_job_visits")
+      .select("job_id, id, visit_number, status, scheduled_date")
+      .eq("inspector_id", profile.id)
+      .in("status", ["scheduled", "in_progress"]);
+    if (visitJobsError) throw new Error(visitJobsError.message);
+
+    const assignedIds = Array.from(
+      new Set([
+        ...(assigned ?? []).map((r) => r.id as string),
+        ...(visitJobs ?? []).map((r) => r.job_id as string),
+      ]),
+    );
     if (assignedIds.length === 0) return NextResponse.json({ data: empty });
+
+    /*
+      The live visit per job, so the handset knows which pass it is on.
+
+      Change 29 turns on this: during a visit the checklist shows only the
+      items an earlier pass could not answer. Without it the app has no
+      way to tell a return trip from the original inspection, because they
+      are now the same job.
+    */
+    const { data: liveVisits, error: liveVisitError } = await admin
+      .from("snagging_job_visits")
+      .select("id, job_id, visit_number, status")
+      .in("job_id", assignedIds)
+      .in("status", ["scheduled", "in_progress"])
+      .order("visit_number", { ascending: false });
+    if (liveVisitError) throw new Error(liveVisitError.message);
+
+    const activeVisit = new Map<string, { id: string; visit_number: number }>();
+    for (const v of liveVisits ?? []) {
+      const jobId = v.job_id as string;
+      // Ordered highest-first, so the first one seen is the current pass.
+      if (!activeVisit.has(jobId)) {
+        activeVisit.set(jobId, {
+          id: v.id as string,
+          visit_number: v.visit_number as number,
+        });
+      }
+    }
 
     /*
       An additional visit also needs its ORIGINAL inspection on the device.
@@ -129,9 +179,17 @@ export async function GET(req: NextRequest) {
       const pick = (key: string) =>
         (rec?.[key] ?? (j as unknown as Record<string, unknown>)[key]) ?? null;
       const team = [insp?.full_name || insp?.email].filter((n): n is string => Boolean(n));
+      const live = activeVisit.get(j.id as string) ?? null;
       return {
         id: j.id,
         code: j.code,
+        /*
+          Null on an ordinary inspection; set while a return visit is
+          booked or under way (change 29). The app reads it to decide
+          which checklist items to show and to stamp what it captures.
+        */
+        active_visit_id: live?.id ?? null,
+        active_visit_number: live?.visit_number ?? null,
         task_type: "single_unit",
         status: j.status,
         round_number: j.round_number,

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
-import { hasResourceAction } from "@/lib/role-permissions";
+import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { emailMasthead } from "@/lib/email-brand";
 import { sendEmail } from "@/lib/server/send-email";
@@ -94,6 +94,75 @@ export async function POST(
       quote_number: quote.quote_number as string,
       status: quote.status as string,
     };
+
+    /*
+      FR-2.04 — an off-band rate cannot reach a client until an admin says
+      so.
+
+      Checked on the two actions that put the document in front of one:
+      sending it, and issuing the share link. Saving a draft at an
+      unusual rate is a proposal somebody is still thinking about;
+      sending it is the promise, and that is the moment worth gating.
+    */
+    if (
+      (action === "send" || action === "share_link") &&
+      quote.rate_outside_band === true &&
+      !quote.rate_approved_at
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "This quotation is priced outside the published band and is waiting on an admin. Ask for approval before sending it to the client.",
+        },
+        { status: 409 },
+      );
+    }
+
+    /*
+      The approval itself. Separate from approving the QUOTATION, which is
+      the client's decision — this one is internal, and it is about the
+      price being allowed rather than the work being agreed.
+    */
+    if (action === "approve_rate") {
+      if (!isAdminUser(accessUser)) {
+        return NextResponse.json(
+          { error: "Only an admin can approve a rate outside the published band." },
+          { status: 403 },
+        );
+      }
+      if (quote.rate_outside_band !== true) {
+        return NextResponse.json(
+          { error: "This quotation is priced inside the band, so it needs no approval." },
+          { status: 409 },
+        );
+      }
+      const { data: approved, error: approveError } = await admin
+        .from("snagging_quotations")
+        .update({
+          rate_approved_by: profile.id,
+          rate_approved_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", id)
+        .select("*")
+        .single();
+      if (approveError) throw new Error(approveError.message);
+
+      await recordAudit(admin, {
+        entityType: "quotation",
+        entityId: id,
+        eventType: "quotation_rate_approved",
+        actorId: profile.id,
+        payload: {
+          quote_number: quote.quote_number,
+          rate_per_sqft: quote.rate_per_sqft,
+          rate_suggested: quote.rate_suggested,
+          reason: quote.rate_override_reason,
+        },
+      });
+
+      return NextResponse.json({ data: approved });
+    }
 
     try {
       if (action === "send") return await send(admin, quote, profile.id, body);

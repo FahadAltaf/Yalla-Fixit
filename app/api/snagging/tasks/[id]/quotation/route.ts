@@ -85,9 +85,12 @@ export async function POST(
     const { id } = await ctx.params;
     const body = await req.json().catch(() => ({}));
     const action = String(body.action ?? "generate");
+    const declaredFurnished =
+      body.furnished === undefined ? null : Boolean(body.furnished);
     const admin = await createAdminServerClient();
 
-    if (action === "generate") return generate(admin, id, profile.id);
+    if (action === "generate")
+      return generate(admin, id, profile.id, declaredFurnished);
     if (action === "send") return send(admin, id, profile.id, body);
     if (action === "share_link") return shareLink(admin, id, profile.id);
     if (action === "approve")
@@ -124,7 +127,17 @@ async function latestQuote(admin: Admin, jobId: string) {
   return data;
 }
 
-async function generate(admin: Admin, jobId: string, userId: string) {
+async function generate(
+  admin: Admin,
+  jobId: string,
+  userId: string,
+  /*
+    What the client declared for this quotation (FR-2.15). Null when the
+    caller does not offer the control, in which case the unit's own flag
+    stands — which is what this priced against before.
+  */
+  declaredFurnished: boolean | null = null,
+) {
   const [{ data: job, error: jobError }, { data: config, error: configError }] =
     await Promise.all([
       admin
@@ -171,7 +184,12 @@ async function generate(admin: Admin, jobId: string, userId: string) {
     );
   }
   const cfg = config as PricingConfig & { currency: string };
-  const priced = computeQuotation(property as QuoteJob, cfg);
+  const furnished =
+    declaredFurnished != null ? declaredFurnished : property.furnished ?? false;
+  const priced = computeQuotation(
+    { ...(property as QuoteJob), furnished },
+    cfg,
+  );
 
   // Snapshot the exact property + pricing used, so this quotation stays
   // reproducible and immune to later config changes (FR-2.03, §10).
@@ -181,7 +199,8 @@ async function generate(admin: Admin, jobId: string, userId: string) {
     community: property.community ?? null,
     developer_name: property.developer_name ?? null,
     property_type: property.property_type ?? null,
-    furnished: property.furnished ?? false,
+    // The declaration this document was priced with, frozen onto it.
+    furnished,
     bedrooms: property.bedrooms ?? null,
     built_up_area_sqft: property.built_up_area_sqft ?? null,
     client_name: client?.name ?? null,
@@ -223,6 +242,8 @@ async function generate(admin: Admin, jobId: string, userId: string) {
     scope_of_work: (config as PricingConfig).scope_of_work,
     terms: (config as PricingConfig).terms,
     lines: priced.lines,
+    // The client's declaration, on the document it priced (FR-2.15).
+    furnished,
     property_snapshot: propertySnapshot,
     pricing_snapshot: pricingSnapshot,
     // Regenerating always returns to an unsent, undecided draft.

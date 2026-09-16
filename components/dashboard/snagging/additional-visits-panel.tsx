@@ -1,47 +1,41 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { CalendarClock, FileText, Plus, UserRound } from "lucide-react";
+import {
+  Ban,
+  CalendarClock,
+  CreditCard,
+  FileText,
+  Plus,
+  UserRound,
+} from "lucide-react";
+import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SectionCard } from "@/components/dashboard/shared/kaizen";
 import { cn } from "@/lib/utils";
-import type { SnaggingTask } from "@/types/types";
+import { snaggingService } from "@/modules/snagging";
+import type { SnaggingJobVisit, SnaggingTask } from "@/types/types";
 
 import { ErrorState, SectionSkeleton, FieldsSkeleton } from "./shared";
 import { AdditionalVisitDialog } from "./additional-visit-dialog";
-import { ScheduleVisitDialog } from "./schedule-visit-dialog";
 
 /**
- * FR-9.01 / FR-9.05 — the additional visits raised against an inspection.
+ * The additional visits on this job (BA v2, changes 25-30).
  *
- * Kept deliberately distinct from de-snagging. A round re-checks defects
- * that already exist; a visit goes back for rooms and elements the first
- * pass could not cover, and anything it finds joins THIS inspection's
- * report rather than becoming a report of its own. Mixing them on one
- * screen is what makes people treat a chargeable return trip as a free
- * re-inspection.
+ * A visit is an APPOINTMENT on this job, not a job of its own: it uses
+ * the job's areas and checklist, and what it finds joins this
+ * inspection's report. That is change 25, and it is why this panel lists
+ * rows rather than linking away to other inspections.
+ *
+ * Kept deliberately distinct from de-snagging, which IS a separate job
+ * (change 31): a de-snag re-checks defects that already exist, a visit
+ * goes back for what the first pass could not cover. Mixing them is what
+ * makes people treat a chargeable return trip as a free re-inspection.
  */
-type VisitRow = {
-  id: string;
-  code: string;
-  status: string;
-  visit_number: number;
-  scheduled_date: string | null;
-  appointment_at: string | null;
-  visit_charge: number | null;
-  inspector: { id?: string; full_name?: string; email?: string } | null;
-  quotation: {
-    id: string;
-    status: string;
-    total: number | null;
-    quote_number: string | null;
-  } | null;
-  new_snags: number;
-  report_version: number | null;
-};
+type VisitRow = SnaggingJobVisit;
 
 type VersionRow = {
   id: string;
@@ -50,6 +44,27 @@ type VersionRow = {
   snag_count: number;
   generated_at: string;
   reason: string | null;
+};
+
+/*
+  Requested is amber because it is waiting on somebody; scheduled and
+  completed are settled states. Cancelled is muted rather than red — a
+  called-off trip is not a failure, it is a fact about the record.
+*/
+const VISIT_TONE: Record<string, string> = {
+  requested: "bg-warning/10 text-warning",
+  scheduled: "bg-brand/10 text-brand",
+  in_progress: "bg-brand/10 text-brand",
+  completed: "bg-success/10 text-success",
+  cancelled: "bg-mist text-ink-soft",
+};
+
+const VISIT_LABEL: Record<string, string> = {
+  requested: "Requested",
+  scheduled: "Scheduled",
+  in_progress: "On site",
+  completed: "Completed",
+  cancelled: "Cancelled",
 };
 
 const QUOTE_TONE: Record<string, string> = {
@@ -81,23 +96,58 @@ export function AdditionalVisitsPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
-  const [scheduling, setScheduling] = useState<VisitRow | null>(null);
+
+  const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/snagging/tasks/${task.id}/visits`);
-      const body = await res.json();
-      if (!res.ok) throw new Error(body?.error ?? "Could not load the additional visits");
-      setVisits(body.data?.visits ?? []);
-      setVersions(body.data?.versions ?? []);
+      const body = await snaggingService.listVisits(task.id);
+      setVisits(body.visits ?? []);
+      setVersions((body.versions ?? []) as VersionRow[]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load the additional visits");
     } finally {
       setLoading(false);
     }
   }, [task.id]);
+
+  /**
+   * Books the visit.
+   *
+   * The server decides whether it may be: a quotation-charged visit waits
+   * for the client to approve one (FR-9.04), a link-charged visit does
+   * not (change 26). The refusal comes back as a sentence, so this does
+   * not try to guess the rule a second time on the client.
+   */
+  async function book(visit: VisitRow) {
+    setBusy(visit.id);
+    try {
+      await snaggingService.updateVisit(task.id, visit.id, { status: "scheduled" });
+      toast.success(`Visit ${visit.visit_number} booked`);
+      await load();
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not book the visit");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function cancel(visit: VisitRow) {
+    setBusy(visit.id);
+    try {
+      await snaggingService.cancelVisit(task.id, visit.id);
+      toast.success(`Visit ${visit.visit_number} cancelled`);
+      await load();
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not cancel the visit");
+    } finally {
+      setBusy(null);
+    }
+  }
 
   useEffect(() => {
     void load();
@@ -120,12 +170,12 @@ export function AdditionalVisitsPanel({
       <SectionCard
         title="Additional visits"
         icon={<CalendarClock />}
-        description="Chargeable return trips for rooms and elements the inspection could not cover. Anything found joins this inspection's report."
+        description="Chargeable return trips on this job. Every area stays available, and anything found joins this inspection's report."
         bodyClassName="border-t"
         action={
           <Button size="sm" onClick={() => setCreateOpen(true)}>
             <Plus className="size-4" />
-            Create additional visit
+            Add visit
           </Button>
         }
       >
@@ -133,7 +183,7 @@ export function AdditionalVisitsPanel({
           <EmptyState
             icon={<CalendarClock className="size-6" />}
             title="No additional visits"
-            description="Raise one when an area or element could not be inspected and the client agrees to a return trip."
+            description="Add one when an area could not be inspected and the client is paying for a return trip — by quotation or by payment link."
           />
         ) : (
           <ul className="divide-y">
@@ -141,18 +191,49 @@ export function AdditionalVisitsPanel({
               <li key={visit.id} className="flex flex-wrap items-start gap-4 px-5 py-4">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-medium">Visit #{visit.visit_number}</span>
-                    <Badge variant="secondary" className="border-0 font-medium">
-                      {visit.status}
+                    <span className="font-medium">Visit {visit.visit_number}</span>
+                    <Badge
+                      variant="secondary"
+                      className={cn(
+                        "border-0 font-medium",
+                        VISIT_TONE[visit.status] ?? "bg-mist text-ink-soft",
+                      )}
+                    >
+                      {VISIT_LABEL[visit.status] ?? visit.status}
                     </Badge>
+                    {visit.charge ? (
+                      <span className="text-muted-foreground text-sm tabular-nums">
+                        AED {visit.charge.toLocaleString()} + VAT
+                      </span>
+                    ) : null}
                   </div>
 
                   <dl className="text-muted-foreground mt-2 grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
+                    {/*
+                      Change 26 — how it is being paid for, said plainly.
+                      "No quotation yet" used to read as a problem on every
+                      visit; on a link-charged one it is not a problem, it
+                      is the point.
+                    */}
                     <div className="flex items-center gap-1.5">
-                      <FileText className="size-3.5 shrink-0" aria-hidden />
-                      <dt className="sr-only">Quotation</dt>
+                      {visit.charge_method === "payment_link" ? (
+                        <CreditCard className="size-3.5 shrink-0" aria-hidden />
+                      ) : (
+                        <FileText className="size-3.5 shrink-0" aria-hidden />
+                      )}
+                      <dt className="sr-only">Charged by</dt>
                       <dd>
-                        {visit.quotation ? (
+                        {visit.charge_method === "payment_link" ? (
+                          <>
+                            Payment link
+                            {visit.payment_reference ? (
+                              <span className="font-mono text-xs">
+                                {" "}
+                                · {visit.payment_reference}
+                              </span>
+                            ) : null}
+                          </>
+                        ) : visit.quotation ? (
                           <>
                             <span className="font-mono text-xs">
                               {visit.quotation.quote_number ?? "Quotation"}
@@ -168,8 +249,8 @@ export function AdditionalVisitsPanel({
                             </Badge>
                           </>
                         ) : (
-                          // FR-9.04: this is why the visit cannot be booked.
-                          <span className="text-warning">No quotation yet</span>
+                          // Only a blocker on the quotation route (FR-9.04).
+                          <span className="text-warning">Quotation not raised yet</span>
                         )}
                       </dd>
                     </div>
@@ -187,34 +268,58 @@ export function AdditionalVisitsPanel({
                     </div>
 
                     <div>
-                      <dt className="sr-only">New snags</dt>
+                      <dt className="sr-only">Snags found</dt>
                       <dd>
-                        {visit.new_snags > 0
-                          ? `${visit.new_snags} new snag${visit.new_snags === 1 ? "" : "s"}`
-                          : "No new snags yet"}
-                        {visit.report_version ? ` · report V${visit.report_version}` : ""}
+                        {(visit.snag_count ?? 0) > 0
+                          ? `${visit.snag_count} snag${visit.snag_count === 1 ? "" : "s"} on this job`
+                          : "No snags from this visit yet"}
                       </dd>
                     </div>
                   </dl>
                 </div>
 
                 {/*
-                  Only a draft is bookable here. Once assigned the visit
-                  belongs to the inspector's flow, and a delivered one is
-                  history — offering "schedule" on either would be a
-                  button that only ever returns a refusal.
+                  Only a requested visit is bookable. Once booked it
+                  belongs to the inspector's day, and a completed or
+                  cancelled one is history — offering "book" on either
+                  would be a button that only ever returns a refusal.
                 */}
-                {visit.status === "draft" ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setScheduling(visit)}
-                    className="shrink-0"
-                  >
-                    <CalendarClock className="size-4" />
-                    Schedule
-                  </Button>
-                ) : null}
+                <div className="flex shrink-0 items-center gap-2">
+                  {visit.status === "requested" ? (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={busy === visit.id}
+                        onClick={() => void book(visit)}
+                      >
+                        <CalendarClock className="size-4" />
+                        Book
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={busy === visit.id}
+                        onClick={() => void cancel(visit)}
+                        aria-label={`Cancel visit ${visit.visit_number}`}
+                        title="Cancel this visit"
+                      >
+                        <Ban className="size-4" />
+                      </Button>
+                    </>
+                  ) : visit.status === "scheduled" ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={busy === visit.id}
+                      onClick={() => void cancel(visit)}
+                      aria-label={`Cancel visit ${visit.visit_number}`}
+                      title="Cancel this visit"
+                    >
+                      <Ban className="size-4" />
+                    </Button>
+                  ) : null}
+                </div>
               </li>
             ))}
           </ul>
@@ -256,30 +361,13 @@ export function AdditionalVisitsPanel({
         </SectionCard>
       ) : null}
 
-      <ScheduleVisitDialog
-        taskId={task.id}
-        visit={scheduling}
-        open={scheduling !== null}
-        onOpenChange={(next) => {
-          if (!next) setScheduling(null);
-        }}
-        onScheduled={() => {
-          void load();
-          onChanged();
-        }}
-      />
-
       <AdditionalVisitDialog
         taskId={task.id}
         open={createOpen}
-        onOpenChange={(next) => {
-          setCreateOpen(next);
-          // Closing after a create: pick up the new visit and let the
-          // page refresh its own counts.
-          if (!next) {
-            void load();
-            onChanged();
-          }
+        onOpenChange={setCreateOpen}
+        onCreated={() => {
+          void load();
+          onChanged();
         }}
       />
     </div>

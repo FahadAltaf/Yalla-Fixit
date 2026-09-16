@@ -154,7 +154,51 @@ export async function POST(req: NextRequest) {
       .eq("id", clientId)
       .maybeSingle();
 
-    const priced = priceQuotation(full as QuotedProperty, client, config);
+    /*
+      The coordinator's rate (FR-2.04), when they made a choice.
+
+      Absent on anything that does not offer the control yet — the API is
+      unchanged for those callers and the size rule still applies, which
+      is what it did before the choice existed.
+    */
+    const chosenRate =
+      body?.rate_per_sqft === undefined || body?.rate_per_sqft === null
+        ? null
+        : Number(body.rate_per_sqft);
+    if (chosenRate !== null && (!Number.isFinite(chosenRate) || chosenRate < 0)) {
+      return NextResponse.json(
+        { error: "The rate must be a number, and cannot be negative." },
+        { status: 400 },
+      );
+    }
+    const overrideReason = String(body?.rate_override_reason ?? "").trim();
+
+    /*
+      What the client declared (FR-2.15). Absent — an older caller — the
+      unit's own flag stands, which is what this priced against before.
+    */
+    const declaredFurnished =
+      body?.furnished === undefined ? null : Boolean(body.furnished);
+
+    const priced = priceQuotation(full as QuotedProperty, client, config, {
+      ratePerSqft: chosenRate,
+      furnished: declaredFurnished,
+    });
+
+    /*
+      Leaving the band is allowed, but not silently. The reason is
+      required here as well as by the database, so the coordinator is told
+      while the form is still open rather than by a 500.
+    */
+    if (priced.rate_outside_band && !overrideReason) {
+      return NextResponse.json(
+        {
+          error:
+            "That rate is outside the published band for this property type. Give a reason — an admin has to approve it before the quotation can be sent.",
+        },
+        { status: 400 },
+      );
+    }
 
     /*
       `quote_number` is deliberately absent: the column's default assigns
@@ -171,6 +215,10 @@ export async function POST(req: NextRequest) {
         quote_kind: "inspection",
         ...UNDECIDED,
         ...priced,
+        // Who chose the rate, which is the whole point of FR-2.04.
+        rate_chosen_by: chosenRate !== null ? profile.id : null,
+        rate_chosen_at: chosenRate !== null ? new Date().toISOString() : null,
+        rate_override_reason: priced.rate_outside_band ? overrideReason : null,
         created_by: profile.id,
         updated_at: new Date().toISOString(),
       })
@@ -192,6 +240,9 @@ export async function POST(req: NextRequest) {
         total: priced.total,
         currency: priced.currency,
         kind: "inspection",
+        rate_per_sqft: priced.rate_per_sqft,
+        rate_suggested: priced.rate_suggested,
+        rate_outside_band: priced.rate_outside_band,
       },
     });
 
