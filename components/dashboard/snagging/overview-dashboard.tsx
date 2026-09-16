@@ -56,7 +56,16 @@ export default function SnaggingOverviewDashboard() {
       <PageHeading
         eyebrow="Property care"
         title="Snagging Overview"
-        description="Monitor inspections, quotations, snags, and work requiring attention."
+        /*
+          Whose figures these are, said out loud (FR-10.01).
+
+          The page counts only what the reader raised or was put on. An
+          unqualified "Monitor inspections" over a page that is empty
+          because you happen to have nothing on today reads as a broken
+          dashboard rather than a clear desk — and it would quietly
+          contradict Analytics, which shows the same work for everyone.
+        */
+        description="Your inspections, quotations and anything waiting on you. Analytics has the same work across everyone."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <LastUpdated refreshing={refreshing} />

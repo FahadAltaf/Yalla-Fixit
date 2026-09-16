@@ -332,6 +332,10 @@ export interface AmcSubmission {
   generated_documents: AmcDocumentType[];
   /* FR6.4: frozen at send. Null while the submission is still a draft. */
   settings_snapshot?: AmcSettings | null;
+  /* FR5.1–FR5.2, FR5.9 */
+  submitted_at?: string | null;
+  decided_at?: string | null;
+  sent_back_reason?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -339,4 +343,7 @@ export interface AmcSubmission {
 export interface AmcSubmissionListResponse {
   submissions: AmcSubmission[];
   totalCount: number;
+  /* FR3.2 — set when the caller holds amc/approve, so the list can show
+     the review queue as well as their own submissions. */
+  canApprove?: boolean;
 }

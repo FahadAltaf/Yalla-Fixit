@@ -5,7 +5,6 @@ import { canAccessAmcContracts } from "@/components/dashboard/extensions/amc/amc
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
 import { hasResourceAction } from "@/lib/role-permissions";
-import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { isAmcSubmissionEditable } from "@/components/dashboard/extensions/amc/amc-types";
 import { ActionType, ResourceType } from "@/types/types";
 import type {
@@ -15,7 +14,6 @@ import type {
 } from "@/components/dashboard/extensions/amc/amc-types";
 
 const DOCUMENT_TYPES = ["proposal", "contract"] as const;
-const SUBMISSION_STATUSES = ["draft", "generated"] as const;
 
 const coordinationContactSchema = z.object({
   name: z.string(),
@@ -47,7 +45,6 @@ const accountManagerSchema = z.object({
 });
 
 const submissionPayloadSchema = z.object({
-  status: z.enum(SUBMISSION_STATUSES).optional(),
   property: z.object({
     propertyCategory: z.enum(["residential", "commercial"]),
     unitType: z.enum(["villa", "apartment", "office"]),
@@ -101,6 +98,9 @@ type AmcSubmissionRow = {
   final_price: number;
   generated_documents: AmcDocumentType[];
   settings_snapshot: AmcSubmission["settings_snapshot"];
+  submitted_at: string | null;
+  decided_at: string | null;
+  sent_back_reason: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -119,6 +119,9 @@ function mapRow(row: AmcSubmissionRow): AmcSubmission {
     final_price: Number(row.final_price),
     generated_documents: row.generated_documents ?? [],
     settings_snapshot: row.settings_snapshot ?? null,
+    submitted_at: row.submitted_at ?? null,
+    decided_at: row.decided_at ?? null,
+    sent_back_reason: row.sent_back_reason ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -254,7 +257,8 @@ export async function POST(req: NextRequest) {
     .from("amc_submissions")
     .insert({
       owner_id: profile.id,
-      status: payload.status ?? "draft",
+      /* Always draft. It advances only through the approval route. */
+      status: "draft",
       property: payload.property,
       customer: payload.customer,
       document_options: payload.document_options,

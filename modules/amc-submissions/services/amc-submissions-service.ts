@@ -7,7 +7,7 @@ import type {
 } from "@/components/dashboard/extensions/amc/amc-types";
 
 export interface AmcSubmissionInput {
-  status?: "draft" | "generated";
+  /* No status: transitions belong to amcSubmissionsService.decide. */
   property: AmcSubmission["property"];
   customer: AmcSubmission["customer"];
   document_options: AmcSubmission["document_options"];
@@ -22,7 +22,43 @@ export interface AmcSubmissionUpdateInput extends Partial<AmcSubmissionInput> {
   id: string;
 }
 
+/* FR5.1–FR5.3 — the internal approval transitions. */
+export type AmcApprovalAction =
+  | { action: "submit"; id: string }
+  | { action: "approve"; id: string }
+  | { action: "send_back"; id: string; reason: string };
+
+/* FR5.4 / FR5.6 — send to the client, or mint the link to send by hand. */
+export type AmcSendInput = {
+  id: string;
+  document: "proposal" | "contract";
+  deliver: "email" | "link";
+};
+
+export interface AmcSendResult {
+  submission: AmcSubmission;
+  link: string;
+  emailed: boolean;
+  /* Set when the document was marked sent and the link is valid but the
+     email did not go — the team needs to know to copy the link. */
+  warning?: string;
+}
+
 export const amcSubmissionsService = {
+  send: async (input: AmcSendInput): Promise<AmcSendResult> =>
+    executeRESTBackend<AmcSendResult>("/api/amc-submissions/send", {
+      method: "POST",
+      body: input as unknown as Record<string, unknown>,
+    }),
+
+  decide: async (
+    input: AmcApprovalAction,
+  ): Promise<{ submission: AmcSubmission }> =>
+    executeRESTBackend<{ submission: AmcSubmission }>(
+      "/api/amc-submissions/approval",
+      { method: "POST", body: input as unknown as Record<string, unknown> },
+    ),
+
   listSubmissions: async (): Promise<AmcSubmissionListResponse> => {
     return executeRESTBackend<AmcSubmissionListResponse>("/api/amc-submissions", {
       method: "GET",

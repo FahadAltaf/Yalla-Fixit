@@ -12,14 +12,13 @@ import type {
 /**
  * Builds the API payload for a submission.
  *
- * `status` is deliberately allowed to be undefined, meaning "leave whatever
- * the row already has". A submission that has produced a document is
- * "generated", and an ordinary autosave -- stepping backwards through the
- * wizard, say -- must not quietly demote it back to a draft.
+ * Status is not part of the payload at all. Under v2 it is owned by the
+ * approval route (FR5.1-FR5.3): an autosave must never move a submission
+ * through the workflow, and a client-settable status would let an owner
+ * skip the approver entirely.
  */
 export function formDataToSubmissionPayload(
   data: AmcFormData,
-  status: "draft" | "generated" | undefined,
   generatedDocuments?: AmcDocumentType[],
 ) {
   const services: AmcSubmissionServiceRow[] = data.serviceRows.map((row) => ({
@@ -56,7 +55,6 @@ export function formDataToSubmissionPayload(
   };
 
   return {
-    status,
     property,
     customer,
     document_options: documentOptions,

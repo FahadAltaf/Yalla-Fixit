@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
-import { Check, FileText, Loader2, Plus, ScrollText } from "lucide-react";
+import { Check, FileText, Loader2, Plus, ScrollText, SendHorizonal } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -17,7 +17,7 @@ import {
   getDefaultFormValues,
 } from "./amc-constants";
 import { formDataToSubmissionPayload, submissionToFormData } from "./amc-submission-mapper";
-import { downloadAmcPdf } from "./amc-document-utils";
+import { openAmcPdfInNewTab } from "./amc-document-utils";
 import { computeAmcData, syncServiceRowsForUnitType } from "./amc-pricing";
 import { amcFormSchema, type AmcDocumentType, type AmcFormData } from "./amc-types";
 import { PropertyCustomerStep } from "./steps/property-customer-step";
@@ -119,6 +119,7 @@ export function AmcContractsPage({
     null,
   );
   const [isSaving, setIsSaving] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [listRefreshKey, setListRefreshKey] = useState(0);
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const activeSavesRef = useRef(0);
@@ -188,24 +189,15 @@ export function AmcContractsPage({
   }, [unitType, form]);
 
   const persistDraft = useCallback(
-    (markGenerated?: AmcDocumentType) => {
+    (generatedDocument?: AmcDocumentType) => {
       activeSavesRef.current += 1;
       setIsSaving(true);
       saveQueueRef.current = saveQueueRef.current
         .then(async () => {
           const values = form.getValues();
-          const isNew = !values.submissionId;
           const payload = formDataToSubmissionPayload(
             values,
-            /*
-              Only a generation sets the status forward, and only a brand
-              new row starts at "draft". An autosave on an existing row
-              sends no status at all -- otherwise stepping back from the
-              review screen would knock a finished submission back to
-              draft in the list.
-            */
-            markGenerated ? "generated" : isNew ? "draft" : undefined,
-            markGenerated ? [markGenerated] : undefined,
+            generatedDocument ? [generatedDocument] : undefined,
           );
 
           if (values.submissionId) {
@@ -283,7 +275,52 @@ export function AmcContractsPage({
     void saveAndNavigate(stepId, false);
   };
 
-  const handleGenerate = async (documentType: AmcDocumentType) => {
+  /*
+    FR5.1 — submit for internal review. The wizard's terminal action; the
+    two "generate" buttons it replaces are gone (FR2.13).
+
+    The draft is flushed first: the autosave queue may still be mid-write,
+    and submitting a proposal the server has not seen the latest edits of
+    would put the previous version in front of the approver.
+  */
+  const handleSubmitForApproval = async () => {
+    const isValid = await form.trigger();
+    if (!isValid) {
+      toast.error(
+        "Please complete every step before submitting this proposal for approval.",
+      );
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      persistDraft();
+      await saveQueueRef.current;
+
+      const submissionId = form.getValues("submissionId");
+      if (!submissionId) throw new Error("The draft has not been saved yet.");
+
+      const { submission } = await amcSubmissionsService.decide({
+        action: "submit",
+        id: submissionId,
+      });
+      form.reset(submissionToFormData(submission));
+      setListRefreshKey((key) => key + 1);
+      setActiveTab("submissions");
+      toast.success(
+        "Submitted for approval. The approver reviews it before anything goes to the client.",
+      );
+    } catch (error) {
+      console.error(error);
+      toast.error(
+        getErrorMessage(error, "Failed to submit this proposal for approval."),
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handlePreview = async (documentType: AmcDocumentType) => {
     const isValid = await form.trigger();
     if (!isValid) {
       toast.error(
@@ -296,29 +333,23 @@ export function AmcContractsPage({
     setGeneratingType(documentType);
     toast.loading(
       documentType === "proposal"
-        ? "Generating proposal..."
-        : "Generating contract...",
+        ? "Opening the proposal preview..."
+        : "Opening the contract preview...",
       { id: toastId },
     );
 
     try {
       const values = form.getValues();
-      await downloadAmcPdf(values, documentType);
-
-      persistDraft(documentType);
-      toast.success(
-        documentType === "proposal"
-          ? "Proposal downloaded successfully!"
-          : "Contract downloaded successfully!",
-      );
+      await openAmcPdfInNewTab(values, documentType);
+      persistDraft();
     } catch (error) {
       console.error(error);
       toast.error(
         getErrorMessage(
           error,
           documentType === "proposal"
-            ? "Failed to generate the proposal PDF. Please try again."
-            : "Failed to generate the contract PDF. Please try again.",
+            ? "Failed to open the proposal preview. Please try again."
+            : "Failed to open the contract preview. Please try again.",
         ),
       );
     } finally {
@@ -468,37 +499,58 @@ export function AmcContractsPage({
                       <Button
                         type="button"
                         variant="outline"
-                        onClick={() => void handleGenerate("proposal")}
-                        disabled={isGenerating}
-                        className="w-full sm:w-auto min-w-[160px] gap-2"
+                        onClick={() => void handlePreview("proposal")}
+                        disabled={isGenerating || isSubmitting}
+                        className="w-full sm:w-auto min-w-[150px] gap-2"
                       >
                         {isGenerating && generatingType === "proposal" ? (
                           <>
                             <Loader2 className="size-4 animate-spin" />
-                            Generating…
+                            Opening…
                           </>
                         ) : (
                           <>
                             <FileText className="size-4" />
-                            Generate Proposal
+                            Preview proposal
                           </>
                         )}
                       </Button>
                       <Button
                         type="button"
-                        onClick={() => void handleGenerate("contract")}
-                        disabled={isGenerating}
-                        className="w-full sm:w-auto min-w-[160px] gap-2"
+                        variant="outline"
+                        onClick={() => void handlePreview("contract")}
+                        disabled={isGenerating || isSubmitting}
+                        className="w-full sm:w-auto min-w-[150px] gap-2"
                       >
                         {isGenerating && generatingType === "contract" ? (
                           <>
                             <Loader2 className="size-4 animate-spin" />
-                            Generating…
+                            Opening…
                           </>
                         ) : (
                           <>
                             <ScrollText className="size-4" />
-                            Generate Contract
+                            Preview contract
+                          </>
+                        )}
+                      </Button>
+                      {/* FR5.1 — the only way out of the wizard. Nothing
+                          reaches the client before internal approval. */}
+                      <Button
+                        type="button"
+                        onClick={() => void handleSubmitForApproval()}
+                        disabled={isGenerating || isSubmitting}
+                        className="w-full sm:w-auto min-w-[180px] gap-2"
+                      >
+                        {isSubmitting ? (
+                          <>
+                            <Loader2 className="size-4 animate-spin" />
+                            Submitting…
+                          </>
+                        ) : (
+                          <>
+                            <SendHorizonal className="size-4" />
+                            Submit for Approval
                           </>
                         )}
                       </Button>
