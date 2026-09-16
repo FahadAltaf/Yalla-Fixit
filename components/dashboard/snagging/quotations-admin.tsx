@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
 import {
   Briefcase,
@@ -87,7 +87,13 @@ export default function QuotationsAdmin() {
   const [rows, setRows] = useState<SnaggingQuotationSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [status, setStatus] = useState("all");
+  /*
+    Seeded from ?status=, so the Overview's quotation funnel can open this
+    list already filtered (FR-10.01) rather than dropping the reader on
+    "All" and making them find the bar they just clicked.
+  */
+  const params = useSearchParams();
+  const [status, setStatus] = useState(params.get("status") ?? "all");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);

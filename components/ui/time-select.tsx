@@ -40,6 +40,8 @@ export default function TimeSelect({
   onChange,
   className,
   disabled,
+  min,
+  max,
   placeholder,
   "aria-label": ariaLabel,
   id,
@@ -49,6 +51,15 @@ export default function TimeSelect({
   onChange: (value: string) => void;
   className?: string;
   disabled?: boolean;
+  /**
+   * Earliest / latest selectable time, "HH:mm".
+   *
+   * The browser marks an out-of-range value invalid and its own stepper
+   * will not walk past the bound, but a typed one still arrives through
+   * onChange — so a caller that must refuse it still has to say so itself.
+   */
+  min?: string;
+  max?: string;
   /**
    * Unused by a native time input, which shows its own --:-- when empty.
    * Accepted so existing call sites need no edit.
@@ -69,6 +80,8 @@ export default function TimeSelect({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         disabled={disabled}
+        min={min}
+        max={max}
         // defaultValue={new Date().getTime()}
         aria-label={ariaLabel ?? placeholder ?? "Time"}
         /*

@@ -3,7 +3,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import { cacheHeaders, countJobs } from "@/lib/server/snagging/overview-queries";
+import {
+  cacheHeaders,
+  countJobs,
+  myJobs,
+} from "@/lib/server/snagging/overview-queries";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
@@ -20,6 +24,35 @@ import { ActionType, ResourceType } from "@/types/types";
 const LIMIT = 6;
 const ALL_LIMIT = 100;
 
+/*
+  Site runs on GST, and appointments are stored as instants.
+
+  Slicing "HH:mm" out of the raw timestamp read the UTC clock, so a 09:00
+  appointment was shown as 05:00 — four hours earlier than the one the
+  coordinator booked and the client was told.
+*/
+const GST = "Asia/Dubai";
+
+function gstDate(at: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: GST,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(at);
+}
+
+function gstTime(iso: string): string | null {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return null;
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: GST,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(at);
+}
+
 export async function GET(req: NextRequest) {
   try {
     const { profile, accessUser } = await getRequestUserAccess(req);
@@ -31,7 +64,7 @@ export async function GET(req: NextRequest) {
     }
 
     const admin = await createAdminServerClient();
-    const today = new Date().toISOString().slice(0, 10);
+    const today = gstDate(new Date());
     const limit =
       req.nextUrl.searchParams.get("scope") === "all" ? ALL_LIMIT : LIMIT;
 
@@ -44,7 +77,10 @@ export async function GET(req: NextRequest) {
       it rather than each spelling it out.
     */
     const booked = (q: any) =>
-      q.gte("scheduled_date", today).in("status", ["assigned", "in_progress"]);
+      // The reader's own diary (FR-10.01): jobs they raised or are on.
+      myJobs(q, profile.id)
+        .gte("scheduled_date", today)
+        .in("status", ["assigned", "in_progress"]);
 
     const total = await countJobs(admin, booked);
 
@@ -77,7 +113,7 @@ export async function GET(req: NextRequest) {
       return {
         id: row.id,
         day: row.scheduled_date,
-        time: row.appointment_at ? row.appointment_at.slice(11, 16) : null,
+        time: row.appointment_at ? gstTime(row.appointment_at) : null,
         propertyType: row.property_type,
         /*
           The unit names the row now that the job code no longer does, so it

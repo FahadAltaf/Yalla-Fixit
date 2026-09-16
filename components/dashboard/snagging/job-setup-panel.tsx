@@ -9,6 +9,7 @@ import {
   Download,
   FileText,
   Lock,
+  MapPin,
   RefreshCw,
   Save,
   ShieldCheck,
@@ -20,6 +21,14 @@ import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { compressImage } from "@/lib/media/compress-image";
@@ -40,6 +49,7 @@ import { snaggingService } from "@/modules/snagging";
 import { usersService } from "@/modules/users/services/users-service";
 
 import { LocationMap } from "./location-map";
+import { LocationPicker } from "./location-picker";
 import { GoogleLocationMap, hasGoogleMapsKey } from "./google-location-map";
 import {
   ActionType,
@@ -112,7 +122,7 @@ export function JobSetupPanel({
   const [usersLoading, setUsersLoading] = useState(true);
   const [usersError, setUsersError] = useState<string | null>(null);
   const [saving, setSaving] = useState<
-    null | "appt" | "contacts" | "assign" | "noc"
+    null | "appt" | "contacts" | "assign" | "noc" | "location"
   >(null);
   const [busyMap, setBusyMap] = useState<Record<string, string>>({});
   const [availabilityError, setAvailabilityError] = useState<string | null>(
@@ -309,6 +319,77 @@ export function JobSetupPanel({
     }
   }
 
+  const [locationOpen, setLocationOpen] = useState(false);
+  const [pickedLat, setPickedLat] = useState<number | null>(null);
+  const [pickedLng, setPickedLng] = useState<number | null>(null);
+
+  /* Seeded from the record each time the dialog opens, during render, so a
+     cancelled edit never leaks into the next one. */
+  const [pickerWasOpen, setPickerWasOpen] = useState(false);
+  if (pickerWasOpen !== locationOpen) {
+    setPickerWasOpen(locationOpen);
+    if (locationOpen) {
+      setPickedLat(property?.location_lat ?? null);
+      setPickedLng(property?.location_lng ?? null);
+    }
+  }
+
+  /**
+   * Writes the pin back to the PROPERTY, not the job.
+   *
+   * Where a unit is does not change between visits, so it belongs on the
+   * record every job for that unit reads — which is also why this is worth
+   * offering here: the person who notices the pin is wrong is the one
+   * looking at the job, and sending them to Clients to fix it is how it
+   * stays wrong.
+   *
+   * The whole record goes back because the properties PATCH validates a
+   * complete one; only the two coordinates differ from what was read.
+   */
+  async function saveLocation(lat: number | null, lng: number | null) {
+    if (!property?.id) return;
+    if (!property.client_id) {
+      // Either the job predates the property link, or the record has no
+      // client. Both mean the same thing here: there is no property row
+      // this job can safely write to.
+      toast.error(
+        "This job has no property record to save the location on. Open the property under Clients first.",
+      );
+      return;
+    }
+
+    setSaving("location");
+    try {
+      await snaggingService.updateProperty(property.id, {
+        client_id: property.client_id,
+        unit_label: property.unit_label,
+        building_name: property.building_name ?? "",
+        community: property.community ?? "",
+        property_type: property.property_type,
+        developer_name: property.developer_name ?? "",
+        bedrooms: property.bedrooms ?? null,
+        built_up_area_sqft: property.built_up_area_sqft ?? null,
+        plot_area_sqft: property.plot_area_sqft ?? null,
+        external_areas_in_scope: property.external_areas_in_scope ?? false,
+        floors: property.floors ?? null,
+        location_lat: lat,
+        location_lng: lng,
+        title_deed_path: property.title_deed_path ?? "",
+        noc_required: property.noc_required ?? false,
+        noc_path: property.noc_path ?? "",
+      });
+      toast.success(lat === null ? "Location cleared" : "Location updated");
+      setLocationOpen(false);
+      onChanged();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not update the location",
+      );
+    } finally {
+      setSaving(null);
+    }
+  }
+
   const nocRequired = Boolean(property?.noc_required);
   const nocOnFile = Boolean(property?.noc_path);
 
@@ -443,7 +524,24 @@ export function JobSetupPanel({
             answer in place.
           */}
           <div className="flex min-w-0 flex-col space-y-3">
-            <SubHeading>Location</SubHeading>
+            <SubHeading
+              action={
+                canEdit && property?.id ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setLocationOpen(true)}
+                  >
+                    <MapPin className="size-3.5" />
+                    {property.location_lat && property.location_lng
+                      ? "Update"
+                      : "Set location"}
+                  </Button>
+                ) : null
+              }
+            >
+              Location
+            </SubHeading>
             {property?.location_lat && property?.location_lng ? (
               // Google Maps here only -- this Setup tab is the one place the
               // team asked for it. Every other map in the app (the picker,
@@ -461,13 +559,86 @@ export function JobSetupPanel({
                 }
               />
             ) : (
-              <div className="text-muted-foreground flex flex-1 items-center justify-center rounded-lg border border-dashed p-6 text-center text-sm">
-                No location pinned on the property record.
+              <div className="text-muted-foreground flex flex-1 flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-6 text-center text-sm">
+                <p>No location pinned on the property record.</p>
+                {canEdit && property?.id ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setLocationOpen(true)}
+                  >
+                    <MapPin className="size-3.5" />
+                    Pin it on the map
+                  </Button>
+                ) : null}
               </div>
             )}
           </div>
         </div>
       </SetupSection>
+
+      {/*
+        The same picker the job wizard uses — search by address or click the
+        map — rather than two number fields. Nobody knows a unit's latitude.
+      */}
+      <Dialog open={locationOpen} onOpenChange={setLocationOpen}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Property location</DialogTitle>
+            <DialogDescription>
+              Search for the building or click the map. This is saved on the
+              property, so every job for this unit picks it up.
+            </DialogDescription>
+          </DialogHeader>
+
+          <LocationPicker
+            lat={pickedLat}
+            lng={pickedLng}
+            onPick={(lat, lng) => {
+              setPickedLat(lat);
+              setPickedLng(lng);
+            }}
+            onClear={() => {
+              setPickedLat(null);
+              setPickedLng(null);
+            }}
+          />
+
+          <DialogFooter className="sm:justify-between">
+            {/* Clearing writes too — a wrong pin is worse than none. */}
+            {property?.location_lat != null ? (
+              <Button
+                variant="ghost"
+                className="text-destructive hover:text-destructive"
+                disabled={saving === "location"}
+                onClick={() => void saveLocation(null, null)}
+              >
+                Remove the location
+              </Button>
+            ) : (
+              <span />
+            )}
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setLocationOpen(false)}
+                disabled={saving === "location"}
+              >
+                Cancel
+              </Button>
+              <SubmitButton
+                pending={saving === "location"}
+                pendingLabel="Saving…"
+                icon={<Save className="size-4" />}
+                disabled={pickedLat === null || pickedLng === null}
+                onClick={() => void saveLocation(pickedLat, pickedLng)}
+              >
+                Save location
+              </SubmitButton>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Inspector assignment (FR-3.08) */}
       <div id="inspector-assignment" className="scroll-mt-24">

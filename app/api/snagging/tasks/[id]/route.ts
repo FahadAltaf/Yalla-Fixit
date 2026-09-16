@@ -160,6 +160,17 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const pick = (key: string) => (rec ? rec[key] : (job as Record<string, unknown>)[key]);
     const property = {
       id: (rec?.id as string | undefined) ?? job.property_id ?? job.client_id,
+      /*
+        Who the record belongs to, and by its presence, whether this
+        property can be edited from the job at all.
+
+        Carried because the properties PATCH validates a complete record,
+        so anything editing a property here — the location pin — has to
+        send the client back with it. Null when there is no property
+        record: `id` above then falls back to the job's own client id,
+        which would PATCH a snagging_properties row that does not exist.
+      */
+      client_id: rec ? ((rec.client_id as string | undefined) ?? job.client_id ?? null) : null,
       client_name: client?.name ?? "",
       client_email: client?.email ?? null,
       client_phone: client?.phone ?? null,

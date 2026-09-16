@@ -15,6 +15,8 @@ import type {
   FrequencyRow,
 } from "./amc-types";
 import { amountToWordsAed } from "./utils/amount-to-words";
+import { getAmcSettingsDefaults } from "./amc-settings";
+import type { AmcSettings } from "./amc-settings";
 
 const VAT_RATE = 0.05;
 
@@ -107,6 +109,9 @@ function buildFrequencyRows(data: AmcFormData): FrequencyRow[] {
 export function computeAmcData(
   data: AmcFormData,
   documentType: AmcDocumentType = "proposal",
+  /* FR6.4: a sent proposal passes its snapshot; a draft passes live
+     settings; a caller that has neither gets the shipped defaults. */
+  settings: AmcSettings = getAmcSettingsDefaults(),
 ): AmcComputedData {
   const categoryLabel =
     data.propertyCategory === "residential" ? "RESIDENTIAL" : "COMMERCIAL";
@@ -114,6 +119,7 @@ export function computeAmcData(
 
   return {
     documentType,
+    settings,
     /* FR4.3: the banner used to read "<PACKAGE> AMC PACKAGE". With
        packages gone it names the document and the property category. */
     documentTitle: `AMC ${documentType === "contract" ? "CONTRACT" : "PROPOSAL"} (${categoryLabel})`,

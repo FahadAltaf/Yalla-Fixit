@@ -3,8 +3,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  ArrowLeft,
-  Check,
   Copy,
   Download,
   FileText,
@@ -30,7 +28,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Textarea } from "@/components/ui/textarea";
 import { generateQuotationPDFBlob } from "@/components/dashboard/extensions/quotation-templates/pdf-utils";
 import { YallaClassicTemplate } from "@/components/dashboard/extensions/quotation-templates/templates/YallaClassicTemplate";
 import { useAuth } from "@/context/AuthContext";
@@ -48,15 +45,20 @@ import {
   QuotationStatusBadge,
   SubmitButton,
   formatGstDateTime,
+  useConfirm,
 } from "./shared";
 
 /**
  * One quotation, on its own page rather than inside a job (BA v2, changes
  * 1-3).
  *
- * It carries the same verbs the job's quotation tab has — download, send,
- * share for WhatsApp, approve, reject — plus the one that only makes sense
- * here: turning an approved quotation into the job it paid for.
+ * It carries the verbs that belong to the document — download it, send it,
+ * share it for WhatsApp — plus the one that only makes sense here: turning
+ * an approved quotation into the job it paid for.
+ *
+ * Approving and rejecting are deliberately NOT here. The client decides,
+ * through the link they were emailed, and the page reports that decision
+ * rather than offering a coordinator a button to make it for them.
  */
 export default function QuotationDetail({ id }: { id: string }) {
   const router = useRouter();
@@ -67,17 +69,26 @@ export default function QuotationDetail({ id }: { id: string }) {
     ActionType.EDIT,
   );
 
+  const { confirm, dialog } = useConfirm();
+
   const [quote, setQuote] = useState<SnaggingQuotation | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [working, setWorking] = useState(false);
-  const [downloading, setDownloading] = useState(false);
   const [sendOpen, setSendOpen] = useState(false);
-  const [rejectOpen, setRejectOpen] = useState(false);
   const [recipient, setRecipient] = useState("");
-  const [reason, setReason] = useState("");
   const [approvalUrl, setApprovalUrl] = useState<string | null>(null);
-  const busy = working || downloading;
+
+  /*
+    WHICH action is running, not merely that one is.
+
+    A single `working` flag disabled every button and spun none of them, so
+    "Share on WhatsApp" — which issues a link, copies it and renders a PDF,
+    several seconds of work — looked like a button that did nothing at all.
+  */
+  const [pending, setPending] = useState<
+    null | "download" | "share_link" | "regenerate" | "send"
+  >(null);
+  const busy = pending !== null;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -113,34 +124,36 @@ export default function QuotationDetail({ id }: { id: string }) {
       }
     : null;
 
+  /** The PDF bytes, from the same template the page renders below. */
+  async function buildPdf() {
+    if (!doc) throw new Error("The quotation has not loaded yet");
+    return generateQuotationPDFBlob(
+      "yalla-classic",
+      snaggingQuoteToTemplateData(doc),
+      { scale: 2 },
+      "without",
+    );
+  }
+
   async function download() {
     if (!doc || !quote) return;
-    setDownloading(true);
-    const t = toast.loading("Preparing the PDF…");
+    setPending("download");
     try {
-      const blob = await generateQuotationPDFBlob(
-        "yalla-classic",
-        snaggingQuoteToTemplateData(doc),
-        { scale: 2 },
-        "without",
-      );
-      saveAs(blob, `Quotation-${quote.quote_number}.pdf`);
-      toast.success("PDF downloaded", { id: t });
+      saveAs(await buildPdf(), `Quotation-${quote.quote_number}.pdf`);
+      toast.success("PDF downloaded");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not generate the PDF", {
-        id: t,
-      });
+      toast.error(e instanceof Error ? e.message : "Could not generate the PDF");
     } finally {
-      setDownloading(false);
+      setPending(null);
     }
   }
 
   async function run(
-    action: "send" | "share_link" | "regenerate" | "approve" | "reject",
+    action: "send" | "regenerate",
     extra?: Record<string, unknown>,
     success?: string,
   ) {
-    setWorking(true);
+    setPending(action);
     try {
       const result = await snaggingService.quotationActionById(id, action, extra);
       if (result.approval_url) setApprovalUrl(result.approval_url);
@@ -151,24 +164,45 @@ export default function QuotationDetail({ id }: { id: string }) {
       toast.error(err instanceof Error ? err.message : "That did not work");
       return null;
     } finally {
-      setWorking(false);
+      setPending(null);
     }
   }
 
-  /** The WhatsApp route: a link and a PDF, ready to paste (change 24). */
+  /**
+   * The WhatsApp route: a link and a PDF, ready to paste (change 24).
+   *
+   * Written out rather than composed from run() + download() so the whole
+   * errand reports once. Composed, it announced "link copied" and then
+   * "PDF downloaded" for what the coordinator experiences as one action.
+   */
   async function shareByHand() {
-    if (
-      approvalUrl &&
-      !window.confirm(
-        "A link has already been issued for this quotation. Getting a new one stops the old link working. Continue?",
-      )
-    ) {
-      return;
+    if (!doc || !quote) return;
+    if (approvalUrl) {
+      const ok = await confirm({
+        title: "Issue a new client link?",
+        description:
+          "A link has already been issued for this quotation. Getting a new one stops the old link working.",
+        confirmText: "Issue a new link",
+      });
+      if (!ok) return;
     }
-    const result = await run("share_link", undefined, "Link copied and PDF downloaded");
-    if (result?.approval_url) {
-      await navigator.clipboard.writeText(result.approval_url).catch(() => {});
-      await download();
+
+    setPending("share_link");
+    try {
+      const result = await snaggingService.quotationActionById(id, "share_link");
+      if (result.approval_url) {
+        setApprovalUrl(result.approval_url);
+        await navigator.clipboard.writeText(result.approval_url).catch(() => {});
+      }
+      saveAs(await buildPdf(), `Quotation-${quote.quote_number}.pdf`);
+      toast.success("Ready for WhatsApp", {
+        description: "The approval link is on your clipboard and the PDF has downloaded.",
+      });
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "That did not work");
+    } finally {
+      setPending(null);
     }
   }
 
@@ -178,21 +212,15 @@ export default function QuotationDetail({ id }: { id: string }) {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <PageHeading
-          eyebrow="Sales"
-          title={quote ? `Quotation ${quote.quote_number}` : "Quotation"}
-          description={
-            quote
-              ? `${isDesnag ? "De-snagging visit" : "Inspection"} · raised ${formatGstDateTime(quote.created_at)}.`
-              : "Loading the document…"
-          }
-        />
-        <Button variant="outline" onClick={() => router.push("/snagging/quotations")}>
-          <ArrowLeft className="size-4" />
-          All quotations
-        </Button>
-      </div>
+      <PageHeading
+        eyebrow="Sales"
+        title={quote ? `Quotation ${quote.quote_number}` : "Quotation"}
+        description={
+          quote
+            ? `${isDesnag ? "De-snagging visit" : "Inspection"} · raised ${formatGstDateTime(quote.created_at)}.`
+            : "Loading the document…"
+        }
+      />
 
       <DataState
         loading={loading}
@@ -218,7 +246,7 @@ export default function QuotationDetail({ id }: { id: string }) {
                     variant="outline"
                     size="sm"
                     onClick={() => void download()}
-                    pending={downloading}
+                    pending={pending === "download"}
                     pendingLabel="Preparing…"
                     disabled={busy}
                     icon={<Download className="size-4" />}
@@ -227,26 +255,32 @@ export default function QuotationDetail({ id }: { id: string }) {
                   </SubmitButton>
 
                   {quote.status === "draft" ? (
-                    <Button
+                    <SubmitButton
                       variant="outline"
                       size="sm"
                       disabled={busy}
+                      pending={pending === "regenerate"}
+                      pendingLabel="Repricing…"
+                      icon={<FileText className="size-4" />}
                       onClick={() => void run("regenerate", undefined, "Repriced")}
                     >
-                      <FileText className="size-4" /> Regenerate
-                    </Button>
+                      Regenerate
+                    </SubmitButton>
                   ) : null}
 
                   {!isDecided ? (
                     <>
-                      <Button
+                      <SubmitButton
                         variant="outline"
                         size="sm"
                         disabled={busy}
+                        pending={pending === "share_link"}
+                        pendingLabel="Preparing…"
+                        icon={<MessageCircle className="size-4" />}
                         onClick={() => void shareByHand()}
                       >
-                        <MessageCircle className="size-4" /> Share on WhatsApp
-                      </Button>
+                        Share on WhatsApp
+                      </SubmitButton>
                       <Button
                         size="sm"
                         disabled={busy}
@@ -263,29 +297,6 @@ export default function QuotationDetail({ id }: { id: string }) {
                       >
                         <Send className="size-4" />{" "}
                         {quote.status === "sent" ? "Resend by email" : "Send by email"}
-                      </Button>
-                      {/*
-                        The coordinator recording a decision the client gave
-                        them on the phone. The client's own route is the
-                        emailed link; both write the identical record.
-                      */}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={busy}
-                        onClick={() =>
-                          void run("approve", undefined, "Recorded as approved")
-                        }
-                      >
-                        <Check className="size-4" /> Mark approved
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={busy}
-                        onClick={() => setRejectOpen(true)}
-                      >
-                        <X className="size-4" /> Mark rejected
                       </Button>
                     </>
                   ) : null}
@@ -385,8 +396,13 @@ export default function QuotationDetail({ id }: { id: string }) {
               </div>
             ) : null}
 
-            {/* The document itself, from the template the PDF is built from. */}
-            <Card className="overflow-x-auto p-0">
+            {/*
+              The document itself, from the template the PDF is built from.
+              Centred and sized to the page it represents (794px = A4 at
+              96dpi) rather than stretched against the left edge of a
+              full-width card.
+            */}
+            <Card className="mx-auto w-fit max-w-full overflow-x-auto p-0">
               <YallaClassicTemplate
                 data={snaggingQuoteToTemplateData(doc)}
                 hideDiscount
@@ -416,11 +432,11 @@ export default function QuotationDetail({ id }: { id: string }) {
             />
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setSendOpen(false)} disabled={working}>
+            <Button variant="outline" onClick={() => setSendOpen(false)} disabled={busy}>
               Cancel
             </Button>
             <SubmitButton
-              pending={working}
+              pending={pending === "send"}
               pendingLabel="Sending…"
               disabled={!recipient.trim()}
               onClick={() => {
@@ -440,52 +456,7 @@ export default function QuotationDetail({ id }: { id: string }) {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={rejectOpen} onOpenChange={setRejectOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Record the client&apos;s rejection</DialogTitle>
-            <DialogDescription>
-              This closes the quotation. A new one can be raised for the same
-              property afterwards.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-1.5">
-            <Label htmlFor="quote-reason">Why?</Label>
-            <Textarea
-              id="quote-reason"
-              rows={3}
-              value={reason}
-              onChange={(event) => setReason(event.target.value)}
-              placeholder="Too expensive, went elsewhere, postponed…"
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setRejectOpen(false)} disabled={working}>
-              Cancel
-            </Button>
-            <SubmitButton
-              pending={working}
-              pendingLabel="Saving…"
-              disabled={!reason.trim()}
-              onClick={() => {
-                void (async () => {
-                  const ok = await run(
-                    "reject",
-                    { reason: reason.trim() },
-                    "Recorded as rejected",
-                  );
-                  if (ok) {
-                    setRejectOpen(false);
-                    setReason("");
-                  }
-                })();
-              }}
-            >
-              Record rejection
-            </SubmitButton>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {dialog}
     </div>
   );
 }

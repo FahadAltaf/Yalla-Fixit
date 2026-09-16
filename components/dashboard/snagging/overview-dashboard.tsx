@@ -16,8 +16,6 @@ import { InspectorPerformance } from "./overview/inspector-performance";
 import { KpiRow } from "./overview/kpi-row";
 import { NeedsAttention } from "./overview/needs-attention";
 import { QuotationAnalytics } from "./overview/quotation-analytics";
-import { SnagOverview } from "./overview/snag-overview";
-import { SnagSeverity } from "./overview/snag-severity";
 import { SnagsByCategory } from "./overview/snags-by-category";
 import { UpcomingInspections } from "./overview/upcoming-inspections";
 import { lastFetchedAt, refreshAll } from "./overview/use-section";
@@ -95,11 +93,6 @@ export default function SnaggingOverviewDashboard() {
         <div className="">
           <UpcomingInspections />
         </div>
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <SnagOverview />
-        <SnagSeverity />
       </div>
 
       <SnagsByCategory />

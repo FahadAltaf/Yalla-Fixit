@@ -106,6 +106,10 @@ export enum ResourceType {
   SETTINGS = "settings",
   // Extensions
   EXTENSIONS = "extensions",
+  /* FR5.3 — AMC approval rights are granted by role, so the approver can
+     change without a code change. Separate from the email allowlist, which
+     still decides who can open the extension at all (FRD §4). */
+  AMC = "amc",
   // Scheduling
   SCHEDULING = "scheduling",
   // Property Care / Snagging

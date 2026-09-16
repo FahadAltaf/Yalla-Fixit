@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 
 import QuotationsAdmin from "@/components/dashboard/snagging/quotations-admin";
+import { HeadingSkeleton } from "@/components/dashboard/shared/kaizen-states";
 
 const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
 const title = "Quotations | Property Care";
@@ -17,5 +19,18 @@ export const metadata: Metadata = {
 };
 
 export default function SnaggingQuotationsPage() {
-  return <QuotationsAdmin />;
+  // QuotationsAdmin reads the status filter from the query string, so it
+  // is wrapped in Suspense as useSearchParams requires under the App
+  // Router — the same shape the jobs page uses.
+  return (
+    <Suspense
+      fallback={
+        <div className="flex flex-col gap-6">
+          <HeadingSkeleton />
+        </div>
+      }
+    >
+      <QuotationsAdmin />
+    </Suspense>
+  );
 }

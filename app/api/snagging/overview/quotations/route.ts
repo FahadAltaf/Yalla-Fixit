@@ -3,7 +3,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import { cacheHeaders } from "@/lib/server/snagging/overview-queries";
+import {
+  cacheHeaders,
+  myQuotations,
+} from "@/lib/server/snagging/overview-queries";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
@@ -24,6 +27,9 @@ export async function GET(req: NextRequest) {
     }
 
     const admin = await createAdminServerClient();
+    // Captured before base(), which is hoisted and so cannot see the
+    // null check above.
+    const me = profile.id;
     const count = async (refine?: (q: ReturnType<typeof base>) => ReturnType<typeof base>) => {
       const query = base();
       const { count: value, error } = await (refine ? refine(query) : query);
@@ -31,7 +37,11 @@ export async function GET(req: NextRequest) {
       return value ?? 0;
     };
     function base() {
-      return admin.from("snagging_quotations").select("id", { count: "exact", head: true });
+      // The reader's own quotations (FR-10.01).
+      return myQuotations(
+        admin.from("snagging_quotations").select("id", { count: "exact", head: true }),
+        me,
+      );
     }
 
     const [generated, sent, approved, rejected, awaiting] = await Promise.all([

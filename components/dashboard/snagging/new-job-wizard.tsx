@@ -5,8 +5,9 @@ import { useRouter, useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
   CalendarIcon,
-  Check,
   ChevronDown,
+  Crosshair,
+  Eraser,
   FileText,
   ImageIcon,
   LayoutGrid,
@@ -14,12 +15,13 @@ import {
   MapPin,
   Plus,
   Search,
+  Shapes,
   Upload,
   UserPlus,
   Users,
   X,
 } from "lucide-react";
-import { format, parseISO } from "date-fns";
+import { addDays, format, parseISO } from "date-fns";
 import { toast } from "sonner";
 
 import { compressImage, readImageSize } from "@/lib/media/compress-image";
@@ -44,7 +46,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import TimeSelect from "@/components/ui/time-select";
+import TimeSelect, { formatTimeAmPm } from "@/components/ui/time-select";
 import { PhoneInput } from "@/components/ui/phone-input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -140,6 +142,50 @@ type Draft = {
  * for both is what stops a quotation and a job ever disagreeing about what
  * a property is — one form, one set of rules, one validation.
  */
+/*
+  Appointments are written in GST (+04:00 — see submit), so "is this in the
+  past" has to be asked in GST too. Reading the browser's own clock would
+  let a coordinator on another machine's timezone either book a slot that
+  has already gone or be refused one that has not.
+*/
+function gstNow() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Dubai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date());
+  const at = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  return {
+    date: `${at("year")}-${at("month")}-${at("day")}`,
+    time: `${at("hour")}:${at("minute")}`,
+  };
+}
+
+/** The instant an appointment names, or null when it is not fully set. */
+function appointmentAtGst(date: string, time: string) {
+  if (!date || !time) return null;
+  const at = new Date(`${date}T${time}:00+04:00`);
+  return Number.isNaN(at.getTime()) ? null : at;
+}
+
+/*
+  The first slot worth offering: tomorrow at the start of the working day.
+
+  Today is not offered by default because an inspection needs the door
+  opened by somebody who has been told about it, and 09:00 is where YFI's
+  standard hours start — the same window the quotation's terms quote.
+*/
+function defaultAppointment() {
+  return {
+    date: format(addDays(parseISO(gstNow().date), 1), "yyyy-MM-dd"),
+    time: "09:00",
+  };
+}
+
 const ALL_STEPS = [
   { key: "property", label: "Property", icon: MapPin },
   { key: "plan_areas", label: "Plan & areas", icon: LayoutGrid },
@@ -238,8 +284,8 @@ export default function NewJobWizard({
     title_deed_path: "",
     noc_required: false,
     noc_path: "",
-    appointment_date: "",
-    appointment_time: "",
+    appointment_date: defaultAppointment().date,
+    appointment_time: defaultAppointment().time,
     developer_contact_name: "",
     developer_contact_phone: "",
     client_contact_name: "",
@@ -306,9 +352,9 @@ export default function NewJobWizard({
           areas: areasTouched.current
             ? current.areas
             : suggestedFor(
-                (snap.property_type as SnaggingPropertyType) ?? current.property_type,
-                typeof snap.bedrooms === "number" ? snap.bedrooms : current.bedrooms,
-              ),
+              (snap.property_type as SnaggingPropertyType) ?? current.property_type,
+              typeof snap.bedrooms === "number" ? snap.bedrooms : current.bedrooms,
+            ),
         }));
         setQuotationLabel(quote.quote_number);
         // Past the property step; the team adds plans, areas and contacts.
@@ -414,10 +460,20 @@ export default function NewJobWizard({
         // The plan itself stays optional — it can be added from the job
         // later. The rooms are what the inspector cannot walk without.
         return draft.areas.length > 0 ? [] : [AREAS_ERROR];
-      case "assign":
+      case "assign": {
         // Schedule + contacts are optional here; the inspector is assigned from
         // the job only after the client approves the quotation (FR-3.08).
+        // What is NOT optional is that a slot which is set is a slot that
+        // can still be kept.
+        const at = appointmentAtGst(draft.appointment_date, draft.appointment_time);
+        if (at && at.getTime() < Date.now()) {
+          return ["The appointment is in the past. Pick a later date or time."];
+        }
+        if (draft.appointment_date && !draft.appointment_time) {
+          return ["Give the appointment a time, or clear the date."];
+        }
         return [];
+      }
       default:
         return [];
     }
@@ -613,8 +669,8 @@ export default function NewJobWizard({
           quoteOnly
             ? "Price a client's property. The job is raised once they approve it."
             : quotationLabel
-            ? "The client and property come from the approved quotation. Add the plans, areas and contacts."
-            : "Three steps to a reference pack an inspector can pull before losing signal."
+              ? "The client and property come from the approved quotation. Add the plans, areas and contacts."
+              : "Three steps to a reference pack an inspector can pull before losing signal."
         }
       />
 
@@ -648,51 +704,6 @@ export default function NewJobWizard({
           </AlertDescription>
         </Alert>
       ) : null}
-
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {STEPS.map((entry, index) => {
-          const done = index < step;
-          const current = index === step;
-          return (
-            <button
-              key={entry.key}
-              type="button"
-              onClick={() => index <= step && setStep(index)}
-              disabled={index > step}
-              className="text-left"
-            >
-              <div
-                className={cn(
-                  "h-1 rounded-full transition-colors",
-                  done ? "bg-brand" : current ? "bg-brand/40" : "bg-mist",
-                )}
-              />
-              <div className="mt-2 flex items-center gap-2">
-                <span
-                  className={cn(
-                    "inline-flex size-5 items-center justify-center rounded-full text-xs font-semibold tabular-nums",
-                    done
-                      ? "bg-brand text-white"
-                      : current
-                        ? "border-brand text-brand border"
-                        : "border-border text-muted-foreground border",
-                  )}
-                >
-                  {done ? <Check className="size-3" /> : index + 1}
-                </span>
-                <span
-                  className={cn(
-                    "text-sm font-medium",
-                    current ? "text-foreground" : "text-muted-foreground",
-                  )}
-                >
-                  {entry.label}
-                </span>
-              </div>
-            </button>
-          );
-        })}
-      </div>
 
       <Card className="gap-0 p-0">
         <div className="p-6">
@@ -733,9 +744,8 @@ export default function NewJobWizard({
           <div className="min-w-0">
             <p className="text-muted-foreground text-xs">
               {STEPS[step].key === "plan_areas"
-                ? `${draft.areas.length} area${draft.areas.length === 1 ? "" : "s"} selected, ${
-                    draft.areas.filter((a) => a.pinX != null).length
-                  } pinned. Pinning is optional.`
+                ? `${draft.areas.length} area${draft.areas.length === 1 ? "" : "s"} selected, ${draft.areas.filter((a) => a.pinX != null).length
+                } pinned. Pinning is optional.`
                 : quoteOnly
                   ? "The client and the property are all a quotation needs."
                   : "Required fields are marked."}
@@ -1545,6 +1555,8 @@ function PlanAreasStep({
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [custom, setCustom] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
+  const listRef = useRef<HTMLDivElement>(null);
   const [activePlanId, setActivePlanId] = useState<string | null>(null);
   const [activeArea, setActiveArea] = useState<string | null>(null);
   /*
@@ -1560,19 +1572,49 @@ function PlanAreasStep({
   // uploads and still reaches the inspector; it just cannot be pinned here.
   const canPin = Boolean(activePlan?.file.type.startsWith("image/"));
 
-  // The full option list is the template for this property type, plus any
-  // custom rooms already added, so ticking and unticking never loses a room.
+  /*
+    The template for this property type, plus any room added by hand.
+
+    Added rooms sit ABOVE the template, newest first, rather than at the
+    bottom of a list of twenty. A room you just typed is the one you are
+    about to place, and hunting for it under a scroll bar was the whole
+    reason adding one felt like it had not worked.
+  */
   const options = useMemo(() => {
     const template = templateFor(propertyType, bedrooms);
     const templateNames = new Set(template.map((a) => a.name.toLowerCase()));
     const extras = areas.filter((a) => !templateNames.has(a.name.toLowerCase()));
-    return [...template, ...extras];
+    return [...extras.slice().reverse(), ...template];
   }, [propertyType, bedrooms, areas]);
 
   const selected = useMemo(
     () => new Map(areas.map((a) => [a.name.toLowerCase(), a])),
     [areas],
   );
+
+  const placedCount = areas.filter((a) => a.pinX != null || a.zone).length;
+
+  const planLabel = (id: string | null | undefined) =>
+    plans.find((plan) => plan.id === id)?.label.trim() || "another plan";
+
+  /**
+   * Picks the room the next click on the plan belongs to.
+   *
+   * Brings its own floor forward when the room already sits on a different
+   * plan, so "select, then click" can never quietly leave a second marker
+   * for one room on the wrong floor.
+   */
+  function select(name: string) {
+    setActiveArea(name);
+    const area = selected.get(name.toLowerCase());
+    if (area?.planId && area.planId !== activePlan?.id) setActivePlanId(area.planId);
+  }
+
+  /* Said in the dialog while the cursor is still in the field, rather than
+     swallowing the click and leaving the list unchanged. */
+  const duplicateArea =
+    custom.trim().length > 0 &&
+    options.some((o) => o.name.toLowerCase() === custom.trim().toLowerCase());
 
   async function addFiles(files: FileList | null) {
     if (!files) return;
@@ -1641,16 +1683,21 @@ function PlanAreasStep({
 
   function addCustom() {
     const name = custom.trim();
-    if (!name) return;
-    if (selected.has(name.toLowerCase())) {
-      setCustom("");
-      return;
-    }
+    if (!name || selected.has(name.toLowerCase())) return;
+
     // A custom room carries no catalogue code; the capture sheet falls
     // back to the whole catalogue there.
     setAreas([...areas, { name, code: null }]);
     setActiveArea(name);
     setCustom("");
+    setAddOpen(false);
+
+    // It lands at the top of the list; show that, in case the list was
+    // scrolled somewhere else when the dialog was opened.
+    requestAnimationFrame(() => {
+      const list = listRef.current;
+      if (list) list.scrollTop = 0;
+    });
   }
 
   /*
@@ -1671,10 +1718,15 @@ function PlanAreasStep({
       ),
     );
 
-    // Move to the next room still waiting for a pin, so a coordinator can
-    // work down the list without going back to it between clicks.
-    const next = areas.find((a) => a.name.toLowerCase() !== key && a.pinX == null);
-    setActiveArea(next ? next.name : null);
+    /*
+      The room STAYS selected.
+
+      This used to jump to the next unplaced room, which read as the
+      placement having landed on the wrong one: you finished a room,
+      looked up, and the list was highlighting its neighbour. Advancing
+      saved one click and cost the confirmation that the click you just
+      made did what you meant.
+    */
   }
 
   /*
@@ -1689,23 +1741,21 @@ function PlanAreasStep({
       areas.map((a) =>
         a.name.toLowerCase() === key.toLowerCase()
           ? {
-              ...a,
-              planId: activePlan.id,
-              zone: points,
-              // A zone implies a point, so the room is placed either way.
-              pinX: a.pinX ?? centre.x,
-              pinY: a.pinY ?? centre.y,
-            }
+            ...a,
+            planId: activePlan.id,
+            zone: points,
+            // A zone implies a point, so the room is placed either way.
+            pinX: a.pinX ?? centre.x,
+            pinY: a.pinY ?? centre.y,
+          }
           : a,
       ),
     );
-    const next = areas.find(
-      (a) => a.name.toLowerCase() !== key.toLowerCase() && a.zone == null,
-    );
-    setActiveArea(next ? next.name : null);
+    // Stays selected, exactly as a pin does -- see placePin.
   }
 
-  function clearPin(name: string) {
+  /** Unplaces a room: pin, outline and the plan it belonged to. */
+  function clearPlacement(name: string) {
     const key = name.toLowerCase();
     setAreas(
       areas.map((a) =>
@@ -1740,13 +1790,13 @@ function PlanAreasStep({
         }}
       />
 
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_19rem]">
-        <div className="space-y-3">
+      <div className="grid gap-5 lg:min-h-[32rem] lg:grid-cols-[minmax(0,1fr)_19rem]">
+        <div className="flex flex-col gap-3">
           {plans.length === 0 ? (
             <button
               type="button"
               onClick={() => inputRef.current?.click()}
-              className="border-border hover:border-brand/40 hover:bg-mist-soft/50 flex w-full flex-col items-center gap-2 rounded-lg border border-dashed px-6 py-16 text-center transition-colors"
+              className="border-border hover:border-brand/40 hover:bg-mist-soft/50 flex w-full flex-1 flex-col items-center justify-center gap-2 rounded-lg border border-dashed px-6 py-16 text-center transition-colors"
             >
               <Upload className="text-muted-foreground size-6" />
               <span className="font-medium">Add plan images</span>
@@ -1810,11 +1860,37 @@ function PlanAreasStep({
                           </button>
                         ))}
                       </div>
-                      <p className="text-muted-foreground text-xs">
-                        {placeMode === "pin"
-                          ? "Pick a room, then click the plan."
-                          : "Pick a room, click each corner, then Enter to close it. Backspace undoes a corner, Esc starts over."}
-                      </p>
+                      {/*
+                        Which room the next click lands on, named.
+
+                        The list highlights it too, but the coordinator's
+                        eyes are on the plan while they click, and "which
+                        room am I placing" is the only question that matters
+                        at that moment.
+                      */}
+                      {activeArea ? (
+                        <p className="text-muted-foreground flex min-w-0 flex-wrap items-center gap-x-1.5 text-xs">
+                          <span className="text-brand font-medium">
+                            Placing {activeArea}
+                          </span>
+                          <span>
+                            {placeMode === "pin"
+                              ? "— click the plan."
+                              : "— click each corner, then Enter to close it. Backspace undoes a corner, Esc starts over."}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setActiveArea(null)}
+                            className="hover:text-foreground underline underline-offset-2"
+                          >
+                            Done
+                          </button>
+                        </p>
+                      ) : (
+                        <p className="text-muted-foreground text-xs">
+                          Pick a room in the list to place it on the plan.
+                        </p>
+                      )}
                     </div>
                   ) : null}
 
@@ -1877,94 +1953,200 @@ function PlanAreasStep({
           )}
         </div>
 
-        <div className="space-y-3">
-          <div className="flex items-baseline justify-between gap-2">
-            <h3 className="font-medium">Areas to inspect</h3>
-            <span className="text-muted-foreground text-xs">{areas.length} ticked</span>
-          </div>
+        {/*
+          The list is measured by the PLAN, not by its own contents.
 
-          {plans.length > 0 ? (
-            <p className="text-muted-foreground text-xs">
-              {activeArea
-                ? `Click the plan to place "${activeArea}".`
-                : "Pick a room to place it on the plan."}
-            </p>
-          ) : null}
+          A grid row is as tall as its tallest cell, so eighteen rooms
+          stretched the row past the bottom of the plan and left the
+          left-hand column trailing white space. Taking the inner column
+          out of flow with absolute positioning means only the plan side
+          sets the row height; this side fills exactly that and scrolls.
+        */}
+        <div className="relative">
+          <div className="flex flex-col gap-3 lg:absolute lg:inset-0">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-baseline gap-2">
+                <h3 className="font-medium">Areas to inspect</h3>
+                <span className="text-muted-foreground text-xs">
+                  {areas.length} ticked
+                  {plans.length > 0 ? `, ${placedCount} placed` : ""}
+                </span>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="size-7 shrink-0"
+                onClick={() => setAddOpen(true)}
+                aria-label="Add an area"
+                title="Add an area"
+              >
+                <Plus className="size-4" />
+              </Button>
+            </div>
 
-          <div className="max-h-[26rem] space-y-1.5 overflow-y-auto pr-1">
-            {options.map((option) => {
-              const key = option.name.toLowerCase();
-              const chosen = selected.get(key);
-              const isActive = activeArea?.toLowerCase() === key;
-              const pinned = chosen?.pinX != null;
-              return (
-                <div
-                  key={option.name}
-                  className={cn(
-                    "flex items-center gap-2 rounded-lg border px-2.5 py-2 text-sm transition-colors",
-                    chosen ? "border-brand/40 bg-brand-50/40" : "border-border",
-                    isActive && "ring-brand/60 ring-2",
-                  )}
-                >
-                  <Checkbox
-                    checked={Boolean(chosen)}
-                    onCheckedChange={() => toggle(option)}
-                    aria-label={option.name}
-                  />
-                  <button
-                    type="button"
-                    disabled={!chosen}
-                    onClick={() => setActiveArea(option.name)}
-                    className="min-w-0 flex-1 text-left disabled:cursor-default"
+            {/*
+              The list runs to the bottom of the plan beside it. A fixed
+              max-height left a ragged gap under a tall plan, and made a
+              coordinator scroll a short list for no reason.
+            */}
+            <div
+              ref={listRef}
+              className="max-h-[26rem] min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1 lg:max-h-none pl-1"
+            >
+              {options.map((option) => {
+                const key = option.name.toLowerCase();
+                const chosen = selected.get(key);
+                const isActive = activeArea?.toLowerCase() === key;
+                const drawn = Boolean(chosen?.zone);
+                const placed = chosen?.pinX != null || drawn;
+                const elsewhere =
+                  placed && chosen?.planId && chosen.planId !== activePlan?.id;
+                return (
+                  <div
+                    key={option.name}
+                    className={cn(
+                      "flex items-center gap-2 rounded-lg border px-2.5 py-2 text-sm transition-colors",
+                      chosen ? "border-brand/40 bg-brand-50/40" : "border-border",
+                      isActive && "ring-brand/60 ring-2",
+                    )}
                   >
-                    <span
-                      className={cn("block truncate font-medium", chosen && "text-brand")}
-                    >
-                      {option.name}
-                    </span>
-                  </button>
-                  {pinned ? (
+                    <Checkbox
+                      checked={Boolean(chosen)}
+                      onCheckedChange={() => toggle(option)}
+                      aria-label={option.name}
+                    />
                     <button
                       type="button"
-                      onClick={() => clearPin(option.name)}
-                      aria-label={`Remove the pin for ${option.name}`}
-                      title="Remove pin"
-                      className="text-brand hover:text-destructive shrink-0"
+                      disabled={!chosen}
+                      onClick={() => select(option.name)}
+                      className="min-w-0 flex-1 text-left disabled:cursor-default"
                     >
-                      <MapPin className="size-3.5" />
+                      <span
+                        className={cn("block truncate font-medium", chosen && "text-brand")}
+                      >
+                        {option.name}
+                      </span>
+                      {/* Which floor it sits on, said only when that could be
+                          a different one from the plan on screen. */}
+                      {elsewhere ? (
+                        <span className="text-muted-foreground block truncate text-xs">
+                          on {planLabel(chosen.planId)}
+                        </span>
+                      ) : null}
                     </button>
+
+                    {chosen && canPin ? (
+                      <div className="flex shrink-0 items-center gap-0.5">
+                        {/*
+                          The room's state, as the control that changes it: a
+                          marker when it is placed, a target when it is not.
+                          Either way, clicking selects it for the plan.
+                        */}
+                        <button
+                          type="button"
+                          onClick={() => select(option.name)}
+                          aria-label={
+                            placed
+                              ? `${option.name} is on the plan. Select it to place it again.`
+                              : `Place ${option.name} on the plan`
+                          }
+                          title={
+                            placed
+                              ? drawn
+                                ? "Drawn as a room. Select to place again."
+                                : "Pinned. Select to place again."
+                              : "Place on the plan"
+                          }
+                          className={cn(
+                            "hover:bg-brand/10 rounded p-1 transition-colors",
+                            placed ? "text-brand" : "text-muted-foreground",
+                          )}
+                        >
+                          {drawn ? (
+                            <Shapes className="size-3.5" />
+                          ) : placed ? (
+                            <MapPin className="size-3.5" />
+                          ) : (
+                            <Crosshair className="size-3.5" />
+                          )}
+                        </button>
+
+                        {placed ? (
+                          <button
+                            type="button"
+                            onClick={() => clearPlacement(option.name)}
+                            aria-label={`Take ${option.name} off the plan`}
+                            title="Take off the plan"
+                            className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded p-1 transition-colors"
+                          >
+                            <Eraser className="size-3.5" />
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+
+            <Dialog
+              open={addOpen}
+              onOpenChange={(next) => {
+                setAddOpen(next);
+                if (!next) setCustom("");
+              }}
+            >
+              <DialogContent className="sm:max-w-sm">
+                <DialogHeader>
+                  <DialogTitle>Add an area</DialogTitle>
+                  <DialogDescription>
+                    A room the template for this property type does not carry. It
+                    is ticked and made active as soon as you add it, so you can
+                    place it on the plan straight away.
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="new-area-name">Name</Label>
+                  <Input
+                    id="new-area-name"
+                    autoFocus
+                    value={custom}
+                    onChange={(event) => setCustom(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        addCustom();
+                      }
+                    }}
+                    placeholder="e.g. Roof terrace"
+                  />
+                  {duplicateArea ? (
+                    <p className="text-destructive text-xs">
+                      “{custom.trim()}” is already in the list.
+                    </p>
                   ) : null}
                 </div>
-              );
-            })}
-          </div>
 
-          <div className="flex items-end gap-2">
-            <div className="flex-1">
-              <Field label="Add a custom area">
-                <Input
-                  value={custom}
-                  onChange={(event) => setCustom(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      addCustom();
-                    }
-                  }}
-                  placeholder="e.g. Roof terrace"
-                />
-              </Field>
-            </div>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              onClick={addCustom}
-              disabled={!custom.trim()}
-              aria-label="Add area"
-            >
-              <Plus className="size-4" />
-            </Button>
+                <DialogFooter>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setAddOpen(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={addCustom}
+                    disabled={!custom.trim() || duplicateArea}
+                  >
+                    <Plus className="size-4" /> Add area
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </div>
         </div>
       </div>
@@ -1988,6 +2170,9 @@ function AssignStep({
   retryUsers: () => void;
 }) {
   const scheduled = draft.appointment_date ? parseISO(draft.appointment_date) : undefined;
+  const now = gstNow();
+  // Only today's times need a floor; every later day is open from 00:00.
+  const earliestTime = draft.appointment_date === now.date ? now.time : undefined;
 
   return (
     <div className="space-y-5">
@@ -2051,6 +2236,9 @@ function AssignStep({
               <Calendar
                 mode="single"
                 selected={scheduled}
+                // Yesterday is never a valid appointment, so it is not
+                // offered — refusing it after the click would be worse.
+                disabled={{ before: parseISO(now.date) }}
                 onSelect={(date) => set("appointment_date", date ? format(date, "yyyy-MM-dd") : "")}
                 autoFocus
               />
@@ -2067,9 +2255,15 @@ function AssignStep({
           <TimeSelect
             value={draft.appointment_time}
             onChange={(value) => set("appointment_time", value)}
+            min={earliestTime}
             placeholder="Select a time"
             aria-label="Appointment time"
           />
+          {earliestTime ? (
+            <p className="text-muted-foreground mt-1.5 text-xs">
+              Today, so {formatTimeAmPm(earliestTime)} at the earliest.
+            </p>
+          ) : null}
         </Field>
       </div>
 

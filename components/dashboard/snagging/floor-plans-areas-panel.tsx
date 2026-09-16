@@ -4,21 +4,22 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
+  Crosshair,
+  Eraser,
   ImageOff,
   Map,
   MapPin,
   MoreHorizontal,
   Pencil,
   Plus,
+  Shapes,
   Trash2,
   Upload,
-  X,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { compressImage } from "@/lib/media/compress-image";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -37,13 +38,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { templateFor } from "@/lib/snagging/area-templates";
@@ -60,6 +54,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/actions/utils";
 import AddFloorPlanDialog from "./add-floor-plan-dialog";
+import { PlanZoneCanvas } from "./plan-zone-canvas";
+import { zoneLabelPoint, type ZonePoint } from "@/lib/snagging/zone-geometry";
 
 import {
   DataRow,
@@ -70,8 +66,6 @@ import {
   SubmitButton,
   useConfirm,
 } from "./shared";
-
-const NEW_AREA = "__new__";
 
 /**
  * Prepares a file for upload. Images pass through with their natural size read.
@@ -147,7 +141,6 @@ export function FloorPlansAreasPanel({
     ActionType.EDIT,
   );
   const { confirm, dialog } = useConfirm();
-  const imgWrapRef = useRef<HTMLDivElement>(null);
 
   const [plans, setPlans] = useState<SnaggingFloorPlan[]>([]);
   const [areas, setAreas] = useState<SnaggingArea[]>([]);
@@ -164,11 +157,17 @@ export function FloorPlansAreasPanel({
   const [overIndex, setOverIndex] = useState<number | null>(null);
   const [activePlanId, setActivePlanId] = useState<string | null>(null);
 
-  // Pending pin (a click position awaiting an area choice).
-  const [pending, setPending] = useState<{ x: number; y: number } | null>(null);
-  const [pinAreaChoice, setPinAreaChoice] = useState<string>(NEW_AREA);
-  const [newAreaName, setNewAreaName] = useState("");
+  /*
+    Placement works the way it does when the job is created: pick the room
+    first, then mark it. Clicking the plan cold used to open a dialog
+    asking which room the pin was for, which put the question AFTER the
+    answer had to be decided and made every pin a two-step affair.
+  */
+  const [activeAreaId, setActiveAreaId] = useState<string | null>(null);
+  const [placeMode, setPlaceMode] = useState<"pin" | "zone">("pin");
+  const [addAreaOpen, setAddAreaOpen] = useState(false);
   const [newAreaOnly, setNewAreaOnly] = useState("");
+  const areaListRef = useRef<HTMLDivElement>(null);
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(
     null,
   );
@@ -200,12 +199,6 @@ export function FloorPlansAreasPanel({
   }, [load]);
 
   const activePlan = plans.find((p) => p.id === activePlanId) ?? null;
-  const pinnedHere = areas.filter(
-    (a) => a.floor_plan_id === activePlanId && a.pin_x != null,
-  );
-  const unpinnedAreas = areas.filter(
-    (a) => a.pin_x == null || a.floor_plan_id == null,
-  );
 
   async function upload(planLabel: string, file: File) {
     setBusy(true);
@@ -299,49 +292,41 @@ export function FloorPlansAreasPanel({
     await applyOrder(next);
   }
 
-  function onPlanClick(e: React.MouseEvent<HTMLDivElement>) {
-    if (!canEdit || !imgWrapRef.current) return;
-    const rect = imgWrapRef.current.getBoundingClientRect();
-    const x = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-    const y = Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height));
-    setPinAreaChoice(NEW_AREA);
-    setNewAreaName("");
-    setPending({ x, y });
+  /** The room the next mark on the plan belongs to. */
+  const activeArea = areas.find((a) => a.id === activeAreaId) ?? null;
+
+  /**
+   * Selects a room, bringing its own floor forward when it is already
+   * marked on a different one — so one room can never end up marked twice,
+   * on two plans.
+   */
+  function select(area: SnaggingArea) {
+    setActiveAreaId(area.id);
+    if (area.floor_plan_id && area.floor_plan_id !== activePlanId) {
+      setActivePlanId(area.floor_plan_id);
+    }
   }
 
-  async function confirmPin() {
-    if (!pending || !activePlanId) return;
+  /** Writes a placement — a pin, an outline, or the removal of both. */
+  async function place(
+    area: SnaggingArea,
+    patch: {
+      floor_plan_id: string | null;
+      pin_x: number | null;
+      pin_y: number | null;
+      zone: ZonePoint[] | null;
+    },
+    success: string,
+  ) {
     setBusy(true);
     setRunning("pin");
     try {
-      if (pinAreaChoice === NEW_AREA) {
-        const name = newAreaName.trim();
-        if (!name) {
-          toast.error("Name the area this pin represents");
-          setBusy(false);
-          setRunning(null);
-          return;
-        }
-        await snaggingService.createArea(taskId, {
-          name,
-          floor_plan_id: activePlanId,
-          pin_x: pending.x,
-          pin_y: pending.y,
-        });
-      } else {
-        await snaggingService.updateArea(taskId, {
-          id: pinAreaChoice,
-          floor_plan_id: activePlanId,
-          pin_x: pending.x,
-          pin_y: pending.y,
-        });
-      }
-      toast.success("Pin placed");
-      setPending(null);
+      await snaggingService.updateArea(taskId, { id: area.id, ...patch });
+      toast.success(success);
       await load();
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Could not place the pin",
+        error instanceof Error ? error.message : "Could not save the placement",
       );
     } finally {
       setBusy(false);
@@ -349,34 +334,51 @@ export function FloorPlansAreasPanel({
     }
   }
 
-  async function clearPin(area: SnaggingArea) {
-    // The position is not recoverable — the plan has to be clicked again.
+  function placePin(key: string, x: number, y: number) {
+    const area = areas.find((a) => a.id === key);
+    if (!area || !activePlanId) return;
+    void place(
+      area,
+      { floor_plan_id: activePlanId, pin_x: x, pin_y: y, zone: null },
+      `${area.name} pinned`,
+    );
+    // The room stays selected, so the mark you just made is the one the
+    // list is still showing.
+  }
+
+  function placeZone(key: string, points: ZonePoint[]) {
+    const area = areas.find((a) => a.id === key);
+    if (!area || !activePlanId) return;
+    // A zone implies a point, so the handset still has a fallback marker.
+    const centre = zoneLabelPoint(points);
+    void place(
+      area,
+      {
+        floor_plan_id: activePlanId,
+        pin_x: area.pin_x ?? centre.x,
+        pin_y: area.pin_y ?? centre.y,
+        zone: points,
+      },
+      `${area.name} drawn`,
+    );
+  }
+
+  async function clearPlacement(area: SnaggingArea) {
+    // The position is not recoverable — the plan has to be marked again.
     const ok = await confirm({
-      title: `Remove the pin for "${area.name}"?`,
+      title: `Take "${area.name}" off the plan?`,
       description:
-        "The area stays on the job, but it will no longer be marked on any floor plan. You can pin it again by clicking the plan.",
-      confirmText: "Remove pin",
+        "The area stays on the job, but it will no longer be marked on any floor plan. You can mark it again by selecting it and clicking the plan.",
+      confirmText: "Take off the plan",
       variant: "destructive",
     });
     if (!ok) return;
 
-    setBusy(true);
-    try {
-      await snaggingService.updateArea(taskId, {
-        id: area.id,
-        floor_plan_id: null,
-        pin_x: null,
-        pin_y: null,
-      });
-      toast.success("Pin removed");
-      await load();
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Could not remove the pin",
-      );
-    } finally {
-      setBusy(false);
-    }
+    await place(
+      area,
+      { floor_plan_id: null, pin_x: null, pin_y: null, zone: null },
+      "Taken off the plan",
+    );
   }
 
   /*
@@ -400,12 +402,18 @@ export function FloorPlansAreasPanel({
     setBusy(true);
     setRunning("area");
     try {
-      await snaggingService.createArea(taskId, {
+      const created = await snaggingService.createArea(taskId, {
         name: room.name,
         catalogue_area_code: room.code,
       });
       toast.success(`${room.name} added`);
       await load();
+      setActiveAreaId(created.id);
+      requestAnimationFrame(() => {
+        areaListRef.current
+          ?.querySelector(`[data-area-id="${created.id}"]`)
+          ?.scrollIntoView({ block: "nearest" });
+      });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not add the area");
     } finally {
@@ -420,10 +428,19 @@ export function FloorPlansAreasPanel({
     setBusy(true);
     setRunning("area");
     try {
-      await snaggingService.createArea(taskId, { name });
+      const created = await snaggingService.createArea(taskId, { name });
       setNewAreaOnly("");
-      toast.success("Area added");
+      setAddAreaOpen(false);
+      toast.success(`${name} added`);
       await load();
+      // Selected and scrolled to, so it is ready to mark on the plan and
+      // is not lost at the bottom of a list of twenty.
+      setActiveAreaId(created.id);
+      requestAnimationFrame(() => {
+        areaListRef.current
+          ?.querySelector(`[data-area-id="${created.id}"]`)
+          ?.scrollIntoView({ block: "nearest" });
+      });
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Could not add the area",
@@ -651,59 +668,84 @@ export function FloorPlansAreasPanel({
               )}
             </div>
 
-            {/* Active plan with pins */}
+            {/* Active plan: pins and outlines */}
             {activePlan?.signed_url ? (
               <div className="space-y-2">
-                {/* An instruction, not a label — SubHeading uppercases,
-                    and shouting a hint at the reader is not the same as
-                    naming the block it sits above. */}
-                <p className="text-muted-foreground text-xs">
-                  {canEdit
-                    ? "Click the plan to place a pin for an area."
-                    : "Area pins on this floor."}
-                </p>
-                <div
-                  ref={imgWrapRef}
-                  onClick={onPlanClick}
-                  className={`relative w-full overflow-hidden rounded-lg border bg-muted ${canEdit ? "cursor-crosshair" : ""}`}
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={activePlan.signed_url}
-                    alt={activePlan.label}
-                    className="block w-full select-none"
-                    draggable={false}
-                  />
-                  {pinnedHere.map((a, idx) => (
-                    <span
-                      key={a.id}
-                      className="bg-brand ring-background absolute flex size-6 -translate-x-1/2 -translate-y-full items-center justify-center rounded-full text-[10px] font-bold text-white ring-2"
-                      style={{
-                        left: `${(a.pin_x ?? 0) * 100}%`,
-                        top: `${(a.pin_y ?? 0) * 100}%`,
-                      }}
-                      title={a.name}
-                    >
-                      {idx + 1}
-                    </span>
-                  ))}
-                </div>
-                {pinnedHere.length > 0 ? (
-                  <div className="flex flex-wrap gap-1.5">
-                    {pinnedHere.map((a, idx) => (
-                      <Badge
-                        key={a.id}
-                        variant="secondary"
-                        className="gap-1.5 font-normal"
-                      >
-                        <span className="text-brand font-semibold tabular-nums">
-                          {idx + 1}
+                {canEdit ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* Pin or outline — the same choice the job wizard
+                        offers, so the two screens teach one gesture. */}
+                    <div className="bg-muted inline-flex rounded-md p-0.5">
+                      {(["pin", "zone"] as const).map((option) => (
+                        <button
+                          key={option}
+                          type="button"
+                          onClick={() => setPlaceMode(option)}
+                          aria-pressed={placeMode === option}
+                          className={cn(
+                            "rounded px-2.5 py-1 text-xs font-medium transition-colors",
+                            placeMode === option
+                              ? "bg-background text-foreground shadow-sm"
+                              : "text-muted-foreground hover:text-foreground",
+                          )}
+                        >
+                          {option === "pin" ? "Drop a pin" : "Draw the room"}
+                        </button>
+                      ))}
+                    </div>
+
+                    {activeArea ? (
+                      <p className="text-muted-foreground flex min-w-0 flex-wrap items-center gap-x-1.5 text-xs">
+                        <span className="text-brand font-medium">
+                          Placing {activeArea.name}
                         </span>
-                        {a.name}
-                      </Badge>
-                    ))}
+                        <span>
+                          {placeMode === "pin"
+                            ? "— click the plan."
+                            : "— click each corner, then Enter to close it. Backspace undoes a corner, Esc starts over."}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setActiveAreaId(null)}
+                          className="hover:text-foreground underline underline-offset-2"
+                        >
+                          Done
+                        </button>
+                      </p>
+                    ) : (
+                      <p className="text-muted-foreground text-xs">
+                        Pick a room in the list to mark it on the plan.
+                      </p>
+                    )}
                   </div>
-                ) : null}
+                ) : (
+                  <p className="text-muted-foreground text-xs">
+                    Areas marked on this floor.
+                  </p>
+                )}
+
+                <PlanZoneCanvas
+                  src={activePlan.signed_url}
+                  alt={activePlan.label}
+                  mode={placeMode}
+                  readOnly={!canEdit || busy}
+                  activeKey={activeArea ? activeArea.id : null}
+                  areas={areas
+                    .filter((a) => a.floor_plan_id === activePlan.id)
+                    .map((a) => ({
+                      key: a.id,
+                      name: a.name,
+                      pinX: a.pin_x ?? null,
+                      pinY: a.pin_y ?? null,
+                      zone: a.zone ?? null,
+                    }))}
+                  onPlacePin={placePin}
+                  onPlaceZone={placeZone}
+                  onPickArea={(key) => {
+                    const hit = areas.find((a) => a.id === key);
+                    if (hit) setActiveAreaId(hit.id);
+                  }}
+                />
               </div>
             ) : activePlan ? (
               <EmptyState
@@ -715,184 +757,237 @@ export function FloorPlansAreasPanel({
             ) : null}
           </div>
 
-          {/* Right: area list */}
-          <div className="space-y-3">
-            <SubHeading count={areas.length}>Areas</SubHeading>
-            <div className="space-y-1">
-              {areas.length === 0 ? (
-                <EmptyState
-                  icon={<MapPin className="size-6" />}
-                  title="No areas yet"
-                  description={
-                    canEdit
-                      ? "Add areas below, or click a floor plan to create one where you drop the pin."
-                      : "Areas appear here once the inspector sets them up."
-                  }
-                  className="rounded-lg border border-dashed py-10"
-                />
-              ) : null}
-              {areas.map((a) => (
-                <div
-                  key={a.id}
-                  className="flex items-center gap-2 rounded-md border p-2 text-sm"
-                >
-                  {a.pin_x != null ? (
-                    <MapPin className="size-4 text-red-600" />
-                  ) : (
-                    <MapPin className="text-muted-foreground/40 size-4" />
-                  )}
-                  <span className="flex-1 truncate">{a.name}</span>
-                  {a.floor_plan_id ? (
-                    <span className="text-muted-foreground truncate text-xs">
-                      {planLabel(a.floor_plan_id)}
-                    </span>
-                  ) : null}
-                  {canEdit ? (
-                    <>
-                      {a.pin_x != null ? (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void clearPin(a)}
-                          className="text-muted-foreground hover:text-foreground"
-                          title="Remove pin"
-                        >
-                          <X className="size-4" />
-                        </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => setRenaming({ id: a.id, name: a.name })}
-                        className="text-muted-foreground hover:text-foreground"
-                        title="Rename"
-                      >
-                        <Pencil className="size-4" />
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void removeArea(a)}
-                        className="text-muted-foreground hover:text-destructive"
-                        title="Remove"
-                      >
-                        <Trash2 className="size-4" />
-                      </button>
-                    </>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-            {canEdit && suggestions.length > 0 ? (
-              <div className="mb-3">
-                <p className="text-muted-foreground mb-2 text-xs">
-                  Rooms this property usually has. Tap to add.
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {suggestions.map((room) => (
-                    <button
-                      key={room.name}
-                      type="button"
-                      onClick={() => void addSuggested(room)}
-                      disabled={busy}
-                      className="border-input hover:bg-accent focus-visible:ring-ring inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs disabled:opacity-50 focus-visible:ring-2 focus-visible:outline-none"
-                    >
-                      <Plus className="size-3" aria-hidden />
-                      {room.name}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : null}
+          {/*
+            Right: the rooms.
 
-            {canEdit ? (
-              <div className="flex items-center gap-2">
-                <Input
-                  value={newAreaOnly}
-                  onChange={(e) => setNewAreaOnly(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      void addAreaOnly();
+            Out of flow on a wide screen so the PLAN sets the row height —
+            a job with twenty rooms used to stretch the row well past the
+            bottom of the plan beside it.
+          */}
+          <div className="relative">
+            <div className="flex flex-col gap-3 lg:absolute lg:inset-0">
+              <SubHeading
+                count={areas.length}
+                action={
+                  canEdit ? (
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      className="size-7 shrink-0"
+                      onClick={() => setAddAreaOpen(true)}
+                      disabled={busy}
+                      aria-label="Add an area"
+                      title="Add an area"
+                    >
+                      <Plus className="size-4" />
+                    </Button>
+                  ) : null
+                }
+              >
+                Areas
+              </SubHeading>
+
+              <div
+                ref={areaListRef}
+                className="max-h-[26rem] min-h-0 flex-1 space-y-1 overflow-y-auto pr-1 lg:max-h-none"
+              >
+                {areas.length === 0 ? (
+                  <EmptyState
+                    icon={<MapPin className="size-6" />}
+                    title="No areas yet"
+                    description={
+                      canEdit
+                        ? "Add the rooms this job covers, then mark each one on the floor plan."
+                        : "Areas appear here once the inspector sets them up."
                     }
-                  }}
-                  placeholder="Add an area (e.g. Balcony)"
-                />
-                <SubmitButton
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void addAreaOnly()}
-                  disabled={busy || !newAreaOnly.trim()}
-                  pending={running === "area"}
-                  pendingLabel="Adding…"
-                  icon={<Plus className="size-4" />}
-                >
-                  Add
-                </SubmitButton>
+                    className="rounded-lg border border-dashed py-10"
+                  />
+                ) : null}
+
+                {areas.map((a) => {
+                  const drawn = Boolean(a.zone);
+                  const placed = a.pin_x != null || drawn;
+                  const isActive = a.id === activeAreaId;
+                  const elsewhere =
+                    placed && a.floor_plan_id && a.floor_plan_id !== activePlanId;
+                  return (
+                    <div
+                      key={a.id}
+                      data-area-id={a.id}
+                      className={cn(
+                        "flex items-center gap-2 rounded-md border p-2 text-sm transition-colors",
+                        isActive
+                          ? "border-brand/40 bg-brand-50/40 ring-brand/60 ring-2"
+                          : "border-border",
+                      )}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => select(a)}
+                        disabled={!canEdit}
+                        className="min-w-0 flex-1 text-left disabled:cursor-default"
+                      >
+                        <span
+                          className={cn(
+                            "block truncate",
+                            placed && "text-brand font-medium",
+                          )}
+                        >
+                          {a.name}
+                        </span>
+                        {elsewhere ? (
+                          <span className="text-muted-foreground block truncate text-xs">
+                            on {planLabel(a.floor_plan_id)}
+                          </span>
+                        ) : null}
+                      </button>
+
+                      {canEdit ? (
+                        <div className="flex shrink-0 items-center gap-0.5">
+                          {/* The room's state, as the control that changes
+                              it: a marker when it is on a plan, a target
+                              when it is not. */}
+                          <button
+                            type="button"
+                            disabled={busy || plans.length === 0}
+                            onClick={() => select(a)}
+                            aria-label={
+                              placed
+                                ? `${a.name} is on the plan. Select it to place it again.`
+                                : `Place ${a.name} on the plan`
+                            }
+                            title={
+                              placed
+                                ? drawn
+                                  ? "Drawn as a room. Select to place again."
+                                  : "Pinned. Select to place again."
+                                : "Place on the plan"
+                            }
+                            className={cn(
+                              "hover:bg-brand/10 rounded p-1 transition-colors disabled:opacity-40",
+                              placed ? "text-brand" : "text-muted-foreground",
+                            )}
+                          >
+                            {drawn ? (
+                              <Shapes className="size-3.5" />
+                            ) : placed ? (
+                              <MapPin className="size-3.5" />
+                            ) : (
+                              <Crosshair className="size-3.5" />
+                            )}
+                          </button>
+
+                          {placed ? (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void clearPlacement(a)}
+                              title="Take off the plan"
+                              className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded p-1 transition-colors"
+                            >
+                              <Eraser className="size-3.5" />
+                            </button>
+                          ) : null}
+
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => setRenaming({ id: a.id, name: a.name })}
+                            className="text-muted-foreground hover:text-foreground hover:bg-accent rounded p-1 transition-colors"
+                            title="Rename"
+                          >
+                            <Pencil className="size-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void removeArea(a)}
+                            className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded p-1 transition-colors"
+                            title="Remove"
+                          >
+                            <Trash2 className="size-3.5" />
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
               </div>
-            ) : null}
+
+              {canEdit && suggestions.length > 0 ? (
+                <div className="shrink-0">
+                  <p className="text-muted-foreground mb-2 text-xs">
+                    Rooms this property usually has. Tap to add.
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {suggestions.map((room) => (
+                      <button
+                        key={room.name}
+                        type="button"
+                        onClick={() => void addSuggested(room)}
+                        disabled={busy}
+                        className="border-input hover:bg-accent focus-visible:ring-ring inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs disabled:opacity-50 focus-visible:ring-2 focus-visible:outline-none"
+                      >
+                        <Plus className="size-3" aria-hidden />
+                        {room.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
           </div>
         </div>
       </DataState>
 
-      {/* Assign a placed pin to an area */}
+      {/* Add an area, from the + beside the Areas heading */}
       <Dialog
-        open={pending !== null}
-        onOpenChange={(o) => !o && setPending(null)}
+        open={addAreaOpen}
+        onOpenChange={(open) => {
+          setAddAreaOpen(open);
+          if (!open) setNewAreaOnly("");
+        }}
       >
-        <DialogContent>
+        <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Which area is this pin?</DialogTitle>
+            <DialogTitle>Add an area</DialogTitle>
             <DialogDescription>
-              Every pin represents one area. Pick an existing area or create a
-              new one. The pin is never auto-assigned.
+              A room this job covers. It is selected as soon as it is added,
+              so you can mark it on the plan straight away.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3 py-2">
-            <div>
-              <Label className="text-xs">Area</Label>
-              <Select value={pinAreaChoice} onValueChange={setPinAreaChoice}>
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NEW_AREA}>Create a new area</SelectItem>
-                  {unpinnedAreas.map((a) => (
-                    <SelectItem key={a.id} value={a.id}>
-                      {a.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            {pinAreaChoice === NEW_AREA ? (
-              <div>
-                <Label className="text-xs">New area name</Label>
-                <Input
-                  value={newAreaName}
-                  onChange={(e) => setNewAreaName(e.target.value)}
-                  placeholder="e.g. Master bedroom"
-                  autoFocus
-                />
-              </div>
-            ) : null}
+          <div className="space-y-1.5">
+            <Label htmlFor="new-job-area">Name</Label>
+            <Input
+              id="new-job-area"
+              autoFocus
+              value={newAreaOnly}
+              onChange={(e) => setNewAreaOnly(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void addAreaOnly();
+                }
+              }}
+              placeholder="e.g. Roof terrace"
+            />
           </div>
           <DialogFooter>
             <Button
               variant="outline"
-              onClick={() => setPending(null)}
+              onClick={() => setAddAreaOpen(false)}
               disabled={busy}
             >
               Cancel
             </Button>
             <SubmitButton
-              onClick={() => void confirmPin()}
-              disabled={busy}
-              pending={running === "pin"}
-              pendingLabel="Placing…"
-              icon={<MapPin className="size-4" />}
+              onClick={() => void addAreaOnly()}
+              disabled={busy || !newAreaOnly.trim()}
+              pending={running === "area"}
+              pendingLabel="Adding…"
+              icon={<Plus className="size-4" />}
             >
-              Place pin
+              Add area
             </SubmitButton>
           </DialogFooter>
         </DialogContent>

@@ -3,7 +3,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import { cacheHeaders, countJobs } from "@/lib/server/snagging/overview-queries";
+import {
+  cacheHeaders,
+  countJobs,
+  myJobs,
+} from "@/lib/server/snagging/overview-queries";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
@@ -63,10 +67,10 @@ export async function GET(req: NextRequest) {
     const rows = await Promise.all(
       pageIds.map(async (id) => {
         const [assigned, inProgress, completed] = await Promise.all([
-          countJobs(admin, (q) => q.eq("inspector_id", id).eq("status", "assigned")),
-          countJobs(admin, (q) => q.eq("inspector_id", id).eq("status", "in_progress")),
+          countJobs(admin, (q) => myJobs(q, profile.id).eq("inspector_id", id).eq("status", "assigned")),
+          countJobs(admin, (q) => myJobs(q, profile.id).eq("inspector_id", id).eq("status", "in_progress")),
           countJobs(admin, (q) =>
-            q.eq("inspector_id", id).in("status", ["approved", "delivered"]),
+            myJobs(q, profile.id).eq("inspector_id", id).in("status", ["approved", "delivered"]),
           ),
         ]);
         return {

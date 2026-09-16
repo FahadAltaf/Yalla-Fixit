@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Download, FileText, PanelLeftClose, PanelLeftOpen, Wrench } from "lucide-react";
+import { Download, FileText, PanelLeftClose, PanelLeftOpen, Settings2, Wrench } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -25,11 +25,16 @@ import { ExtensionsPageClient } from "./bulk-download";
 import { QuotationTemplatesPage } from "./quotation-templates/index";
 import { AmcContractsPage } from "./amc/index";
 import { canAccessAmcContracts } from "./amc/amc-constants";
+import { AmcSettingsPage } from "./amc/amc-settings-page";
 
 const ALL_NAV_ITEMS = [
   { name: "Bulk Download", icon: Download },
   { name: "Quotation Templates", icon: FileText },
   { name: "AMC Proposals", icon: Wrench },
+  /* FR6.1 — admin-only, and a stricter gate than the module itself: the
+     allowlist decides who writes a proposal, but only an admin changes
+     the text every proposal is written from. */
+  { name: "AMC Settings", icon: Settings2 },
 ] as const;
 
 export default function Extensions({ defaultNavOpen = false }: { defaultNavOpen?: boolean }) {
@@ -48,17 +53,23 @@ export default function Extensions({ defaultNavOpen = false }: { defaultNavOpen?
     });
 
   const canAccessAmc = canAccessAmcContracts(userProfile?.email);
+  const isAdmin = userProfile?.roles?.name === "admin";
 
   const nav = useMemo(
     () =>
-      ALL_NAV_ITEMS.filter(
-        (item) => item.name !== "AMC Proposals" || canAccessAmc
-      ),
-    [canAccessAmc]
+      ALL_NAV_ITEMS.filter((item) => {
+        if (item.name === "AMC Proposals") return canAccessAmc;
+        /* Hidden outright rather than shown-and-refused: a non-admin has
+           nothing to do on this screen. */
+        if (item.name === "AMC Settings") return canAccessAmc && isAdmin;
+        return true;
+      }),
+    [canAccessAmc, isAdmin]
   );
 
   const resolvedActiveSection =
-    activeSection === "AMC Proposals" && !canAccessAmc
+    (activeSection === "AMC Proposals" && !canAccessAmc) ||
+    (activeSection === "AMC Settings" && !(canAccessAmc && isAdmin))
       ? "Bulk Download"
       : activeSection;
 
@@ -70,6 +81,12 @@ export default function Extensions({ defaultNavOpen = false }: { defaultNavOpen?
         return <QuotationTemplatesPage />;
       case "AMC Proposals":
         return canAccessAmc ? <AmcContractsPage /> : <ExtensionsPageClient />;
+      case "AMC Settings":
+        return canAccessAmc && isAdmin ? (
+          <AmcSettingsPage />
+        ) : (
+          <ExtensionsPageClient />
+        );
       default:
         return null;
     }

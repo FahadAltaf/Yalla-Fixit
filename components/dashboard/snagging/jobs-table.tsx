@@ -49,6 +49,13 @@ export default function JobsTable() {
   const { userProfile } = useAuth();
 
   const initialFilter = (params.get("status") as FilterValue) ?? "all";
+  /*
+    One inspector's jobs, when the Overview's performance table sent the
+    reader here (FR-10.01). Read once from the URL rather than held as
+    state: it is where the reader arrived, not a control on this screen,
+    and the toolbar's own filters still narrow it further.
+  */
+  const assigneeId = params.get("assignee") ?? undefined;
   const [filter, setFilter] = useState<FilterValue>(
     FILTERS.some((entry) => entry.value === initialFilter) ? initialFilter : "all",
   );
@@ -72,6 +79,7 @@ export default function JobsTable() {
     const active = FILTERS.find((entry) => entry.value === filter);
     return {
       status: active?.statuses,
+      assigneeId,
       search: debouncedSearchTerm || undefined,
       // Sorting is resolved by the API; the table only reports which
       // column was clicked. Updated-desc stays the default view.
@@ -86,7 +94,7 @@ export default function JobsTable() {
       sortBy: sorting.sortBy ?? "created_at",
       sortDirection: sorting.sortOrder ?? "desc",
     };
-  }, [filter, debouncedSearchTerm, sorting]);
+  }, [filter, debouncedSearchTerm, sorting, assigneeId]);
 
   const fetchJobs = useCallback(async () => {
     setIsRefetching(true);

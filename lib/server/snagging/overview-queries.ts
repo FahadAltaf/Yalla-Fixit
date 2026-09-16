@@ -67,6 +67,43 @@ export async function countJobs(
   return count ?? 0;
 }
 
+/*
+  ─────────────────────────── whose records ───────────────────────────
+
+  FR-10.01: the Overview shows each user what THEY need to act on, from
+  the records they created or were assigned. Analytics (FR-10.02+) stays
+  everything-for-everyone; that difference is the point of having two
+  screens rather than one with a filter on it.
+
+  "Assigned" is read as any role the job puts a name in, not the
+  inspector alone. Scoping to inspector_id only would mean a reviewer or
+  an approval manager never saw the jobs waiting on their own decision —
+  which is most of what the attention card exists to surface.
+*/
+const JOB_ROLES = [
+  "created_by",
+  "inspector_id",
+  "reviewer_id",
+  "approval_manager_id",
+] as const;
+
+/** Narrows a snagging_jobs query to the ones this user has a hand in. */
+export function myJobs<T>(query: T, userId: string): T {
+  return (query as any).or(
+    JOB_ROLES.map((column) => `${column}.eq.${userId}`).join(","),
+  ) as T;
+}
+
+/**
+ * Narrows a snagging_quotations query the same way.
+ *
+ * A quotation carries only its author — there is nobody to assign one
+ * to — so "worked on" can only mean raised it.
+ */
+export function myQuotations<T>(query: T, userId: string): T {
+  return (query as any).eq("created_by", userId) as T;
+}
+
 /** COUNT(*) over snagging_snags, refined by the caller. */
 export async function countSnags(
   admin: Admin,

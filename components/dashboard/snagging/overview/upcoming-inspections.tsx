@@ -2,7 +2,16 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ArrowRight, CalendarDays } from "lucide-react";
+import {
+  ArrowRight,
+  Building,
+  Building2,
+  CalendarDays,
+  Clock,
+  Home,
+  Store,
+  UserRound,
+} from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,10 +23,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
+import { formatTimeAmPm } from "@/components/ui/time-select";
 import { cn } from "@/lib/utils";
 
 import { InlineError, LinesSkeleton, SectionShell } from "./section-shell";
-import { SubHeading } from "../shared";
 import { useSection } from "./use-section";
 
 type UpcomingItem = {
@@ -34,6 +43,14 @@ type UpcomingItem = {
 type Upcoming = {
   total: number;
   items: UpcomingItem[];
+};
+
+/** The kind of unit, as a glyph — read before the words are. */
+const TYPE_ICON: Record<string, typeof Building2> = {
+  apartment: Building2,
+  villa: Home,
+  townhouse: Building,
+  commercial: Store,
 };
 
 const ENDPOINT = "/api/snagging/overview/upcoming";
@@ -100,7 +117,7 @@ export function UpcomingInspections() {
           ) : null
         }
       >
-        <DayGroups items={data?.items ?? []} />
+        <AppointmentList items={data?.items ?? []} />
       </SectionShell>
 
       <AllUpcomingDialog
@@ -113,60 +130,78 @@ export function UpcomingInspections() {
 }
 
 /**
- * The appointments, banded by day.
+ * The appointments, one row each, in the order the days happen.
  *
- * Written once and used by both the card and the dialog — two copies
- * would drift, and the dialog would stop looking like the card it opened
- * from.
+ * No day bands. The list is short and already ordered, so a "TOMORROW"
+ * heading above a single row cost a line of chrome to say what the row's
+ * own date says — and the relative label stopped being useful the moment
+ * the list ran past the day after next.
+ *
+ * Written once and used by both the card and the dialog; two copies would
+ * drift, and the dialog would stop looking like the card it opened from.
  */
-function DayGroups({
+function AppointmentList({
   items,
   className,
 }: {
   items: UpcomingItem[];
   className?: string;
 }) {
-  const groups = new Map<string, UpcomingItem[]>();
-  for (const item of items) {
-    const key = item.day ?? "unscheduled";
-    groups.set(key, [...(groups.get(key) ?? []), item]);
-  }
-
   return (
-    <div className="divide-y">
-      {[...groups.entries()].map(([day, dayItems]) => (
-        <div key={day} className={cn("px-5 py-3", className)}>
-          <SubHeading className="mb-2">{dayLabel(day)}</SubHeading>
-          <ul className="space-y-1">
-            {dayItems.map((item) => (
-              <li key={item.id}>
-                <Link
-                  href={item.href}
-                  className="hover:bg-muted/50 -mx-2 flex items-center gap-3 rounded-md px-2 py-1.5 transition-colors"
-                >
-                  <span className="w-12 shrink-0 text-sm font-medium tabular-nums">
-                    {item.time ?? "—"}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium">
-                      {item.unit ?? "Unnamed unit"}
-                    </span>
-                    <span className="text-muted-foreground block truncate text-xs">
-                      {[item.propertyType, item.place]
-                        .filter(Boolean)
-                        .join(" · ") || "No property detail"}
-                    </span>
-                  </span>
-                  <span className="text-muted-foreground shrink-0 truncate text-xs">
-                    {item.inspector ?? "Unassigned"}
-                  </span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </div>
+    <ul className={cn("divide-y", className)}>
+      {items.map((item) => (
+        <li key={item.id}>
+          <Link
+            href={item.href}
+            className="hover:bg-muted/50 flex items-center gap-3 px-5 py-2.5 transition-colors"
+          >
+            <TypeGlyph type={item.propertyType} />
+
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium">
+                {item.unit ?? "Unnamed unit"}
+              </span>
+              <span className="text-muted-foreground block truncate text-xs">
+                {[item.propertyType, item.place].filter(Boolean).join(" · ") ||
+                  "No property detail"}
+              </span>
+            </span>
+
+            {/*
+              Who is going, and when — together at the end of the row.
+              These are the two things a coordinator scans this card for,
+              and they answer one question, so they read as one block.
+            */}
+            <span className="shrink-0 text-right">
+              <span
+                className={cn(
+                  "flex items-center justify-end gap-1.5 text-xs font-medium",
+                  item.inspector ? "text-foreground" : "text-warning",
+                )}
+              >
+                <UserRound className="size-3.5 shrink-0" aria-hidden />
+                <span className="max-w-[9rem] truncate">
+                  {item.inspector ?? "Unassigned"}
+                </span>
+              </span>
+              <span className="text-muted-foreground mt-0.5 flex items-center justify-end gap-1.5 text-xs tabular-nums">
+                <Clock className="size-3.5 shrink-0" aria-hidden />
+                {whenLabel(item.day, item.time)}
+              </span>
+            </span>
+          </Link>
+        </li>
       ))}
-    </div>
+    </ul>
+  );
+}
+
+function TypeGlyph({ type }: { type: string | null }) {
+  const Icon = (type && TYPE_ICON[type]) || Building2;
+  return (
+    <span className="bg-muted text-muted-foreground flex size-7 shrink-0 items-center justify-center rounded-md">
+      <Icon className="size-3.5" aria-hidden />
+    </span>
   );
 }
 
@@ -234,7 +269,7 @@ function AllUpcomingDialog({
               />
             </div>
           ) : (
-            <DayGroups items={items} className="px-6" />
+            <AppointmentList items={items} className="px-1" />
           )}
         </div>
 
@@ -250,17 +285,19 @@ function AllUpcomingDialog({
   );
 }
 
-/** "Today" and "Tomorrow" read faster than a date somebody has to parse. */
-function dayLabel(day: string): string {
-  if (day === "unscheduled") return "Not scheduled";
-  const today = new Date().toISOString().slice(0, 10);
-  const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
-  if (day === today) return "Today";
-  if (day === tomorrow) return "Tomorrow";
-  return new Date(`${day}T00:00:00Z`).toLocaleDateString("en-GB", {
+/**
+ * "Wed 16 Sep · 9:00 AM" — the actual day, not a relative one.
+ *
+ * Formatted in GST, like the appointment itself: on a browser set to UTC
+ * an evening appointment would otherwise print the previous day.
+ */
+function whenLabel(day: string | null, time: string | null): string {
+  if (!day) return time ? formatTimeAmPm(time) : "Not scheduled";
+  const date = new Date(`${day}T00:00:00Z`).toLocaleDateString("en-GB", {
     weekday: "short",
     day: "numeric",
     month: "short",
     timeZone: "UTC",
   });
+  return time ? `${date} · ${formatTimeAmPm(time)}` : date;
 }

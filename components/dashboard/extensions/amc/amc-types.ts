@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { isEndDateBeforeStartDate } from "./amc-date-utils";
+import type { AmcSettings } from "./amc-settings";
 
 export const propertyCategorySchema = z.enum(["residential", "commercial"]);
 export const unitTypeSchema = z.enum(["villa", "apartment", "office"]);
@@ -219,6 +220,13 @@ export interface AmcTotals {
 
 export interface AmcComputedData {
   documentType: AmcDocumentType;
+  /*
+    FR6.4 — the text this document renders with. For a sent proposal this
+    is its frozen snapshot; for a draft it is live settings. Defaulted by
+    computeAmcData so a caller that has not loaded settings still renders
+    the shipped text rather than nothing.
+  */
+  settings: AmcSettings;
   documentTitle: string;
   propertyTypeLabel: string;
   proposalDate: string;
@@ -228,7 +236,45 @@ export interface AmcComputedData {
   formData: AmcFormData;
 }
 
-export type AmcSubmissionStatus = "draft" | "generated";
+/*
+  §9.2 — the full status set. 'generated' is gone: it meant "a PDF was
+  produced from this", which v2's workflow does not care about, and the
+  phase 4 migration maps the one row carrying it back to draft.
+*/
+export const AMC_STATUSES = [
+  "draft",
+  "awaiting_approval",
+  "sent_back",
+  "approved",
+  "proposal_sent",
+  "proposal_rejected",
+  "proposal_approved",
+  "contract_sent",
+  "signed",
+] as const;
+
+export type AmcSubmissionStatus = (typeof AMC_STATUSES)[number];
+
+/* FR5.8 — how each status reads to a person. */
+export const AMC_STATUS_LABELS: Record<AmcSubmissionStatus, string> = {
+  draft: "Draft",
+  awaiting_approval: "Awaiting approval",
+  sent_back: "Sent back",
+  approved: "Approved",
+  proposal_sent: "Proposal sent",
+  proposal_rejected: "Proposal rejected",
+  proposal_approved: "Proposal approved",
+  contract_sent: "Contract sent",
+  signed: "Signed",
+};
+
+/*
+  FR3.4 — "The owner can edit and resubmit while it is a draft or has been
+  sent back. Once it is sent for review it is locked."
+*/
+export function isAmcSubmissionEditable(status: AmcSubmissionStatus): boolean {
+  return status === "draft" || status === "sent_back";
+}
 
 export interface AmcSubmissionProperty {
   propertyCategory: PropertyCategory;
@@ -284,6 +330,8 @@ export interface AmcSubmission {
   discount_amount: number;
   final_price: number;
   generated_documents: AmcDocumentType[];
+  /* FR6.4: frozen at send. Null while the submission is still a draft. */
+  settings_snapshot?: AmcSettings | null;
   created_at: string;
   updated_at: string;
 }

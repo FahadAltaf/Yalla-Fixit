@@ -4,6 +4,10 @@ import { z } from "zod";
 import { canAccessAmcContracts } from "@/components/dashboard/extensions/amc/amc-constants";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
+import { hasResourceAction } from "@/lib/role-permissions";
+import { recordAmcAudit } from "@/lib/server/amc/audit";
+import { isAmcSubmissionEditable } from "@/components/dashboard/extensions/amc/amc-types";
+import { ActionType, ResourceType } from "@/types/types";
 import type {
   AmcDocumentType,
   AmcSubmission,
@@ -96,6 +100,7 @@ type AmcSubmissionRow = {
   discount_amount: number;
   final_price: number;
   generated_documents: AmcDocumentType[];
+  settings_snapshot: AmcSubmission["settings_snapshot"];
   created_at: string;
   updated_at: string;
 };
@@ -113,18 +118,27 @@ function mapRow(row: AmcSubmissionRow): AmcSubmission {
     discount_amount: Number(row.discount_amount),
     final_price: Number(row.final_price),
     generated_documents: row.generated_documents ?? [],
+    settings_snapshot: row.settings_snapshot ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
 }
 
+type AmcAccess = Awaited<ReturnType<typeof getAuthenticatedUserAccess>>;
+
 type AmcAccessResult =
-  | { ok: true; profile: NonNullable<Awaited<ReturnType<typeof getAuthenticatedUserAccess>>["profile"]> }
+  | {
+      ok: true;
+      profile: NonNullable<AmcAccess["profile"]>;
+      /* Carried through so the list route can check role_access for the
+         approver queue (FR3.2/FR5.3) without a second lookup. */
+      accessUser: NonNullable<AmcAccess["accessUser"]>;
+    }
   | { ok: false; error: NextResponse };
 
 async function requireAmcAccess(): Promise<AmcAccessResult> {
   const access = await getAuthenticatedUserAccess();
-  if (!access.profile) {
+  if (!access.profile || !access.accessUser) {
     return {
       ok: false,
       error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
@@ -138,7 +152,7 @@ async function requireAmcAccess(): Promise<AmcAccessResult> {
     };
   }
 
-  return { ok: true, profile: access.profile };
+  return { ok: true, profile: access.profile, accessUser: access.accessUser };
 }
 
 export async function GET(req: NextRequest) {
@@ -167,7 +181,22 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(mapRow(data as AmcSubmissionRow));
   }
 
-  const { data, error } = await admin
+  /*
+    FR3.2: "My AMC Submissions shows each user their own submissions. The
+    approver also sees every submission sent for review."
+
+    Two reads rather than one `or` filter: the owner clause and the
+    approver clause select on different columns, and an `or` spanning
+    both is easy to get subtly wrong in a way that leaks drafts. Union by
+    id here instead, where the intent is legible.
+  */
+  const canApprove = hasResourceAction(
+    gate.accessUser,
+    ResourceType.AMC,
+    ActionType.APPROVE,
+  );
+
+  const { data: own, error } = await admin
     .from("amc_submissions")
     .select("*")
     .eq("owner_id", profile.id)
@@ -177,10 +206,30 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  const submissions = ((data ?? []) as AmcSubmissionRow[]).map(mapRow);
+  const rows = [...((own ?? []) as AmcSubmissionRow[])];
+
+  if (canApprove) {
+    const { data: queue, error: queueError } = await admin
+      .from("amc_submissions")
+      .select("*")
+      .eq("status", "awaiting_approval")
+      .order("submitted_at", { ascending: true });
+
+    if (queueError) {
+      return NextResponse.json({ error: queueError.message }, { status: 500 });
+    }
+
+    const seen = new Set(rows.map((row) => row.id));
+    for (const row of (queue ?? []) as AmcSubmissionRow[]) {
+      if (!seen.has(row.id)) rows.push(row);
+    }
+  }
+
+  const submissions = rows.map(mapRow);
   return NextResponse.json({
     submissions,
     totalCount: submissions.length,
+    canApprove,
   });
 }
 
@@ -257,6 +306,22 @@ export async function PUT(req: NextRequest) {
   }
 
   const existingRow = existing as AmcSubmissionRow;
+
+  /*
+    FR3.4 — "Once it is sent for review it is locked, until it is approved
+    or sent back." Enforced here and not only in the UI: the autosave
+    fires on a timer, and a submission approved in another tab while this
+    one still had the wizard open would otherwise be silently rewritten
+    after the decision was made.
+  */
+  if (!isAmcSubmissionEditable(existingRow.status)) {
+    return NextResponse.json(
+      {
+        error: `This proposal is ${existingRow.status.replace(/_/g, " ")} and can no longer be edited.`,
+      },
+      { status: 409 },
+    );
+  }
   const mergedDocuments = updates.generated_documents
     ? Array.from(
         new Set([

@@ -3,7 +3,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import { cacheHeaders, resolvePeriod } from "@/lib/server/snagging/overview-queries";
+import {
+  cacheHeaders,
+  myJobs,
+  resolvePeriod,
+} from "@/lib/server/snagging/overview-queries";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
@@ -33,15 +37,14 @@ export async function GET(req: NextRequest) {
     const period = resolvePeriod(req.nextUrl.searchParams.get("days"), 30);
     const admin = await createAdminServerClient();
 
+    // FR-10.01 — the reader's own work over the window, not the org's.
+    const me = profile.id;
+
     const [created, completed] = await Promise.all([
-      admin
-        .from("snagging_jobs")
-        .select("created_at")
+      myJobs(admin.from("snagging_jobs").select("created_at"), me)
         .gte("created_at", period.fromTs)
         .lte("created_at", period.toTs),
-      admin
-        .from("snagging_jobs")
-        .select("approved_at")
+      myJobs(admin.from("snagging_jobs").select("approved_at"), me)
         .not("approved_at", "is", null)
         .gte("approved_at", period.fromTs)
         .lte("approved_at", period.toTs),

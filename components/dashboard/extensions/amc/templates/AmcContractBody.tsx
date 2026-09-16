@@ -16,6 +16,7 @@ import {
   getSelectedScopeSections,
 } from "../amc-contract-content";
 import { AMC_PROVIDER } from "../amc-constants";
+import type { AmcSettings } from "../amc-settings";
 import {
   formatDesignationLabel,
   formatDisplayDate,
@@ -176,14 +177,31 @@ function Clause2IntroBlock() {
   );
 }
 
-function Clause3Block() {
+/* FR6.2 — settings store clause text as blank-line separated blocks,
+   which is how getAmcSettingsDefaults joined the original bullets. So
+   splitting here round-trips an unedited clause exactly, and an edited
+   one keeps whatever structure the admin typed. */
+function textBlocks(value: string): string[] {
+  return value
+    .split(/\n\s*\n/)
+    .map((block) => block.trim())
+    .filter(Boolean);
+}
+
+function Clause3Block({ settings }: { settings: AmcSettings }) {
   return (
     <div>
       <div style={clauseMainTitle}>{CLAUSE_3_EMERGENCY.title}</div>
-      {CLAUSE_3_EMERGENCY.sections.map((section) => (
+      {CLAUSE_3_EMERGENCY.sections.map((section, sectionIndex) => (
         <div key={section.title}>
           <div style={{ ...clauseSubTitle, fontWeight: 700 }}>{section.title}</div>
-          {section.bullets.map((bullet) => (
+          {/* FR6.2 — 3.1 and 3.2 are separately editable in AMC Settings.
+              Keyed by position, matching how the defaults were read. */}
+          {textBlocks(
+            sectionIndex === 0
+              ? settings.clauses.emergencyCallOut
+              : settings.clauses.nonEmergencyCallOut,
+          ).map((bullet) => (
             <div key={bullet} style={clauseBulletItem}>
               <span style={{ position: "absolute", left: "44px" }}>-</span>
               {bullet}
@@ -195,11 +213,11 @@ function Clause3Block() {
   );
 }
 
-function Clause4Block() {
+function Clause4Block({ settings }: { settings: AmcSettings }) {
   return (
     <div>
       <div style={clauseMainTitle}>{CLAUSE_4_MATERIALS.title}</div>
-      {CLAUSE_4_MATERIALS.paragraphs.map((paragraph) => (
+      {textBlocks(settings.clauses.materials).map((paragraph) => (
         <div key={paragraph} style={clauseParagraph}>
           {paragraph}
         </div>
@@ -208,12 +226,12 @@ function Clause4Block() {
   );
 }
 
-function Clause5Block() {
+function Clause5Block({ settings }: { settings: AmcSettings }) {
   return (
     <div>
       <div style={clauseMainTitle}>{CLAUSE_5_EXCLUDED.title}</div>
       <div style={clauseParagraph}>{CLAUSE_5_EXCLUDED.intro}</div>
-      {CLAUSE_5_EXCLUDED.bullets.map((bullet) => (
+      {textBlocks(settings.clauses.servicesExcluded).map((bullet) => (
         <div key={bullet} style={clauseBulletItem}>
           <span style={{ position: "absolute", left: "44px" }}>-</span>
           {bullet}
@@ -229,7 +247,7 @@ function Clause5Block() {
 }
 
 export function AmcContractBody({ data, isPdf = false }: Props) {
-  const { formData, totals, frequencyRows, documentType } = data;
+  const { formData, totals, frequencyRows, documentType, settings } = data;
   const contacts = formData.coordinationContacts;
   const totalAmountText = `${totals.finalPrice.toFixed(2)} AED (VAT EXCLUDED) + ${totals.vatAmount.toFixed(2)} AED VAT = ${totals.grandTotal.toFixed(2)} AED`;
   const selectedServiceIds = formData.serviceRows
@@ -309,7 +327,7 @@ export function AmcContractBody({ data, isPdf = false }: Props) {
             <td style={infoLabelCell}>Customer ID: {formData.customerId}</td>
           </tr>
           <tr>
-            <td style={infoLabelCell}>Contact No: {AMC_PROVIDER.contactNo}</td>
+            <td style={infoLabelCell}>Contact No: {settings.provider.contactNo}</td>
             <td style={infoLabelCell}>Contract Type: {AMC_PROVIDER.contractType}</td>
           </tr>
           <tr>
@@ -319,7 +337,7 @@ export function AmcContractBody({ data, isPdf = false }: Props) {
           <tr>
             <td style={infoLabelCell}>
               <div>Coordination Email Address:</div>
-              {AMC_PROVIDER.coordinationEmails.map((email, index) => (
+              {settings.provider.coordinationEmails.map((email, index) => (
                 <div key={`${email}-${index}`}>{email}</div>
               ))}
             </td>
@@ -442,9 +460,9 @@ export function AmcContractBody({ data, isPdf = false }: Props) {
         <ScopeSectionBlock key={section.serviceId} section={section} isPdf={isPdf} />
       ))}
 
-      <Clause3Block />
-      <Clause4Block />
-      <Clause5Block />
+      <Clause3Block settings={settings} />
+      <Clause4Block settings={settings} />
+      <Clause5Block settings={settings} />
 
       <div style={{ ...clauseMainTitle, marginBottom: CLAUSE_LAYOUT.PARAGRAPH_GAP }}>
         6- Service Frequency and Provisions
