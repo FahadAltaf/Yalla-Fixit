@@ -57,6 +57,9 @@ export interface SnaggingTaskFilters {
   assigneeId?: string;
   from?: string;
   to?: string;
+  /** Raised between these dates (YYYY-MM-DD), as opposed to scheduled. */
+  createdFrom?: string;
+  createdTo?: string;
   queue?: "approval";
   sortBy?: string;
   sortDirection?: "asc" | "desc";

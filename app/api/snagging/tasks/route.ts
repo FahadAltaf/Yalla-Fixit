@@ -76,6 +76,19 @@ export async function GET(req: NextRequest) {
     const to = params.get("to");
     if (to) query = query.lte("scheduled_date", to);
 
+    /*
+      When the job was RAISED, which is a different question from when it
+      is booked in. The Overview's activity chart plots intake by
+      created_at, so a click on one of its days has to narrow by the same
+      column — reusing from/to above would have opened the jobs SCHEDULED
+      that day, a different set with the same size and no way to tell.
+    */
+    const createdFrom = params.get("createdFrom");
+    if (createdFrom) query = query.gte("created_at", createdFrom);
+    const createdTo = params.get("createdTo");
+    // Inclusive of the whole day, since the column is a timestamp.
+    if (createdTo) query = query.lt("created_at", `${createdTo}T23:59:59.999Z`);
+
     if (params.get("queue") === "approval") {
       query = query
         .in("status", ["submitted", "in_review"])

@@ -66,12 +66,24 @@ export function NeedsAttention() {
         icon={<AlertCircle />}
         action={
           total > 0 ? (
-            <Badge
-              variant="secondary"
-              className="bg-danger/10 text-danger border-0 font-medium"
+            /*
+              The count is the figure, so it opens what it counts
+              (FR-10.01). There is no single URL behind it — these items
+              span jobs in four states and quotations — so the matching
+              "list" is the full dialog the footer already opens.
+            */
+            <button
+              type="button"
+              onClick={() => setAllOpen(true)}
+              aria-label={`Show all ${total} items needing attention`}
             >
-              {total}
-            </Badge>
+              <Badge
+                variant="secondary"
+                className="bg-danger/10 text-danger hover:bg-danger/20 border-0 font-medium transition-colors"
+              >
+                {total}
+              </Badge>
+            </button>
           ) : null
         }
         loading={loading}

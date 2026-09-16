@@ -16,7 +16,6 @@ import { InspectorPerformance } from "./overview/inspector-performance";
 import { KpiRow } from "./overview/kpi-row";
 import { NeedsAttention } from "./overview/needs-attention";
 import { QuotationAnalytics } from "./overview/quotation-analytics";
-import { SnagsByCategory } from "./overview/snags-by-category";
 import { UpcomingInspections } from "./overview/upcoming-inspections";
 import { lastFetchedAt, refreshAll } from "./overview/use-section";
 import { PageHeading } from "./shared";
@@ -24,11 +23,15 @@ import { PageHeading } from "./shared";
 /**
  * The Snagging Overview.
  *
- * Eight sections, each fetching its own data, rendering its own
+ * Seven sections, each fetching its own data, rendering its own
  * skeleton, and failing on its own. There is deliberately no combined
  * request and no page-level spinner: the KPI row is interactive while
- * the category chart is still loading, and a broken quotation query
+ * the activity chart is still loading, and a broken quotation query
  * costs one card rather than the page.
+ *
+ * Every figure on it counts only what the reader raised or was put on
+ * (FR-10.01). Snag breakdowns and the org-wide view of the same work
+ * live in Analytics.
  *
  * The order is an argument about attention. What needs somebody now
  * comes first — headline figures, then activity beside the attention
@@ -103,8 +106,6 @@ export default function SnaggingOverviewDashboard() {
           <UpcomingInspections />
         </div>
       </div>
-
-      <SnagsByCategory />
 
       {/* Everything below here is analysis rather than action. The
           divider and the quieter cards are what stop it competing with

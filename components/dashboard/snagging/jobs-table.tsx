@@ -56,6 +56,10 @@ export default function JobsTable() {
     and the toolbar's own filters still narrow it further.
   */
   const assigneeId = params.get("assignee") ?? undefined;
+  /* A single day from the Overview's activity chart, by when a job was
+     raised rather than when it is booked in. */
+  const createdFrom = params.get("createdFrom") ?? undefined;
+  const createdTo = params.get("createdTo") ?? undefined;
   const [filter, setFilter] = useState<FilterValue>(
     FILTERS.some((entry) => entry.value === initialFilter) ? initialFilter : "all",
   );
@@ -80,6 +84,8 @@ export default function JobsTable() {
     return {
       status: active?.statuses,
       assigneeId,
+      createdFrom,
+      createdTo,
       search: debouncedSearchTerm || undefined,
       // Sorting is resolved by the API; the table only reports which
       // column was clicked. Updated-desc stays the default view.
@@ -94,7 +100,7 @@ export default function JobsTable() {
       sortBy: sorting.sortBy ?? "created_at",
       sortDirection: sorting.sortOrder ?? "desc",
     };
-  }, [filter, debouncedSearchTerm, sorting, assigneeId]);
+  }, [filter, debouncedSearchTerm, sorting, assigneeId, createdFrom, createdTo]);
 
   const fetchJobs = useCallback(async () => {
     setIsRefetching(true);

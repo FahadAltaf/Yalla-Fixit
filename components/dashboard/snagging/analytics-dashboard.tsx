@@ -61,6 +61,7 @@ import {
   type SnaggingAnalyticsGranularity,
 } from "@/types/types";
 
+import { SnagsByCategory } from "./overview/snags-by-category";
 import {
   AnalyticsDrilldown,
   type DrilldownRequest,
@@ -777,6 +778,17 @@ export default function SnaggingAnalyticsDashboard() {
           </div>
         ) : null}
       </DataState>
+
+      {/*
+        Snags by category, moved here from the Overview.
+
+        It counts every snag in the business, and the Overview now counts
+        only the reader's own work — so on that page it was the one card
+        answering a different question from all the others. Change 11
+        moved the other two snag cards off for the same reason; this is
+        the third, and org-wide figures are what Analytics is for.
+      */}
+      <SnagsByCategory />
 
       <AnalyticsDrilldown
         request={drilldown}

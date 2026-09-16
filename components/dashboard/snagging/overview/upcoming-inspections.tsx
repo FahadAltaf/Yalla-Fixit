@@ -79,12 +79,19 @@ export function UpcomingInspections() {
         icon={<CalendarDays />}
         action={
           total > 0 ? (
-            <Badge
-              variant="secondary"
-              className="bg-mist text-ink-soft border-0 font-medium"
+            // The count opens the whole booked diary — see NeedsAttention.
+            <button
+              type="button"
+              onClick={() => setAllOpen(true)}
+              aria-label={`Show all ${total} upcoming inspections`}
             >
-              {total}
-            </Badge>
+              <Badge
+                variant="secondary"
+                className="bg-mist text-ink-soft hover:bg-muted border-0 font-medium transition-colors"
+              >
+                {total}
+              </Badge>
+            </button>
           ) : null
         }
         loading={loading}
