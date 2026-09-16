@@ -1,0 +1,162 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+import { dedupeDefects } from "./defect-set";
+import { loadJobFamily } from "./job-family";
+
+/**
+ * The client's report, and its history.
+ *
+ * BRD Module 9: an additional visit does NOT produce a report of its own.
+ * Its snags join the original inspection's report, which is reissued as a
+ * new version — so the client holds one document that grows, not a stack
+ * of separate ones they have to reconcile.
+ *
+ * Earlier versions are kept because they were actually sent. A client may
+ * be holding a printout of V1 while V2 is being prepared, and "which
+ * snags were in the version you received" has to have an answer.
+ */
+export type ReportVersion = {
+  id: string;
+  version: number;
+  source_visit_id: string | null;
+  snag_count: number;
+  generated_at: string;
+  reason: string | null;
+};
+
+/** Whether the versions table has been migrated in yet. */
+async function versioningAvailable(admin: SupabaseClient): Promise<boolean> {
+  const { error } = await admin.from("snagging_report_versions").select("id").limit(1);
+  // PostgREST reports an unknown relation rather than throwing; treating
+  // that as "not yet migrated" keeps every caller working on an
+  // environment where the migration has not been applied.
+  return !error;
+}
+
+export async function listReportVersions(
+  admin: SupabaseClient,
+  jobId: string,
+): Promise<ReportVersion[]> {
+  if (!(await versioningAvailable(admin))) return [];
+
+  const { data, error } = await admin
+    .from("snagging_report_versions")
+    .select("id, version, source_visit_id, snag_count, generated_at, reason")
+    .eq("job_id", jobId)
+    .order("version", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as ReportVersion[];
+}
+
+/**
+ * Issues the next version of an inspection's report.
+ *
+ * Reads the family's snags at this moment and records exactly which ones
+ * the version contained, so a superseded version stays explainable after
+ * the live rows have moved on.
+ *
+ * Idempotent per visit: reissuing for a visit that already has a version
+ * returns that version rather than minting a duplicate, because delivery
+ * can be retried and a retry is not a new issue of the document.
+ */
+export async function issueReportVersion(
+  admin: SupabaseClient,
+  input: {
+    jobId: string;
+    sourceVisitId?: string | null;
+    /** FR-7.07 — set for a de-snag round's own report. */
+    sourceRoundId?: string | null;
+    reportType?: "inspection" | "round" | "cumulative";
+    generatedBy?: string | null;
+    reason?: string | null;
+  },
+): Promise<{
+  id: string;
+  version: number;
+  snagCount: number;
+  created: boolean;
+} | null> {
+  if (!(await versioningAvailable(admin))) return null;
+
+  const family = await loadJobFamily(admin, input.jobId);
+  const rootId = family.rootId;
+
+  if (input.sourceVisitId) {
+    const { data: already } = await admin
+      .from("snagging_report_versions")
+      .select("id, version, snag_count")
+      .eq("job_id", rootId)
+      .eq("source_visit_id", input.sourceVisitId)
+      .maybeSingle();
+    if (already) {
+      return {
+        id: already.id as string,
+        version: already.version as number,
+        snagCount: already.snag_count as number,
+        created: false,
+      };
+    }
+  }
+
+  /*
+    What the client's report contains: the original inspection's snags, plus
+    everything found on its additional visits, plus the defects first raised
+    during a de-snag round.
+
+    De-snag rounds used to be excluded outright, on the reasoning that their
+    rows are working copies whose verdicts write through to the originals —
+    true of a carried defect, and false of one BORN on a round, which has no
+    original to write through to. Those were left out of the client's
+    document entirely. Reading the family and collapsing by snag_code keeps
+    the carried copies from doubling while letting the round-born ones
+    through, which is what the exclusion was really trying to achieve.
+  */
+  const { data: snags, error: snagError } = await admin
+    .from("snagging_snags")
+    .select("id, job_id, snag_code")
+    .in("job_id", family.allIds)
+    .neq("status", "withdrawn");
+  if (snagError) throw new Error(snagError.message);
+
+  const snagIds = dedupeDefects(snags ?? [], {
+    preferredJobIds: [rootId, ...family.additionalVisitIds],
+    roundOf: family.roundOf,
+  }).map((s) => s.id as string);
+
+  const { data: latest } = await admin
+    .from("snagging_report_versions")
+    .select("version")
+    .eq("job_id", rootId)
+    .order("version", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const nextVersion = ((latest?.version as number | undefined) ?? 0) + 1;
+
+  const { data: inserted, error: insertError } = await admin
+    .from("snagging_report_versions")
+    .insert({
+      job_id: rootId,
+      version: nextVersion,
+      report_type: input.reportType ?? "inspection",
+      source_visit_id: input.sourceVisitId ?? null,
+      source_round_id: input.sourceRoundId ?? null,
+      snag_count: snagIds.length,
+      snag_ids: snagIds,
+      generated_by: input.generatedBy ?? null,
+      reason: input.reason ?? null,
+      // FR-7.01 — the row exists before the PDF does. Nothing may read this
+      // as a deliverable document until generation actually succeeds.
+      generation_status: "pending",
+    })
+    .select("id")
+    .single();
+  if (insertError) throw new Error(insertError.message);
+
+  return {
+    id: inserted.id as string,
+    version: nextVersion,
+    snagCount: snagIds.length,
+    created: true,
+  };
+}

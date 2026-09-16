@@ -16,13 +16,25 @@ import { ActionType, ResourceType } from "@/types/types";
  * Reuses snagging_areas; no new table.
  */
 const AREA_COLUMNS =
-  "id, job_id, name, catalogue_area_code, sort_order, status, floor_plan_id, pin_x, pin_y";
+  "id, job_id, name, catalogue_area_code, sort_order, status, floor_plan_id, pin_x, pin_y, zone";
 
 const pinFieldsFrom = (
-  input: { floor_plan_id?: string | null; pin_x?: number | null; pin_y?: number | null },
+  input: {
+    floor_plan_id?: string | null;
+    pin_x?: number | null;
+    pin_y?: number | null;
+    zone?: { x: number; y: number }[] | null;
+  },
 ): Record<string, unknown> => {
   const out: Record<string, unknown> = {};
   if (input.floor_plan_id !== undefined) out.floor_plan_id = input.floor_plan_id;
+  /*
+    A zone is placement, like a pin, and is cleared the same way — sending
+    null removes the outline and leaves the room pinned (or unplaced).
+    Zones and pins coexist for good: every job created before this feature
+    has a pin and no outline, and edges cannot be derived from a point.
+  */
+  if (input.zone !== undefined) out.zone = input.zone;
   // A pin is all-or-nothing: keep the plan/x/y consistent so the DB check holds.
   if (input.pin_x !== undefined || input.pin_y !== undefined) {
     const x = input.pin_x ?? null;

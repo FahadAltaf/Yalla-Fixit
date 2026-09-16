@@ -98,6 +98,14 @@ export const createTaskSchema = z
     property_id: z.string().uuid().optional(),
     property: propertyInputSchema.optional(),
 
+    /*
+      The approved quotation this job is being raised against (BA v2,
+      change 3). Present when the wizard was opened from a quotation, which
+      is now the ordinary way a job comes into existence: the client agreed
+      a price, and this is the work they agreed to.
+    */
+    quotation_id: z.string().uuid().optional(),
+
     // Job type is gone from this step (E9): full building is a separate flow.
     scheduled_date: isoDate.optional().or(z.literal("")),
     // Appointment date + time (I2), and the two site contacts (I3, I4).
@@ -140,6 +148,8 @@ export const updateTaskSchema = z.object({
   technician_ids: z.array(z.string().uuid()).optional(),
   supervisor_id: z.string().uuid().optional().nullable(),
   approval_manager_id: z.string().uuid().optional().nullable(),
+  // FR-6.01 — who checks the work before the manager decides on it.
+  reviewer_id: z.string().uuid().optional().nullable(),
   // Site contacts (I3/I4) — editable after creation.
   developer_contact_name: z.string().trim().max(120).optional().nullable(),
   developer_contact_phone: z.string().trim().max(32).optional().nullable(),
@@ -158,15 +168,76 @@ export const approveTaskSchema = z.object({
   comment: z.string().trim().max(2000).optional().or(z.literal("")),
 });
 
+/**
+ * FR-6.03 — a rejection carries a written reason, always.
+ *
+ * `.trim()` runs before `.min()`, so "   " is measured as empty and refused
+ * exactly like null or a missing field. The cap matches the approval
+ * comment's, which was previously unbounded here.
+ */
 export const rejectTaskSchema = z.object({
   category: rejectionCategorySchema,
   comment: z
-    .string()
+    .string({ error: "A written reason is required to reject an inspection" })
     .trim()
-    .min(10, "Give the inspector at least a sentence explaining what to fix"),
+    .min(10, "Give the inspector at least a sentence explaining what to fix")
+    .max(2000, "Keep the reason under 2000 characters"),
+});
+
+/** FR-6.01 — the reviewer handing the job to the approval manager. */
+export const completeReviewSchema = z.object({
+  comment: z.string().trim().max(2000).optional().or(z.literal("")),
 });
 
 export type RejectTaskInput = z.infer<typeof rejectTaskSchema>;
+
+/**
+ * The checklist library (N1, FR-4.13).
+ *
+ * `code` is the analytics key and the join back to every job checklist row
+ * already written, so it is set once at creation and never rewritten. Every
+ * other field is editable, and an item is deactivated rather than deleted.
+ */
+/**
+ * Which list a check belongs to (Action Points N1).
+ *
+ * `technician` is copied onto each job and answered on site; `client` is
+ * the published list, stored once and shared on request (N7). The two are
+ * one library because they are the same shape and the same people edit
+ * them, and only this tells them apart.
+ */
+export const checklistAudienceSchema = z
+  .enum(["technician", "client"])
+  .default("technician");
+
+export const checklistItemSchema = z.object({
+  audience: checklistAudienceSchema,
+  code: z
+    .string()
+    .trim()
+    .regex(/^CHK-[0-9]{3,4}$/, "Code looks like CHK-048"),
+  group_name: z.string().trim().min(2, "Give the check a group"),
+  label: z.string().trim().min(3, "Describe what the inspector checks"),
+  applies_apartment: z.boolean().default(true),
+  applies_villa: z.boolean().default(true),
+  applies_townhouse: z.boolean().default(true),
+  applies_commercial: z.boolean().default(true),
+  mandatory: z.boolean().default(true),
+  sort_order: z.coerce.number().int().min(0).default(0),
+});
+
+export const checklistToggleSchema = z.object({
+  id: z.string().uuid(),
+  active: z.boolean(),
+});
+
+/** Editing an existing item: the code is deliberately not accepted. */
+export const checklistItemUpdateSchema = checklistItemSchema
+  .omit({ code: true })
+  .partial()
+  .extend({ id: z.string().uuid() });
+
+export type ChecklistItemInput = z.infer<typeof checklistItemSchema>;
 
 export const catalogueEntrySchema = z.object({
   element_code: z
@@ -186,6 +257,55 @@ export const catalogueEntrySchema = z.object({
 
 export type CatalogueEntryInput = z.infer<typeof catalogueEntrySchema>;
 
+/*
+  The catalogue's three levels (Action Points P1, P6).
+
+  Each level owns a short code, and the snag code is the three composed:
+  CIV-PNT-DRP. Codes are two to four capitals — long enough to stay
+  readable when a category has sixty sub-categories, short enough that the
+  composed code still fits a report line.
+
+  Every level is editable from the admin screens without a release, which
+  is why none of this is a TypeScript union or a database CHECK.
+*/
+const catalogueCode = z
+  .string()
+  .trim()
+  .regex(/^[A-Z0-9]{2,4}$/, "A code is 2-4 capitals or digits, e.g. CIV");
+
+export const catalogueCategorySchema = z.object({
+  code: catalogueCode,
+  label: z.string().trim().min(2).max(80),
+  sort_order: z.coerce.number().int().min(0).default(0),
+});
+
+export const catalogueSubcategorySchema = z.object({
+  category_id: z.string().uuid(),
+  code: catalogueCode,
+  label: z.string().trim().min(2).max(120),
+  sort_order: z.coerce.number().int().min(0).default(0),
+});
+
+export const catalogueDefectSchema = z.object({
+  subcategory_id: z.string().uuid(),
+  code: catalogueCode,
+  label: z.string().trim().min(2).max(200),
+  default_severity: severitySchema,
+  guidance: z.string().trim().max(1000).optional().or(z.literal("")),
+  sort_order: z.coerce.number().int().min(0).default(0),
+});
+
+export type CatalogueCategoryInput = z.infer<typeof catalogueCategorySchema>;
+export type CatalogueSubcategoryInput = z.infer<typeof catalogueSubcategorySchema>;
+export type CatalogueDefectInput = z.infer<typeof catalogueDefectSchema>;
+
+/** Which level a write targets, so one route serves all three. */
+export const catalogueLevelSchema = z.enum([
+  "category",
+  "subcategory",
+  "defect",
+]);
+
 /** BR-8: entries are deactivated, never deleted. */
 export const catalogueToggleSchema = z.object({
   id: z.string().uuid(),
@@ -199,12 +319,26 @@ export const catalogueToggleSchema = z.object({
  * explicit area — never auto-assigned to the first area.
  */
 const pinFraction = z.number().min(0).max(1);
+
+/*
+  The outline of a room on a plan (BA change 6 / FR-3.05).
+
+  Mirrors `isZone` in lib/snagging/zone-geometry and the database's own
+  check constraint. Three places agree on this shape on purpose: the
+  handset has no way to recover from a malformed polygon that reaches it
+  over sync while the inspector is standing in a basement with no signal.
+*/
+const zonePolygon = z
+  .array(z.object({ x: pinFraction, y: pinFraction }))
+  .min(3, "A zone needs at least three points")
+  .max(64, "That outline has too many points");
 export const createAreaSchema = z.object({
   name: z.string().trim().min(1, "Area name is required").max(120),
   catalogue_area_code: z.string().trim().max(32).optional().nullable(),
   floor_plan_id: z.string().uuid().nullable().optional(),
   pin_x: pinFraction.nullable().optional(),
   pin_y: pinFraction.nullable().optional(),
+  zone: zonePolygon.nullable().optional(),
 });
 
 export const updateAreaSchema = z.object({
@@ -214,13 +348,37 @@ export const updateAreaSchema = z.object({
   floor_plan_id: z.string().uuid().nullable().optional(),
   pin_x: pinFraction.nullable().optional(),
   pin_y: pinFraction.nullable().optional(),
+  zone: zonePolygon.nullable().optional(),
 });
 
 export type CreateAreaInput = z.infer<typeof createAreaSchema>;
 export type UpdateAreaInput = z.infer<typeof updateAreaSchema>;
 
 export const createRoundSchema = z.object({
-  scheduled_date: isoDate.optional().or(z.literal("")),
+  /*
+    The approved de-snag quotation this round is carried out under
+    (BA v2, change 31).
+
+    A de-snag used to be free — a round of the original, at no charge. It
+    is now sold like any other visit, so the round may only be opened
+    against a quotation the client has agreed. Optional on the type and
+    required by the route, so the refusal can explain WHICH state the
+    quotation is in rather than the schema saying only that a field is
+    missing.
+  */
+  quotation_id: z.string().uuid().optional(),
+  /*
+    Required, not inherited.
+
+    A round used to take the original's date, so every round on a job read
+    back as having happened on the day of the first inspection — the record
+    said an inspector attended twice on one morning, and nobody could tell
+    when a re-check was actually due. A round is a new site visit and gets
+    its own appointment, which the server also refuses to place in the past.
+  */
+  scheduled_date: isoDate,
+  /** Full appointment instant, when a time was given with the date. */
+  appointment_at: z.string().datetime().optional().nullable(),
   technician_ids: z.array(z.string().uuid()).default([]),
   approval_manager_id: z.string().uuid().optional().nullable(),
   notes: z.string().trim().max(4000).optional().or(z.literal("")),
@@ -236,11 +394,29 @@ export const createRoundSchema = z.object({
  * fresh inspection pass — so there is no snag_ids field.
  */
 export const createVisitSchema = z.object({
-  scheduled_date: isoDate.optional().or(z.literal("")),
+  /*
+    Required, like a round's.
+
+    A visit raised with no date was a request nobody could plan around, and
+    the row inherited the original inspection's date instead — so the record
+    claimed a return trip had happened on the day of the first visit. This
+    is the date and time being ASKED for; the visit is still created as a
+    draft, and FR-9.04 keeps the actual booking behind quotation approval.
+  */
+  scheduled_date: isoDate,
+  appointment_at: z.string().datetime().optional().nullable(),
   technician_ids: z.array(z.string().uuid()).default([]),
   approval_manager_id: z.string().uuid().optional().nullable(),
   notes: z.string().trim().max(4000).optional().or(z.literal("")),
   reason: z.string().trim().max(4000).optional().or(z.literal("")),
+});
+
+/** FR-9.04 — what booking an approved additional visit needs. */
+export const scheduleVisitSchema = z.object({
+  scheduled_date: isoDate,
+  /** The confirmed slot, when one has been agreed with the occupier. */
+  appointment_at: z.string().datetime().optional().nullable(),
+  inspector_id: z.string().uuid().optional().nullable(),
 });
 
 export const deliverReportSchema = z.object({

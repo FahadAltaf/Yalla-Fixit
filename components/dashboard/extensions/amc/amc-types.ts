@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { isEndDateBeforeStartDate } from "./amc-date-utils";
+import type { AmcSettings } from "./amc-settings";
 
 export const propertyCategorySchema = z.enum(["residential", "commercial"]);
 export const unitTypeSchema = z.enum(["villa", "apartment", "office"]);
@@ -17,11 +18,50 @@ export const coordinationContactSchema = z.object({
   designation: designationSchema,
 });
 
+/*
+  FR4.5 / §8.3 — sections the team switches on per proposal. The other
+  three optional sections in §8.3 (24/7 hotline, water pump, free
+  handyman) are already service rows, so their own checkbox decides
+  whether they print; only these two need a toggle of their own.
+
+  additionalFixedPriceServices maps to clause 6.3, the out-of-hours
+  handyman rates. §8.3 says "thought to be clause 6.3, see OI-5" -- OI-5
+  is in the Open Issues register, which is missing from the PDF, so this
+  mapping is unconfirmed.
+*/
+export const amcOptionalSectionsSchema = z.object({
+  supplyInstallPriceList: z.boolean(),
+  additionalFixedPriceServices: z.boolean(),
+});
+
+/* FR4.6 — the rows behind clause 6.2, filled in when that section is on. */
+export const amcPriceListRowSchema = z.object({
+  category: z.string(),
+  description: z.string(),
+  brand: z.string(),
+  price: z.string(),
+});
+
+/* FR4.4 / §8.2 — the account manager named in clause 1.1, entered per
+   proposal. The other placeholders in §8.2 are standing org values and
+   come from AMC Settings in phase 3. */
+export const amcAccountManagerSchema = z.object({
+  name: z.string(),
+  phone: z.string(),
+});
+
 export const amcServiceRowSchema = z.object({
   serviceId: z.string().min(1),
   included: z.boolean(),
   units: z.coerce.number().int().min(1, "Units must be at least 1"),
   frequency: z.coerce.number().int().min(1, "Frequency must be at least 1"),
+  /*
+    FR2.4: entered per proposal, replacing the unitRate constant. Optional
+    here and enforced per row in superRefine, so an unchecked row is never
+    asked for a price. Zero is valid and meaningful -- FR2.12 calls out
+    the free handyman service.
+  */
+  basePrice: z.coerce.number().min(0, "Base price cannot be negative").optional(),
   price: z.coerce.number().min(0).optional(),
 });
 
@@ -31,12 +71,15 @@ export const amcFormSchema = z
     unitType: unitTypeSchema,
     propertyAddress: z.string().min(1, "Property address is required"),
     propertyDetail: z.string().min(1, "Property detail is required"),
-    packageId: z.string().optional(),
-    customMonthlyPrice: z.coerce.number().positive().optional(),
     serviceRows: z.array(amcServiceRowSchema),
     discountPercent: z.coerce.number().min(0).max(100).default(0),
+    optionalSections: amcOptionalSectionsSchema,
+    priceListRows: z.array(amcPriceListRowSchema),
+    accountManagers: z.tuple([amcAccountManagerSchema, amcAccountManagerSchema]),
     customerName: z.string().min(1, "Customer name is required"),
-    customerId: z.string().optional(),
+    /* FR4.4 / §8.2: prints in the contract header, where it used to
+       fall back to "XXX". Required now. */
+    customerId: z.string().min(1, "Customer ID is required"),
     customerPhone: z.string().min(1, "Customer phone is required"),
     customerEmail: z.string().email("Invalid email address"),
     coordinationContacts: z.tuple([
@@ -50,23 +93,6 @@ export const amcFormSchema = z
     submissionId: z.string().uuid().optional(),
   })
   .superRefine((data, ctx) => {
-    if (data.propertyCategory === "residential" && !data.packageId) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Please select a package",
-        path: ["packageId"],
-      });
-    }
-    if (data.propertyCategory === "commercial") {
-      if (!data.customMonthlyPrice || data.customMonthlyPrice <= 0) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "Please enter a monthly rate",
-          path: ["customMonthlyPrice"],
-        });
-      }
-    }
-
     const includedRows = data.serviceRows.filter((row) => row.included);
     if (includedRows.length === 0) {
       ctx.addIssue({
@@ -77,6 +103,19 @@ export const amcFormSchema = z
     }
 
     for (const row of includedRows) {
+      /*
+        FR2.12: every checked row needs a base price before submission.
+        Checked explicitly against undefined -- 0 is a valid price (a
+        service given free), and a falsy test would reject it.
+      */
+      if (row.basePrice === undefined || Number.isNaN(row.basePrice)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Enter a base price for every selected service",
+          path: ["serviceRows"],
+        });
+        break;
+      }
       if (row.units < 1) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -92,6 +131,24 @@ export const amcFormSchema = z
           path: ["serviceRows"],
         });
         break;
+      }
+    }
+
+    if (data.optionalSections.supplyInstallPriceList) {
+      const filled = data.priceListRows.filter(
+        (row) =>
+          row.category.trim() ||
+          row.description.trim() ||
+          row.brand.trim() ||
+          row.price.trim(),
+      );
+      if (filled.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "Add at least one price list row, or switch the supply and installation section off",
+          path: ["priceListRows"],
+        });
       }
     }
 
@@ -114,17 +171,10 @@ export type PaymentTerms = z.infer<typeof paymentTermsSchema>;
 export type Designation = z.infer<typeof designationSchema>;
 export type CoordinationContact = z.infer<typeof coordinationContactSchema>;
 export type AmcServiceRow = z.infer<typeof amcServiceRowSchema>;
+export type AmcOptionalSections = z.infer<typeof amcOptionalSectionsSchema>;
+export type AmcPriceListRow = z.infer<typeof amcPriceListRowSchema>;
+export type AmcAccountManager = z.infer<typeof amcAccountManagerSchema>;
 export type AmcFormData = z.infer<typeof amcFormSchema>;
-
-export interface AmcPackage {
-  id: string;
-  name: string;
-  slug: string;
-  monthlyPrice: number;
-  ppmVisitsPerYear: number;
-  handymanHoursPerYear: number;
-  propertyCategory: "residential";
-}
 
 export type AmcServiceFrequencyType =
   | "covered"
@@ -141,8 +191,9 @@ export interface AmcService {
   scope: string;
   reference: string;
   frequencyType: AmcServiceFrequencyType;
+  /* The default the table starts at (FR2.3). No unitRate any more: price
+     comes from the base price entered per proposal (FR2.4). */
   frequencyPerYear?: number;
-  unitRate: number;
   villaOnly: boolean;
   sectionNumber?: string;
   sectionTitle?: string;
@@ -169,8 +220,14 @@ export interface AmcTotals {
 
 export interface AmcComputedData {
   documentType: AmcDocumentType;
-  packageName: string;
-  packageTitle: string;
+  /*
+    FR6.4 — the text this document renders with. For a sent proposal this
+    is its frozen snapshot; for a draft it is live settings. Defaulted by
+    computeAmcData so a caller that has not loaded settings still renders
+    the shipped text rather than nothing.
+  */
+  settings: AmcSettings;
+  documentTitle: string;
   propertyTypeLabel: string;
   proposalDate: string;
   endDate: string;
@@ -179,13 +236,57 @@ export interface AmcComputedData {
   formData: AmcFormData;
 }
 
-export type AmcSubmissionStatus = "draft" | "generated";
+/*
+  §9.2 — the full status set. 'generated' is gone: it meant "a PDF was
+  produced from this", which v2's workflow does not care about, and the
+  phase 4 migration maps the one row carrying it back to draft.
+*/
+export const AMC_STATUSES = [
+  "draft",
+  "awaiting_approval",
+  "sent_back",
+  "approved",
+  "proposal_sent",
+  "proposal_rejected",
+  "proposal_approved",
+  "contract_sent",
+  "signed",
+] as const;
+
+export type AmcSubmissionStatus = (typeof AMC_STATUSES)[number];
+
+/* FR5.8 — how each status reads to a person. */
+export const AMC_STATUS_LABELS: Record<AmcSubmissionStatus, string> = {
+  draft: "Draft",
+  awaiting_approval: "Awaiting approval",
+  sent_back: "Sent back",
+  approved: "Approved",
+  proposal_sent: "Proposal sent",
+  proposal_rejected: "Proposal rejected",
+  proposal_approved: "Proposal approved",
+  contract_sent: "Contract sent",
+  signed: "Signed",
+};
+
+/*
+  FR3.4 — "The owner can edit and resubmit while it is a draft or has been
+  sent back. Once it is sent for review it is locked."
+*/
+export function isAmcSubmissionEditable(status: AmcSubmissionStatus): boolean {
+  return status === "draft" || status === "sent_back";
+}
 
 export interface AmcSubmissionProperty {
   propertyCategory: PropertyCategory;
   unitType: UnitType;
   propertyAddress: string;
   propertyDetail: string;
+}
+
+export interface AmcSubmissionDocumentOptions {
+  optionalSections: AmcOptionalSections;
+  priceListRows: AmcPriceListRow[];
+  accountManagers: [AmcAccountManager, AmcAccountManager];
 }
 
 export interface AmcSubmissionCustomer {
@@ -200,13 +301,18 @@ export interface AmcSubmissionCustomer {
   proposalNumber: string;
 }
 
-export interface AmcSubmissionPackage {
-  packageId?: string;
-  customMonthlyPrice?: number;
-  propertyCategory: PropertyCategory;
-}
-
-export interface AmcSubmissionServiceRow extends AmcServiceRow {
+/* Omit rather than extend: the form's basePrice is number | undefined
+   (not yet typed), while the persisted one is number | null (not entered).
+   Same idea, different absent-value convention -- JSON has no undefined. */
+export interface AmcSubmissionServiceRow extends Omit<AmcServiceRow, "basePrice"> {
+  /*
+    FR3.1: the submission stores what was entered, so reopening it
+    restores the figures exactly (FR3.3). Nullable on purpose: drafts
+    autosave continuously, and a row the team has not priced yet must
+    come back unpriced rather than as a free service. Null is "not
+    entered", 0 is "free".
+  */
+  basePrice: number | null;
   price: number;
 }
 
@@ -216,12 +322,20 @@ export interface AmcSubmission {
   status: AmcSubmissionStatus;
   property: AmcSubmissionProperty;
   customer: AmcSubmissionCustomer;
-  package: AmcSubmissionPackage;
+  /* FR3.1: optional sections and placeholder values are part of the
+     submission, so reopening one restores the document exactly. */
+  document_options: AmcSubmissionDocumentOptions;
   services: AmcSubmissionServiceRow[];
   discount_percent: number;
   discount_amount: number;
   final_price: number;
   generated_documents: AmcDocumentType[];
+  /* FR6.4: frozen at send. Null while the submission is still a draft. */
+  settings_snapshot?: AmcSettings | null;
+  /* FR5.1–FR5.2, FR5.9 */
+  submitted_at?: string | null;
+  decided_at?: string | null;
+  sent_back_reason?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -229,4 +343,7 @@ export interface AmcSubmission {
 export interface AmcSubmissionListResponse {
   submissions: AmcSubmission[];
   totalCount: number;
+  /* FR3.2 — set when the caller holds amc/approve, so the list can show
+     the review queue as well as their own submissions. */
+  canApprove?: boolean;
 }

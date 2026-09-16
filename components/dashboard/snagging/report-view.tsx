@@ -19,11 +19,14 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
-import { elementToPdfBlob } from "@/lib/snagging/report-pdf";
+import { renderReactToPdfBlob } from "@/lib/snagging/report-pdf";
 import { snaggingService, type SnaggingQuotation } from "@/modules/snagging";
 import { ActionType, ResourceType, type SnaggingTask } from "@/types/types";
+
+import YallaFixit from "@/public/yalla-fixit.png";
 
 import { InspectionReport } from "./inspection-report";
 import { ErrorState, SubmitButton } from "./shared";
@@ -44,6 +47,16 @@ export function ReportView({ taskId }: { taskId: string }) {
   const reportRef = useRef<HTMLDivElement>(null);
 
   const [task, setTask] = useState<SnaggingTask | null>(null);
+
+  /*
+    Name this page in the breadcrumb.
+
+    The trail is built from the URL, so without this the crumb was the job's
+    UUID title-cased into "B32c501d 1ac5 42e6 A208 …" — a raw id sitting
+    exactly where the unit's name belongs. The job detail page already does
+    this; the report page was simply missed.
+  */
+  useBreadcrumbLabel(taskId, task?.property?.unit_label ?? undefined);
   const [quotation, setQuotation] = useState<SnaggingQuotation | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -94,15 +107,85 @@ export function ReportView({ taskId }: { taskId: string }) {
         userProfile?.id === task.approval_manager_id,
       ));
 
+  /**
+   * The mark as a data URI, at the size the page master draws it.
+   *
+   * jsPDF cannot take a URL, and the header is drawn outside the rasterised
+   * canvas, so the mark has to be handed over separately.
+   *
+   * Painted onto a white canvas first rather than passed through as the
+   * file's own bytes. Two reasons, both of which printed a black rectangle
+   * where the logo should be: jsPDF has no WebP decoder, and a PNG's
+   * transparent pixels come through as black once it re-encodes them. A
+   * flattened square-cropped canvas has neither problem.
+   *
+   * A failure loses the mark, never the PDF.
+   */
+  async function loadHeaderLogo() {
+    try {
+      const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const el = new Image();
+        el.crossOrigin = "anonymous";
+        el.onload = () => resolve(el);
+        el.onerror = reject;
+        el.src = YallaFixit.src;
+      });
+
+      const canvas = document.createElement("canvas");
+      canvas.width = image.naturalWidth || 85;
+      canvas.height = image.naturalHeight || 87;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return undefined;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+      // The mark is square, so the printed box is too — a wider box would
+      // letterbox it and reintroduce the bands this is meant to remove.
+      return { dataUrl: canvas.toDataURL("image/png"), widthMm: 9, heightMm: 9 };
+    } catch {
+      return undefined;
+    }
+  }
+
   async function downloadPdf() {
-    if (!reportRef.current || !task) return;
+    if (!task) return;
     setBusy(true);
     // Rasterising a multi-page report takes seconds; the toast holds the
     // place so the download does not land with no explanation.
     const t = toast.loading("Preparing the PDF…");
     try {
-      const blob = await elementToPdfBlob(reportRef.current);
-      saveAs(blob, `${task.code}-snagging-report.pdf`);
+      // Rendered fresh with forPDF rather than rasterising the node on
+      // screen: the two need different vertical padding (html2canvas puts a
+      // box's background where the browser does not), which is the same
+      // split the quotation template makes.
+      const blob = await renderReactToPdfBlob(
+        <InspectionReport task={task} quotation={quotation} forPDF />,
+        2,
+        {
+          footerLabel: `${task.property?.unit_label ?? "Inspection"} · Snagging inspection report`,
+          /*
+            The running head, drawn per page rather than placed in the
+            content — see paginate's `header`. The cover carries its own
+            masthead, so page one is skipped.
+          */
+          header: {
+            text: `PROPERTY HANDOVER SNAGGING REPORT — ${[
+              task.property?.building_name,
+              task.property?.unit_label,
+            ]
+              .filter(Boolean)
+              .join(", ")
+              .toUpperCase()}`,
+            logo: await loadHeaderLogo(),
+            skipFirstPage: true,
+          },
+        },
+      );
+      saveAs(
+        blob,
+        `${(task.property?.unit_label ?? "inspection").replace(/\s+/g, "-")}-snagging-report.pdf`,
+      );
       toast.success("PDF downloaded", { id: t });
     } catch (error) {
       toast.error(
@@ -165,7 +248,72 @@ export function ReportView({ taskId }: { taskId: string }) {
             <Skeleton className="h-9 w-32 rounded-full" />
           </div>
         </div>
-        <Skeleton className="h-[600px] w-full max-w-[794px]" />
+        {/*
+          Shaped like the report, not a 600px grey slab. The document is an
+          A4 sheet -- masthead, two property/client cards, a dark visit
+          strip, a row of summary figures, then defect sections -- so the
+          placeholder is that sheet with its contents greyed, and nothing
+          jumps when the real one arrives.
+        */}
+        <div className="bg-card w-full max-w-[794px] space-y-5 rounded-lg border p-8 mx-auto">
+          <div className="flex items-start justify-between gap-6">
+            <div className="space-y-2">
+              <Skeleton className="size-12 rounded-md" />
+              <Skeleton className="h-3 w-32" />
+            </div>
+            <div className="space-y-2 text-right">
+              <Skeleton className="ml-auto h-4 w-40" />
+              <Skeleton className="ml-auto h-3 w-24" />
+            </div>
+          </div>
+
+          <div className="flex gap-3">
+            {[0, 1].map((card) => (
+              <div
+                key={card}
+                className="flex-1 space-y-2 rounded-lg border p-3"
+              >
+                <Skeleton className="h-2.5 w-16" />
+                <Skeleton className="h-4 w-3/5" />
+                <Skeleton className="h-2.5 w-4/5" />
+                <Skeleton className="h-2.5 w-2/5" />
+              </div>
+            ))}
+          </div>
+
+          <Skeleton className="h-7 w-full rounded-lg" />
+
+          <div className="space-y-2">
+            <Skeleton className="h-3 w-24" />
+            <div className="flex gap-2">
+              {[0, 1, 2, 3, 4].map((stat) => (
+                <div
+                  key={stat}
+                  className="flex-1 space-y-2 rounded-lg border p-3"
+                >
+                  <Skeleton className="h-2.5 w-12" />
+                  <Skeleton className="h-5 w-8" />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {[0, 1].map((section) => (
+            <div key={section} className="space-y-2.5">
+              <Skeleton className="h-3 w-32" />
+              {[0, 1, 2].map((row) => (
+                <div key={row} className="flex items-start gap-3">
+                  <Skeleton className="size-12 shrink-0 rounded-md" />
+                  <div className="flex-1 space-y-1.5 pt-1">
+                    <Skeleton className="h-3 w-2/5" />
+                    <Skeleton className="h-2.5 w-3/5" />
+                  </div>
+                  <Skeleton className="h-4 w-16 shrink-0 rounded-full" />
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
       </div>
     );
   }
@@ -240,7 +388,7 @@ export function ReportView({ taskId }: { taskId: string }) {
 
       {notReady ? (
         <div className="snag-report-noprint border-warning/30 bg-warning/5 rounded-md border px-4 py-2 text-sm">
-          This inspection is not finished yet — the report reflects only what
+          This inspection is not finished yet. The report reflects only what
           has been captured so far.
         </div>
       ) : null}
@@ -270,7 +418,7 @@ export function ReportView({ taskId }: { taskId: string }) {
             </div>
           ) : (
             <div className="text-muted-foreground text-xs">
-              Use “Re-issue link” to generate a fresh client link.
+              Use &quot;Re-issue link&quot; to generate a fresh client link.
             </div>
           )}
         </div>
@@ -293,7 +441,7 @@ export function ReportView({ taskId }: { taskId: string }) {
             <DialogTitle>Deliver report to client</DialogTitle>
             <DialogDescription>
               Generates a private client link and moves the job to delivered. On
-              the email channel the client is emailed the moment you confirm —
+              the email channel the client is emailed the moment you confirm, and
               that cannot be taken back. On the other channels, copy the link
               and send it yourself.
             </DialogDescription>

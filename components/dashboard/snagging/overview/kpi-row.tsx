@@ -22,9 +22,12 @@ type Kpis = {
  * and something to do.
  */
 export function KpiRow() {
-  const { data, loading, error, reload } = useSection<Kpis>("/api/snagging/overview/kpis", {
-    staleMs: 60_000,
-  });
+  const { data, loading, error, reload } = useSection<Kpis>(
+    "/api/snagging/overview/kpis",
+    {
+      staleMs: 60_000,
+    },
+  );
 
   if (error) {
     return <InlineError message={error} onRetry={reload} />;
@@ -71,7 +74,9 @@ export function KpiRow() {
       <StatCard
         label="Waiting review"
         value={data.waitingReview.value}
-        headline={data.waitingReview.value > 0 ? "Needs action" : "Nothing waiting"}
+        headline={
+          data.waitingReview.value > 0 ? "Needs action" : "Nothing waiting"
+        }
         caption="Submitted and not yet approved"
         tone={data.waitingReview.value > 0 ? "progress" : "neutral"}
         href="/snagging/review"

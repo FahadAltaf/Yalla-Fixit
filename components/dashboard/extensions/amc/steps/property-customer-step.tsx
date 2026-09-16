@@ -167,7 +167,7 @@ export function PropertyCustomerStep({ form }: StepProps) {
               name="customerId"
               render={({ field }) => (
                 <FormItem className="flex flex-col">
-                  <FormLabel>Customer ID</FormLabel>
+                  <FormLabel>Customer ID *</FormLabel>
                   <FormControl className="">
                     <Input placeholder="Customer reference ID (optional)" {...field} />
                   </FormControl>

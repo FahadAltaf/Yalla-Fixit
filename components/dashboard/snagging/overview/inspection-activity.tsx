@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Activity } from "lucide-react";
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 
@@ -13,7 +14,13 @@ import {
   ChartTooltipContent,
 } from "@/components/ui/chart";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 import { CHART_COLOR } from "@/lib/snagging/chart-palette";
 
@@ -22,7 +29,12 @@ import { useSection } from "./use-section";
 
 type Activity = {
   periodDays: number;
-  points: Array<{ day: string; label: string; created: number; completed: number }>;
+  points: Array<{
+    day: string;
+    label: string;
+    created: number;
+    completed: number;
+  }>;
 };
 
 /*
@@ -46,18 +58,22 @@ const config = {
  * anybody is actually trying to move.
  */
 export function InspectionActivity() {
+  const router = useRouter();
   const [days, setDays] = useState("30");
   const { data, loading, error, reload } = useSection<Activity>(
     `/api/snagging/overview/activity?days=${days}`,
     { staleMs: 300_000 },
   );
 
-  const total = (data?.points ?? []).reduce((sum, point) => sum + point.created + point.completed, 0);
+  const total = (data?.points ?? []).reduce(
+    (sum, point) => sum + point.created + point.completed,
+    0,
+  );
 
   return (
     <SectionShell
       title="Inspection activity"
-      description="Jobs raised against inspections signed off."
+      description="Jobs raised against inspections signed off. Click a day to open the jobs raised on it."
       icon={<Activity />}
       action={
         <Select value={days} onValueChange={setDays}>
@@ -86,10 +102,39 @@ export function InspectionActivity() {
       skeleton={<ChartSkeleton bars={14} />}
     >
       <ChartContainer config={config} className="h-56 w-full">
-        <LineChart data={data?.points ?? []} margin={{ left: -20, right: 8, top: 8 }}>
+        <LineChart
+          data={data?.points ?? []}
+          margin={{ left: -20, right: 8, top: 8 }}
+          className="cursor-pointer"
+          /*
+            A day opens the jobs raised on it (FR-10.01).
+
+            Intake rather than completions, because a point carries both
+            series and a click cannot say which one was meant — and of the
+            two, "what came in that day" is the list somebody actually
+            goes looking for.
+          */
+          onClick={(state) => {
+            const day = (
+              state as { activePayload?: Array<{ payload?: { day?: string } }> }
+            )?.activePayload?.[0]?.payload?.day;
+            if (day) router.push(`/snagging/jobs?createdFrom=${day}&createdTo=${day}`);
+          }}
+        >
           <CartesianGrid vertical={false} />
-          <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} />
-          <YAxis tickLine={false} axisLine={false} allowDecimals={false} width={36} />
+          <XAxis
+            dataKey="label"
+            tickLine={false}
+            axisLine={false}
+            tickMargin={8}
+            minTickGap={24}
+          />
+          <YAxis
+            tickLine={false}
+            axisLine={false}
+            allowDecimals={false}
+            width={36}
+          />
           <ChartTooltip content={<ChartTooltipContent labelKey="label" />} />
           <ChartLegend content={<ChartLegendContent />} />
           <Line

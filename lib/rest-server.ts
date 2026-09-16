@@ -3,6 +3,36 @@
  * Similar to executeGraphQLBackend but for REST operations
  */
 
+/**
+ * The session ran out.
+ *
+ * Its own type because it needs a different response from every other
+ * failure: retrying cannot fix it, and the screen that says "Try again"
+ * sends someone hunting for a data problem that is not there. A 401
+ * surfaced as "Failed to load inspections" once cost a bug report — the
+ * table was empty because nobody was signed in, and nothing on screen
+ * said so.
+ */
+export class SessionExpiredError extends Error {
+  readonly status = 401;
+
+  constructor(message = "Your session has expired. Sign in again to continue.") {
+    super(message);
+    this.name = "SessionExpiredError";
+  }
+}
+
+/** Whether a caught error is the session lapsing rather than a real fault. */
+export function isSessionExpired(error: unknown): boolean {
+  if (error instanceof SessionExpiredError) return true;
+  // Survives an error that crossed a boundary and lost its prototype.
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { name?: string }).name === "SessionExpiredError"
+  );
+}
+
 // Turn a route's error payload into a readable, specific message. Routes may
 // return a plain string (`{ error: "..." }`) or a Zod validation object
 // (`{ error: { formErrors, fieldErrors } }`); the latter used to surface as the
@@ -68,6 +98,15 @@ export async function executeRESTBackend<T = unknown>(
 
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
+
+      /*
+        A 401 is not a failure of this request; it is the session being
+        gone, and every other request will fail the same way. Raised as
+        its own type so screens can say "sign in" rather than offering a
+        retry that cannot work.
+      */
+      if (response.status === 401) throw new SessionExpiredError();
+
       throw new Error(extractErrorMessage(payload, response.status));
     }
 

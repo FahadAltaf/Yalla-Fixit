@@ -1,7 +1,6 @@
 "use client";
 
 import { ColumnDef } from "@tanstack/react-table";
-import Link from "next/link";
 import { Building2 } from "lucide-react";
 
 import {
@@ -25,21 +24,16 @@ import type { SnaggingTaskSummary } from "@/types/types";
  */
 export function getSnaggingJobColumns(): ColumnDef<SnaggingTaskSummary>[] {
   return [
-    {
-      id: "code",
-      header: "Code",
-      accessorKey: "code",
-      cell: ({ row }) => (
-        <Link
-          href={`/snagging/${row.original.id}`}
-          className="text-muted-foreground hover:text-foreground font-mono text-xs"
-          onClick={(event) => event.stopPropagation()}
-        >
-          {row.original.code}
-        </Link>
-      ),
-      enableSorting: true,
-    },
+    /*
+      No Code column.
+
+      The generated job code (ALMUNI23-BHQT) is an internal handle, and the
+      one thing it carried that a reader needs — whether a row is a de-snag
+      round or an additional visit — the Round column already states as R2
+      or V2. Nothing else is lost by dropping it: the row itself opens the
+      job, so the code was not the only way in, and the list sorts by
+      creation date rather than by code.
+    */
     {
       id: "unit_label",
       header: "Unit",

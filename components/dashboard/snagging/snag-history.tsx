@@ -102,10 +102,9 @@ export function SnagHistory({ snagId }: { snagId: string }) {
               <SnagStatusBadge status={leg.status as SnaggingSnagStatus} />
             </div>
             <p className="text-muted-foreground mt-0.5 flex flex-wrap items-center gap-x-2 text-xs">
-              <span className="font-mono">{leg.job_code}</span>
               {leg.photo_count > 0 ? (
                 <span>
-                  · {leg.photo_count} {leg.photo_count === 1 ? "photo" : "photos"}
+                  {leg.photo_count} {leg.photo_count === 1 ? "photo" : "photos"}
                 </span>
               ) : null}
             </p>

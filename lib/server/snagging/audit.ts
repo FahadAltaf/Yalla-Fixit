@@ -13,6 +13,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 export type AuditEntry = {
   entityType:
     | "task"
+    /* A quotation raised before any job exists has no task to hang off
+       (BA v2, change 1), so it is audited against itself. */
+    | "quotation"
     | "snag"
     | "area"
     | "photo"

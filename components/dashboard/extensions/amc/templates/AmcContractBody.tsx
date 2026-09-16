@@ -3,7 +3,8 @@ import { formatCurrencyAED } from "@/utils/format-currency";
 
 import {
   BANK_DETAILS,
-  CLAUSE_1_OPERATION,
+  buildClause1Operation,
+  buildPriceListRows,
   CLAUSE_2_INTRO,
   CLAUSE_3_EMERGENCY,
   CLAUSE_4_MATERIALS,
@@ -13,9 +14,9 @@ import {
   CLAUSE_7_TERMS,
   CLAUSE_8_TERMINATION,
   getSelectedScopeSections,
-  PRICE_LIST_ROWS,
 } from "../amc-contract-content";
 import { AMC_PROVIDER } from "../amc-constants";
+import type { AmcSettings } from "../amc-settings";
 import {
   formatDesignationLabel,
   formatDisplayDate,
@@ -108,11 +109,17 @@ function isClauseHighlightParagraph(text: string) {
   );
 }
 
-function Clause1Block({ isPdf }: { isPdf: boolean }) {
+function Clause1Block({
+  isPdf,
+  clause1,
+}: {
+  isPdf: boolean;
+  clause1: ReturnType<typeof buildClause1Operation>;
+}) {
   return (
     <div>
-      <div style={clauseMainTitle}>{CLAUSE_1_OPERATION.title}</div>
-      {CLAUSE_1_OPERATION.sections.map((section) => (
+      <div style={clauseMainTitle}>{clause1.title}</div>
+      {clause1.sections.map((section) => (
         <div key={section.title}>
           <div style={{ ...clauseSubTitle, fontWeight: 700 }}>{section.title}</div>
           {"paragraphs" in section &&
@@ -140,7 +147,9 @@ function Clause1Block({ isPdf }: { isPdf: boolean }) {
                 key={item}
                 style={{
                   ...clauseLetterItem,
-                  ...(index === 1 ? highlightStyle(isPdf) : {}),
+                  ...(index === (section as { highlightIndex?: number }).highlightIndex
+                    ? highlightStyle(isPdf)
+                    : {}),
                 }}
               >
                 {section.listType === "letter"
@@ -168,14 +177,31 @@ function Clause2IntroBlock() {
   );
 }
 
-function Clause3Block() {
+/* FR6.2 — settings store clause text as blank-line separated blocks,
+   which is how getAmcSettingsDefaults joined the original bullets. So
+   splitting here round-trips an unedited clause exactly, and an edited
+   one keeps whatever structure the admin typed. */
+function textBlocks(value: string): string[] {
+  return value
+    .split(/\n\s*\n/)
+    .map((block) => block.trim())
+    .filter(Boolean);
+}
+
+function Clause3Block({ settings }: { settings: AmcSettings }) {
   return (
     <div>
       <div style={clauseMainTitle}>{CLAUSE_3_EMERGENCY.title}</div>
-      {CLAUSE_3_EMERGENCY.sections.map((section) => (
+      {CLAUSE_3_EMERGENCY.sections.map((section, sectionIndex) => (
         <div key={section.title}>
           <div style={{ ...clauseSubTitle, fontWeight: 700 }}>{section.title}</div>
-          {section.bullets.map((bullet) => (
+          {/* FR6.2 — 3.1 and 3.2 are separately editable in AMC Settings.
+              Keyed by position, matching how the defaults were read. */}
+          {textBlocks(
+            sectionIndex === 0
+              ? settings.clauses.emergencyCallOut
+              : settings.clauses.nonEmergencyCallOut,
+          ).map((bullet) => (
             <div key={bullet} style={clauseBulletItem}>
               <span style={{ position: "absolute", left: "44px" }}>-</span>
               {bullet}
@@ -187,11 +213,11 @@ function Clause3Block() {
   );
 }
 
-function Clause4Block() {
+function Clause4Block({ settings }: { settings: AmcSettings }) {
   return (
     <div>
       <div style={clauseMainTitle}>{CLAUSE_4_MATERIALS.title}</div>
-      {CLAUSE_4_MATERIALS.paragraphs.map((paragraph) => (
+      {textBlocks(settings.clauses.materials).map((paragraph) => (
         <div key={paragraph} style={clauseParagraph}>
           {paragraph}
         </div>
@@ -200,12 +226,12 @@ function Clause4Block() {
   );
 }
 
-function Clause5Block() {
+function Clause5Block({ settings }: { settings: AmcSettings }) {
   return (
     <div>
       <div style={clauseMainTitle}>{CLAUSE_5_EXCLUDED.title}</div>
       <div style={clauseParagraph}>{CLAUSE_5_EXCLUDED.intro}</div>
-      {CLAUSE_5_EXCLUDED.bullets.map((bullet) => (
+      {textBlocks(settings.clauses.servicesExcluded).map((bullet) => (
         <div key={bullet} style={clauseBulletItem}>
           <span style={{ position: "absolute", left: "44px" }}>-</span>
           {bullet}
@@ -221,13 +247,36 @@ function Clause5Block() {
 }
 
 export function AmcContractBody({ data, isPdf = false }: Props) {
-  const { formData, totals, frequencyRows, documentType } = data;
+  const { formData, totals, frequencyRows, documentType, settings } = data;
   const contacts = formData.coordinationContacts;
   const totalAmountText = `${totals.finalPrice.toFixed(2)} AED (VAT EXCLUDED) + ${totals.vatAmount.toFixed(2)} AED VAT = ${totals.grandTotal.toFixed(2)} AED`;
   const selectedServiceIds = formData.serviceRows
     .filter((row) => row.included)
     .map((row) => row.serviceId);
   const selectedScopeSections = getSelectedScopeSections(selectedServiceIds);
+
+  /*
+    FR4.5 — the two switchable sections of §8.3. The other three optional
+    sections are service rows, so their own checkbox already decides
+    whether they print.
+  */
+  const showPriceList = Boolean(
+    formData.optionalSections?.supplyInstallPriceList,
+  );
+  const showFixedPriceServices = Boolean(
+    formData.optionalSections?.additionalFixedPriceServices,
+  );
+
+  /* FR4.6 — blank rows dropped, so a half-filled list prints only what
+     was actually priced. */
+  const priceListRows = buildPriceListRows(formData.priceListRows ?? []);
+
+  /* FR4.4 — clause 1.1 is built from this proposal's account managers,
+     and drops the 24/7 wording when the hotline is not on the contract. */
+  const clause1 = buildClause1Operation({
+    accountManagers: formData.accountManagers ?? [],
+    helpdeskIncluded: selectedServiceIds.includes("helpdesk"),
+  });
   const dateLabel =
     documentType === "contract" ? "AMC CONTRACT DATE:" : "AMC PROPOSAL DATE:";
   const numberLabel =
@@ -251,7 +300,7 @@ export function AmcContractBody({ data, isPdf = false }: Props) {
 
   return (
     <div data-amc-body style={{ width: "100%" }}>
-      <AmcRedBanner title={data.packageTitle} isPdf={isPdf} />
+      <AmcRedBanner title={data.documentTitle} isPdf={isPdf} />
 
       <div style={{ ...text, marginBottom: "6px", fontSize: "12px" }}>
         <span style={{ fontWeight: 700 }}>{dateLabel}</span> {data.proposalDate}
@@ -275,10 +324,10 @@ export function AmcContractBody({ data, isPdf = false }: Props) {
           </tr>
           <tr>
             <td style={infoLabelCell}>P.O. Box: {AMC_PROVIDER.poBox}</td>
-            <td style={infoLabelCell}>Customer ID: {formData.customerId || "XXX"}</td>
+            <td style={infoLabelCell}>Customer ID: {formData.customerId}</td>
           </tr>
           <tr>
-            <td style={infoLabelCell}>Contact No: {AMC_PROVIDER.contactNo}</td>
+            <td style={infoLabelCell}>Contact No: {settings.provider.contactNo}</td>
             <td style={infoLabelCell}>Contract Type: {AMC_PROVIDER.contractType}</td>
           </tr>
           <tr>
@@ -288,7 +337,7 @@ export function AmcContractBody({ data, isPdf = false }: Props) {
           <tr>
             <td style={infoLabelCell}>
               <div>Coordination Email Address:</div>
-              {AMC_PROVIDER.coordinationEmails.map((email, index) => (
+              {settings.provider.coordinationEmails.map((email, index) => (
                 <div key={`${email}-${index}`}>{email}</div>
               ))}
             </td>
@@ -404,23 +453,23 @@ export function AmcContractBody({ data, isPdf = false }: Props) {
         </tbody>
       </table>
 
-      <Clause1Block isPdf={isPdf} />
+      <Clause1Block isPdf={isPdf} clause1={clause1} />
       <Clause2IntroBlock />
 
       {selectedScopeSections.map((section) => (
         <ScopeSectionBlock key={section.serviceId} section={section} isPdf={isPdf} />
       ))}
 
-      <Clause3Block />
-      <Clause4Block />
-      <Clause5Block />
+      <Clause3Block settings={settings} />
+      <Clause4Block settings={settings} />
+      <Clause5Block settings={settings} />
 
       <div style={{ ...clauseMainTitle, marginBottom: CLAUSE_LAYOUT.PARAGRAPH_GAP }}>
         6- Service Frequency and Provisions
       </div>
       <div style={{ ...clauseSubTitle, fontWeight: 700, marginBottom: CLAUSE_LAYOUT.PARAGRAPH_GAP }}>
         6.1 Scope of work and frequency of the services of annual maintenance contract (
-        {data.packageTitle})
+        {data.documentTitle})
       </div>
       <table
         style={{
@@ -448,7 +497,7 @@ export function AmcContractBody({ data, isPdf = false }: Props) {
         </tbody>
       </table>
 
-      {CLAUSE_6_2_INTRO.map((line, index) => (
+      {showPriceList && CLAUSE_6_2_INTRO.map((line, index) => (
         <div
           key={line}
           style={{
@@ -461,40 +510,44 @@ export function AmcContractBody({ data, isPdf = false }: Props) {
           {line}
         </div>
       ))}
-      <table
-        style={{
-          width: "100%",
-          marginTop: CLAUSE_LAYOUT.TABLE_TOP,
-          marginBottom: CLAUSE_LAYOUT.TABLE_BOTTOM,
-          borderCollapse: "collapse",
-        }}
-      >
-        <thead>
-          <tr>
-            <td style={beigeHeaderCell}>No.</td>
-            <td style={beigeHeaderCell}>Category</td>
-            <td style={beigeHeaderCell}>Description</td>
-            <td style={beigeHeaderCell}>Brand</td>
-            <td style={beigeHeaderCell}>Price (AED)</td>
-          </tr>
-        </thead>
-        <tbody>
-          {PRICE_LIST_ROWS.map((row) => (
-            <tr key={row.no}>
-              <td style={cell}>{row.no}</td>
-              <td style={cell}>{row.category}</td>
-              <td style={cell}>{row.description}</td>
-              <td style={cell}>{row.brand}</td>
-              <td style={cell}>{row.price}</td>
+      {showPriceList && priceListRows.length > 0 && (
+        <table
+          style={{
+            width: "100%",
+            marginTop: CLAUSE_LAYOUT.TABLE_TOP,
+            marginBottom: CLAUSE_LAYOUT.TABLE_BOTTOM,
+            borderCollapse: "collapse",
+          }}
+        >
+          <thead>
+            <tr>
+              <td style={beigeHeaderCell}>No.</td>
+              <td style={beigeHeaderCell}>Category</td>
+              <td style={beigeHeaderCell}>Description</td>
+              <td style={beigeHeaderCell}>Brand</td>
+              <td style={beigeHeaderCell}>Price (AED)</td>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {priceListRows.map((row) => (
+              <tr key={row.no}>
+                <td style={cell}>{row.no}</td>
+                <td style={cell}>{row.category}</td>
+                <td style={cell}>{row.description}</td>
+                <td style={cell}>{row.brand}</td>
+                <td style={cell}>{row.price}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
 
-      <div style={{ ...clauseMainTitle, marginBottom: CLAUSE_LAYOUT.PARAGRAPH_GAP }}>
-        {CLAUSE_6_3_HANDYMAN.title}
-      </div>
-      {CLAUSE_6_3_HANDYMAN.rates.map((rate) => (
+      {showFixedPriceServices && (
+        <div style={{ ...clauseMainTitle, marginBottom: CLAUSE_LAYOUT.PARAGRAPH_GAP }}>
+          {CLAUSE_6_3_HANDYMAN.title}
+        </div>
+      )}
+      {showFixedPriceServices && CLAUSE_6_3_HANDYMAN.rates.map((rate) => (
         <div key={rate.label} style={clauseParagraph}>
           {rate.label} {rate.text}
         </div>

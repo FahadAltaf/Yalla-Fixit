@@ -5,7 +5,13 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAuditBatch, type AuditEntry } from "@/lib/server/snagging/audit";
-import { isTaskEditableByInspector, statusFromVerdict } from "@/lib/server/snagging/workflow";
+import { inParallel, planWaves } from "@/lib/server/snagging/push-plan";
+import {
+  approvalDueAt,
+  assertTransition,
+  isTaskEditableByInspector,
+  statusFromVerdict,
+} from "@/lib/server/snagging/workflow";
 import { syncPushSchema, type SyncPushInput } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType, SnaggingTaskStatus, SnaggingVerdict } from "@/types/types";
 
@@ -67,23 +73,48 @@ export async function POST(req: NextRequest) {
     const ledger: Array<Record<string, unknown>> = [];
     const audit: AuditEntry[] = [];
 
-    for (const mutation of input.mutations) {
-      if (seen.has(mutation.mutation_id)) {
-        results.push({ mutation_id: mutation.mutation_id, status: "duplicate" });
-        continue;
-      }
+    /*
+      Applied in dependency waves, concurrently within each wave.
+
+      This was strictly sequential. Every mutation costs one to three round
+      trips to the database, measured at ~220ms each, so a full
+      hundred-mutation outbox took twenty seconds to a minute — and the
+      longer an inspector had been offline, the worse it got.
+
+      planWaves keeps the two things that matter: a photo or a verdict
+      never runs before its snag, a submission runs last and alone, and two
+      mutations against the same row keep their order. Everything else was
+      already independent and simply had no reason to wait.
+
+      Results are keyed by mutation_id and the client matches on that, so
+      the order they are reported in does not matter.
+    */
+    /*
+      Captured before the closure below: TypeScript's narrowing from the
+      unauthorized guard does not survive into a nested function, and the
+      alternative is a non-null assertion on every use.
+    */
+    const actor = profile;
+
+    const fresh = input.mutations.filter((mutation) => {
+      if (!seen.has(mutation.mutation_id)) return true;
+      results.push({ mutation_id: mutation.mutation_id, status: "duplicate" });
+      return false;
+    });
+
+    async function runOne(mutation: Mutation): Promise<void> {
       try {
         await applyMutation(admin, {
           mutation,
-          userId: profile.id,
-          actorLabel: profile.full_name ?? profile.email ?? null,
+          userId: actor.id,
+          actorLabel: actor.full_name ?? actor.email ?? null,
           jobById,
           audit,
         });
         results.push({ mutation_id: mutation.mutation_id, status: "applied" });
         ledger.push({
           mutation_id: mutation.mutation_id,
-          user_id: profile.id,
+          user_id: actor.id,
           device_id: input.device_id ?? null,
           entity: mutation.entity,
           entity_id: mutation.entity_id,
@@ -95,7 +126,7 @@ export async function POST(req: NextRequest) {
         results.push({ mutation_id: mutation.mutation_id, status: "rejected", error: message });
         ledger.push({
           mutation_id: mutation.mutation_id,
-          user_id: profile.id,
+          user_id: actor.id,
           device_id: input.device_id ?? null,
           entity: mutation.entity,
           entity_id: mutation.entity_id,
@@ -104,6 +135,16 @@ export async function POST(req: NextRequest) {
           error_message: message,
         });
       }
+    }
+
+    for (const wave of planWaves(fresh)) {
+      // Each chain is one row's mutations in order; chains never share a
+      // row, so running them together cannot race.
+      await inParallel(
+        wave.map((chain) => async () => {
+          for (const mutation of chain) await runOne(mutation);
+        }),
+      );
     }
 
     if (ledger.length > 0) {
@@ -219,6 +260,13 @@ async function applySnag(admin: Admin, ctx: Ctx, payload: Record<string, unknown
     snag_code: payload.snag_code as string,
     catalogue_entry_id: (payload.catalogue_entry_id as string) ?? null,
     catalogue_code: payload.catalogue_code as string,
+    /*
+      The catalogue's top level (Action Points P1), sent by devices on
+      build 18 and later. Older ones send nothing here and their snags
+      keep a null category — which reads as "before the restructure"
+      rather than as missing data.
+    */
+    category_label: (payload.category_label as string) ?? null,
     element_label: (payload.element_label as string) ?? null,
     defect_label: (payload.defect_label as string) ?? null,
     severity,
@@ -303,11 +351,16 @@ async function applyArea(admin: Admin, ctx: Ctx, payload: Record<string, unknown
   Object.assign(update, pinFields());
   if (Object.keys(update).length === 0) return;
 
-  const { error } = await admin
+  // The name comes back on the update so the audit entry can say which
+  // area this was. Reading it afterwards would be a second round trip for
+  // a string the write already has in hand.
+  const { data: area, error } = await admin
     .from("snagging_areas")
     .update(update)
     .eq("id", ctx.mutation.entity_id)
-    .eq("job_id", job.id);
+    .eq("job_id", job.id)
+    .select("name")
+    .maybeSingle();
   if (error) throw new Error(error.message);
 
   // Access state carries a written reason (a locked door, a room only
@@ -323,7 +376,12 @@ async function applyArea(admin: Admin, ctx: Ctx, payload: Record<string, unknown
         "confirmed_at" in payload && payload.confirmed_at ? "area_confirmed" : "area_access_changed",
       justification:
         ((payload.access_reason as string) || (payload.elements_not_checked as string)) ?? null,
-      payload: { access_state: (payload.access_state as string) ?? null },
+      payload: {
+        access_state: (payload.access_state as string) ?? null,
+        // Snapshotted rather than resolved on read: an area can be renamed
+        // or removed, and the trail should still say what was confirmed.
+        area_name: area?.name ?? null,
+      },
     });
   }
 }
@@ -387,7 +445,7 @@ async function applyChecklist(admin: Admin, ctx: Ctx, payload: Record<string, un
   if (status !== "pending" && status !== "passed" && status !== "failed" && status !== "not_checked") {
     throw new Error("Invalid checklist status");
   }
-  const { error } = await admin
+  const { data: item, error } = await admin
     .from("snagging_job_checklist")
     .update({
       status,
@@ -395,7 +453,9 @@ async function applyChecklist(admin: Admin, ctx: Ctx, payload: Record<string, un
       updated_at: new Date().toISOString(),
     })
     .eq("id", ctx.mutation.entity_id)
-    .eq("job_id", job.id);
+    .eq("job_id", job.id)
+    .select("code, label, group_name")
+    .maybeSingle();
   if (error) throw new Error(error.message);
 
   // Only answers that skip an item are trailed. A plain pass/fail is
@@ -408,6 +468,12 @@ async function applyChecklist(admin: Admin, ctx: Ctx, payload: Record<string, un
       taskId: job.id,
       eventType: "checklist_not_checked",
       justification: (payload.reason as string) ?? null,
+      // Which item was skipped. Without this the trail carried the job id
+      // and nothing else, so a reviewer could see that something had been
+      // skipped but never what.
+      payload: item
+        ? { code: item.code, label: item.label, group_name: item.group_name }
+        : null,
     });
   }
 }
@@ -566,6 +632,12 @@ async function applySubmission(admin: Admin, ctx: Ctx, payload: Record<string, u
     }
   }
 
+  // The device is allowed to edit a job in assigned, in_progress or
+  // rejected, but only in_progress and rejected may be SUBMITTED. Without
+  // this the editability check was the only gate and a job could jump
+  // straight from assigned to submitted, skipping in_progress entirely.
+  assertTransition(job.status as SnaggingTaskStatus, "submitted");
+
   const submittedAt = new Date().toISOString();
   const { error } = await admin
     .from("snagging_jobs")
@@ -573,6 +645,14 @@ async function applySubmission(admin: Admin, ctx: Ctx, payload: Record<string, u
       status: "submitted",
       locked: true,
       submitted_at: submittedAt,
+      // FR-6.07 — the 48-hour clock starts here and is stored, so the
+      // escalation sweep can index it instead of recomputing it per read.
+      approval_due_at: approvalDueAt(new Date(submittedAt)),
+      // A resubmission is a fresh decision: clear the previous review
+      // pass and any escalation so the job is not born already late.
+      review_started_at: null,
+      reviewed_at: null,
+      escalated_at: null,
       signer_name: (payload.signer_name as string) ?? null,
       signed_at: (payload.signed_at as string) ?? submittedAt,
       signature_path: (payload.signature_path as string) ?? null,
@@ -591,7 +671,15 @@ async function applySubmission(admin: Admin, ctx: Ctx, payload: Record<string, u
     entityId: job.id,
     taskId: job.id,
     eventType: "task_submitted",
-    payload: { code: job.code, signer_name: (payload.signer_name as string) ?? null },
+    payload: {
+      code: job.code,
+      signer_name: (payload.signer_name as string) ?? null,
+      from_status: job.status,
+      to_status: "submitted",
+      // A resubmission after a rejection writes its own row rather than
+      // replacing the last one, so both cycles stay readable in the
+      // history -- the table refuses updates, so this is structural.
+    },
   });
 
   ctx.jobById.set(job.id, { ...job, status: "submitted" });
@@ -602,6 +690,9 @@ async function applyTaskProgress(admin: Admin, ctx: Ctx, payload: Record<string,
   const job = writableJob(ctx, ctx.mutation.entity_id);
   if (payload.status !== "in_progress") throw new Error("The app may only move an inspection to in_progress");
   if (job.status === "in_progress") return;
+  // Same rule as submission: the transition map decides, not just whether
+  // the inspector may edit the record.
+  assertTransition(job.status as SnaggingTaskStatus, "in_progress");
 
   const { error } = await admin
     .from("snagging_jobs")
@@ -641,23 +732,46 @@ async function writeVerdictThroughToOrigin(
 ): Promise<void> {
   const { data: copy, error: copyError } = await admin
     .from("snagging_snags")
-    .select("snag_code, job:job_id(parent_job_id, visit_type)")
+    .select("snag_code, job:job_id(id, parent_job_id, visit_type)")
     .eq("id", snagId)
     .maybeSingle();
   if (copyError) throw new Error(copyError.message);
 
   const job = (Array.isArray(copy?.job) ? copy?.job[0] : copy?.job) as
-    | { parent_job_id: string | null; visit_type: string | null }
+    | { id: string; parent_job_id: string | null; visit_type: string | null }
     | undefined;
 
   // Only a de-snag round re-verifies an earlier defect. An additional
   // visit finds new ones, and its snags are already the original.
   if (!copy || !job?.parent_job_id || job.visit_type !== "desnag") return;
 
+  /*
+    Every copy of this defect, not just the original's.
+
+    Writing only to the original was right for a defect the original knows
+    about, and a no-op for one that was first raised on an earlier round --
+    that defect has no row on the original, so the update matched nothing
+    and the verdict lived only on the round that gave it. The round the
+    defect was BORN on kept saying "open" no matter how many times a later
+    round fixed and closed it.
+
+    Updating the whole family keeps the copies in agreement wherever the
+    lasting record happens to sit, which is what "one lasting record per
+    defect" has to mean once a defect can be born on a round.
+  */
+  const rootId = job.parent_job_id;
+  const { data: family, error: familyError } = await admin
+    .from("snagging_jobs")
+    .select("id")
+    .eq("parent_job_id", rootId);
+  if (familyError) throw new Error(familyError.message);
+
   const { error } = await admin
     .from("snagging_snags")
     .update({ status })
-    .eq("job_id", job.parent_job_id)
-    .eq("snag_code", copy.snag_code);
+    .in("job_id", [rootId, ...(family ?? []).map((row) => row.id as string)])
+    .eq("snag_code", copy.snag_code)
+    // The row that was just given the verdict already holds it.
+    .neq("id", snagId);
   if (error) throw new Error(error.message);
 }

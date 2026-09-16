@@ -1,4 +1,4 @@
-import { AMC_PACKAGES, AMC_SERVICES } from "./amc-constants";
+import { AMC_SERVICES } from "./amc-constants";
 import { SCOPE_SECTIONS } from "./amc-contract-content";
 import {
   formatDisplayDate,
@@ -37,7 +37,7 @@ const SERVICE_COVERAGE_FALLBACK: Record<string, string> = {
   "coil-cleaning":
     "Deep evaporator coil cleaning, filter and drain pan cleaning, and performance check.",
   handyman:
-    "Minor carpentry, adjustments, furniture assembly support, and light touch-up works within package hours.",
+    "Minor carpentry, adjustments, furniture assembly support, and light touch-up works within the handyman hours covered.",
   emergency:
     "Priority response for critical failures outside standard working hours and holidays.",
   "non-emergency":
@@ -91,12 +91,10 @@ export function getProposalCoverageMonths(data: AmcFormData): number {
   return Math.max(1, months || 12);
 }
 
+/* FR4.3: no package to name any more -- the AMC is described by the
+   property category it covers. */
 export function getProposalAmcType(data: AmcFormData): string {
-  if (data.propertyCategory === "commercial") {
-    return "COMMERCIAL";
-  }
-  const pkg = AMC_PACKAGES.find((item) => item.id === data.packageId);
-  return pkg ? pkg.name.toUpperCase() : "CUSTOM";
+  return data.propertyCategory === "commercial" ? "COMMERCIAL" : "RESIDENTIAL";
 }
 
 export function getProposalContactPerson(data: AmcFormData): string {
@@ -114,27 +112,33 @@ export function getProposalPropertyLabel(data: AmcFormData): string {
 export function buildProposalCommercialTerms(
   data: AmcFormData,
 ): ProposalCommercialTerm[] {
-  const pkg = AMC_PACKAGES.find((item) => item.id === data.packageId);
   const emergencyIncluded = data.serviceRows.some(
     (row) => row.included && row.serviceId === "emergency",
   );
   const ppmRow = data.serviceRows.find(
     (row) => row.included && row.serviceId === "ac-ppm",
   );
-  const ppmVisits =
-    ppmRow?.frequency ??
-    pkg?.ppmVisitsPerYear ??
-    (data.propertyCategory === "commercial" ? 4 : 1);
+  /*
+    FR4.2: print the frequency the team entered. This previously fell
+    through to the package's visit count, which is why a frequency edited
+    to 5 still printed as 1 per year. If AC PPM is not on the proposal
+    there is no visit count to state, so the row is dropped below.
+  */
+  const ppmVisits = ppmRow?.frequency;
 
   return [
     {
       label: "Payment Terms",
       value: formatPaymentTermsLabel(data.paymentTerms),
     },
-    {
-      label: "Preventive Maintenance Visits",
-      value: `${ppmVisits} visit${ppmVisits === 1 ? "" : "s"} per year`,
-    },
+    ...(ppmVisits
+      ? [
+          {
+            label: "Preventive Maintenance Visits",
+            value: `${ppmVisits} visit${ppmVisits === 1 ? "" : "s"} per year`,
+          },
+        ]
+      : []),
     {
       label: "Emergency Call-outs",
       value: emergencyIncluded ? "Unlimited" : "As agreed",

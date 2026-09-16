@@ -1,22 +1,29 @@
 import { calculateAmcTotals, computeServiceRowPrice } from "./amc-pricing";
-import { getDefaultEndDate } from "./amc-constants";
+import { emptyPriceListRow, getDefaultEndDate } from "./amc-constants";
 import type {
   AmcDocumentType,
   AmcFormData,
   AmcSubmission,
   AmcSubmissionCustomer,
-  AmcSubmissionPackage,
   AmcSubmissionProperty,
   AmcSubmissionServiceRow,
 } from "./amc-types";
 
+/**
+ * Builds the API payload for a submission.
+ *
+ * Status is not part of the payload at all. Under v2 it is owned by the
+ * approval route (FR5.1-FR5.3): an autosave must never move a submission
+ * through the workflow, and a client-settable status would let an owner
+ * skip the approver entirely.
+ */
 export function formDataToSubmissionPayload(
   data: AmcFormData,
-  status: "draft" | "generated" = "draft",
   generatedDocuments?: AmcDocumentType[],
 ) {
   const services: AmcSubmissionServiceRow[] = data.serviceRows.map((row) => ({
     ...row,
+    basePrice: row.basePrice ?? null,
     price: computeServiceRowPrice(row),
   }));
   const totals = calculateAmcTotals(data);
@@ -40,17 +47,17 @@ export function formDataToSubmissionPayload(
     proposalNumber: data.proposalNumber,
   };
 
-  const pkg: AmcSubmissionPackage = {
-    packageId: data.packageId,
-    customMonthlyPrice: data.customMonthlyPrice,
-    propertyCategory: data.propertyCategory,
+  /* FR3.1 */
+  const documentOptions = {
+    optionalSections: data.optionalSections,
+    priceListRows: data.priceListRows,
+    accountManagers: data.accountManagers,
   };
 
   return {
-    status,
     property,
     customer,
-    package: pkg,
+    document_options: documentOptions,
     services,
     discount_percent: totals.discountPercent,
     discount_amount: totals.discountAmount,
@@ -65,17 +72,35 @@ export function submissionToFormData(submission: AmcSubmission): AmcFormData {
     unitType: submission.property.unitType,
     propertyAddress: submission.property.propertyAddress,
     propertyDetail: submission.property.propertyDetail,
-    packageId: submission.package.packageId ?? "",
-    customMonthlyPrice: submission.package.customMonthlyPrice,
+    /* FR3.3: basePrice has to come back too, or reopening a submission
+       silently blanks every price the team entered. */
     serviceRows: submission.services.map(
-      ({ serviceId, included, units, frequency }) => ({
+      ({ serviceId, included, units, frequency, basePrice }) => ({
         serviceId,
         included,
         units,
         frequency,
+        basePrice: basePrice ?? undefined,
       }),
     ),
     discountPercent: Number(submission.discount_percent) || 0,
+    /*
+      FR3.3. Older submissions predate these fields, so each falls back to
+      the same default a new proposal starts from -- reopening one must
+      not crash on a missing key, and must not silently switch a section
+      on either.
+    */
+    optionalSections: submission.document_options?.optionalSections ?? {
+      supplyInstallPriceList: false,
+      additionalFixedPriceServices: false,
+    },
+    priceListRows: submission.document_options?.priceListRows?.length
+      ? submission.document_options.priceListRows
+      : [emptyPriceListRow(), emptyPriceListRow(), emptyPriceListRow()],
+    accountManagers: submission.document_options?.accountManagers ?? [
+      { name: "", phone: "" },
+      { name: "", phone: "" },
+    ],
     customerName: submission.customer.customerName,
     customerId: submission.customer.customerId ?? "",
     customerPhone: submission.customer.customerPhone,

@@ -210,13 +210,19 @@ export function ReviewStep({ form, computed }: StepProps) {
           className="w-full gap-3"
         >
           <TabsList className="w-full sm:w-auto">
+            {/*
+              Named for what they are. These switch the preview; the two
+              buttons below the wizard are what actually generate, and
+              having four controls reading "Generate Proposal" on one
+              screen made the harmless pair look like the real ones.
+            */}
             <TabsTrigger value="proposal" className="gap-2">
               <FileText className="size-4" />
-              Generate Proposal
+              Proposal
             </TabsTrigger>
             <TabsTrigger value="contract" className="gap-2">
               <ScrollText className="size-4" />
-              Generate Contract
+              Contract
             </TabsTrigger>
           </TabsList>
 

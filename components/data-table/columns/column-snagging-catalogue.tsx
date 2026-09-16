@@ -27,15 +27,11 @@ export function getSnaggingCatalogueColumns({
   onToggle: (entry: SnaggingCatalogueEntry, active: boolean) => void;
 }): ColumnDef<SnaggingCatalogueEntry>[] {
   return [
-    {
-      id: "code",
-      header: "Code",
-      accessorKey: "code",
-      cell: ({ row }) => (
-        <span className="font-mono text-xs">{row.original.code}</span>
-      ),
-      enableSorting: true,
-    },
+    /*
+      No Code column. The generated entry code (ENT-EL-EXP) is an internal
+      key; the Element and Defect columns beside it are what an admin reads
+      and search still matches on the code, so nothing is harder to find.
+    */
     {
       id: "element_label",
       header: "Element",
@@ -85,7 +81,7 @@ export function getSnaggingCatalogueColumns({
               checked={entry.active}
               disabled={!canEdit || togglingId === entry.id}
               onCheckedChange={(checked) => onToggle(entry, checked)}
-              aria-label={`${entry.active ? "Retire" : "Reinstate"} ${entry.code}`}
+              aria-label={`${entry.active ? "Retire" : "Reinstate"} ${entry.defect_label}`}
             />
           </div>
         );

@@ -3,7 +3,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
 import {
+  CheckCircle2,
   ChevronLeft,
+  Link as LinkIcon,
+  Mail,
   ChevronRight,
   EllipsisVerticalIcon,
   EyeIcon,
@@ -14,6 +17,7 @@ import {
   RefreshCw,
   ScrollText,
   Search,
+  Undo2,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -44,12 +48,51 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import StatusBadge from "@/components/ui/status-badge";
+import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { formatCurrencyAED } from "@/utils/format-currency";
 import { amcSubmissionsService } from "@/modules/amc-submissions";
 
 import { openAmcPdfFromSubmission } from "./amc-document-utils";
-import type { AmcDocumentType, AmcSubmission } from "./amc-types";
+import {
+  AMC_STATUS_LABELS,
+  isAmcSubmissionEditable,
+  type AmcDocumentType,
+  type AmcSubmission,
+  type AmcSubmissionStatus,
+} from "./amc-types";
+
+/* FR5.8 — nine statuses across four parties. Colour carries the same
+   information as the label so the queue reads at a glance: amber is
+   waiting on someone, red needs the team to act, green has landed. */
+function amcStatusTone(status: AmcSubmissionStatus): string {
+  switch (status) {
+    case "signed":
+    case "proposal_approved":
+      return "bg-green-600/10 text-green-700 dark:bg-green-400/10 dark:text-green-400";
+    case "awaiting_approval":
+    case "proposal_sent":
+    case "contract_sent":
+      return "bg-amber-600/10 text-amber-700 dark:bg-amber-400/10 dark:text-amber-400";
+    case "sent_back":
+    case "proposal_rejected":
+      return "bg-destructive/10 text-destructive";
+    case "approved":
+      return "bg-sky-600/10 text-sky-700 dark:bg-sky-400/10 dark:text-sky-400";
+    case "draft":
+    default:
+      return "bg-muted text-muted-foreground";
+  }
+}
 
 interface SubmissionsListProps {
   refreshKey: number;
@@ -73,6 +116,11 @@ export function SubmissionsList({
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [viewingKey, setViewingKey] = useState<string | null>(null);
+  const [canApprove, setCanApprove] = useState(false);
+  const [sendBackFor, setSendBackFor] = useState<AmcSubmission | null>(null);
+  const [sendBackReason, setSendBackReason] = useState("");
+  const [deciding, setDeciding] = useState(false);
+  const [sendingId, setSendingId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -83,6 +131,9 @@ export function SubmissionsList({
     try {
       const response = await amcSubmissionsService.listSubmissions();
       setSubmissions(response.submissions);
+      /* FR3.2 — the server decides this from role_access; the list just
+         reflects it, so approval rights are never inferred client-side. */
+      setCanApprove(Boolean(response.canApprove));
     } catch (error) {
       console.error(error);
       setSubmissions([]);
@@ -120,6 +171,91 @@ export function SubmissionsList({
   useEffect(() => {
     setPage(1);
   }, [search, pageSize]);
+
+  /*
+    FR5.2 — approve, or send back with a reason. The list reloads rather
+    than patching the row in place: a decision changes which rows the
+    caller can see at all (FR3.2), so a local edit would leave the queue
+    showing a row the next reload drops.
+  */
+  const handleDecision = async (
+    submission: AmcSubmission,
+    action: "approve" | "send_back",
+    reason?: string,
+  ) => {
+    setDeciding(true);
+    try {
+      await amcSubmissionsService.decide(
+        action === "approve"
+          ? { action: "approve", id: submission.id }
+          : { action: "send_back", id: submission.id, reason: reason ?? "" },
+      );
+      toast.success(
+        action === "approve"
+          ? "Approved. It can now be sent to the client."
+          : "Sent back to the owner with your reason.",
+      );
+      setSendBackFor(null);
+      setSendBackReason("");
+      await loadSubmissions();
+    } catch (error) {
+      console.error(error);
+      toast.error(
+        getErrorMessage(
+          error,
+          action === "approve"
+            ? "Failed to approve this proposal."
+            : "Failed to send this proposal back.",
+        ),
+      );
+    } finally {
+      setDeciding(false);
+    }
+  };
+
+  /*
+    FR5.4 / FR5.6 — send the document, or take the link to send over
+    WhatsApp. Both mint a token and advance the status; only the delivery
+    differs, so they are one call with a `deliver` flag rather than two
+    code paths that could drift.
+  */
+  const handleSend = async (
+    submission: AmcSubmission,
+    document: "proposal" | "contract",
+    deliver: "email" | "link",
+  ) => {
+    setSendingId(submission.id);
+    try {
+      const result = await amcSubmissionsService.send({
+        id: submission.id,
+        document,
+        deliver,
+      });
+
+      if (deliver === "link") {
+        await navigator.clipboard.writeText(result.link).catch(() => {
+          /* Clipboard access can be refused; the link still has to reach
+             the person, so it is shown rather than silently lost. */
+          window.prompt("Copy this link and send it to the client:", result.link);
+        });
+        toast.success("Link copied. Paste it into WhatsApp to send it.");
+      } else if (result.warning) {
+        toast.warning(result.warning);
+      } else {
+        toast.success(
+          document === "proposal"
+            ? "Proposal emailed to the client."
+            : "Contract emailed to the client.",
+        );
+      }
+      await loadSubmissions();
+    } catch (error) {
+      console.error(error);
+      toast.error(getErrorMessage(error, "Failed to send this document."));
+    } finally {
+      setSendingId(null);
+    }
+  };
 
   const handleView = async (
     submission: AmcSubmission,
@@ -174,8 +310,8 @@ export function SubmissionsList({
               </div>
             </div>
           </TableCell>
-          <TableCell className="text-right">
-            <Skeleton className="ml-auto h-4 w-20" />
+          <TableCell className="">
+            <Skeleton className=" h-4 w-20" />
           </TableCell>
           <TableCell>
             <Skeleton className="h-5 w-16 rounded-sm" />
@@ -184,7 +320,7 @@ export function SubmissionsList({
             <Skeleton className="h-4 w-32" />
           </TableCell>
           <TableCell>
-            <Skeleton className="ml-auto size-8 rounded-md" />
+            <Skeleton className=" size-8 rounded-md" />
           </TableCell>
         </TableRow>
       ));
@@ -244,16 +380,27 @@ export function SubmissionsList({
             />
           </TableCell>
           {/* Currency right-aligns so the magnitudes line up down the column. */}
-          <TableCell className="text-right text-sm tabular-nums">
+          <TableCell className=" text-sm tabular-nums">
             {formatCurrencyAED(Number(submission.final_price))}
           </TableCell>
           <TableCell>
-            <StatusBadge status={submission.status} />
+            <div className="flex flex-col items-start gap-1">
+              <Badge variant="secondary" className={`border-none ${amcStatusTone(submission.status)}`}>
+                {AMC_STATUS_LABELS[submission.status] ?? submission.status}
+              </Badge>
+              {/* FR5.2 — the owner has to see WHY it came back, or the
+                  send-back tells them nothing actionable. */}
+              {submission.status === "sent_back" && submission.sent_back_reason && (
+                <span className="text-muted-foreground max-w-[26ch] text-xs leading-snug">
+                  {submission.sent_back_reason}
+                </span>
+              )}
+            </div>
           </TableCell>
           <TableCell className="text-muted-foreground text-sm">
             {format(new Date(submission.updated_at), "dd MMM yyyy, HH:mm")}
           </TableCell>
-          <TableCell className="text-right">
+          <TableCell className="">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -261,9 +408,9 @@ export function SubmissionsList({
                   size="icon"
                   className="size-8"
                   aria-label={`Actions for ${customer}`}
-                  disabled={isViewing}
+                  disabled={isViewing || sendingId === submission.id}
                 >
-                  {isViewing ? (
+                  {isViewing || sendingId === submission.id ? (
                     <Loader2 className="size-4 animate-spin" />
                   ) : (
                     <EllipsisVerticalIcon className="size-4" />
@@ -271,10 +418,69 @@ export function SubmissionsList({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-max">
-                <DropdownMenuItem onClick={() => onEdit(submission.id)}>
-                  <PencilIcon className="size-4" />
-                  Edit
-                </DropdownMenuItem>
+                {/* FR3.4 — locked once sent for review. Hidden rather
+                    than shown-and-refused: opening a locked submission in
+                    the wizard would let the team type into a form whose
+                    every autosave the server rejects. */}
+                {isAmcSubmissionEditable(submission.status) && (
+                  <DropdownMenuItem onClick={() => onEdit(submission.id)}>
+                    <PencilIcon className="size-4" />
+                    Edit
+                  </DropdownMenuItem>
+                )}
+
+                {/* FR5.4 — a proposal may only be sent once it has been
+                    approved internally. FR5.6 — a contract only once the
+                    client has approved the proposal. */}
+                {submission.status === "approved" && (
+                  <>
+                    <DropdownMenuItem
+                      onClick={() => void handleSend(submission, "proposal", "email")}
+                    >
+                      <Mail className="size-4" />
+                      Email proposal to client
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => void handleSend(submission, "proposal", "link")}
+                    >
+                      <LinkIcon className="size-4" />
+                      Copy proposal link
+                    </DropdownMenuItem>
+                  </>
+                )}
+                {submission.status === "proposal_approved" && (
+                  <>
+                    <DropdownMenuItem
+                      onClick={() => void handleSend(submission, "contract", "email")}
+                    >
+                      <Mail className="size-4" />
+                      Email contract to client
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => void handleSend(submission, "contract", "link")}
+                    >
+                      <LinkIcon className="size-4" />
+                      Copy contract link
+                    </DropdownMenuItem>
+                  </>
+                )}
+
+                {/* FR5.2 — the approver's two decisions, on the queue rows
+                    only. */}
+                {canApprove && submission.status === "awaiting_approval" && (
+                  <>
+                    <DropdownMenuItem
+                      onClick={() => void handleDecision(submission, "approve")}
+                    >
+                      <CheckCircle2 className="size-4" />
+                      Approve
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setSendBackFor(submission)}>
+                      <Undo2 className="size-4" />
+                      Send back…
+                    </DropdownMenuItem>
+                  </>
+                )}
                 <DropdownMenuItem onClick={() => void handleView(submission, "proposal")}>
                   <FileText className="size-4" />
                   View Proposal
@@ -291,8 +497,64 @@ export function SubmissionsList({
     });
   };
 
+  const sendBackDialog = (
+    <Dialog
+      open={Boolean(sendBackFor)}
+      onOpenChange={(open) => {
+        if (open) return;
+        setSendBackFor(null);
+        setSendBackReason("");
+      }}
+    >
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Send back for changes</DialogTitle>
+          <DialogDescription>
+            The owner sees this reason on their submission and can edit and
+            resubmit. Nothing is sent to the client.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2">
+          <Label htmlFor="amc-send-back-reason">What needs changing?</Label>
+          <Textarea
+            id="amc-send-back-reason"
+            rows={4}
+            value={sendBackReason}
+            onChange={(event) => setSendBackReason(event.target.value)}
+            placeholder="e.g. The AC PPM frequency should be 4 visits, not 2."
+          />
+        </div>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setSendBackFor(null);
+              setSendBackReason("");
+            }}
+            disabled={deciding}
+          >
+            Cancel
+          </Button>
+          {/* FR5.2 requires a reason, so the action stays disabled until
+              there is one rather than failing on the server. */}
+          <Button
+            onClick={() =>
+              sendBackFor &&
+              void handleDecision(sendBackFor, "send_back", sendBackReason.trim())
+            }
+            disabled={deciding || sendBackReason.trim().length === 0}
+          >
+            {deciding ? <Loader2 className="size-4 animate-spin" /> : <Undo2 className="size-4" />}
+            Send back
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+
   return (
     <div className="flex flex-col gap-4">
+      {sendBackDialog}
       {/* Toolbar: search left, page size / refresh / primary action right. */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="relative w-full max-w-xs">
@@ -340,10 +602,10 @@ export function SubmissionsList({
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead>Customer / Property</TableHead>
-              <TableHead className="text-right">Final Price</TableHead>
+              <TableHead className="">Final Price</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Last Updated</TableHead>
-              <TableHead className="w-[1%] text-right">Actions</TableHead>
+              <TableHead className="">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>{body()}</TableBody>

@@ -3,7 +3,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import { CATEGORY_ELEMENTS } from "@/lib/server/snagging/overview-queries";
 import {
   average,
   inRange,
@@ -20,7 +19,6 @@ import {
   previousRange,
   queueBucketOf,
   resolveRange,
-  type SnagRow,
   type AnalyticsJob,
   type DateRange,
 } from "@/lib/server/snagging/analytics";
@@ -120,7 +118,6 @@ export async function GET(req: NextRequest) {
 
     const data: SnaggingAnalytics = {
       byStatus: computeByStatus(raised, raisedBefore),
-      defectCategories: computeDefectCategories(snags),
       reviewQueue: computeReviewQueue(queue),
       completed: computeCompleted(jobs, range),
       timeMetrics: computeTimeMetrics(jobs, queue, range),
@@ -435,25 +432,4 @@ async function computeByInspector(
  * the same map the overview uses, so the two pages agree on what counts
  * as Civil.
  */
-function computeDefectCategories(
-  snags: SnagRow[],
-): SnaggingAnalytics["defectCategories"] {
-  const elementOf = (code: string | null) => code?.split("-")[1] ?? null;
 
-  const counts = new Map<string, number>();
-  for (const { category } of CATEGORY_ELEMENTS) counts.set(category, 0);
-
-  for (const snag of snags) {
-    const element = elementOf(snag.catalogue_code);
-    if (!element) continue;
-    const match = CATEGORY_ELEMENTS.find((entry) =>
-      entry.elements.includes(element),
-    );
-    if (!match) continue;
-    counts.set(match.category, (counts.get(match.category) ?? 0) + 1);
-  }
-
-  return [...counts.entries()]
-    .map(([category, count]) => ({ category, count }))
-    .sort((a, b) => b.count - a.count);
-}

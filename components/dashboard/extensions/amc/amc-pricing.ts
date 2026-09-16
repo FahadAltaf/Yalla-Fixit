@@ -1,11 +1,9 @@
 import { format } from "date-fns";
 
 import {
-  AMC_PACKAGES,
   AMC_SERVICES,
   getDefaultFrequencyForService,
   getServicesForUnitType,
-  isFrequencyEditable,
 } from "./amc-constants";
 import type {
   AmcComputedData,
@@ -17,14 +15,24 @@ import type {
   FrequencyRow,
 } from "./amc-types";
 import { amountToWordsAed } from "./utils/amount-to-words";
+import { getAmcSettingsDefaults } from "./amc-settings";
+import type { AmcSettings } from "./amc-settings";
 
 const VAT_RATE = 0.05;
 
+/*
+  FR2.5: Price = Base Price x Units x Frequency, read only, recomputed on
+  every change. The base price is entered per proposal (FR2.4) and
+  replaces the unitRate constant, which was never filled in and made
+  every document price at zero.
+
+  A missing base price contributes 0 rather than NaN, so a half-filled
+  table still shows a running subtotal. FR2.12 blocks submission until
+  every checked row has one.
+*/
 export function computeServiceRowPrice(row: AmcServiceRow): number {
   if (!row.included) return 0;
-  const service = AMC_SERVICES.find((item) => item.id === row.serviceId);
-  if (!service) return 0;
-  return service.unitRate * row.units * row.frequency;
+  return (row.basePrice ?? 0) * row.units * row.frequency;
 }
 
 export function calculateAmcTotals(data: AmcFormData): AmcTotals {
@@ -64,14 +72,6 @@ function formatPropertyTypeLabel(data: AmcFormData): string {
   return `${category} - ${unit}`;
 }
 
-function getPackageName(data: AmcFormData): string {
-  if (data.propertyCategory === "commercial") {
-    return "COMMERCIAL";
-  }
-  const pkg = AMC_PACKAGES.find((item) => item.id === data.packageId);
-  return pkg?.name.toUpperCase() ?? "CUSTOM";
-}
-
 function formatFrequencyForPdf(service: AmcService, frequency: number): string {
   switch (service.frequencyType) {
     case "covered":
@@ -109,16 +109,20 @@ function buildFrequencyRows(data: AmcFormData): FrequencyRow[] {
 export function computeAmcData(
   data: AmcFormData,
   documentType: AmcDocumentType = "proposal",
+  /* FR6.4: a sent proposal passes its snapshot; a draft passes live
+     settings; a caller that has neither gets the shipped defaults. */
+  settings: AmcSettings = getAmcSettingsDefaults(),
 ): AmcComputedData {
-  const packageName = getPackageName(data);
   const categoryLabel =
     data.propertyCategory === "residential" ? "RESIDENTIAL" : "COMMERCIAL";
   const endDate = data.endDate ? formatDisplayDate(data.endDate) : "";
 
   return {
     documentType,
-    packageName,
-    packageTitle: `${packageName} AMC PACKAGE (${categoryLabel})`,
+    settings,
+    /* FR4.3: the banner used to read "<PACKAGE> AMC PACKAGE". With
+       packages gone it names the document and the property category. */
+    documentTitle: `AMC ${documentType === "contract" ? "CONTRACT" : "PROPOSAL"} (${categoryLabel})`,
     propertyTypeLabel: formatPropertyTypeLabel(data),
     proposalDate: format(new Date(), "dd/MM/yyyy"),
     endDate,
@@ -128,32 +132,16 @@ export function computeAmcData(
   };
 }
 
-export function refreshServiceRowFrequencies(
-  serviceRows: AmcServiceRow[],
-  packageId: string | undefined,
-  propertyCategory: AmcFormData["propertyCategory"],
-): AmcServiceRow[] {
-  return serviceRows.map((row) => {
-    const service = AMC_SERVICES.find((item) => item.id === row.serviceId);
-    if (!service || !isFrequencyEditable(service.frequencyType)) {
-      return row;
-    }
-    return {
-      ...row,
-      frequency: getDefaultFrequencyForService(
-        row.serviceId,
-        packageId,
-        propertyCategory,
-      ),
-    };
-  });
-}
+/*
+  refreshServiceRowFrequencies is gone with the packages (FR2.6). It
+  existed to push package visit counts back over the table whenever the
+  package changed -- which is exactly the behaviour FR4.2 reports as a
+  bug: a frequency edited to 5 was reset behind the team's back.
+*/
 
 export function syncServiceRowsForUnitType(
   serviceRows: AmcServiceRow[],
   unitType: AmcFormData["unitType"],
-  packageId?: string,
-  propertyCategory: AmcFormData["propertyCategory"] = "residential",
 ): AmcServiceRow[] {
   const allowedServices = getServicesForUnitType(unitType);
   const allowedIds = new Set(allowedServices.map((service) => service.id));
@@ -168,11 +156,8 @@ export function syncServiceRowsForUnitType(
       serviceId: service.id,
       included: false,
       units: 1,
-      frequency: getDefaultFrequencyForService(
-        service.id,
-        packageId,
-        propertyCategory,
-      ),
+      frequency: getDefaultFrequencyForService(service.id),
+      basePrice: undefined,
     };
   }).filter((row) => allowedIds.has(row.serviceId));
 }

@@ -6,6 +6,7 @@ import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import {
   cacheHeaders,
   countJobs,
+  myJobs,
   resolvePeriod,
   startOfToday,
   trendPercent,
@@ -33,6 +34,8 @@ export async function GET(req: NextRequest) {
 
     const period = resolvePeriod(req.nextUrl.searchParams.get("days"));
     const admin = await createAdminServerClient();
+    // FR-10.01: these tiles count the reader's own work, not the org's.
+    const me = profile.id;
     const today = startOfToday();
 
     const [
@@ -46,21 +49,21 @@ export async function GET(req: NextRequest) {
       completedNow,
       completedBefore,
     ] = await Promise.all([
-      countJobs(admin, (q) => q.gte("created_at", period.fromTs).lte("created_at", period.toTs)),
+      countJobs(admin, (q) => myJobs(q, me).gte("created_at", period.fromTs).lte("created_at", period.toTs)),
       countJobs(admin, (q) =>
-        q.gte("created_at", period.previousFromTs).lt("created_at", period.previousToTs),
+        myJobs(q, me).gte("created_at", period.previousFromTs).lt("created_at", period.previousToTs),
       ),
-      countJobs(admin, (q) => q.eq("status", "assigned")),
-      countJobs(admin, (q) => q.eq("status", "assigned").gte("created_at", today)),
-      countJobs(admin, (q) => q.eq("status", "in_progress")),
+      countJobs(admin, (q) => myJobs(q, me).eq("status", "assigned")),
+      countJobs(admin, (q) => myJobs(q, me).eq("status", "assigned").gte("created_at", today)),
+      countJobs(admin, (q) => myJobs(q, me).eq("status", "in_progress")),
       // Distinct inspectors currently walking a unit. The rows are the
       // in-progress jobs only, so this stays small however big the table
       // gets, and it is the one place a row set is genuinely needed —
       // Postgres has no DISTINCT COUNT through PostgREST.
       distinctInspectors(admin),
-      countJobs(admin, (q) => q.in("status", ["submitted", "in_review"])),
+      countJobs(admin, (q) => myJobs(q, me).in("status", ["submitted", "in_review"])),
       countJobs(admin, (q) =>
-        q.in("status", ["approved", "delivered"]).gte("approved_at", period.fromTs),
+        myJobs(q, me).in("status", ["approved", "delivered"]).gte("approved_at", period.fromTs),
       ),
       countJobs(admin, (q) =>
         q

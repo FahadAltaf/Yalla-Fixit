@@ -4,23 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
-import {
-  Check,
-  ClipboardList,
-  FileText,
-  Loader2,
-  Plus,
-  ScrollText,
-} from "lucide-react";
+import { Check, FileText, Loader2, Plus, ScrollText, SendHorizonal } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Form } from "@/components/ui/form";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
@@ -30,11 +17,11 @@ import {
   getDefaultFormValues,
 } from "./amc-constants";
 import { formDataToSubmissionPayload, submissionToFormData } from "./amc-submission-mapper";
-import { downloadAmcPdf } from "./amc-document-utils";
+import { openAmcPdfInNewTab } from "./amc-document-utils";
 import { computeAmcData, syncServiceRowsForUnitType } from "./amc-pricing";
 import { amcFormSchema, type AmcDocumentType, type AmcFormData } from "./amc-types";
 import { PropertyCustomerStep } from "./steps/property-customer-step";
-import { PackageServicesStep } from "./steps/package-services-step";
+import { ServicesPricingStep } from "./steps/services-pricing-step";
 import { ReviewStep } from "./steps/review-step";
 import { SubmissionsList } from "./submissions-list";
 
@@ -46,13 +33,13 @@ const STEPS = [
   },
   {
     id: 2,
-    title: "Package & Services",
-    description: "Package selection and service table",
+    title: "Services & Pricing",
+    description: "Service table, base prices and discount",
   },
   {
     id: 3,
-    title: "Review & Generate",
-    description: "Summary and document generation",
+    title: "Review & Submit",
+    description: "Summary, preview and submit for approval",
   },
 ] as const;
 
@@ -63,6 +50,7 @@ const STEP_FIELDS: Partial<Record<number, (keyof AmcFormData)[]>> = {
     "propertyAddress",
     "propertyDetail",
     "customerName",
+    "customerId",
     "customerPhone",
     "customerEmail",
     "startDate",
@@ -71,7 +59,13 @@ const STEP_FIELDS: Partial<Record<number, (keyof AmcFormData)[]>> = {
     "proposalNumber",
     "coordinationContacts",
   ],
-  2: ["packageId", "customMonthlyPrice", "serviceRows", "discountPercent"],
+  2: [
+    "serviceRows",
+    "discountPercent",
+    "optionalSections",
+    "priceListRows",
+    "accountManagers",
+  ],
 };
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -83,7 +77,7 @@ function getErrorMessage(error: unknown, fallback: string) {
 
 const STEP_VALIDATION_MESSAGES: Record<number, string> = {
   1: "Please complete all property, customer, and contract fields before continuing.",
-  2: "Please select a package, choose at least one service, and complete the service table before continuing.",
+  2: "Choose at least one service, and give every selected service units, a frequency and a base price, before continuing.",
 };
 
 function scrollWizardContainerToTop(element: HTMLElement | null) {
@@ -125,6 +119,7 @@ export function AmcContractsPage({
     null,
   );
   const [isSaving, setIsSaving] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [listRefreshKey, setListRefreshKey] = useState(0);
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const activeSavesRef = useRef(0);
@@ -141,8 +136,6 @@ export function AmcContractsPage({
   });
 
   const unitType = form.watch("unitType");
-  const packageId = form.watch("packageId");
-  const propertyCategory = form.watch("propertyCategory");
   const watchedValues = form.watch();
   const computed = useMemo(
     () => computeAmcData(watchedValues, "proposal"),
@@ -187,21 +180,16 @@ export function AmcContractsPage({
 
   useEffect(() => {
     const currentRows = form.getValues("serviceRows");
-    const synced = syncServiceRowsForUnitType(
-      currentRows,
-      unitType,
-      packageId,
-      propertyCategory,
-    );
+    const synced = syncServiceRowsForUnitType(currentRows, unitType);
     const currentJson = JSON.stringify(currentRows);
     const syncedJson = JSON.stringify(synced);
     if (currentJson !== syncedJson) {
       form.setValue("serviceRows", synced, { shouldValidate: true });
     }
-  }, [unitType, packageId, propertyCategory, form]);
+  }, [unitType, form]);
 
   const persistDraft = useCallback(
-    (markGenerated?: AmcDocumentType) => {
+    (generatedDocument?: AmcDocumentType) => {
       activeSavesRef.current += 1;
       setIsSaving(true);
       saveQueueRef.current = saveQueueRef.current
@@ -209,8 +197,7 @@ export function AmcContractsPage({
           const values = form.getValues();
           const payload = formDataToSubmissionPayload(
             values,
-            markGenerated ? "generated" : "draft",
-            markGenerated ? [markGenerated] : undefined,
+            generatedDocument ? [generatedDocument] : undefined,
           );
 
           if (values.submissionId) {
@@ -288,7 +275,52 @@ export function AmcContractsPage({
     void saveAndNavigate(stepId, false);
   };
 
-  const handleGenerate = async (documentType: AmcDocumentType) => {
+  /*
+    FR5.1 — submit for internal review. The wizard's terminal action; the
+    two "generate" buttons it replaces are gone (FR2.13).
+
+    The draft is flushed first: the autosave queue may still be mid-write,
+    and submitting a proposal the server has not seen the latest edits of
+    would put the previous version in front of the approver.
+  */
+  const handleSubmitForApproval = async () => {
+    const isValid = await form.trigger();
+    if (!isValid) {
+      toast.error(
+        "Please complete every step before submitting this proposal for approval.",
+      );
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      persistDraft();
+      await saveQueueRef.current;
+
+      const submissionId = form.getValues("submissionId");
+      if (!submissionId) throw new Error("The draft has not been saved yet.");
+
+      const { submission } = await amcSubmissionsService.decide({
+        action: "submit",
+        id: submissionId,
+      });
+      form.reset(submissionToFormData(submission));
+      setListRefreshKey((key) => key + 1);
+      setActiveTab("submissions");
+      toast.success(
+        "Submitted for approval. The approver reviews it before anything goes to the client.",
+      );
+    } catch (error) {
+      console.error(error);
+      toast.error(
+        getErrorMessage(error, "Failed to submit this proposal for approval."),
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handlePreview = async (documentType: AmcDocumentType) => {
     const isValid = await form.trigger();
     if (!isValid) {
       toast.error(
@@ -301,29 +333,23 @@ export function AmcContractsPage({
     setGeneratingType(documentType);
     toast.loading(
       documentType === "proposal"
-        ? "Generating proposal..."
-        : "Generating contract...",
+        ? "Opening the proposal preview..."
+        : "Opening the contract preview...",
       { id: toastId },
     );
 
     try {
       const values = form.getValues();
-      await downloadAmcPdf(values, documentType);
-
-      persistDraft(documentType);
-      toast.success(
-        documentType === "proposal"
-          ? "Proposal downloaded successfully!"
-          : "Contract downloaded successfully!",
-      );
+      await openAmcPdfInNewTab(values, documentType);
+      persistDraft();
     } catch (error) {
       console.error(error);
       toast.error(
         getErrorMessage(
           error,
           documentType === "proposal"
-            ? "Failed to generate the proposal PDF. Please try again."
-            : "Failed to generate the contract PDF. Please try again.",
+            ? "Failed to open the proposal preview. Please try again."
+            : "Failed to open the contract preview. Please try again.",
         ),
       );
     } finally {
@@ -348,7 +374,7 @@ export function AmcContractsPage({
       case 1:
         return <PropertyCustomerStep form={form} />;
       case 2:
-        return <PackageServicesStep form={form} />;
+        return <ServicesPricingStep form={form} />;
       case 3:
         return <ReviewStep form={form} computed={computed} />;
       default:
@@ -360,31 +386,27 @@ export function AmcContractsPage({
 
   return (
     <Card ref={wizardRef} className="w-full flex-1 relative top-px right-px gap-6">
-      {/* <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div className="flex flex-col gap-1">
-          <CardTitle className="text-xl flex items-center gap-2">
-            <ClipboardList className="size-5 text-primary" />
-            AMC Proposals
-          </CardTitle>
-          <CardDescription>
+      <div className="print:hidden flex flex-wrap items-start justify-between gap-3 px-4">
+        <div>
+          <p className="eyebrow">Extension</p>
+          <h1 className="mt-1.5 text-3xl">AMC Proposals</h1>
+          <p className="text-muted-foreground mt-1 text-[0.9375rem]">
             Build annual maintenance contract proposals, manage submissions, and
             generate proposal or contract PDFs.
-          </CardDescription>
+          </p>
         </div>
-        {isSaving && (
-          <span className="text-xs text-muted-foreground flex items-center gap-1">
+        {/*
+          The wizard saves a draft on every step change. Without this the
+          save is entirely silent, which is the wrong reassurance to give
+          about the one feature whose whole point is that closing the
+          browser does not lose your work.
+        */}
+        {isSaving ? (
+          <span className="text-muted-foreground flex items-center gap-1.5 text-xs">
             <Loader2 className="size-3 animate-spin" />
             Saving draft...
           </span>
-        )}
-      </CardHeader> */}
-
-      <div className="print:hidden px-4">
-        <p className="eyebrow">Extension</p>
-        <h1 className="mt-1.5 text-3xl">AMC Proposals</h1>
-        <p className="text-muted-foreground mt-1 text-[0.9375rem]">
-          Build annual maintenance contract proposals, manage submissions, and
-          generate proposal or contract PDFs.        </p>
+        ) : null}
       </div>
 
       <CardContent className="space-y-4">
@@ -477,37 +499,58 @@ export function AmcContractsPage({
                       <Button
                         type="button"
                         variant="outline"
-                        onClick={() => void handleGenerate("proposal")}
-                        disabled={isGenerating}
-                        className="w-full sm:w-auto min-w-[160px] gap-2"
+                        onClick={() => void handlePreview("proposal")}
+                        disabled={isGenerating || isSubmitting}
+                        className="w-full sm:w-auto min-w-[150px] gap-2"
                       >
                         {isGenerating && generatingType === "proposal" ? (
                           <>
                             <Loader2 className="size-4 animate-spin" />
-                            Generating…
+                            Opening…
                           </>
                         ) : (
                           <>
                             <FileText className="size-4" />
-                            Generate Proposal
+                            Preview proposal
                           </>
                         )}
                       </Button>
                       <Button
                         type="button"
-                        onClick={() => void handleGenerate("contract")}
-                        disabled={isGenerating}
-                        className="w-full sm:w-auto min-w-[160px] gap-2"
+                        variant="outline"
+                        onClick={() => void handlePreview("contract")}
+                        disabled={isGenerating || isSubmitting}
+                        className="w-full sm:w-auto min-w-[150px] gap-2"
                       >
                         {isGenerating && generatingType === "contract" ? (
                           <>
                             <Loader2 className="size-4 animate-spin" />
-                            Generating…
+                            Opening…
                           </>
                         ) : (
                           <>
                             <ScrollText className="size-4" />
-                            Generate Contract
+                            Preview contract
+                          </>
+                        )}
+                      </Button>
+                      {/* FR5.1 — the only way out of the wizard. Nothing
+                          reaches the client before internal approval. */}
+                      <Button
+                        type="button"
+                        onClick={() => void handleSubmitForApproval()}
+                        disabled={isGenerating || isSubmitting}
+                        className="w-full sm:w-auto min-w-[180px] gap-2"
+                      >
+                        {isSubmitting ? (
+                          <>
+                            <Loader2 className="size-4 animate-spin" />
+                            Submitting…
+                          </>
+                        ) : (
+                          <>
+                            <SendHorizonal className="size-4" />
+                            Submit for Approval
                           </>
                         )}
                       </Button>

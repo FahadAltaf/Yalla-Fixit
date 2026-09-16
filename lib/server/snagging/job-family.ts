@@ -22,6 +22,10 @@ export type JobFamily = {
   allIds: string[];
   /** Additional visits only — the ones whose snags merge into the root. */
   additionalVisitIds: string[];
+  /** De-snag rounds only. A defect can be BORN on one of these. */
+  desnagRoundIds: string[];
+  /** Round number per job in the family, for ordering copies of one defect. */
+  roundOf: Map<string, number>;
 };
 
 export async function loadJobFamily(
@@ -30,7 +34,7 @@ export async function loadJobFamily(
 ): Promise<JobFamily> {
   const { data: self, error: selfError } = await admin
     .from("snagging_jobs")
-    .select("id, parent_job_id")
+    .select("id, parent_job_id, round_number")
     .eq("id", jobId)
     .maybeSingle();
   if (selfError) throw new Error(selfError.message);
@@ -40,16 +44,28 @@ export async function loadJobFamily(
 
   const { data: children, error: childError } = await admin
     .from("snagging_jobs")
-    .select("id, visit_type")
+    .select("id, visit_type, round_number")
     .eq("parent_job_id", rootId);
   if (childError) throw new Error(childError.message);
 
   const rows = children ?? [];
+  const roundOf = new Map<string, number>([[rootId, 1]]);
+  // The root's own number when we are looking at it; a child viewed
+  // directly does not tell us the root's, which is 1 by definition anyway.
+  if (self?.id === rootId) roundOf.set(rootId, (self.round_number as number | null) ?? 1);
+  for (const row of rows) {
+    roundOf.set(row.id as string, (row.round_number as number | null) ?? 1);
+  }
+
   return {
     rootId,
     allIds: [rootId, ...rows.map((row) => row.id as string)],
     additionalVisitIds: rows
       .filter((row) => row.visit_type === "additional")
       .map((row) => row.id as string),
+    desnagRoundIds: rows
+      .filter((row) => row.visit_type === "desnag")
+      .map((row) => row.id as string),
+    roundOf,
   };
 }

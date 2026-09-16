@@ -106,6 +106,10 @@ export enum ResourceType {
   SETTINGS = "settings",
   // Extensions
   EXTENSIONS = "extensions",
+  /* FR5.3 — AMC approval rights are granted by role, so the approver can
+     change without a code change. Separate from the email allowlist, which
+     still decides who can open the extension at all (FRD §4). */
+  AMC = "amc",
   // Scheduling
   SCHEDULING = "scheduling",
   // Property Care / Snagging
@@ -390,6 +394,14 @@ export interface SnaggingArea {
   floor_plan_id?: string | null;
   pin_x?: number | null;
   pin_y?: number | null;
+  /**
+   * The room's outline on that plan (BA change 6 / FR-3.05).
+   *
+   * Null on every area drawn before zones existed, and there is no way to
+   * derive edges from a point — so the pin above never goes away and the
+   * two coexist for the life of those jobs.
+   */
+  zone?: { x: number; y: number }[] | null;
   note?: string | null;
   confirmed_at?: string | null;
   confirmed_by?: string | null;
@@ -411,6 +423,13 @@ export interface SnaggingPhoto {
   width?: number | null;
   height?: number | null;
   exif?: Record<string, unknown> | null;
+  /**
+   * FR-6.05 — the exact defect spot on the photo (FR-4.06), as a
+   * fraction of the image in each axis so it survives any resize.
+   * All-or-nothing: both are set, or neither is.
+   */
+  marker_x?: number | null;
+  marker_y?: number | null;
   gps_lat?: number | null;
   gps_lng?: number | null;
   taken_at: string;
@@ -423,6 +442,14 @@ export interface SnaggingSnag {
   id: string;
   property_id: string;
   origin_task_id: string;
+  /**
+   * Raised on an earlier visit, not the one being viewed.
+   *
+   * Set when an additional visit shows the original inspection's defects
+   * as context. Those rows are reference only — they belong to the
+   * original and are never edited or re-counted here.
+   */
+  from_earlier_visit?: boolean;
   area_id: string;
   snag_code: string;
   catalogue_entry_id?: string | null;
@@ -431,6 +458,10 @@ export interface SnaggingSnag {
   element_code?: string | null;
   defect_code?: string | null;
   area_label?: string | null;
+  /** The catalogue's top level (Action Points P1). Null on snags captured
+      before the restructure. */
+  category_label?: string | null;
+  /** The middle level — the same level `element` always meant. */
   element_label?: string | null;
   defect_label?: string | null;
   severity: SnaggingSeverity;
@@ -521,6 +552,19 @@ export interface SnaggingTask {
   client_contact_phone?: string | null;
   supervisor_id?: string | null;
   approval_manager_id?: string | null;
+  /** FR-6.01 — who checks the work before the approval manager decides. */
+  reviewer_id?: string | null;
+  /** Joined from reviewer_id, so a screen can name them. */
+  reviewer?: {
+    id: string;
+    full_name?: string | null;
+    email?: string | null;
+  } | null;
+  review_started_at?: string | null;
+  /** Set when the reviewer hands the job on; gates approval. */
+  reviewed_at?: string | null;
+  /** FR-6.07 — stamped once when the 48-hour window is breached. */
+  escalated_at?: string | null;
   /**
    * Joined from approval_manager_id, so a screen can name who has to
    * sign an inspection off rather than only knowing that somebody must.
@@ -585,8 +629,58 @@ export interface SnaggingSubmission {
   signature_url?: string | null;
 }
 
+/** One row of the checklist library, as the admin screen reads it (N1). */
+export interface SnaggingChecklistLibraryItem {
+  id: string;
+  code: string;
+  group_name: string;
+  label: string;
+  applies_apartment: boolean;
+  applies_villa: boolean;
+  applies_townhouse: boolean;
+  applies_commercial: boolean;
+  mandatory: boolean;
+  linked_catalogue_codes: string[];
+  active: boolean;
+  sort_order: number;
+  updated_at?: string;
+}
+
 export type SnaggingChecklistStatus =
   "pending" | "passed" | "failed" | "not_checked";
+
+/*
+  The catalogue's three levels (Action Points P1).
+
+  Each level owns a short code; a snag's code is the three composed, e.g.
+  CIV-PNT-DRP. Areas are not part of it — every category applies in every
+  area (P2), and the area is recorded against the snag instead (P3).
+*/
+export interface CatalogueCategory {
+  id: string;
+  code: string;
+  label: string;
+  sort_order: number;
+  active: boolean;
+}
+
+export interface CatalogueSubcategory extends CatalogueCategory {
+  category_id: string;
+}
+
+export interface CatalogueDefect {
+  id: string;
+  subcategory_id: string;
+  code: string;
+  label: string;
+  default_severity: SnaggingSeverity;
+  guidance?: string | null;
+  /** The defect library's own identifier, e.g. SN-01-01-01, where it came
+      from one. Null for a defect added in the admin screens. */
+  source_code?: string | null;
+  sort_order: number;
+  active: boolean;
+}
 
 export interface SnaggingChecklistItem {
   id: string;
@@ -626,6 +720,14 @@ export interface SnaggingTaskSummary {
   updated_at: string;
   supervisor_id?: string | null;
   approval_manager_id?: string | null;
+  /** FR-6.01 — the review chain, so the queue can say who holds a job. */
+  reviewer_id?: string | null;
+  reviewer?: { id: string; full_name?: string | null; email?: string | null } | null;
+  manager?: { id: string; full_name?: string | null; email?: string | null } | null;
+  review_started_at?: string | null;
+  reviewed_at?: string | null;
+  /** FR-6.07 — stamped once by the escalation sweep. */
+  escalated_at?: string | null;
   property_id: string;
   unit_label: string;
   building_name?: string | null;
@@ -714,8 +816,6 @@ export interface SnaggingAnalytics {
     overdueApprovals: number;
   };
   /** FR-10.03 — developer view. */
-  /** FR-10.03 — defect categories across every developer in the range. */
-  defectCategories: Array<{ category: string; count: number }>;
   byDeveloper: Array<{
     developer_name: string;
     /** Units this period against the one before, as a signed count. */

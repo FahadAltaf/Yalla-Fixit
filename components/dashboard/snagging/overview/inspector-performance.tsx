@@ -11,7 +11,13 @@ import { SectionShell, TableSkeleton } from "./section-shell";
 import { useInView, useSection } from "./use-section";
 
 type Performance = {
-  rows: Array<{ id: string; name: string; assigned: number; inProgress: number; completed: number }>;
+  rows: Array<{
+    id: string;
+    name: string;
+    assigned: number;
+    inProgress: number;
+    completed: number;
+  }>;
   rowCount: number;
 };
 
@@ -38,7 +44,7 @@ export function InspectorPerformance() {
     <div ref={anchor}>
       <SectionShell
         title="Inspector performance"
-        description="Workload per inspector. Snag counts are deliberately absent — they measure the building, not the person."
+        description="Workload per inspector. Snag counts are deliberately absent because they measure the building, not the person."
         icon={<Users />}
         muted
         loading={!visible || loading}

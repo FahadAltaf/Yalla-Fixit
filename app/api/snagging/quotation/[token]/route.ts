@@ -21,7 +21,9 @@ const SELECT =
 
 type QuoteRow = Record<string, unknown> & {
   id: string;
-  job_id: string;
+  /* Null while an inspection quotation is still waiting on approval —
+     the job it pays for is created afterwards (BA v2, change 1). */
+  job_id: string | null;
   quote_number: string;
   status: string;
   approval_token_expires_at: string | null;

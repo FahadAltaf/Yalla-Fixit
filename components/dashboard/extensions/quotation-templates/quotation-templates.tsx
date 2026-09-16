@@ -67,6 +67,15 @@ export interface QuotationData {
   grandTotal?: number;
   /** Terms and conditions text from API (Terms_And_Conditions.value) */
   termsAndConditions?: string;
+  /**
+   * What the service covers, printed above the terms.
+   *
+   * Separate from `termsAndConditions` because they are two different
+   * things on the team's own quotation — the scope sits with the priced
+   * line, the terms are the numbered notes underneath — and folding one
+   * into the other loses whichever it was folded into (BA v2, change 22).
+   */
+  scopeOfWork?: string;
 
   notes?: string;
 }

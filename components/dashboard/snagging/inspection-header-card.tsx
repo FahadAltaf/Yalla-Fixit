@@ -30,6 +30,7 @@ import { snaggingService } from "@/modules/snagging";
 import { ActionType, ResourceType, type SnaggingTask } from "@/types/types";
 
 import { AdditionalVisitDialog } from "./additional-visit-dialog";
+import { OpenRoundDialog } from "./open-round-dialog";
 import { RejectInspectionDialog } from "./reject-inspection-dialog";
 import {
   StatCard,
@@ -58,6 +59,7 @@ export function InspectionHeaderCard({
   const { userProfile } = useAuth();
   const { confirm, dialog } = useConfirm();
   const [working, setWorking] = useState(false);
+  const [roundOpen, setRoundOpen] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [visitOpen, setVisitOpen] = useState(false);
 
@@ -86,9 +88,27 @@ export function InspectionHeaderCard({
   const isApprovalManager = Boolean(
     task.approval_manager_id && userProfile?.id === task.approval_manager_id,
   );
+  /*
+    FR-6.01 — two roles, two gates.
+
+    The reviewer checks the evidence and hands it on; the approval manager
+    decides. Where no reviewer is named the manager owns their own queue, so
+    an unassigned job is never stuck. These mirror `isDesignatedReviewer` and
+    `isDesignatedApprovalManager` on the server exactly — the buttons must
+    not offer an action the API will refuse.
+  */
+  const isReviewer = task.reviewer_id
+    ? userProfile?.id === task.reviewer_id
+    : isApprovalManager;
+  const canReview =
+    canApprove && (isAdminUser(userProfile) || isReviewer || isApprovalManager);
   const canDecide =
     canApprove && (isAdminUser(userProfile) || isApprovalManager);
   const managerName = task.manager?.full_name ?? task.manager?.email ?? null;
+  const reviewerName = task.reviewer?.full_name ?? task.reviewer?.email ?? null;
+  // The reviewer's hand-off. Until this is set the server refuses both
+  // approve and reject, so neither button is offered.
+  const reviewComplete = Boolean(task.reviewed_at);
 
   const snags = useMemo(() => task.snags ?? [], [task]);
   const areas = task.areas ?? [];
@@ -102,7 +122,15 @@ export function InspectionHeaderCard({
     of them have been given a verdict. A defect raised ON this round is not
     counted — it is a new find, not something the round went back for.
   */
-  const isRound = (task.round_number ?? 1) > 1;
+  /*
+    A de-snag round, not merely "not the first visit".
+
+    This read round_number > 1, which is also true of every additional
+    visit — so a visit showed "Defects re-checked 0 / 0", a de-snagging
+    metric, on a workflow that carries no defects to re-check. The two
+    are different jobs and are told apart by visit_type, never by number.
+  */
+  const isRound = task.visit_type === "desnag";
   const carried = snags.filter(
     (snag) => (snag.round_created ?? 1) < (task.round_number ?? 1),
   );
@@ -134,6 +162,25 @@ export function InspectionHeaderCard({
     awaitingDecision &&
     !Number.isNaN(submittedMs) &&
     submittedMs + 48 * 60 * 60 * 1000 < Date.now();
+
+  async function completeReview() {
+    setWorking(true);
+    try {
+      await snaggingService.completeReview(task.id);
+      toast.success(
+        managerName
+          ? `Review complete. ${managerName} can now approve or send it back.`
+          : "Review complete. The approval manager can now decide.",
+      );
+      onChanged();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not complete the review",
+      );
+    } finally {
+      setWorking(false);
+    }
+  }
 
   async function startReview() {
     setWorking(true);
@@ -170,7 +217,7 @@ export function InspectionHeaderCard({
     ].filter(Boolean);
 
     const ok = await confirm({
-      title: `Approve ${task.code}?`,
+      title: `Approve ${task.property?.unit_label ?? "this inspection"}?`,
       description: outstanding.length
         ? `This accepts the inspection and lets the report go to the client. Still outstanding: ${outstanding.join(", ")}.`
         : "This accepts the inspection and lets the report go to the client.",
@@ -192,28 +239,29 @@ export function InspectionHeaderCard({
     }
   }
 
-  async function openRound() {
-    // Opening a round creates a new inspection and navigates away from
-    // this one; a reviewer who meant to open the report should not lose
-    // their place to a mis-click.
-    const carrying = snags.filter(
-      (snag) =>
-        snag.status === "open" ||
-        snag.status === "pending_verification" ||
-        snag.status === "verified_poor_quality" ||
-        snag.status === "verified_not_done",
-    ).length;
+  /*
+    How many defects carry into the round.
 
-    const ok = await confirm({
-      title: `Open a de-snag round for ${task.code}?`,
-      description: `This creates round ${task.round_number + 1} with the ${carrying} still-open snag(s) carried into it, and takes you to the new round.`,
-      confirmText: "Open round",
-    });
-    if (!ok) return;
+    Only counted for the dialog's summary — the server decides what
+    actually carries, and now reads the whole family rather than this job
+    alone, so a defect first raised on an earlier round is included there
+    even though this list cannot see it.
+  */
+  const carryingCount = snags.filter(
+    (snag) =>
+      snag.status === "open" ||
+      snag.status === "pending_verification" ||
+      snag.status === "verified_poor_quality" ||
+      snag.status === "verified_not_done",
+  ).length;
 
+  async function openRound(input: {
+    scheduled_date: string;
+    appointment_at: string | null;
+  }) {
     setWorking(true);
     try {
-      const round = await snaggingService.openRound(task.id, {});
+      const round = await snaggingService.openRound(task.id, input);
       toast.success(
         `Round ${round.round_number} opened with ${round.carried_snags} snag(s)`,
       );
@@ -233,14 +281,13 @@ export function InspectionHeaderCard({
         <div className="flex flex-wrap items-center justify-between gap-4 p-5">
           <div className="space-y-1">
             <div className="flex items-center gap-2">
-              {/* <span className="text-muted-foreground font-mono text-xs">{task.code}</span> */}
               {task.visit_type === "additional" ? (
                 <Badge variant="outline">Additional visit</Badge>
               ) : task.round_number > 1 ? (
                 <Badge variant="outline">Round {task.round_number}</Badge>
               ) : null}
               {task.visit_type === "additional" &&
-                (task.visit_charge ?? 0) > 0 ? (
+              (task.visit_charge ?? 0) > 0 ? (
                 <span className="text-muted-foreground text-xs">
                   Charge AED {task.visit_charge!.toLocaleString()}
                 </span>
@@ -256,13 +303,12 @@ export function InspectionHeaderCard({
               <h2 className="text-2xl">{task.property?.unit_label}</h2>
               <TaskStatusBadge status={task.status} />
               {/*
-                The job code is what people quote to each other; the id is
-                what support needs. The code reads inline, the id hides
-                behind a copy button rather than taking a line of its own.
+                No job code. It is an internal handle, and the unit label
+                beside it is what people actually recognise; the round or
+                visit badge above carries the one thing the code's suffix
+                was telling anybody. The id stays behind a copy button
+                because support still needs it.
               */}
-              <span className="text-muted-foreground font-mono text-xs">
-                {task.code}
-              </span>
               <CopyId id={task.id} />
             </div>
             <p className="text-muted-foreground text-sm">
@@ -290,7 +336,34 @@ export function InspectionHeaderCard({
                 </Link>
               </Button>
             ) : null}
-            {awaitingDecision && canDecide ? (
+            {/*
+              FR-6.01 — the chain has three stops, and the card shows the one
+              it is at: pick it up, hand it on, decide. Each button is offered
+              only to the person the server will accept it from, so a missing
+              button is always "not your step" rather than a 403.
+            */}
+            {awaitingDecision && task.status === "submitted" && canReview ? (
+              <SubmitButton
+                onClick={() => void startReview()}
+                pending={working}
+                pendingLabel="Starting…"
+                icon={<ClipboardCheck className="size-4" />}
+              >
+                Start review
+              </SubmitButton>
+            ) : awaitingDecision &&
+              task.status === "in_review" &&
+              !reviewComplete &&
+              canReview ? (
+              <SubmitButton
+                onClick={() => void completeReview()}
+                pending={working}
+                pendingLabel="Sending…"
+                icon={<ClipboardCheck className="size-4" />}
+              >
+                {managerName ? `Send to ${managerName}` : "Send to approval manager"}
+              </SubmitButton>
+            ) : awaitingDecision && reviewComplete && canDecide ? (
               <>
                 <Button
                   variant="outline"
@@ -300,48 +373,42 @@ export function InspectionHeaderCard({
                   <XCircle className="size-4" />
                   Send back
                 </Button>
-                {task.status === "submitted" ? (
-                  // FR-6.01 — the review must be picked up (submitted →
-                  // in_review, audited) before it can be approved. Approve
-                  // only appears once the inspection is under review.
-                  <SubmitButton
-                    onClick={() => void startReview()}
-                    pending={working}
-                    pendingLabel="Starting…"
-                    icon={<ClipboardCheck className="size-4" />}
-                  >
-                    Start review
-                  </SubmitButton>
-                ) : (
-                  <SubmitButton
-                    onClick={() => void approve()}
-                    pending={working}
-                    pendingLabel="Approving…"
-                    icon={<CheckCircle2 className="size-4" />}
-                  >
-                    Approve inspection
-                  </SubmitButton>
-                )}
+                <SubmitButton
+                  onClick={() => void approve()}
+                  pending={working}
+                  pendingLabel="Approving…"
+                  icon={<CheckCircle2 className="size-4" />}
+                >
+                  Approve inspection
+                </SubmitButton>
               </>
             ) : awaitingDecision ? (
               /*
-                Waiting on somebody else. Naming them turns a missing set
-                of buttons into an answer — otherwise a coordinator is
-                left wondering whether the page is broken or they simply
-                are not the person.
+                Waiting on somebody else. Naming them turns a missing set of
+                buttons into an answer — otherwise a coordinator is left
+                wondering whether the page is broken or they simply are not
+                the person it is waiting on.
               */
               <span className="text-muted-foreground text-sm">
-                {managerName
-                  ? `Awaiting sign-off by ${managerName}`
-                  : "Awaiting sign-off by this job's approval manager"}
+                {task.status === "submitted"
+                  ? reviewerName
+                    ? `Awaiting review by ${reviewerName}`
+                    : "Awaiting review"
+                  : !reviewComplete
+                    ? reviewerName
+                      ? `Under review by ${reviewerName}`
+                      : "Under review"
+                    : managerName
+                      ? `Awaiting sign-off by ${managerName}`
+                      : "Awaiting sign-off by this job's approval manager"}
               </span>
             ) : null}
             {(task.status === "approved" || task.status === "delivered") &&
-              canCreate ? (
+            canCreate ? (
               <>
                 <SubmitButton
                   variant="outline"
-                  onClick={() => void openRound()}
+                  onClick={() => setRoundOpen(true)}
                   pending={working}
                   pendingLabel="Opening…"
                   icon={<RotateCcw className="size-4" />}
@@ -410,7 +477,9 @@ export function InspectionHeaderCard({
           /* A round's list is mostly defects carried in to be re-checked,
              not new finds, so the caption cannot claim otherwise. */
           caption={
-            (task.round_number ?? 1) > 1 ? "Carried in, plus new finds" : "Captured on this walk"
+            (task.round_number ?? 1) > 1
+              ? "Carried in, plus new finds"
+              : "Captured on this walk"
           }
         />
         <StatCard
@@ -455,11 +524,30 @@ export function InspectionHeaderCard({
             tone={pendingArea ? "progress" : "good"}
           />
         )}
+        {/*
+          Labelled by what the ratio counts. "Media · 3 / 3" left the reader
+          to work out what was being divided by what, with the answer in the
+          caption two lines below -- and a snag with no photo is a hole in
+          the report, so it is worth reading at a glance.
+        */}
         <StatCard
-          label="Media"
+          label="Snags with photos"
           value={`${snagsWithPhoto} / ${snags.length}`}
-          headline={`${photoTotal} ${photoTotal === 1 ? "file" : "files"} received`}
-          caption="Snags carrying at least one photo"
+          headline={
+            snags.length === 0
+              ? "No snags recorded"
+              : snagsWithPhoto === snags.length
+                ? "Every snag has evidence"
+                : `${snags.length - snagsWithPhoto} with no photo`
+          }
+          caption={`${photoTotal} ${photoTotal === 1 ? "file" : "files"} across the inspection`}
+          tone={
+            snags.length === 0
+              ? "neutral"
+              : snagsWithPhoto === snags.length
+                ? "good"
+                : "bad"
+          }
         />
       </StatCardGrid>
 
@@ -474,6 +562,16 @@ export function InspectionHeaderCard({
         taskId={task.id}
         open={visitOpen}
         onOpenChange={setVisitOpen}
+      />
+
+      <OpenRoundDialog
+        open={roundOpen}
+        onOpenChange={setRoundOpen}
+        roundNumber={task.round_number + 1}
+        from={task.property?.unit_label ?? "this inspection"}
+        carrying={carryingCount}
+        busy={working}
+        onConfirm={openRound}
       />
 
       {dialog}
@@ -501,7 +599,7 @@ function RemediationDue({ due }: { due: string }) {
         overdue ? "text-danger font-medium" : "text-muted-foreground",
       )}
     >
-      {overdue ? `Fix overdue — was due ${when}` : `Fix due by ${when}`}
+      {overdue ? `Fix overdue, was due ${when}` : `Fix due by ${when}`}
     </p>
   );
 }

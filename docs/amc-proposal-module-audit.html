@@ -1,0 +1,745 @@
+<title>AMC Proposal Module Audit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zilla+Slab:wght@500;600;700&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --paper:      #F7F5F1;
+    --card:       #FFFDFA;
+    --ink:        #17120E;
+    --muted:      #6E655B;
+    --rule:       #E3DDD4;
+    --rule-soft:  #EFEAE3;
+    --accent:     #0E7C70;
+    --banner:     #AA272C;
+    --crit:       #B42318;
+    --crit-wash:  #FBEFEE;
+    --warn:       #B54708;
+    --warn-wash:  #FBF3EA;
+    --ok:         #067647;
+    --ok-wash:    #ECF6F0;
+    --info-wash:  #ECF4F3;
+
+    --display: "Zilla Slab", Georgia, "Times New Roman", serif;
+    --body: "Source Sans 3", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:      #141210;
+      --card:       #1B1815;
+      --ink:        #F2EDE6;
+      --muted:      #9E958A;
+      --rule:       #2F2923;
+      --rule-soft:  #251F1A;
+      --accent:     #2FB9A8;
+      --banner:     #E0656A;
+      --crit:       #F97066;
+      --crit-wash:  #2A1714;
+      --warn:       #F79009;
+      --warn-wash:  #291B0C;
+      --ok:         #47CD89;
+      --ok-wash:    #11241A;
+      --info-wash:  #10211F;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper:      #141210;
+    --card:       #1B1815;
+    --ink:        #F2EDE6;
+    --muted:      #9E958A;
+    --rule:       #2F2923;
+    --rule-soft:  #251F1A;
+    --accent:     #2FB9A8;
+    --banner:     #E0656A;
+    --crit:       #F97066;
+    --crit-wash:  #2A1714;
+    --warn:       #F79009;
+    --warn-wash:  #291B0C;
+    --ok:         #47CD89;
+    --ok-wash:    #11241A;
+    --info-wash:  #10211F;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 17px;
+    line-height: 1.6;
+    margin: 0;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 860px;
+    margin: 0 auto;
+    padding-inline: 20px;
+    padding-block: 0 72px;
+  }
+
+  /* ── Masthead: the red rule echoes the red banner on the actual
+       AMC proposal/contract PDFs this module produces. ── */
+  .banner-rule {
+    height: 6px;
+    background: var(--banner);
+  }
+
+  header.mast {
+    padding-block: 34px 26px;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--banner);
+    margin: 0 0 14px;
+  }
+
+  h1 {
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: clamp(30px, 6vw, 44px);
+    line-height: 1.1;
+    letter-spacing: -0.015em;
+    margin: 0 0 12px;
+    text-wrap: balance;
+  }
+
+  .standfirst {
+    font-size: clamp(17px, 2.4vw, 19px);
+    color: var(--muted);
+    margin: 0;
+    max-width: 62ch;
+  }
+
+  dl.meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 14px 24px;
+    margin: 26px 0 0;
+    padding-top: 20px;
+    border-top: 1px solid var(--rule-soft);
+  }
+  dl.meta dt {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 3px;
+  }
+  dl.meta dd {
+    margin: 0;
+    font-size: 14px;
+    font-family: var(--mono);
+    word-break: break-word;
+  }
+
+  h2 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: clamp(22px, 3.4vw, 27px);
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+    margin: 0 0 4px;
+    text-wrap: balance;
+  }
+
+  section { padding-block: 40px 0; }
+
+  .sec-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 10px;
+  }
+
+  p { margin: 0 0 16px; max-width: 72ch; }
+  p:last-child { margin-bottom: 0; }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.85em;
+    background: var(--rule-soft);
+    padding: 1px 5px;
+    border-radius: 3px;
+    word-break: break-word;
+  }
+
+  /* ── Verdict ── */
+  .verdict {
+    background: var(--crit-wash);
+    border: 1px solid color-mix(in srgb, var(--crit) 30%, transparent);
+    border-left: 4px solid var(--crit);
+    border-radius: 3px;
+    padding: 20px 22px;
+    margin-top: 18px;
+  }
+  .verdict .v-head {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 19px;
+    color: var(--crit);
+    margin: 0 0 8px;
+  }
+  .verdict p { color: var(--ink); margin-bottom: 0; }
+
+  /* ── Figures strip ── */
+  .figures {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    margin-top: 22px;
+    overflow: hidden;
+  }
+  .fig {
+    background: var(--card);
+    padding: 16px 18px;
+  }
+  .fig .n {
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: 30px;
+    line-height: 1.05;
+    font-variant-numeric: tabular-nums;
+    display: block;
+  }
+  .fig .l {
+    font-size: 13px;
+    color: var(--muted);
+    margin-top: 5px;
+    display: block;
+    line-height: 1.35;
+  }
+  .fig.bad .n { color: var(--crit); }
+  .fig.warn .n { color: var(--warn); }
+
+  /* ── Findings ── */
+  .finding {
+    border: 1px solid var(--rule);
+    border-left: 4px solid var(--sev, var(--muted));
+    border-radius: 3px;
+    background: var(--card);
+    padding: 20px 22px;
+    margin-top: 18px;
+  }
+  .finding.crit { --sev: var(--crit); }
+  .finding.warn { --sev: var(--warn); }
+  .finding.low  { --sev: var(--muted); }
+
+  .f-top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+  .f-id {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--muted);
+  }
+  .pill {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .pill.crit { background: var(--crit-wash); color: var(--crit); }
+  .pill.warn { background: var(--warn-wash); color: var(--warn); }
+  .pill.low  { background: var(--rule-soft); color: var(--muted); }
+  .pill.ok   { background: var(--ok-wash);   color: var(--ok); }
+
+  .f-title {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 19px;
+    line-height: 1.25;
+    margin: 0 0 10px;
+    width: 100%;
+    text-wrap: balance;
+  }
+
+  .evidence {
+    background: var(--rule-soft);
+    border-radius: 3px;
+    padding: 12px 14px;
+    margin: 14px 0;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.55;
+    overflow-x: auto;
+    white-space: pre;
+  }
+
+  .f-meta {
+    display: grid;
+    gap: 10px;
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--rule-soft);
+  }
+  .f-meta div { display: grid; grid-template-columns: 74px 1fr; gap: 12px; }
+  .f-meta .k {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding-top: 4px;
+  }
+  .f-meta .v { font-size: 15px; }
+  @media (max-width: 460px) {
+    .f-meta div { grid-template-columns: 1fr; gap: 2px; }
+  }
+
+  ul.tight { margin: 0 0 16px; padding-left: 20px; max-width: 72ch; }
+  ul.tight li { margin-bottom: 6px; }
+
+  /* ── Tables ── */
+  .table-scroll { overflow-x: auto; margin-top: 18px; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 14.5px;
+    min-width: 520px;
+  }
+  th, td {
+    text-align: left;
+    padding: 10px 14px 10px 0;
+    border-bottom: 1px solid var(--rule-soft);
+    vertical-align: top;
+  }
+  th {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 1px solid var(--rule);
+    font-weight: 500;
+  }
+  td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+  .works {
+    background: var(--ok-wash);
+    border: 1px solid color-mix(in srgb, var(--ok) 26%, transparent);
+    border-radius: 3px;
+    padding: 20px 22px;
+    margin-top: 18px;
+  }
+  .works ul { margin-bottom: 0; }
+
+  .note {
+    font-size: 14px;
+    color: var(--muted);
+    border-left: 2px solid var(--rule);
+    padding-left: 14px;
+    margin-top: 18px;
+    max-width: 68ch;
+  }
+
+  footer {
+    margin-top: 56px;
+    padding-top: 22px;
+    border-top: 1px solid var(--rule);
+    font-size: 13.5px;
+    color: var(--muted);
+  }
+
+  a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<div class="banner-rule"></div>
+<div class="wrap">
+
+  <header class="mast">
+    <p class="eyebrow">Module Audit &middot; Extensions</p>
+    <h1>AMC Proposal Module Audit</h1>
+    <p class="standfirst">
+      A code-and-data review of the Annual Maintenance Contract proposal builder
+      that sits behind <strong>Extensions &rarr; AMC Proposals</strong>. The wizard,
+      the PDF pipeline and the persistence layer all work. The pricing engine does not.
+    </p>
+
+    <dl class="meta">
+      <div><dt>Repository</dt><dd>Yalla&nbsp;Fixit</dd></div>
+      <div><dt>Branch</dt><dd>snagging</dd></div>
+      <div><dt>Commit</dt><dd>9dd4d5a</dd></div>
+      <div><dt>Date</dt><dd>15 Sep 2026</dd></div>
+      <div><dt>Scope</dt><dd>33 files &middot; 5,575 LOC</dd></div>
+      <div><dt>Data checked</dt><dd>Production (live)</dd></div>
+    </dl>
+  </header>
+
+  <section>
+    <p class="sec-label">Verdict</p>
+    <h2>Every proposal this module has ever produced is priced at zero</h2>
+
+    <div class="verdict">
+      <p class="v-head">The pricing engine is wired to constants that were never filled in.</p>
+      <p>
+        All 12 AMC services carry <code>unitRate: 0</code>, left behind a
+        <code>TODO(pricing)</code> comment. Price is computed as
+        <em>unit rate &times; units &times; frequency</em>, so every line item evaluates to
+        AED&nbsp;0.00 &mdash; and so do the subtotal, the discount, the 5% VAT and the grand total.
+        I confirmed this against production: <strong>all 10 submissions have
+        <code>final_price = 0</code></strong>, including the one that was marked generated
+        and had both a proposal and a contract PDF produced from it.
+      </p>
+    </div>
+
+    <div class="figures">
+      <div class="fig bad"><span class="n">0</span><span class="l">of 12 services have a unit rate</span></div>
+      <div class="fig bad"><span class="n">10/10</span><span class="l">production submissions priced AED&nbsp;0</span></div>
+      <div class="fig warn"><span class="n">0</span><span class="l">of 3 price inputs reach the total</span></div>
+      <div class="fig"><span class="n">8</span><span class="l">weeks live &middot; 1 document generated</span></div>
+    </div>
+  </section>
+
+  <section>
+    <p class="sec-label">Orientation</p>
+    <h2>What the module does</h2>
+    <p>
+      A three-step wizard that turns property and customer details into a branded AMC
+      proposal or contract PDF, saved per user so drafts can be resumed.
+    </p>
+    <ul class="tight">
+      <li><strong>Step 1 &mdash; Property &amp; Customer.</strong> Category (residential/commercial),
+          unit type (villa/apartment/office), address, customer identity, two mandatory
+          coordination contacts, contract dates, payment terms, proposal number.</li>
+      <li><strong>Step 2 &mdash; Package &amp; Services.</strong> One of four residential packages
+          (Basic AED&nbsp;95 &rarr; Elite AED&nbsp;250 per month) or a commercial monthly rate,
+          plus a service table with per-line units and frequency.</li>
+      <li><strong>Step 3 &mdash; Review &amp; Generate.</strong> Totals summary and PDF generation.</li>
+    </ul>
+    <p>
+      Services are typed by how they bill &mdash; <code>covered</code>, <code>unlimited</code>,
+      <code>ppm</code>, <code>handyman</code>, <code>fixed</code> &mdash; which drives both the
+      default frequency and how it prints ("2 per year", "12 hours per year", "Covered").
+      Villa-only services are filtered out for apartments and offices. PDFs are rendered
+      client-side by <code>html2canvas</code> into <code>jsPDF</code>, with a measure-then-slice
+      pagination pass so page breaks land between sections.
+    </p>
+  </section>
+
+  <section>
+    <p class="sec-label">Findings &middot; severity order</p>
+    <h2>Eight issues, two of them blocking</h2>
+
+    <article class="finding crit">
+      <div class="f-top">
+        <span class="f-id">F1</span><span class="pill crit">Critical</span>
+        <h3 class="f-title">All service unit rates are zero, so every total is zero</h3>
+      </div>
+      <p>
+        <code>AMC_SERVICES</code> defines 12 services. Every one has <code>unitRate: 0</code>,
+        under a comment marking it as unfinished. Nothing downstream guards against it, so
+        the wizard happily generates a signed-looking contract for AED&nbsp;0.00.
+      </p>
+      <div class="evidence">// amc-constants.ts:43
+// TODO(pricing): team to fill unit rates from pricing sheet
+//                — all default to 0 until then.
+
+$ grep -o "unitRate: [0-9.]*" amc-constants.ts | sort | uniq -c
+     12 unitRate: 0
+
+// amc-pricing.ts:23
+return service.unitRate * row.units * row.frequency;   // → 0</div>
+      <div class="f-meta">
+        <div><span class="k">Impact</span><span class="v">The module cannot produce a commercially valid document. Confirmed on all 10 live submissions.</span></div>
+        <div><span class="k">Fix</span><span class="v">Populate unit rates from the pricing sheet, and block generation when an included service still has a zero rate.</span></div>
+      </div>
+    </article>
+
+    <article class="finding crit">
+      <div class="f-top">
+        <span class="f-id">F2</span><span class="pill crit">Critical</span>
+        <h3 class="f-title">Customer records are readable by anyone with the public key</h3>
+      </div>
+      <p>
+        <code>amc_submissions</code> has RLS enabled with a policy of
+        <code>USING (true) WITH CHECK (true)</code> for role <code>public</code>. The API route
+        carefully scopes every query by <code>owner_id</code> and gates on an email allowlist &mdash;
+        but PostgREST is reachable directly, so none of that applies. I verified this with the
+        anon key alone, the same key shipped to every browser.
+      </p>
+      <div class="evidence">GET /rest/v1/amc_submissions?select=... (anon key only)
+→ HTTP 206 · total rows visible: 10</div>
+      <p>
+        The rows expose the <code>customer</code> JSONB: name, phone, email and both
+        coordination contacts. The policy also permits <em>writes</em>, so records can be
+        altered or deleted by an unauthenticated caller.
+      </p>
+      <div class="f-meta">
+        <div><span class="k">Impact</span><span class="v">Customer PII disclosure, and unauthenticated modification of contract records.</span></div>
+        <div><span class="k">Fix</span><span class="v">Replace the blanket policy with <code>owner_id = auth.uid()</code>, or revoke the table from <code>anon</code> entirely and let the service-role API remain the only path.</span></div>
+      </div>
+    </article>
+
+    <article class="finding warn">
+      <div class="f-top">
+        <span class="f-id">F3</span><span class="pill warn">High</span>
+        <h3 class="f-title">The commercial monthly rate is required, then discarded</h3>
+      </div>
+      <p>
+        For commercial properties the schema refuses to advance without
+        <code>customMonthlyPrice</code> &gt; 0. That value is validated, mapped, persisted and
+        round-tripped &mdash; and never read by any pricing function. It appears in seven places;
+        none is a calculation.
+      </p>
+      <div class="evidence">amc-types.ts:61       validates it (required, commercial)
+amc-submission-mapper  stores + restores it
+package-services-step  renders the input
+amc-pricing.ts         ← never referenced</div>
+      <div class="f-meta">
+        <div><span class="k">Impact</span><span class="v">Commercial quotes ignore the only number the user was forced to supply.</span></div>
+        <div><span class="k">Fix</span><span class="v">Decide whether commercial pricing is rate-driven or line-driven, then wire the chosen input into <code>calculateAmcTotals</code>.</span></div>
+      </div>
+    </article>
+
+    <article class="finding warn">
+      <div class="f-top">
+        <span class="f-id">F4</span><span class="pill warn">High</span>
+        <h3 class="f-title">Package selection is decorative</h3>
+      </div>
+      <p>
+        The four residential packages advertise AED&nbsp;95 / 125 / 200 / 250 per month.
+        <code>monthlyPrice</code> is rendered in the package card and used nowhere else.
+        <code>calculateAmcTotals</code> sums service rows only, then <em>derives</em> a monthly
+        figure as <code>finalPrice / 12</code> &mdash; so the number shown on the card and the
+        number on the PDF are unrelated.
+      </p>
+      <p>
+        Picking a package does change <code>ppmVisitsPerYear</code> and
+        <code>handymanHoursPerYear</code>, which set default frequencies. That part works. The
+        headline price does not.
+      </p>
+      <div class="f-meta">
+        <div><span class="k">Impact</span><span class="v">A customer told "Elite, AED 250/month" receives a document quoting a different figure.</span></div>
+        <div><span class="k">Fix</span><span class="v">Either treat the package price as the contract value, or drop it from the card so it stops implying a promise.</span></div>
+      </div>
+    </article>
+
+    <article class="finding warn">
+      <div class="f-top">
+        <span class="f-id">F5</span><span class="pill warn">Medium</span>
+        <h3 class="f-title">Access is a hardcoded email allowlist, not a role</h3>
+      </div>
+      <p>
+        Five addresses in <code>amc-constants.ts:310</code> decide who sees the module. The same
+        function gates the client nav and the API route, so at least the two agree &mdash; but the
+        list lives in a component file that ships to the browser, and changing who has access
+        means a code change, a review and a deploy.
+      </p>
+      <p>
+        Every other module in the app uses <code>role_access</code> with a
+        <code>ResourceType</code> and per-action permissions, administered from the Permissions
+        screen. AMC is the exception.
+      </p>
+      <div class="f-meta">
+        <div><span class="k">Impact</span><span class="v">Access changes need an engineer; the allowlist is visible in the client bundle; staff turnover leaves stale entries.</span></div>
+        <div><span class="k">Fix</span><span class="v">Add an <code>AMC</code> resource to the permission system and gate on it, matching the other modules.</span></div>
+      </div>
+    </article>
+
+    <article class="finding warn">
+      <div class="f-top">
+        <span class="f-id">F6</span><span class="pill warn">Medium</span>
+        <h3 class="f-title">Proposal numbers are random with no uniqueness check</h3>
+      </div>
+      <p>
+        <code>AMC-{year}-{random 1000–9999}</code>, generated in the browser, with no database
+        lookup and no unique constraint on the column. That is 9,000 values per year, so by the
+        birthday bound a collision becomes more likely than not at roughly
+        <strong>112 proposals in a year</strong>.
+      </p>
+      <div class="evidence">// amc-constants.ts:211
+const suffix = String(Math.floor(Math.random() * 9000) + 1000);
+return `AMC-${year}-${suffix}`;</div>
+      <p>
+        The number is the customer-facing reference and the PDF filename, so a collision means
+        two different contracts sharing an identifier.
+      </p>
+      <div class="f-meta">
+        <div><span class="k">Impact</span><span class="v">Duplicate contract references; overwritten downloads.</span></div>
+        <div><span class="k">Fix</span><span class="v">Allocate server-side from a sequence and add a unique constraint.</span></div>
+      </div>
+    </article>
+
+    <article class="finding low">
+      <div class="f-top">
+        <span class="f-id">F7</span><span class="pill low">Low</span>
+        <h3 class="f-title">Submissions can be created and edited, never deleted</h3>
+      </div>
+      <p>
+        The route exports <code>GET</code>, <code>POST</code> and <code>PUT</code>. There is no
+        <code>DELETE</code>, and the submissions list offers Edit and two View actions but no
+        remove. Nine of the ten live rows are abandoned drafts.
+      </p>
+      <div class="f-meta">
+        <div><span class="k">Impact</span><span class="v">The list accumulates test and abandoned drafts with no way to clear them.</span></div>
+        <div><span class="k">Fix</span><span class="v">Add a soft-delete (<code>archived_at</code>) and a row action, filtering archived rows from the default view.</span></div>
+      </div>
+    </article>
+
+    <article class="finding low">
+      <div class="f-top">
+        <span class="f-id">F8</span><span class="pill low">Low</span>
+        <h3 class="f-title">No delivery step &mdash; the PDF is a manual download</h3>
+      </div>
+      <p>
+        There is no email path in the module. The customer's address is collected and validated
+        at step 1, then only used to populate the document. Sending means downloading the file
+        and attaching it by hand, outside the system &mdash; so there is no record of what was sent
+        or when.
+      </p>
+      <p>
+        Worth noting the codebase already has the pieces: the quotation module sends via Resend,
+        and <code>lib/server/send-email.ts</code> landed recently on this branch.
+      </p>
+      <div class="f-meta">
+        <div><span class="k">Impact</span><span class="v">No audit trail of customer delivery; the recorded status says "generated", never "sent".</span></div>
+        <div><span class="k">Fix</span><span class="v">Add a send action reusing the existing mail helper, and record <code>sent_at</code>.</span></div>
+      </div>
+    </article>
+  </section>
+
+  <section>
+    <p class="sec-label">Credit where due</p>
+    <h2>What holds up well</h2>
+    <div class="works">
+      <ul class="tight">
+        <li><strong>Separation of concerns is genuinely good.</strong> Pricing, constants, types,
+            mapping and PDF rendering are separate modules with no circular dependencies. The
+            zero-rate bug is a one-line fix precisely because of this.</li>
+        <li><strong>The autosave queue is carefully built.</strong> Saves are chained through a
+            promise queue with a reference count, and status is deliberately not reset when a
+            user steps backwards &mdash; with a comment explaining why. That is a real bug someone
+            found and fixed properly.</li>
+        <li><strong>Validation is thorough.</strong> Cross-field rules via <code>superRefine</code>
+            cover end-before-start dates, at-least-one-service, and category-conditional
+            requirements, with step-scoped triggers so users aren't shown errors for fields
+            they haven't reached.</li>
+        <li><strong>The PDF pagination is the sophisticated part.</strong> It measures the rendered
+            layout, then computes slice offsets so breaks fall between scope sections instead of
+            mid-table.</li>
+        <li><strong>The UI matches the rest of the app</strong> &mdash; Card, Table, EmptyState,
+            Skeleton, StatusBadge and DropdownMenu row actions, consistent with the other
+            extensions.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <p class="sec-label">Sequencing</p>
+    <h2>Suggested order of work</h2>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>#</th><th>Action</th><th>Why first</th><th>Size</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="num">1</td>
+            <td>Close the RLS policy on <code>amc_submissions</code></td>
+            <td>Live PII exposure; independent of every other fix</td>
+            <td class="num">~1 h</td>
+          </tr>
+          <tr>
+            <td class="num">2</td>
+            <td>Populate the 12 unit rates</td>
+            <td>Unblocks the module's core purpose</td>
+            <td class="num">Pricing sheet + ~1 h</td>
+          </tr>
+          <tr>
+            <td class="num">3</td>
+            <td>Decide the commercial and package pricing model, then wire it</td>
+            <td>F3 and F4 are the same decision; rates alone won't fix them</td>
+            <td class="num">~half day</td>
+          </tr>
+          <tr>
+            <td class="num">4</td>
+            <td>Guard generation against zero-priced lines</td>
+            <td>Stops this class of bug reaching a customer again</td>
+            <td class="num">~1 h</td>
+          </tr>
+          <tr>
+            <td class="num">5</td>
+            <td>Server-allocated proposal numbers + unique constraint</td>
+            <td>Cheap now, painful to retrofit after volume</td>
+            <td class="num">~2 h</td>
+          </tr>
+          <tr>
+            <td class="num">6</td>
+            <td>Move access onto <code>role_access</code></td>
+            <td>Removes engineering from the access path</td>
+            <td class="num">~half day</td>
+          </tr>
+          <tr>
+            <td class="num">7</td>
+            <td>Soft-delete, then email delivery</td>
+            <td>Quality of life; needs the rest to be trustworthy first</td>
+            <td class="num">~1 day</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="note">
+      One open question I couldn't answer from the code: should an AMC be priced from the
+      package (a flat monthly fee, services defining scope rather than cost), or from the
+      service lines (rates &times; frequency, package as a preset)? The module currently
+      implements the second and displays the first. Both F3 and F4 collapse into a single
+      change once that's settled.
+    </p>
+  </section>
+
+  <section>
+    <p class="sec-label">Reference</p>
+    <h2>Where things live</h2>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Path</th><th>Role</th><th>LOC</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>amc/index.tsx</code></td><td>Wizard orchestration, autosave, generation</td><td class="num">523</td></tr>
+          <tr><td><code>amc/amc-constants.ts</code></td><td>Packages, services, defaults, access list</td><td class="num">321</td></tr>
+          <tr><td><code>amc/amc-pricing.ts</code></td><td>Totals, VAT, frequency rows</td><td class="num">223</td></tr>
+          <tr><td><code>amc/amc-types.ts</code></td><td>Zod schemas and domain types</td><td class="num">232</td></tr>
+          <tr><td><code>amc/templates/AmcContractBody.tsx</code></td><td>Contract document body</td><td class="num">581</td></tr>
+          <tr><td><code>amc/templates/AmcProposalBody.tsx</code></td><td>Proposal document body</td><td class="num">503</td></tr>
+          <tr><td><code>amc/amc-pdf-utils.tsx</code></td><td>html2canvas &rarr; jsPDF pipeline</td><td class="num">185</td></tr>
+          <tr><td><code>amc/submissions-list.tsx</code></td><td>Saved submissions table</td><td class="num">383</td></tr>
+          <tr><td><code>app/api/amc-submissions/route.ts</code></td><td>GET / POST / PUT</td><td class="num">248</td></tr>
+          <tr><td><code>migrations/20260721120000_…sql</code></td><td><code>amc_submissions</code> table + RLS</td><td class="num">34</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    Findings F1, F2 and the production figures were verified against the live database at the
+    time of writing; the rest are from static reading of the code at commit 9dd4d5a. Severity
+    reflects customer-facing consequence, not effort to fix.
+  </footer>
+</div>

@@ -59,6 +59,40 @@ export function YallaClassicTemplate({
       .map((s) => s.trim())
       .filter(Boolean)
     : null;
+  /*
+    Scope of work, in the three shapes the team's quotation uses.
+
+    Their document opens with a sentence naming what is being inspected,
+    groups the work under trade headings — "Mechanical, electrical and
+    plumbing", "Carpentry", "Civil and structural" — and closes on a note
+    about de-snagging. So a line is one of three things, decided by how it
+    is written in the admin field:
+
+      bullet   a line starting "-", "•" or "*"
+      heading  a short line with no bullet and no sentence punctuation
+      text     anything else — the opening sentence, the closing note
+
+    Getting that third case wrong is what makes a scope read badly: an
+    opening sentence rendered as a bullet looks like the first item of a
+    list it is actually introducing.
+  */
+  const scopeLines = data.scopeOfWork
+    ? data.scopeOfWork
+        .split(/\r?\n/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((raw) => {
+          const bulleted = /^[-•*]\s+/.test(raw);
+          const text = raw.replace(/^[-•*]\s+/, "");
+          const kind: "bullet" | "heading" | "text" = bulleted
+            ? "bullet"
+            : text.length < 60 && !/[.;:!?]$/.test(text)
+              ? "heading"
+              : "text";
+          return { text, kind };
+        })
+    : null;
+
   const isRevision =
     typeof data.quotationType === "string" &&
     data.quotationType.trim().toLowerCase() === "revision";
@@ -144,7 +178,7 @@ export function YallaClassicTemplate({
           {data.customerContact && <div style={{ marginTop: "2px" }}>{data.customerContact}</div>}
           {data.customerPhone && <div style={{}}>{data.customerPhone}</div>}
           {data.customerEmail && <div style={{}}>{data.customerEmail}</div>}
-          {data.customerId && <div style={{}}>{data.customerId}</div>}
+          {/* {data.customerId && <div style={{}}>{data.customerId}</div>} */}
         </div>
 
         {data.serviceAddress && (
@@ -320,6 +354,47 @@ export function YallaClassicTemplate({
           </div>
         </div>
       </div>
+
+      {/*
+        ── Scope of work ──
+
+        What the client is actually buying. On the team's own quotation this
+        sits inside the priced line as a bulleted list under three headings;
+        here it is its own block directly beneath the totals, which keeps the
+        line table readable while printing the same words in the same order.
+
+        Rendered only when the admin panel has something to print, so a
+        template used elsewhere in the product is unaffected.
+      */}
+      {scopeLines && scopeLines.length > 0 ? (
+        <div id="scope-block" style={{ paddingTop: "32px" }}>
+          <div
+            style={{
+              fontWeight: 700,
+              fontSize: "11px",
+              textTransform: "uppercase",
+              marginBottom: "10px",
+            }}
+          >
+            Scope of Work
+          </div>
+          {scopeLines.map((line, i) => (
+            <div
+              key={i}
+              style={{
+                fontSize: line.kind === "heading" ? "10px" : "9px",
+                fontWeight: line.kind === "heading" ? 700 : 400,
+                color: line.kind === "bullet" ? "#334155" : "#1e293b",
+                marginTop: line.kind === "heading" && i > 0 ? "8px" : "0px",
+                marginBottom: "4px",
+                paddingLeft: line.kind === "bullet" ? "10px" : "0px",
+              }}
+            >
+              {line.kind === "bullet" ? `• ${line.text}` : line.text}
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       {/* ── Terms ── */}
       <div id="terms-block" style={{ paddingTop: "40px" }}>

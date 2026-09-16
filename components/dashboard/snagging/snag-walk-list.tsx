@@ -13,6 +13,13 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -22,15 +29,21 @@ import {
 import { EmptyState } from "@/components/ui/empty-state";
 import { cn } from "@/lib/utils";
 import { coverPhoto, splitEvidence } from "@/lib/snagging/evidence";
+import { EvidenceThumbnail, EvidenceViewer } from "./evidence-media";
 
 import { SnagHistory } from "./snag-history";
 import type {
   SnaggingFloorPlan,
   SnaggingPhoto,
+  SnaggingSeverity,
   SnaggingTask,
 } from "@/types/types";
 
 import {
+  AccessIndex,
+  AccessStateBadge,
+  ListPager,
+  PillTabs,
   SectionCard,
   SeverityBadge,
   SnagIndex,
@@ -78,9 +91,12 @@ function describeWalk(
   failedChecks: number,
 ): string {
   const plural = (n: number) => (n === 1 ? "snag" : "snags");
-  if (round <= 1) return `${snags.length} ${plural(snags.length)} captured on this walk`;
+  if (round <= 1)
+    return `${snags.length} ${plural(snags.length)} captured on this walk`;
 
-  const found = snags.filter((snag) => (snag.round_created ?? 1) === round).length;
+  const found = snags.filter(
+    (snag) => (snag.round_created ?? 1) === round,
+  ).length;
   const carried = snags.length - found;
   const parts = [`${carried} carried in to re-check`];
   if (found > 0) parts.push(`${found} found on this round`);
@@ -90,18 +106,84 @@ function describeWalk(
     round reading as "snags only" and the failed checks going unnoticed.
   */
   if (failedChecks > 0) {
-    parts.push(`${failedChecks} failed ${failedChecks === 1 ? "check" : "checks"}`);
+    parts.push(
+      `${failedChecks} failed ${failedChecks === 1 ? "check" : "checks"}`,
+    );
   }
   return parts.join(" · ");
 }
 
+type SeverityFilter = "all" | SnaggingSeverity;
+type SortMode = "newest" | "oldest";
+
 export function SnagWalkList({ task }: { task: SnaggingTask }) {
   const [preview, setPreview] = useState<SnaggingPhoto | null>(null);
   const [detail, setDetail] = useState<Snag | null>(null);
+  const [severity, setSeverity] = useState<SeverityFilter>("all");
+  const [sort, setSort] = useState<SortMode>("newest");
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
 
-  const snags = useMemo(() => task.snags ?? [], [task]);
+  const all = useMemo(() => task.snags ?? [], [task]);
+
+  /*
+    On an additional visit the list carries the original inspection's
+    defects as context. They are split out rather than mixed in: one set
+    is what this visit found, the other is what was already known, and
+    running them together would have the visit appear to have captured
+    defects it never touched.
+  */
+  const snags = useMemo(() => all.filter((s) => !s.from_earlier_visit), [all]);
+  const earlier = useMemo(() => all.filter((s) => s.from_earlier_visit), [all]);
   const plans = useMemo(() => task.floor_plans ?? [], [task]);
   const areas = task.areas ?? [];
+
+  /*
+    Filter, order, then cut to a page.
+
+    A full inspection can carry a hundred defects, and every row mounts a
+    plan pin and up to two photo thumbnails -- rendering the lot was the
+    slowest thing on the job page and left a reviewer scrolling for the
+    one defect they came to check. Severity is the question actually
+    asked of this list ("show me the high ones"), so it is pills rather
+    than a menu; the counts are of the whole walk, not the page.
+  */
+  const counts = useMemo(() => {
+    const tally = { all: snags.length, high: 0, medium: 0, low: 0 };
+    for (const snag of snags) tally[snag.severity] += 1;
+    return tally;
+  }, [snags]);
+
+  const visible = useMemo(() => {
+    const filtered =
+      severity === "all"
+        ? snags
+        : snags.filter((snag) => snag.severity === severity);
+
+    // Sorted here rather than trusted from the API: the walk arrives with
+    // the task and nothing downstream guarantees its order.
+    return [...filtered].sort((a, b) => {
+      const left = new Date(a.created_at ?? 0).getTime();
+      const right = new Date(b.created_at ?? 0).getTime();
+      return sort === "newest" ? right - left : left - right;
+    });
+  }, [snags, severity, sort]);
+
+  // A page that no longer exists (the filter shrank the list under it)
+  // would render empty with no way back, so it clamps.
+  const pageCount = Math.max(1, Math.ceil(visible.length / pageSize));
+  const safePage = Math.min(page, pageCount - 1);
+  const pageRows = visible.slice(
+    safePage * pageSize,
+    (safePage + 1) * pageSize,
+  );
+
+  const severityTabs = [
+    { value: "all" as const, label: "All", count: counts.all },
+    { value: "high" as const, label: "High", count: counts.high },
+    { value: "medium" as const, label: "Medium", count: counts.medium },
+    { value: "low" as const, label: "Low", count: counts.low },
+  ];
   // Rooms the inspector could not fully reach (R1-R6/J3). Surfaced so a
   // coordinator sees why an area carries no snags — a locked door, not a
   // clean pass — before approving.
@@ -119,29 +201,28 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
         >
           <ul>
             {accessIssues.map((area) => (
+              /*
+                Laid out like the snag rows below: a fixed-width marker, the
+                name and its detail, then the badge at the row end. The badge
+                used to lead the row, and because "No access" and "Limited
+                access" are different widths, every area name started at a
+                different place.
+              */
               <li
                 key={area.id}
-                className="flex flex-wrap items-start gap-3 border-b px-5 py-3 last:border-b-0"
+                className="flex flex-wrap items-start gap-3 border-b px-5 py-4 last:border-b-0"
               >
-                <span
-                  className={cn(
-                    "mt-0.5 rounded-md px-2 py-0.5 text-xs font-medium",
-                    area.access_state === "not_accessible"
-                      ? "bg-destructive/10 text-destructive"
-                      : "bg-warning/10 text-warning",
-                  )}
-                >
-                  {area.access_state === "not_accessible"
-                    ? "No access"
-                    : "Limited access"}
-                </span>
+                <AccessIndex state={area.access_state!} />
+
                 <div className="min-w-48 flex-1">
                   <p className="font-medium">{area.name}</p>
-                  {area.access_reason ? (
-                    <p className="text-muted-foreground mt-0.5 text-sm">
-                      {area.access_reason}
-                    </p>
-                  ) : null}
+                  <p className="text-muted-foreground mt-0.5 text-sm">
+                    {area.access_reason || "No reason given."}
+                  </p>
+                </div>
+
+                <div className="ml-auto flex flex-wrap items-center gap-2">
+                  <AccessStateBadge state={area.access_state!} />
                 </div>
               </li>
             ))}
@@ -168,191 +249,276 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
             description="Every area on this inspection was walked and signed off clear."
           />
         ) : (
-          <ul>
-            {snags.map((snag, index) => {
-              const photoCount = snag.photos?.length ?? 0;
-              const evidence = splitEvidence(snag.photos, task.round_number ?? 1);
-              // On a round this is the newest AFTER shot: the current state
-              // of the defect is what a reviewer scanning the list wants.
-              const cover = coverPhoto(evidence);
-              const isRound = (task.round_number ?? 1) > 1;
-              const beforeShot = evidence.before.filter((p) => p.signed_url).at(-1) ?? null;
-              const afterShot = evidence.after.filter((p) => p.signed_url).at(-1) ?? null;
-              const pinned =
-                snag.pin_x !== null &&
-                snag.pin_x !== undefined &&
-                snag.pin_y !== null &&
-                snag.pin_y !== undefined;
-              return (
-                <li
-                  key={snag.id}
-                  className="flex flex-wrap items-start gap-3 border-b px-5 py-4 last:border-b-0"
+          <>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-3">
+              <PillTabs
+                tabs={severityTabs}
+                value={severity}
+                onChange={(next) => {
+                  setSeverity(next);
+                  setPage(0);
+                }}
+              />
+              <div className="ml-auto flex items-center gap-1.5">
+                {/* <span className="text-muted-foreground text-xs">Sort</span> */}
+                <Select
+                  value={sort}
+                  onValueChange={(value) => {
+                    setSort(value as SortMode);
+                    setPage(0);
+                  }}
                 >
-                  <SnagIndex index={index + 1} severity={snag.severity} />
+                  <SelectTrigger
+                    size="sm"
+                    className="w-[130px]"
+                    aria-label="Sort snags"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="newest">Newest first</SelectItem>
+                    <SelectItem value="oldest">Oldest first</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
 
-                  <div className="min-w-48 flex-1">
-                    <button
-                      type="button"
-                      onClick={() => setDetail(snag)}
-                      className="hover:text-primary text-left font-medium hover:underline"
+            {pageRows.length === 0 ? (
+              <EmptyState
+                icon={<CheckCircle2 className="size-6" />}
+                title="No snags at this severity"
+                description="Nothing on this walk was recorded at that level. Choose All to see every defect."
+              />
+            ) : (
+              <ul>
+                {pageRows.map((snag, index) => {
+                  const photoCount = snag.photos?.length ?? 0;
+                  const evidence = splitEvidence(
+                    snag.photos,
+                    task.round_number ?? 1,
+                  );
+                  // On a round this is the newest AFTER shot: the current state
+                  // of the defect is what a reviewer scanning the list wants.
+                  const cover = coverPhoto(evidence);
+                  const isRound = (task.round_number ?? 1) > 1;
+                  const beforeShot =
+                    evidence.before.filter((p) => p.signed_url).at(-1) ?? null;
+                  const afterShot =
+                    evidence.after.filter((p) => p.signed_url).at(-1) ?? null;
+                  const pinned =
+                    snag.pin_x !== null &&
+                    snag.pin_x !== undefined &&
+                    snag.pin_y !== null &&
+                    snag.pin_y !== undefined;
+                  return (
+                    <li
+                      key={snag.id}
+                      className="flex flex-wrap items-start gap-3 border-b px-5 py-4 last:border-b-0"
                     >
-                      {[
-                        snag.area?.name ?? snag.area_label,
-                        snag.element_label,
-                        snag.defect_label,
-                      ]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </button>
-                    <p className="text-muted-foreground mt-0.5 flex flex-wrap items-center gap-x-2 text-xs">
-                      <span className="font-mono">{snag.snag_code}</span>
-                      {snag.catalogue_code ? (
-                        <span>· {snag.catalogue_code}</span>
-                      ) : null}
-                      {snag.created_at ? (
-                        <span>· {formatGstDateTime(snag.created_at)}</span>
-                      ) : null}
-                      {/*
+                      {/* Numbered by position in the whole filtered walk, so a
+                      snag keeps its number across page turns. */}
+                      <SnagIndex
+                        index={safePage * pageSize + index + 1}
+                        severity={snag.severity}
+                      />
+
+                      <div className="min-w-48 flex-1">
+                        <button
+                          type="button"
+                          onClick={() => setDetail(snag)}
+                          className="hover:text-primary text-left font-medium hover:underline"
+                        >
+                          {[
+                            snag.area?.name ?? snag.area_label,
+                            snag.category_label,
+                            snag.element_label,
+                            snag.defect_label,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </button>
+                        <p className="text-muted-foreground mt-0.5 flex flex-wrap items-center gap-x-2 text-xs">
+                          {snag.created_at ? (
+                            <span>{formatGstDateTime(snag.created_at)}</span>
+                          ) : null}
+                          {/*
                         FR-6.03 — a round mixes two kinds of defect: the
                         ones it was opened to re-check, and anything the
                         inspector found while they were there. Reading a
                         round's list without that distinction turns eleven
                         re-checks and one new find into twelve new defects.
                       */}
-                      {(snag.round_created ?? 1) === (task.round_number ?? 1) &&
-                      (task.round_number ?? 1) > 1 ? (
-                        <span className="text-brand font-medium">· New this round</span>
-                      ) : (snag.round_created ?? 1) > 1 ? (
-                        <span>· Found on round {snag.round_created}</span>
-                      ) : null}
-                      <span>
-                        · {photoCount} {photoCount === 1 ? "photo" : "photos"}
-                      </span>
-                    </p>
-                    {snag.note ? (
-                      <p className="text-muted-foreground mt-1 text-sm">
-                        {snag.note}
-                      </p>
-                    ) : null}
+                          {(snag.round_created ?? 1) ===
+                            (task.round_number ?? 1) &&
+                            (task.round_number ?? 1) > 1 ? (
+                            <span className="text-brand font-medium">
+                              · New this round
+                            </span>
+                          ) : (snag.round_created ?? 1) > 1 ? (
+                            <span>· Found on round {snag.round_created}</span>
+                          ) : null}
+                          <span>
+                            · {photoCount}{" "}
+                            {photoCount === 1 ? "photo" : "photos"}
+                          </span>
+                        </p>
+                        {snag.note ? (
+                          <p className="text-muted-foreground mt-1 text-sm">
+                            {snag.note}
+                          </p>
+                        ) : null}
 
-                    {/*
+                        {/*
                     One thumbnail, not all of them. Rendering every photo
                     inline minted a signed URL per image and loaded
                     hundreds on a busy job before the reviewer had
                     scrolled; the rest open with the snag.
                   */}
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      {/* The pin, in the list itself — a reviewer walking
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          {/* The pin, in the list itself — a reviewer walking
                         the snags can see where each defect is without
                         opening every one. */}
-                      {pinned ? (
-                        <button
-                          type="button"
-                          onClick={() => setDetail(snag)}
-                          className="focus-visible:ring-ring shrink-0 rounded-md focus-visible:ring-2 focus-visible:outline-none"
-                          aria-label={`Show ${snag.snag_code} on the plan`}
-                        >
-                          <SnagPlanPin snag={snag} plans={plans} compact />
-                        </button>
-                      ) : null}
-                      {/*
+                          {pinned ? (
+                            <button
+                              type="button"
+                              onClick={() => setDetail(snag)}
+                              className="focus-visible:ring-ring shrink-0 rounded-md focus-visible:ring-2 focus-visible:outline-none"
+                              aria-label={`Show ${snag.defect_label ?? "this snag"} on the plan`}
+                            >
+                              <SnagPlanPin snag={snag} plans={plans} compact />
+                            </button>
+                          ) : null}
+                          {/*
                         On a round the pair IS the record: the defect as it
                         was raised, and the state the inspector found it in.
                         Showing one thumbnail meant a reviewer had to open
                         every snag to see whether anything had changed.
                       */}
-                      {isRound ? (
-                        <div className="flex items-center gap-2">
-                          <EvidenceThumb
-                            label="Before"
-                            photo={beforeShot}
-                            snagCode={snag.snag_code}
-                            onOpen={setPreview}
-                          />
-                          <ArrowRight
-                            className="text-muted-foreground/50 size-3.5 shrink-0"
-                            aria-hidden
-                          />
-                          <EvidenceThumb
-                            label="After"
-                            photo={afterShot}
-                            snagCode={snag.snag_code}
-                            onOpen={setPreview}
-                          />
-                          {photoCount > 2 ? (
-                            <button
-                              type="button"
-                              onClick={() => setDetail(snag)}
-                              className="text-muted-foreground hover:text-foreground text-xs hover:underline"
-                            >
-                              +{photoCount - 2} more
-                            </button>
+                          {isRound ? (
+                            <div className="flex items-center gap-2">
+                              <EvidenceThumb
+                                label="Before"
+                                photo={beforeShot}
+                                snagLabel={snag.defect_label ?? "this snag"}
+                                onOpen={setPreview}
+                              />
+                              <ArrowRight
+                                className="text-muted-foreground/50 size-3.5 shrink-0"
+                                aria-hidden
+                              />
+                              <EvidenceThumb
+                                label="After"
+                                photo={afterShot}
+                                snagLabel={snag.defect_label ?? "this snag"}
+                                onOpen={setPreview}
+                              />
+                              {photoCount > 2 ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setDetail(snag)}
+                                  className="text-muted-foreground hover:text-foreground text-xs hover:underline"
+                                >
+                                  +{photoCount - 2} more
+                                </button>
+                              ) : null}
+                            </div>
+                          ) : cover ? (
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setPreview(cover)}
+                                className="focus-visible:ring-ring relative size-12 shrink-0 overflow-hidden rounded-md border focus-visible:ring-2 focus-visible:outline-none"
+                                aria-label={`Photo evidence for ${snag.defect_label ?? "this snag"}`}
+                              >
+                                <EvidenceThumbnail photo={cover} />
+                              </button>
+                              {photoCount > 1 ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setDetail(snag)}
+                                  className="text-muted-foreground hover:text-foreground text-xs hover:underline"
+                                >
+                                  +{photoCount - 1} more
+                                </button>
+                              ) : null}
+                            </div>
                           ) : null}
                         </div>
-                      ) : cover ? (
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setPreview(cover)}
-                            className="focus-visible:ring-ring relative size-12 shrink-0 overflow-hidden rounded-md border focus-visible:ring-2 focus-visible:outline-none"
-                            aria-label={`Photo evidence for ${snag.snag_code}`}
-                          >
-                            <Image
-                              src={cover.signed_url as string}
-                              alt=""
-                              fill
-                              unoptimized
-                              sizes="48px"
-                              className="object-cover"
-                            />
-                          </button>
-                          {photoCount > 1 ? (
-                            <button
-                              type="button"
-                              onClick={() => setDetail(snag)}
-                              className="text-muted-foreground hover:text-foreground text-xs hover:underline"
-                            >
-                              +{photoCount - 1} more
-                            </button>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
+                      </div>
 
-                  <div className="flex items-center gap-2">
-                    {pinned ? (
-                      <span
-                        className="text-muted-foreground inline-flex items-center gap-1 text-xs"
-                        title={`Pinned at ${Math.round(Number(snag.pin_x) * 100)}%, ${Math.round(
-                          Number(snag.pin_y) * 100,
-                        )}% on the plan`}
-                      >
-                        <MapPin className="size-3.5" aria-hidden />
-                        On plan
-                      </span>
-                    ) : (
-                      <span className="text-muted-foreground/70 text-xs">
-                        Not pinned
-                      </span>
-                    )}
-                    <SeverityBadge severity={snag.severity} />
-                    <SnagStatusBadge status={snag.status} />
-                    {photoCount === 0 ? (
-                      <Badge
-                        variant="secondary"
-                        className="bg-warning/10 text-warning border-0"
-                      >
-                        No photo
-                      </Badge>
-                    ) : null}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
+                      <div className="flex items-center gap-2">
+                        {pinned ? (
+                          <span
+                            className="text-muted-foreground inline-flex items-center gap-1 text-xs"
+                            title={`Pinned at ${Math.round(Number(snag.pin_x) * 100)}%, ${Math.round(
+                              Number(snag.pin_y) * 100,
+                            )}% on the plan`}
+                          >
+                            <MapPin className="size-3.5" aria-hidden />
+                            On plan
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground/70 text-xs">
+                            Not pinned
+                          </span>
+                        )}
+                        <SeverityBadge severity={snag.severity} />
+                        <SnagStatusBadge status={snag.status} />
+                        {photoCount === 0 ? (
+                          <Badge
+                            variant="secondary"
+                            className="bg-warning/10 text-warning border-0"
+                          >
+                            No photo
+                          </Badge>
+                        ) : null}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+
+            <ListPager
+              page={safePage}
+              pageSize={pageSize}
+              total={visible.length}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+              noun="snags"
+              className="border-t"
+            />
+          </>
         )}
       </SectionCard>
+
+      {/*
+        Read-only context on an additional visit. Deliberately below the
+        visit's own list and visually quieter: it is there to tell the
+        inspector what has already been seen, not to be worked through.
+      */}
+      {earlier.length > 0 ? (
+        <SectionCard
+          title="Already on record"
+          icon={<ListChecks />}
+          description={`${earlier.length} defect${earlier.length === 1 ? "" : "s"} from the original inspection. Shown for context. They stay on the original and are not re-counted here.`}
+          bodyClassName="border-t"
+        >
+          <ul className="divide-y">
+            {earlier.map((snag) => (
+              <li key={snag.id} className="flex flex-wrap items-center gap-3 px-5 py-3 text-sm">
+                <span className="min-w-0 flex-1">
+                  {[snag.area?.name ?? snag.area_label, snag.element_label, snag.defect_label]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </span>
+                <SeverityBadge severity={snag.severity} />
+                <SnagStatusBadge status={snag.status} />
+              </li>
+            ))}
+          </ul>
+        </SectionCard>
+      ) : null}
 
       <Dialog
         open={Boolean(preview)}
@@ -369,14 +535,9 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
             </DialogDescription>
           </DialogHeader>
           {preview?.signed_url ? (
-            <Image
-              src={preview.signed_url}
-              alt="Snag evidence"
-              width={1280}
-              height={960}
-              unoptimized
-              className="h-auto w-full rounded-md object-contain"
-            />
+            // A clip plays; a still renders. next/image cannot decode a
+            // video, so every video opened here used to be a broken frame.
+            <MarkedEvidence photo={preview} />
           ) : (
             <div className="text-muted-foreground flex h-64 items-center justify-center">
               <ImageOff className="mr-2 size-5" /> This photo is no longer
@@ -414,14 +575,18 @@ function SnagDetailDialog({
   onOpenPhoto: (photo: SnaggingPhoto) => void;
 }) {
   const evidence = splitEvidence(snag?.photos, visitRound);
-  const photos = [...evidence.before, ...evidence.after].filter((p) => p.signed_url);
+  const photos = [...evidence.before, ...evidence.after].filter(
+    (p) => p.signed_url,
+  );
   return (
     <Dialog open={Boolean(snag)} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[88vh] overflow-x-hidden overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{snag?.defect_label ?? "Snag"}</DialogTitle>
           <DialogDescription>
-            <span className="font-mono text-xs">{snag?.snag_code}</span>
+            {[snag?.area?.name ?? snag?.area_label, snag?.element_label]
+              .filter(Boolean)
+              .join(" · ") || "Snag detail"}
           </DialogDescription>
         </DialogHeader>
 
@@ -429,7 +594,8 @@ function SnagDetailDialog({
           <div className="space-y-4 text-sm">
             <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
               <Detail label="Area" value={snag.area?.name ?? snag.area_label} />
-              <Detail label="Element" value={snag.element_label} />
+              <Detail label="Category" value={snag.category_label ?? "—"} />
+              <Detail label="Sub-category" value={snag.element_label} />
               <Detail label="Defect" value={snag.defect_label} />
               <Detail
                 label="Severity"
@@ -450,14 +616,6 @@ function SnagDetailDialog({
                 label="Captured"
                 value={formatGstDateTime(snag.created_at)}
               />
-              <Detail
-                label="Code"
-                value={
-                  <span className="font-mono text-xs">
-                    {snag.catalogue_code}
-                  </span>
-                }
-              />
             </dl>
 
             {/* Where the defect actually is, rather than a pair of
@@ -472,7 +630,9 @@ function SnagDetailDialog({
             {/* FR-8.05 — the whole journey, so a reviewer can see that
                 this is the third time the defect has come back. */}
             <div>
-              <p className="text-muted-foreground mb-2 text-xs">Status history</p>
+              <p className="text-muted-foreground mb-2 text-xs">
+                Status history
+              </p>
               <SnagHistory snagId={snag.id} />
             </div>
 
@@ -503,7 +663,16 @@ function SnagDetailDialog({
               <div className="grid gap-4 sm:grid-cols-2">
                 <EvidenceGroup
                   label="Before"
-                  hint="As the defect was raised"
+                  /*
+                    Accurate once a defect has been through more than one
+                    round: by round 3 this column is the whole history, not
+                    just the day the defect was raised.
+                  */
+                  hint={
+                    new Set(evidence.before.map((p) => p.round_number ?? 1)).size > 1
+                      ? "Every earlier round"
+                      : "As the defect was raised"
+                  }
                   photos={evidence.before}
                   onOpenPhoto={onOpenPhoto}
                   emptyHint="No photo carried from the earlier visit."
@@ -573,7 +742,7 @@ function SnagPlanPin({
     return (
       <p className="text-muted-foreground rounded-md border px-3 py-3 text-sm">
         Pinned at {Math.round(Number(x) * 100)}%, {Math.round(Number(y) * 100)}%
-        — the plan is not available to display.
+        . The plan is not available to display.
       </p>
     );
   }
@@ -634,12 +803,13 @@ function Detail({ label, value }: { label: string; value: React.ReactNode }) {
 function EvidenceThumb({
   label,
   photo,
-  snagCode,
+  snagLabel,
   onOpen,
 }: {
   label: string;
   photo: SnaggingPhoto | null;
-  snagCode: string;
+  /** Named for a screen reader; a code read aloud tells nobody anything. */
+  snagLabel: string;
   onOpen: (photo: SnaggingPhoto) => void;
 }) {
   return (
@@ -649,21 +819,14 @@ function EvidenceThumb({
           type="button"
           onClick={() => onOpen(photo)}
           className="focus-visible:ring-ring relative size-12 shrink-0 overflow-hidden rounded-md border focus-visible:ring-2 focus-visible:outline-none"
-          aria-label={`${label} photo for ${snagCode}`}
+          aria-label={`${label} photo for ${snagLabel}`}
         >
-          <Image
-            src={photo.signed_url as string}
-            alt=""
-            fill
-            unoptimized
-            sizes="48px"
-            className="object-cover"
-          />
+          <EvidenceThumbnail photo={photo} />
         </button>
       ) : (
         <span
           className="border-muted-foreground/25 text-muted-foreground/50 flex size-12 shrink-0 items-center justify-center rounded-md border border-dashed"
-          aria-label={`No ${label.toLowerCase()} photo for ${snagCode}`}
+          aria-label={`No ${label.toLowerCase()} photo for ${snagLabel}`}
         >
           <ImageOff className="size-4" aria-hidden />
         </span>
@@ -699,11 +862,25 @@ function EvidenceGroup({
   columns?: 3 | 4;
 }) {
   const usable = photos.filter((p) => p.signed_url);
+
+  /*
+    Which round each shot came from, once there is more than one answer.
+
+    By round 3 the "before" column holds the original capture AND round 2's
+    re-check, and side by side those are two photos of the same defect with
+    nothing to say which is which. The badge only appears when the group
+    actually spans rounds, so the common single-round case stays clean.
+  */
+  const rounds = new Set(usable.map((photo) => photo.round_number ?? 1));
+  const showRound = rounds.size > 1;
+
   return (
     <div>
       <p className="text-muted-foreground mb-1.5 text-xs">
         {label}
-        {hint ? <span className="text-muted-foreground/70"> · {hint}</span> : null}
+        {hint ? (
+          <span className="text-muted-foreground/70"> · {hint}</span>
+        ) : null}
       </p>
       {usable.length > 0 ? (
         <div
@@ -719,18 +896,10 @@ function EvidenceGroup({
               onClick={() => onOpenPhoto(photo)}
               className="focus-visible:ring-ring relative aspect-square overflow-hidden rounded-md border focus-visible:ring-2 focus-visible:outline-none"
             >
-              <Image
-                src={photo.signed_url as string}
-                alt=""
-                fill
-                unoptimized
-                sizes="120px"
-                className="object-cover"
-              />
-              {/* A clip and a still look identical as a poster frame. */}
-              {photo.media_type === "video" ? (
-                <span className="absolute right-1 bottom-1 rounded bg-black/65 px-1 py-0.5 text-[10px] leading-none font-medium text-white">
-                  Video
+              <EvidenceThumbnail photo={photo} />
+              {showRound ? (
+                <span className="bg-foreground/75 text-background absolute top-1 left-1 rounded px-1 py-0.5 text-[10px] leading-none font-medium tabular-nums">
+                  R{photo.round_number ?? 1}
                 </span>
               ) : null}
             </button>
@@ -741,6 +910,42 @@ function EvidenceGroup({
           {emptyHint}
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * FR-6.05 — the photo with the defect spot the inspector marked on it.
+ *
+ * `marker_x` / `marker_y` are stored as fractions of the image, not pixels,
+ * so the same pair lands correctly whatever the photo's dimensions or aspect
+ * ratio: the overlay is positioned in percentages over a wrapper that the
+ * image itself sizes. They were captured and stored but drawn nowhere, which
+ * left an approver reading "there is a defect in this wall" over a photo of
+ * a whole wall.
+ */
+function MarkedEvidence({ photo }: { photo: SnaggingPhoto }) {
+  const x = typeof photo.marker_x === "number" ? photo.marker_x : null;
+  const y = typeof photo.marker_y === "number" ? photo.marker_y : null;
+  // A marker outside the frame is corrupt data, not a spot worth drawing.
+  const placed =
+    x !== null && y !== null && x >= 0 && x <= 1 && y >= 0 && y <= 1;
+
+  if (!placed) return <EvidenceViewer photo={photo} />;
+
+  return (
+    <div className="relative">
+      <EvidenceViewer photo={photo} />
+      <span
+        className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2"
+        style={{ left: `${x! * 100}%`, top: `${y! * 100}%` }}
+        aria-hidden
+      >
+        <span className="border-danger bg-danger/25 block size-7 rounded-full border-2 shadow-[0_0_0_2px_rgba(255,255,255,0.85)]" />
+      </span>
+      <span className="bg-danger absolute top-2 left-2 rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white uppercase">
+        Marked defect
+      </span>
     </div>
   );
 }
@@ -773,10 +978,6 @@ function PhotoExif({ photo }: { photo: SnaggingPhoto }) {
   const iso = str("ISOSpeedRatings", "ISO", "iso");
   const dims =
     photo.width && photo.height ? `${photo.width} × ${photo.height}` : null;
-  const size =
-    photo.bytes && photo.bytes > 0
-      ? `${(photo.bytes / (1024 * 1024)).toFixed(1)} MB`
-      : null;
   const hasGps = photo.gps_lat != null && photo.gps_lng != null;
 
   const rows: Array<{ label: string; value: React.ReactNode }> = [];
@@ -791,7 +992,6 @@ function PhotoExif({ photo }: { photo: SnaggingPhoto }) {
     .join(" · ");
   if (shot) rows.push({ label: "Exposure", value: shot });
   if (dims) rows.push({ label: "Dimensions", value: dims });
-  if (size) rows.push({ label: "File size", value: size });
   if (software) rows.push({ label: "Software", value: software });
   rows.push({
     label: "Captured",
@@ -814,11 +1014,29 @@ function PhotoExif({ photo }: { photo: SnaggingPhoto }) {
     ),
   });
 
+  /*
+    Did the camera give us anything, or only what the upload knew?
+
+    Dimensions, file size and the upload timestamp exist for every photo, so
+    a panel built from those alone looks like EXIF while carrying none. An
+    approver judging evidence needs to be able to tell the difference.
+  */
+  const hasCameraData = Boolean(
+    camera || lens || shot || software || hasGps || (photo.exif && Object.keys(photo.exif).length > 0),
+  );
+
   return (
     <div className="bg-muted/40 rounded-md border p-4">
       <p className="text-muted-foreground mb-2 text-xs font-medium tracking-wide uppercase">
         Capture data (EXIF)
       </p>
+      {!hasCameraData ? (
+        <p className="text-muted-foreground mb-3 text-xs">
+          This photo carries no camera metadata. The device did not record
+          it, or it was stripped before upload. What follows is what the
+          upload itself knows.
+        </p>
+      ) : null}
       <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-3">
         {rows.map((row) => (
           <Detail key={row.label} label={row.label} value={row.value} />

@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Clock } from "lucide-react";
+import { AlertTriangle, Clock, DoorClosed } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { TASK_STATUS_LABELS } from "@/lib/snagging/status-labels";
@@ -20,6 +20,7 @@ export {
   SubHeading,
   SectionCard,
   PillTabs,
+  ListPager,
   timeAgo,
   type StatTone,
 } from "@/components/dashboard/shared/kaizen";
@@ -43,6 +44,7 @@ export {
 import type {
   SnaggingRejectionCategory,
   SnaggingSeverity,
+  SnaggingAreaAccessState,
   SnaggingSnagStatus,
   SnaggingTaskStatus,
 } from "@/types/types";
@@ -214,6 +216,63 @@ export function SnagStatusBadge({ status }: { status: SnaggingSnagStatus }) {
     <Badge variant="secondary" className={cn("border-0 font-medium", SNAG_STATUS_STYLES[status])}>
       {SNAG_STATUS_LABELS[status]}
     </Badge>
+  );
+}
+
+/**
+ * How reachable a room was on the day (R1-R6/J3).
+ *
+ * Lives here with the other status badges rather than as markup inside the
+ * walk list, so an access state is written the same way wherever it appears
+ * and picks up the module's tints -- the inline version used shadcn's
+ * `destructive` while every neighbouring badge used `danger`, so two reds
+ * sat in the same card.
+ *
+ * "accessible" has no badge: the card only lists the rooms that were a
+ * problem, and a green "Fine" among them would be noise.
+ */
+export const ACCESS_STATE_LABELS: Record<SnaggingAreaAccessState, string> = {
+  accessible: "Accessible",
+  limited_access: "Limited access",
+  not_accessible: "No access",
+};
+
+const ACCESS_STATE_STYLES: Record<SnaggingAreaAccessState, string> = {
+  accessible: "bg-success/10 text-success",
+  limited_access: "bg-warning/10 text-warning",
+  not_accessible: "bg-danger/10 text-danger",
+};
+
+export function AccessStateBadge({ state }: { state: SnaggingAreaAccessState }) {
+  return (
+    <Badge variant="secondary" className={cn("border-0 font-medium", ACCESS_STATE_STYLES[state])}>
+      {ACCESS_STATE_LABELS[state]}
+    </Badge>
+  );
+}
+
+/**
+ * The row marker for an area with an access problem, matching SnagIndex in
+ * size and shape so the two lists on the job page line up.
+ */
+export function AccessIndex({ state }: { state: SnaggingAreaAccessState }) {
+  const tone =
+    state === "not_accessible"
+      ? "bg-danger text-white"
+      : state === "limited_access"
+        ? "bg-warning text-white"
+        : "bg-ink/25 text-ink";
+
+  return (
+    <span
+      className={cn(
+        "inline-flex size-7 shrink-0 items-center justify-center rounded-full",
+        tone,
+      )}
+      aria-label={ACCESS_STATE_LABELS[state]}
+    >
+      <DoorClosed className="size-3.5" aria-hidden />
+    </span>
   );
 }
 

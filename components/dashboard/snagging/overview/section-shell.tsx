@@ -28,6 +28,7 @@ export function SectionShell({
   isEmpty,
   empty,
   skeleton,
+  footer,
   muted,
   centerBody,
   className,
@@ -45,6 +46,15 @@ export function SectionShell({
   empty?: React.ReactNode;
   /** Shaped like the content it stands in for, so nothing reflows. */
   skeleton: React.ReactNode;
+  /**
+   * The "View all" link at the foot of a list card.
+   *
+   * A slot rather than the last child of `children`, because `children` is
+   * only rendered in the loaded state -- a card whose list happened to be
+   * empty lost its footer, so two cards side by side had one link between
+   * them.
+   */
+  footer?: React.ReactNode;
   /** Below-the-fold analytics: a quieter header so it does not compete. */
   muted?: boolean;
   /**
@@ -57,9 +67,21 @@ export function SectionShell({
    */
   centerBody?: boolean;
   className?: string;
+  /** Applied to the loaded content only, not to the skeleton or error. */
   bodyClassName?: string;
   children: React.ReactNode;
 }) {
+  /*
+    A footer has to sit on the floor of the card, not under the last row.
+
+    These cards are `h-full` in a grid row, so one is routinely taller
+    than its own content -- and a "View all" that stops where the list
+    stops left a band of white space beneath it, reading as the end of
+    nothing. Stretching the content region instead pushes the footer down
+    to the border, which is where the eye goes looking for it.
+  */
+  const stretch = Boolean(footer) && !error;
+
   return (
     <SectionCard
       title={title}
@@ -68,20 +90,33 @@ export function SectionShell({
       action={error ? null : action}
       className={cn("h-full", muted && "bg-muted/20", className)}
       bodyClassName={cn(
-        "px-5 pb-5",
         centerBody && "flex flex-1 flex-col justify-center",
-        bodyClassName,
+        stretch && "flex flex-1 flex-col",
       )}
     >
+      {/*
+        The inset sits on each state rather than on the card body. A section
+        whose rows pad themselves passes bodyClassName="px-0 pb-0"; when that
+        lived on the body it also un-padded the skeleton and the error, and
+        both render flush to the card border with nothing to inset them.
+      */}
       {error ? (
-        <InlineError message={error} onRetry={onRetry} />
+        <div className="px-5 pb-5">
+          <InlineError message={error} onRetry={onRetry} />
+        </div>
       ) : loading ? (
-        skeleton
+        <div className={cn("px-5 pb-5", stretch && "flex-1")}>{skeleton}</div>
       ) : isEmpty ? (
-        empty
+        <div className={cn("px-5 pb-5", stretch && "flex-1")}>{empty}</div>
       ) : (
-        children
+        <div className={cn("px-5 pb-5", stretch && "flex-1", bodyClassName)}>
+          {children}
+        </div>
       )}
+
+      {footer && !error ? (
+        <div className="border-t px-5 py-3">{footer}</div>
+      ) : null}
     </SectionCard>
   );
 }
@@ -93,11 +128,20 @@ export function SectionShell({
  * an incident, and a full-width red panel would make the page look
  * broken when seven eighths of it is fine.
  */
-export function InlineError({ message, onRetry }: { message: string; onRetry: () => void }) {
+export function InlineError({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry: () => void;
+}) {
   return (
     <div className="border-border/70 flex flex-col items-start gap-3 rounded-lg border border-dashed p-4">
       <div className="flex items-start gap-2.5">
-        <AlertTriangle className="text-warning mt-0.5 size-4 shrink-0" aria-hidden />
+        <AlertTriangle
+          className="text-warning mt-0.5 size-4 shrink-0"
+          aria-hidden
+        />
         <div>
           <p className="text-sm font-medium">Couldn&apos;t load this section</p>
           <p className="text-muted-foreground mt-0.5 text-sm">{message}</p>
@@ -112,7 +156,13 @@ export function InlineError({ message, onRetry }: { message: string; onRetry: ()
 }
 
 /** Stacked lines, for a list or a stat column. */
-export function LinesSkeleton({ rows = 4, className }: { rows?: number; className?: string }) {
+export function LinesSkeleton({
+  rows = 4,
+  className,
+}: {
+  rows?: number;
+  className?: string;
+}) {
   return (
     <div className={cn("space-y-3", className)}>
       {Array.from({ length: rows }).map((_, index) => (
@@ -130,14 +180,37 @@ export function LinesSkeleton({ rows = 4, className }: { rows?: number; classNam
 }
 
 /** Bars of varying height, so a chart does not pop into a flat grey box. */
-export function ChartSkeleton({ bars = 12, className }: { bars?: number; className?: string }) {
+export function ChartSkeleton({
+  bars = 12,
+  className,
+}: {
+  bars?: number;
+  className?: string;
+}) {
   // Fixed heights rather than random ones: a skeleton that reshuffles on
   // every render reads as movement where there is no news.
-  const heights = ["45%", "70%", "35%", "85%", "55%", "95%", "40%", "75%", "60%", "50%", "80%", "65%"];
+  const heights = [
+    "45%",
+    "70%",
+    "35%",
+    "85%",
+    "55%",
+    "95%",
+    "40%",
+    "75%",
+    "60%",
+    "50%",
+    "80%",
+    "65%",
+  ];
   return (
     <div className={cn("flex h-56 items-end gap-2", className)}>
       {Array.from({ length: bars }).map((_, index) => (
-        <Skeleton key={index} className="flex-1" style={{ height: heights[index % heights.length] }} />
+        <Skeleton
+          key={index}
+          className="flex-1"
+          style={{ height: heights[index % heights.length] }}
+        />
       ))}
     </div>
   );
@@ -153,18 +226,33 @@ export function DonutSkeleton() {
 }
 
 /** Header row plus body rows, matching the real table's rhythm. */
-export function TableSkeleton({ rows = 4, columns = 4 }: { rows?: number; columns?: number }) {
+export function TableSkeleton({
+  rows = 4,
+  columns = 4,
+}: {
+  rows?: number;
+  columns?: number;
+}) {
   return (
     <div className="overflow-hidden rounded-lg border">
       <div className="bg-muted/40 flex gap-4 border-b px-4 py-2.5">
         {Array.from({ length: columns }).map((_, index) => (
-          <Skeleton key={index} className={cn("h-3", index === 0 ? "flex-1" : "w-16")} />
+          <Skeleton
+            key={index}
+            className={cn("h-3", index === 0 ? "flex-1" : "w-16")}
+          />
         ))}
       </div>
       {Array.from({ length: rows }).map((_, row) => (
-        <div key={row} className="flex gap-4 border-b px-4 py-3 last:border-b-0">
+        <div
+          key={row}
+          className="flex gap-4 border-b px-4 py-3 last:border-b-0"
+        >
           {Array.from({ length: columns }).map((_, index) => (
-            <Skeleton key={index} className={cn("h-4", index === 0 ? "flex-1" : "w-16")} />
+            <Skeleton
+              key={index}
+              className={cn("h-4", index === 0 ? "flex-1" : "w-16")}
+            />
           ))}
         </div>
       ))}

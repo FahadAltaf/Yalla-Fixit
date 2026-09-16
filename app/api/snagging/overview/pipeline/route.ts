@@ -3,7 +3,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import { cacheHeaders, countJobs, PIPELINE_STAGES } from "@/lib/server/snagging/overview-queries";
+import {
+  PIPELINE_STAGES,
+  cacheHeaders,
+  countJobs,
+  myJobs,
+} from "@/lib/server/snagging/overview-queries";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
@@ -25,7 +30,10 @@ export async function GET(req: NextRequest) {
 
     const admin = await createAdminServerClient();
     const counts = await Promise.all(
-      PIPELINE_STAGES.map((stage) => countJobs(admin, (q) => q.eq("status", stage.status))),
+      PIPELINE_STAGES.map((stage) =>
+        // The reader's own pipeline (FR-10.01).
+        countJobs(admin, (q) => myJobs(q, profile.id).eq("status", stage.status)),
+      ),
     );
 
     return NextResponse.json(

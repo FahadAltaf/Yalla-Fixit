@@ -3,7 +3,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import { cacheHeaders } from "@/lib/server/snagging/overview-queries";
+import {
+  cacheHeaders,
+  countJobs,
+  myJobs,
+} from "@/lib/server/snagging/overview-queries";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
@@ -11,8 +15,43 @@ import { ActionType, ResourceType } from "@/types/types";
  *
  * Limited in the query rather than sliced afterwards, and ordered by
  * appointment time so "Today" reads in the order the day happens.
+ *
+ * `?scope=all` lifts the ceiling for the dialog behind "View all" —
+ * bigger, not unbounded, because a full diary is a schedule rather than
+ * something to read in a dialog. The total is counted separately either
+ * way, so the card can name a number its own list is not carrying.
  */
 const LIMIT = 6;
+const ALL_LIMIT = 100;
+
+/*
+  Site runs on GST, and appointments are stored as instants.
+
+  Slicing "HH:mm" out of the raw timestamp read the UTC clock, so a 09:00
+  appointment was shown as 05:00 — four hours earlier than the one the
+  coordinator booked and the client was told.
+*/
+const GST = "Asia/Dubai";
+
+function gstDate(at: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: GST,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(at);
+}
+
+function gstTime(iso: string): string | null {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return null;
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: GST,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(at);
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -25,18 +64,36 @@ export async function GET(req: NextRequest) {
     }
 
     const admin = await createAdminServerClient();
-    const today = new Date().toISOString().slice(0, 10);
+    const today = gstDate(new Date());
+    const limit =
+      req.nextUrl.searchParams.get("scope") === "all" ? ALL_LIMIT : LIMIT;
 
-    const { data, error } = await admin
-      .from("snagging_jobs")
-      .select(
-        "id, code, scheduled_date, appointment_at, property_type, unit_label, building_name, inspector:inspector_id(full_name, email)",
-      )
-      .gte("scheduled_date", today)
-      .in("status", ["assigned", "in_progress"])
+    /*
+      What counts as booked, asked once.
+
+      The count and the list have to agree exactly -- a footer reading
+      "showing 6 of 23" is a lie the moment the two predicates drift --
+      so the filter is written here and both queries are refined through
+      it rather than each spelling it out.
+    */
+    const booked = (q: any) =>
+      // The reader's own diary (FR-10.01): jobs they raised or are on.
+      myJobs(q, profile.id)
+        .gte("scheduled_date", today)
+        .in("status", ["assigned", "in_progress"]);
+
+    const total = await countJobs(admin, booked);
+
+    const { data, error } = await booked(
+      admin
+        .from("snagging_jobs")
+        .select(
+          "id, code, scheduled_date, appointment_at, property_type, unit_label, building_name, inspector:inspector_id(full_name, email)",
+        ),
+    )
       .order("scheduled_date", { ascending: true })
       .order("appointment_at", { ascending: true, nullsFirst: false })
-      .limit(LIMIT);
+      .limit(limit);
     if (error) throw new Error(error.message);
 
     type Joined = { full_name: string | null; email: string | null };
@@ -55,17 +112,26 @@ export async function GET(req: NextRequest) {
       const inspector = Array.isArray(row.inspector) ? row.inspector[0] : row.inspector;
       return {
         id: row.id,
-        code: row.code,
         day: row.scheduled_date,
-        time: row.appointment_at ? row.appointment_at.slice(11, 16) : null,
+        time: row.appointment_at ? gstTime(row.appointment_at) : null,
         propertyType: row.property_type,
-        place: [row.unit_label, row.building_name].filter(Boolean).join(", ") || null,
+        /*
+          The unit names the row now that the job code no longer does, so it
+          is its own field rather than being folded into the address line
+          underneath — a row whose headline is the building would read the
+          same for every unit in it.
+        */
+        unit: row.unit_label,
+        place: row.building_name,
         inspector: inspector?.full_name ?? inspector?.email ?? null,
         href: `/snagging/${row.id}`,
       };
     });
 
-    return NextResponse.json({ data: { items } }, { headers: cacheHeaders(300) });
+    return NextResponse.json(
+      { data: { total, items } },
+      { headers: cacheHeaders(300) },
+    );
   } catch (error) {
     console.error("Upcoming inspections error:", error);
     return NextResponse.json({ error: "Failed to load upcoming inspections" }, { status: 500 });

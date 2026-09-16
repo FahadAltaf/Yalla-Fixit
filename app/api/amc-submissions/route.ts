@@ -4,6 +4,9 @@ import { z } from "zod";
 import { canAccessAmcContracts } from "@/components/dashboard/extensions/amc/amc-constants";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
+import { hasResourceAction } from "@/lib/role-permissions";
+import { isAmcSubmissionEditable } from "@/components/dashboard/extensions/amc/amc-types";
+import { ActionType, ResourceType } from "@/types/types";
 import type {
   AmcDocumentType,
   AmcSubmission,
@@ -11,7 +14,6 @@ import type {
 } from "@/components/dashboard/extensions/amc/amc-types";
 
 const DOCUMENT_TYPES = ["proposal", "contract"] as const;
-const SUBMISSION_STATUSES = ["draft", "generated"] as const;
 
 const coordinationContactSchema = z.object({
   name: z.string(),
@@ -24,11 +26,25 @@ const serviceRowSchema = z.object({
   included: z.boolean(),
   units: z.number().int().min(1),
   frequency: z.number().int().min(1),
+  /* FR2.4. Nullable: a draft row the team has not priced yet is saved
+     unpriced, and must not come back as a free service. */
+  basePrice: z.number().min(0).nullable().optional(),
   price: z.number().min(0).optional(),
 });
 
+const priceListRowSchema = z.object({
+  category: z.string(),
+  description: z.string(),
+  brand: z.string(),
+  price: z.string(),
+});
+
+const accountManagerSchema = z.object({
+  name: z.string(),
+  phone: z.string(),
+});
+
 const submissionPayloadSchema = z.object({
-  status: z.enum(SUBMISSION_STATUSES).optional(),
   property: z.object({
     propertyCategory: z.enum(["residential", "commercial"]),
     unitType: z.enum(["villa", "apartment", "office"]),
@@ -46,11 +62,18 @@ const submissionPayloadSchema = z.object({
     paymentTerms: z.enum(["monthly", "quarterly", "annual"]),
     proposalNumber: z.string(),
   }),
-  package: z.object({
-    packageId: z.string().optional(),
-    customMonthlyPrice: z.number().optional(),
-    propertyCategory: z.enum(["residential", "commercial"]),
-  }),
+  /* FR3.1/FR4.5/FR4.6. Optional on the payload so a submission saved
+     before these existed still validates on update. */
+  document_options: z
+    .object({
+      optionalSections: z.object({
+        supplyInstallPriceList: z.boolean(),
+        additionalFixedPriceServices: z.boolean(),
+      }),
+      priceListRows: z.array(priceListRowSchema),
+      accountManagers: z.tuple([accountManagerSchema, accountManagerSchema]),
+    })
+    .optional(),
   services: z.array(serviceRowSchema),
   discount_percent: z.number().min(0).max(100),
   discount_amount: z.number().min(0),
@@ -68,12 +91,16 @@ type AmcSubmissionRow = {
   status: AmcSubmissionStatus;
   property: AmcSubmission["property"];
   customer: AmcSubmission["customer"];
-  package: AmcSubmission["package"];
+  document_options: AmcSubmission["document_options"];
   services: AmcSubmission["services"];
   discount_percent: number;
   discount_amount: number;
   final_price: number;
   generated_documents: AmcDocumentType[];
+  settings_snapshot: AmcSubmission["settings_snapshot"];
+  submitted_at: string | null;
+  decided_at: string | null;
+  sent_back_reason: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -85,24 +112,36 @@ function mapRow(row: AmcSubmissionRow): AmcSubmission {
     status: row.status,
     property: row.property,
     customer: row.customer,
-    package: row.package,
+    document_options: row.document_options,
     services: row.services,
     discount_percent: Number(row.discount_percent),
     discount_amount: Number(row.discount_amount),
     final_price: Number(row.final_price),
     generated_documents: row.generated_documents ?? [],
+    settings_snapshot: row.settings_snapshot ?? null,
+    submitted_at: row.submitted_at ?? null,
+    decided_at: row.decided_at ?? null,
+    sent_back_reason: row.sent_back_reason ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
 }
 
+type AmcAccess = Awaited<ReturnType<typeof getAuthenticatedUserAccess>>;
+
 type AmcAccessResult =
-  | { ok: true; profile: NonNullable<Awaited<ReturnType<typeof getAuthenticatedUserAccess>>["profile"]> }
+  | {
+      ok: true;
+      profile: NonNullable<AmcAccess["profile"]>;
+      /* Carried through so the list route can check role_access for the
+         approver queue (FR3.2/FR5.3) without a second lookup. */
+      accessUser: NonNullable<AmcAccess["accessUser"]>;
+    }
   | { ok: false; error: NextResponse };
 
 async function requireAmcAccess(): Promise<AmcAccessResult> {
   const access = await getAuthenticatedUserAccess();
-  if (!access.profile) {
+  if (!access.profile || !access.accessUser) {
     return {
       ok: false,
       error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
@@ -116,7 +155,7 @@ async function requireAmcAccess(): Promise<AmcAccessResult> {
     };
   }
 
-  return { ok: true, profile: access.profile };
+  return { ok: true, profile: access.profile, accessUser: access.accessUser };
 }
 
 export async function GET(req: NextRequest) {
@@ -145,7 +184,22 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(mapRow(data as AmcSubmissionRow));
   }
 
-  const { data, error } = await admin
+  /*
+    FR3.2: "My AMC Submissions shows each user their own submissions. The
+    approver also sees every submission sent for review."
+
+    Two reads rather than one `or` filter: the owner clause and the
+    approver clause select on different columns, and an `or` spanning
+    both is easy to get subtly wrong in a way that leaks drafts. Union by
+    id here instead, where the intent is legible.
+  */
+  const canApprove = hasResourceAction(
+    gate.accessUser,
+    ResourceType.AMC,
+    ActionType.APPROVE,
+  );
+
+  const { data: own, error } = await admin
     .from("amc_submissions")
     .select("*")
     .eq("owner_id", profile.id)
@@ -155,10 +209,30 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  const submissions = ((data ?? []) as AmcSubmissionRow[]).map(mapRow);
+  const rows = [...((own ?? []) as AmcSubmissionRow[])];
+
+  if (canApprove) {
+    const { data: queue, error: queueError } = await admin
+      .from("amc_submissions")
+      .select("*")
+      .eq("status", "awaiting_approval")
+      .order("submitted_at", { ascending: true });
+
+    if (queueError) {
+      return NextResponse.json({ error: queueError.message }, { status: 500 });
+    }
+
+    const seen = new Set(rows.map((row) => row.id));
+    for (const row of (queue ?? []) as AmcSubmissionRow[]) {
+      if (!seen.has(row.id)) rows.push(row);
+    }
+  }
+
+  const submissions = rows.map(mapRow);
   return NextResponse.json({
     submissions,
     totalCount: submissions.length,
+    canApprove,
   });
 }
 
@@ -183,10 +257,11 @@ export async function POST(req: NextRequest) {
     .from("amc_submissions")
     .insert({
       owner_id: profile.id,
-      status: payload.status ?? "draft",
+      /* Always draft. It advances only through the approval route. */
+      status: "draft",
       property: payload.property,
       customer: payload.customer,
-      package: payload.package,
+      document_options: payload.document_options,
       services: payload.services,
       discount_percent: payload.discount_percent,
       discount_amount: payload.discount_amount,
@@ -235,6 +310,22 @@ export async function PUT(req: NextRequest) {
   }
 
   const existingRow = existing as AmcSubmissionRow;
+
+  /*
+    FR3.4 — "Once it is sent for review it is locked, until it is approved
+    or sent back." Enforced here and not only in the UI: the autosave
+    fires on a timer, and a submission approved in another tab while this
+    one still had the wizard open would otherwise be silently rewritten
+    after the decision was made.
+  */
+  if (!isAmcSubmissionEditable(existingRow.status)) {
+    return NextResponse.json(
+      {
+        error: `This proposal is ${existingRow.status.replace(/_/g, " ")} and can no longer be edited.`,
+      },
+      { status: 409 },
+    );
+  }
   const mergedDocuments = updates.generated_documents
     ? Array.from(
         new Set([

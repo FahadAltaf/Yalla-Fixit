@@ -14,6 +14,8 @@ import type { SnaggingSnag, SnaggingTask } from "@/types/types";
 
 import { EmptyState } from "@/components/ui/empty-state";
 
+import { OpenRoundDialog } from "./open-round-dialog";
+
 import {
   DataState,
   HeadingSkeleton,
@@ -25,7 +27,6 @@ import {
   SnagIndex,
   SubHeading,
   SubmitButton,
-  useConfirm,
 } from "./shared";
 
 /**
@@ -48,8 +49,8 @@ const CARRY_FORWARD = new Set([
 
 export default function DesnagBuilder({ taskId }: { taskId: string }) {
   const router = useRouter();
-  const { confirm, dialog } = useConfirm();
   const [task, setTask] = useState<SnaggingTask | null>(null);
+  const [roundOpen, setRoundOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -95,24 +96,25 @@ export default function DesnagBuilder({ taskId }: { taskId: string }) {
     });
   }
 
-  async function open() {
+  function open() {
     if (!task) {
-      toast.error("The inspection is still loading — try again in a moment");
+      toast.error("The inspection is still loading. Try again in a moment.");
       return;
     }
+    // The round is booked before it is opened: it is a new site visit, and
+    // the dialog states the carried count back before anything commits.
+    setRoundOpen(true);
+  }
 
-    // Opening a round creates a new job and navigates away from this
-    // selection, so the count is stated back before it is committed.
-    const ok = await confirm({
-      title: `Open round ${task.round_number + 1}?`,
-      description: `${selected.size} snag(s) carry forward from ${task.code} as verification items in a new round. The new round opens straight away and you leave this screen.`,
-      confirmText: `Open round ${task.round_number + 1}`,
-    });
-    if (!ok) return;
-
+  async function createRound(input: {
+    scheduled_date: string;
+    appointment_at: string | null;
+  }) {
+    if (!task) return;
     setSubmitting(true);
     try {
       const round = await snaggingService.openRound(task.id, {
+        ...input,
         snag_ids: [...selected],
       });
       toast.success(`Round ${round.round_number} opened with ${round.carried_snags} snag(s)`);
@@ -170,7 +172,8 @@ export default function DesnagBuilder({ taskId }: { taskId: string }) {
               <div className="flex flex-wrap items-center justify-between gap-3 p-5">
                 <div>
                   <h2 className="text-lg">
-                    Carry forward from {task.code} · round {task.round_number}
+                    Carry forward from {task.property?.unit_label ?? "this inspection"} ·
+                    round {task.round_number}
                   </h2>
                   <p className="text-muted-foreground mt-1 text-sm">
                     Selected snags become verification items in round {nextRound}. The inspector
@@ -224,7 +227,10 @@ export default function DesnagBuilder({ taskId }: { taskId: string }) {
               <h2 className="mt-2 text-xl">New de-snag round</h2>
 
               <dl className="mt-4 space-y-3 text-sm">
-                <Row label="Parent job" value={task.code} />
+                <Row
+                  label="Parent job"
+                  value={task.property?.unit_label ?? "This inspection"}
+                />
                 <Row label="Round number" value={String(nextRound)} />
                 <Row label="Carried" value={`${selected.size} of ${candidates.length} snags`} />
               </dl>
@@ -266,7 +272,18 @@ export default function DesnagBuilder({ taskId }: { taskId: string }) {
         ) : null}
       </DataState>
 
-      {dialog}
+      {task ? (
+        <OpenRoundDialog
+          open={roundOpen}
+          onOpenChange={setRoundOpen}
+          roundNumber={task.round_number + 1}
+          from={task.property?.unit_label ?? "this inspection"}
+          carrying={selected.size}
+          busy={submitting}
+          onConfirm={createRound}
+        />
+      ) : null}
+
     </div>
   );
 }
@@ -292,7 +309,7 @@ function SnagRow({
       <Checkbox
         checked={checked}
         onCheckedChange={onToggle}
-        aria-label={`Carry ${snag.snag_code}`}
+        aria-label={`Carry ${snag.defect_label ?? "this snag"}`}
       />
       <SnagIndex index={index} severity={snag.severity} />
       <div className="min-w-0 flex-1">
@@ -301,7 +318,6 @@ function SnagRow({
             .filter(Boolean)
             .join(" · ")}
         </p>
-        <p className="text-muted-foreground font-mono text-xs">{snag.snag_code}</p>
       </div>
       <SeverityBadge severity={snag.severity} />
     </li>

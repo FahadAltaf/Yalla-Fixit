@@ -3,6 +3,8 @@
 import { useRef } from "react";
 import { FileSignature } from "lucide-react";
 
+import Link from "next/link";
+
 import { EmptyState } from "@/components/ui/empty-state";
 import { Progress } from "@/components/ui/progress";
 
@@ -34,8 +36,12 @@ export function QuotationAnalytics() {
     { staleMs: 600_000, enabled: visible },
   );
 
-  const widest = Math.max(1, ...(data?.stages ?? []).map((stage) => stage.count));
-  const generated = data?.stages.find((stage) => stage.key === "generated")?.count ?? 0;
+  const widest = Math.max(
+    1,
+    ...(data?.stages ?? []).map((stage) => stage.count),
+  );
+  const generated =
+    data?.stages.find((stage) => stage.key === "generated")?.count ?? 0;
 
   return (
     <div ref={anchor}>
@@ -61,8 +67,26 @@ export function QuotationAnalytics() {
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_auto]">
           <ul className="min-w-0 space-y-3">
             {(data?.stages ?? []).map((stage) => (
-              <li key={stage.key} className="flex items-center gap-3">
-                <span className="text-muted-foreground w-20 shrink-0 text-sm">{stage.label}</span>
+              <li key={stage.key}>
+                {/*
+                  A figure opens the list behind it (FR-10.01). "Generated"
+                  is every quotation, so it has no status to filter on;
+                  "Awaiting" is the approved ones with no job raised yet,
+                  which the list surfaces under approved.
+                */}
+                <Link
+                  href={
+                    stage.key === "generated"
+                      ? "/snagging/quotations"
+                      : `/snagging/quotations?status=${
+                          stage.key === "awaiting" ? "approved" : stage.key
+                        }`
+                  }
+                  className="hover:bg-muted/50 -mx-2 flex items-center gap-3 rounded-md px-2 py-1 transition-colors"
+                >
+                <span className="text-muted-foreground w-20 shrink-0 text-sm">
+                  {stage.label}
+                </span>
                 {/*
                   Raised and sent are steps rather than verdicts, so they
                   stay neutral; only the three outcomes take a colour.
@@ -75,6 +99,7 @@ export function QuotationAnalytics() {
                 <span className="w-8 shrink-0 text-right text-sm font-medium tabular-nums">
                   {stage.count}
                 </span>
+                </Link>
               </li>
             ))}
           </ul>

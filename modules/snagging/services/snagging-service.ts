@@ -14,7 +14,11 @@ import type {
   SnaggingProperty,
   SnaggingPropertyType,
   SnaggingCatalogueArea,
+  CatalogueCategory,
+  CatalogueDefect,
+  CatalogueSubcategory,
   SnaggingCatalogueEntry,
+  SnaggingChecklistLibraryItem,
   SnaggingTask,
   SnaggingTaskSummary,
 } from "@/types/types";
@@ -40,6 +44,7 @@ export interface SnaggingPropertyInput {
 }
 import type {
   CatalogueEntryInput,
+  ChecklistItemInput,
   CreateTaskInput,
   RejectTaskInput,
   UpdateTaskInput,
@@ -52,6 +57,9 @@ export interface SnaggingTaskFilters {
   assigneeId?: string;
   from?: string;
   to?: string;
+  /** Raised between these dates (YYYY-MM-DD), as opposed to scheduled. */
+  createdFrom?: string;
+  createdTo?: string;
   queue?: "approval";
   sortBy?: string;
   sortDirection?: "asc" | "desc";
@@ -60,6 +68,16 @@ export interface SnaggingTaskFilters {
 export interface SnaggingTaskListResponse {
   data: SnaggingTaskSummary[];
   totalCount: number;
+}
+
+/** What the checklist library screen reads (N1). */
+export interface ChecklistLibraryResponse {
+  items: SnaggingChecklistLibraryItem[];
+  /** Every group in the library, not just the filtered page. */
+  groups: string[];
+  totalCount: number;
+  activeCount: number;
+  mandatoryCount: number;
 }
 
 export interface CatalogueResponse {
@@ -73,17 +91,73 @@ export interface CatalogueResponse {
   total?: number;
 }
 
+/** One property type's row on the rate card (BRD v7 §9.3). */
+export interface SnaggingRateCardType {
+  unfurnished_min: number;
+  unfurnished_max: number;
+  furnished: number;
+  minimum_charge: number;
+  /** Null where the card says "to be confirmed", as it does for commercial. */
+  desnag_min: number | null;
+  desnag_max: number | null;
+}
+
+export interface SnaggingRateCard {
+  types: Record<string, SnaggingRateCardType>;
+  external_min: number;
+  external_max: number;
+  additional_visit_price: number;
+}
+
 export interface SnaggingPricingConfig {
   currency: string;
-  rate_per_sqft: number;
-  external_rate_per_sqft: number;
-  multipliers: Record<string, number>;
+  /** Null only on a database the rate card migration has not reached. */
+  rate_card: SnaggingRateCard | null;
+  out_of_hours_percent: number;
   tax_rate: number;
-  desnag_price: number;
-  additional_visit_price: number;
   scope_of_work: string | null;
   terms: string | null;
   updated_at?: string;
+  /*
+    The pre-card model. Nothing prices against these any more, but they are
+    still returned and still written, because quotations issued before the
+    card carry them in their own snapshot.
+  */
+  rate_per_sqft?: number;
+  external_rate_per_sqft?: number;
+  multipliers?: Record<string, number>;
+  desnag_price?: number;
+  additional_visit_price?: number;
+}
+
+/** One row of the Quotations list. */
+export interface SnaggingQuotationSummary {
+  id: string;
+  quote_number: string;
+  status: "draft" | "sent" | "approved" | "rejected";
+  quote_kind: "inspection" | "visit" | "desnag";
+  currency: string;
+  subtotal: number;
+  tax_amount: number;
+  total: number;
+  sent_at: string | null;
+  approved_at: string | null;
+  decided_at: string | null;
+  rejected_reason: string | null;
+  created_at: string;
+  /** Null until an approved quotation has been turned into a job. */
+  job_id: string | null;
+  job_code: string | null;
+  job_status: string | null;
+  /** The original inspection a de-snag quotation returns to (change 31). */
+  source_job_id: string | null;
+  client_id: string | null;
+  property_id: string | null;
+  client_name: string | null;
+  client_email: string | null;
+  client_phone: string | null;
+  unit_label: string | null;
+  building_name: string | null;
 }
 
 export interface SnaggingQuoteLine {
@@ -99,7 +173,14 @@ export interface SnaggingQuotation {
   id: string | null;
   /** True when this is what the job *would* be quoted, not a saved one. */
   preview?: boolean;
-  job_id: string;
+  /** Null on an inspection quotation raised before its job exists. */
+  job_id: string | null;
+  /** Who and what is being quoted, carried by the quotation itself. */
+  client_id?: string | null;
+  property_id?: string | null;
+  quote_kind?: "inspection" | "visit" | "desnag";
+  /** The original inspection a de-snag quotation returns to (change 31). */
+  source_job_id?: string | null;
   quote_number: string;
   status: "draft" | "sent" | "approved" | "rejected";
   currency: string;
@@ -135,6 +216,10 @@ export interface SnaggingClientOption {
   company?: string | null;
   developer_name?: string | null;
   property_count?: number;
+  notes?: string | null;
+  created_at?: string | null;
+  /** Only asked for by the Clients page; the picker does not pay for it. */
+  job_count?: number;
 }
 
 function toParams(
@@ -172,10 +257,27 @@ export const snaggingService = {
       method: "GET",
     }),
 
-  getAudit: async (id: string): Promise<SnaggingAuditEvent[]> =>
-    executeRESTBackend<SnaggingAuditEvent[]>(
+  /**
+   * One page of the audit trail, newest first by default.
+   *
+   * Carries the total alongside the rows: the trail on a job that has been
+   * through rounds runs to hundreds of entries, and a pager that cannot say
+   * how many there are can only offer "next" until it runs out.
+   */
+  getAudit: async (
+    id: string,
+    options?: { page?: number; pageSize?: number; order?: "asc" | "desc" },
+  ): Promise<{ data: SnaggingAuditEvent[]; totalCount: number }> =>
+    executeRESTBackend<{ data: SnaggingAuditEvent[]; totalCount: number }>(
       `/api/snagging/tasks/${id}/audit`,
-      { method: "GET" },
+      {
+        method: "GET",
+        params: {
+          page: options?.page ?? 0,
+          pageSize: options?.pageSize ?? 25,
+          order: options?.order ?? "desc",
+        },
+      },
     ),
 
   createTask: async (
@@ -186,10 +288,16 @@ export const snaggingService = {
       body: input as unknown as Record<string, unknown>,
     }),
 
-  searchClients: async (search?: string): Promise<SnaggingClientOption[]> =>
+  searchClients: async (
+    search?: string,
+    options?: { withCounts?: boolean },
+  ): Promise<SnaggingClientOption[]> =>
     executeRESTBackend<SnaggingClientOption[]>("/api/snagging/clients", {
       method: "GET",
-      params: search ? { search } : {},
+      params: {
+        ...(search ? { search } : {}),
+        ...(options?.withCounts ? { with_counts: "true" } : {}),
+      },
     }),
 
   // ── Quotation (F1-F13) ────────────────────────────────────────────────
@@ -225,7 +333,7 @@ export const snaggingService = {
 
   quotationAction: async (
     taskId: string,
-    action: "generate" | "send" | "approve" | "reject",
+    action: "generate" | "send" | "share_link" | "approve" | "reject",
     extra?: Record<string, unknown>,
   ): Promise<SnaggingQuotation> =>
     executeRESTBackend<SnaggingQuotation>(
@@ -236,14 +344,85 @@ export const snaggingService = {
       },
     ),
 
+  // ── Quotations as their own section (BA v2, changes 1-3) ─────────────
+  /**
+   * Every quotation, newest first — including the ones with no job yet,
+   * which is what the Quotations section exists to show.
+   */
+  listQuotations: async (filters?: {
+    status?: string;
+    kind?: string;
+  }): Promise<SnaggingQuotationSummary[]> =>
+    executeRESTBackend<SnaggingQuotationSummary[]>("/api/snagging/quotations", {
+      method: "GET",
+      params: {
+        ...(filters?.status && filters.status !== "all" ? { status: filters.status } : {}),
+        ...(filters?.kind && filters.kind !== "all" ? { kind: filters.kind } : {}),
+      },
+    }),
+
+  /** Quotes a client's property before any job exists (change 1). */
+  createQuotation: async (input: {
+    client_id?: string;
+    property_id?: string;
+    property: Record<string, unknown>;
+  }): Promise<SnaggingQuotationSummary> =>
+    executeRESTBackend<SnaggingQuotationSummary>("/api/snagging/quotations", {
+      method: "POST",
+      body: input as unknown as Record<string, unknown>,
+    }),
+
+  /**
+   * Quotes a return visit to verify fixes on a job already done (change 31).
+   * Everything it needs is on the original, so it takes only that job.
+   */
+  createDesnagQuotation: async (
+    sourceJobId: string,
+  ): Promise<SnaggingQuotationSummary> =>
+    executeRESTBackend<SnaggingQuotationSummary>("/api/snagging/quotations", {
+      method: "POST",
+      body: { quote_kind: "desnag", source_job_id: sourceJobId },
+    }),
+
+  getQuotationById: async (id: string): Promise<SnaggingQuotation> =>
+    executeRESTBackend<SnaggingQuotation>(`/api/snagging/quotations/${id}`, {
+      method: "GET",
+    }),
+
+  /** send / share_link / regenerate / approve / reject, by quotation id. */
+  quotationActionById: async (
+    id: string,
+    action: "send" | "share_link" | "regenerate" | "approve" | "reject",
+    extra?: Record<string, unknown>,
+  ): Promise<SnaggingQuotation> =>
+    executeRESTBackend<SnaggingQuotation>(`/api/snagging/quotations/${id}`, {
+      method: "POST",
+      body: { action, ...(extra ?? {}) },
+    }),
+
   /** Persists a brand-new client and returns it (with its id). */
   createClient: async (input: {
     client_name: string;
     client_email?: string;
     client_phone?: string;
+    company?: string;
   }): Promise<SnaggingClientOption> =>
     executeRESTBackend<SnaggingClientOption>("/api/snagging/clients", {
       method: "POST",
+      body: input as unknown as Record<string, unknown>,
+    }),
+
+  /** Corrects a client's details (FR-1.11). Only what is sent changes. */
+  updateClient: async (input: {
+    id: string;
+    client_name?: string;
+    client_email?: string | null;
+    client_phone?: string | null;
+    company?: string | null;
+    notes?: string | null;
+  }): Promise<SnaggingClientOption> =>
+    executeRESTBackend<SnaggingClientOption>("/api/snagging/clients", {
+      method: "PATCH",
       body: input as unknown as Record<string, unknown>,
     }),
 
@@ -406,6 +585,18 @@ export const snaggingService = {
       body: { comment: comment ?? "" },
     }),
 
+  /**
+   * FR-6.01 — the reviewer handing the job to the approval manager.
+   *
+   * The status stays `in_review`; this is what unlocks the decision, so
+   * approve and reject both refuse until it has been called.
+   */
+  completeReview: async (id: string, comment?: string) =>
+    executeRESTBackend(`/api/snagging/tasks/${id}/review/complete`, {
+      method: "POST",
+      body: { comment: comment ?? "" },
+    }),
+
   approveTask: async (id: string, comment?: string) =>
     executeRESTBackend(`/api/snagging/tasks/${id}/approve`, {
       method: "POST",
@@ -439,7 +630,9 @@ export const snaggingService = {
   openRound: async (
     id: string,
     input: {
-      scheduled_date?: string;
+      /** Required: a round is a new site visit and books its own slot. */
+      scheduled_date: string;
+      appointment_at?: string | null;
       technician_ids?: string[];
       notes?: string;
       snag_ids?: string[];
@@ -459,7 +652,9 @@ export const snaggingService = {
   scheduleVisit: async (
     id: string,
     input: {
-      scheduled_date?: string;
+      /** Required: a visit is a trip and is requested for a specific slot. */
+      scheduled_date: string;
+      appointment_at?: string | null;
       technician_ids?: string[];
       notes?: string;
       reason?: string;
@@ -502,6 +697,114 @@ export const snaggingService = {
   /** BR-8: retire rather than delete, so historical reports resolve. */
   setCatalogueEntryActive: async (id: string, active: boolean) =>
     executeRESTBackend("/api/snagging/catalogue", {
+      method: "PATCH",
+      body: { id, active },
+    }),
+
+  // ---------------------------------------------------------------
+  // Catalogue v2: category > sub-category > defect (Action Points P1, P6)
+  // ---------------------------------------------------------------
+
+  /**
+   * The whole tree in one call.
+   *
+   * All three levels together rather than one request per level: a picker
+   * cannot narrow anything until it has all three, and three round trips
+   * on a site connection is the difference between the sheet opening and
+   * the inspector giving up.
+   */
+  getCatalogueTree: async (
+    activeOnly = false,
+  ): Promise<{
+    categories: CatalogueCategory[];
+    subcategories: CatalogueSubcategory[];
+    defects: CatalogueDefect[];
+  }> =>
+    executeRESTBackend("/api/snagging/catalogue/v2", {
+      method: "GET",
+      params: activeOnly ? { activeOnly: "true" } : {},
+    }),
+
+  createCatalogueNode: async (
+    level: "category" | "subcategory" | "defect",
+    input: Record<string, unknown>,
+  ) =>
+    executeRESTBackend("/api/snagging/catalogue/v2", {
+      method: "POST",
+      body: { ...input, level },
+    }),
+
+  updateCatalogueNode: async (
+    level: "category" | "subcategory" | "defect",
+    input: Record<string, unknown>,
+  ) =>
+    executeRESTBackend("/api/snagging/catalogue/v2", {
+      method: "PATCH",
+      body: { ...input, level },
+    }),
+
+  /** BR-8: retire rather than delete, so historical reports resolve. */
+  setCatalogueNodeActive: async (
+    level: "category" | "subcategory" | "defect",
+    id: string,
+    active: boolean,
+  ) =>
+    executeRESTBackend("/api/snagging/catalogue/v2", {
+      method: "PATCH",
+      body: { level, id, active },
+    }),
+
+  // ---------------------------------------------------------------
+  // Checklist library (N1, FR-4.13)
+  // ---------------------------------------------------------------
+
+  listChecklistLibrary: async (
+    filters: {
+      search?: string;
+      group?: string;
+      propertyType?: string;
+      activeOnly?: boolean;
+      /** Which list to read (N1). Defaults to the technician one. */
+      audience?: "technician" | "client";
+    } = {},
+  ): Promise<ChecklistLibraryResponse> => {
+    const params: Record<string, string | number> = {};
+    if (filters.search) params.search = filters.search;
+    if (filters.group && filters.group !== "all") params.group = filters.group;
+    if (filters.propertyType && filters.propertyType !== "all")
+      params.propertyType = filters.propertyType;
+    if (filters.activeOnly) params.activeOnly = "true";
+    if (filters.audience) params.audience = filters.audience;
+
+    return executeRESTBackend<ChecklistLibraryResponse>("/api/snagging/checklist", {
+      method: "GET",
+      params,
+    });
+  },
+
+  createChecklistItem: async (
+    input: ChecklistItemInput,
+  ): Promise<SnaggingChecklistLibraryItem> =>
+    executeRESTBackend("/api/snagging/checklist", {
+      method: "POST",
+      body: input as unknown as Record<string, unknown>,
+    }),
+
+  updateChecklistItem: async (
+    id: string,
+    changes: Partial<Omit<ChecklistItemInput, "code">>,
+  ): Promise<SnaggingChecklistLibraryItem> =>
+    executeRESTBackend("/api/snagging/checklist", {
+      method: "PATCH",
+      body: { id, ...changes } as unknown as Record<string, unknown>,
+    }),
+
+  /**
+   * Deactivate rather than delete: a job checklist row still points at this
+   * item, so removing it would blank the link on inspections already sent.
+   */
+  setChecklistItemActive: async (id: string, active: boolean) =>
+    executeRESTBackend("/api/snagging/checklist", {
       method: "PATCH",
       body: { id, active },
     }),

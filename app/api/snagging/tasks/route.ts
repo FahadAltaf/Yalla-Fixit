@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
+import { recordAudit } from "@/lib/server/snagging/audit";
+import { resolveClient } from "@/lib/server/snagging/client";
 import { APPROVAL_SLA_HOURS, generateTaskCode } from "@/lib/server/snagging/workflow";
 import { propertySnapshot, resolveProperty } from "@/lib/server/snagging/property";
 import { createTaskSchema } from "@/modules/snagging/schemas";
@@ -39,10 +41,14 @@ export async function GET(req: NextRequest) {
         `id, code, status, round_number, visit_type, parent_job_id, scheduled_date, locked,
          rejection_reason, rejection_category, rejection_count, remediation_due_at,
          submitted_at, approved_at, created_at, updated_at,
-         approval_manager_id, client_id, unit_label, building_name, community,
+         approval_manager_id, reviewer_id, review_started_at, reviewed_at,
+         approval_due_at, escalated_at,
+         client_id, unit_label, building_name, community,
          property_type, developer_name,
          client:client_id(name),
-         inspector:inspector_id(full_name, email)`,
+         inspector:inspector_id(full_name, email),
+         reviewer:reviewer_id(id, full_name, email),
+         manager:approval_manager_id(id, full_name, email)`,
         { count: "exact" },
       );
 
@@ -69,6 +75,19 @@ export async function GET(req: NextRequest) {
     if (from) query = query.gte("scheduled_date", from);
     const to = params.get("to");
     if (to) query = query.lte("scheduled_date", to);
+
+    /*
+      When the job was RAISED, which is a different question from when it
+      is booked in. The Overview's activity chart plots intake by
+      created_at, so a click on one of its days has to narrow by the same
+      column — reusing from/to above would have opened the jobs SCHEDULED
+      that day, a different set with the same size and no way to tell.
+    */
+    const createdFrom = params.get("createdFrom");
+    if (createdFrom) query = query.gte("created_at", createdFrom);
+    const createdTo = params.get("createdTo");
+    // Inclusive of the whole day, since the column is a timestamp.
+    if (createdTo) query = query.lt("created_at", `${createdTo}T23:59:59.999Z`);
 
     if (params.get("queue") === "approval") {
       query = query
@@ -134,6 +153,14 @@ type JobRow = {
   created_at: string;
   updated_at: string;
   approval_manager_id: string | null;
+  // FR-6.01 / FR-6.07 — the review chain and its clock.
+  reviewer_id: string | null;
+  review_started_at: string | null;
+  reviewed_at: string | null;
+  approval_due_at: string | null;
+  escalated_at: string | null;
+  reviewer: Joined;
+  manager: Joined;
   client_id: string | null;
   unit_label: string;
   building_name: string | null;
@@ -193,18 +220,27 @@ async function enrichRows(admin: Admin, rows: JobRow[]) {
     const ar = areaAgg.get(row.id) ?? { total: 0, confirmed: 0 };
     const client = firstOf(row.client);
     const insp = firstOf(row.inspector);
-    // FR-6.07 — the 48h approval SLA. Derived from submitted_at at read
-    // time (rather than a stored column and a cron) so an approval that
-    // has waited too long surfaces as escalated the moment the queue is
-    // opened. Only jobs still awaiting a decision can be escalated.
+    /*
+      FR-6.07 — the 48h approval SLA.
+
+      The deadline is now stored on the row when the job is submitted, so
+      the escalation sweep can index it and a job keeps the deadline it was
+      actually given. It is still derived here for rows written before the
+      column existed, so a historical job does not read as having no
+      deadline at all.
+    */
     const submittedMs = row.submitted_at ? Date.parse(row.submitted_at) : NaN;
-    const approvalDueAt = Number.isNaN(submittedMs)
-      ? null
-      : new Date(submittedMs + APPROVAL_SLA_HOURS * 60 * 60 * 1000).toISOString();
+    const approvalDueAt =
+      row.approval_due_at ??
+      (Number.isNaN(submittedMs)
+        ? null
+        : new Date(submittedMs + APPROVAL_SLA_HOURS * 60 * 60 * 1000).toISOString());
+    const awaitingDecision = row.status === "submitted" || row.status === "in_review";
+    // Stamped by the sweep, or past the deadline and not yet swept. Either
+    // way the queue shows it as late rather than waiting on the scheduler.
     const escalated =
-      !Number.isNaN(submittedMs) &&
-      (row.status === "submitted" || row.status === "in_review") &&
-      submittedMs + APPROVAL_SLA_HOURS * 60 * 60 * 1000 < now;
+      Boolean(row.escalated_at) ||
+      (awaitingDecision && approvalDueAt !== null && Date.parse(approvalDueAt) < now);
     return {
       id: row.id,
       code: row.code,
@@ -232,6 +268,12 @@ async function enrichRows(admin: Admin, rows: JobRow[]) {
       updated_at: row.updated_at,
       supervisor_id: null,
       approval_manager_id: row.approval_manager_id,
+      reviewer_id: row.reviewer_id ?? null,
+      reviewer: firstOf(row.reviewer) ?? null,
+      manager: firstOf(row.manager) ?? null,
+      review_started_at: row.review_started_at ?? null,
+      reviewed_at: row.reviewed_at ?? null,
+      escalated_at: row.escalated_at ?? null,
       property_id: row.client_id ?? row.id,
       unit_label: row.unit_label,
       building_name: row.building_name,
@@ -276,14 +318,13 @@ export async function POST(req: NextRequest) {
 
     // 1. Resolve the client. A client the picker already persisted arrives
     // by id; otherwise find-or-create one from the typed details.
-    const clientId =
-      input.client_id ??
-      (await resolveClient(admin, {
-        name: p.client_name,
-        email: emptyToNull(p.client_email),
-        phone: emptyToNull(p.client_phone),
-        createdBy: profile.id,
-      }));
+    const clientId = await resolveClient(admin, {
+      clientId: input.client_id ?? null,
+      name: p.client_name,
+      email: emptyToNull(p.client_email),
+      phone: emptyToNull(p.client_phone),
+      createdBy: profile.id,
+    });
 
     // 1b. Resolve the property record (BR-1). Reuses the client's property
     // for this unit or creates one; the full attributes live there now. The
@@ -364,36 +405,62 @@ export async function POST(req: NextRequest) {
     // 4. Build the job checklist from the property type (N2, FR-3.10).
     await generateChecklist(admin, job.id, p.property_type);
 
+    /*
+      5. Bind the approved quotation to the job it paid for (BA v2, change 3).
+
+      The quotation came first and has been agreed, so two things follow:
+      the two records point at each other from here on, and the job skips
+      `draft`. Draft exists to mean "waiting on a price the client has not
+      agreed yet" — which is exactly what is no longer true.
+
+      Guarded on `approved` and on the quotation still being unattached, so
+      this cannot silently move a second job onto one client's agreement.
+    */
+    if (input.quotation_id) {
+      const { data: bound, error: bindError } = await admin
+        .from("snagging_quotations")
+        .update({ job_id: job.id, updated_at: new Date().toISOString() })
+        .eq("id", input.quotation_id)
+        .eq("status", "approved")
+        .is("job_id", null)
+        .select("id, quote_number")
+        .maybeSingle();
+      if (bindError) throw new Error(bindError.message);
+
+      if (bound) {
+        const { error: statusError } = await admin
+          .from("snagging_jobs")
+          .update({ status: "assigned" })
+          .eq("id", job.id)
+          .eq("status", "draft");
+        if (statusError) throw new Error(statusError.message);
+
+        await recordAudit(admin, {
+          entityType: "task",
+          entityId: job.id,
+          taskId: job.id,
+          eventType: "job_created_from_quotation",
+          actorId: profile.id,
+          payload: { quote_number: bound.quote_number, quotation_id: bound.id },
+        });
+      } else {
+        /*
+          Not fatal. The job is real and the coordinator is looking at it;
+          refusing to return it because the link could not be made would
+          lose the areas and contacts they just entered. Logged so the
+          mismatch can be chased.
+        */
+        console.warn(
+          `Job ${job.code} could not be bound to quotation ${input.quotation_id} — not approved, or already attached to another job.`,
+        );
+      }
+    }
+
     return NextResponse.json({ data: { id: job.id, code: job.code } }, { status: 201 });
   } catch (error) {
     console.error("Snagging tasks POST error:", error);
     return NextResponse.json({ error: "Failed to create inspection" }, { status: 500 });
   }
-}
-
-/** Finds a client by name+email, or creates one. Returns its id. */
-async function resolveClient(
-  admin: Admin,
-  input: { name: string; email: string | null; phone: string | null; createdBy: string },
-): Promise<string> {
-  const { data: existing } = await admin
-    .from("snagging_clients")
-    .select("id, email")
-    .ilike("name", input.name)
-    .limit(20);
-  const match = (existing ?? []).find(
-    (c: { id: string; email: string | null }) =>
-      (c.email ?? "").toLowerCase() === (input.email ?? "").toLowerCase(),
-  );
-  if (match) return match.id;
-
-  const { data, error } = await admin
-    .from("snagging_clients")
-    .insert({ name: input.name, email: input.email, phone: input.phone, created_by: input.createdBy })
-    .select("id")
-    .single();
-  if (error) throw new Error(error.message);
-  return data.id;
 }
 
 function emptyToNull(value: string | null | undefined): string | null {
@@ -416,6 +483,11 @@ async function generateChecklist(admin: Admin, jobId: string, propertyType: stri
     .from("snagging_checklist_items")
     .select("id, code, group_name, label, mandatory, sort_order")
     .eq("active", true)
+    // The technician list only (N1/N7). The client list is one stored
+    // document shared on request, never copied onto a job — including it
+    // here would put a client-facing question in front of an inspector
+    // and block submission on an answer they cannot give (N5).
+    .eq("audience", "technician")
     .eq(appliesColumn, true)
     .order("sort_order", { ascending: true });
   if (error) throw new Error(error.message);

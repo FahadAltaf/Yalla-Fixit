@@ -3,7 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
+import { emailService } from "@/lib/email-service";
 import { recordAudit } from "@/lib/server/snagging/audit";
+import { REJECTION_LABELS } from "@/lib/server/snagging/workflow";
 import { assertTransition, isDesignatedApprovalManager, remediationDueAt } from "@/lib/server/snagging/workflow";
 import { rejectTaskSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType, SnaggingTaskStatus } from "@/types/types";
@@ -39,7 +41,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const admin = await createAdminServerClient();
     const { data: job, error: loadError } = await admin
       .from("snagging_jobs")
-      .select("id, code, status, rejection_count, approval_manager_id")
+      .select(
+        "id, code, status, rejection_count, approval_manager_id, inspector_id, unit_label, building_name",
+      )
       .eq("id", id)
       .maybeSingle();
 
@@ -77,7 +81,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         rejection_count: (job.rejection_count ?? 0) + 1,
       })
       .eq("id", id)
-      .in("status", ["submitted", "in_review"]);
+      // Same optimistic guard as approval: whichever decision lands first wins.
+      .eq("status", "in_review");
 
     if (updateError) throw new Error(updateError.message);
 
@@ -100,11 +105,57 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       actorId: profile.id,
       actorLabel: profile.full_name ?? profile.email,
       justification: comment,
-      payload: { code: job.code, category },
+      payload: {
+        code: job.code,
+        category,
+        from_status: job.status,
+        to_status: "rejected",
+        remediation_due_at: remediationDeadline,
+      },
     });
 
+    /*
+      FR-6.02 — tell the inspector, don't wait for them to notice.
+
+      Best-effort and last: the rejection is already committed and audited,
+      and a mail failure must not roll it back or fail the manager's request.
+    */
+    let notified = false;
+    if (job.inspector_id) {
+      const { data: inspector } = await admin
+        .from("user_profile")
+        .select("email")
+        .eq("id", job.inspector_id)
+        .maybeSingle();
+
+      if (inspector?.email) {
+        try {
+          await emailService.sendSnaggingRejectionEmail({
+            to: inspector.email,
+            code: job.code,
+            unit:
+              [job.unit_label, job.building_name].filter(Boolean).join(", ") || job.code,
+            categoryLabel: REJECTION_LABELS[category].title,
+            remediation: REJECTION_LABELS[category].remediation,
+            reason: comment,
+            dueAt: remediationDeadline,
+            jobUrl: `${process.env.NEXT_PUBLIC_APP_URL ?? ""}/snagging/${id}`,
+          });
+          notified = true;
+        } catch (emailError) {
+          console.error("Rejection email failed:", job.code, emailError);
+        }
+      }
+    }
+
     return NextResponse.json({
-      data: { id, status: "rejected", category, remediation_due_at: remediationDeadline },
+      data: {
+        id,
+        status: "rejected",
+        category,
+        remediation_due_at: remediationDeadline,
+        inspector_notified: notified,
+      },
     });
   } catch (error) {
     console.error("Snagging reject error:", error);

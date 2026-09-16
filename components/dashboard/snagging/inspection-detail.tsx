@@ -15,16 +15,14 @@ import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-lab
 import { snaggingService } from "@/modules/snagging";
 import type { SnaggingTask } from "@/types/types";
 
-import {
-  ErrorState,
-  FieldsSkeleton,
-  SectionSkeleton,
-} from "./shared";
+import { ErrorState } from "./shared";
 
 import { AuditTimeline } from "./audit-timeline";
 import { ChecklistPanel } from "./checklist-panel";
 import { FloorPlansAreasPanel } from "./floor-plans-areas-panel";
 import { JobSetupPanel } from "./job-setup-panel";
+import { InspectorAssignmentAlert } from "./inspector-alert";
+import { AdditionalVisitsPanel } from "./additional-visits-panel";
 import { QuotationPanel } from "./quotation-panel";
 import { InspectionHeaderCard } from "./inspection-header-card";
 import { SnagWalkList } from "./snag-walk-list";
@@ -99,22 +97,62 @@ export default function InspectionDetail({ taskId }: { taskId: string }) {
     task ? (task.property?.unit_label ?? task.code) : undefined,
   );
 
+  /*
+    Additional visits belong to the ORIGINAL inspection. Showing the
+    section on a round or on a visit itself would invite raising one
+    against a child, which is the chained-family shape the routes now
+    deliberately refuse.
+  */
+  const isOriginal = !task?.parent_task_id;
+
   if (loading) {
     return (
       // Back link, then the tab row, then ONE panel -- the page shows a
-      // single tab at a time. The old skeleton had no tab bar (so the whole
-      // row appeared and shoved the content down) and stacked two cards the
-      // page never renders together.
+      // single tab at a time. The tab row is drawn as the filled bar it
+      // actually is, with six evenly spaced pills inside it: loose pills
+      // floating on the page meant the real bar appeared underneath them
+      // and shoved the panel down.
       <div className="flex flex-col gap-4">
         <Skeleton className="h-8 w-24" />
-        <div className="flex flex-wrap gap-1">
+
+        <div className="bg-muted flex w-full items-center gap-1 rounded-lg p-1">
           {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="h-8 w-24 rounded-md" />
+            <Skeleton
+              key={i}
+              className="bg-background/60 h-7 flex-1 rounded-md"
+            />
           ))}
         </div>
-        <SectionSkeleton>
-          <FieldsSkeleton fields={6} columns={3} />
-        </SectionSkeleton>
+
+        {/*
+          Shaped like the panel the page opens on: a card header, then a
+          list of rows each with its marker, two lines and a trailing badge.
+        */}
+        <Card className="gap-0 overflow-hidden p-0">
+          <div className="space-y-2 px-5 pt-5 pb-4">
+            <Skeleton className="h-5 w-44" />
+            <Skeleton className="h-3.5 w-64" />
+          </div>
+          <div className="border-t">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div
+                key={i}
+                className="flex items-start gap-3 border-b px-5 py-4 last:border-b-0"
+              >
+                <Skeleton className="size-7 shrink-0 rounded-full" />
+                <div className="flex-1 space-y-2">
+                  <Skeleton className="h-4 w-2/5" />
+                  <Skeleton className="h-3 w-3/5" />
+                  <Skeleton className="h-12 w-12 rounded-md" />
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Skeleton className="h-5 w-16 rounded-full" />
+                  <Skeleton className="h-5 w-14 rounded-full" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
       </div>
     );
   }
@@ -187,10 +225,34 @@ export default function InspectionDetail({ taskId }: { taskId: string }) {
           </TabsTrigger>
           <TabsTrigger value="setup">Setup</TabsTrigger>
           <TabsTrigger value="quotation">Quotation</TabsTrigger>
+          {/* FR-9.01 — its own section, so a chargeable return trip is
+              never mistaken for a de-snag round. Only on the original
+              inspection: visits hang off it, not off each other. */}
+          {isOriginal ? (
+            <TabsTrigger value="visits">Additional visits</TabsTrigger>
+          ) : null}
           <TabsTrigger value="history">History</TabsTrigger>
         </TabsList>
 
         <TabsContent value="snags" className="mt-4 flex flex-col gap-6">
+          {/*
+            The gap is worth saying here as well as on Setup: this is the
+            tab the job opens on, so an unassigned job would otherwise read
+            as ready until somebody went looking for the inspector.
+          */}
+          <InspectorAssignmentAlert
+            task={task}
+            onAssign={() => {
+              setTab("setup");
+              // After the tab has painted; the field does not exist until
+              // the panel is mounted.
+              window.setTimeout(() => {
+                document
+                  .getElementById("inspector-assignment")
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }, 120);
+            }}
+          />
           {/* The counts and the Approve / Send back decision sit with
               the snags they are about, rather than pinned above every
               tab where they were repeating information the other tabs
@@ -199,7 +261,11 @@ export default function InspectionDetail({ taskId }: { taskId: string }) {
           <SnagWalkList task={task} />
         </TabsContent>
         <TabsContent value="areas" className="mt-4">
-          <FloorPlansAreasPanel taskId={task.id} />
+          <FloorPlansAreasPanel
+            taskId={task.id}
+            propertyType={task.property?.property_type}
+            bedrooms={task.property?.bedrooms}
+          />
         </TabsContent>
         <TabsContent value="checklist" className="mt-4">
           <ChecklistPanel task={task} />
@@ -210,6 +276,11 @@ export default function InspectionDetail({ taskId }: { taskId: string }) {
         <TabsContent value="quotation" className="mt-4">
           <QuotationPanel task={task} onChanged={() => void load()} />
         </TabsContent>
+        {isOriginal ? (
+          <TabsContent value="visits" className="mt-4">
+            <AdditionalVisitsPanel task={task} onChanged={() => void load()} />
+          </TabsContent>
+        ) : null}
         <TabsContent value="history" className="mt-4">
           <AuditTimeline taskId={task.id} />
         </TabsContent>

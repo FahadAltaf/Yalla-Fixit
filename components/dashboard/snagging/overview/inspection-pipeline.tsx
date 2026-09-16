@@ -17,7 +17,9 @@ import { CHART_COLOR, PIPELINE_COLOR } from "@/lib/snagging/chart-palette";
 import { ChartSkeleton, SectionShell } from "./section-shell";
 import { useSection } from "./use-section";
 
-type Pipeline = { stages: Array<{ status: string; label: string; count: number }> };
+type Pipeline = {
+  stages: Array<{ status: string; label: string; count: number }>;
+};
 
 const config = { count: { label: "Jobs" } } satisfies ChartConfig;
 
@@ -36,7 +38,10 @@ export function InspectionPipeline() {
     { staleMs: 60_000 },
   );
 
-  const total = (data?.stages ?? []).reduce((sum, stage) => sum + stage.count, 0);
+  const total = (data?.stages ?? []).reduce(
+    (sum, stage) => sum + stage.count,
+    0,
+  );
 
   return (
     <SectionShell
@@ -75,7 +80,10 @@ export function InspectionPipeline() {
             tickLine={false}
             axisLine={false}
             allowDecimals={false}
-            domain={[0, (dataMax: number) => Math.max(1, Math.ceil(dataMax * 1.2))]}
+            domain={[
+              0,
+              (dataMax: number) => Math.max(1, Math.ceil(dataMax * 1.2)),
+            ]}
           />
           <YAxis
             type="category"
@@ -91,7 +99,9 @@ export function InspectionPipeline() {
               <Cell
                 key={stage.status}
                 fill={PIPELINE_COLOR[stage.status] ?? CHART_COLOR.neutral}
-                onClick={() => router.push(`/snagging/jobs?status=${stage.status}`)}
+                onClick={() =>
+                  router.push(`/snagging/jobs?status=${stage.status}`)
+                }
               />
             ))}
           </Bar>
