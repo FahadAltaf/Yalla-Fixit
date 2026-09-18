@@ -210,6 +210,9 @@ export interface TechnicianRole {
   id: string;
   name: string;
   sort_order: number;
+  // FR-2: row highlight colour on the schedule board (hex, e.g. #dc2626). Null
+  // = no highlight. Driver / Technician-Driver default to red.
+  color?: string | null;
   technician_count?: number;
 }
 
@@ -233,6 +236,9 @@ export interface TechnicianReference {
   shift?: TechnicianShift | null;
   team_leader_fsm_id?: string | null;
   team_leader_name?: string | null;
+  // Team-arranged row order on the schedule board ("Custom" sort). Null =
+  // not arranged yet.
+  board_position?: number | null;
 }
 
 export interface TechnicianTag {

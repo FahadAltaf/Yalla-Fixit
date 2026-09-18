@@ -13,9 +13,15 @@ import {
   APPOINTMENT_STATE_LABELS,
   APPOINTMENT_STATE_ORDER,
   APPOINTMENT_STATE_STYLES,
+  HEADLINE_STATES,
   resolveAppointmentState,
   type AppointmentState,
 } from "@/lib/scheduling/appointment-status";
+import {
+  setOrgTimeZone,
+  todayInZone,
+  zonedMinutesOfDay,
+} from "@/lib/scheduling/org-time";
 import { cn } from "@/lib/actions/utils";
 
 // Wall-display view of the day's schedule.
@@ -29,18 +35,16 @@ import { cn } from "@/lib/actions/utils";
 // one. A short interval against the existing authorised REST route gives the
 // same practical result for a schedule that changes a few times an hour.
 const REFRESH_MS = 20_000;
-// Re-derive "now" often enough that a job tips into Delayed promptly and the
+// Re-derive "now" often enough that the
 // current-time marker glides rather than jumps.
 const CLOCK_MS = 30_000;
 
 function todayIso() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return todayInZone();
 }
 
 function minutesOfDay(iso: string) {
-  const d = new Date(iso);
-  return d.getHours() * 60 + d.getMinutes();
+  return zonedMinutesOfDay(iso);
 }
 
 function hhmm(totalMinutes: number) {
@@ -88,7 +92,12 @@ export default function ScheduleDisplay() {
   }, []);
 
   useEffect(() => {
-    scheduleService.getConfig().then(setConfig).catch(() => setConfig(null));
+    scheduleService
+      .getConfig()
+      .then((cfg) => {
+        setOrgTimeZone(cfg.org_timezone);
+        setConfig(cfg);
+      }).catch(() => setConfig(null));
   }, []);
 
   useEffect(() => {
@@ -143,13 +152,13 @@ export default function ScheduleDisplay() {
       // status, so scoring it would mark every past note as Delayed.
       entry.entry_type === "free_text"
         ? "note"
-        : resolveAppointmentState(entry.fsm_status, entry.start_at, now),
-    [now],
+        : resolveAppointmentState(entry.fsm_status),
+    [],
   );
 
   const counts = useMemo(() => {
     const tally: Record<AppointmentState, number> = {
-      scheduled: 0, in_progress: 0, completed: 0, delayed: 0, cancelled: 0,
+      new: 0, scheduled: 0, dispatched: 0, in_progress: 0, completed: 0, cannot_complete: 0, cancelled: 0, unknown: 0,
     };
     entries.forEach((e) => {
       const state = stateOf(e);
@@ -164,7 +173,7 @@ export default function ScheduleDisplay() {
     return marks;
   }, [bounds]);
 
-  const nowMinutes = new Date(now).getHours() * 60 + new Date(now).getMinutes();
+  const nowMinutes = zonedMinutesOfDay(now);
   const nowPct = ((nowMinutes - bounds.start) / span) * 100;
   const showNowLine = date === todayIso() && nowPct >= 0 && nowPct <= 100;
 
@@ -219,7 +228,7 @@ export default function ScheduleDisplay() {
         </div>
 
         <div className="flex items-center gap-6">
-          {APPOINTMENT_STATE_ORDER.filter((s) => s !== "cancelled" || counts.cancelled > 0).map((state) => (
+          {APPOINTMENT_STATE_ORDER.filter((s) => counts[s] > 0 || HEADLINE_STATES.has(s)).map((state) => (
             <div key={state} className="text-center">
               <p className="text-muted-foreground flex items-center justify-center gap-1.5 text-[0.7rem] font-medium tracking-wider uppercase">
                 <span className={cn("size-2 rounded-full", APPOINTMENT_STATE_STYLES[state].dot)} />
@@ -251,7 +260,7 @@ export default function ScheduleDisplay() {
             <div className="leading-tight">
               <p className="text-sm font-medium">{failed ? "Reconnecting" : "Live"}</p>
               <p className="text-muted-foreground text-xs tabular-nums">
-                {lastUpdated ? `Updated ${new Date(lastUpdated).toLocaleTimeString()}` : "Loading..."}
+                {lastUpdated ? `Updated ${formatZonedTime(lastUpdated, { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : "Loading..."}
               </p>
             </div>
           </div> */}
@@ -365,14 +374,14 @@ export default function ScheduleDisplay() {
 
       {/* ── Legend: the colour code, spelled out ──────────────────────── */}
       <footer className="flex shrink-0 flex-wrap items-center gap-6 border-t px-6 py-3">
-        {APPOINTMENT_STATE_ORDER.map((state) => (
+        {APPOINTMENT_STATE_ORDER.filter((s) => s !== "unknown" || counts.unknown > 0).map((state) => (
           <div key={state} className="flex items-center gap-2">
             <span className={cn("size-3 rounded-sm", APPOINTMENT_STATE_STYLES[state].dot)} />
             <span className="text-sm font-medium">{APPOINTMENT_STATE_LABELS[state]}</span>
           </div>
         ))}
         <span className="text-muted-foreground ml-auto flex items-center gap-4 text-xs">
-          <span className="flex items-center gap-1.5"><TriangleAlert className="size-3.5" /> Delayed = start time passed, not started</span>
+          <span className="flex items-center gap-1.5"><TriangleAlert className="size-3.5" /> Colours mirror each appointment&apos;s status in Zoho FSM</span>
           <span className="flex items-center gap-1.5"><Clock className="size-3.5" /> Refreshes every {REFRESH_MS / 1000}s</span>
         </span>
       </footer>

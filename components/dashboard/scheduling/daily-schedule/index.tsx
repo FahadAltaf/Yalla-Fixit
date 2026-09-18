@@ -1,6 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
+import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import {
   scheduleService,
@@ -8,15 +19,18 @@ import {
   tagsService,
   rolesService,
   serviceTypesService,
+  techniciansService,
   type ScheduleEntry,
   type ScheduleVersion,
   type SchedulingAccess,
   type SchedulingConfig,
   type ShiftType,
   type TechnicianReference,
+  type UpdateEntryInput,
+  type FsmImportSummary,
 } from "@/modules/scheduling";
 import type { LeaveRecord, TechnicianTag, TechnicianRole, TechnicianServiceType } from "@/types/types";
-import { orderTechnicians, computeDriverIds, type SortMode } from "./technician-order";
+import { orderTechnicians, type SortMode } from "./technician-order";
 import { exportSchedulePdf, type PdfSection } from "@/lib/scheduling/export-pdf";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,48 +40,69 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dialog";
 import {
   AlertTriangle,
+  ArrowRight,
+  Ban,
   ChevronDown,
   ChevronUp,
   CircleCheck,
   Clock,
   Eraser,
   Eye,
+  GripVertical,
   Layers,
+  MoveHorizontal,
+  Pencil,
   Plus,
   Printer,
   RefreshCw,
   SlidersHorizontal,
+  UserRound,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
+import { cn } from "@/lib/actions/utils";
+import {
+  APPOINTMENT_STATE_LABELS,
+  APPOINTMENT_STATE_ORDER,
+  APPOINTMENT_STATE_STYLES,
+  HEADLINE_STATES,
+  resolveAppointmentState,
+  type AppointmentState,
+} from "@/lib/scheduling/appointment-status";
+import {
+  addDaysToDateString,
+  formatZonedDate,
+  isoAtZonedMinutes,
+  setOrgTimeZone,
+  todayInZone,
+  zonedDateString,
+  zonedMinutesOfDay,
+  zonedTimeToUtc,
+} from "@/lib/scheduling/org-time";
 import ScheduleBoardSkeleton from "./board-skeleton";
 import DateNav from "./date-nav";
 import TechnicianPicker from "./technician-picker";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import AddEntryDialog from "./add-entry-dialog";
 import SubmitDialog from "./submit-dialog";
 import EntryDetailDialog from "./entry-detail-dialog";
 import RejectDialog from "./reject-dialog";
 import HistoryDialog from "./history-dialog";
-import { formatTimeAmPm } from "@/components/ui/time-select";
+import { formatTimeAmPm, TIME_STEP_MINUTES } from "@/components/ui/time-select";
 
 type Props = {
   technicians: TechnicianReference[];
 };
 
-// Local-date helpers. Using toISOString() here would shift the date by the
-// UTC offset (Gulf Standard Time is +4), which made the "next day" button
-// appear stuck — so we build/read the YYYY-MM-DD string from local parts.
+// Dates and times are handled in the ORG's timezone (settings.org_timezone),
+// never the browser's: a scheduler whose laptop is set to another zone must
+// still read and write Gulf times. See lib/scheduling/org-time.ts.
 function todayIso() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return todayInZone();
 }
 
 function addDaysIso(dateStr: string, delta: number) {
-  const [y, m, d] = dateStr.split("-").map(Number);
-  const dt = new Date(y, m - 1, d + delta);
-  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+  return addDaysToDateString(dateStr, delta);
 }
 
 function shiftToMinutes(hhmmss: string) {
@@ -76,8 +111,7 @@ function shiftToMinutes(hhmmss: string) {
 }
 
 function timeOfDayMinutes(iso: string) {
-  const d = new Date(iso);
-  return d.getHours() * 60 + d.getMinutes();
+  return zonedMinutesOfDay(iso);
 }
 
 function minutesToHhmm(minutes: number) {
@@ -102,8 +136,8 @@ function formatRange(startMin: number, endMin: number) {
 // A leave record overlaps the selected day if it touches any moment of it.
 function leaveOverlapsDate(record: LeaveRecord, dateStr: string) {
   if (record.status !== "active") return false;
-  const dayStart = new Date(`${dateStr}T00:00:00`).getTime();
-  const dayEnd = new Date(`${dateStr}T23:59:59.999`).getTime();
+  const dayStart = zonedTimeToUtc(dateStr, "00:00:00").getTime();
+  const dayEnd = zonedTimeToUtc(dateStr, "23:59:59.999").getTime();
   return new Date(record.start_at).getTime() <= dayEnd && new Date(record.end_at).getTime() >= dayStart;
 }
 
@@ -164,12 +198,41 @@ const FIELD_DEFAULT: FieldVis = { tags: false, roles: false, ids: false, address
 const FIELD_STORAGE_KEY = "yfi.scheduling.fields";
 const FILTERS_STORAGE_KEY = "yfi.scheduling.filtersOpen";
 const HIDDEN_TECH_STORAGE_KEY = "yfi.scheduling.hiddenTechs";
-const SHIFT_TAB_STORAGE_KEY = "yfi.scheduling.shiftTab";
 type ExportShift = "both" | "day" | "night";
+// Radix Select forbids an empty-string item value; this stands in for "no role".
+const NO_ROLE_VALUE = "__no_role__";
+// FR-3: a failed sync is a portal state, not a job status. Solid red is Cannot complete, so
+// failures are red WITH stripes, and neither can be mistaken for the other.
+const SYNC_FAILED_STRIPES =
+  "repeating-linear-gradient(135deg, transparent 0 5px, rgba(255,255,255,0.22) 5px 10px)";
 
-export default function DailyScheduleDashboard({ technicians }: Props) {
+// FR-4: one line saying what the pull from Zoho FSM did. "Nothing appeared"
+// needs a reason as much as "five appeared" does, so this explains the
+// skips rather than leaving an empty board unexplained.
+function describeFsmImport(summary: FsmImportSummary | null | undefined): string | null {
+  if (!summary) return null;
+  if (summary.error) return `Couldn’t bring appointments in from Zoho FSM: ${summary.error}`;
+  if (summary.imported > 0) {
+    return `${summary.imported} appointment${summary.imported === 1 ? "" : "s"} booked in Zoho FSM added to the board`;
+  }
+  if (summary.scanned === 0) return "No appointments are booked in Zoho FSM for this date.";
+  const r = summary.reasons;
+  const parts = [
+    r.alreadyOnBoard > 0 ? `${r.alreadyOnBoard} already on the board` : null,
+    r.noKnownTechnician > 0 ? `${r.noKnownTechnician} assigned to someone not in the technician list` : null,
+    r.cancelled > 0 ? `${r.cancelled} cancelled` : null,
+    r.noWorkOrder > 0 ? `${r.noWorkOrder} with no work order` : null,
+    r.noTimes > 0 ? `${r.noTimes} with no scheduled time` : null,
+  ].filter((part): part is string => part !== null);
+  return `Zoho FSM has ${summary.scanned} appointment${summary.scanned === 1 ? "" : "s"} for this date; none added (${parts.join(", ")}).`;
+}
+
+export default function DailyScheduleDashboard({ technicians: initialTechnicians }: Props) {
+  // Kept in state (seeded from the server prop) so an inline role change on the
+  // board reflects immediately, without a round-trip to Technicians & Leave.
+  const [technicians, setTechnicians] = useState(initialTechnicians);
+  useEffect(() => setTechnicians(initialTechnicians), [initialTechnicians]);
   const [date, setDate] = useState(todayIso());
-  const [shiftTab, setShiftTab] = useState<"night" | "day">("night");
   const [config, setConfig] = useState<SchedulingConfig | null>(null);
   const [access, setAccess] = useState<SchedulingAccess | null>(null);
   const [version, setVersion] = useState<ScheduleVersion | null>(null);
@@ -187,7 +250,11 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
   const [inverseFilter, setInverseFilter] = useState(false);
   const [hideOnLeave, setHideOnLeave] = useState(false);
   const [onlyUnscheduled, setOnlyUnscheduled] = useState(false);
-  const [sortMode, setSortMode] = useState<SortMode>("default");
+  // Once the team has arranged the rows, the board opens in that order.
+  const [sortMode, setSortMode] = useState<SortMode>(() =>
+    initialTechnicians.some((t) => t.board_position != null) ? "custom" : "default",
+  );
+  const [refreshing, setRefreshing] = useState(false);
   const [zoomIndex, setZoomIndex] = useState(ZOOM_DEFAULT_INDEX);
   const [fieldVis, setFieldVis] = useState<FieldVis>(FIELD_DEFAULT);
   const [fieldMenuOpen, setFieldMenuOpen] = useState(false);
@@ -209,7 +276,13 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    scheduleService.getConfig().then(setConfig).catch(() => toast.error("Failed to load shift configuration"));
+    scheduleService
+      .getConfig()
+      .then((cfg) => {
+        // Every time on the board is read and written in the org's zone.
+        setOrgTimeZone(cfg.org_timezone);
+        setConfig(cfg);
+      }).catch(() => toast.error("Failed to load shift configuration"));
     scheduleService.getMe().then(setAccess).catch(() => toast.error("Failed to load your scheduling access"));
     Promise.all([
       tagsService.listTags(),
@@ -238,8 +311,6 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
     const storedFilters = window.localStorage.getItem(FILTERS_STORAGE_KEY);
     if (storedFilters === "open") setFiltersOpen(true);
     else if (storedFilters === "closed") setFiltersOpen(false);
-    const tab = window.localStorage.getItem(SHIFT_TAB_STORAGE_KEY);
-    if (tab === "night" || tab === "day") setShiftTab(tab);
     try {
       const h = JSON.parse(window.localStorage.getItem(HIDDEN_TECH_STORAGE_KEY) || "[]");
       if (Array.isArray(h)) setHiddenTechIds(new Set(h));
@@ -267,6 +338,23 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
     });
   };
 
+  // FR-1: change a technician's role directly from the board. Optimistic — the
+  // row updates at once and reverts if the save fails.
+  const handleRoleChange = async (fsmId: string, roleId: string | null) => {
+    const roleName = roles.find((r) => r.id === roleId)?.name ?? null;
+    const before = technicians;
+    setTechnicians((list) =>
+      list.map((t) => (t.fsm_resource_id === fsmId ? { ...t, role_id: roleId, role_name: roleName } : t)),
+    );
+    try {
+      await techniciansService.updateAttributes([fsmId], { roleId });
+      toast.success("Role updated");
+    } catch (error) {
+      setTechnicians(before);
+      toast.error(error instanceof Error ? error.message : "Failed to update role");
+    }
+  };
+
   const setField = (key: keyof FieldVis, value: boolean) => {
     setFieldVis((prev) => {
       const next = { ...prev, [key]: value };
@@ -284,8 +372,12 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
   // `reset` is used when the operating date changes: the previous day's
   // version and entries must not linger, or a "Rejected"/"Published" badge
   // from yesterday reads as though it belongs to the new date (D-04).
-  const loadDay = useCallback(async (targetDate: string, options?: { reset?: boolean }) => {
-    setLoading(true);
+  // `silent` reloads in place (after an action) without swapping the board
+  // for the loading skeleton.
+  const dayRequestRef = useRef(0);
+  const loadDay = useCallback(async (targetDate: string, options?: { reset?: boolean; silent?: boolean }) => {
+    const requestId = ++dayRequestRef.current;
+    if (!options?.silent) setLoading(true);
     if (options?.reset) {
       setVersion(null);
       setEntries([]);
@@ -295,13 +387,21 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
         scheduleService.getDay(targetDate),
         leaveService.listLeave({ status: "active" }),
       ]);
+      // A newer load (another date, or a later refresh) supersedes this one.
+      if (requestId !== dayRequestRef.current) return;
       setVersion(result.version);
       setEntries(result.entries);
       setLeaveRecords(leave);
+      // FR-4: appointments booked straight in FSM are pulled in when a day is
+      // first opened.
+      const fsmMessage = describeFsmImport(result.fsmImport);
+      if (fsmMessage) toast.info(fsmMessage, { duration: 8000 });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to load schedule");
+      if (requestId === dayRequestRef.current) {
+        toast.error(error instanceof Error ? error.message : "Failed to load schedule");
+      }
     } finally {
-      setLoading(false);
+      if (requestId === dayRequestRef.current) setLoading(false);
     }
   }, []);
 
@@ -348,17 +448,38 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
     return map;
   }, [entries]);
 
-  // Appointment count per shift, shown on the tabs so the shift you are not
-  // looking at never hides work silently.
-  const shiftCounts = useMemo(
-    () => ({
-      night: entries.filter((e) => e.shift === "night").length,
-      day: entries.filter((e) => e.shift === "day").length,
-    }),
-    [entries],
-  );
+  // FR-6: a technician's "site" is the address of their earliest appointment
+  // that day; used by the "Site" grouping to cluster same-address crews.
+  const siteByTechnician = useMemo(() => {
+    const map = new Map<string, string>();
+    entriesByTechnician.forEach((list, techId) => {
+      const first = list
+        .filter((e) => (e.address ?? "").trim())
+        .sort((a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime())[0];
+      if (first?.address) map.set(techId, first.address.trim());
+    });
+    return map;
+  }, [entriesByTechnician]);
 
-  const driverIds = useMemo(() => computeDriverIds(technicians), [technicians]);
+  // FR-3: which FSM statuses are on the board today, so the legend lists the
+  // usual ones plus anything unusual that is actually present.
+  const presentStates = useMemo(() => {
+    const set = new Set<AppointmentState>();
+    entries.forEach((e) => {
+      if (e.entry_type !== "free_text" && e.fsm_appointment_id) set.add(resolveAppointmentState(e.fsm_status));
+    });
+    return set;
+  }, [entries]);
+
+  // FR-2: role id → highlight colour, so each technician's row is tinted by
+  // their role (Driver / Technician-Driver = red by default; others as set).
+  const roleColorById = useMemo(() => {
+    const map = new Map<string, string>();
+    roles.forEach((r) => {
+      if (r.color) map.set(r.id, r.color);
+    });
+    return map;
+  }, [roles]);
 
   const anyCategoryFilter = tagFilters.length > 0 || roleFilters.length > 0 || serviceFilters.length > 0;
 
@@ -405,7 +526,7 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
     // S1: individually hidden technicians never appear on the board (or PDF).
     if (hiddenTechIds.size > 0) list = list.filter((t) => !hiddenTechIds.has(t.fsm_resource_id));
 
-    return orderTechnicians(list, sortMode, roles, services);
+    return orderTechnicians(list, sortMode, roles, services, siteByTechnician);
   }, [
     technicians,
     search,
@@ -424,9 +545,134 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
     sortMode,
     roles,
     services,
+    siteByTechnician,
   ]);
 
   const isEditable = version?.status === "draft" || version?.status === "draft_revision";
+
+  const hasCustomOrder = useMemo(() => technicians.some((t) => t.board_position != null), [technicians]);
+  const defaultSortMode: SortMode = hasCustomOrder ? "custom" : "default";
+
+  // Rows dragged into a new order on the board. `sectionIds` is the order the
+  // shift section showed; the move is applied to the whole team's list (so
+  // technicians filtered out of view keep their place), saved for everyone,
+  // and the board switches to the Custom order. Optimistic, reverted on error.
+  const handleReorder = async (sectionIds: string[], techId: string, toIndex: number) => {
+    const moved = sectionIds.filter((id) => id !== techId);
+    moved.splice(toIndex, 0, techId);
+    const prevId = moved[toIndex - 1] ?? null;
+    const nextId = moved[toIndex + 1] ?? null;
+
+    const order = orderTechnicians(technicians, sortMode, roles, services, siteByTechnician)
+      .map((t) => t.fsm_resource_id)
+      .filter((id) => id !== techId);
+    let insertAt = prevId ? order.indexOf(prevId) + 1 : nextId ? order.indexOf(nextId) : 0;
+    if (insertAt < 0) insertAt = order.length;
+    order.splice(insertAt, 0, techId);
+
+    const positionById = new Map(order.map((id, i) => [id, i + 1]));
+    const beforeTechnicians = technicians;
+    const beforeSort = sortMode;
+    setTechnicians((list) => list.map((t) => ({ ...t, board_position: positionById.get(t.fsm_resource_id) ?? null })));
+    setSortMode("custom");
+    try {
+      await techniciansService.saveBoardOrder(order);
+      if (beforeSort !== "custom") toast.success("Order saved — the board now uses your Custom order");
+    } catch (error) {
+      setTechnicians(beforeTechnicians);
+      setSortMode(beforeSort);
+      toast.error(error instanceof Error ? error.message : "Couldn't save the technician order");
+    }
+  };
+
+  // FR-5: apply a bar's new time / technicians. The board updates at once and
+  // the save runs in the background; if it fails, the day reloads from the
+  // server so the board never shows a change that didn't happen.
+  const saveEntryPlacement = async (
+    entry: ScheduleEntry,
+    next: { startAt: string; endAt: string; technicianFsmIds: string[] },
+    message: string,
+    allowUndo: boolean,
+  ) => {
+    const currentIds = (entry.schedule_entry_assignments ?? []).map((a) => a.technician_fsm_id);
+    const techsChanged =
+      currentIds.length !== next.technicianFsmIds.length ||
+      next.technicianFsmIds.some((id) => !currentIds.includes(id));
+    const payload: UpdateEntryInput = { id: entry.id };
+    if (next.startAt !== entry.start_at || next.endAt !== entry.end_at) {
+      payload.startAt = next.startAt;
+      payload.endAt = next.endAt;
+    }
+    if (techsChanged) payload.technicianFsmIds = next.technicianFsmIds;
+
+    const updated: ScheduleEntry = {
+      ...entry,
+      start_at: next.startAt,
+      end_at: next.endAt,
+      schedule_entry_assignments: techsChanged
+        ? next.technicianFsmIds.map(
+            (techId) =>
+              entry.schedule_entry_assignments?.find((a) => a.technician_fsm_id === techId) ?? {
+                id: `pending-${techId}`,
+                technician_fsm_id: techId,
+                technician_reference: {
+                  display_name: technicians.find((t) => t.fsm_resource_id === techId)?.display_name ?? techId,
+                },
+              },
+          )
+        : entry.schedule_entry_assignments,
+    };
+    setEntries((list) => list.map((e) => (e.id === entry.id ? updated : e)));
+
+    try {
+      await scheduleService.updateEntry(payload);
+      if (allowUndo) {
+        toast.success(message, {
+          duration: 6000,
+          action: {
+            label: "Undo",
+            onClick: () =>
+              saveEntryPlacement(
+                updated,
+                { startAt: entry.start_at, endAt: entry.end_at, technicianFsmIds: currentIds },
+                "Change undone",
+                false,
+              ),
+          },
+        });
+      } else {
+        toast.success(message, { duration: 2500 });
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn't save that change");
+      loadDay(date, { silent: true });
+    }
+  };
+
+  const commitEntryChange = (c: EntryDragCommit) => {
+    const { entry } = c;
+    const currentIds = (entry.schedule_entry_assignments ?? []).map((a) => a.technician_fsm_id);
+    // Replace the technician the bar was dragged FROM with the target, keeping
+    // any other assignees.
+    const technicianFsmIds = c.techChanged
+      ? Array.from(new Set([...currentIds.map((id) => (id === c.sourceTech ? c.targetTech : id)), c.targetTech]))
+      : currentIds;
+    const startAt = c.timeChanged ? isoAtMinutes(entry.start_at, c.startMin) : entry.start_at;
+    const endAt = c.timeChanged ? isoAtMinutes(entry.start_at, c.endMin) : entry.end_at;
+
+    const range = formatRange(c.startMin, c.endMin);
+    const targetName = technicians.find((t) => t.fsm_resource_id === c.targetTech)?.display_name ?? "technician";
+    const resized = c.timeChanged && c.startMin === timeOfDayMinutes(entry.start_at);
+    const message = c.techChanged
+      ? c.timeChanged
+        ? `Reassigned to ${targetName} · ${range}`
+        : `Reassigned to ${targetName}`
+      : resized
+        ? `Now ${range} (${formatDuration(c.endMin - c.startMin)})`
+        : `Moved to ${range}`;
+
+    saveEntryPlacement(entry, { startAt, endAt, technicianFsmIds }, message, true);
+  };
 
   const toggleTagFilter = (tagId: string) => {
     setTagFilters((prev) => (prev.includes(tagId) ? prev.filter((t) => t !== tagId) : [...prev, tagId]));
@@ -445,7 +691,7 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
     setInverseFilter(false);
     setHideOnLeave(false);
     setOnlyUnscheduled(false);
-    setSortMode("default");
+    setSortMode(defaultSortMode);
   };
   const viewCustomised =
     search.trim() !== "" ||
@@ -453,9 +699,11 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
     inverseFilter ||
     hideOnLeave ||
     onlyUnscheduled ||
-    sortMode !== "default";
+    sortMode !== defaultSortMode;
 
   const handleRefresh = async () => {
+    setRefreshing(true);
+    let refreshMessage: string | null = null;
     try {
       // Adopt any direct FSM edits for THIS day before reloading. Scoped to
       // the visible date so a refresh costs one FSM read per entry on screen
@@ -463,17 +711,20 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
       //
       // We don't announce "updated in FSM" -- Zoho's automation bumps every
       // appointment, so that message was just noise.
-      await scheduleService.reconcile(date);
+      const reconciled = await scheduleService.reconcile(date);
+      refreshMessage = describeFsmImport(reconciled.fsmImport);
     } catch {
       // Non-fatal: still reload the local view even if reconciliation fails.
     }
-    loadDay(date);
+    await loadDay(date, { silent: true });
+    setRefreshing(false);
+    if (refreshMessage) toast.info(refreshMessage, { duration: 8000 });
   };
 
   // E1: submitting opens a dialog to choose an approver or publish now.
   const handleSubmitted = () => {
     setSubmitOpen(false);
-    loadDay(date);
+    loadDay(date, { silent: true });
   };
 
   const handleApprove = async () => {
@@ -491,7 +742,7 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
       } else {
         toast.success("Schedule approved and published to FSM");
       }
-      loadDay(date);
+      loadDay(date, { silent: true });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to approve");
     } finally {
@@ -512,7 +763,7 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
           { duration: 12000 },
         );
       else toast.success("All entries synced to Zoho FSM");
-      loadDay(date);
+      loadDay(date, { silent: true });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to retry sync");
     } finally {
@@ -542,7 +793,7 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
       const { removed } = await scheduleService.clearDay(version.id);
       toast.success(removed === 0 ? "The schedule was already empty" : `Cleared ${removed} entr${removed === 1 ? "y" : "ies"}`);
       setClearOpen(false);
-      loadDay(date);
+      loadDay(date, { silent: true });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to clear the schedule");
     } finally {
@@ -572,7 +823,7 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
       const revision = await scheduleService.createRevision(date);
       setVersion(revision);
       toast.success("Draft revision created -- add new work, then submit for approval");
-      loadDay(date);
+      loadDay(date, { silent: true });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to create revision");
     } finally {
@@ -647,8 +898,8 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
               onToday={() => setDate(todayIso())}
               isToday={date === todayIso()}
             />
-            <Button variant="ghost" size="icon" onClick={handleRefresh} title="Refresh from FSM">
-              <RefreshCw className="size-4" />
+            <Button variant="ghost" size="icon" onClick={handleRefresh} disabled={refreshing} title="Refresh from FSM">
+              <RefreshCw className={cn("size-4", refreshing && "animate-spin")} />
             </Button>
           </div>
 
@@ -781,7 +1032,14 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="default">Default</SelectItem>
+                  {/* FR-6: "Driver" groups each crew under its driver (the
+                      default); "Site" groups technicians by appointment address. */}
+                  {/* The team's own row order, arranged by dragging rows. */}
+                  <SelectItem value="custom" disabled={!hasCustomOrder}>
+                    {hasCustomOrder ? "Custom" : "Custom (drag rows to arrange)"}
+                  </SelectItem>
+                  <SelectItem value="default">Driver</SelectItem>
+                  <SelectItem value="site">Site</SelectItem>
                   <SelectItem value="name">Name</SelectItem>
                   <SelectItem value="role">Role</SelectItem>
                   <SelectItem value="service">Service</SelectItem>
@@ -913,84 +1171,84 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
           )}
         </div>
 
+        {/* FR-3: bar colour = the job's FSM status (row tint = role). */}
+        {!loading && shiftBounds && (
+          <div className="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] print:hidden">
+            <span className="font-medium">Bar colour = FSM status:</span>
+            {APPOINTMENT_STATE_ORDER.filter((state) => presentStates.has(state) || HEADLINE_STATES.has(state)).map((state) => (
+              <span key={state} className="inline-flex items-center gap-1">
+                <span className={cn("size-2.5 rounded-sm", APPOINTMENT_STATE_STYLES[state].dot)} />
+                {APPOINTMENT_STATE_LABELS[state]}
+              </span>
+            ))}
+            <span className="inline-flex items-center gap-1">
+              <span className="bg-danger size-2.5 rounded-sm" style={{ backgroundImage: SYNC_FAILED_STRIPES }} />
+              Sync failed
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="border-border bg-ink/40 size-2.5 rounded-sm border border-dashed" />
+              Note
+            </span>
+          </div>
+        )}
         {loading || !shiftBounds ? (
           <ScheduleBoardSkeleton />
         ) : (
-          <Tabs
-            value={shiftTab}
-            onValueChange={(v) => {
-              const next = v as "night" | "day";
-              setShiftTab(next);
-              window.localStorage.setItem(SHIFT_TAB_STORAGE_KEY, next);
-            }}
-            className="gap-4 print:hidden"
-          >
-            {/* Counts sit on the tab so the shift you are not looking at
-                never hides work silently. */}
-            <TabsList className="h-auto! w-full p-1 sm:w-auto">
-              <TabsTrigger value="night" className="gap-2 px-4 ">
-                Night Shift
-                <Badge variant="secondary" className="px-1.5 py-0 text-[11px] font-normal tabular-nums">
-                  {shiftCounts.night}
-                </Badge>
-              </TabsTrigger>
-              <TabsTrigger value="day" className="gap-2 px-4">
-                Morning Shift
-                <Badge variant="secondary" className="px-1.5 py-0 text-[11px] font-normal tabular-nums">
-                  {shiftCounts.day}
-                </Badge>
-              </TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="night" className="mt-0">
-              <ShiftSection
-                title="Night Shift"
-                shift="night"
-                bounds={shiftBounds.night}
-                zoom={zoom}
-                fieldVis={fieldVis}
-                // #10: only night-shift technicians (plus those with no shift set).
-                technicians={visibleTechnicians.filter((t) => t.shift === "night" || !t.shift)}
-                pickTechnicians={technicians.filter((t) => t.is_active && (t.shift === "night" || !t.shift))}
-                hiddenTechIds={hiddenTechIds}
-                onToggleHidden={toggleHiddenTech}
-                onSetTechsHidden={setTechsHidden}
-                driverIds={driverIds}
-                tagsByTechnician={assignments}
-                entriesByTechnician={entriesByTechnician}
-                leaveByTechnician={leaveByTechnician}
-                isEditable={isEditable}
-                onAddEntry={(technicianFsmId, slot) =>
-                  setAddEntryFor({ shift: "night", technicianFsmId, ...slot })
-                }
-                onEntryClick={setSelectedEntry}
-                onEntryMoved={() => loadDay(date)}
-              />
-            </TabsContent>
-
-            <TabsContent value="day" className="mt-0">
-              <ShiftSection
-                title="Morning Shift"
-                shift="day"
-                bounds={shiftBounds.day}
-                zoom={zoom}
-                fieldVis={fieldVis}
-                technicians={visibleTechnicians.filter((t) => t.shift === "morning" || !t.shift)}
-                pickTechnicians={technicians.filter((t) => t.is_active && (t.shift === "morning" || !t.shift))}
-                hiddenTechIds={hiddenTechIds}
-                onToggleHidden={toggleHiddenTech}
-                onSetTechsHidden={setTechsHidden}
-                driverIds={driverIds}
-                tagsByTechnician={assignments}
-                entriesByTechnician={entriesByTechnician}
-                leaveByTechnician={leaveByTechnician}
-                isEditable={isEditable}
-                onAddEntry={(technicianFsmId, slot) => setAddEntryFor({ shift: "day", technicianFsmId, ...slot })}
-                onEntryClick={setSelectedEntry}
-                onEntryMoved={() => loadDay(date)}
-              />
-            </TabsContent>
-          </Tabs>
+          // Both shifts stacked: Night Shift on top, Morning Shift underneath
+          // (YFI: the board must show both shifts at once, not split into tabs).
+          <div className="flex flex-col gap-4 print:hidden">
+            <ShiftSection
+              title="Night Shift"
+              shift="night"
+              bounds={shiftBounds.night}
+              zoom={zoom}
+              fieldVis={fieldVis}
+              // #10: only night-shift technicians (plus those with no shift set).
+              technicians={visibleTechnicians.filter((t) => t.shift === "night" || !t.shift)}
+              pickTechnicians={technicians.filter((t) => t.is_active && (t.shift === "night" || !t.shift))}
+              hiddenTechIds={hiddenTechIds}
+              onToggleHidden={toggleHiddenTech}
+              onSetTechsHidden={setTechsHidden}
+              roleColors={roleColorById}
+              tagsByTechnician={assignments}
+              entriesByTechnician={entriesByTechnician}
+              leaveByTechnician={leaveByTechnician}
+              isEditable={isEditable}
+              onAddEntry={(technicianFsmId, slot) => setAddEntryFor({ shift: "night", technicianFsmId, ...slot })}
+              roles={roles}
+              onRoleChange={handleRoleChange}
+              canEditRoles={Boolean(access?.canEdit)}
+              onEntryClick={setSelectedEntry}
+              onEntryCommit={commitEntryChange}
+              canReorder={Boolean(access?.canEdit)}
+              onReorder={handleReorder}
+            />
+            <ShiftSection
+              title="Morning Shift"
+              shift="day"
+              bounds={shiftBounds.day}
+              zoom={zoom}
+              fieldVis={fieldVis}
+              technicians={visibleTechnicians.filter((t) => t.shift === "morning" || !t.shift)}
+              pickTechnicians={technicians.filter((t) => t.is_active && (t.shift === "morning" || !t.shift))}
+              hiddenTechIds={hiddenTechIds}
+              onToggleHidden={toggleHiddenTech}
+              onSetTechsHidden={setTechsHidden}
+              roleColors={roleColorById}
+              tagsByTechnician={assignments}
+              entriesByTechnician={entriesByTechnician}
+              leaveByTechnician={leaveByTechnician}
+              isEditable={isEditable}
+              onAddEntry={(technicianFsmId, slot) => setAddEntryFor({ shift: "day", technicianFsmId, ...slot })}
+              roles={roles}
+              onRoleChange={handleRoleChange}
+              canEditRoles={Boolean(access?.canEdit)}
+              onEntryClick={setSelectedEntry}
+              onEntryCommit={commitEntryChange}
+              canReorder={Boolean(access?.canEdit)}
+              onReorder={handleReorder}
+            />
+          </div>
         )}
 
       </div>
@@ -1011,7 +1269,7 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
           onOpenChange={(open) => !open && setAddEntryFor(null)}
           onAdded={() => {
             setAddEntryFor(null);
-            loadDay(date);
+            loadDay(date, { silent: true });
           }}
         />
       )}
@@ -1026,10 +1284,11 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
           technicians={technicians}
           leaveRecords={leaveRecords}
           scheduleVersionId={version?.id ?? null}
+          dayEntries={entries}
           onOpenChange={(open) => !open && setSelectedEntry(null)}
           onChanged={() => {
             setSelectedEntry(null);
-            loadDay(date);
+            loadDay(date, { silent: true });
           }}
         />
       )}
@@ -1094,11 +1353,167 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
   );
 }
 
-const TECH_COL_WIDTH = 208; // px — sticky first column, so it needs a fixed width
+const TECH_COL_WIDTH = 224; // px — sticky first column, so it needs a fixed width
+// A press that moves less than this is a click, not a drag.
+const DRAG_THRESHOLD_PX = 4;
+// How long a row's handle must be held before the row lifts, so a stray click
+// or a scroll gesture never reorders anything.
+const LONG_PRESS_MS = 280;
+// Dragging within this distance of the pane's edge scrolls the pane.
+const AUTOSCROLL_EDGE_PX = 48;
+const AUTOSCROLL_MAX_PX = 18;
+const EMPTY_ENTRIES: ScheduleEntry[] = [];
+const EMPTY_TAGS: TechnicianTag[] = [];
 
 type HourCell = { start: number; end: number; leftPct: number; widthPct: number };
 
 type SlotSelection = { startTime: string; endTime: string };
+
+type Bounds = { start: number; end: number };
+
+type Placement = {
+  startMin: number;
+  endMin: number;
+  outside: boolean;
+  allDay: boolean;
+  leftPct: number;
+  widthPct: number;
+};
+
+// An appointment being moved (body) or stretched (right edge). Only snapped
+// values live here, so the board re-renders once per 30-minute step or row
+// change -- never per pixel.
+type EntryDrag = {
+  entry: ScheduleEntry;
+  mode: "move" | "resize";
+  sourceTech: string;
+  targetTech: string;
+  origStartMin: number;
+  origEndMin: number;
+  startMin: number;
+  endMin: number;
+  blockedReason: string | null;
+};
+
+// A technician row being dragged to a new position.
+type RowDrag = {
+  techId: string;
+  fromIndex: number;
+  insertIndex: number; // the boundary (0..n) the row would drop at
+  boundaryTop: number; // px within the rows wrapper
+  rowHeight: number;
+};
+
+type EntryDragCommit = {
+  entry: ScheduleEntry;
+  sourceTech: string;
+  targetTech: string;
+  startMin: number;
+  endMin: number;
+  timeChanged: boolean;
+  techChanged: boolean;
+};
+
+function formatDuration(minutes: number) {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h === 0) return `${m}m`;
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+}
+
+// ISO timestamp for `minutes` after midnight on the entry's own day (values
+// past 1440 roll into the next day).
+function isoAtMinutes(dayIso: string, minutes: number) {
+  return isoAtZonedMinutes(zonedDateString(dayIso), minutes);
+}
+
+// Left/width percentages for a time range: never runs off the right edge and
+// keeps a clickable minimum width.
+function spanPct(startMin: number, endMin: number, bounds: Bounds, span: number) {
+  const leftPct = ((startMin - bounds.start) / span) * 100;
+  const rawWidth = ((endMin - startMin) / span) * 100;
+  const widthPct = Math.max(Math.min(rawWidth, 100 - leftPct), Math.min(6, 100 - leftPct));
+  return { leftPct, widthPct };
+}
+
+// An entry whose window does not intersect this shift at all used to be
+// positioned past 100% and disappeared off the right edge (D-01). Now it is
+// clamped to the nearest edge and flagged instead.
+function placeEntry(entry: ScheduleEntry, bounds: Bounds, span: number): Placement {
+  const startMin = timeOfDayMinutes(entry.start_at);
+  let endMin = timeOfDayMinutes(entry.end_at);
+  if (endMin <= startMin) endMin += 1440; // crosses midnight
+
+  // All-Day appointments have no time — they span the whole shift row.
+  if (entry.fsm_schedule_type === "All Day") {
+    return { startMin, endMin, outside: false, allDay: true, leftPct: 0, widthPct: 100 };
+  }
+
+  const visibleStart = Math.max(startMin, bounds.start);
+  const visibleEnd = Math.min(endMin, bounds.end);
+  const outside = visibleEnd <= visibleStart;
+  if (outside) {
+    const pinRight = startMin >= bounds.end;
+    return { startMin, endMin, outside, allDay: false, leftPct: pinRight ? 100 - 14 : 0, widthPct: 14 };
+  }
+  return { startMin, endMin, outside, allDay: false, ...spanPct(visibleStart, visibleEnd, bounds, span) };
+}
+
+// Assign each of a technician's entries to a vertical lane so overlapping
+// appointments stack under one another and are all visible (YFI v1.5 on
+// N-7), instead of one hiding another.
+function laneLayout(rowEntries: ScheduleEntry[]) {
+  const sorted = [...rowEntries].sort((a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime());
+  const laneEnds: number[] = [];
+  const laneOf = new Map<string, number>();
+  for (const e of sorted) {
+    const s = new Date(e.start_at).getTime();
+    const en = new Date(e.end_at).getTime();
+    let lane = laneEnds.findIndex((end) => end <= s);
+    if (lane === -1) {
+      lane = laneEnds.length;
+      laneEnds.push(en);
+    } else {
+      laneEnds[lane] = en;
+    }
+    laneOf.set(e.id, lane);
+  }
+  return { laneOf, laneCount: Math.max(1, laneEnds.length) };
+}
+
+// The lane a dropped range would sit in: the first lane with nothing
+// overlapping it, or a new lane underneath (the row grows to make room).
+function laneForRange(
+  rowEntries: ScheduleEntry[],
+  laneOf: Map<string, number>,
+  laneCount: number,
+  range: { startMin: number; endMin: number; ignoreId: string },
+  bounds: Bounds,
+  span: number,
+) {
+  for (let lane = 0; lane < laneCount; lane += 1) {
+    const clash = rowEntries.some((e) => {
+      if (e.id === range.ignoreId || laneOf.get(e.id) !== lane) return false;
+      const p = placeEntry(e, bounds, span);
+      return p.startMin < range.endMin && p.endMin > range.startMin;
+    });
+    if (!clash) return lane;
+  }
+  return laneCount;
+}
+
+// E3: which text lines a bar shows, driven by the eye menu.
+function entryText(entry: ScheduleEntry, fieldVis: FieldVis, allDay: boolean) {
+  const label = entryLabel(entry);
+  if (entry.entry_type === "free_text") return { primaryText: label, secondaryText: "" };
+  const addr = entry.address || entry.client_name || "";
+  const parts: string[] = [];
+  if (fieldVis.ids) parts.push(label);
+  if (fieldVis.address && addr) parts.push(addr);
+  if (allDay && parts.length < 2) parts.push("All Day");
+  if (parts.length === 0) parts.push(label);
+  return { primaryText: parts[0], secondaryText: parts[1] ?? "" };
+}
 
 function ShiftSection({
   title,
@@ -1111,18 +1526,22 @@ function ShiftSection({
   hiddenTechIds,
   onToggleHidden,
   onSetTechsHidden,
-  driverIds,
+  roleColors,
   tagsByTechnician,
   entriesByTechnician,
   leaveByTechnician,
   isEditable,
   onAddEntry,
   onEntryClick,
-  onEntryMoved,
+  onEntryCommit,
+  roles,
+  onRoleChange,
+  canEditRoles,
+  canReorder,  onReorder,
 }: {
   title: string;
   shift: ShiftType;
-  bounds: { start: number; end: number };
+  bounds: Bounds;
   zoom: number;
   fieldVis: FieldVis;
   technicians: TechnicianReference[];
@@ -1131,21 +1550,66 @@ function ShiftSection({
   hiddenTechIds: Set<string>;
   onToggleHidden: (id: string) => void;
   onSetTechsHidden: (ids: string[], hidden: boolean) => void;
-  driverIds: Set<string>;
+  roleColors: Map<string, string>;
   tagsByTechnician: Record<string, TechnicianTag[]>;
   entriesByTechnician: Map<string, ScheduleEntry[]>;
   leaveByTechnician: Map<string, LeaveRecord>;
   isEditable: boolean;
   onAddEntry: (technicianFsmId: string, slot?: SlotSelection) => void;
   onEntryClick: (entry: ScheduleEntry) => void;
-  onEntryMoved: () => void;
+  onEntryCommit: (commit: EntryDragCommit) => void;
+  roles: TechnicianRole[];
+  onRoleChange: (technicianFsmId: string, roleId: string | null) => void;
+  canEditRoles: boolean;
+  canReorder: boolean;
+  // `sectionIds` is this section's displayed order; `toIndex` the new position.
+  onReorder: (sectionIds: string[], technicianFsmId: string, toIndex: number) => void;
 }) {
   const span = bounds.end - bounds.start || 1;
 
-  // Drag-to-reschedule (Google-Calendar style): while a bar is being dragged
-  // we hold its live snapped start here so it follows the pointer; on release
-  // we push the new time to FSM-backed storage via updateEntry.
-  const [drag, setDrag] = useState<{ id: string; newStartMin: number } | null>(null);
+  // FR-1: which technician row is editing its role inline (by fsm_resource_id).
+  const [editingRoleFor, setEditingRoleFor] = useState<string | null>(null);
+  const [entryDrag, setEntryDrag] = useState<EntryDrag | null>(null);
+  const [rowDrag, setRowDrag] = useState<RowDrag | null>(null);
+  // The row just dropped, briefly highlighted so the eye can find where it went.
+  const [flashTech, setFlashTech] = useState<string | null>(null);
+
+  const paneRef = useRef<HTMLDivElement>(null);
+  const rowsRef = useRef<HTMLDivElement>(null);
+  const pillRef = useRef<HTMLDivElement>(null);
+  const rowGhostRef = useRef<HTMLDivElement>(null);
+  const pointerRef = useRef({ x: 0, y: 0 });
+
+  // Pointer handlers are created once, so memoised rows don't re-render every
+  // time this section does; they read current props through this ref.
+  const latest = useRef({
+    bounds,
+    span,
+    isEditable,
+    canReorder,
+    technicians,
+    leaveByTechnician,
+    onEntryClick,
+    onEntryCommit,
+    onReorder,
+    onAddEntry,
+    onRoleChange,
+  });
+  useLayoutEffect(() => {
+    latest.current = {
+      bounds,
+      span,
+      isEditable,
+      canReorder,
+      technicians,
+      leaveByTechnician,
+      onEntryClick,
+      onEntryCommit,
+      onReorder,
+      onAddEntry,
+      onRoleChange,
+    };
+  });
 
   // Explicit percentage widths (rather than flex-1) so the frozen header
   // cells and the body gridlines stay aligned even when the shift window
@@ -1176,142 +1640,413 @@ function ShiftSection({
   const trackMinPx = TECH_COL_WIDTH + hourCells.length * MIN_HOUR_PX * zoom;
   const laneHeight = Math.round((zoom < 1 ? 40 : 52) * (zoom < 1 ? zoom + 0.35 : 1 + (zoom - 1) * 0.3));
 
-  // Assign each of a technician's entries to a vertical lane so overlapping
-  // appointments stack under one another and are all visible (YFI v1.5 on
-  // N-7), instead of one hiding another.
-  const laneLayout = (rowEntries: ScheduleEntry[]) => {
-    const sorted = [...rowEntries].sort((a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime());
-    const laneEnds: number[] = [];
-    const laneOf = new Map<string, number>();
-    for (const e of sorted) {
-      const s = new Date(e.start_at).getTime();
-      const en = new Date(e.end_at).getTime();
-      let lane = laneEnds.findIndex((end) => end <= s);
-      if (lane === -1) {
-        lane = laneEnds.length;
-        laneEnds.push(en);
-      } else {
-        laneEnds[lane] = en;
-      }
-      laneOf.set(e.id, lane);
-    }
-    return { laneOf, laneCount: Math.max(1, laneEnds.length) };
-  };
-
-  // An entry whose window does not intersect this shift at all used to be
-  // positioned past 100% and disappeared off the right edge (D-01). Now it
-  // is clamped to the nearest edge and flagged instead.
-  const placeEntry = (entry: ScheduleEntry) => {
-    const startMin = timeOfDayMinutes(entry.start_at);
-    let endMin = timeOfDayMinutes(entry.end_at);
-    if (endMin <= startMin) endMin += 1440; // crosses midnight
-
-    // All-Day appointments have no time — they span the whole shift row.
-    if (entry.fsm_schedule_type === "All Day") {
-      return { startMin, endMin, outside: false, allDay: true, leftPct: 0, widthPct: 100 };
-    }
-
-    const visibleStart = Math.max(startMin, bounds.start);
-    const visibleEnd = Math.min(endMin, bounds.end);
-    const outside = visibleEnd <= visibleStart;
-
-    if (outside) {
-      const pinRight = startMin >= bounds.end;
-      return {
-        startMin,
-        endMin,
-        outside,
-        leftPct: pinRight ? 100 - 14 : 0,
-        widthPct: 14,
-      };
-    }
-
-    const leftPct = ((visibleStart - bounds.start) / span) * 100;
-    const rawWidth = ((visibleEnd - visibleStart) / span) * 100;
-    // Never let a bar run off the right edge, and keep a clickable minimum.
-    const widthPct = Math.max(Math.min(rawWidth, 100 - leftPct), Math.min(6, 100 - leftPct));
-    return { startMin, endMin, outside, leftPct, widthPct };
-  };
-
   const outOfWindow = useMemo(() => {
     const seen = new Map<string, ScheduleEntry>();
     technicians.forEach((t) => {
       (entriesByTechnician.get(t.fsm_resource_id) ?? [])
         .filter((e) => e.shift === shift)
         .forEach((e) => {
-          if (placeEntry(e).outside) seen.set(e.id, e);
+          if (placeEntry(e, bounds, span).outside) seen.set(e.id, e);
         });
     });
     return [...seen.values()];
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [technicians, entriesByTechnician, shift, bounds.start, bounds.end]);
+  }, [technicians, entriesByTechnician, shift, bounds, span]);
 
-  // Start a pointer-drag on an entry bar. A tiny movement is treated as a
-  // click (opens the detail dialog); a real drag snaps the start to the
-  // nearest 30 minutes, clamped inside the shift window, and on release
-  // persists the new time (keeping the appointment's duration). Editable days
-  // only; All-Day and out-of-window bars are not draggable but still clickable.
-  const startDrag = (
-    e: ReactPointerEvent,
-    entry: ScheduleEntry,
-    placed: { startMin: number; endMin: number; outside: boolean; allDay?: boolean },
-  ) => {
-    const canDrag = isEditable && !placed.allDay && !placed.outside;
-    const container = (e.currentTarget as HTMLElement).parentElement;
-    const trackPx = container?.clientWidth || 1;
-    const minPerPx = span / trackPx;
-    const startMin = placed.startMin;
-    const durationMin = Math.max(1, placed.endMin - placed.startMin);
-    const startX = e.clientX;
-    let moved = false;
-    let finalStartMin = startMin;
+  // The floating label next to the cursor while dragging a bar. Positioned
+  // straight on the DOM so following the pointer costs no re-render.
+  const positionPill = useCallback(() => {
+    const pill = pillRef.current;
+    if (!pill) return;
+    const { x, y } = pointerRef.current;
+    const width = pill.offsetWidth;
+    const left = x + 16 + width > window.innerWidth - 8 ? x - 16 - width : x + 16;
+    pill.style.transform = `translate3d(${Math.max(8, left)}px, ${y + 18}px, 0)`;
+  }, []);
+  useLayoutEffect(() => {
+    if (entryDrag) positionPill();
+  }, [entryDrag, positionPill]);
 
-    const move = (ev: PointerEvent) => {
-      if (!canDrag) return;
-      const dx = ev.clientX - startX;
-      if (Math.abs(dx) > 3) moved = true;
-      let ns = startMin + Math.round((dx * minPerPx) / 30) * 30;
-      ns = Math.max(bounds.start, Math.min(ns, bounds.end - durationMin));
-      finalStartMin = ns;
-      setDrag({ id: entry.id, newStartMin: ns });
-    };
-    const up = async () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      setDrag(null);
-      if (!canDrag || !moved || finalStartMin === startMin) {
-        onEntryClick(entry); // barely moved → treat as a click
-        return;
+  // Scrolls the pane while the pointer rests near its edge during a drag, and
+  // re-runs `onScrolled` so the drop target keeps up. Returns a stop function.
+  const startAutoScroll = useCallback((axis: "both" | "y", onScrolled: () => void) => {
+    let raf = 0;
+    const speed = (depth: number) =>
+      Math.min(AUTOSCROLL_MAX_PX, Math.ceil((depth / AUTOSCROLL_EDGE_PX) * AUTOSCROLL_MAX_PX));
+    const tick = () => {
+      const pane = paneRef.current;
+      if (pane) {
+        const r = pane.getBoundingClientRect();
+        const { x, y } = pointerRef.current;
+        let dx = 0;
+        let dy = 0;
+        if (y < r.top + AUTOSCROLL_EDGE_PX) dy = -speed(r.top + AUTOSCROLL_EDGE_PX - y);
+        else if (y > r.bottom - AUTOSCROLL_EDGE_PX) dy = speed(y - (r.bottom - AUTOSCROLL_EDGE_PX));
+        if (axis === "both") {
+          const trackLeft = r.left + TECH_COL_WIDTH;
+          if (x >= trackLeft - 8 && x < trackLeft + AUTOSCROLL_EDGE_PX) dx = -speed(trackLeft + AUTOSCROLL_EDGE_PX - x);
+          else if (x > r.right - AUTOSCROLL_EDGE_PX) dx = speed(x - (r.right - AUTOSCROLL_EDGE_PX));
+        }
+        if (dx || dy) {
+          const beforeLeft = pane.scrollLeft;
+          const beforeTop = pane.scrollTop;
+          pane.scrollBy(dx, dy);
+          if (pane.scrollLeft !== beforeLeft || pane.scrollTop !== beforeTop) onScrolled();
+        }
       }
-      const startDate = new Date(entry.start_at);
-      const durationMs = new Date(entry.end_at).getTime() - startDate.getTime();
-      const newStart = new Date(startDate);
-      newStart.setHours(Math.floor(finalStartMin / 60), finalStartMin % 60, 0, 0);
-      const newEnd = new Date(newStart.getTime() + durationMs);
-      try {
-        await scheduleService.updateEntry({
-          id: entry.id,
-          startAt: newStart.toISOString(),
-          endAt: newEnd.toISOString(),
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  // FR-5: press on a bar to drag it. Sideways changes the time (30-minute
+  // snap, clamped inside the shift); up/down onto another row reassigns it;
+  // the right edge stretches the end time. A press that barely moves is a
+  // click and opens the detail. On release the change is handed to the
+  // dashboard, which updates the board at once and saves in the background.
+  const beginEntryDrag = useCallback(
+    (
+      e: ReactPointerEvent<HTMLElement>,
+      entry: ScheduleEntry,
+      placed: Placement,
+      sourceTech: string,
+      mode: "move" | "resize",
+    ) => {
+      if (e.button !== 0) return;
+      if (mode === "resize") e.stopPropagation(); // don't also start a move
+      const canDrag = latest.current.isEditable && !placed.allDay && !placed.outside;
+      const track = (e.currentTarget as HTMLElement).closest<HTMLElement>("[data-track]");
+      const minPerPx = latest.current.span / (track?.clientWidth || 1);
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const startScrollLeft = paneRef.current?.scrollLeft ?? 0;
+      const duration = Math.max(TIME_STEP_MINUTES, placed.endMin - placed.startMin);
+      pointerRef.current = { x: startX, y: startY };
+      let started = false;
+      let current: EntryDrag | null = null;
+      let stopScroll: (() => void) | null = null;
+
+      // Only rows inside this shift section are valid drop targets.
+      const rowAt = (x: number, y: number) => {
+        const row = (document.elementFromPoint(x, y) as HTMLElement | null)?.closest<HTMLElement>("[data-tech-fsm]");
+        return row && rowsRef.current?.contains(row) ? (row.dataset.techFsm ?? null) : null;
+      };
+
+      const compute = (): EntryDrag => {
+        const { bounds: b, leaveByTechnician: leaveMap, technicians: techs } = latest.current;
+        const { x, y } = pointerRef.current;
+        const scrolled = (paneRef.current?.scrollLeft ?? startScrollLeft) - startScrollLeft;
+        const delta = Math.round(((x - startX + scrolled) * minPerPx) / TIME_STEP_MINUTES) * TIME_STEP_MINUTES;
+        const base = { entry, mode, sourceTech, origStartMin: placed.startMin, origEndMin: placed.endMin };
+
+        if (mode === "resize") {
+          const endMin = Math.max(placed.startMin + TIME_STEP_MINUTES, Math.min(placed.endMin + delta, b.end));
+          return { ...base, targetTech: sourceTech, startMin: placed.startMin, endMin, blockedReason: null };
+        }
+
+        const startMin = Math.max(b.start, Math.min(placed.startMin + delta, b.end - duration));
+        const endMin = startMin + duration;
+        const targetTech = rowAt(x, y) ?? current?.targetTech ?? sourceTech;
+        let blockedReason: string | null = null;
+        const leave = targetTech !== sourceTech ? leaveMap.get(targetTech) : undefined;
+        if (leave) {
+          const s = new Date(isoAtMinutes(entry.start_at, startMin)).getTime();
+          const en = new Date(isoAtMinutes(entry.start_at, endMin)).getTime();
+          if (new Date(leave.start_at).getTime() < en && new Date(leave.end_at).getTime() > s) {
+            const name = techs.find((t) => t.fsm_resource_id === targetTech)?.display_name ?? "This technician";
+            blockedReason = `${name} is on leave (${leave.leave_type}) at that time`;
+          }
+        }
+        return { ...base, targetTech, startMin, endMin, blockedReason };
+      };
+
+      const update = () => {
+        positionPill();
+        const next = compute();
+        if (
+          !current ||
+          next.startMin !== current.startMin ||
+          next.endMin !== current.endMin ||
+          next.targetTech !== current.targetTech ||
+          next.blockedReason !== current.blockedReason
+        ) {
+          current = next;
+          setEntryDrag(next);
+        }
+      };
+
+      const cleanup = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onCancel);
+        window.removeEventListener("keydown", onKey);
+        stopScroll?.();
+        document.body.style.removeProperty("cursor");
+        document.body.style.removeProperty("user-select");
+      };
+
+      const onMove = (ev: PointerEvent) => {
+        pointerRef.current = { x: ev.clientX, y: ev.clientY };
+        if (!started) {
+          if (!canDrag) return;
+          if (Math.abs(ev.clientX - startX) < DRAG_THRESHOLD_PX && Math.abs(ev.clientY - startY) < DRAG_THRESHOLD_PX) {
+            return;
+          }
+          started = true;
+          document.body.style.cursor = mode === "resize" ? "ew-resize" : "grabbing";
+          document.body.style.userSelect = "none";
+          stopScroll = startAutoScroll("both", update);
+        }
+        update();
+      };
+
+      const onUp = () => {
+        cleanup();
+        if (!started) {
+          latest.current.onEntryClick(entry); // barely moved → a click
+          return;
+        }
+        const final = current;
+        setEntryDrag(null);
+        if (!final) return;
+        const timeChanged = final.startMin !== final.origStartMin || final.endMin !== final.origEndMin;
+        const techChanged = final.targetTech !== final.sourceTech;
+        if (!timeChanged && !techChanged) return;
+        if (final.blockedReason) {
+          toast.error(final.blockedReason);
+          return;
+        }
+        latest.current.onEntryCommit({
+          entry,
+          sourceTech,
+          targetTech: final.targetTech,
+          startMin: final.startMin,
+          endMin: final.endMin,
+          timeChanged,
+          techChanged,
         });
-        toast.success(`Moved to ${formatRange(finalStartMin, finalStartMin + durationMin)}`);
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Failed to move appointment");
-      } finally {
-        onEntryMoved(); // reload either way, so the bar snaps back on failure
-      }
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  };
+      };
+
+      const onCancel = () => {
+        cleanup();
+        setEntryDrag(null);
+      };
+      // Escape drops the drag without changing anything.
+      const onKey = (ev: KeyboardEvent) => {
+        if (ev.key !== "Escape" || !started) return;
+        cleanup();
+        setEntryDrag(null);
+      };
+
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onCancel);
+      window.addEventListener("keydown", onKey);
+    },
+    [positionPill, startAutoScroll],
+  );
+
+  const flashRow = useCallback((techId: string) => {
+    setFlashTech(techId);
+    window.setTimeout(() => setFlashTech((t) => (t === techId ? null : t)), 1200);
+  }, []);
+
+  // Team-arranged rows: press and hold a row's handle, then drag it up or down.
+  // The row lifts and follows the pointer, a line shows where it will land, and
+  // releasing saves the new order for everyone.
+  const beginRowPress = useCallback(
+    (e: ReactPointerEvent<HTMLElement>, techId: string) => {
+      if (e.button !== 0 || !latest.current.canReorder) return;
+      e.preventDefault(); // no text selection while holding...
+      const grip = e.currentTarget as HTMLElement;
+      // ...but do select the handle, so ↑ / ↓ move the row after a click.
+      grip.focus({ preventScroll: true });
+      // With a mouse, dragging the handle is unambiguous, so it starts as soon
+      // as the pointer moves. On touch the hold is required, so scrolling the
+      // board with a finger never reorders anything.
+      const isMouse = e.pointerType === "mouse";
+      const startX = e.clientX;
+      const startY = e.clientY;
+      pointerRef.current = { x: startX, y: startY };
+      grip.dataset.pressing = "true";
+
+      let dragging = false;
+      let cancelled = false;
+      let ids: string[] = [];
+      let geometry: { top: number; height: number }[] = [];
+      let fromIndex = -1;
+      let insertIndex = -1;
+      let grabOffset = 0;
+      let stopScroll: (() => void) | null = null;
+
+      const positionGhost = () => {
+        const ghost = rowGhostRef.current;
+        const wrap = rowsRef.current;
+        const pane = paneRef.current;
+        if (!ghost || !wrap || !pane) return;
+        const top = pointerRef.current.y - wrap.getBoundingClientRect().top - grabOffset;
+        ghost.style.transform = `translate3d(${pane.scrollLeft}px, ${top}px, 0)`;
+      };
+
+      const update = () => {
+        positionGhost();
+        const wrap = rowsRef.current;
+        if (!wrap || geometry.length === 0) return;
+        const y = pointerRef.current.y - wrap.getBoundingClientRect().top;
+        let idx = geometry.findIndex((g) => y < g.top + g.height / 2);
+        if (idx === -1) idx = geometry.length;
+        if (idx === insertIndex) return;
+        insertIndex = idx;
+        const last = geometry[geometry.length - 1];
+        setRowDrag({
+          techId,
+          fromIndex,
+          insertIndex: idx,
+          boundaryTop: idx < geometry.length ? geometry[idx].top : last.top + last.height,
+          rowHeight: geometry[fromIndex].height,
+        });
+      };
+
+      const lift = () => {
+        const wrap = rowsRef.current;
+        if (!wrap || cancelled) return;
+        const rows = Array.from(wrap.querySelectorAll<HTMLElement>(":scope > [data-tech-fsm]"));
+        ids = rows.map((r) => r.dataset.techFsm ?? "");
+        fromIndex = ids.indexOf(techId);
+        if (fromIndex === -1) return;
+        geometry = rows.map((r) => ({ top: r.offsetTop, height: r.offsetHeight }));
+        grabOffset = startY - rows[fromIndex].getBoundingClientRect().top;
+        dragging = true;
+        delete grip.dataset.pressing;
+        document.body.style.cursor = "grabbing";
+        document.body.style.userSelect = "none";
+        navigator.vibrate?.(10); // a small tick on touch devices
+        update();
+        stopScroll = startAutoScroll("y", update);
+      };
+      const timer = window.setTimeout(lift, LONG_PRESS_MS);
+
+      const cleanup = () => {
+        window.clearTimeout(timer);
+        delete grip.dataset.pressing;
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onCancel);
+        window.removeEventListener("keydown", onKey);
+        stopScroll?.();
+        document.body.style.removeProperty("cursor");
+        document.body.style.removeProperty("user-select");
+      };
+
+      const onMove = (ev: PointerEvent) => {
+        pointerRef.current = { x: ev.clientX, y: ev.clientY };
+        if (dragging) {
+          update();
+          return;
+        }
+        const distance = Math.hypot(ev.clientX - startX, ev.clientY - startY);
+        if (isMouse && distance > DRAG_THRESHOLD_PX) {
+          window.clearTimeout(timer);
+          lift();
+        } else if (!isMouse && distance > 8) {
+          // A finger moved before the hold completed: a scroll, not a reorder.
+          cancelled = true;
+          cleanup();
+        }
+      };
+
+      const onUp = () => {
+        cleanup();
+        if (!dragging) {
+          if (!cancelled) {
+            toast.info("Row selected — use ↑ / ↓ to move it, or drag the handle.", { id: "row-reorder-hint" });
+          }
+          return;
+        }
+        setRowDrag(null);
+        const to = insertIndex > fromIndex ? insertIndex - 1 : insertIndex;
+        if (to === fromIndex) return;
+        latest.current.onReorder(ids, techId, to);
+        flashRow(techId);
+      };
+
+      const onCancel = () => {
+        cleanup();
+        if (dragging) setRowDrag(null);
+      };
+      const onKey = (ev: KeyboardEvent) => {
+        if (ev.key !== "Escape") return;
+        cleanup();
+        if (dragging) setRowDrag(null);
+      };
+
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onCancel);
+      window.addEventListener("keydown", onKey);
+    },
+    [startAutoScroll, flashRow],
+  );
+
+  // Keyboard alternative: focus a row's handle and use ↑ / ↓.
+  const moveRowByKey = useCallback(
+    (e: ReactKeyboardEvent<HTMLElement>, techId: string) => {
+      if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+      e.preventDefault();
+      const ids = latest.current.technicians.map((t) => t.fsm_resource_id);
+      const from = ids.indexOf(techId);
+      const to = e.key === "ArrowUp" ? from - 1 : from + 1;
+      if (from === -1 || to < 0 || to >= ids.length) return;
+      latest.current.onReorder(ids, techId, to);
+      flashRow(techId);
+      // The row re-renders in its new place; keep focus on its handle.
+      requestAnimationFrame(() =>
+        rowsRef.current?.querySelector<HTMLElement>(`[data-grip="${CSS.escape(techId)}"]`)?.focus(),
+      );
+    },
+    [flashRow],
+  );
+
+  const addEntry = useCallback(
+    (techId: string, slot?: SlotSelection) => latest.current.onAddEntry(techId, slot),
+    [],
+  );
+  const clickEntry = useCallback((entry: ScheduleEntry) => latest.current.onEntryClick(entry), []);
+  const changeRole = useCallback(
+    (techId: string, roleId: string | null) => latest.current.onRoleChange(techId, roleId),
+    [],
+  );
+
+  const nameOf = (techId: string) =>
+    technicians.find((t) => t.fsm_resource_id === techId)?.display_name ?? "another technician";
+  const dragTimeChanged = entryDrag
+    ? entryDrag.startMin !== entryDrag.origStartMin || entryDrag.endMin !== entryDrag.origEndMin
+    : false;
+  const dragTechChanged = entryDrag ? entryDrag.targetTech !== entryDrag.sourceTech : false;
+  const dragBand = entryDrag ? spanPct(entryDrag.startMin, entryDrag.endMin, bounds, span) : null;
+  const rowDragTech = rowDrag ? (technicians.find((t) => t.fsm_resource_id === rowDrag.techId) ?? null) : null;
+  const showInsertLine =
+    rowDrag !== null && rowDrag.insertIndex !== rowDrag.fromIndex && rowDrag.insertIndex !== rowDrag.fromIndex + 1;
 
   return (
     <div className="rounded-md border">
       <div className="bg-muted/50 flex items-center justify-between gap-2 rounded-t-md border-b px-3 py-1.5">
         <span className="text-sm font-semibold">{title}</span>
-        <span className="text-muted-foreground text-xs tabular-nums">
-          {formatRange(bounds.start, bounds.end)}
-        </span>
+        <div className="flex min-w-0 items-center gap-3">
+          {(isEditable || canReorder) && (
+            <span className="text-muted-foreground hidden truncate text-[11px] xl:inline">
+              {[
+                isEditable && "Drag a bar to move or reassign it, or its right edge to change its length",
+                canReorder && "drag ⠿ to reorder technicians",
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </span>
+          )}
+          <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
+            {formatRange(bounds.start, bounds.end)}
+          </span>
+        </div>
       </div>
 
       {outOfWindow.length > 0 && (
@@ -1330,7 +2065,7 @@ function ShiftSection({
 
       {/* Scroll pane: the hour row is frozen at the top (Excel-style) and the
           technician column is frozen at the left, both inside this pane. */}
-      <div className="max-h-[65vh] overflow-auto print:overflow-visible">
+      <div ref={paneRef} className="max-h-[65vh] overflow-auto print:overflow-visible">
         <div style={{ width: `${trackWidthPct}%`, minWidth: `max(100%, ${Math.round(trackMinPx)}px)` }}>
           <div className="bg-background sticky top-0 z-40 flex border-b">
             <div
@@ -1360,6 +2095,17 @@ function ShiftSection({
                   {formatHourLabel(cell.start)}
                 </div>
               ))}
+              {/* While a bar is dragged, the hour row marks the time it would take. */}
+              {dragBand && (
+                <div
+                  className="border-primary bg-primary/15 pointer-events-none absolute inset-y-0 z-10 border-x-2"
+                  style={{
+                    left: `${dragBand.leftPct}%`,
+                    width: `${dragBand.widthPct}%`,
+                    transition: "left 90ms ease-out, width 90ms ease-out",
+                  }}
+                />
+              )}
               {/* Spacer giving the absolutely-positioned labels their height. */}
               <div className="py-1.5 text-[11px] leading-none">&nbsp;</div>
             </div>
@@ -1370,245 +2116,595 @@ function ShiftSection({
               No technicians match the current filters.
             </div>
           ) : (
-            technicians.map((technician) => {
-              const rowEntries = (entriesByTechnician.get(technician.fsm_resource_id) ?? []).filter(
-                (e) => e.shift === shift,
-              );
-              const leave = leaveByTechnician.get(technician.fsm_resource_id);
-              const techTags = tagsByTechnician[technician.fsm_resource_id] ?? [];
+            <div ref={rowsRef} className="relative">
+              {technicians.map((technician) => {
+                const id = technician.fsm_resource_id;
+                const involved =
+                  entryDrag && (entryDrag.sourceTech === id || entryDrag.targetTech === id) ? entryDrag : null;
+                return (
+                  <TechnicianRow
+                    key={id}
+                    technician={technician}
+                    entries={entriesByTechnician.get(id) ?? EMPTY_ENTRIES}
+                    shift={shift}
+                    title={title}
+                    leave={leaveByTechnician.get(id)}
+                    tags={tagsByTechnician[id] ?? EMPTY_TAGS}
+                    roleColor={technician.role_id ? (roleColors.get(technician.role_id) ?? null) : null}
+                    fieldVis={fieldVis}
+                    hourCells={hourCells}
+                    bounds={bounds}
+                    span={span}
+                    laneHeight={laneHeight}
+                    isEditable={isEditable}
+                    canEditRoles={canEditRoles}
+                    canReorder={canReorder}
+                    isEditingRole={editingRoleFor === id}
+                    roles={roles}
+                    drag={involved}
+                    isRowDragSource={rowDrag?.techId === id}
+                    flash={flashTech === id}
+                    onAddEntry={addEntry}
+                    onEntryClick={clickEntry}
+                    onBeginEntryDrag={beginEntryDrag}
+                    onBeginRowPress={beginRowPress}
+                    onRowKey={moveRowByKey}
+                    onSetEditingRole={setEditingRoleFor}
+                    onRoleChange={changeRole}
+                  />
+                );
+              })}
 
-              // L-2: flag entries that overlap another appointment for the
-              // same technician (allowed, but shown so it's never silent).
-              const overlappingIds = new Set<string>();
-              for (let i = 0; i < rowEntries.length; i += 1) {
-                for (let j = i + 1; j < rowEntries.length; j += 1) {
-                  const a = rowEntries[i];
-                  const b = rowEntries[j];
-                  if (
-                    new Date(a.start_at).getTime() < new Date(b.end_at).getTime() &&
-                    new Date(a.end_at).getTime() > new Date(b.start_at).getTime()
-                  ) {
-                    overlappingIds.add(a.id);
-                    overlappingIds.add(b.id);
-                  }
-                }
-              }
-
-              // Stack overlapping entries in separate lanes so both are
-              // visible; the row grows to fit the busiest moment (YFI v1.5).
-              const { laneOf, laneCount } = laneLayout(rowEntries);
-              const rowHeight = laneCount * laneHeight + 6;
-
-              // Highlighting: DRIVERS get their own colour and head their
-              // group; the technicians assigned to a driver sit underneath.
-              const isDriver = driverIds.has(technician.fsm_resource_id);
-              const roleLabel = technician.role_name;
-              const rowTint = isDriver ? "bg-brand-50" : "";
-              const nameColor = isDriver ? "font-semibold text-brand" : "";
-
-              return (
+              {/* Row reorder: where the row will land... */}
+              {showInsertLine && (
                 <div
-                  key={technician.fsm_resource_id}
-                  className={`flex items-stretch border-b last:border-0 ${rowTint}`}
-                >
+                  className="bg-primary pointer-events-none absolute right-0 left-0 z-40 h-[3px] -translate-y-1/2 rounded-full shadow-[0_0_0_2px_var(--background)]"
+                  style={{ top: rowDrag.boundaryTop }}
+                />
+              )}
+              {/* ...and the lifted row, following the pointer (moved on the DOM). */}
+              <div
+                ref={rowGhostRef}
+                aria-hidden
+                className="pointer-events-none absolute top-0 left-0 z-50 will-change-transform"
+                style={{ display: rowDrag ? "block" : "none", width: TECH_COL_WIDTH + 24 }}
+              >
+                {rowDragTech && (
                   <div
-                    className={`sticky left-0 z-30 flex shrink-0 flex-col justify-center gap-0.5 border-r px-2 py-2 ${rowTint || "bg-background"
-                      }`}
-                    style={{ width: TECH_COL_WIDTH }}
+                    className="bg-background ring-primary flex -rotate-1 items-center gap-2 rounded-md px-2 py-2 shadow-xl ring-2"
+                    style={{ minHeight: rowDrag?.rowHeight }}
                   >
-                    <div className="flex items-center gap-1.5">
-                      <span className={`truncate text-sm font-medium ${nameColor}`}>{technician.display_name}</span>
-                      {isDriver && (
-                        <span className="rounded bg-brand-100 px-1 py-0.5 text-[9px] font-semibold tracking-wide text-brand uppercase">
-                          Driver
-                        </span>
-                      )}
-                      {leave && (
-                        <span className="rounded bg-warning/15 px-1 py-0.5 text-[10px] font-medium text-warning">
-                          Unavailable
-                        </span>
+                    <GripVertical className="text-primary size-4 shrink-0" />
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium">{rowDragTech.display_name}</div>
+                      {rowDragTech.role_name && (
+                        <div className="text-muted-foreground truncate text-[10px]">{rowDragTech.role_name}</div>
                       )}
                     </div>
-                    {fieldVis.roles && (roleLabel || technician.service_type_name) && (
-                      <span className="text-muted-foreground truncate text-[10px]">
-                        {[roleLabel, technician.service_type_name].filter(Boolean).join(" · ")}
-                      </span>
-                    )}
-                    {fieldVis.tags && techTags.length > 0 && (
-                      <div className="flex flex-wrap gap-0.5">
-                        {techTags.map((tag) => (
-                          <Badge key={tag.id} variant="secondary" className="px-1 py-0 text-[10px]">
-                            {tag.name}
-                          </Badge>
-                        ))}
-                      </div>
-                    )}
                   </div>
-
-                  <div
-                    className={`relative min-w-0 flex-1 ${leave ? "bg-warning/10" : ""}`}
-                    style={{ height: rowHeight }}
-                  >
-                    {/* One clickable cell per hour: clicking 5–6 AM opens the
-                        add dialog with 5:00 AM–6:00 AM already selected. */}
-                    {hourCells.map((cell) => (
-                      <button
-                        key={cell.start}
-                        type="button"
-                        disabled={!isEditable || !!leave}
-                        onClick={() =>
-                          onAddEntry(technician.fsm_resource_id, {
-                            startTime: minutesToHhmm(cell.start),
-                            endTime: minutesToHhmm(cell.end),
-                          })
-                        }
-                        className={`border-border/40 absolute top-0 bottom-0 border-l ${isEditable && !leave ? "hover:bg-primary/5 cursor-pointer" : "cursor-default"
-                          }`}
-                        style={{ left: `${cell.leftPct}%`, width: `${cell.widthPct}%` }}
-                        title={
-                          leave
-                            ? "On leave — unavailable"
-                            : isEditable
-                              ? `Add ${formatRange(cell.start, cell.end)} for ${technician.display_name}`
-                              : undefined
-                        }
-                      />
-                    ))}
-
-                    {leave && (
-                      <span className="pointer-events-none absolute top-1 left-2 z-10 text-[11px] font-medium text-warning">
-                        On Leave: {leave.leave_type} ({new Date(leave.start_at).toLocaleDateString()}–
-                        {new Date(leave.end_at).toLocaleDateString()})
-                      </span>
-                    )}
-
-                    {rowEntries.map((entry) => {
-                      const placed = placeEntry(entry);
-                      const { startMin, endMin, outside, leftPct, widthPct } = placed;
-                      const allDay = "allDay" in placed && placed.allDay;
-                      const isFreeText = entry.entry_type === "free_text";
-                      const conflictsWithLeave = leave ? entryOverlapsLeave(entry, leave) : false;
-                      const label = entryLabel(entry);
-                      const timeLabel = allDay ? "All Day" : formatRange(startMin, endMin);
-
-                      const syncFailed = entry.sync_status === "failed";
-                      const overlaps = overlappingIds.has(entry.id);
-
-                      // N4: a failed entry is a solid red box (clearer than a
-                      // red ring on a coloured box). Free-text stays slate,
-                      // everything else is the brand colour.
-                      const boxColour = syncFailed
-                        ? "bg-danger text-white"
-                        : isFreeText
-                          ? "border border-dashed border-border bg-ink/40 text-white"
-                          : "bg-primary text-white";
-
-                      // Rings only mark real, actionable states: an out-of-window
-                      // time, or a leave conflict. (The "changed in FSM" review
-                      // flag was dropped — the board just stays synced.)
-                      let ring = "";
-                      if (outside) ring = "ring-2 ring-warning ring-offset-1";
-                      else if (conflictsWithLeave) ring = "ring-2 ring-destructive";
-
-                      const tooltip = syncFailed
-                        ? `Sync failed: ${entry.last_sync_error || "Zoho FSM rejected the change"}. Open to retry.`
-                        : allDay
-                          ? `${label} — All Day`
-                          : outside
-                            ? `Outside the ${title} window — scheduled ${timeLabel}. Open to change the time or move it to the other shift.`
-                            : conflictsWithLeave
-                              ? `Conflict: ${technician.display_name} is on leave during this appointment (${timeLabel})`
-                              : `${label} — ${timeLabel}${!isFreeText && entry.fsm_appointment_id && entry.sync_status === "synced"
-                                ? " · Synced to Zoho FSM"
-                                : entry.entry_type === "new_appointment" && !entry.fsm_appointment_id
-                                  ? " · Will be created in FSM on approval"
-                                  : ""
-                              }${overlaps ? " · Overlaps another appointment for this technician" : ""}`;
-
-                      // N1: sync-status icon (replaces the changed-in-FSM flag).
-                      const synced = !isFreeText && Boolean(entry.fsm_appointment_id) && entry.sync_status === "synced";
-                      const pendingCreate =
-                        entry.entry_type === "new_appointment" && !entry.fsm_appointment_id && !syncFailed;
-
-                      // Vertical lane so overlapping entries stack (YFI v1.5).
-                      // Small 2px inset keeps stacked bars apart while letting
-                      // each bar fill most of its lane height (flexes with zoom).
-                      const lane = laneOf.get(entry.id) ?? 0;
-                      const laneTop = lane * laneHeight + 2;
-                      const laneBoxHeight = laneHeight - 4;
-
-                      // While this bar is being dragged, follow the snapped
-                      // start; otherwise sit at its scheduled position.
-                      const isDragging = drag?.id === entry.id;
-                      const dispLeftPct = isDragging
-                        ? ((drag!.newStartMin - bounds.start) / span) * 100
-                        : leftPct;
-                      const draggable = isEditable && !allDay && !outside;
-
-                      // E3: which text lines to show, driven by the eye menu.
-                      const addr = entry.address || entry.client_name || "";
-                      let primaryText = label;
-                      let secondaryText = "";
-                      if (!isFreeText) {
-                        const parts: string[] = [];
-                        if (fieldVis.ids) parts.push(label);
-                        if (fieldVis.address && addr) parts.push(addr);
-                        if (allDay && parts.length < 2) parts.push("All Day");
-                        if (parts.length === 0) parts.push(label);
-                        primaryText = parts[0];
-                        secondaryText = parts[1] ?? "";
-                      }
-
-                      return (
-                        <button
-                          key={entry.id}
-                          type="button"
-                          onPointerDown={(e) => startDrag(e, entry, placed)}
-                          // Pointer clicks are handled on pointer-up (so a drag
-                          // isn't also a click); this only catches keyboard
-                          // activation (Enter/Space give a click with detail 0).
-                          onClick={(e) => {
-                            if (e.detail === 0) onEntryClick(entry);
-                          }}
-                          className={`absolute flex flex-col justify-center gap-0.5 overflow-hidden rounded border-r border-black/15 px-2 text-left shadow-sm select-none ${boxColour} ${isDragging ? "z-20 opacity-90 ring-2 ring-primary" : `z-10 ${ring}`
-                            } ${draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"}`}
-                          style={{
-                            // Fill the full time span (flexes with zoom). The
-                            // thin ring separates back-to-back bars without
-                            // leaving a gap that reads as "not filled".
-                            left: `${dispLeftPct}%`,
-                            width: `${widthPct}%`,
-                            top: laneTop,
-                            height: laneBoxHeight,
-                            touchAction: "none",
-                          }}
-                          title={tooltip}
-                        >
-                          <span className="flex items-center gap-1 truncate text-[11px] leading-tight font-medium">
-                            {(outside || syncFailed) && <AlertTriangle className="size-3.5 shrink-0" />}
-                            {synced && <CircleCheck className="size-3.5 shrink-0" aria-label="Synced to FSM" />}
-                            {pendingCreate && (
-                              <Clock className="size-3.5 shrink-0" aria-label="Pending creation in FSM" />
-                            )}
-                            {overlaps && <Layers className="size-3.5 shrink-0" aria-label="Overlaps another appointment" />}
-                            <span className="truncate">{primaryText}</span>
-                          </span>
-                          {/* Second line follows the eye-menu field choices (E3);
-                              the time is read off the top hour bar. */}
-                          {secondaryText && (
-                            <span className="truncate text-[10px] leading-tight opacity-85">{secondaryText}</span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })
+                )}
+              </div>
+            </div>
           )}
         </div>
       </div>
 
+      {/* What the drop will do, next to the cursor. */}
+      {entryDrag &&
+        createPortal(
+          <div ref={pillRef} className="pointer-events-none fixed top-0 left-0 z-[100] will-change-transform">
+            <div
+              className={cn(
+                "flex max-w-xs flex-col gap-0.5 rounded-lg px-2.5 py-1.5 text-xs shadow-lg ring-1",
+                entryDrag.blockedReason
+                  ? "bg-destructive ring-destructive text-white"
+                  : "bg-popover text-popover-foreground ring-foreground/10",
+              )}
+            >
+              {entryDrag.blockedReason ? (
+                <span className="flex items-center gap-1.5 font-medium">
+                  <Ban className="size-3.5 shrink-0" />
+                  {entryDrag.blockedReason}
+                </span>
+              ) : entryDrag.mode === "resize" ? (
+                <>
+                  <span className="flex items-center gap-1.5 font-medium">
+                    <MoveHorizontal className="text-primary size-3.5 shrink-0" />
+                    Ends {formatTimeAmPm(minutesToHhmm(entryDrag.endMin))}
+                  </span>
+                  <span className="text-muted-foreground">
+                    {formatRange(entryDrag.startMin, entryDrag.endMin)} ·{" "}
+                    {formatDuration(entryDrag.endMin - entryDrag.startMin)}
+                  </span>
+                </>
+              ) : (
+                <>
+                  {dragTechChanged && (
+                    <span className="flex items-center gap-1.5">
+                      <UserRound className="text-primary size-3.5 shrink-0" />
+                      <span className="truncate">{nameOf(entryDrag.sourceTech)}</span>
+                      <ArrowRight className="size-3 shrink-0" />
+                      <b className="truncate">{nameOf(entryDrag.targetTech)}</b>
+                    </span>
+                  )}
+                  {dragTimeChanged && (
+                    <span className="flex items-center gap-1.5">
+                      <Clock className="text-primary size-3.5 shrink-0" />
+                      <b>{formatRange(entryDrag.startMin, entryDrag.endMin)}</b>
+                    </span>
+                  )}
+                  {dragTimeChanged && (
+                    <span className="text-muted-foreground pl-5">
+                      was {formatRange(entryDrag.origStartMin, entryDrag.origEndMin)}
+                    </span>
+                  )}
+                  {!dragTechChanged && !dragTimeChanged && (
+                    <span className="text-muted-foreground">
+                      Drag sideways to change the time, or up / down to reassign
+                    </span>
+                  )}
+                </>
+              )}
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
+
+type TechnicianRowProps = {
+  technician: TechnicianReference;
+  // All of this technician's entries for the day (any shift) — a stable array.
+  entries: ScheduleEntry[];
+  shift: ShiftType;
+  title: string;
+  leave: LeaveRecord | undefined;
+  tags: TechnicianTag[];
+  roleColor: string | null;
+  fieldVis: FieldVis;
+  hourCells: HourCell[];
+  bounds: Bounds;
+  span: number;
+  laneHeight: number;
+  isEditable: boolean;
+  canEditRoles: boolean;
+  canReorder: boolean;
+  isEditingRole: boolean;
+  roles: TechnicianRole[];
+  // Set only when this row is the source or target of a bar drag.
+  drag: EntryDrag | null;
+  isRowDragSource: boolean;
+  flash: boolean;
+  onAddEntry: (technicianFsmId: string, slot?: SlotSelection) => void;
+  onEntryClick: (entry: ScheduleEntry) => void;
+  onBeginEntryDrag: (
+    e: ReactPointerEvent<HTMLElement>,
+    entry: ScheduleEntry,
+    placed: Placement,
+    sourceTech: string,
+    mode: "move" | "resize",
+  ) => void;
+  onBeginRowPress: (e: ReactPointerEvent<HTMLElement>, techId: string) => void;
+  onRowKey: (e: ReactKeyboardEvent<HTMLElement>, techId: string) => void;
+  onSetEditingRole: (techId: string | null) => void;
+  onRoleChange: (techId: string, roleId: string | null) => void;
+};
+
+// One technician's row. Memoised: during a drag only the rows it touches
+// (source and target) re-render, which is what keeps dragging smooth on a
+// board with many technicians.
+const TechnicianRow = memo(function TechnicianRow({
+  technician,
+  entries,
+  shift,
+  title,
+  leave,
+  tags,
+  roleColor,
+  fieldVis,
+  hourCells,
+  bounds,
+  span,
+  laneHeight,
+  isEditable,
+  canEditRoles,
+  canReorder,  isEditingRole,
+  roles,
+  drag,
+  isRowDragSource,
+  flash,
+  onAddEntry,
+  onEntryClick,
+  onBeginEntryDrag,
+  onBeginRowPress,
+  onRowKey,
+  onSetEditingRole,
+  onRoleChange,
+}: TechnicianRowProps) {
+  const id = technician.fsm_resource_id;
+  const rowEntries = useMemo(() => entries.filter((e) => e.shift === shift), [entries, shift]);
+
+  // L-2: flag entries that overlap another appointment for the same
+  // technician (allowed, but shown so it's never silent).
+  const overlappingIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (let i = 0; i < rowEntries.length; i += 1) {
+      for (let j = i + 1; j < rowEntries.length; j += 1) {
+        const a = rowEntries[i];
+        const b = rowEntries[j];
+        if (
+          new Date(a.start_at).getTime() < new Date(b.end_at).getTime() &&
+          new Date(a.end_at).getTime() > new Date(b.start_at).getTime()
+        ) {
+          ids.add(a.id);
+          ids.add(b.id);
+        }
+      }
+    }
+    return ids;
+  }, [rowEntries]);
+
+  // Stack overlapping entries in separate lanes so both are visible; the row
+  // grows to fit the busiest moment (YFI v1.5).
+  const { laneOf, laneCount } = useMemo(() => laneLayout(rowEntries), [rowEntries]);
+
+  // A bar being moved lands here: preview it in the lane it would take.
+  const ghost = drag && drag.mode === "move" && drag.targetTech === id ? drag : null;
+  const ghostLane = ghost
+    ? laneForRange(
+        rowEntries,
+        laneOf,
+        laneCount,
+        { startMin: ghost.startMin, endMin: ghost.endMin, ignoreId: ghost.entry.id },
+        bounds,
+        span,
+      )
+    : -1;
+  const rowHeight = Math.max(laneCount, ghostLane + 1) * laneHeight + 6;
+  const reassignTarget = Boolean(ghost && ghost.targetTech !== ghost.sourceTech);
+  const targetBlocked = reassignTarget && Boolean(ghost?.blockedReason);
+  const roleLabel = technician.role_name;
+  // Role & service only show when switched on in the Fields menu; the row's
+  // colour tint still marks the role either way.
+  const showRoleLine = fieldVis.roles && !isEditingRole && Boolean(roleLabel || technician.service_type_name);
+
+  const ghostView = ghost
+    ? {
+        ...spanPct(ghost.startMin, ghost.endMin, bounds, span),
+        top: ghostLane * laneHeight + 2,
+        text: entryText(ghost.entry, fieldVis, false).primaryText,
+        freeText: ghost.entry.entry_type === "free_text",
+      }
+    : null;
+
+  return (
+    <div
+      data-tech-fsm={id}
+      className={cn(
+        "group/row relative flex items-stretch border-b transition-opacity last:border-0",
+        isRowDragSource && "opacity-40",
+      )}
+      style={{ backgroundColor: roleColor ? `${roleColor}0f` : undefined }}
+    >
+      <div
+        className={cn(
+          "bg-background sticky left-0 z-30 flex shrink-0 flex-col justify-center gap-1 border-r py-1.5 pr-2",
+          canReorder ? "pl-8" : "pl-2",
+          reassignTarget && (targetBlocked ? "ring-destructive ring-2 ring-inset" : "ring-primary ring-2 ring-inset"),
+        )}
+        style={{
+          width: TECH_COL_WIDTH,
+          borderLeft: roleColor ? `3px solid ${roleColor}` : undefined,
+        }}
+      >
+        {/* Team row order: a full-height handle down the left of the name cell,
+            big enough to grab comfortably with a mouse. */}
+        {canReorder && (
+          <button
+            type="button"
+            data-grip={id}
+            onPointerDown={(e) => onBeginRowPress(e, id)}
+            onKeyDown={(e) => onRowKey(e, id)}
+            // A long press on touch would otherwise open the context menu.
+            onContextMenu={(e) => e.preventDefault()}
+            className="group/grip text-muted-foreground hover:bg-muted hover:text-foreground focus:bg-primary/10 focus:text-primary data-[pressing=true]:bg-primary/15 data-[pressing=true]:text-primary absolute inset-y-0 left-0 flex w-7 cursor-grab touch-none items-center justify-center opacity-0 transition-[opacity,background-color,color] duration-150 group-hover/row:opacity-100 focus:opacity-100 focus:outline-none active:cursor-grabbing data-[pressing=true]:opacity-100"
+            title="Drag to reorder — or click, then use ↑ ↓"
+            aria-label={`Reorder ${technician.display_name}: drag the handle, or use the arrow keys`}
+          >
+            <GripVertical className="size-4 transition-transform duration-200 group-data-[pressing=true]/grip:scale-125" />
+          </button>
+        )}
+        <div className="group flex min-w-0 items-start gap-1">
+          <span
+            className="line-clamp-2 min-w-0 flex-1 text-sm leading-tight font-medium break-words"
+            style={{ color: roleColor ?? undefined }}
+            title={technician.display_name}
+          >
+            {technician.display_name}
+          </span>
+          {/* FR-1: edit this technician's role without leaving the board. */}
+          {canEditRoles && !isEditingRole && (
+            <button
+              type="button"
+              onClick={() => onSetEditingRole(id)}
+              className="text-muted-foreground hover:text-foreground shrink-0 rounded p-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100"
+              title={`Edit role for ${technician.display_name}`}
+              aria-label={`Edit role for ${technician.display_name}`}
+            >
+              <Pencil className="size-3" />
+            </button>
+          )}
+        </div>
+        {canEditRoles && isEditingRole && (
+          <Select
+            defaultOpen
+            value={technician.role_id ?? NO_ROLE_VALUE}
+            onValueChange={(v) => {
+              onRoleChange(id, v === NO_ROLE_VALUE ? null : v);
+              onSetEditingRole(null);
+            }}
+            onOpenChange={(open) => {
+              if (!open) onSetEditingRole(null);
+            }}
+          >
+            <SelectTrigger size="sm" className="h-7 w-full text-xs" aria-label={`Role for ${technician.display_name}`}>
+              <SelectValue placeholder="Set role" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NO_ROLE_VALUE}>No role</SelectItem>
+              {roles.map((r) => (
+                <SelectItem key={r.id} value={r.id}>
+                  {r.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        {(showRoleLine || leave) && (
+          <div className="flex min-w-0 flex-wrap items-center gap-1">
+            {showRoleLine &&
+              roleLabel &&
+              (roleColor ? (
+                <span
+                  className="rounded px-1 py-0.5 text-[9px] font-semibold tracking-wide uppercase"
+                  style={{ backgroundColor: `${roleColor}22`, color: roleColor }}
+                >
+                  {roleLabel}
+                </span>
+              ) : (
+                <span className="text-muted-foreground text-[10px]">{roleLabel}</span>
+              ))}
+            {showRoleLine && technician.service_type_name && (
+              <span className="text-muted-foreground truncate text-[10px]">{technician.service_type_name}</span>
+            )}
+            {leave && (
+              <span className="rounded bg-warning/15 px-1 py-0.5 text-[10px] font-medium text-warning">
+                Unavailable
+              </span>
+            )}
+          </div>
+        )}
+        {fieldVis.tags && tags.length > 0 && (
+          <div className="flex flex-wrap gap-0.5">
+            {tags.map((tag) => (
+              <Badge key={tag.id} variant="secondary" className="px-1 py-0 text-[10px]">
+                {tag.name}
+              </Badge>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div
+        data-track
+        className={cn("relative min-w-0 flex-1", leave && "bg-warning/10")}
+        // min-height (not height) so the track also fills a taller name cell.
+        style={{ minHeight: rowHeight, transition: "min-height 120ms ease-out" }}
+      >
+        {/* One clickable cell per hour: clicking 5–6 AM opens the add dialog
+            with 5:00 AM–6:00 AM already selected. */}
+        {hourCells.map((cell) => (
+          <button
+            key={cell.start}
+            type="button"
+            disabled={!isEditable || !!leave}
+            onClick={() =>
+              onAddEntry(id, {
+                startTime: minutesToHhmm(cell.start),
+                endTime: minutesToHhmm(cell.end),
+              })
+            }
+            className={`border-border/40 absolute top-0 bottom-0 border-l ${
+              isEditable && !leave ? "hover:bg-primary/5 cursor-pointer" : "cursor-default"
+            }`}
+            style={{ left: `${cell.leftPct}%`, width: `${cell.widthPct}%` }}
+            title={
+              leave
+                ? "On leave — unavailable"
+                : isEditable
+                  ? `Add ${formatRange(cell.start, cell.end)} for ${technician.display_name}`
+                  : undefined
+            }
+          />
+        ))}
+
+        {leave && (
+          <span className="pointer-events-none absolute top-1 left-2 z-10 text-[11px] font-medium text-warning">
+            On Leave: {leave.leave_type} ({formatZonedDate(leave.start_at)}–
+            {formatZonedDate(leave.end_at)})
+          </span>
+        )}
+
+        {/* This row is where a dragged bar would be reassigned to. */}
+        {reassignTarget && (
+          <span
+            className={cn(
+              "pointer-events-none absolute inset-0 z-[5]",
+              targetBlocked ? "bg-destructive/10" : "bg-primary/10",
+            )}
+          />
+        )}
+
+        {rowEntries.map((entry) => {
+          const placed = placeEntry(entry, bounds, span);
+          const { startMin, endMin, outside, allDay } = placed;
+          const beingDragged = drag !== null && drag.entry.id === entry.id && drag.sourceTech === id;
+          const resizing = beingDragged && drag.mode === "resize";
+          const movingAway = beingDragged && drag.mode === "move";
+          const shownEnd = resizing ? drag.endMin : endMin;
+          const { leftPct, widthPct } = resizing ? spanPct(startMin, shownEnd, bounds, span) : placed;
+          const isFreeText = entry.entry_type === "free_text";
+          const conflictsWithLeave = leave ? entryOverlapsLeave(entry, leave) : false;
+          const label = entryLabel(entry);
+          const timeLabel = allDay ? "All Day" : formatRange(startMin, shownEnd);
+
+          const syncFailed = entry.sync_status === "failed";
+          const overlaps = overlappingIds.has(entry.id);
+
+          // FR-3 (as decided 18 Sep: mirror FSM's own statuses): the bar is coloured
+          // by the appointment's status in FSM; the row tint is the role, so the two
+          // channels never collide. An appointment not yet created in FSM reads as
+          // Scheduled -- that is the plan for it. A failed sync is a portal state,
+          // not a job status: red with stripes, so it can't be mistaken for
+          // Cannot complete (solid red).
+          const state: AppointmentState | null = isFreeText
+            ? null
+            : entry.fsm_appointment_id
+              ? resolveAppointmentState(entry.fsm_status)
+              : "scheduled";
+          const stateLabel = state ? APPOINTMENT_STATE_LABELS[state] : null;
+          const boxColour = syncFailed
+            ? "bg-danger text-white"
+            : isFreeText
+              ? "border border-dashed border-border bg-ink/40 text-white"
+              : APPOINTMENT_STATE_STYLES[state ?? "scheduled"].bar;
+
+          // Rings only mark real, actionable states: an out-of-window time, or
+          // a leave conflict.
+          let ring = "";
+          if (outside) ring = "ring-2 ring-warning ring-offset-1";
+          else if (conflictsWithLeave) ring = "ring-2 ring-destructive";
+
+          const tooltip = syncFailed
+            ? `Sync failed: ${entry.last_sync_error || "Zoho FSM rejected the change"}. Open to retry.`
+            : allDay
+              ? `${stateLabel ? `${stateLabel} · ` : ""}${label} — All Day`
+              : outside
+                ? `Outside the ${title} window — scheduled ${timeLabel}. Open to change the time or move it to the other shift.`
+                : conflictsWithLeave
+                  ? `Conflict: ${technician.display_name} is on leave during this appointment (${timeLabel})`
+                  : `${stateLabel ? `${stateLabel} · ` : ""}${label} — ${timeLabel}${
+                      !isFreeText && entry.fsm_appointment_id && entry.sync_status === "synced"
+                        ? " · Synced to Zoho FSM"
+                        : entry.entry_type === "new_appointment" && !entry.fsm_appointment_id
+                          ? " · Will be created in FSM on approval"
+                          : ""
+                    }${overlaps ? " · Overlaps another appointment for this technician" : ""}${entry.origin === "fsm" ? " · Booked in Zoho FSM" : ""}`;
+
+          // N1: sync-status icon.
+          const synced = !isFreeText && Boolean(entry.fsm_appointment_id) && entry.sync_status === "synced";
+          const pendingCreate = entry.entry_type === "new_appointment" && !entry.fsm_appointment_id && !syncFailed;
+
+          // Vertical lane so overlapping entries stack (YFI v1.5). A small 2px
+          // inset keeps stacked bars apart.
+          const lane = laneOf.get(entry.id) ?? 0;
+          const laneTop = lane * laneHeight + 2;
+          const laneBoxHeight = laneHeight - 4;
+          const draggable = isEditable && !allDay && !outside;
+          const { primaryText, secondaryText } = entryText(entry, fieldVis, allDay);
+
+          return (
+            <button
+              key={entry.id}
+              type="button"
+              onPointerDown={(e) => onBeginEntryDrag(e, entry, placed, id, "move")}
+              // Pointer clicks are handled on pointer-up (so a drag isn't also
+              // a click); this only catches keyboard activation.
+              onClick={(e) => {
+                if (e.detail === 0) onEntryClick(entry);
+              }}
+              className={cn(
+                "group/bar absolute flex flex-col justify-center gap-0.5 overflow-hidden rounded border-r border-black/15 px-2 text-left shadow-sm transition-[box-shadow,filter,opacity] select-none",
+                boxColour,
+                movingAway
+                  ? "z-10 opacity-35 shadow-none outline-2 -outline-offset-2 outline-white/80 outline-dashed"
+                  : resizing
+                    ? "ring-primary z-20 shadow-md ring-2 ring-offset-1"
+                    : cn("z-10", ring),
+                draggable ? "cursor-grab hover:shadow-md hover:brightness-110 active:cursor-grabbing" : "cursor-pointer",
+              )}
+              style={{
+                left: `${leftPct}%`,
+                width: `${widthPct}%`,
+                top: laneTop,
+                height: laneBoxHeight,
+                touchAction: "none",
+                transition: resizing ? "width 90ms ease-out" : undefined,
+                backgroundImage: syncFailed ? SYNC_FAILED_STRIPES : undefined,
+              }}
+              title={beingDragged ? undefined : tooltip}
+            >
+              <span className="flex items-center gap-1 truncate text-[11px] leading-tight font-medium">
+                {(outside || syncFailed) && <AlertTriangle className="size-3.5 shrink-0" />}
+                {synced && <CircleCheck className="size-3.5 shrink-0" aria-label="Synced to FSM" />}
+                {pendingCreate && <Clock className="size-3.5 shrink-0" aria-label="Pending creation in FSM" />}
+                {overlaps && <Layers className="size-3.5 shrink-0" aria-label="Overlaps another appointment" />}
+                <span className="truncate">{primaryText}</span>
+              </span>
+              {secondaryText && (
+                <span className="truncate text-[10px] leading-tight opacity-85">{secondaryText}</span>
+              )}
+              {/* Right edge: drag to change how long the appointment runs. */}
+              {draggable && !movingAway && (
+                <span
+                  onPointerDown={(e) => onBeginEntryDrag(e, entry, placed, id, "resize")}
+                  className={cn(
+                    "absolute inset-y-0 right-0 flex w-2.5 cursor-ew-resize items-center justify-center transition-opacity hover:bg-white/25",
+                    resizing ? "bg-white/25 opacity-100" : "opacity-0 group-hover/bar:opacity-100",
+                  )}
+                  title="Drag to change the end time"
+                  aria-hidden
+                >
+                  <span className="h-4 w-[3px] rounded-full border-x border-white/90" />
+                </span>
+              )}
+            </button>
+          );
+        })}
+
+        {/* The bar being moved, previewed where it would land. */}
+        {ghostView && ghost && (
+          <div
+            aria-hidden
+            className={cn(
+              "pointer-events-none absolute z-30 flex flex-col justify-center gap-0.5 overflow-hidden rounded px-2 text-white shadow-lg ring-2 ring-white",
+              ghost.blockedReason ? "bg-destructive" : ghostView.freeText ? "bg-ink/70" : "bg-primary",
+            )}
+            style={{
+              left: `${ghostView.leftPct}%`,
+              width: `${ghostView.widthPct}%`,
+              top: ghostView.top,
+              height: laneHeight - 4,
+              transition: "left 90ms ease-out, top 90ms ease-out",
+            }}
+          >
+            <span className="flex items-center gap-1 truncate text-[11px] leading-tight font-semibold">
+              {ghost.blockedReason ? <Ban className="size-3.5 shrink-0" /> : <Clock className="size-3.5 shrink-0" />}
+              <span className="truncate">{formatRange(ghost.startMin, ghost.endMin)}</span>
+            </span>
+            <span className="truncate text-[10px] leading-tight opacity-90">{ghostView.text}</span>
+          </div>
+        )}
+
+        {/* Just dropped here: a brief highlight. */}
+        <span
+          className={cn(
+            "bg-primary/15 pointer-events-none absolute inset-0 z-[6] transition-opacity duration-700",
+            flash ? "opacity-100" : "opacity-0",
+          )}
+        />
+      </div>
+    </div>
+  );
+});

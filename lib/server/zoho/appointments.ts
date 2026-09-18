@@ -5,6 +5,7 @@
 // Section 12.2). Only reached from the whole-day approval flow, the retry
 // action, and the published-edit path -- never during drafting.
 
+import { resolveAppointmentState } from "@/lib/scheduling/appointment-status";
 import {
   fsmFail,
   fsmFetch,
@@ -46,6 +47,10 @@ type ServiceLineItem = { id: string };
 type AxsItem = {
   Service_Line_Item?: { id: string } | null;
   Service_Appointment?: { id: string; name?: string } | null;
+  // Junction flags: a cancelled appointment's line association is marked
+  // inactive (is_line_item_active=false, SLI_Status="Cancelled").
+  SLI_Status?: string | null;
+  is_line_item_active?: boolean;
 };
 
 type WorkOrderDetail = {
@@ -69,14 +74,26 @@ type AppointmentDetail = {
 
 const DEFAULT_ALL_DAY_SECONDS = 8 * 3600;
 
-// The Service_Line_Item ids already sitting on an appointment, so a line is
+// Whether a work order's line <-> appointment association still holds the line.
+// A cancelled (or voided) appointment frees its line: FSM keeps the junction row
+// but marks it inactive with SLI_Status "Cancelled", and lists the line as "yet
+// to be scheduled". Status matching reuses the display board's mapping, since
+// FSM's status picklist is editable per org.
+export function isLiveLineAssociation(axs: AxsItem): boolean {
+  if (!axs.Service_Line_Item?.id || !axs.Service_Appointment?.id) return false;
+  if (axs.is_line_item_active === false) return false;
+  const state = resolveAppointmentState(axs.SLI_Status);
+  // Cancelled and Cannot complete both hand the line back to be rebooked.
+  return state !== "cancelled" && state !== "cannot_complete";
+}
+
+// The Service_Line_Item ids already sitting on a LIVE appointment, so a line is
 // never double-scheduled.
 export function scheduledLineIdsOf(wo: WorkOrderDetail): Set<string> {
   const ids = new Set<string>();
   for (const axs of wo.Appointments_X_Services ?? []) {
-    if (axs.Service_Line_Item?.id && axs.Service_Appointment?.id) {
-      ids.add(axs.Service_Line_Item.id);
-    }
+    const lineId = axs.Service_Line_Item?.id;
+    if (lineId && isLiveLineAssociation(axs)) ids.add(lineId);
   }
   return ids;
 }
@@ -262,8 +279,10 @@ export async function updateFsmAppointment(input: UpdateAppointmentInput): Promi
     const current = getRes.record;
     if (!current) return fsmFail("Appointment not found in Zoho FSM", 404);
 
-    if (current.Cancellation_Reason) {
-      // SYNC-017: don't let a stale portal version overwrite a cancellation.
+    // SYNC-017: don't let a stale portal version overwrite a cancellation. FSM
+    // often cancels with no Cancellation_Reason (Status "Cancelled" only), so
+    // the status is checked too.
+    if (current.Cancellation_Reason || resolveAppointmentState(current.Status) === "cancelled") {
       return fsmFail("Appointment is cancelled in Zoho FSM", 409, { status: current.Status });
     }
 
