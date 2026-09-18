@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Activity } from "lucide-react";
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
@@ -14,18 +13,11 @@ import {
   ChartTooltipContent,
 } from "@/components/ui/chart";
 import { EmptyState } from "@/components/ui/empty-state";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 
 import { CHART_COLOR } from "@/lib/snagging/chart-palette";
 
 import { ChartSkeleton, SectionShell } from "./section-shell";
-import { useSection } from "./use-section";
+import { useRangedSection } from "./range";
 
 type Activity = {
   periodDays: number;
@@ -59,9 +51,16 @@ const config = {
  */
 export function InspectionActivity() {
   const router = useRouter();
-  const [days, setDays] = useState("30");
-  const { data, loading, error, reload } = useSection<Activity>(
-    `/api/snagging/overview/activity?days=${days}`,
+  /*
+    No period select of its own any more.
+
+    It used to carry 7/30 days while the KPI row beside it was fixed at
+    30 and the pipeline counted everything ever raised. One control at
+    the top of the page now sets all of them, so the cards can be read
+    against each other.
+  */
+  const { data, loading, error, reload } = useRangedSection<Activity>(
+    "/api/snagging/overview/activity",
     { staleMs: 300_000 },
   );
 
@@ -75,17 +74,6 @@ export function InspectionActivity() {
       title="Inspection activity"
       description="Jobs raised against inspections signed off. Click a day to open the jobs raised on it."
       icon={<Activity />}
-      action={
-        <Select value={days} onValueChange={setDays}>
-          <SelectTrigger size="sm" className="w-32" aria-label="Period">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent align="end">
-            <SelectItem value="7">7 days</SelectItem>
-            <SelectItem value="30">30 days</SelectItem>
-          </SelectContent>
-        </Select>
-      }
       centerBody
       loading={loading}
       error={error}

@@ -16,7 +16,6 @@ import { saveAs } from "file-saver";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -45,7 +44,6 @@ import { YallaClassicTemplate } from "@/components/dashboard/extensions/quotatio
 
 import {
   DataState,
-  QuotationStatusBadge,
   SectionCard,
   SubHeading,
   SubmitButton,
@@ -103,8 +101,26 @@ function blobToBase64(blob: Blob): Promise<string> {
  */
 export function QuotationPanel({
   task,
+  quotationId,
+  visitNumber,
 }: {
-  task: SnaggingTask;
+  /* Only these two are read, so a visit page can pass them without the
+     whole job record. */
+  task: Pick<SnaggingTask, "id" | "status">;
+  /**
+   * Render this one quotation instead of the job's own.
+   *
+   * An additional visit's quotation is raised from the job (change 26)
+   * and should look exactly like the job's — the same card, the same
+   * document, the same Download / WhatsApp / Send — rather than a second,
+   * smaller design that drifts. So the panel takes the id and reads and
+   * acts on that quotation directly. What it never does in this mode is
+   * generate or regenerate: a visit is a fixed charge, and regenerating
+   * would reprice it from the property as if it were an inspection.
+   */
+  quotationId?: string;
+  /** Which visit the quotation is for, for the panel's own wording. */
+  visitNumber?: number;
   /**
    * Part of the panel's contract with the job screen, but nothing here
    * moves the job any more: the client approves or rejects through the
@@ -148,6 +164,12 @@ export function QuotationPanel({
       // against a job that already has one.
       // Ask for the preview too: a job that has never been quoted still
       // opens on the document it would be quoted, rather than on a button.
+      // One specific quotation: read it, and never generate one.
+      if (quotationId) {
+        setQuote(await snaggingService.getQuotationById(quotationId));
+        return;
+      }
+
       const current = await snaggingService.getQuotation(task.id, {
         preview: true,
       });
@@ -201,7 +223,7 @@ export function QuotationPanel({
     } finally {
       setLoading(false);
     }
-  }, [task.id, canEdit]);
+  }, [task.id, canEdit, quotationId]);
 
   useEffect(() => {
     void load();
@@ -289,10 +311,9 @@ export function QuotationPanel({
 
     setWorking(true);
     try {
-      const res = (await snaggingService.quotationAction(
-        task.id,
-        "share_link",
-      )) as SnaggingQuotation;
+      const res = (quotationId
+        ? await snaggingService.quotationActionById(quotationId, "share_link")
+        : await snaggingService.quotationAction(task.id, "share_link")) as SnaggingQuotation;
       setApprovalUrl(res.approval_url ?? null);
       if (res.approval_url) {
         await navigator.clipboard.writeText(res.approval_url).catch(() => {});
@@ -314,10 +335,15 @@ export function QuotationPanel({
     setWorking(true);
     try {
       const pdf_base64 = await makePdfBase64();
-      const res = (await snaggingService.quotationAction(task.id, "send", {
-        sent_to: recipient.trim(),
-        pdf_base64,
-      })) as SnaggingQuotation;
+      const res = (quotationId
+        ? await snaggingService.quotationActionById(quotationId, "send", {
+            sent_to: recipient.trim(),
+            pdf_base64,
+          })
+        : await snaggingService.quotationAction(task.id, "send", {
+            sent_to: recipient.trim(),
+            pdf_base64,
+          })) as SnaggingQuotation;
       setApprovalUrl(res.approval_url ?? null);
       setSendOpen(false);
       toast.success("Quotation emailed to the client");
@@ -352,9 +378,91 @@ export function QuotationPanel({
                   ? "This job is a draft. Generate and send a quotation to the client to proceed."
                   : "No quotation on this job."
       }
-      // The status belongs in the header as a badge, not as a raw
-      // lowercase word appended to the subtitle.
-      action={quote ? <QuotationStatusBadge status={quote.status} /> : null}
+      /*
+        The document's one universal action sits in the header, where the
+        status badge was.
+
+        A decided quotation showed its status three times — the badge
+        here, a grey "Approved by client, locked" pill beside Download, and
+        the green alert over the document — with the one thing a
+        coordinator actually does with an approved quotation, download it,
+        tucked between them. The alert already says approved, and says who
+        and when; the header now carries the PDF. An undecided quotation
+        keeps its badge beside it, because nothing else on the page says
+        draft or sent.
+      */
+      /*
+        Every action on the document, in the header beside Download.
+
+        They were split: Download up here beside a Draft badge, and Share
+        on WhatsApp / Send by email in a row of their own under it. The
+        badge said nothing the page does not (a sent quotation has its own
+        "Awaiting the client" note below), so it is gone and the actions
+        sit together. Nothing is offered once the client has decided but
+        the PDF.
+      */
+      action={
+        quote && !isPreview ? (
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {canEdit && !isDecided ? (
+              <>
+                {quote.status !== "draft" || quotationId ? null : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setRegenOpen(true)}
+                    disabled={busy}
+                  >
+                    <FileText className="size-4" /> Regenerate
+                  </Button>
+                )}
+                {/*
+                  Two ways out, because the team uses two (BA v2, change
+                  24). Email is driven end to end here; WhatsApp is sent by
+                  hand, so that button hands over the two things they
+                  paste -- the PDF and a live approval link.
+                */}
+                <SubmitButton
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void shareByHand()}
+                  disabled={busy}
+                  pending={working}
+                  pendingLabel="Preparing…"
+                  icon={<MessageCircle className="size-4" />}
+                >
+                  Share on WhatsApp
+                </SubmitButton>
+              </>
+            ) : null}
+            <SubmitButton
+              variant="outline"
+              size="sm"
+              onClick={() => void download()}
+              disabled={busy}
+              pending={downloading}
+              pendingLabel="Preparing…"
+              icon={<Download className="size-4" />}
+            >
+              Download PDF
+            </SubmitButton>
+            {canEdit && !isDecided ? (
+              <Button
+                size="sm"
+                onClick={() => {
+                  const snap = (quote.property_snapshot ?? {}) as Record<string, unknown>;
+                  setRecipient((snap.client_email as string) ?? quote.sent_to ?? "");
+                  setSendOpen(true);
+                }}
+                disabled={busy}
+              >
+                <Send className="size-4" />{" "}
+                {quote.status === "sent" ? "Resend by email" : "Send by email"}
+              </Button>
+            ) : null}
+          </div>
+        ) : null
+      }
       bodyClassName="border-t"
     >
       <div className="space-y-4 p-5">
@@ -439,95 +547,15 @@ export function QuotationPanel({
                 before the page is scrolled — not at the foot of an A4
                 sheet somebody has to reach the bottom of first.
               */}
-              {canEdit ? (
-                <div className="flex flex-wrap items-center justify-end gap-2 pb-2">
-                  {isPreview ? (
-                    /*
-                      A preview still on screen means the automatic
-                      generation did not go through. Download and Send
-                      would both promise a document that does not exist,
-                      so the panel states what it is rather than offering
-                      an action.
-                    */
-                    <p className="text-muted-foreground text-xs">
-                      Preview only. This quotation has not been numbered yet.
-                    </p>
-                  ) : (
-                    <>
-                      <SubmitButton
-                        variant="outline"
-                        size="sm"
-                        onClick={() => void download()}
-                        disabled={busy}
-                        pending={downloading}
-                        pendingLabel="Preparing…"
-                        icon={<Download className="size-4" />}
-                      >
-                        Download PDF
-                      </SubmitButton>
-                      {!isDecided ? (
-                        <>
-                          {quote.status !== "draft" ? null : (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => setRegenOpen(true)}
-                              disabled={busy}
-                            >
-                              <FileText className="size-4" /> Regenerate
-                            </Button>
-                          )}
-                          {/*
-                            Two ways out, because the team uses two (BA v2,
-                            change 24). Email is driven end to end here;
-                            WhatsApp is sent by hand, so that button's job
-                            is to hand over the two things they paste — the
-                            PDF and a live approval link.
-                          */}
-                          <SubmitButton
-                            variant="outline"
-                            size="sm"
-                            onClick={() => void shareByHand()}
-                            disabled={busy}
-                            pending={working}
-                            pendingLabel="Preparing…"
-                            icon={<MessageCircle className="size-4" />}
-                          >
-                            Share on WhatsApp
-                          </SubmitButton>
-                          <Button
-                            size="sm"
-                            onClick={() => {
-                              const s = (quote.property_snapshot ??
-                                {}) as Record<string, unknown>;
-                              setRecipient(
-                                (s.client_email as string) ??
-                                  quote.sent_to ??
-                                  "",
-                              );
-                              setSendOpen(true);
-                            }}
-                            disabled={busy}
-                          >
-                            <Send className="size-4" />{" "}
-                            {quote.status === "sent"
-                              ? "Resend by email"
-                              : "Send by email"}
-                          </Button>
-                        </>
-                      ) : (
-                        <Badge
-                          variant="secondary"
-                          className="bg-muted border-0"
-                        >
-                          {quote.status === "approved"
-                            ? "Approved by client, locked"
-                            : "Rejected by client"}
-                        </Badge>
-                      )}
-                    </>
-                  )}
-                </div>
+              {/*
+                A preview still on screen means the automatic generation
+                did not go through; Download and Send would both promise a
+                document that does not exist, so none is offered.
+              */}
+              {canEdit && isPreview ? (
+                <p className="text-muted-foreground pb-2 text-right text-xs">
+                  Preview only. This quotation has not been numbered yet.
+                </p>
               ) : null}
 
               {/* Where it stands with the client. */}
@@ -555,7 +583,9 @@ export function QuotationPanel({
                     {quote.decided_at
                       ? ` on ${formatGstDateTime(quote.decided_at)}`
                       : ""}
-                    . Inspector assignment is unlocked.
+                    {quotationId
+                      ? `. Visit ${visitNumber ?? ""} can be booked.`.replace("  ", " ")
+                      : ". Inspector assignment is unlocked."}
                   </AlertDescription>
                 </Alert>
               ) : null}

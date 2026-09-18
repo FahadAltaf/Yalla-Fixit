@@ -3,12 +3,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  Check,
   Copy,
   Download,
   FileText,
   MessageCircle,
   Plus,
   Send,
+  TriangleAlert,
   X,
 } from "lucide-react";
 import { saveAs } from "file-saver";
@@ -43,6 +45,8 @@ import {
   DataState,
   PageHeading,
   QuotationStatusBadge,
+  StatCard,
+  StatCardGrid,
   SubmitButton,
   formatGstDateTime,
   useConfirm,
@@ -86,7 +90,7 @@ export default function QuotationDetail({ id }: { id: string }) {
     several seconds of work — looked like a button that did nothing at all.
   */
   const [pending, setPending] = useState<
-    null | "download" | "share_link" | "regenerate" | "send"
+    null | "download" | "share_link" | "regenerate" | "send" | "approve_rate"
   >(null);
   const busy = pending !== null;
 
@@ -206,6 +210,29 @@ export default function QuotationDetail({ id }: { id: string }) {
     }
   }
 
+  /*
+    A rate outside the published band, still waiting on an admin
+    (FR-2.04). Until it is approved the document cannot reach the client,
+    and the server refuses both send and share — so the page has to say
+    so, and offer the way out to whoever can take it.
+  */
+  const rateWaiting = quote?.rate_outside_band === true && !quote?.rate_approved_at;
+  // Admin or this job's approval manager — decided by the server, which
+  // is the only side that can see who manages the job.
+  const canApproveRate = quote?.can_approve_rate === true;
+
+  async function approveRate() {
+    setPending("approve_rate");
+    try {
+      setQuote(await snaggingService.approveQuotationRate(id));
+      toast.success("Rate approved");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not approve the rate");
+    } finally {
+      setPending(null);
+    }
+  }
+
   const isDecided = quote?.status === "approved" || quote?.status === "rejected";
   const isDesnag = quote?.quote_kind === "desnag";
   const needsJob = quote?.status === "approved" && !quote?.job_id;
@@ -254,7 +281,9 @@ export default function QuotationDetail({ id }: { id: string }) {
                     Download PDF
                   </SubmitButton>
 
-                  {quote.status === "draft" ? (
+                  {/* A de-snag is priced at the amount chosen for it, not
+                      from the property, so it is never regenerated. */}
+                  {quote.status === "draft" && !isDesnag ? (
                     <SubmitButton
                       variant="outline"
                       size="sm"
@@ -303,6 +332,39 @@ export default function QuotationDetail({ id }: { id: string }) {
                 </div>
               ) : null}
             </div>
+
+            {/*
+              What the de-snag is charged, above the document. The amount
+              was chosen inside the rate card's range when it was raised,
+              and it is the one figure the coordinator and the client talk
+              about -- it should not have to be found in the line table.
+            */}
+            {isDesnag ? (
+              <StatCardGrid columns={3}>
+                <StatCard
+                  label="De-snagging amount"
+                  value={`${quote.currency} ${Number(quote.subtotal ?? 0).toLocaleString()}`}
+                  headline="Before VAT"
+                  caption="Chosen within the rate card range"
+                />
+                <StatCard
+                  label="VAT"
+                  value={`${quote.currency} ${Number(quote.tax_amount ?? 0).toLocaleString()}`}
+                  // Stored as a fraction (0.05) on some rows and a percentage (5) on
+                  // older ones; either reads as a percentage here.
+                  caption={`At ${(() => {
+                    const rate = Number(quote.tax_rate ?? 0);
+                    return Math.round((rate <= 1 ? rate * 100 : rate) * 100) / 100;
+                  })()}%`}
+                />
+                <StatCard
+                  label="Total"
+                  value={`${quote.currency} ${Number(quote.total ?? 0).toLocaleString()}`}
+                  headline="What the client pays"
+                  tone="good"
+                />
+              </StatCardGrid>
+            ) : null}
 
             {/*
               Approved, and no job yet — the whole reason this section
@@ -359,6 +421,51 @@ export default function QuotationDetail({ id }: { id: string }) {
                   >
                     Open the job
                   </Button>
+                </AlertDescription>
+              </Alert>
+            ) : null}
+
+            {rateWaiting ? (
+              <Alert variant="destructive">
+                <TriangleAlert />
+                <AlertTitle>This pricing is waiting on an admin</AlertTitle>
+                <AlertDescription className="flex flex-wrap items-center gap-3">
+                  <span>
+                    {/*
+                      Both rates are shown, not just the one that broke
+                      its band: an admin approving a price should see the
+                      whole price, and the suggestion beside each says how
+                      far the coordinator moved.
+                    */}
+                    Inspection {quote.rate_per_sqft} per sq ft
+                    {quote.rate_suggested != null
+                      ? ` (suggested ${quote.rate_suggested})`
+                      : ""}
+                    {quote.external_rate_per_sqft != null
+                      ? `, external areas ${quote.external_rate_per_sqft}${
+                          quote.external_rate_suggested != null
+                            ? ` (suggested ${quote.external_rate_suggested})`
+                            : ""
+                        }`
+                      : ""}
+                    .
+                    {quote.rate_override_reason
+                      ? ` Reason given: ${quote.rate_override_reason}`
+                      : ""}{" "}
+                    It cannot be sent to the client until the pricing is
+                    approved.
+                  </span>
+                  {canApproveRate ? (
+                    <SubmitButton
+                      size="sm"
+                      pending={pending === "approve_rate"}
+                      pendingLabel="Approving…"
+                      icon={<Check className="size-4" />}
+                      onClick={() => void approveRate()}
+                    >
+                      Approve this pricing
+                    </SubmitButton>
+                  ) : null}
                 </AlertDescription>
               </Alert>
             ) : null}

@@ -1,15 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
 import {
   Briefcase,
   FileText,
   Plus,
+  UserRound,
 } from "lucide-react";
-import { toast } from "sonner";
 
 import { DataTable } from "@/components/data-table";
 import { SnaggingQuotationsToolbar } from "@/components/data-table/toolbars/snagging-quotations-toolbar";
@@ -17,43 +16,22 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
-import { IdentityCell } from "@/components/ui/entity-avatar";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
 import {
   snaggingService,
   type SnaggingQuotationSummary,
 } from "@/modules/snagging";
-import {
-  ActionType,
-  ResourceType,
-  type SnaggingTaskSummary,
-} from "@/types/types";
+import { ActionType, ResourceType } from "@/types/types";
 
 import {
   ErrorState,
   PageHeading,
   QuotationStatusBadge,
-  SubmitButton,
   formatGstDate,
 } from "./shared";
+import { DesnagQuotationDialog } from "./desnag-quotation-dialog";
 
 
 const KIND_LABEL: Record<string, string> = {
@@ -179,11 +157,25 @@ export default function QuotationsAdmin() {
           const q = row.original;
           const place = [q.unit_label, q.building_name].filter(Boolean).join(", ");
           return (
-            <IdentityCell
-              title={q.client_name || "—"}
-              subtitle={place || "No property recorded"}
-              seed={q.client_id ?? q.id}
-            />
+            <div className="flex items-center gap-2.5">
+              {/*
+                One neutral person mark rather than coloured initials.
+
+                A quotation list is read down the Client column looking
+                for a name, and eight differently-tinted circles pull the
+                eye away from the words that actually distinguish the
+                rows.
+              */}
+              <span className="bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-full">
+                <UserRound className="size-4" />
+              </span>
+              <div className="min-w-0">
+                <div className="truncate font-medium">{q.client_name || "—"}</div>
+                <div className="text-muted-foreground truncate text-sm">
+                  {place || "No property recorded"}
+                </div>
+              </div>
+            </div>
           );
         },
       },
@@ -214,16 +206,28 @@ export default function QuotationsAdmin() {
         cell: ({ row }) => {
           const q = row.original;
 
+          /*
+            One button per state, and the code is not one of them.
+
+            The column used to print a job code, which reads as an
+            identifier to memorise when the only thing anybody wants from
+            it is to go there. Whoever raised the job is on the job
+            itself; repeating it here made the cell wide and told nobody
+            anything they act on.
+          */
           if (q.job_id) {
             return (
-              <Link
-                href={`/snagging/${q.job_id}`}
-                className="text-primary inline-flex items-center gap-1.5 text-sm hover:underline"
-                onClick={(event) => event.stopPropagation()}
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  router.push(`/snagging/${q.job_id}`);
+                }}
               >
-                <Briefcase className="size-3.5" />
-                {q.job_code ?? "Open job"}
-              </Link>
+                <Briefcase className="size-4" />
+                Open job
+              </Button>
             );
           }
 
@@ -281,18 +285,18 @@ export default function QuotationsAdmin() {
 
   return (
     <div className="flex flex-col gap-6">
-        <PageHeading
-          eyebrow="Sales"
-          title="Quotations"
-          description="Price a client's property first. The job is raised once they approve."
-        />
+      <PageHeading
+        eyebrow="Sales"
+        title="Quotations"
+        description="Price a client's property first. The job is raised once they approve."
+      />
 
 
       {/*
         One line, because one number matters: how much agreed work has not
         been turned into a job yet.
       */}
-      {awaitingJob > 0 ? (
+      {/* {awaitingJob > 0 ? (
         <Alert>
           <Briefcase />
           <AlertTitle>
@@ -303,7 +307,7 @@ export default function QuotationsAdmin() {
             Raise the job from the row, and the client and property carry over.
           </AlertDescription>
         </Alert>
-      ) : null}
+      ) : null} */}
 
       <Card className="py-0">
         <DataTable
@@ -366,130 +370,12 @@ export default function QuotationsAdmin() {
 
       <DesnagQuotationDialog
         open={desnagOpen}
-        onClose={() => setDesnagOpen(false)}
-        onCreated={(id) => {
+        onOpenChange={setDesnagOpen}
+        onCreated={(quote) => {
           setDesnagOpen(false);
-          router.push(`/snagging/quotations/${id}`);
+          router.push(`/snagging/quotations/${quote.id}`);
         }}
       />
     </div>
-  );
-}
-
-/**
- * Raises a de-snag quotation against a job already carried out.
- *
- * Only finished jobs are offered. A de-snag verifies fixes to defects that
- * have been reported, so quoting one against an inspection still being
- * walked would price a return visit to a first visit that has not
- * happened.
- */
-function DesnagQuotationDialog({
-  open,
-  onClose,
-  onCreated,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onCreated: (quotationId: string) => void;
-}) {
-  const [jobs, setJobs] = useState<SnaggingTaskSummary[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [jobId, setJobId] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    void (async () => {
-      setLoading(true);
-      try {
-        const res = await snaggingService.listTasks(
-          { status: "approved,delivered" },
-          0,
-          200,
-        );
-        if (!cancelled) setJobs(res.data ?? []);
-      } catch {
-        if (!cancelled) setJobs([]);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
-
-  async function create() {
-    if (!jobId) return;
-    setSaving(true);
-    try {
-      const quote = await snaggingService.createDesnagQuotation(jobId);
-      toast.success(`De-snag quotation ${quote.quote_number} created`);
-      onCreated(quote.id);
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Could not raise the quotation",
-      );
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Quote a de-snagging visit</DialogTitle>
-          <DialogDescription>
-            The client, the unit and the price come from the original
-            inspection. Once they approve it, the round is opened from that
-            job with its outstanding defects carried across.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-1.5">
-          <Label htmlFor="desnag-job" className="text-muted-foreground text-xs font-medium">
-            Which inspection?
-          </Label>
-          <Select value={jobId} onValueChange={setJobId} disabled={loading}>
-            <SelectTrigger id="desnag-job" className="w-full">
-              <SelectValue
-                placeholder={
-                  loading
-                    ? "Loading finished inspections…"
-                    : jobs.length === 0
-                      ? "No finished inspections yet"
-                      : "Pick the inspection to return to"
-                }
-              />
-            </SelectTrigger>
-            <SelectContent>
-              {jobs.map((job) => (
-                <SelectItem key={job.id} value={job.id}>
-                  {job.code} — {job.unit_label}
-                  {job.building_name ? `, ${job.building_name}` : ""}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={saving}>
-            Cancel
-          </Button>
-          <SubmitButton
-            onClick={() => void create()}
-            pending={saving}
-            pendingLabel="Pricing…"
-            disabled={!jobId}
-          >
-            Raise quotation
-          </SubmitButton>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }

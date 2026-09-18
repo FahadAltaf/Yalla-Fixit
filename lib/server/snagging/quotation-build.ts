@@ -46,6 +46,8 @@ export function priceQuotation(
   options: {
     outOfHours?: boolean;
     ratePerSqft?: number | null;
+    /** The coordinator's external-areas rate, where they apply. */
+    externalRatePerSqft?: number | null;
     /**
      * What the client declared for THIS quotation (FR-2.15).
      *
@@ -121,6 +123,8 @@ export function priceQuotation(
     */
     rate_per_sqft: priced.rate_per_sqft,
     rate_suggested: priced.rate_suggested,
+    external_rate_per_sqft: priced.external_rate_per_sqft,
+    external_rate_suggested: priced.external_rate_suggested,
     rate_outside_band: priced.rate_outside_band,
     furnished,
   };
@@ -144,12 +148,18 @@ export function priceDesnag(
   property: QuotedProperty,
   client: QuotedClient | null,
   config: PricingConfig & { currency: string },
-  context: { jobCode?: string | null; round?: number | null } = {},
+  context: {
+    jobCode?: string | null;
+    round?: number | null;
+    /** Chosen by the coordinator inside the card's range; checked by the caller. */
+    price?: number | null;
+  } = {},
 ) {
   const card = config.rate_card;
   const type = property.property_type ?? "apartment";
-  const price = card ? desnagPrice(card, type) : null;
-  if (price == null) return null;
+  const published = card ? desnagPrice(card, type) : null;
+  if (published == null) return null;
+  const price = context.price ?? published;
 
   const label = TYPE_LABEL[type] ?? type;
   const where = context.jobCode ? ` for ${context.jobCode}` : "";
@@ -174,6 +184,65 @@ export function priceDesnag(
     tax_amount: summary.tax_amount,
     total: summary.total,
     lines: summary.lines,
+  };
+}
+
+/**
+ * Prices an additional visit (BA v2, changes 26 and 30).
+ *
+ * One line at the visit's own frozen charge — the figure the visit was
+ * given when it was requested, from the card's fixed per-visit price —
+ * rather than today's card. The coordinator has already been shown that
+ * number on the visit row, and a quotation that disagreed with it because
+ * Operations edited the card in between would be a second price for one
+ * trip.
+ *
+ * Flat, per visit per property, whatever the size of the unit (change
+ * 30), so nothing about the property enters the figure. The property and
+ * client still go into the snapshot, because the document names both.
+ *
+ * Null when there is no price to charge, which the caller refuses rather
+ * than issuing a quotation for nothing.
+ */
+export function priceVisit(
+  property: QuotedProperty,
+  client: QuotedClient | null,
+  config: PricingConfig & { currency: string },
+  context: { jobCode?: string | null; visitNumber: number; charge: number | null },
+) {
+  const price = Number(context.charge) || 0;
+  if (!(price > 0)) return null;
+
+  const where = context.jobCode ? ` for ${context.jobCode}` : "";
+  const line = {
+    description: `Additional visit ${context.visitNumber}${where}: return inspection (fixed charge per visit)`,
+    qty: 1,
+    unit: "visit",
+    unit_price: price,
+    amount: price,
+  };
+
+  const summary = summarise([line], config);
+  const base = priceQuotation(property, client, config);
+
+  return {
+    ...base,
+    currency: summary.currency,
+    subtotal: summary.subtotal,
+    tax_rate: summary.tax_rate,
+    tax_amount: summary.tax_amount,
+    total: summary.total,
+    lines: summary.lines,
+    /*
+      A visit is not priced by the square foot, so it records no rate
+      decision. Left as the inspection figures `base` computed, the
+      document would claim a per-square-foot rate it never charged.
+    */
+    rate_per_sqft: null,
+    rate_suggested: null,
+    external_rate_per_sqft: null,
+    external_rate_suggested: null,
+    rate_outside_band: false,
   };
 }
 

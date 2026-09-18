@@ -98,6 +98,39 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       which is the thing FR-9.03 exists to prevent. They are tagged below
       so the UI can say plainly where each one came from.
     */
+    /*
+      Visits whose findings the manager has not approved yet. The job page
+      shows everything, labelled; the report view leaves these out, so the
+      client's report never carries a visit before it is signed off.
+    */
+    const { data: visitStates, error: visitStateError } = await admin
+      .from("snagging_job_visits")
+      .select("id, status")
+      .eq("job_id", family.rootId);
+    if (visitStateError) throw new Error(visitStateError.message);
+    const unapprovedVisitIds = (visitStates ?? [])
+      .filter((visit) => visit.status !== "completed")
+      .map((visit) => visit.id as string);
+
+    /*
+      Where this job's de-snag stands (change 31). A de-snag is a new job
+      raised through Quotations, and the job page offers the step it is
+      actually at -- quote it, wait for the client, open it -- instead of
+      a round dialog that could only fail until a quotation existed.
+    */
+    const { data: desnagQuotes, error: desnagError } = await admin
+      .from("snagging_quotations")
+      .select("id, quote_number, status, job_id, created_at")
+      .eq("source_job_id", family.rootId)
+      .eq("quote_kind", "desnag")
+      .order("created_at", { ascending: false });
+    if (desnagError) throw new Error(desnagError.message);
+    const desnagRow =
+      (desnagQuotes ?? []).find((q) => q.status === "approved" && !q.job_id) ??
+      (desnagQuotes ?? []).find((q) => q.status === "draft" || q.status === "sent") ??
+      (desnagQuotes ?? [])[0] ??
+      null;
+
     const isAdditionalVisit = id !== family.rootId && job.visit_type === "additional";
     const snagJobIds =
       id === family.rootId
@@ -261,6 +294,15 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         submissions,
         snags,
         checklist: checklist ?? [],
+        unapproved_visit_ids: unapprovedVisitIds,
+        desnag_quotation: desnagRow
+          ? {
+              id: desnagRow.id as string,
+              quote_number: (desnagRow.quote_number as string | null) ?? null,
+              status: desnagRow.status as string,
+              job_id: (desnagRow.job_id as string | null) ?? null,
+            }
+          : null,
       },
     });
   } catch (error) {
@@ -357,10 +399,19 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       //    the gate and which is created assigned by design.
       const isChild = existing.parent_job_id != null;
       if (!isChild) {
+        /*
+          The inspection's quotation only, and the newest of them. This
+          was a bare maybeSingle(), which errors the moment a job has two
+          quotations — and a visit's quotation is a second one — so
+          raising a visit quotation silently blocked inspector assignment.
+        */
         const { data: quote } = await admin
           .from("snagging_quotations")
           .select("status")
           .eq("job_id", id)
+          .neq("quote_kind", "visit")
+          .order("created_at", { ascending: false })
+          .limit(1)
           .maybeSingle();
         if (!quote || quote.status !== "approved") {
           return NextResponse.json(

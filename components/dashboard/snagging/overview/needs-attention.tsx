@@ -22,6 +22,8 @@ import { useSection } from "./use-section";
 
 type AttentionItem = {
   id: string;
+  /** Which kind of problem this is, for the filter strip. */
+  category: string;
   severity: "urgent" | "pending";
   title: string;
   subtitle: string;
@@ -29,10 +31,28 @@ type AttentionItem = {
   href: string;
 };
 
+type AttentionCategory = {
+  key: string;
+  label: string;
+  count: number;
+  severity: "urgent" | "pending";
+};
+
 type Attention = {
   total: number;
+  /** The real totals per kind, counted server-side, not from `items`. */
+  categories: AttentionCategory[];
   items: AttentionItem[];
 };
+
+/** The card's URL for the chosen kind. The server does the narrowing. */
+function endpointFor(filter: string | null, scope?: "all"): string {
+  const params = new URLSearchParams();
+  if (scope) params.set("scope", scope);
+  if (filter) params.set("category", filter);
+  const query = params.toString();
+  return query ? `${ENDPOINT}?${query}` : ENDPOINT;
+}
 
 const ENDPOINT = "/api/snagging/overview/attention";
 
@@ -50,13 +70,26 @@ const ENDPOINT = "/api/snagging/overview/attention";
  * the reader the other six somewhere.
  */
 export function NeedsAttention() {
-  const { data, loading, error, reload } = useSection<Attention>(ENDPOINT, {
-    staleMs: 60_000,
-  });
   const [allOpen, setAllOpen] = useState(false);
+  /* Which kind the list is narrowed to, or all of them. */
+  const [filter, setFilter] = useState<string | null>(null);
 
-  const shown = data?.items.length ?? 0;
+  const { data, loading, error, reload } = useSection<Attention>(
+    endpointFor(filter),
+    { staleMs: 60_000 },
+  );
+
+  const items = data?.items ?? [];
+  const shown = items.length;
   const total = data?.total ?? 0;
+  /*
+    How many of the chosen kind there are in total, so the footer can
+    still offer the rest of them.
+  */
+  const inView =
+    filter
+      ? (data?.categories ?? []).find((c) => c.key === filter)?.count ?? 0
+      : total;
 
   return (
     <>
@@ -89,7 +122,7 @@ export function NeedsAttention() {
         loading={loading}
         error={error}
         onRetry={reload}
-        isEmpty={!loading && shown === 0}
+        isEmpty={!loading && total === 0}
         empty={
           <EmptyState
             icon={<CheckCircle2 />}
@@ -106,34 +139,107 @@ export function NeedsAttention() {
             a list that is already showing everything opens a dialog with
             the same four rows in it, which reads as a bug.
           */
-          total > shown ? (
+          inView > shown ? (
             <Button
               variant="ghost"
               size="sm"
               className="text-brand h-auto w-full justify-between px-0 hover:bg-transparent"
               onClick={() => setAllOpen(true)}
             >
-              View all {total}
+              View all {inView}
               <ArrowRight className="size-3.5" aria-hidden />
             </Button>
           ) : null
         }
       >
-        <ul className="divide-y">
-          {(data?.items ?? []).map((item) => (
-            <li key={`${item.id}-${item.title}`}>
-              <AttentionRow item={item} />
-            </li>
-          ))}
-        </ul>
+        <CategoryStrip
+          categories={data?.categories ?? []}
+          active={filter}
+          onPick={setFilter}
+        />
+        {items.length === 0 && filter ? (
+          <p className="text-muted-foreground px-5 pb-4 text-sm">
+            Nothing of that kind right now. Pick another, or clear it to see
+            the whole backlog.
+          </p>
+        ) : (
+          <ul className="divide-y">
+            {items.map((item) => (
+              <li key={`${item.id}-${item.title}`}>
+                <AttentionRow item={item} />
+              </li>
+            ))}
+          </ul>
+        )}
       </SectionShell>
 
       <AllAttentionDialog
         open={allOpen}
         onOpenChange={setAllOpen}
         total={total}
+        initialFilter={filter}
       />
     </>
+  );
+}
+
+
+/**
+ * The backlog by kind, as figures you can click.
+ *
+ * Deliberately not a chart (BA v2, change 9). These are five things
+ * somebody has to go and do, and a pie of your own problems is a
+ * picture you cannot click through to a job. Numbers with their labels
+ * read faster, and each one filters the list underneath it.
+ *
+ * Only the kinds that actually have something in them are drawn. A row
+ * of zeroes would say "here are five problems you do not have", which is
+ * the opposite of what an attention card is for.
+ */
+function CategoryStrip({
+  categories,
+  active,
+  onPick,
+}: {
+  categories: AttentionCategory[];
+  active: string | null;
+  onPick: (key: string | null) => void;
+}) {
+  const shown = categories.filter((category) => category.count > 0);
+  if (shown.length < 2) return null;
+
+  return (
+    <div className="flex flex-wrap gap-1.5 px-5 pb-3">
+      {shown.map((category) => {
+        const on = active === category.key;
+        return (
+          <button
+            key={category.key}
+            type="button"
+            aria-pressed={on}
+            onClick={() => onPick(on ? null : category.key)}
+            className={cn(
+              "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors",
+              on
+                ? "border-brand bg-brand-50 text-brand"
+                : "border-border hover:bg-muted/60",
+            )}
+          >
+            <span
+              className={cn(
+                "size-1.5 shrink-0 rounded-full",
+                category.severity === "urgent" ? "bg-danger" : "bg-warning",
+              )}
+              aria-hidden
+            />
+            <span className="font-medium tabular-nums">{category.count}</span>
+            <span className={on ? "" : "text-muted-foreground"}>
+              {category.label}
+            </span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -200,13 +306,29 @@ function AllAttentionDialog({
   open,
   onOpenChange,
   total,
+  initialFilter,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   total: number;
+  /** Opened from a chip, the dialog arrives on that same kind. */
+  initialFilter: string | null;
 }) {
+  const [filter, setFilter] = useState<string | null>(initialFilter);
+  /*
+    The card's chip is the dialog's starting point, and changing it while
+    the dialog is closed moves it. Compared during render rather than
+    synchronised in an effect, which would render one frame on the old
+    kind first.
+  */
+  const [lastInitial, setLastInitial] = useState(initialFilter);
+  if (lastInitial !== initialFilter) {
+    setLastInitial(initialFilter);
+    setFilter(initialFilter);
+  }
+
   const { data, loading, error, reload } = useSection<Attention>(
-    `${ENDPOINT}?scope=all`,
+    endpointFor(filter, "all"),
     { staleMs: 60_000, enabled: open },
   );
 
@@ -227,10 +349,23 @@ function AllAttentionDialog({
         </DialogHeader>
 
         {!loading && !error ? (
-          <div className="border-y px-6 py-3">
+          <div className="space-y-2 border-y px-6 py-3">
             <p className="text-muted-foreground text-sm">
-              {total === 1 ? "1 inspection" : `${total} inspections`}
+              {filter
+                ? `${items.length} of ${total}`
+                : total === 1
+                  ? "1 inspection"
+                  : `${total} inspections`}
             </p>
+            {/* The same strip as the card, so the dialog it opened from
+                is still the thing you are looking at. */}
+            <div className="-mx-6">
+              <CategoryStrip
+                categories={data?.categories ?? []}
+                active={filter}
+                onPick={setFilter}
+              />
+            </div>
           </div>
         ) : null}
 
@@ -247,8 +382,12 @@ function AllAttentionDialog({
             <div className="px-6 py-4">
               <EmptyState
                 icon={<CheckCircle2 />}
-                title="Nothing needs attention"
-                description="No inspection is late, sent back, or waiting on a decision right now."
+                title={filter ? "Nothing of that kind" : "Nothing needs attention"}
+                description={
+                  filter
+                    ? "Clear the filter to see the rest of the backlog."
+                    : "No inspection is late, sent back, or waiting on a decision right now."
+                }
               />
             </div>
           ) : (
@@ -268,9 +407,11 @@ function AllAttentionDialog({
         */}
         {!loading && !error && items.length > 0 ? (
           <div className="text-muted-foreground border-t px-6 py-3 text-xs">
-            {items.length < total
-              ? `Showing the ${items.length} most urgent of ${total}. Clear these to see the rest.`
-              : "Open a row to go to the inspection."}
+            {filter
+              ? "Filtered. Clear the chip above to see the whole backlog."
+              : items.length < total
+                ? `Showing the ${items.length} most urgent of ${total}. Clear these to see the rest.`
+                : "Open a row to go to the inspection."}
           </div>
         ) : null}
       </DialogContent>

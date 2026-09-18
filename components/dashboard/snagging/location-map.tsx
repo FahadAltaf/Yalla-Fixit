@@ -138,7 +138,17 @@ export function LocationMap({
     // the caller's layout gives it while the coordinate row stays put
     // underneath at its natural size.
     <div className={cn("flex min-h-56 flex-col gap-2", className)}>
-      <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg border">
+      {/*
+        `isolate` is load-bearing.
+
+        Leaflet gives its own panes and controls z-index 400-1000, which
+        beat the dialog overlay's 50 outright — so opening the location
+        picker left the page's map painting on top of it, apparently
+        floating outside its card. Isolating contains those values in a
+        stacking context of this element's own, and the map then sits
+        under anything layered above the page.
+      */}
+      <div className="relative isolate min-h-0 flex-1 overflow-hidden rounded-lg border">
         {/*
           The className here must stay constant. Leaflet writes its own
           classes onto this element, and re-rendering it with a different

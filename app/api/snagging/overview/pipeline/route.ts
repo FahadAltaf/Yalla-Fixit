@@ -8,6 +8,7 @@ import {
   cacheHeaders,
   countJobs,
   myJobs,
+  resolvePeriod,
 } from "@/lib/server/snagging/overview-queries";
 import { ActionType, ResourceType } from "@/types/types";
 
@@ -17,6 +18,12 @@ import { ActionType, ResourceType } from "@/types/types";
  * One COUNT(*) per stage, issued together. Six round trips beats pulling
  * every job back to tally statuses in the browser, and stays flat as the
  * table grows.
+ *
+ * Counted over the window the page is being read through (`?days=`), on
+ * when the job was RAISED. A pipeline is a picture of a period's intake
+ * moving through the stages; counting every job ever raised would make
+ * the chart a monument that barely moves, and the date range above it a
+ * control that did nothing here.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -28,11 +35,17 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
+    const period = resolvePeriod(req.nextUrl.searchParams.get("days"));
+
     const admin = await createAdminServerClient();
     const counts = await Promise.all(
       PIPELINE_STAGES.map((stage) =>
-        // The reader's own pipeline (FR-10.01).
-        countJobs(admin, (q) => myJobs(q, profile.id).eq("status", stage.status)),
+        // The reader's own pipeline (FR-10.01), over the chosen window.
+        countJobs(admin, (q) =>
+          myJobs(q, profile.id)
+            .eq("status", stage.status)
+            .gte("created_at", period.fromTs),
+        ),
       ),
     );
 
@@ -44,6 +57,7 @@ export async function GET(req: NextRequest) {
             label: stage.label,
             count: counts[index],
           })),
+          periodDays: period.days,
         },
       },
       { headers: cacheHeaders(60) },

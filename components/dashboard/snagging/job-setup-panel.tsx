@@ -10,6 +10,7 @@ import {
   FileText,
   Lock,
   MapPin,
+  Pencil,
   RefreshCw,
   Save,
   ShieldCheck,
@@ -30,6 +31,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { compressImage } from "@/lib/media/compress-image";
 import DateSelect from "@/components/ui/date-select";
@@ -54,6 +56,7 @@ import { GoogleLocationMap, hasGoogleMapsKey } from "./google-location-map";
 import {
   ActionType,
   ResourceType,
+  type SnaggingPropertyType,
   type SnaggingTask,
   type User,
 } from "@/types/types";
@@ -122,8 +125,36 @@ export function JobSetupPanel({
   const [usersLoading, setUsersLoading] = useState(true);
   const [usersError, setUsersError] = useState<string | null>(null);
   const [saving, setSaving] = useState<
-    null | "appt" | "contacts" | "assign" | "noc" | "location"
+    null | "appt" | "contacts" | "assign" | "noc" | "location" | "property" | "client"
   >(null);
+
+  /*
+    The record behind the job, correctable in place (BR-1, FR-1.11).
+
+    Both write to the SHARED records rather than to the job, because that
+    is what they are: one property per unit, one client across their
+    jobs. A coordinator fixing a mistyped tower here is fixing it for the
+    unit, which is the behaviour the location picker beside it already
+    has.
+  */
+  const [propertyOpen, setPropertyOpen] = useState(false);
+  const [clientOpen, setClientOpen] = useState(false);
+  const [propDraft, setPropDraft] = useState({
+    unit_label: "",
+    building_name: "",
+    community: "",
+    developer_name: "",
+    property_type: "apartment" as SnaggingPropertyType,
+    bedrooms: "2",
+    built_up_area: "",
+    plot_area: "",
+    external_areas_in_scope: false,
+  });
+  const [clientDraft, setClientDraft] = useState({
+    name: "",
+    email: "",
+    phone: "",
+  });
   const [busyMap, setBusyMap] = useState<Record<string, string>>({});
   const [availabilityError, setAvailabilityError] = useState<string | null>(
     null,
@@ -346,6 +377,134 @@ export function JobSetupPanel({
    * The whole record goes back because the properties PATCH validates a
    * complete one; only the two coordinates differ from what was read.
    */
+
+  /* Seeded on open rather than in an effect, so the dialog always shows
+     what is on the record right now and never a half-stale copy. */
+  function openProperty() {
+    setPropDraft({
+      unit_label: property?.unit_label ?? "",
+      building_name: property?.building_name ?? "",
+      community: property?.community ?? "",
+      developer_name: property?.developer_name ?? "",
+      property_type: (property?.property_type ??
+        "apartment") as SnaggingPropertyType,
+      bedrooms: property?.bedrooms != null ? String(property.bedrooms) : "2",
+      built_up_area:
+        property?.built_up_area_sqft != null
+          ? String(property.built_up_area_sqft)
+          : "",
+      plot_area:
+        property?.plot_area_sqft != null ? String(property.plot_area_sqft) : "",
+      external_areas_in_scope: property?.external_areas_in_scope ?? false,
+    });
+    setPropertyOpen(true);
+  }
+
+  function openClient() {
+    setClientDraft({
+      name: property?.client_name ?? "",
+      email: property?.client_email ?? "",
+      phone: property?.client_phone ?? "",
+    });
+    setClientOpen(true);
+  }
+
+  async function saveProperty() {
+    if (!property?.id || !property.client_id) {
+      toast.error(
+        "This job has no property record to save against. Open the property under Clients first.",
+      );
+      return;
+    }
+    const unit = propDraft.unit_label.trim();
+    if (!unit) {
+      toast.error("The unit reference is required: it is how the inspector finds the property.");
+      return;
+    }
+    const area = Number(propDraft.built_up_area);
+    if (!(area > 0)) {
+      toast.error("Built-up area is required, and has to be more than zero.");
+      return;
+    }
+
+    const num = (value: string) => {
+      const n = Number(value);
+      return value.trim() === "" || !Number.isFinite(n) ? null : n;
+    };
+    const commercial = propDraft.property_type === "commercial";
+    const hasPlot =
+      propDraft.property_type === "villa" ||
+      propDraft.property_type === "townhouse";
+
+    setSaving("property");
+    try {
+      /*
+        Every column, not only the changed ones: the endpoint replaces the
+        record, so anything left out would be written back as null. The
+        location, title deed and NOC are carried through untouched — they
+        are edited by their own controls on this page.
+      */
+      await snaggingService.updateProperty(property.id, {
+        client_id: property.client_id,
+        unit_label: unit,
+        building_name: propDraft.building_name.trim(),
+        community: propDraft.community.trim(),
+        property_type: propDraft.property_type,
+        developer_name: propDraft.developer_name.trim(),
+        bedrooms: commercial ? null : num(propDraft.bedrooms),
+        built_up_area_sqft: area,
+        plot_area_sqft: hasPlot ? num(propDraft.plot_area) : null,
+        external_areas_in_scope: propDraft.external_areas_in_scope,
+        floors: property.floors ?? null,
+        location_lat: property.location_lat ?? null,
+        location_lng: property.location_lng ?? null,
+        title_deed_path: property.title_deed_path ?? "",
+        noc_required: property.noc_required ?? false,
+        noc_path: property.noc_path ?? "",
+      });
+      toast.success("Property updated");
+      setPropertyOpen(false);
+      onChanged();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not update the property",
+      );
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  async function saveClient() {
+    if (!property?.client_id) {
+      toast.error("This job has no client record to save against.");
+      return;
+    }
+    const name = clientDraft.name.trim();
+    if (name.length < 2) {
+      toast.error("The client needs a name.");
+      return;
+    }
+
+    setSaving("client");
+    try {
+      await snaggingService.updateClient({
+        id: property.client_id,
+        client_name: name,
+        client_email: clientDraft.email.trim() || null,
+        client_phone: clientDraft.phone.trim() || null,
+      });
+      toast.success("Client updated");
+      setClientOpen(false);
+      onChanged();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not update the client",
+      );
+    } finally {
+      setSaving(null);
+    }
+  }
+
   async function saveLocation(lat: number | null, lng: number | null) {
     if (!property?.id) return;
     if (!property.client_id) {
@@ -449,7 +608,18 @@ export function JobSetupPanel({
         <div className="grid items-stretch gap-6 lg:grid-cols-2">
           <div className="space-y-6">
             <div className="space-y-3">
-              <SubHeading>Property</SubHeading>
+              <SubHeading
+                action={
+                  canEdit && property?.id ? (
+                    <Button variant="ghost" size="sm" onClick={openProperty}>
+                      <Pencil className="size-3.5" />
+                      Edit
+                    </Button>
+                  ) : null
+                }
+              >
+                Property
+              </SubHeading>
               <DetailList
                 rows={[
                   { label: "Unit", value: property?.unit_label },
@@ -494,7 +664,18 @@ export function JobSetupPanel({
             </div>
 
             <div className="space-y-3">
-              <SubHeading>Client</SubHeading>
+              <SubHeading
+                action={
+                  canEdit && property?.client_id ? (
+                    <Button variant="ghost" size="sm" onClick={openClient}>
+                      <Pencil className="size-3.5" />
+                      Edit
+                    </Button>
+                  ) : null
+                }
+              >
+                Client
+              </SubHeading>
               <DetailList
                 rows={[
                   { label: "Name", value: property?.client_name },
@@ -576,6 +757,258 @@ export function JobSetupPanel({
           </div>
         </div>
       </SetupSection>
+
+
+      {/*
+        The property record, in the same shape the wizard asks for it.
+        Saved on the property, so every job for this unit picks the
+        correction up rather than each one carrying its own version of
+        the address.
+      */}
+      <Dialog open={propertyOpen} onOpenChange={setPropertyOpen}>
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Property details</DialogTitle>
+            <DialogDescription>
+              Saved on the property record, so every job for this unit picks
+              this up.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="prop-unit">Unit reference</Label>
+              <Input
+                id="prop-unit"
+                value={propDraft.unit_label}
+                onChange={(e) =>
+                  setPropDraft((d) => ({ ...d, unit_label: e.target.value }))
+                }
+                placeholder="e.g. Unit 1904"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="prop-building">Project / tower</Label>
+              <Input
+                id="prop-building"
+                value={propDraft.building_name}
+                onChange={(e) =>
+                  setPropDraft((d) => ({ ...d, building_name: e.target.value }))
+                }
+                placeholder="e.g. Riviera Tower 3"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="prop-community">Community</Label>
+              <Input
+                id="prop-community"
+                value={propDraft.community}
+                onChange={(e) =>
+                  setPropDraft((d) => ({ ...d, community: e.target.value }))
+                }
+                placeholder="e.g. Dubai Marina"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="prop-developer">Developer</Label>
+              <Input
+                id="prop-developer"
+                value={propDraft.developer_name}
+                onChange={(e) =>
+                  setPropDraft((d) => ({ ...d, developer_name: e.target.value }))
+                }
+                placeholder="e.g. Emaar"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Property type</Label>
+              <Select
+                value={propDraft.property_type ?? "apartment"}
+                onValueChange={(v) =>
+                  setPropDraft((d) => ({
+                    ...d,
+                    property_type: v as SnaggingPropertyType,
+                  }))
+                }
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(PROPERTY_TYPE_LABELS).map(([value, label]) => (
+                    <SelectItem key={value} value={value}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {propDraft.property_type !== "commercial" ? (
+              <div className="space-y-1.5">
+                <Label>Bedrooms</Label>
+                <Select
+                  value={propDraft.bedrooms}
+                  onValueChange={(v) =>
+                    setPropDraft((d) => ({ ...d, bedrooms: v }))
+                  }
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="0">Studio</SelectItem>
+                    {Array.from({ length: 11 }, (_, i) => i + 1).map((n) => (
+                      <SelectItem key={n} value={String(n)}>
+                        {n} bedroom{n > 1 ? "s" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null}
+
+            <div className="space-y-1.5">
+              <Label htmlFor="prop-area">Built-up area (sq ft)</Label>
+              <Input
+                id="prop-area"
+                type="number"
+                inputMode="decimal"
+                value={propDraft.built_up_area}
+                onChange={(e) =>
+                  setPropDraft((d) => ({ ...d, built_up_area: e.target.value }))
+                }
+                placeholder="e.g. 1200"
+              />
+            </div>
+
+            {propDraft.property_type === "villa" ||
+            propDraft.property_type === "townhouse" ? (
+              <div className="space-y-1.5">
+                <Label htmlFor="prop-plot">Plot area (sq ft)</Label>
+                <Input
+                  id="prop-plot"
+                  type="number"
+                  inputMode="decimal"
+                  value={propDraft.plot_area}
+                  onChange={(e) =>
+                    setPropDraft((d) => ({ ...d, plot_area: e.target.value }))
+                  }
+                  placeholder="e.g. 3000"
+                />
+              </div>
+            ) : null}
+          </div>
+
+          <label className="flex items-start gap-2 text-sm">
+            <Checkbox
+              checked={propDraft.external_areas_in_scope}
+              onCheckedChange={(v) =>
+                setPropDraft((d) => ({
+                  ...d,
+                  external_areas_in_scope: Boolean(v),
+                }))
+              }
+            />
+            <span>
+              External areas are in scope
+              <span className="text-muted-foreground block text-xs">
+                Garden, terrace and the rest of the plot, charged separately.
+              </span>
+            </span>
+          </label>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setPropertyOpen(false)}
+              disabled={saving === "property"}
+            >
+              Cancel
+            </Button>
+            <SubmitButton
+              pending={saving === "property"}
+              pendingLabel="Saving…"
+              icon={<Save className="size-4" />}
+              onClick={() => void saveProperty()}
+            >
+              Save property
+            </SubmitButton>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/*
+        The client's own record, not this job's site contacts — those are
+        separate fields further down, because the person who owns the unit
+        and the person who opens the door are often not the same.
+      */}
+      <Dialog open={clientOpen} onOpenChange={setClientOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Client details</DialogTitle>
+            <DialogDescription>
+              Saved on the client record, so their other jobs and quotations
+              pick this up too.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="client-name">Name</Label>
+              <Input
+                id="client-name"
+                value={clientDraft.name}
+                onChange={(e) =>
+                  setClientDraft((d) => ({ ...d, name: e.target.value }))
+                }
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="client-email">Email</Label>
+              <Input
+                id="client-email"
+                type="email"
+                value={clientDraft.email}
+                onChange={(e) =>
+                  setClientDraft((d) => ({ ...d, email: e.target.value }))
+                }
+                placeholder="client@example.com"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="client-phone">Phone</Label>
+              <Input
+                id="client-phone"
+                value={clientDraft.phone}
+                onChange={(e) =>
+                  setClientDraft((d) => ({ ...d, phone: e.target.value }))
+                }
+                placeholder="+971 50 000 0000"
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setClientOpen(false)}
+              disabled={saving === "client"}
+            >
+              Cancel
+            </Button>
+            <SubmitButton
+              pending={saving === "client"}
+              pendingLabel="Saving…"
+              icon={<Save className="size-4" />}
+              onClick={() => void saveClient()}
+            >
+              Save client
+            </SubmitButton>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/*
         The same picker the job wizard uses — search by address or click the

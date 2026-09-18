@@ -57,6 +57,16 @@ interface MultipleSelectorProps {
   maxSelected?: number;
   /** When the number of selected options exceeds the limit, the onMaxSelected will be called. */
   onMaxSelected?: (maxLimit: number) => void;
+  /**
+   * Which way the suggestion list opens. Below the field by default.
+   *
+   * It used to open upwards, which put it outside every container this
+   * control is actually used in: clipped by a dialog on the snagging
+   * areas form, and cut off 68px short on the todos form, where the list
+   * started above the top of the scrolling body it lives in. "top" is
+   * kept for a field genuinely near the bottom of its container.
+   */
+  menuPlacement?: "top" | "bottom";
   /** Hide the placeholder when there are options selected. */
   hidePlaceholderWhenSelected?: boolean;
   disabled?: boolean;
@@ -204,6 +214,7 @@ const MultipleSelector = React.forwardRef<
       commandProps,
       inputProps,
       hideClearAllButton = false,
+      menuPlacement = "bottom",
     }: MultipleSelectorProps,
     ref: React.Ref<MultipleSelectorRef>
   ) => {
@@ -589,7 +600,10 @@ const MultipleSelector = React.forwardRef<
         <div className="relative">
           <div
             className={cn(
-              "absolute bottom-[36px] mb-2 z-90 overflow-auto w-full rounded-lg border border-input",
+              "absolute z-90 overflow-auto w-full rounded-lg border border-input",
+              menuPlacement === "bottom"
+                ? "top-1 mt-2"
+                : "bottom-[36px] mb-2",
               "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
               !open && "hidden"
             )}

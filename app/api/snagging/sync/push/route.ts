@@ -26,7 +26,20 @@ import { ActionType, ResourceType, SnaggingTaskStatus, SnaggingVerdict } from "@
  * updates the snag's status.
  */
 type Admin = SupabaseClient;
-type JobRef = { id: string; status: string; code: string };
+type JobRef = {
+  id: string;
+  status: string;
+  code: string;
+  /**
+   * The additional visit being run on this job right now, if any.
+   *
+   * A visit is an appointment on an already-approved job (change 25), so
+   * the job itself is locked and in a status the inspector may not edit.
+   * A live visit is the one thing that reopens it: it is how the server
+   * tells a sanctioned return trip from a write to a closed record.
+   */
+  visit?: { id: string; number: number; status: string } | null;
+};
 
 type MutationResult = {
   mutation_id: string;
@@ -68,6 +81,80 @@ export async function POST(req: NextRequest) {
     const { data: myJobs, error: jobsError } = await jobsQuery;
     if (jobsError) throw new Error(jobsError.message);
     const jobById = new Map<string, JobRef>((myJobs ?? []).map((j) => [j.id, j as JobRef]));
+
+    /*
+      Live visits, and the jobs an inspector reaches only through one.
+
+      An inspector booked onto a visit may not be the job's own inspector,
+      and the job is approved and locked by then. Without this the push
+      refused every snag a return trip captured — the job was not theirs,
+      and even if it had been, it was not in a status they could edit.
+    */
+    const { data: liveVisits, error: liveError } = await admin
+      .from("snagging_job_visits")
+      .select("id, job_id, visit_number, status, inspector_id")
+      .in("status", ["scheduled", "in_progress"])
+      .order("visit_number", { ascending: false });
+    if (liveError) throw new Error(liveError.message);
+
+    const mine = (liveVisits ?? []).filter(
+      (v) =>
+        isAdminUser(accessUser) ||
+        v.inspector_id === profile.id ||
+        jobById.has(v.job_id as string),
+    );
+    const missingJobIds = [
+      ...new Set(mine.map((v) => v.job_id as string).filter((id) => !jobById.has(id))),
+    ];
+    if (missingJobIds.length > 0) {
+      const { data: visitJobs, error: visitJobsError } = await admin
+        .from("snagging_jobs")
+        .select("id, status, code")
+        .in("id", missingJobIds);
+      if (visitJobsError) throw new Error(visitJobsError.message);
+      for (const j of visitJobs ?? []) jobById.set(j.id, j as JobRef);
+    }
+    // Highest visit first, so the first one seen per job is the live pass.
+    for (const v of mine) {
+      const job = jobById.get(v.job_id as string);
+      if (job && !job.visit) {
+        job.visit = {
+          id: v.id as string,
+          number: v.visit_number as number,
+          status: v.status as string,
+        };
+      }
+    }
+
+    /*
+      The first thing a device sends for a booked visit means the
+      inspector is on site. Flipped once, here, rather than in each
+      applier, so a batch of forty snags does not race to do it forty
+      times.
+    */
+    const touched = new Set<string>();
+    for (const m of input.mutations) {
+      const p = (m.payload ?? {}) as Record<string, unknown>;
+      const taskId =
+        m.entity === "task" ? m.entity_id : ((p.task_id ?? p.round_task_id) as string | undefined);
+      if (taskId) touched.add(taskId);
+    }
+    for (const taskId of touched) {
+      const job = jobById.get(taskId);
+      if (job?.visit?.status !== "scheduled") continue;
+      const { error: startError } = await admin
+        .from("snagging_job_visits")
+        .update({
+          status: "in_progress",
+          started_at: new Date().toISOString(),
+          // The pull finds changed visits by this; see its delta.
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", job.visit.id)
+        .eq("status", "scheduled");
+      if (startError) throw new Error(startError.message);
+      job.visit.status = "in_progress";
+    }
 
     const results: MutationResult[] = [];
     const ledger: Array<Record<string, unknown>> = [];
@@ -221,6 +308,10 @@ function writableJob(ctx: Ctx, taskId: unknown): JobRef {
   if (typeof taskId !== "string" || !taskId) throw new Error("Missing task_id");
   const job = ctx.jobById.get(taskId);
   if (!job) throw new Error("Not assigned to this inspection");
+  // A return visit reopens an approved job for exactly as long as it runs.
+  if (job.visit && (job.visit.status === "scheduled" || job.visit.status === "in_progress")) {
+    return job;
+  }
   if (!isTaskEditableByInspector(job.status as SnaggingTaskStatus)) {
     throw new Error(`Inspection is ${job.status} and cannot be edited`);
   }
@@ -251,6 +342,26 @@ async function applySnag(admin: Admin, ctx: Ctx, payload: Record<string, unknown
   if (severity !== "low" && severity !== "medium" && severity !== "high") {
     throw new Error("severity must be low, medium or high");
   }
+
+  /*
+    On a visit, a defect from an earlier pass is part of a report the
+    client already holds. The visit adds to that report; it does not
+    rewrite what was approved. So an existing locked row is refused
+    rather than quietly overwritten by the upsert below.
+  */
+  if (job.visit) {
+    const { data: existing, error: existingError } = await admin
+      .from("snagging_snags")
+      .select("locked")
+      .eq("id", ctx.mutation.entity_id)
+      .maybeSingle();
+    if (existingError) throw new Error(existingError.message);
+    if (existing?.locked) {
+      throw new Error(
+        "This snag is from an earlier visit and is part of the approved report, so it cannot be changed on this visit.",
+      );
+    }
+  }
   if (!payload.catalogue_code) throw new Error("Every snag must carry a classification code");
 
   const row = {
@@ -275,6 +386,12 @@ async function applySnag(admin: Admin, ctx: Ctx, payload: Record<string, unknown
     pin_x: toNumber(payload.pin_x),
     pin_y: toNumber(payload.pin_y),
     round_created: (payload.round_created as number) ?? 1,
+    /*
+      Which visit found it, decided here rather than trusted from the
+      device: the server knows which visit is live, and the report's
+      "found on visit 2" depends on this being right.
+    */
+    ...(job.visit ? { visit_id: job.visit.id } : {}),
     created_by: ctx.userId,
     created_at: (payload.captured_at as string) ?? new Date().toISOString(),
   };
@@ -315,18 +432,28 @@ async function applyArea(admin: Admin, ctx: Ctx, payload: Record<string, unknown
   };
 
   if (ctx.mutation.op === "insert") {
-    const { error } = await admin.from("snagging_areas").upsert(
-      {
-        id: ctx.mutation.entity_id,
-        job_id: job.id,
-        name: (payload.name as string) ?? "Area",
-        catalogue_area_code: (payload.catalogue_area_code as string) ?? null,
-        sort_order: (payload.sort_order as number) ?? 0,
-        status: "pending",
-        ...pinFields(),
-      },
-      { onConflict: "id" },
-    );
+    const row: Record<string, unknown> = {
+      id: ctx.mutation.entity_id,
+      job_id: job.id,
+      name: (payload.name as string) ?? "Area",
+      catalogue_area_code: (payload.catalogue_area_code as string) ?? null,
+      sort_order: (payload.sort_order as number) ?? 0,
+      status: "pending",
+      ...pinFields(),
+      /*
+        A room added on a return visit says so. Rooms have no finish tick
+        on a visit, so without this it could never be signed off and the
+        job page counted it as the original walk's unfinished work.
+      */
+      ...(job.visit ? { visit_id: job.visit.id } : {}),
+    };
+    let { error } = await admin.from("snagging_areas").upsert(row, { onConflict: "id" });
+    // Until 20260918110000_area_visit.sql is applied the column does not
+    // exist; the room is still saved rather than the inspector's add failing.
+    if (error && "visit_id" in row && error.message.includes("visit_id")) {
+      delete row.visit_id;
+      ({ error } = await admin.from("snagging_areas").upsert(row, { onConflict: "id" }));
+    }
     if (error) throw new Error(error.message);
     return;
   }
@@ -455,7 +582,7 @@ async function applyChecklist(admin: Admin, ctx: Ctx, payload: Record<string, un
         reported. Null on an ordinary inspection, which is what every
         answer given before visits existed already carries.
       */
-      visit_id: (payload.visit_id as string) ?? null,
+      visit_id: job.visit?.id ?? (payload.visit_id as string) ?? null,
       updated_at: new Date().toISOString(),
     })
     .eq("id", ctx.mutation.entity_id)
@@ -527,6 +654,7 @@ async function applyVerification(admin: Admin, ctx: Ctx, payload: Record<string,
 /** Sign-off writes onto the job and locks the visit (no submissions table). */
 async function applySubmission(admin: Admin, ctx: Ctx, payload: Record<string, unknown>): Promise<void> {
   const job = writableJob(ctx, payload.task_id);
+  if (job.visit) return submitVisit(admin, ctx, job, payload);
 
   // Every snag must carry at least one photo, and every mandatory checklist
   // item must be answered, before the visit can close (BR-5, BR-12). A
@@ -691,10 +819,95 @@ async function applySubmission(admin: Admin, ctx: Ctx, payload: Record<string, u
   ctx.jobById.set(job.id, { ...job, status: "submitted" });
 }
 
+/**
+ * Hands a finished additional visit to its manager (decided 2026-09-18).
+ *
+ * The visit is submitted, not the job. The job was approved long ago and
+ * its report is with the client; what goes for review is only what THIS
+ * visit found, so that is what is checked and what is locked.
+ *
+ * The checklist does not hold it. A visit shows only the items an earlier
+ * pass could not reach (change 29), and one that still cannot be reached
+ * keeps its earlier "not checked, because" — exactly the rule a de-snag
+ * round follows.
+ */
+async function submitVisit(
+  admin: Admin,
+  ctx: Ctx,
+  job: JobRef,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const visit = job.visit!;
+  if (visit.status !== "in_progress" && visit.status !== "scheduled") {
+    throw new Error(`Visit ${visit.number} is ${visit.status} and cannot be submitted`);
+  }
+
+  const [snagRows, photoRows] = await Promise.all([
+    admin
+      .from("snagging_snags")
+      .select("id, snag_code")
+      .eq("job_id", job.id)
+      .eq("visit_id", visit.id)
+      .neq("status", "withdrawn"),
+    admin.from("snagging_snag_photos").select("snag_id").eq("job_id", job.id),
+  ]);
+  if (snagRows.error) throw new Error(snagRows.error.message);
+  if (photoRows.error) throw new Error(photoRows.error.message);
+
+  // BR-5 still holds on a visit: every defect it raises carries a photo.
+  const photographed = new Set((photoRows.data ?? []).map((r) => r.snag_id));
+  const missing = (snagRows.data ?? []).filter((s) => !photographed.has(s.id));
+  if (missing.length > 0) {
+    const sample = missing.slice(0, 3).map((s) => s.snag_code).join(", ");
+    throw new Error(
+      `${missing.length} snag(s) from this visit still have no photo uploaded (${sample}${missing.length > 3 ? ", …" : ""})`,
+    );
+  }
+
+  const submittedAt = new Date().toISOString();
+  const { error } = await admin
+    .from("snagging_job_visits")
+    .update({
+      status: "submitted",
+      submitted_at: submittedAt,
+      // A resubmission after a send-back answers the note; it is cleared.
+      review_note: null,
+      updated_at: submittedAt,
+    })
+    .eq("id", visit.id);
+  if (error) throw new Error(error.message);
+
+  // What this visit found is now the manager's to judge, not the phone's.
+  const { error: lockError } = await admin
+    .from("snagging_snags")
+    .update({ locked: true })
+    .eq("job_id", job.id)
+    .eq("visit_id", visit.id);
+  if (lockError) throw new Error(lockError.message);
+
+  auditFrom(ctx, {
+    entityType: "submission",
+    entityId: visit.id,
+    taskId: job.id,
+    eventType: "visit_submitted",
+    payload: {
+      code: job.code,
+      visit_number: visit.number,
+      snag_count: (snagRows.data ?? []).length,
+      signer_name: (payload.signer_name as string) ?? null,
+    },
+  });
+
+  visit.status = "submitted";
+}
+
 /** The device reporting that work has started on site (FR-1.06). */
 async function applyTaskProgress(admin: Admin, ctx: Ctx, payload: Record<string, unknown>): Promise<void> {
   const job = writableJob(ctx, ctx.mutation.entity_id);
   if (payload.status !== "in_progress") throw new Error("The app may only move an inspection to in_progress");
+  // On a visit the start was already recorded against the visit when this
+  // push began, and the approved job must not be moved back to on-site.
+  if (job.visit) return;
   if (job.status === "in_progress") return;
   // Same rule as submission: the transition map decides, not just whether
   // the inspector may edit the record.

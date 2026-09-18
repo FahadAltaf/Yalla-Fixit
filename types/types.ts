@@ -310,6 +310,8 @@ export type SnaggingVisitStatus =
   | "requested"
   | "scheduled"
   | "in_progress"
+  /** Finished on site, waiting for the approval manager (2026-09-18). */
+  | "submitted"
   | "completed"
   | "cancelled";
 
@@ -344,6 +346,11 @@ export interface SnaggingJobVisit {
   payment_reference: string | null;
   started_at: string | null;
   completed_at: string | null;
+  /** When the inspector handed it to the manager. */
+  submitted_at?: string | null;
+  /** The manager's reason for sending it back, shown on the phone. */
+  review_note?: string | null;
+  reviewed_at?: string | null;
   notes: string | null;
   /** Defects this visit raised onto the job it belongs to. */
   snag_count?: number;
@@ -460,6 +467,8 @@ export interface SnaggingArea {
   /** How reachable the room was on the day (R1-R6/J3). */
   access_state?: SnaggingAreaAccessState;
   access_reason?: string | null;
+  /** The return visit that added this room; null on the original walk. */
+  visit_id?: string | null;
 }
 
 export type SnaggingAreaAccessState =
@@ -502,6 +511,8 @@ export interface SnaggingSnag {
    * original and are never edited or re-counted here.
    */
   from_earlier_visit?: boolean;
+  /** The additional visit that raised it; null on the original walk. */
+  visit_id?: string | null;
   area_id: string;
   snag_code: string;
   catalogue_entry_id?: string | null;
@@ -577,6 +588,24 @@ export interface SnaggingApprovalAction {
 
 export interface SnaggingTask {
   id: string;
+  /**
+   * Visits on this job not yet approved by the manager (booked, on site,
+   * submitted, cancelled). What they recorded stays out of the client's
+   * report until approval reissues it.
+   */
+  unapproved_visit_ids?: string[];
+  /**
+   * The de-snag quotation for this job that matters now (change 31): an
+   * approved one not yet used to open a round, else a draft or sent one
+   * the client has not decided, else the latest. Null when none exists.
+   * `job_id` is set once it has paid for a round.
+   */
+  desnag_quotation?: {
+    id: string;
+    quote_number: string | null;
+    status: string;
+    job_id: string | null;
+  } | null;
   code: string;
   project_id?: string | null;
   property_id: string;
@@ -743,6 +772,8 @@ export interface SnaggingChecklistItem {
   status: SnaggingChecklistStatus;
   reason?: string | null;
   sort_order: number;
+  /** The return visit that answered it; null when answered on the walk. */
+  visit_id?: string | null;
 }
 
 /** Row shape of the snagging_task_summaries view. */

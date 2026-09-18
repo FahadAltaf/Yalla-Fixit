@@ -8,7 +8,6 @@ import {
   ChevronDown,
   Crosshair,
   Eraser,
-  FileText,
   ImageIcon,
   LayoutGrid,
   Loader2,
@@ -59,7 +58,12 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import { snaggingService, type SnaggingClientOption } from "@/modules/snagging";
+import { pickRateForSize } from "@/lib/server/snagging/pricing";
+import {
+  snaggingService,
+  type SnaggingClientOption,
+  type SnaggingPricingConfig,
+} from "@/modules/snagging";
 import { usersService } from "@/modules/users/services/users-service";
 import { suggestedFor, templateFor } from "@/lib/snagging/area-templates";
 import type { SnaggingProperty, SnaggingPropertyType, User } from "@/types/types";
@@ -122,6 +126,17 @@ type Draft = {
   title_deed_path: string;
   noc_required: boolean;
   noc_path: string;
+  /*
+    What the client declared, and what the coordinator charged.
+
+    Both belong to the QUOTATION rather than to the unit (FR-2.15,
+    FR-2.04): the same property can be let furnished to one client and
+    empty to the next, and the rate is a person's decision that the
+    document has to record.
+  */
+  furnished: boolean;
+  rate_per_sqft: string;
+  external_rate_per_sqft: string;
   appointment_date: string; // YYYY-MM-DD
   appointment_time: string; // HH:MM
   developer_contact_name: string;
@@ -231,11 +246,44 @@ const AREAS_ERROR =
 
 export default function NewJobWizard({
   mode = "job",
+  editQuotationId,
 }: {
   /** "quote" stops after the property step and writes a quotation. */
   mode?: "job" | "quote";
+  /**
+   * The draft quotation this form is reopened on.
+   *
+   * Set, the wizard fills itself from that quotation and saves back to it
+   * instead of writing a new one. Deliberately the same form rather than
+   * a second, smaller "edit quotation" dialog: the two would ask for the
+   * same property in two shapes and drift apart on the first field either
+   * of them gained.
+   */
+  editQuotationId?: string;
 } = {}) {
   const quoteOnly = mode === "quote";
+  const isEdit = Boolean(editQuotationId);
+
+  /*
+    The rate card, so the form can show the band and suggest a rate.
+
+    Fetched only in quote mode: the job wizard prices nothing, and asking
+    for pricing it will not use is a round trip on every job creation.
+  */
+  const [pricing, setPricing] = useState<SnaggingPricingConfig | null>(null);
+  useEffect(() => {
+    if (!quoteOnly) return;
+    let live = true;
+    snaggingService
+      .getPricing()
+      .then((cfg) => live && setPricing(cfg))
+      // Non-fatal: without the card the form falls back to letting the
+      // server price it, which is exactly what it did before.
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [quoteOnly]);
   const STEPS = useMemo(
     () => (quoteOnly ? ALL_STEPS.slice(0, 1) : ALL_STEPS),
     [quoteOnly],
@@ -251,7 +299,9 @@ export default function NewJobWizard({
   */
   const searchParams = useSearchParams();
   const quotationId = searchParams.get("quotation");
-  const [quotationLoading, setQuotationLoading] = useState(Boolean(quotationId));
+  const [quotationLoading, setQuotationLoading] = useState(
+    Boolean(quotationId ?? editQuotationId),
+  );
   const [quotationError, setQuotationError] = useState<string | null>(null);
   const [quotationLabel, setQuotationLabel] = useState<string | null>(null);
   const [step, setStep] = useState(0);
@@ -284,6 +334,9 @@ export default function NewJobWizard({
     title_deed_path: "",
     noc_required: false,
     noc_path: "",
+    furnished: false,
+    rate_per_sqft: "",
+    external_rate_per_sqft: "",
     appointment_date: defaultAppointment().date,
     appointment_time: defaultAppointment().time,
     developer_contact_name: "",
@@ -330,31 +383,55 @@ export default function NewJobWizard({
           return;
         }
 
+        /*
+          From the property RECORD, with the document's snapshot only as a
+          fallback.
+
+          The snapshot is a five-field copy frozen at pricing time
+          (FR-2.03); it has never held the map pin, the plot area, the
+          floors or the NOC. Filling the form from it alone left those
+          fields empty, and submitting the job then wrote the emptiness
+          back over the record — so a location pinned while quoting
+          disappeared the moment the job was raised from that quotation.
+        */
+        const prop = (quote.property ?? {}) as Record<string, unknown>;
         const snap = (quote.property_snapshot ?? {}) as Record<string, unknown>;
         const text = (value: unknown) => (value == null ? "" : String(value));
+        const either = (key: string) => text(prop[key] ?? snap[key] ?? null);
+
+        const type =
+          ((prop.property_type ?? snap.property_type) as SnaggingPropertyType) ??
+          "apartment";
+        const beds =
+          typeof prop.bedrooms === "number"
+            ? prop.bedrooms
+            : typeof snap.bedrooms === "number"
+              ? snap.bedrooms
+              : 2;
 
         setDraft((current) => ({
           ...current,
           client_id: text(quote.client_id),
           property_id: text(quote.property_id),
-          client_name: text(snap.client_name),
-          client_email: text(snap.client_email),
-          client_phone: text(snap.client_phone),
-          unit_label: text(snap.unit_label),
-          building_name: text(snap.building_name),
-          community: text(snap.community),
-          developer_name: text(snap.developer_name),
-          property_type:
-            (snap.property_type as SnaggingPropertyType) ?? current.property_type,
-          bedrooms:
-            typeof snap.bedrooms === "number" ? snap.bedrooms : current.bedrooms,
-          built_up_area: text(snap.built_up_area_sqft),
-          areas: areasTouched.current
-            ? current.areas
-            : suggestedFor(
-              (snap.property_type as SnaggingPropertyType) ?? current.property_type,
-              typeof snap.bedrooms === "number" ? snap.bedrooms : current.bedrooms,
-            ),
+          client_name: text(quote.client?.name ?? snap.client_name),
+          client_email: text(quote.client?.email ?? snap.client_email),
+          client_phone: text(quote.client?.phone ?? snap.client_phone),
+          unit_label: either("unit_label"),
+          building_name: either("building_name"),
+          community: either("community"),
+          developer_name: either("developer_name"),
+          property_type: type,
+          bedrooms: beds,
+          built_up_area: either("built_up_area_sqft"),
+          plot_area: text(prop.plot_area_sqft),
+          external_areas_in_scope: Boolean(prop.external_areas_in_scope),
+          floors: text(prop.floors),
+          location_lat: text(prop.location_lat),
+          location_lng: text(prop.location_lng),
+          title_deed_path: text(prop.title_deed_path),
+          noc_required: Boolean(prop.noc_required),
+          noc_path: text(prop.noc_path),
+          areas: areasTouched.current ? current.areas : suggestedFor(type, beds),
         }));
         setQuotationLabel(quote.quote_number);
         // Past the property step; the team adds plans, areas and contacts.
@@ -374,6 +451,98 @@ export default function NewJobWizard({
       cancelled = true;
     };
   }, [quotationId]);
+
+
+  /*
+    Edit mode: fill the form from the quotation itself.
+
+    From the LIVE property record rather than the document's snapshot.
+    The snapshot is a frozen five-field copy taken at pricing time
+    (FR-2.03) and is what the PDF renders; filling the form from it would
+    drop the plot area, the pin and the rest, and saving would then write
+    those absences back over the record.
+  */
+  useEffect(() => {
+    if (!editQuotationId) return;
+    let cancelled = false;
+
+    void (async () => {
+      setQuotationLoading(true);
+      setQuotationError(null);
+      try {
+        const quote = await snaggingService.getQuotationById(editQuotationId);
+        if (cancelled) return;
+
+        if (quote.status !== "draft") {
+          setQuotationError(
+            quote.status === "sent"
+              ? "That quotation has already been sent to the client, so it can no longer be edited."
+              : "That quotation has been decided, so it can no longer be edited.",
+          );
+          return;
+        }
+
+        const prop = (quote.property ?? {}) as Record<string, unknown>;
+        const snap = (quote.property_snapshot ?? {}) as Record<string, unknown>;
+        const text = (value: unknown) => (value == null ? "" : String(value));
+        // The record first, the snapshot as the fallback for a quotation
+        // raised before the record carried the field.
+        const either = (key: string) =>
+          text(prop[key] ?? snap[key] ?? null);
+
+        const type =
+          ((prop.property_type ?? snap.property_type) as SnaggingPropertyType) ??
+          "apartment";
+        const beds =
+          typeof prop.bedrooms === "number"
+            ? prop.bedrooms
+            : typeof snap.bedrooms === "number"
+              ? snap.bedrooms
+              : 2;
+
+        setDraft((current) => ({
+          ...current,
+          client_id: text(quote.client_id),
+          property_id: text(quote.property_id),
+          client_name: text(quote.client?.name ?? snap.client_name),
+          client_email: text(quote.client?.email ?? snap.client_email),
+          client_phone: text(quote.client?.phone ?? snap.client_phone),
+          unit_label: either("unit_label"),
+          building_name: either("building_name"),
+          community: either("community"),
+          developer_name: either("developer_name"),
+          property_type: type,
+          bedrooms: beds,
+          built_up_area: either("built_up_area_sqft"),
+          plot_area: text(prop.plot_area_sqft),
+          external_areas_in_scope: Boolean(prop.external_areas_in_scope),
+          floors: text(prop.floors),
+          location_lat: text(prop.location_lat),
+          location_lng: text(prop.location_lng),
+          noc_required: Boolean(prop.noc_required),
+          furnished: Boolean(quote.furnished ?? snap.furnished),
+          // The rate this document was priced at, so leaving the field
+          // alone saves the same figure rather than resuggesting one.
+          rate_per_sqft: text(quote.rate_per_sqft),
+          external_rate_per_sqft: text(quote.external_rate_per_sqft),
+          areas: areasTouched.current ? current.areas : suggestedFor(type, beds),
+        }));
+        setQuotationLabel(quote.quote_number);
+      } catch (error) {
+        if (!cancelled) {
+          setQuotationError(
+            error instanceof Error ? error.message : "Could not load that quotation",
+          );
+        }
+      } finally {
+        if (!cancelled) setQuotationLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [editQuotationId]);
 
   // Kept on screen rather than fired as a toast: a failed staff load used
   // to leave the approval-manager picker silently empty, which reads as
@@ -407,6 +576,12 @@ export default function NewJobWizard({
       ...current,
       property_type: value,
       areas: areasTouched.current ? current.areas : suggestedFor(value, current.bedrooms),
+      /*
+        Each type has its own band, so a rate typed against the old one is
+        no longer the number the coordinator meant. Same reasoning as the
+        furnished toggle.
+      */
+      rate_per_sqft: "",
     }));
   }
 
@@ -493,7 +668,7 @@ export default function NewJobWizard({
       */
       if (quoteOnly) {
         const num0 = (v: string) => (v.trim() && Number(v) ? Number(v) : undefined);
-        const quote = await snaggingService.createQuotation({
+        const payload = {
           client_id: draft.client_id || undefined,
           property_id: draft.property_id || undefined,
           property: {
@@ -514,7 +689,26 @@ export default function NewJobWizard({
             location_lat: num0(draft.location_lat),
             location_lng: num0(draft.location_lng),
           },
-        });
+          furnished: draft.furnished,
+          rate_per_sqft: num0(draft.rate_per_sqft),
+          external_rate_per_sqft: num0(draft.external_rate_per_sqft),
+        };
+
+        /*
+          Saved back onto the draft, not raised as a second document. The
+          quotation keeps its number, and the client and property records
+          are corrected with it — they are what the next Regenerate would
+          reprice from, so a fix that lived only on the quotation would
+          not survive one.
+        */
+        if (editQuotationId) {
+          await snaggingService.updateQuotation(editQuotationId, payload);
+          toast.success(`Quotation ${quotationLabel ?? ""} saved`.replace("  ", " "));
+          router.push(`/snagging/quotations/${editQuotationId}`);
+          return;
+        }
+
+        const quote = await snaggingService.createQuotation(payload);
         toast.success(`Quotation ${quote.quote_number} created`);
         router.push(`/snagging/quotations/${quote.id}`);
         return;
@@ -664,26 +858,45 @@ export default function NewJobWizard({
     <div className="flex flex-col gap-6">
       <PageHeading
         eyebrow={quoteOnly ? "Sales" : "Work"}
-        title={quoteOnly ? "New quotation" : "New job"}
+        title={
+          isEdit
+            ? quotationLabel
+              ? `Edit quotation ${quotationLabel}`
+              : "Edit quotation"
+            : quoteOnly
+              ? "New quotation"
+              : "New job"
+        }
         description={
-          quoteOnly
-            ? "Price a client's property. The job is raised once they approve it."
-            : quotationLabel
-              ? "The client and property come from the approved quotation. Add the plans, areas and contacts."
-              : "Three steps to a reference pack an inspector can pull before losing signal."
+          isEdit
+            ? "Correct the details while it is still a draft. Saving reprices the document and updates the client and property records."
+            : quoteOnly
+              ? "Price a client's property. The job is raised once they approve it."
+              : quotationLabel
+                ? "The client and property come from the approved quotation. Add the plans, areas and contacts."
+                : "Three steps to a reference pack an inspector can pull before losing signal."
         }
       />
 
       {/*
-        Raised from a quotation (BA v2, change 3). Named, not implied — the
-        coordinator needs to see WHICH agreement this job is being built
-        against before they commit an inspector to it.
+        Only the two states worth interrupting for: still fetching, and
+        could not be used. That the job came from a quotation is already
+        in the page's own subtitle, and repeating it in a banner spent a
+        full-width alert on something nobody has to act on.
       */}
       {quotationLoading ? (
-        <Alert>
-          <Loader2 className="animate-spin" />
-          <AlertTitle>Loading the quotation…</AlertTitle>
-        </Alert>
+        /*
+          The form is about to be filled in from the quotation, so it is
+          not shown yet. A banner over a blank New job form read as "here
+          is your form, and also something is loading" — and anything
+          typed into it was a second away from being overwritten.
+        */
+        <Card className="flex min-h-[20rem] flex-col items-center justify-center gap-3 p-10 text-center">
+          <Loader2 className="text-muted-foreground size-6 animate-spin" />
+          <p className="text-muted-foreground text-sm">
+            Loading the quotation…
+          </p>
+        </Card>
       ) : quotationError ? (
         <Alert variant="destructive">
           <AlertTriangle />
@@ -693,100 +906,111 @@ export default function NewJobWizard({
             Quotations and pick another.
           </AlertDescription>
         </Alert>
-      ) : quotationLabel ? (
-        <Alert>
-          <FileText />
-          <AlertTitle>Raising the job for quotation {quotationLabel}</AlertTitle>
-          <AlertDescription>
-            The client and property were agreed on that quotation and are
-            carried over. Changing them here would put the job out of step
-            with what the client approved.
-          </AlertDescription>
-        </Alert>
       ) : null}
 
-      <Card className="gap-0 p-0">
-        <div className="p-6">
-          {STEPS[step].key === "property" ? (
-            <PropertyStep
-              draft={draft}
-              set={set}
-              setPropertyType={setPropertyType}
-              setBedrooms={setBedrooms}
-              applyProperty={applyProperty}
-              titleDeedFile={titleDeedFile}
-              setTitleDeedFile={setTitleDeedFile}
-              nocFile={nocFile}
-              setNocFile={setNocFile}
-            />
-          ) : STEPS[step].key === "plan_areas" ? (
-            <PlanAreasStep
-              propertyType={draft.property_type}
-              bedrooms={draft.bedrooms}
-              areas={draft.areas}
-              setAreas={setAreas}
-              plans={plans}
-              setPlans={setPlans}
-            />
-          ) : (
-            <AssignStep
-              draft={draft}
-              set={set}
-              users={users}
-              usersLoading={usersLoading}
-              usersError={usersError}
-              retryUsers={() => void loadUsers()}
-            />
-          )}
-        </div>
-
-        <div className="flex items-start justify-between gap-4 border-t px-6 py-4">
-          <div className="min-w-0">
-            <p className="text-muted-foreground text-xs">
-              {STEPS[step].key === "plan_areas"
-                ? `${draft.areas.length} area${draft.areas.length === 1 ? "" : "s"} selected, ${draft.areas.filter((a) => a.pinX != null).length
-                } pinned. Pinning is optional.`
-                : quoteOnly
-                  ? "The client and the property are all a quotation needs."
-                  : "Required fields are marked."}
-            </p>
-            {/* A greyed-out Continue used to explain nothing; the first
-                unmet rule is named here, and again under its own field. */}
-            {blockers.map((reason) => (
-              <p key={reason} className="text-destructive mt-1 text-xs">
-                {reason}
-              </p>
-            ))}
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <Button
-              variant="outline"
-              onClick={() =>
-                step === 0
-                  ? router.push(quoteOnly ? "/snagging/quotations" : "/snagging/jobs")
-                  : setStep(step - 1)
-              }
-              disabled={submitting}
-            >
-              Back
-            </Button>
-            {isLast ? (
-              <SubmitButton
-                onClick={() => void submit()}
-                disabled={!stepValid}
-                pending={submitting}
-                pendingLabel="Creating…"
-              >
-                {quoteOnly ? "Create quotation" : "Create job"}
-              </SubmitButton>
+      {/*
+        A draft that cannot be loaded, or can no longer be edited, gets no
+        form at all. Rendering an empty one would invite somebody to fill
+        it in and then be refused on save.
+      */}
+      {quotationLoading || (isEdit && quotationError) ? null : (
+        <Card className="gap-0 p-0">
+          <div className="p-6">
+            {STEPS[step].key === "property" ? (
+              <PropertyStep
+                draft={draft}
+                set={set}
+                quoteOnly={quoteOnly}
+                pricing={pricing}
+                setPropertyType={setPropertyType}
+                setBedrooms={setBedrooms}
+                applyProperty={applyProperty}
+                titleDeedFile={titleDeedFile}
+                setTitleDeedFile={setTitleDeedFile}
+                nocFile={nocFile}
+                setNocFile={setNocFile}
+              />
+            ) : STEPS[step].key === "plan_areas" ? (
+              <PlanAreasStep
+                propertyType={draft.property_type}
+                bedrooms={draft.bedrooms}
+                areas={draft.areas}
+                setAreas={setAreas}
+                plans={plans}
+                setPlans={setPlans}
+              />
             ) : (
-              <Button onClick={() => setStep(step + 1)} disabled={!stepValid}>
-                Continue
-              </Button>
+              <AssignStep
+                draft={draft}
+                set={set}
+                users={users}
+                usersLoading={usersLoading}
+                usersError={usersError}
+                retryUsers={() => void loadUsers()}
+              />
             )}
           </div>
-        </div>
-      </Card>
+
+          <div className="flex items-start justify-between gap-4 border-t px-6 py-4">
+            <div className="min-w-0">
+              <p className="text-muted-foreground text-xs">
+                {STEPS[step].key === "plan_areas"
+                  ? `${draft.areas.length} area${draft.areas.length === 1 ? "" : "s"} selected, ${draft.areas.filter((a) => a.pinX != null).length
+                  } pinned. Pinning is optional.`
+                  : isEdit
+                    ? "Saving reprices the document. Once it is sent to the client it can no longer be edited."
+                    : quoteOnly
+                      ? "The client and the property are all a quotation needs."
+                      : "Required fields are marked."}
+              </p>
+              {/* A greyed-out Continue used to explain nothing; the first
+                unmet rule is named here, and again under its own field. */}
+              {blockers.map((reason) => (
+                <p key={reason} className="text-destructive mt-1 text-xs">
+                  {reason}
+                </p>
+              ))}
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Button
+                variant="outline"
+                onClick={() =>
+                  step > 0
+                    ? setStep(step - 1)
+                    : router.push(
+                      isEdit
+                        ? `/snagging/quotations/${editQuotationId}`
+                        : quoteOnly
+                          ? "/snagging/quotations"
+                          : "/snagging/jobs",
+                    )
+                }
+                disabled={submitting}
+              >
+                {isEdit ? "Cancel" : "Back"}
+              </Button>
+              {isLast ? (
+                <SubmitButton
+                  onClick={() => void submit()}
+                  disabled={!stepValid}
+                  pending={submitting}
+                  pendingLabel={isEdit ? "Saving…" : "Creating…"}
+                >
+                  {isEdit
+                    ? "Save changes"
+                    : quoteOnly
+                      ? "Create quotation"
+                      : "Create job"}
+                </SubmitButton>
+              ) : (
+                <Button onClick={() => setStep(step + 1)} disabled={!stepValid}>
+                  Continue
+                </Button>
+              )}
+            </div>
+          </div>
+        </Card>
+      )}
     </div>
   );
 }
@@ -1157,6 +1381,8 @@ function DocumentField({
 function PropertyStep({
   draft,
   set,
+  quoteOnly,
+  pricing,
   setPropertyType,
   setBedrooms,
   applyProperty,
@@ -1167,6 +1393,9 @@ function PropertyStep({
 }: {
   draft: Draft;
   set: <K extends keyof Draft>(key: K, value: Draft[K]) => void;
+  /** Only a quotation prices anything, so only it shows the rate block. */
+  quoteOnly: boolean;
+  pricing: SnaggingPricingConfig | null;
   setPropertyType: (value: SnaggingPropertyType) => void;
   setBedrooms: (value: number) => void;
   applyProperty: (prop: SnaggingProperty | null) => void;
@@ -1446,6 +1675,16 @@ function PropertyStep({
           />
           <span>External areas (garden, pool, landscaping) are inside the inspection scope</span>
         </label>
+      ) : null}
+
+      {/*
+        What the client is charged (FR-2.15, FR-2.04).
+
+        Only on a quotation: a job prices nothing, and the decisions here
+        belong to the document that bills for the work.
+      */}
+      {quoteOnly ? (
+        <QuotePricingBlock draft={draft} set={set} pricing={pricing} />
       ) : null}
 
       {/*
@@ -1841,8 +2080,8 @@ function PlanAreasStep({
                     it just cannot be drawn on here.
                   */}
                   {canPin ? (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="bg-muted inline-flex rounded-md p-0.5">
+                    <div className="bg-muted/40 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-2 py-1.5">
+                      <div className="bg-background inline-flex rounded-md border p-0.5">
                         {(["pin", "zone"] as const).map((option) => (
                           <button
                             key={option}
@@ -1850,46 +2089,53 @@ function PlanAreasStep({
                             onClick={() => setPlaceMode(option)}
                             aria-pressed={placeMode === option}
                             className={cn(
-                              "rounded px-2.5 py-1 text-xs font-medium transition-colors",
+                              "flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors",
                               placeMode === option
-                                ? "bg-background text-foreground shadow-sm"
+                                ? "bg-brand-50 text-brand"
                                 : "text-muted-foreground hover:text-foreground",
                             )}
                           >
+                            {option === "pin" ? (
+                              <MapPin className="size-3.5" />
+                            ) : (
+                              <Shapes className="size-3.5" />
+                            )}
                             {option === "pin" ? "Drop a pin" : "Draw the room"}
                           </button>
                         ))}
                       </div>
-                      {/*
-                        Which room the next click lands on, named.
 
-                        The list highlights it too, but the coordinator's
-                        eyes are on the plan while they click, and "which
-                        room am I placing" is the only question that matters
-                        at that moment.
+                      {/*
+                        Which room the next click lands on. The list marks
+                        it too, but the coordinator's eyes are on the plan
+                        while they click, and that is the only question
+                        that matters at that moment.
                       */}
                       {activeArea ? (
-                        <p className="text-muted-foreground flex min-w-0 flex-wrap items-center gap-x-1.5 text-xs">
-                          <span className="text-brand font-medium">
-                            Placing {activeArea}
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="bg-brand text-primary-foreground inline-flex max-w-[12rem] items-center gap-1.5 truncate rounded-full px-2.5 py-1 text-xs font-medium">
+                            <Crosshair className="size-3 shrink-0" />
+                            <span className="truncate">{activeArea}</span>
                           </span>
-                          <span>
+                          <span className="text-muted-foreground hidden text-xs sm:inline">
                             {placeMode === "pin"
-                              ? "— click the plan."
-                              : "— click each corner, then Enter to close it. Backspace undoes a corner, Esc starts over."}
+                              ? "Click the plan"
+                              : "Click each corner · Enter closes · Esc restarts"}
                           </span>
-                          <button
+                          <Button
                             type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-xs"
                             onClick={() => setActiveArea(null)}
-                            className="hover:text-foreground underline underline-offset-2"
                           >
                             Done
-                          </button>
-                        </p>
+                          </Button>
+                        </div>
                       ) : (
-                        <p className="text-muted-foreground text-xs">
-                          Pick a room in the list to place it on the plan.
-                        </p>
+                        <span className="text-muted-foreground text-xs">
+                          Pick a room to place it
+                        </span>
                       )}
                     </div>
                   ) : null}
@@ -2007,8 +2253,16 @@ function PlanAreasStep({
                     key={option.name}
                     className={cn(
                       "flex items-center gap-2 rounded-lg border px-2.5 py-2 text-sm transition-colors",
-                      chosen ? "border-brand/40 bg-brand-50/40" : "border-border",
-                      isActive && "ring-brand/60 ring-2",
+                      /*
+                        Ticked is a soft edge; ACTIVE is the solid one. A
+                        ring on top of a tint made every ticked room look
+                        like the one being placed.
+                      */
+                      isActive
+                        ? "border-brand bg-brand-50/50"
+                        : chosen
+                          ? "border-brand/30"
+                          : "border-border hover:bg-muted/40",
                     )}
                   >
                     <Checkbox
@@ -2022,68 +2276,56 @@ function PlanAreasStep({
                       onClick={() => select(option.name)}
                       className="min-w-0 flex-1 text-left disabled:cursor-default"
                     >
-                      <span
-                        className={cn("block truncate font-medium", chosen && "text-brand")}
-                      >
-                        {option.name}
-                      </span>
-                      {/* Which floor it sits on, said only when that could be
-                          a different one from the plan on screen. */}
-                      {elsewhere ? (
+                      <span className="block truncate font-medium">{option.name}</span>
+                      {chosen ? (
                         <span className="text-muted-foreground block truncate text-xs">
-                          on {planLabel(chosen.planId)}
+                          {!placed
+                            ? "Not on the plan"
+                            : elsewhere
+                              ? `${drawn ? "Drawn" : "Pinned"} on ${planLabel(chosen.planId)}`
+                              : drawn
+                                ? "Drawn as a room"
+                                : "Pinned"}
                         </span>
                       ) : null}
                     </button>
 
-                    {chosen && canPin ? (
-                      <div className="flex shrink-0 items-center gap-0.5">
-                        {/*
-                          The room's state, as the control that changes it: a
-                          marker when it is placed, a target when it is not.
-                          Either way, clicking selects it for the plan.
-                        */}
-                        <button
-                          type="button"
-                          onClick={() => select(option.name)}
-                          aria-label={
-                            placed
-                              ? `${option.name} is on the plan. Select it to place it again.`
-                              : `Place ${option.name} on the plan`
-                          }
-                          title={
-                            placed
-                              ? drawn
-                                ? "Drawn as a room. Select to place again."
-                                : "Pinned. Select to place again."
-                              : "Place on the plan"
-                          }
-                          className={cn(
-                            "hover:bg-brand/10 rounded p-1 transition-colors",
-                            placed ? "text-brand" : "text-muted-foreground",
-                          )}
-                        >
-                          {drawn ? (
-                            <Shapes className="size-3.5" />
-                          ) : placed ? (
-                            <MapPin className="size-3.5" />
-                          ) : (
-                            <Crosshair className="size-3.5" />
-                          )}
-                        </button>
+                    {/*
+                      The marker sits at the end, with the row's other
+                      controls.
 
-                        {placed ? (
-                          <button
-                            type="button"
-                            onClick={() => clearPlacement(option.name)}
-                            aria-label={`Take ${option.name} off the plan`}
-                            title="Take off the plan"
-                            className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded p-1 transition-colors"
-                          >
-                            <Eraser className="size-3.5" />
-                          </button>
-                        ) : null}
-                      </div>
+                      Between the tick and the name it split the two halves
+                      of one idea — you read a box, then an icon, then the
+                      room it belonged to. On the right it lines up down
+                      the list, so the placed rooms can be counted in one
+                      pass, and the names start at the same x.
+                    */}
+                    <span
+                      className={cn(
+                        "flex size-7 shrink-0 items-center justify-center rounded-md border [&_svg]:size-3.5",
+                        placed
+                          ? "border-brand/30 bg-brand-50 text-brand"
+                          : "text-muted-foreground bg-muted/50",
+                      )}
+                      title={
+                        drawn ? "Drawn as a room" : placed ? "Pinned" : "Not on the plan"
+                      }
+                    >
+                      {drawn ? <Shapes /> : placed ? <MapPin /> : <Crosshair />}
+                    </span>
+
+                    {chosen && canPin && placed ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="text-muted-foreground hover:text-destructive size-7 shrink-0"
+                        onClick={() => clearPlacement(option.name)}
+                        aria-label={`Take ${option.name} off the plan`}
+                        title="Take off the plan"
+                      >
+                        <Eraser className="size-3.5" />
+                      </Button>
                     ) : null}
                   </div>
                 );
@@ -2154,6 +2396,281 @@ function PlanAreasStep({
   );
 }
 
+/**
+ * The two pricing decisions a coordinator makes when raising a quotation.
+ *
+ * FURNISHED is the client's declaration, recorded per quotation rather
+ * than per unit: the same property is let furnished to one client and
+ * empty to the next, and the rate follows what is being inspected on the
+ * day. Commercial is a flat rate either way, so the question is not asked
+ * there.
+ *
+ * THE RATE is a person's choice inside the published band. The size rule
+ * still proposes a figure — smaller properties toward the top of the
+ * range — but it is a suggestion, and the quotation records who took it.
+ * Leaving the band is allowed, needs a reason, and cannot be sent to a
+ * client until an admin approves it.
+ */
+function QuotePricingBlock({
+  draft,
+  set,
+  pricing,
+}: {
+  draft: Draft;
+  set: <K extends keyof Draft>(key: K, value: Draft[K]) => void;
+  pricing: SnaggingPricingConfig | null;
+}) {
+  const isCommercial = draft.property_type === "commercial";
+  const row = pricing?.rate_card?.types?.[draft.property_type] ?? null;
+  const area = Number(draft.built_up_area) || 0;
+
+  /*
+    The same rule the server applies, so the figure on screen is the one
+    that will be charged. Imported rather than reimplemented — two copies
+    of a pricing rule is two answers.
+  */
+  const suggested = row
+    ? draft.furnished
+      ? row.furnished
+      : pickRateForSize(row.unfurnished_min, row.unfurnished_max, area)
+    : null;
+
+  const band = row && !draft.furnished
+    ? { min: row.unfurnished_min, max: row.unfurnished_max }
+    : null;
+
+  /*
+    External areas are a second, separate decision (FR-2.07).
+
+    Only asked where they are actually charged: a villa or townhouse, in
+    scope, with a plot larger than the building. Anywhere else there is no
+    line to price and the question would be noise.
+  */
+  const plot = Number(draft.plot_area) || 0;
+  const hasExternal =
+    (draft.property_type === "villa" || draft.property_type === "townhouse") &&
+    draft.external_areas_in_scope &&
+    plot > area;
+  const externalArea = hasExternal ? plot - area : 0;
+  const externalBand = pricing?.rate_card
+    ? { min: pricing.rate_card.external_min, max: pricing.rate_card.external_max }
+    : null;
+  const externalSuggested =
+    hasExternal && externalBand
+      ? pickRateForSize(externalBand.min, externalBand.max, externalArea)
+      : null;
+  return (
+    <div className="space-y-4 rounded-lg border p-4">
+      <div>
+        <p className="text-sm font-medium">Pricing</p>
+        <p className="text-muted-foreground mt-0.5 text-xs">
+          What the client declared, and the rate this quotation charges.
+        </p>
+      </div>
+
+      {/* The declaration. Not asked on commercial, which is flat. */}
+      {!isCommercial ? (
+        <label className="flex items-start gap-2 text-sm">
+          <Checkbox
+            checked={draft.furnished}
+            onCheckedChange={(v) => {
+              set("furnished", Boolean(v));
+              /*
+                The band changes with it, so a rate typed against the old
+                one is no longer the number the coordinator meant.
+                Furnished is a single published rate, with nothing to
+                choose at all.
+              */
+              set("rate_per_sqft", "");
+            }}
+          />
+          <span>
+            The client declares this property is <strong>furnished</strong>
+            <span className="text-muted-foreground block text-xs">
+              Charged at the furnished rate. If the inspector finds otherwise on
+              site the quotation is void and a revised one is needed.
+            </span>
+          </span>
+        </label>
+      ) : null}
+
+      {row ? (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <RateField
+            label="Rate per sq ft"
+            band={band}
+            suggested={suggested}
+            value={draft.rate_per_sqft}
+            onChange={(v) => set("rate_per_sqft", v)}
+            fixedNote={
+              draft.furnished
+                ? "Furnished is one published rate, so there is nothing to choose."
+                : "The card publishes one rate for this property type."
+            }
+            hint={band ? `Between ${band.min} and ${band.max}.` : undefined}
+          />
+
+          {hasExternal ? (
+            <RateField
+              label="External areas, per sq ft"
+              band={externalBand}
+              suggested={externalSuggested}
+              value={draft.external_rate_per_sqft}
+              onChange={(v) => set("external_rate_per_sqft", v)}
+              hint={
+                externalBand
+                  ? `Between ${externalBand.min} and ${externalBand.max}. Suggested ${externalSuggested} for ${externalArea.toLocaleString()} sq ft of plot.`
+                  : undefined
+              }
+            />
+          ) : null}
+        </div>
+      ) : (
+        <p className="text-muted-foreground text-xs">
+          {pricing
+            ? "The rate card has no row for this property type, so the server will price it."
+            : "Loading the rate card…"}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** One nudge of the arrow keys, and the rounding that keeps it clean. */
+const RATE_STEP = 0.05;
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * Could this half-typed string still grow into the band?
+ *
+ * A keystroke has to be judged on what it might become, not on what it
+ * is: on the way to "1.3" you must be allowed to type "1", which on its
+ * own sits below a 1.2 minimum. So the partial string is read as the
+ * range of numbers that start with it — "1" covers [1, 2), "1.3" covers
+ * [1.3, 1.4) — and the keystroke is accepted only if that range still
+ * touches the band.
+ *
+ * "2" covers [2, 3) and touches nothing in 1.2–1.4, so it never lands in
+ * the field at all.
+ */
+function canReachBand(partial: string, band: { min: number; max: number }) {
+  if (partial === "") return true;
+  if (!/^\d*\.?\d*$/.test(partial)) return false;
+  const lower = Number(partial === "." ? "0" : partial);
+  if (!Number.isFinite(lower)) return false;
+  const dot = partial.indexOf(".");
+  // Appending digits can only move the value up, and never past the next
+  // unit (no decimal point yet) or the next place (one already typed).
+  const span = dot === -1 ? 1 : Math.pow(10, -(partial.length - dot - 1));
+  /*
+    A tolerance, because the arithmetic is binary floating point: 1.1
+    plus one place is 1.2000000000000002, and without it that lands
+    just inside a 1.2 minimum and lets a dead prefix through while
+    the longer "1.19" is refused.
+  */
+  const EPS = 1e-9;
+  return lower <= band.max + EPS && lower + span > band.min + EPS;
+}
+
+/**
+ * One rate on the card, as either a fact or a bounded choice.
+ *
+ * Where the card publishes a SINGLE figure — the furnished rate, a
+ * commercial flat rate, or a band whose two ends are equal — there is
+ * nothing to decide, so it is shown rather than typed. Asking somebody
+ * to key in a number the system already knows invites a typo into the
+ * one field that decides what a client pays.
+ *
+ * Where it publishes a BAND, the field cannot leave it. A keystroke that
+ * could never land inside the range is not accepted, the arrow keys stop
+ * at each end, and a value left short of the band on blur is clamped
+ * into it. There is no way to price outside the card from here.
+ */
+function RateField({
+  label,
+  band,
+  suggested,
+  value,
+  onChange,
+  fixedNote,
+  hint,
+}: {
+  label: string;
+  /** Null when the card publishes one figure rather than a range. */
+  band: { min: number; max: number } | null;
+  suggested: number | null;
+  value: string;
+  onChange: (value: string) => void;
+  fixedNote?: string;
+  hint?: string;
+}) {
+  const fixed = band === null || band.min === band.max;
+
+  if (fixed) {
+    return (
+      <Field label={label} hint={fixedNote}>
+        <div className="bg-muted/50 text-muted-foreground flex h-9 items-center rounded-md border px-3 text-sm">
+          <span className="text-foreground font-medium tabular-nums">
+            {suggested ?? "—"}
+          </span>
+          <span className="ml-2 text-xs">per sq ft · published rate</span>
+        </div>
+      </Field>
+    );
+  }
+
+  return (
+    <Field label={label} hint={hint}>
+      {/*
+        Deliberately a text field rather than type="number": a number
+        input reports a half-typed "1." as an empty string, which makes
+        it impossible to judge a keystroke on what it is becoming. The
+        bounds are enforced here instead, and the arrow keys are wired
+        back up below so the field still nudges.
+      */}
+      <Input
+        type="text"
+        inputMode="decimal"
+        autoComplete="off"
+        value={value}
+        placeholder={suggested != null ? String(suggested) : ""}
+        onChange={(e) => {
+          const next = e.target.value;
+          if (!/^\d*\.?\d*$/.test(next)) return;
+          // A value that can never reach the band is refused outright,
+          // so it never appears in the field at all.
+          if (!canReachBand(next, band)) return;
+          onChange(next);
+        }}
+        onKeyDown={(e) => {
+          if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+          e.preventDefault();
+          const current = Number(value);
+          const from =
+            value.trim() !== "" && Number.isFinite(current)
+              ? current
+              : (suggested ?? band.min);
+          const next = round2(
+            from + (e.key === "ArrowUp" ? RATE_STEP : -RATE_STEP),
+          );
+          onChange(String(Math.min(band.max, Math.max(band.min, next))));
+        }}
+        onBlur={(e) => {
+          // "1" can still reach the band while you are typing, but on
+          // the way out it is just a number below the minimum, so it is
+          // clamped rather than left sitting there out of range.
+          const trimmed = e.target.value.trim().replace(/\.$/, "");
+          if (trimmed === "") return;
+          const n = Number(trimmed);
+          if (!Number.isFinite(n)) return;
+          const held = Math.min(band.max, Math.max(band.min, n));
+          if (String(held) !== e.target.value) onChange(String(held));
+        }}
+      />
+    </Field>
+  );
+}
+
 function AssignStep({
   draft,
   set,
@@ -2180,7 +2697,7 @@ function AssignStep({
         <h2 className="text-xl">Schedule and site contacts</h2>
         <p className="text-muted-foreground mt-1 text-sm">
           When the inspection happens and who gives access. The inspector is assigned from the job
-          once the client approves the quotation (FR-3.08); you can pre-select the approval manager here.
+          once the client approves the quotation; you can pre-select the approval manager here.
         </p>
       </div>
 

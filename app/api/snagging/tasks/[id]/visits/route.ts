@@ -36,10 +36,15 @@ import { ActionType, ResourceType } from "@/types/types";
  * approval.
  */
 
-const VISIT_COLUMNS =
-  "id, job_id, visit_number, status, scheduled_date, appointment_at, inspector_id, " +
-  "charge, charge_method, quotation_id, payment_reference, started_at, completed_at, " +
-  "notes, created_at, updated_at, inspector:inspector_id(id, full_name, email)";
+/*
+  Every column, rather than a list.
+
+  The review fields (submitted_at, review_note, reviewed_at) arrive with
+  a migration. Naming them here would make this whole tab fail with a
+  400 on any database the migration has not reached yet; `*` reads them
+  where they exist and simply omits them where they do not.
+*/
+const VISIT_COLUMNS = "*, inspector:inspector_id(id, full_name, email)";
 
 function firstOf<T>(v: T | T[] | null | undefined): T | null {
   return Array.isArray(v) ? v[0] ?? null : v ?? null;

@@ -250,8 +250,7 @@ export async function buildReportData(
        signed_at, signer_name, signature_path,
        client:client_id(name, email, phone),
        inspector:inspector_id(id, full_name, email),
-       areas:snagging_areas(id, name, status, note, confirmed_at, sort_order,
-         access_state, access_reason, elements_not_checked)`,
+       areas:snagging_areas(*)`,
     )
     .eq("id", jobId)
     .maybeSingle();
@@ -281,18 +280,37 @@ export async function buildReportData(
           ? family.allIds
           : [jobId];
 
-  const [{ data: checklist }, { data: snagRows }, { data: catalogue }] =
+  /*
+    Visits the manager has not approved. What they recorded -- snags, a
+    room added on the visit, checklist answers -- stays out of the client's
+    report until approval reissues it; a submitted visit is not yet
+    anything YFI stands behind.
+  */
+  const { data: visitStates, error: visitStateError } = await admin
+    .from("snagging_job_visits")
+    .select("id, status")
+    .eq("job_id", family.rootId);
+  if (visitStateError) throw new Error(visitStateError.message);
+  const unapprovedVisits = new Set(
+    (visitStates ?? [])
+      .filter((visit) => visit.status !== "completed")
+      .map((visit) => visit.id as string),
+  );
+  const unapproved = (row: Record<string, unknown>) =>
+    typeof row.visit_id === "string" && unapprovedVisits.has(row.visit_id);
+
+  const [{ data: checklistRows }, { data: allSnagRows }, { data: catalogue }] =
     await Promise.all([
       admin
         .from("snagging_job_checklist")
-        .select("id, code, group_name, label, mandatory, status, reason, sort_order")
+        .select("id, code, group_name, label, mandatory, status, reason, sort_order, visit_id")
         .eq("job_id", jobId)
         .order("sort_order", { ascending: true }),
       admin
         .from("snagging_snags")
         .select(
           `id, job_id, area_id, snag_code, catalogue_code, category_label, element_label, defect_label,
-           severity, note, status, round_created,
+           severity, note, status, round_created, visit_id,
            photos:snagging_snag_photos(id, snag_id, storage_path, media_type, taken_at,
              width, height, gps_lat, gps_lng, exif, marker_x, marker_y)`,
         )
@@ -301,6 +319,14 @@ export async function buildReportData(
         .order("snag_code", { ascending: true }),
       admin.from("snagging_catalogue_entries").select("code, guidance"),
     ]);
+
+  const snagRows = (allSnagRows ?? []).filter(
+    (row) => !unapproved(row as Record<string, unknown>),
+  );
+  // An item a pending visit answered reads as the walk left it.
+  const checklist = ((checklistRows ?? []) as Array<Record<string, unknown>>).map((row) =>
+    unapproved(row) ? { ...row, status: "not_checked", reason: null } : row,
+  );
 
   /*
     Collapse the per-round copies before anything else looks at them, so
@@ -331,7 +357,8 @@ export async function buildReportData(
 
   // FR-7.03 — the inspection's configured order, never alphabetical.
   const areaRows = ((job.areas ?? []) as Array<Record<string, unknown>>)
-    .slice()
+    // A room a pending visit added is not in the report yet.
+    .filter((area) => !unapproved(area))
     .sort((a, b) => Number(a.sort_order ?? 0) - Number(b.sort_order ?? 0));
 
   const byArea = new Map<string, ReportSnag[]>();
@@ -433,7 +460,9 @@ export async function buildReportData(
     areas,
     unassignedSnags,
     tally: {
-      areasWalked: areaRows.filter((area) => area.confirmed_at).length,
+      // A room added on a return visit was walked on that visit; rooms
+      // have no finish tick there, so it never carries a sign-off.
+      areasWalked: areaRows.filter((area) => area.confirmed_at || area.visit_id).length,
       areasTotal: areaRows.length,
       checklistDone: ((checklist ?? []) as Array<Record<string, unknown>>).filter(
         (item) => item.status !== "pending" && item.status !== "not_checked",

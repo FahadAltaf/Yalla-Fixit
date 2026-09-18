@@ -169,6 +169,67 @@ export interface SnaggingQuoteLine {
   amount: number;
 }
 
+/** One additional visit, with everything that belongs to it. */
+export interface SnaggingVisitDetail {
+  visit: SnaggingJobVisit;
+  job: {
+    id: string;
+    code: string;
+    unit_label: string | null;
+    building_name: string | null;
+    approval_manager_id: string | null;
+    status: string;
+  } | null;
+  quotation: {
+    id: string;
+    quote_number: string;
+    status: string;
+    total: number | null;
+    currency: string | null;
+    sent_at: string | null;
+    approved_at: string | null;
+    decided_at: string | null;
+    rejected_reason: string | null;
+    created_at: string;
+  } | null;
+  snags: Array<{
+    id: string;
+    snag_code: string;
+    category_label: string | null;
+    element_label: string | null;
+    defect_label: string | null;
+    severity: "low" | "medium" | "high";
+    status: string;
+    note: string | null;
+    created_at: string;
+    locked: boolean;
+    area: { id: string; name: string } | null;
+    photos: Array<{
+      id: string;
+      storage_path: string;
+      media_type: string;
+      taken_at: string;
+      signed_url: string | null;
+    }>;
+  }>;
+  checklist: Array<{
+    id: string;
+    code: string;
+    group_name: string | null;
+    label: string;
+    status: string;
+    reason: string | null;
+    updated_at: string;
+  }>;
+  revisit_areas: Array<{
+    id: string;
+    name: string;
+    access_state: string;
+    access_reason: string | null;
+    elements_not_checked: string | null;
+  }>;
+}
+
 export interface SnaggingQuotation {
   /** Null on a preview: nothing has been written for it yet. */
   id: string | null;
@@ -206,6 +267,50 @@ export interface SnaggingQuotation {
   approved_by_contact?: string | null;
   /** Returned by the "send" action so the coordinator can copy the client link. */
   approval_url?: string | null;
+
+  /* ── The pricing decisions this document records (FR-2.04, FR-2.15) ── */
+
+  /** What the client declared when it was raised. */
+  furnished?: boolean;
+  /** The built-up rate it was actually priced at. */
+  rate_per_sqft?: number | null;
+  /** What the size rule proposed, for comparison. */
+  rate_suggested?: number | null;
+  /** The external-areas rate, where the property has any. */
+  external_rate_per_sqft?: number | null;
+  external_rate_suggested?: number | null;
+  rate_chosen_by?: string | null;
+  rate_chosen_at?: string | null;
+  /** True when the rate sits outside the card band; blocks sending. */
+  rate_outside_band?: boolean;
+  rate_override_reason?: string | null;
+  rate_approved_by?: string | null;
+  rate_approved_at?: string | null;
+  /**
+   * Whether the CURRENT reader may sign off pricing outside the band.
+   *
+   * Computed by the server, because the answer depends on the approval
+   * manager of the job this quotation belongs to — which the quotation
+   * itself does not carry.
+   */
+  can_approve_rate?: boolean;
+
+  /**
+   * The live client and property behind the document, beside the frozen
+   * snapshot the PDF renders from.
+   *
+   * Only the edit form reads these. The snapshot is deliberately a
+   * five-field copy taken when the quotation was priced, so filling an
+   * edit form from it would silently drop the plot area, the map pin and
+   * everything else it never held.
+   */
+  property?: Record<string, unknown> | null;
+  client?: {
+    id: string;
+    name: string | null;
+    email: string | null;
+    phone: string | null;
+  } | null;
 }
 
 export interface SnaggingClientOption {
@@ -367,6 +472,14 @@ export const snaggingService = {
     client_id?: string;
     property_id?: string;
     property: Record<string, unknown>;
+    /** What the client declared for this quotation (FR-2.15). */
+    furnished?: boolean;
+    /** The coordinator's rate, if they moved it off the suggestion (FR-2.04). */
+    rate_per_sqft?: number;
+    /** The same choice for external areas, where they apply (FR-2.07). */
+    external_rate_per_sqft?: number;
+    /** Required when the rate sits outside the published band. */
+    rate_override_reason?: string;
   }): Promise<SnaggingQuotationSummary> =>
     executeRESTBackend<SnaggingQuotationSummary>("/api/snagging/quotations", {
       method: "POST",
@@ -379,10 +492,12 @@ export const snaggingService = {
    */
   createDesnagQuotation: async (
     sourceJobId: string,
+    /** The chosen amount, inside the card's de-snagging range. */
+    price?: number,
   ): Promise<SnaggingQuotationSummary> =>
     executeRESTBackend<SnaggingQuotationSummary>("/api/snagging/quotations", {
       method: "POST",
-      body: { quote_kind: "desnag", source_job_id: sourceJobId },
+      body: { quote_kind: "desnag", source_job_id: sourceJobId, price },
     }),
 
   getQuotationById: async (id: string): Promise<SnaggingQuotation> =>
@@ -390,7 +505,38 @@ export const snaggingService = {
       method: "GET",
     }),
 
+  /**
+   * Corrects a quotation that has not gone out yet.
+   *
+   * Takes the same shape as createQuotation, because it is the same form:
+   * a draft is edited in the wizard it was written in rather than in a
+   * second, smaller copy of it that would drift on the first field either
+   * of them gained.
+   */
+  updateQuotation: async (
+    id: string,
+    input: {
+      client_id?: string;
+      property: Record<string, unknown>;
+      furnished?: boolean;
+      rate_per_sqft?: number;
+      external_rate_per_sqft?: number;
+      rate_override_reason?: string;
+    },
+  ): Promise<SnaggingQuotation> =>
+    executeRESTBackend<SnaggingQuotation>(`/api/snagging/quotations/${id}`, {
+      method: "PATCH",
+      body: input as unknown as Record<string, unknown>,
+    }),
+
   /** send / share_link / regenerate / approve / reject, by quotation id. */
+  /** Admin sign-off on a rate outside the published band (FR-2.04). */
+  approveQuotationRate: async (id: string): Promise<SnaggingQuotation> =>
+    executeRESTBackend<SnaggingQuotation>(`/api/snagging/quotations/${id}`, {
+      method: "POST",
+      body: { action: "approve_rate" },
+    }),
+
   quotationActionById: async (
     id: string,
     action: "send" | "share_link" | "regenerate" | "approve" | "reject",
@@ -706,6 +852,44 @@ export const snaggingService = {
       `/api/snagging/tasks/${id}/visits/${visitId}`,
       { method: "PATCH", body: input as unknown as Record<string, unknown> },
     ),
+
+  /**
+   * Raises the quotation a visit is charged by, from this job, and links
+   * it to the visit (BA v2, change 26). The visit can be booked once the
+   * client approves it.
+   */
+  raiseVisitQuotation: async (
+    id: string,
+    visitId: string,
+  ): Promise<{ id: string; quote_number: string; status: string; total: number }> =>
+    executeRESTBackend<{ id: string; quote_number: string; status: string; total: number }>(
+      `/api/snagging/tasks/${id}/visits/${visitId}/quotation`,
+      { method: "POST" },
+    ),
+
+  /** One visit with its snags, quotation, checklist answers and rooms. */
+  getVisit: async (id: string, visitId: string): Promise<SnaggingVisitDetail> =>
+    executeRESTBackend<SnaggingVisitDetail>(
+      `/api/snagging/tasks/${id}/visits/${visitId}`,
+      { method: "GET" },
+    ),
+
+  /**
+   * The approval manager's decision on a submitted visit. Approving
+   * reissues the client's report with what the visit found.
+   */
+  reviewVisit: async (
+    id: string,
+    visitId: string,
+    input: { decision: "approve" } | { decision: "send_back"; reason: string },
+  ): Promise<{
+    status: string;
+    generation?: { status: "generated" | "failed"; version: number; error?: string } | null;
+  }> =>
+    executeRESTBackend(`/api/snagging/tasks/${id}/visits/${visitId}/review`, {
+      method: "POST",
+      body: input as unknown as Record<string, unknown>,
+    }),
 
   cancelVisit: async (id: string, visitId: string) =>
     executeRESTBackend<{ id: string; status: string }>(

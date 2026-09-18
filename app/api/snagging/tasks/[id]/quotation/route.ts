@@ -116,10 +116,20 @@ export async function POST(
 }
 
 async function latestQuote(admin: Admin, jobId: string) {
+    /*
+      The inspection's own quotation, not a visit's.
+
+      An additional visit's quotation is raised from this job and carries
+      its job_id (change 26), so "the newest quotation on the job" became
+      the visit's the moment one existed — and the inspection's tab, its
+      client report and its inspector gate all started reading a AED 500
+      return trip as if it were the agreement for the inspection.
+    */
   const { data, error } = await admin
     .from("snagging_quotations")
     .select("*")
     .eq("job_id", jobId)
+    .neq("quote_kind", "visit")
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -301,7 +311,8 @@ async function quoteCount(admin: Admin, jobId: string): Promise<number> {
   const { count } = await admin
     .from("snagging_quotations")
     .select("id", { count: "exact", head: true })
-    .eq("job_id", jobId);
+    .eq("job_id", jobId)
+    .neq("quote_kind", "visit");
   return count ?? 0;
 }
 

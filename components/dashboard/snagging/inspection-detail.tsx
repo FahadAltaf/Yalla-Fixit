@@ -13,7 +13,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
 import { snaggingService } from "@/modules/snagging";
-import type { SnaggingTask } from "@/types/types";
+import type { SnaggingJobVisit, SnaggingTask } from "@/types/types";
 
 import { ErrorState } from "./shared";
 
@@ -26,6 +26,7 @@ import { AdditionalVisitsPanel } from "./additional-visits-panel";
 import { QuotationPanel } from "./quotation-panel";
 import { InspectionHeaderCard } from "./inspection-header-card";
 import { SnagWalkList } from "./snag-walk-list";
+import { VisitActivityAlerts } from "./visit-activity-alerts";
 
 /**
  * A single inspection, opened from the jobs table or a dashboard link.
@@ -51,6 +52,12 @@ export default function InspectionDetail({ taskId }: { taskId: string }) {
   const router = useRouter();
   const params = useSearchParams();
   const [task, setTask] = useState<SnaggingTask | null>(null);
+  /*
+    The job's additional visits, loaded with it. The page leads with what
+    each live one is waiting for, and the snag list labels the defects a
+    visit raised. A failure here costs only those, never the job itself.
+  */
+  const [visits, setVisits] = useState<SnaggingJobVisit[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -68,7 +75,12 @@ export default function InspectionDetail({ taskId }: { taskId: string }) {
     setLoading(true);
     setError(null);
     try {
-      setTask(await snaggingService.getTask(taskId));
+      const [job, visitList] = await Promise.all([
+        snaggingService.getTask(taskId),
+        snaggingService.listVisits(taskId).catch(() => null),
+      ]);
+      setTask(job);
+      setVisits(visitList?.visits ?? []);
     } catch (err) {
       // A failed request and a genuinely missing inspection used to look
       // identical ("could not be found"), which sent people hunting for
@@ -79,6 +91,33 @@ export default function InspectionDetail({ taskId }: { taskId: string }) {
       );
     } finally {
       setLoading(false);
+    }
+  }, [taskId]);
+
+  /*
+    The same fetch, without the page skeleton.
+
+    An action inside a panel — booking the appointment, correcting the
+    property, assigning an inspector — changes data the panel is showing,
+    not which page you are on. Routing those through load() blanked the
+    whole record for a moment, dropped you back to the top of the page and
+    redrew six tabs to update one card. The button that did the work
+    already reports it, so this quietly replaces the data underneath.
+
+    Errors are deliberately swallowed: the panel that made the call has
+    already told the user what went wrong, and there is no reason to throw
+    away a good screen because the refetch after it failed.
+  */
+  const refresh = useCallback(async () => {
+    try {
+      const [job, visitList] = await Promise.all([
+        snaggingService.getTask(taskId),
+        snaggingService.listVisits(taskId).catch(() => null),
+      ]);
+      setTask(job);
+      if (visitList) setVisits(visitList.visits);
+    } catch {
+      /* keep what is on screen */
     }
   }, [taskId]);
 
@@ -191,9 +230,27 @@ export default function InspectionDetail({ taskId }: { taskId: string }) {
     );
   }
 
+  /* Visit number by id, for the "Visit 2" label on the snags it raised. */
+  const visitNumbers = Object.fromEntries(
+    visits.map((visit) => [visit.id, visit.visit_number] as const),
+  );
+  /* A live visit waiting on somebody here puts a count on its tab. */
+  const visitsNeedingAction = visits.filter(
+    (visit) =>
+      visit.status === "submitted" ||
+      visit.status === "requested" ||
+      (visit.status === "scheduled" && !visit.inspector_id),
+  ).length;
+
   return (
     <div className="flex flex-col gap-4">
       <BackToJobs />
+
+      {/*
+        Above the tabs, so it is read whichever tab the job opens on: a
+        visit waiting for review is the most urgent thing on the page.
+      */}
+      <VisitActivityAlerts taskId={task.id} visits={visits} />
 
       {/*
         One panel at a time. Stacked, the six panels mounted together and
@@ -229,7 +286,14 @@ export default function InspectionDetail({ taskId }: { taskId: string }) {
               never mistaken for a de-snag round. Only on the original
               inspection: visits hang off it, not off each other. */}
           {isOriginal ? (
-            <TabsTrigger value="visits">Additional visits</TabsTrigger>
+            <TabsTrigger value="visits">
+              Additional visits
+              {visitsNeedingAction > 0 ? (
+                <Badge className="bg-warning ml-1.5 px-1.5 font-normal tabular-nums text-white">
+                  {visitsNeedingAction}
+                </Badge>
+              ) : null}
+            </TabsTrigger>
           ) : null}
           <TabsTrigger value="history">History</TabsTrigger>
         </TabsList>
@@ -257,8 +321,8 @@ export default function InspectionDetail({ taskId }: { taskId: string }) {
               the snags they are about, rather than pinned above every
               tab where they were repeating information the other tabs
               do not need. */}
-          <InspectionHeaderCard task={task} onChanged={() => void load()} />
-          <SnagWalkList task={task} />
+          <InspectionHeaderCard task={task} onChanged={() => void refresh()} />
+          <SnagWalkList task={task} visitNumbers={visitNumbers} />
         </TabsContent>
         <TabsContent value="areas" className="mt-4">
           <FloorPlansAreasPanel
@@ -271,14 +335,16 @@ export default function InspectionDetail({ taskId }: { taskId: string }) {
           <ChecklistPanel task={task} />
         </TabsContent>
         <TabsContent value="setup" className="mt-4">
-          <JobSetupPanel task={task} onChanged={() => void load()} />
+          <JobSetupPanel task={task} onChanged={() => void refresh()} />
         </TabsContent>
         <TabsContent value="quotation" className="mt-4">
-          <QuotationPanel task={task} onChanged={() => void load()} />
+          {/* The inspection's own quotation only. A visit's quotation is
+              on that visit's page. */}
+          <QuotationPanel task={task} onChanged={() => void refresh()} />
         </TabsContent>
         {isOriginal ? (
           <TabsContent value="visits" className="mt-4">
-            <AdditionalVisitsPanel task={task} onChanged={() => void load()} />
+            <AdditionalVisitsPanel task={task} onChanged={() => void refresh()} />
           </TabsContent>
         ) : null}
         <TabsContent value="history" className="mt-4">

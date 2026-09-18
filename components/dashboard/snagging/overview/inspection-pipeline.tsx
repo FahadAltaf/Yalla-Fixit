@@ -15,7 +15,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { CHART_COLOR, PIPELINE_COLOR } from "@/lib/snagging/chart-palette";
 
 import { ChartSkeleton, SectionShell } from "./section-shell";
-import { useSection } from "./use-section";
+import { useRangedSection } from "./range";
 
 type Pipeline = {
   stages: Array<{ status: string; label: string; count: number }>;
@@ -33,7 +33,7 @@ const config = { count: { label: "Jobs" } } satisfies ChartConfig;
  */
 export function InspectionPipeline() {
   const router = useRouter();
-  const { data, loading, error, reload } = useSection<Pipeline>(
+  const { data, loading, error, reload } = useRangedSection<Pipeline>(
     "/api/snagging/overview/pipeline",
     { staleMs: 60_000 },
   );

@@ -11,7 +11,8 @@ import { Progress } from "@/components/ui/progress";
 import { QUOTATION_COLOR } from "@/lib/snagging/chart-palette";
 
 import { LinesSkeleton, SectionShell } from "./section-shell";
-import { useInView, useSection } from "./use-section";
+import { useRangedSection } from "./range";
+import { useInView } from "./use-section";
 
 type Quotations = {
   stages: Array<{ key: string; label: string; count: number }>;
@@ -31,7 +32,7 @@ export function QuotationAnalytics() {
   const anchor = useRef<HTMLDivElement>(null);
   const visible = useInView(anchor);
 
-  const { data, loading, error, reload } = useSection<Quotations>(
+  const { data, loading, error, reload } = useRangedSection<Quotations>(
     "/api/snagging/overview/quotations",
     { staleMs: 600_000, enabled: visible },
   );

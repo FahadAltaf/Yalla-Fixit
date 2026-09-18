@@ -1,26 +1,67 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
+  ArrowLeftRight,
   Ban,
+  ClipboardCheck,
   CalendarClock,
   CreditCard,
+  ExternalLink,
+  FilePlus2,
   FileText,
+  MoreHorizontal,
+  Pencil,
   Plus,
   UserRound,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
+import { IdentityCell } from "@/components/ui/entity-avatar";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { SectionCard } from "@/components/dashboard/shared/kaizen";
 import { cn } from "@/lib/utils";
 import { snaggingService } from "@/modules/snagging";
 import type { SnaggingJobVisit, SnaggingTask } from "@/types/types";
 
-import { ErrorState, SectionSkeleton, FieldsSkeleton } from "./shared";
+import {
+  ErrorState,
+  SectionSkeleton,
+  FieldsSkeleton,
+  SubmitButton,
+  formatGstDateTime,
+  useConfirm,
+} from "./shared";
 import { AdditionalVisitDialog } from "./additional-visit-dialog";
+import { VisitEditDialog } from "./visit-edit-dialog";
 
 /**
  * The additional visits on this job (BA v2, changes 25-30).
@@ -55,6 +96,7 @@ const VISIT_TONE: Record<string, string> = {
   requested: "bg-warning/10 text-warning",
   scheduled: "bg-brand/10 text-brand",
   in_progress: "bg-brand/10 text-brand",
+  submitted: "bg-warning/10 text-warning",
   completed: "bg-success/10 text-success",
   cancelled: "bg-mist text-ink-soft",
 };
@@ -63,6 +105,7 @@ const VISIT_LABEL: Record<string, string> = {
   requested: "Requested",
   scheduled: "Scheduled",
   in_progress: "On site",
+  submitted: "Awaiting review",
   completed: "Completed",
   cancelled: "Cancelled",
 };
@@ -98,6 +141,18 @@ export function AdditionalVisitsPanel({
   const [createOpen, setCreateOpen] = useState(false);
 
   const [busy, setBusy] = useState<string | null>(null);
+  const router = useRouter();
+  const { confirm, dialog } = useConfirm();
+
+  /* The visit whose inspector, date and notes are being edited. */
+  const [editing, setEditing] = useState<VisitRow | null>(null);
+  /* True when the dialog is booking the visit by assigning it. */
+  const [bookMode, setBookMode] = useState(false);
+  const openVisit = (visit: VisitRow) => router.push(`/snagging/${task.id}/visits/${visit.id}`);
+
+  /* The visit whose charge method is being switched, and its reference. */
+  const [switching, setSwitching] = useState<VisitRow | null>(null);
+  const [paymentRef, setPaymentRef] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -114,22 +169,71 @@ export function AdditionalVisitsPanel({
   }, [task.id]);
 
   /**
-   * Books the visit.
+   * Raises the visit's quotation from this job and links it (change 26).
    *
-   * The server decides whether it may be: a quotation-charged visit waits
-   * for the client to approve one (FR-9.04), a link-charged visit does
-   * not (change 26). The refusal comes back as a sentence, so this does
-   * not try to guess the rule a second time on the client.
+   * Lands on the quotation itself, because the next thing that happens
+   * to it is sending it to the client — and Send, Share on WhatsApp and
+   * the PDF all live on that page already.
    */
-  async function book(visit: VisitRow) {
+  async function raiseQuotation(visit: VisitRow) {
+    setBusy(visit.id);
+    const id = toast.loading(`Raising the quotation for visit ${visit.visit_number}…`);
+    try {
+      const quote = await snaggingService.raiseVisitQuotation(task.id, visit.id);
+      toast.success(`Quotation ${quote.quote_number} raised`, {
+        id,
+        description: "Send it to the client. Book the visit once they approve.",
+      });
+      router.push(`/snagging/${task.id}/visits/${visit.id}?tab=quotation`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not raise the quotation", { id });
+      setBusy(null);
+    }
+  }
+
+  function openSwitch(visit: VisitRow) {
+    setPaymentRef(visit.payment_reference ?? "");
+    setSwitching(visit);
+  }
+
+  /**
+   * Moves a visit between the two ways it can be paid for (change 26).
+   *
+   * Asked for the change it actually is: switching to a payment link
+   * lets go of any quotation already raised, and saying so first is what
+   * stops a coordinator stranding one the client is halfway through
+   * reading.
+   */
+  async function switchCharge() {
+    const visit = switching;
+    if (!visit) return;
+    const next = visit.charge_method === "payment_link" ? "quotation" : "payment_link";
+
+    if (next === "payment_link" && visit.quotation && visit.quotation.status !== "rejected") {
+      const ok = await confirm({
+        title: `Stop charging visit ${visit.visit_number} by quotation?`,
+        description: `Quotation ${visit.quotation.quote_number ?? ""} is ${visit.quotation.status}. It will no longer be linked to this visit, and the visit can be booked as soon as the payment link is paid.`,
+        confirmText: "Switch to payment link",
+      });
+      if (!ok) return;
+    }
+
     setBusy(visit.id);
     try {
-      await snaggingService.updateVisit(task.id, visit.id, { status: "scheduled" });
-      toast.success(`Visit ${visit.visit_number} booked`);
+      await snaggingService.updateVisit(task.id, visit.id, {
+        charge_method: next,
+        payment_reference: next === "payment_link" ? paymentRef.trim() || null : null,
+      });
+      toast.success(
+        next === "payment_link"
+          ? `Visit ${visit.visit_number} is now charged by payment link`
+          : `Visit ${visit.visit_number} is now charged by quotation`,
+      );
+      setSwitching(null);
       await load();
       onChanged();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not book the visit");
+      toast.error(err instanceof Error ? err.message : "Could not change how the visit is charged");
     } finally {
       setBusy(null);
     }
@@ -165,6 +269,170 @@ export function AdditionalVisitsPanel({
     return <ErrorState title="Could not load the additional visits" message={error} onRetry={() => void load()} />;
   }
 
+  /*
+    The row's next step, and only that one: raise the quotation, send it,
+    book, assign, review -- following the visit through its route. A
+    payment link goes straight to Book (change 26). Everything occasional
+    sits in the row's menu.
+  */
+  const nextAction = (visit: VisitRow) => (
+    <>
+            {visit.status === "requested"
+              ? (() => {
+                const quote = visit.quotation;
+                const byQuote = visit.charge_method !== "payment_link";
+                const needsQuote =
+                  byQuote && (!quote || quote.status === "rejected");
+                const awaitingClient =
+                  byQuote && quote && (quote.status === "draft" || quote.status === "sent");
+
+                // Opening the visit's Quotation tab raises it, as the
+                // job's does; a rejected one is raised again here,
+                // on purpose.
+                if (needsQuote && quote?.status !== "rejected") {
+                  return (
+                    <Button
+                      size="sm"
+                      onClick={() =>
+                        router.push(`/snagging/${task.id}/visits/${visit.id}?tab=quotation`)
+                      }
+                    >
+                      <FilePlus2 className="size-4" />
+                      Raise quotation
+                    </Button>
+                  );
+                }
+                if (needsQuote) {
+                  return (
+                    <SubmitButton
+                      size="sm"
+                      pending={busy === visit.id}
+                      pendingLabel="Raising…"
+                      icon={<FilePlus2 className="size-4" />}
+                      onClick={() => void raiseQuotation(visit)}
+                    >
+                      {quote?.status === "rejected" ? "Raise new quotation" : "Raise quotation"}
+                    </SubmitButton>
+                  );
+                }
+                if (awaitingClient) {
+                  return (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        router.push(`/snagging/${task.id}/visits/${visit.id}?tab=quotation`)
+                      }
+                    >
+                      <FileText className="size-4" />
+                      {quote!.status === "draft" ? "Send quotation" : "View quotation"}
+                    </Button>
+                  );
+                }
+                /*
+                  Paid for -- quotation approved, or charged by link. What
+                  is left is who goes and when, and assigning them books
+                  it; the server still checks the quotation (FR-9.04).
+                */
+                return (
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      setBookMode(true);
+                      setEditing(visit);
+                    }}
+                  >
+                    <UserRound className="size-4" />
+                    Assign inspector
+                  </Button>
+                );
+              })()
+              : visit.status === "scheduled" && !visit.inspector_id ? (
+                /*
+                  Booked, but nobody is going. The phone of the
+                  inspector who should be has nothing on it until
+                  this is set, so it is the next step.
+                */
+                <Button size="sm" onClick={() => setEditing(visit)}>
+                  <UserRound className="size-4" />
+                  Assign inspector
+                </Button>
+              ) : visit.status === "submitted" ? (
+                <Button size="sm" onClick={() => openVisit(visit)}>
+                  <ClipboardCheck className="size-4" />
+                  Review
+                </Button>
+              ) : (
+                <Button size="sm" variant="outline" onClick={() => openVisit(visit)}>
+                  <ExternalLink className="size-4" />
+                  Open visit
+                </Button>
+              )}
+    </>
+  );
+
+  const rowMenu = (visit: VisitRow) => (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="size-8"
+              disabled={busy === visit.id}
+              aria-label={`Actions for visit ${visit.visit_number}`}
+            >
+              <MoreHorizontal className="size-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-max">
+            <DropdownMenuItem onClick={() => openVisit(visit)}>
+              <ExternalLink className="size-4" />
+              Open visit
+            </DropdownMenuItem>
+            {visit.status !== "completed" && visit.status !== "cancelled" ? (
+              <DropdownMenuItem onClick={() => setEditing(visit)}>
+                <Pencil className="size-4" />
+                Edit inspector, date and notes
+              </DropdownMenuItem>
+            ) : null}
+            {visit.quotation ? (
+              <DropdownMenuItem
+                onClick={() =>
+                  router.push(`/snagging/${task.id}/visits/${visit.id}?tab=quotation`)
+                }
+              >
+                <FileText className="size-4" />
+                Open quotation
+              </DropdownMenuItem>
+            ) : null}
+            {visit.status === "requested" ? (
+              <DropdownMenuItem onClick={() => openSwitch(visit)}>
+                <ArrowLeftRight className="size-4" />
+                {visit.charge_method === "payment_link"
+                  ? "Charge by quotation instead"
+                  : "Charge by payment link instead"}
+              </DropdownMenuItem>
+            ) : null}
+            {visit.status === "requested" || visit.status === "scheduled" ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={() => void cancel(visit)}
+                >
+                  <Ban className="size-4" />
+                  Cancel visit
+                </DropdownMenuItem>
+              </>
+            ) : null}
+          </DropdownMenuContent>
+        </DropdownMenu>
+  );
+
+  // Newest first: the visit being worked is the one looked for.
+  const newestFirst = [...visits].sort((a, b) => b.visit_number - a.visit_number);
+  const versionsNewestFirst = [...versions].sort((a, b) => b.version - a.version);
+
   return (
     <div className="flex flex-col gap-6">
       <SectionCard
@@ -186,143 +454,146 @@ export function AdditionalVisitsPanel({
             description="Add one when an area could not be inspected and the client is paying for a return trip — by quotation or by payment link."
           />
         ) : (
-          <ul className="divide-y">
-            {visits.map((visit) => (
-              <li key={visit.id} className="flex flex-wrap items-start gap-4 px-5 py-4">
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-medium">Visit {visit.visit_number}</span>
-                    <Badge
-                      variant="secondary"
-                      className={cn(
-                        "border-0 font-medium",
-                        VISIT_TONE[visit.status] ?? "bg-mist text-ink-soft",
-                      )}
-                    >
-                      {VISIT_LABEL[visit.status] ?? visit.status}
-                    </Badge>
-                    {visit.charge ? (
-                      <span className="text-muted-foreground text-sm tabular-nums">
-                        AED {visit.charge.toLocaleString()} + VAT
-                      </span>
-                    ) : null}
-                  </div>
-
-                  <dl className="text-muted-foreground mt-2 grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
-                    {/*
-                      Change 26 — how it is being paid for, said plainly.
-                      "No quotation yet" used to read as a problem on every
-                      visit; on a link-charged one it is not a problem, it
-                      is the point.
-                    */}
-                    <div className="flex items-center gap-1.5">
-                      {visit.charge_method === "payment_link" ? (
-                        <CreditCard className="size-3.5 shrink-0" aria-hidden />
-                      ) : (
-                        <FileText className="size-3.5 shrink-0" aria-hidden />
-                      )}
-                      <dt className="sr-only">Charged by</dt>
-                      <dd>
-                        {visit.charge_method === "payment_link" ? (
-                          <>
-                            Payment link
-                            {visit.payment_reference ? (
-                              <span className="font-mono text-xs">
-                                {" "}
-                                · {visit.payment_reference}
-                              </span>
-                            ) : null}
-                          </>
-                        ) : visit.quotation ? (
-                          <>
-                            <span className="font-mono text-xs">
-                              {visit.quotation.quote_number ?? "Quotation"}
-                            </span>{" "}
-                            <Badge
-                              variant="secondary"
-                              className={cn(
-                                "border-0 font-medium",
-                                QUOTE_TONE[visit.quotation.status] ?? "bg-mist text-ink-soft",
-                              )}
-                            >
-                              {visit.quotation.status}
-                            </Badge>
-                          </>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader className="bg-muted/50">
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="h-10 ps-5">Visit</TableHead>
+                  <TableHead className="h-10">Status</TableHead>
+                  <TableHead className="h-10">Charge</TableHead>
+                  <TableHead className="h-10">Appointment</TableHead>
+                  <TableHead className="h-10">Inspector</TableHead>
+                  <TableHead className="h-10 text-right">Snags</TableHead>
+                  <TableHead className="h-10 pe-5 text-right">
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {newestFirst.map((visit) => {
+                  const quote = visit.quotation;
+                  const when = visit.appointment_at
+                    ? formatGstDateTime(visit.appointment_at)
+                    : visit.scheduled_date
+                      ? fmtDate(visit.scheduled_date)
+                      : null;
+                  return (
+                    <TableRow key={visit.id}>
+                      <TableCell className="ps-5">
+                        <button
+                          type="button"
+                          className="group flex flex-col items-start text-left"
+                          onClick={() => openVisit(visit)}
+                        >
+                          <span className="font-medium underline-offset-2 group-hover:underline">
+                            Visit {visit.visit_number}
+                          </span>
+                          <span className="text-muted-foreground text-xs">
+                            Raised {fmtDate(visit.created_at)}
+                          </span>
+                        </button>
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant="secondary"
+                          className={cn(
+                            "rounded-sm border-none font-medium",
+                            VISIT_TONE[visit.status] ?? "bg-mist text-ink-soft",
+                          )}
+                        >
+                          {VISIT_LABEL[visit.status] ?? visit.status}
+                        </Badge>
+                      </TableCell>
+                      {/*
+                        Change 26 -- the amount, and how it is being paid
+                        for under it: the quotation and where it stands, or
+                        the payment link. "No quotation yet" is only a
+                        blocker on the quotation route.
+                      */}
+                      <TableCell>
+                        <div className="flex flex-col gap-0.5">
+                          <span className="whitespace-nowrap tabular-nums">
+                            {visit.charge ? `AED ${visit.charge.toLocaleString()} + VAT` : "—"}
+                          </span>
+                          <span className="text-muted-foreground flex items-center gap-1.5 text-xs whitespace-nowrap">
+                            {visit.charge_method === "payment_link" ? (
+                              <>
+                                <CreditCard className="size-3.5 shrink-0" aria-hidden />
+                                Payment link
+                                {visit.payment_reference ? (
+                                  <span className="font-mono">· {visit.payment_reference}</span>
+                                ) : null}
+                              </>
+                            ) : quote ? (
+                              <>
+                                <FileText className="size-3.5 shrink-0" aria-hidden />
+                                <button
+                                  type="button"
+                                  className="text-foreground font-mono underline-offset-2 hover:underline"
+                                  onClick={() =>
+                                    router.push(`/snagging/${task.id}/visits/${visit.id}?tab=quotation`)
+                                  }
+                                >
+                                  {quote.quote_number ?? "Quotation"}
+                                </button>
+                                <Badge
+                                  variant="secondary"
+                                  className={cn(
+                                    "h-4 rounded-sm border-none px-1.5 text-[11px] font-medium capitalize",
+                                    QUOTE_TONE[quote.status] ?? "bg-mist text-ink-soft",
+                                  )}
+                                >
+                                  {quote.status}
+                                </Badge>
+                              </>
+                            ) : (
+                              <>
+                                <FileText className="size-3.5 shrink-0" aria-hidden />
+                                <span className="text-warning">Quotation not raised</span>
+                              </>
+                            )}
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        {when ? (
+                          <span className="flex items-center gap-1.5">
+                            <CalendarClock className="text-muted-foreground size-3.5 shrink-0" aria-hidden />
+                            {when}
+                          </span>
                         ) : (
-                          // Only a blocker on the quotation route (FR-9.04).
-                          <span className="text-warning">Quotation not raised yet</span>
+                          <span className="text-muted-foreground">Not booked</span>
                         )}
-                      </dd>
-                    </div>
-
-                    <div className="flex items-center gap-1.5">
-                      <CalendarClock className="size-3.5 shrink-0" aria-hidden />
-                      <dt className="sr-only">Appointment</dt>
-                      <dd>{fmtDate(visit.appointment_at ?? visit.scheduled_date)}</dd>
-                    </div>
-
-                    <div className="flex items-center gap-1.5">
-                      <UserRound className="size-3.5 shrink-0" aria-hidden />
-                      <dt className="sr-only">Inspector</dt>
-                      <dd>{visit.inspector?.full_name ?? "Not assigned"}</dd>
-                    </div>
-
-                    <div>
-                      <dt className="sr-only">Snags found</dt>
-                      <dd>
-                        {(visit.snag_count ?? 0) > 0
-                          ? `${visit.snag_count} snag${visit.snag_count === 1 ? "" : "s"} on this job`
-                          : "No snags from this visit yet"}
-                      </dd>
-                    </div>
-                  </dl>
-                </div>
-
-                {/*
-                  Only a requested visit is bookable. Once booked it
-                  belongs to the inspector's day, and a completed or
-                  cancelled one is history — offering "book" on either
-                  would be a button that only ever returns a refusal.
-                */}
-                <div className="flex shrink-0 items-center gap-2">
-                  {visit.status === "requested" ? (
-                    <>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={busy === visit.id}
-                        onClick={() => void book(visit)}
-                      >
-                        <CalendarClock className="size-4" />
-                        Book
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={busy === visit.id}
-                        onClick={() => void cancel(visit)}
-                        aria-label={`Cancel visit ${visit.visit_number}`}
-                        title="Cancel this visit"
-                      >
-                        <Ban className="size-4" />
-                      </Button>
-                    </>
-                  ) : visit.status === "scheduled" ? (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={busy === visit.id}
-                      onClick={() => void cancel(visit)}
-                      aria-label={`Cancel visit ${visit.visit_number}`}
-                      title="Cancel this visit"
-                    >
-                      <Ban className="size-4" />
-                    </Button>
-                  ) : null}
-                </div>
-              </li>
-            ))}
-          </ul>
+                      </TableCell>
+                      <TableCell>
+                        {visit.inspector ? (
+                          <IdentityCell
+                            title={visit.inspector.full_name ?? visit.inspector.email ?? "Inspector"}
+                            subtitle={visit.inspector.full_name ? visit.inspector.email : null}
+                            seed={visit.inspector.id}
+                          />
+                        ) : (
+                          <span className="text-muted-foreground flex items-center gap-1.5 whitespace-nowrap">
+                            <UserRound className="size-3.5 shrink-0" aria-hidden />
+                            Not assigned
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {visit.snag_count ?? 0}
+                      </TableCell>
+                      <TableCell className="pe-5">
+                        <div className="flex items-center justify-end gap-2">
+                          {nextAction(visit)}
+                          {rowMenu(visit)}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
         )}
       </SectionCard>
 
@@ -339,27 +610,116 @@ export function AdditionalVisitsPanel({
           description="The client holds one report. Each additional visit reissues it; earlier versions stay available."
           bodyClassName="border-t"
         >
-          <ul className="divide-y">
-            {versions.map((version, index) => (
-              <li key={version.id} className="flex flex-wrap items-baseline gap-3 px-5 py-3">
-                <span className="font-medium">V{version.version}</span>
-                {index === 0 ? (
-                  <Badge variant="secondary" className="bg-success/10 text-success border-0">
-                    Current
-                  </Badge>
-                ) : null}
-                <span className="text-muted-foreground text-sm">
-                  {version.snag_count} snag{version.snag_count === 1 ? "" : "s"} ·{" "}
-                  {fmtDate(version.generated_at)}
-                </span>
-                {version.reason ? (
-                  <span className="text-muted-foreground/80 text-sm">{version.reason}</span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader className="bg-muted/50">
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="h-10 ps-5">Version</TableHead>
+                  <TableHead className="h-10">Issued for</TableHead>
+                  <TableHead className="h-10 text-right">Snags</TableHead>
+                  <TableHead className="h-10 pe-5 text-right">Issued</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {versionsNewestFirst.map((version, index) => (
+                  <TableRow key={version.id}>
+                    <TableCell className="ps-5">
+                      <span className="flex items-center gap-2 font-medium">
+                        V{version.version}
+                        {index === 0 ? (
+                          <Badge
+                            variant="secondary"
+                            className="bg-success/10 text-success rounded-sm border-none font-medium"
+                          >
+                            Current
+                          </Badge>
+                        ) : null}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {version.reason ?? "—"}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">{version.snag_count}</TableCell>
+                    <TableCell className="text-muted-foreground pe-5 text-right whitespace-nowrap">
+                      {fmtDate(version.generated_at)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         </SectionCard>
       ) : null}
+
+      <Dialog
+        open={Boolean(switching)}
+        onOpenChange={(open) => {
+          if (!open) setSwitching(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {switching?.charge_method === "payment_link"
+                ? "Charge by quotation"
+                : "Charge by payment link"}
+            </DialogTitle>
+            <DialogDescription>
+              {switching?.charge_method === "payment_link"
+                ? "Raise a quotation from this job for the client to approve. The visit can be booked once they do."
+                : "No quotation needed. Send the client a payment link and book the visit as soon as it is paid."}
+            </DialogDescription>
+          </DialogHeader>
+
+          {switching?.charge_method !== "payment_link" ? (
+            <div className="space-y-1.5">
+              <Label htmlFor="switch-payment-ref">Payment reference</Label>
+              <Input
+                id="switch-payment-ref"
+                value={paymentRef}
+                onChange={(event) => setPaymentRef(event.target.value)}
+                placeholder="Optional — the link or transaction id"
+              />
+            </div>
+          ) : null}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setSwitching(null)}
+              disabled={busy !== null}
+            >
+              Cancel
+            </Button>
+            <SubmitButton
+              pending={busy !== null && busy === switching?.id}
+              pendingLabel="Saving…"
+              onClick={() => void switchCharge()}
+            >
+              Switch
+            </SubmitButton>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {dialog}
+
+      <VisitEditDialog
+        taskId={task.id}
+        visit={editing}
+        open={Boolean(editing)}
+        book={bookMode}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditing(null);
+            setBookMode(false);
+          }
+        }}
+        onSaved={() => {
+          void load();
+          onChanged();
+        }}
+      />
 
       <AdditionalVisitDialog
         taskId={task.id}

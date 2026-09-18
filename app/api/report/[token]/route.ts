@@ -77,8 +77,7 @@ async function assembleReport(admin: Admin, jobId: string) {
        signed_at, signer_name, signature_path,
        client:client_id(name, email, phone),
        inspector:inspector_id(id, full_name, email),
-       areas:snagging_areas(id, name, status, note, confirmed_at, sort_order,
-         access_state, access_reason)`,
+       areas:snagging_areas(*)`,
     )
     .eq("id", jobId)
     .maybeSingle();
@@ -93,17 +92,35 @@ async function assembleReport(admin: Admin, jobId: string) {
   const snagJobIds =
     jobId === family.rootId ? [jobId, ...family.additionalVisitIds] : [jobId];
 
-  const [{ data: checklist }, { data: snagRows }] = await Promise.all([
+  /*
+    Visits the manager has not approved stay out of the client's report:
+    their snags, a room they added, their checklist answers. Same rule as
+    buildReportData, so the link and the PDF agree.
+  */
+  const { data: visitStates, error: visitStateError } = await admin
+    .from("snagging_job_visits")
+    .select("id, status")
+    .eq("job_id", family.rootId);
+  if (visitStateError) throw new Error(visitStateError.message);
+  const unapprovedVisits = new Set(
+    (visitStates ?? [])
+      .filter((visit) => visit.status !== "completed")
+      .map((visit) => visit.id as string),
+  );
+  const unapproved = (row: Record<string, unknown>) =>
+    typeof row.visit_id === "string" && unapprovedVisits.has(row.visit_id);
+
+  const [{ data: checklistRows }, { data: allSnagRows }] = await Promise.all([
     admin
       .from("snagging_job_checklist")
-      .select("id, code, group_name, label, mandatory, status, reason, sort_order")
+      .select("id, code, group_name, label, mandatory, status, reason, sort_order, visit_id")
       .eq("job_id", jobId)
       .order("sort_order", { ascending: true }),
     admin
       .from("snagging_snags")
       .select(
         `id, job_id, area_id, snag_code, catalogue_code, element_label, defect_label,
-         severity, note, pin_x, pin_y, status, round_created,
+         severity, note, pin_x, pin_y, status, round_created, visit_id,
          area:snagging_areas(id, name),
          photos:snagging_snag_photos(id, snag_id, storage_path, taken_at)`,
       )
@@ -112,7 +129,16 @@ async function assembleReport(admin: Admin, jobId: string) {
       .order("snag_code", { ascending: true }),
   ]);
 
-  const signedSnags = await signMediaPaths(admin, snagRows ?? [], PHOTO_TTL_SECONDS);
+  const snagRows = (allSnagRows ?? []).filter(
+    (row) => !unapproved(row as Record<string, unknown>),
+  );
+  const checklist = (checklistRows ?? []).map((row) =>
+    unapproved(row as Record<string, unknown>)
+      ? { ...row, status: "not_checked", reason: null }
+      : row,
+  );
+
+  const signedSnags = await signMediaPaths(admin, snagRows, PHOTO_TTL_SECONDS);
   const snags = signedSnags.map((s) => {
     const snag = s as Record<string, unknown> & { area_id?: string };
     return { ...snag, origin_task_id: snag.job_id, area_id: firstAreaId(snag) };
@@ -153,10 +179,12 @@ async function assembleReport(admin: Admin, jobId: string) {
       }]
     : [];
 
+  // The inspection's quotation; a visit's own is not the report's.
   const { data: quotationRow } = await admin
     .from("snagging_quotations")
     .select("*")
     .eq("job_id", jobId)
+    .neq("quote_kind", "visit")
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -164,8 +192,20 @@ async function assembleReport(admin: Admin, jobId: string) {
   const quotation =
     quotationRow && ["sent", "approved"].includes(quotationRow.status) ? quotationRow : null;
 
-  const areas = ((job.areas ?? []) as Array<{ sort_order: number }>)
-    .slice()
+  // Read with `*` so this works before and after the area-visit column
+  // exists, then cut back to what a client-facing page may carry.
+  const areas = ((job.areas ?? []) as Array<Record<string, unknown>>)
+    .filter((area) => !unapproved(area))
+    .map((area) => ({
+      id: area.id as string,
+      name: area.name as string,
+      status: area.status as string,
+      note: (area.note as string | null) ?? null,
+      confirmed_at: (area.confirmed_at as string | null) ?? null,
+      sort_order: Number(area.sort_order ?? 0),
+      access_state: (area.access_state as string | null) ?? null,
+      access_reason: (area.access_reason as string | null) ?? null,
+    }))
     .sort((a, b) => a.sort_order - b.sort_order);
 
   return {

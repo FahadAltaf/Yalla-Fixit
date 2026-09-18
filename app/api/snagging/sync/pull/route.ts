@@ -98,13 +98,22 @@ export async function GET(req: NextRequest) {
     */
     const { data: liveVisits, error: liveVisitError } = await admin
       .from("snagging_job_visits")
-      .select("id, job_id, visit_number, status")
+      .select("*")
       .in("job_id", assignedIds)
       .in("status", ["scheduled", "in_progress"])
       .order("visit_number", { ascending: false });
     if (liveVisitError) throw new Error(liveVisitError.message);
 
-    const activeVisit = new Map<string, { id: string; visit_number: number }>();
+    const activeVisit = new Map<
+      string,
+      {
+        id: string;
+        visit_number: number;
+        review_note: string | null;
+        scheduled_date: string | null;
+        appointment_at: string | null;
+      }
+    >();
     for (const v of liveVisits ?? []) {
       const jobId = v.job_id as string;
       // Ordered highest-first, so the first one seen is the current pass.
@@ -112,8 +121,91 @@ export async function GET(req: NextRequest) {
         activeVisit.set(jobId, {
           id: v.id as string,
           visit_number: v.visit_number as number,
+          // Present once the review migration is in; null before it.
+          review_note: ((v as Record<string, unknown>).review_note as string | null) ?? null,
+          scheduled_date: (v.scheduled_date as string | null) ?? null,
+          appointment_at: (v.appointment_at as string | null) ?? null,
         });
       }
+    }
+
+    /*
+      The most recent FINISHED visit per job: submitted for review, or
+      approved. Once submitted a visit is no longer live, so the phone lost
+      it -- the job fell back to being the original approved inspection,
+      dated weeks ago, with that round's old send-back note on the card,
+      and the inspector could not find the visit they had just submitted.
+    */
+    const { data: doneVisits, error: doneVisitError } = await admin
+      .from("snagging_job_visits")
+      .select("*")
+      .in("job_id", assignedIds)
+      .in("status", ["submitted", "completed"])
+      .order("visit_number", { ascending: false });
+    if (doneVisitError) throw new Error(doneVisitError.message);
+
+    const lastVisit = new Map<string, { visit_number: number; status: string; at: string | null }>();
+    for (const v of doneVisits ?? []) {
+      const jobId = v.job_id as string;
+      if (lastVisit.has(jobId)) continue;
+      const row = v as Record<string, unknown>;
+      lastVisit.set(jobId, {
+        visit_number: v.visit_number as number,
+        status: v.status as string,
+        at:
+          (row.submitted_at as string | null) ??
+          (row.completed_at as string | null) ??
+          (row.updated_at as string | null) ??
+          null,
+      });
+    }
+
+    /*
+      Every finished visit per job, newest first, each with its own date,
+      appointment and what it found.
+
+      The phone had only the latest one, so a job with Visits 2 and 3
+      listed Visit 3 alone under Done, and opening it showed the original
+      inspection's appointment -- nothing on the phone said Visit 2 had
+      ever happened. Sent whatever else is live on the job: an earlier
+      visit stays history while the next one is being worked.
+    */
+    const doneVisitIds = (doneVisits ?? []).map((v) => v.id as string);
+    const visitSnagCount = new Map<string, number>();
+    if (doneVisitIds.length > 0) {
+      const { data: visitSnags, error: visitSnagError } = await admin
+        .from("snagging_snags")
+        .select("visit_id")
+        .in("visit_id", doneVisitIds)
+        .neq("status", "withdrawn");
+      if (visitSnagError) throw new Error(visitSnagError.message);
+      for (const row of visitSnags ?? []) {
+        const key = row.visit_id as string;
+        visitSnagCount.set(key, (visitSnagCount.get(key) ?? 0) + 1);
+      }
+    }
+    const gstDay = (value: unknown) => {
+      if (!value) return null;
+      const at = new Date(value as string);
+      return Number.isNaN(at.getTime())
+        ? null
+        : at.toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
+    };
+    const finishedVisits = new Map<string, Array<Record<string, unknown>>>();
+    for (const v of doneVisits ?? []) {
+      const row = v as Record<string, unknown>;
+      const list = finishedVisits.get(v.job_id as string) ?? [];
+      list.push({
+        id: v.id,
+        number: v.visit_number,
+        status: v.status,
+        date: gstDay(row.scheduled_date ?? row.appointment_at ?? row.submitted_at),
+        appointment_at: (row.appointment_at as string | null) ?? null,
+        submitted_at: (row.submitted_at as string | null) ?? null,
+        completed_at: (row.completed_at as string | null) ?? null,
+        snag_count: visitSnagCount.get(v.id as string) ?? 0,
+      });
+      finishedVisits.set(v.job_id as string, list);
     }
 
     /*
@@ -160,7 +252,44 @@ export async function GET(req: NextRequest) {
          inspector:inspector_id(full_name, email)`,
       )
       .in("id", jobIds);
-    if (since) jobQuery = jobQuery.gt("updated_at", since);
+
+    /*
+      A delta is "jobs that changed", and a visit changing is the job
+      changing, as far as the phone is concerned.
+
+      This was only the job's own updated_at. Booking a visit, putting an
+      inspector on it, the client approving its quotation, a send-back —
+      every one of those writes the VISIT row and never touches the job.
+      So a phone that had already synced never re-received the job, kept
+      it as "approved, nothing to do", and the inspector booked onto the
+      visit never saw it in Today.
+    */
+    if (since) {
+      const [{ data: changedJobs, error: changedError }, { data: changedVisits, error: visitsError }] =
+        await Promise.all([
+          admin.from("snagging_jobs").select("id").in("id", jobIds).gt("updated_at", since),
+          admin
+            .from("snagging_job_visits")
+            .select("job_id")
+            .in("job_id", jobIds)
+            .gt("updated_at", since),
+        ]);
+      if (changedError) throw new Error(changedError.message);
+      if (visitsError) throw new Error(visitsError.message);
+
+      const changedIds = [
+        ...new Set([
+          ...(changedJobs ?? []).map((row) => row.id as string),
+          ...(changedVisits ?? []).map((row) => row.job_id as string),
+        ]),
+      ];
+      // Nothing changed: an id no job has keeps the query shape and returns
+      // no rows, rather than an empty IN list PostgREST would reject.
+      jobQuery = jobQuery.in(
+        "id",
+        changedIds.length > 0 ? changedIds : ["00000000-0000-0000-0000-000000000000"],
+      );
+    }
     const { data: jobs, error: jobError } = await jobQuery;
     if (jobError) throw new Error(jobError.message);
 
@@ -180,6 +309,8 @@ export async function GET(req: NextRequest) {
         (rec?.[key] ?? (j as unknown as Record<string, unknown>)[key]) ?? null;
       const team = [insp?.full_name || insp?.email].filter((n): n is string => Boolean(n));
       const live = activeVisit.get(j.id as string) ?? null;
+      // A live visit outranks a finished one: it is the work in hand.
+      const last = live ? null : (lastVisit.get(j.id as string) ?? null);
       return {
         id: j.id,
         code: j.code,
@@ -190,6 +321,38 @@ export async function GET(req: NextRequest) {
         */
         active_visit_id: live?.id ?? null,
         active_visit_number: live?.visit_number ?? null,
+        /*
+          Why the manager sent the visit back, when they did. The inspector
+          reopens the job to it, so it has to be on the phone, not only on
+          the portal page the inspector never sees.
+        */
+        active_visit_note: live?.review_note ?? null,
+        /*
+          When the visit is, which is not when the job was. The job's own
+          date is the original inspection's, weeks ago, so the phone filed
+          a booked return trip under Done with the approved job and the
+          inspector booked onto it never saw it in Today.
+        */
+        // A GST calendar date (YYYY-MM-DD), which is what the phone files
+        // and compares by. The visit's scheduled_date is a timestamptz, so
+        // it is converted too, not passed through as a timestamp.
+        active_visit_date: (() => {
+          const when = live?.scheduled_date ?? live?.appointment_at ?? null;
+          if (!when) return null;
+          const at = new Date(when);
+          return Number.isNaN(at.getTime())
+            ? null
+            : at.toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
+        })(),
+        active_visit_at: live?.appointment_at ?? null,
+        // The latest visit handed in ("submitted") or approved ("completed"),
+        // when none is live -- so the phone lists it under Done as that visit.
+        last_visit_number: last?.visit_number ?? null,
+        last_visit_status: last?.status ?? null,
+        last_visit_date: last?.at
+          ? new Date(last.at).toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" })
+          : null,
+        finished_visits: finishedVisits.get(j.id as string) ?? [],
         task_type: "single_unit",
         status: j.status,
         round_number: j.round_number,
@@ -198,7 +361,17 @@ export async function GET(req: NextRequest) {
         parent_task_id: j.parent_job_id,
         scheduled_date: j.scheduled_date,
         notes: j.notes,
-        locked: j.locked,
+        /*
+          Open for the length of a live visit (change 28).
+
+          The job was locked when the original inspection was submitted,
+          and that lock reached the phone during a return trip too — so
+          the whole workspace was read-only and the inspector could not
+          add a snag on the visit they had travelled for. Each earlier
+          snag keeps its own lock, so opening the job does not open the
+          approved findings.
+        */
+        locked: live ? false : j.locked,
         catalogue_version: "v1.0",
         rejection_category: j.rejection_category,
         rejection_reason: j.rejection_reason,
@@ -317,6 +490,17 @@ export async function GET(req: NextRequest) {
       status: c.status,
       reason: c.reason,
       sort_order: c.sort_order,
+      /*
+        Which visit gave this answer (BA v2, change 29).
+
+        The column has been on the table since visits became appointments
+        and the handset has been stamping it, but it was never sent back
+        — so a device that had not seen the job before, or one restored
+        from a cold pull, had every answer with no visit against it. The
+        report can then no longer say which pass found what, which is the
+        only reason the stamp exists.
+      */
+      visit_id: c.visit_id ?? null,
     }));
 
     const photos = photoRows.map((p) => ({

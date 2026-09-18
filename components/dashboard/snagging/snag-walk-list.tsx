@@ -116,10 +116,24 @@ function describeWalk(
 type SeverityFilter = "all" | SnaggingSeverity;
 type SortMode = "newest" | "oldest";
 
-export function SnagWalkList({ task }: { task: SnaggingTask }) {
+export function SnagWalkList({
+  task,
+  visitNumbers,
+}: {
+  task: SnaggingTask;
+  /**
+   * Visit number by visit id. Given on the job page, where the list mixes
+   * the original walk with what return visits found, so each visit's
+   * snags carry a "Visit N" label and can be filtered to. The visit's own
+   * page shows only its snags and passes nothing.
+   */
+  visitNumbers?: Record<string, number>;
+}) {
   const [preview, setPreview] = useState<SnaggingPhoto | null>(null);
   const [detail, setDetail] = useState<Snag | null>(null);
   const [severity, setSeverity] = useState<SeverityFilter>("all");
+  /* "all", "walk" (the original inspection), or a visit id. */
+  const [source, setSource] = useState<string>("all");
   const [sort, setSort] = useState<SortMode>("newest");
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
@@ -154,11 +168,31 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
     return tally;
   }, [snags]);
 
+  /*
+    The visits that raised any of these snags, in number order, for the
+    source filter. Absent when the job has had no visit find anything, and
+    the filter with it.
+  */
+  const visitSources = useMemo(() => {
+    const seen = new Map<string, number>();
+    for (const snag of snags) {
+      const number = snag.visit_id ? visitNumbers?.[snag.visit_id] : undefined;
+      if (snag.visit_id && number) seen.set(snag.visit_id, number);
+    }
+    return [...seen.entries()].sort((a, b) => a[1] - b[1]);
+  }, [snags, visitNumbers]);
+
   const visible = useMemo(() => {
+    const bySource =
+      source === "all"
+        ? snags
+        : source === "walk"
+          ? snags.filter((snag) => !snag.visit_id)
+          : snags.filter((snag) => snag.visit_id === source);
     const filtered =
       severity === "all"
-        ? snags
-        : snags.filter((snag) => snag.severity === severity);
+        ? bySource
+        : bySource.filter((snag) => snag.severity === severity);
 
     // Sorted here rather than trusted from the API: the walk arrives with
     // the task and nothing downstream guarantees its order.
@@ -167,7 +201,7 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
       const right = new Date(b.created_at ?? 0).getTime();
       return sort === "newest" ? right - left : left - right;
     });
-  }, [snags, severity, sort]);
+  }, [snags, severity, sort, source]);
 
   // A page that no longer exists (the filter shrank the list under it)
   // would render empty with no way back, so it clamps.
@@ -260,6 +294,33 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
                 }}
               />
               <div className="ml-auto flex items-center gap-1.5">
+                {/* Which pass found it: the original walk or a visit. */}
+                {visitSources.length > 0 ? (
+                  <Select
+                    value={source}
+                    onValueChange={(value) => {
+                      setSource(value);
+                      setPage(0);
+                    }}
+                  >
+                    <SelectTrigger
+                      size="sm"
+                      className="w-[170px]"
+                      aria-label="Filter by visit"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All visits</SelectItem>
+                      <SelectItem value="walk">Original inspection</SelectItem>
+                      {visitSources.map(([id, number]) => (
+                        <SelectItem key={id} value={id}>
+                          Visit {number}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : null}
                 {/* <span className="text-muted-foreground text-xs">Sort</span> */}
                 <Select
                   value={sort}
@@ -462,6 +523,18 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
                             Not pinned
                           </span>
                         )}
+                        {/*
+                          Raised on a return visit, not on the original
+                          walk -- the defects a visit's review is about.
+                        */}
+                        {snag.visit_id && visitNumbers?.[snag.visit_id] ? (
+                          <Badge
+                            variant="secondary"
+                            className="bg-brand/10 text-brand border-0"
+                          >
+                            Visit {visitNumbers[snag.visit_id]}
+                          </Badge>
+                        ) : null}
                         <SeverityBadge severity={snag.severity} />
                         <SnagStatusBadge status={snag.status} />
                         {photoCount === 0 ? (
@@ -552,6 +625,7 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
         snag={detail}
         plans={task.floor_plans ?? []}
         visitRound={task.round_number ?? 1}
+        visitNumbers={visitNumbers}
         onClose={() => setDetail(null)}
         onOpenPhoto={(photo) => setPreview(photo)}
       />
@@ -564,6 +638,7 @@ function SnagDetailDialog({
   snag,
   plans,
   visitRound,
+  visitNumbers,
   onClose,
   onOpenPhoto,
 }: {
@@ -571,6 +646,7 @@ function SnagDetailDialog({
   plans: SnaggingFloorPlan[];
   /** The round being viewed, which is what makes a photo "before" or "after". */
   visitRound: number;
+  visitNumbers?: Record<string, number>;
   onClose: () => void;
   onOpenPhoto: (photo: SnaggingPhoto) => void;
 }) {
@@ -608,10 +684,14 @@ function SnagDetailDialog({
                 label="Status"
                 value={<SnagStatusBadge status={snag.status} />}
               />
-              <Detail
-                label="Round"
-                value={snag.round_created ? `Round ${snag.round_created}` : "1"}
-              />
+              {snag.visit_id && visitNumbers?.[snag.visit_id] ? (
+                <Detail label="Found on" value={`Visit ${visitNumbers[snag.visit_id]}`} />
+              ) : (
+                <Detail
+                  label="Round"
+                  value={snag.round_created ? `Round ${snag.round_created}` : "1"}
+                />
+              )}
               <Detail
                 label="Captured"
                 value={formatGstDateTime(snag.created_at)}

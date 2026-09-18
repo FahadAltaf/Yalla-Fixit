@@ -950,7 +950,9 @@ export const InspectionReport = forwardRef<
   const high = snags.filter((s) => s.severity === "high").length;
   const medium = snags.filter((s) => s.severity === "medium").length;
   const low = snags.filter((s) => s.severity === "low").length;
-  const confirmedAreas = areas.filter((a) => a.confirmed_at).length;
+  // A room added on a return visit was walked on that visit, though it
+  // carries no sign-off (rooms have no finish tick on a visit).
+  const confirmedAreas = areas.filter((a) => a.confirmed_at || a.visit_id).length;
 
   /*
     Defects by catalogue category, worst first (BA v2, change 20).
@@ -1092,8 +1094,6 @@ export const InspectionReport = forwardRef<
   ]
     .filter(Boolean)
     .join(" — ");
-  /* The unit's plan, used as the cover image where one is on file. */
-  const coverPlan = (task.floor_plans ?? []).find((plan) => plan.signed_url);
 
   const propertyLine = [
     property?.building_name,
@@ -1121,20 +1121,19 @@ export const InspectionReport = forwardRef<
         }}
       >
         {/*
-          ── Page 1: the cover, as the issued handover reports set it ──
+          ── Page 1: the project information ──
 
-          A block of its own with a full page's height, so the sheet the
-          client opens on is the cover and nothing else: the paginator keeps
-          a [data-pdf-block] whole, and the height pushes what follows onto
-          page two.
+          Sized to its content, and the property description follows it on
+          the same sheet. The cover used to be a full page on purpose, with
+          the unit's floor plan filling the space under the table; with the
+          plan gone, that height was two thirds of an empty page before the
+          report had said anything. The paginator still keeps this block
+          whole, so the table is never split across a page.
         */}
         <div
           data-pdf-block
           style={{
             position: "relative",
-            // The cover is deliberately a full sheet; the space is the design.
-            minHeight: forPDF ? 1020 : 980,
-            breakAfter: "page",
             paddingTop: 0,
             paddingBottom: forPDF ? "24px" : "12px",
           }}
@@ -1206,60 +1205,6 @@ export const InspectionReport = forwardRef<
             </tbody>
           </table>
 
-          {/* The heavy orange bar that separates the table from the project. */}
-          <div style={{ height: 5, background: C.orange, marginTop: 22 }} />
-
-          <div style={{ paddingTop: 0, paddingBottom: "10px", marginTop: 12 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>
-              {[property?.building_name, property?.community]
-                .filter(Boolean)
-                .join(" — ") || "Property"}
-            </div>
-            <div style={{ fontSize: 13, color: C.ink, marginTop: 4 }}>
-              Unit:{" "}
-              <span style={{ color: C.deep, fontWeight: 700 }}>
-                {unitNumber(property?.unit_label)}
-              </span>
-            </div>
-            <div
-              style={{
-                fontSize: 13,
-                fontWeight: 700,
-                color: C.ink,
-                marginTop: 4,
-                textTransform: "uppercase",
-              }}
-            >
-              {[
-                property?.bedrooms ? `${property.bedrooms}-bedroom` : null,
-                property?.property_type ?? "property",
-              ]
-                .filter(Boolean)
-                .join(" ")}
-            </div>
-          </div>
-
-          {/*
-            The unit's own plan, where one is on file. The issued reports
-            print a building photograph here; nothing in an inspection
-            record holds one, and a defect close-up as the cover image
-            would misrepresent the whole document.
-          */}
-          {coverPlan?.signed_url ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={coverPlan.signed_url}
-              alt=""
-              crossOrigin="anonymous"
-              style={{
-                display: "block",
-                margin: "0 auto",
-                maxWidth: "70%",
-                maxHeight: 420,
-                objectFit: "contain",
-              }}
-            />
-          ) : null}
         </div>
 
         {/*

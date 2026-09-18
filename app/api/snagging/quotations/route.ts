@@ -13,6 +13,7 @@ import {
   UNDECIDED,
   type QuotedProperty,
 } from "@/lib/server/snagging/quotation-build";
+import { desnagBand } from "@/lib/server/snagging/pricing";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
@@ -171,6 +172,17 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       );
     }
+    const externalRate =
+      body?.external_rate_per_sqft === undefined || body?.external_rate_per_sqft === null
+        ? null
+        : Number(body.external_rate_per_sqft);
+    if (externalRate !== null && (!Number.isFinite(externalRate) || externalRate < 0)) {
+      return NextResponse.json(
+        { error: "The external areas rate must be a number, and cannot be negative." },
+        { status: 400 },
+      );
+    }
+
     const overrideReason = String(body?.rate_override_reason ?? "").trim();
 
     /*
@@ -182,6 +194,7 @@ export async function POST(req: NextRequest) {
 
     const priced = priceQuotation(full as QuotedProperty, client, config, {
       ratePerSqft: chosenRate,
+      externalRatePerSqft: externalRate,
       furnished: declaredFurnished,
     });
 
@@ -216,8 +229,12 @@ export async function POST(req: NextRequest) {
         ...UNDECIDED,
         ...priced,
         // Who chose the rate, which is the whole point of FR-2.04.
-        rate_chosen_by: chosenRate !== null ? profile.id : null,
-        rate_chosen_at: chosenRate !== null ? new Date().toISOString() : null,
+        rate_chosen_by:
+          chosenRate !== null || externalRate !== null ? profile.id : null,
+        rate_chosen_at:
+          chosenRate !== null || externalRate !== null
+            ? new Date().toISOString()
+            : null,
         rate_override_reason: priced.rate_outside_band ? overrideReason : null,
         created_by: profile.id,
         updated_at: new Date().toISOString(),
@@ -242,6 +259,8 @@ export async function POST(req: NextRequest) {
         kind: "inspection",
         rate_per_sqft: priced.rate_per_sqft,
         rate_suggested: priced.rate_suggested,
+        external_rate_per_sqft: priced.external_rate_per_sqft,
+        external_rate_suggested: priced.external_rate_suggested,
         rate_outside_band: priced.rate_outside_band,
       },
     });
@@ -326,6 +345,36 @@ async function desnagQuotation(
     );
   }
 
+  /*
+    The amount, inside the card's de-snagging range for this property
+    type -- the same rule the job wizard applies to its rate. A range asks
+    for a figure and refuses one outside it; a single published figure is
+    simply used. Enforced here as well as in the dialog, because the
+    dialog is not the only thing that can reach this route.
+  */
+  const band = config.rate_card
+    ? desnagBand(config.rate_card, (property.property_type as string) ?? "apartment")
+    : null;
+  let chosenPrice: number | null = null;
+  if (band && band.min !== band.max) {
+    const entered = Number(body.price);
+    if (body.price === undefined || body.price === null || !Number.isFinite(entered)) {
+      return NextResponse.json(
+        { error: `Enter the de-snagging amount, between ${config.currency} ${band.min} and ${band.max}.` },
+        { status: 400 },
+      );
+    }
+    if (entered < band.min || entered > band.max) {
+      return NextResponse.json(
+        {
+          error: `The de-snagging amount must be between ${config.currency} ${band.min} and ${band.max} for this property type.`,
+        },
+        { status: 400 },
+      );
+    }
+    chosenPrice = entered;
+  }
+
   const priced = priceDesnag(
     property as QuotedProperty,
     client as { name?: string | null } | null,
@@ -333,6 +382,7 @@ async function desnagQuotation(
     {
       jobCode: job.code as string,
       round: ((job.round_number as number) ?? 1) + 1,
+      price: chosenPrice,
     },
   );
   if (!priced) {

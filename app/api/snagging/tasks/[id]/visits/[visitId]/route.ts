@@ -4,6 +4,8 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
+import { loadJobFamily } from "@/lib/server/snagging/job-family";
+import { signPaths } from "@/lib/server/snagging/media";
 import { updateVisitSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType } from "@/types/types";
 
@@ -26,6 +28,120 @@ import { ActionType, ResourceType } from "@/types/types";
  * The gate is here rather than in the UI because a disabled button is not
  * a control: a stale tab, a retry or a script reaches the API directly.
  */
+/**
+ * One additional visit and everything that belongs to it.
+ *
+ * The visit page reads this: what the visit found (its own snags, with
+ * their photos), how it is being paid for, what it answered on the
+ * checklist, and which rooms it went back for. Scoped to THIS visit
+ * throughout — the job's other snags are the original report's, and the
+ * page exists to show what the return trip added.
+ */
+export async function GET(
+  req: NextRequest,
+  ctx: { params: Promise<{ id: string; visitId: string }> },
+) {
+  try {
+    const { profile, accessUser } = await getRequestUserAccess(req);
+    if (!profile || !accessUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.VIEW)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    const { id, visitId } = await ctx.params;
+    const admin = await createAdminServerClient();
+    const family = await loadJobFamily(admin, id);
+
+    const { data: visit, error: visitError } = await admin
+      .from("snagging_job_visits")
+      .select("*, inspector:inspector_id(id, full_name, email)")
+      .eq("id", visitId)
+      .maybeSingle();
+    if (visitError) throw new Error(visitError.message);
+    if (!visit || visit.job_id !== family.rootId) {
+      return NextResponse.json({ error: "Visit not found on this job" }, { status: 404 });
+    }
+    const jobId = visit.job_id as string;
+
+    const [job, quote, snags, checklist, areas] = await Promise.all([
+      admin
+        .from("snagging_jobs")
+        .select("id, code, unit_label, building_name, approval_manager_id, status")
+        .eq("id", jobId)
+        .maybeSingle(),
+      visit.quotation_id
+        ? admin
+            .from("snagging_quotations")
+            .select("id, quote_number, status, total, currency, sent_at, approved_at, decided_at, rejected_reason, created_at")
+            .eq("id", visit.quotation_id as string)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+      admin
+        .from("snagging_snags")
+        .select(
+          `id, snag_code, category_label, element_label, defect_label, severity, status,
+           note, created_at, locked, area:area_id(id, name),
+           photos:snagging_snag_photos(id, storage_path, media_type, taken_at)`,
+        )
+        .eq("job_id", jobId)
+        .eq("visit_id", visitId)
+        .neq("status", "withdrawn")
+        .order("created_at", { ascending: true }),
+      admin
+        .from("snagging_job_checklist")
+        .select("id, code, group_name, label, status, reason, updated_at")
+        .eq("job_id", jobId)
+        .eq("visit_id", visitId)
+        .order("sort_order", { ascending: true }),
+      // The rooms a return trip is usually FOR (change 27).
+      admin
+        .from("snagging_areas")
+        .select("id, name, access_state, access_reason, elements_not_checked")
+        .eq("job_id", jobId)
+        .in("access_state", ["not_accessible", "limited_access"])
+        .order("sort_order", { ascending: true }),
+    ]);
+    for (const result of [job, quote, snags, checklist, areas]) {
+      if (result.error) throw new Error(result.error.message);
+    }
+
+    // Photos signed in one batch, so a visit with thirty snags is one call.
+    type PhotoRow = { id: string; storage_path: string; media_type: string; taken_at: string };
+    const snagRows = (snags.data ?? []) as unknown as Array<
+      Record<string, unknown> & { photos?: PhotoRow[] | null }
+    >;
+    const paths = snagRows.flatMap((snag) =>
+      (snag.photos ?? []).map((photo) => photo.storage_path).filter(Boolean),
+    );
+    const urlByPath = await signPaths(admin, paths);
+
+    const first = (v: unknown) => (Array.isArray(v) ? (v[0] ?? null) : (v ?? null));
+
+    return NextResponse.json({
+      data: {
+        visit: { ...visit, inspector: first(visit.inspector) },
+        job: job.data,
+        quotation: quote.data,
+        snags: snagRows.map((snag) => ({
+          ...snag,
+          area: first(snag.area),
+          photos: (snag.photos ?? []).map((photo) => ({
+            ...photo,
+            signed_url: urlByPath.get(photo.storage_path) ?? null,
+          })),
+        })),
+        checklist: checklist.data ?? [],
+        revisit_areas: areas.data ?? [],
+      },
+    });
+  } catch (error) {
+    console.error("Visit GET error:", error);
+    return NextResponse.json({ error: "Failed to load the visit" }, { status: 500 });
+  }
+}
+
 export async function PATCH(
   req: NextRequest,
   ctx: { params: Promise<{ id: string; visitId: string }> },

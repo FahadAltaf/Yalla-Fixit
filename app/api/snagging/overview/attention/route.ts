@@ -61,6 +61,17 @@ export async function GET(req: NextRequest) {
     const limit =
       req.nextUrl.searchParams.get("scope") === "all" ? ALL_LIMIT : VISIBLE;
 
+    /*
+      One kind of problem, when the card's strip has been used.
+
+      Applied here rather than in the browser because the card only holds
+      four rows: filtering those four to "no inspector" showed nothing
+      whenever the four happened to be overdue visits, while the strip
+      beside them said there was one. Asking the server means the four
+      shown are four of the kind that was picked.
+    */
+    const category = req.nextUrl.searchParams.get("category");
+
     const admin = await createAdminServerClient();
     const overdueCutoff = new Date(
       Date.now() - APPROVAL_SLA_HOURS * 60 * 60 * 1000,
@@ -211,6 +222,7 @@ export async function GET(req: NextRequest) {
         const due = dueDate(row.scheduled_date);
         return {
           id: row.id,
+          category: "overdue_on_site" as const,
           severity: "urgent" as const,
           title: `${row.code} overdue on site`,
           subtitle: due ? `${place(row)} · was due ${due}` : place(row),
@@ -222,6 +234,7 @@ export async function GET(req: NextRequest) {
       }),
       ...((rejected.data ?? []) as Row[]).map((row) => ({
         id: row.id,
+        category: "sent_back" as const,
         severity: "urgent" as const,
         title: `${row.code} sent back for correction`,
         subtitle: row.rejection_reason?.trim() || place(row),
@@ -230,6 +243,7 @@ export async function GET(req: NextRequest) {
       })),
       ...((overdue.data ?? []) as Row[]).map((row) => ({
         id: row.id,
+        category: "review_overdue" as const,
         severity: "urgent" as const,
         title: `${row.code} past the 48-hour review window`,
         subtitle: place(row),
@@ -238,6 +252,7 @@ export async function GET(req: NextRequest) {
       })),
       ...((waiting.data ?? []) as Row[]).map((row) => ({
         id: row.id,
+        category: "in_review" as const,
         severity: "pending" as const,
         title: `${row.code} waiting on review`,
         subtitle: place(row),
@@ -246,6 +261,7 @@ export async function GET(req: NextRequest) {
       })),
       ...((unassigned.data ?? []) as Row[]).map((row) => ({
         id: row.id,
+        category: "unassigned" as const,
         severity: "pending" as const,
         title: `${row.code} has no inspector`,
         subtitle: place(row),
@@ -254,13 +270,71 @@ export async function GET(req: NextRequest) {
       })),
       ...((staleQuotes.data ?? []) as QuoteRow[]).map((row) => ({
         id: row.id,
+        category: "quote_unanswered" as const,
         severity: "pending" as const,
         title: `${row.quote_number} unanswered for 2 days`,
         subtitle: "Sent to the client, no decision yet",
         at: row.sent_at ?? row.updated_at,
         href: `/snagging/quotations/${row.id}`,
       })),
-    ].slice(0, limit);
+    ]
+      /*
+        "With a reviewer" is one chip over two kinds. The list keeps them
+        apart because past the 48-hour window is urgent and inside it is
+        not; as a question it is one thing.
+      */
+      .filter((item) =>
+        !category ||
+        item.category === category ||
+        (category === "in_review" && item.category === "review_overdue"),
+      )
+      .slice(0, limit);
+
+    /*
+      The same backlog, counted by kind (BA v2, change 9).
+
+      Returned beside the list rather than tallied from it: the list is
+      capped at four on the card, so counting what is on screen would
+      report "1 late" while eleven were waiting. These are the real
+      totals, and the card uses them for its filter strip.
+
+      Review is one figure here, not two. The list separates past the
+      SLA from inside it because urgency differs; as a filter the reader
+      is asking "what is with a reviewer", and splitting that into two
+      chips with one item each would be noise.
+    */
+    const categories = [
+      {
+        key: "overdue_on_site",
+        label: "Overdue on site",
+        count: onSiteCount,
+        severity: "urgent" as const,
+      },
+      {
+        key: "sent_back",
+        label: "Sent back",
+        count: rejectedCount,
+        severity: "urgent" as const,
+      },
+      {
+        key: "in_review",
+        label: "With a reviewer",
+        count: waitingCount,
+        severity: "pending" as const,
+      },
+      {
+        key: "unassigned",
+        label: "No inspector",
+        count: unassignedCount,
+        severity: "pending" as const,
+      },
+      {
+        key: "quote_unanswered",
+        label: "Quote unanswered",
+        count: staleQuoteCount,
+        severity: "pending" as const,
+      },
+    ];
 
     return NextResponse.json(
       {
@@ -271,6 +345,7 @@ export async function GET(req: NextRequest) {
             waitingCount +
             unassignedCount +
             staleQuoteCount,
+          categories,
           items,
         },
       },
