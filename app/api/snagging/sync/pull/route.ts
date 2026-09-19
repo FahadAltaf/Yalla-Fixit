@@ -31,10 +31,14 @@ export async function GET(req: NextRequest) {
 
     const parsed = syncPullSchema.safeParse({
       since: req.nextUrl.searchParams.get("since") ?? undefined,
-      include_catalogue: req.nextUrl.searchParams.get("include_catalogue") ?? undefined,
+      include_catalogue:
+        req.nextUrl.searchParams.get("include_catalogue") ?? undefined,
     });
     if (!parsed.success) {
-      return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+      return NextResponse.json(
+        { error: parsed.error.flatten() },
+        { status: 400 },
+      );
     }
     const { since } = parsed.data;
     const coldStart = !since;
@@ -60,7 +64,15 @@ export async function GET(req: NextRequest) {
       .from("snagging_jobs")
       .select("id")
       .eq("inspector_id", profile.id)
-      .in("status", ["assigned", "in_progress", "submitted", "in_review", "rejected", "approved", "delivered"]);
+      .in("status", [
+        "assigned",
+        "in_progress",
+        "submitted",
+        "in_review",
+        "rejected",
+        "approved",
+        "delivered",
+      ]);
     if (assignedError) throw new Error(assignedError.message);
 
     /*
@@ -98,7 +110,7 @@ export async function GET(req: NextRequest) {
     */
     const { data: liveVisits, error: liveVisitError } = await admin
       .from("snagging_job_visits")
-      .select("*")
+      .select("id, job_id, visit_number, review_note, scheduled_date, appointment_at")
       .in("job_id", assignedIds)
       .in("status", ["scheduled", "in_progress"])
       .order("visit_number", { ascending: false });
@@ -121,8 +133,7 @@ export async function GET(req: NextRequest) {
         activeVisit.set(jobId, {
           id: v.id as string,
           visit_number: v.visit_number as number,
-          // Present once the review migration is in; null before it.
-          review_note: ((v as Record<string, unknown>).review_note as string | null) ?? null,
+          review_note: (v.review_note as string | null) ?? null,
           scheduled_date: (v.scheduled_date as string | null) ?? null,
           appointment_at: (v.appointment_at as string | null) ?? null,
         });
@@ -138,13 +149,18 @@ export async function GET(req: NextRequest) {
     */
     const { data: doneVisits, error: doneVisitError } = await admin
       .from("snagging_job_visits")
-      .select("*")
+      .select(
+        "id, job_id, visit_number, status, scheduled_date, appointment_at, submitted_at, completed_at, updated_at",
+      )
       .in("job_id", assignedIds)
       .in("status", ["submitted", "completed"])
       .order("visit_number", { ascending: false });
     if (doneVisitError) throw new Error(doneVisitError.message);
 
-    const lastVisit = new Map<string, { visit_number: number; status: string; at: string | null }>();
+    const lastVisit = new Map<
+      string,
+      { visit_number: number; status: string; at: string | null }
+    >();
     for (const v of doneVisits ?? []) {
       const jobId = v.job_id as string;
       if (lastVisit.has(jobId)) continue;
@@ -199,7 +215,9 @@ export async function GET(req: NextRequest) {
         id: v.id,
         number: v.visit_number,
         status: v.status,
-        date: gstDay(row.scheduled_date ?? row.appointment_at ?? row.submitted_at),
+        date: gstDay(
+          row.scheduled_date ?? row.appointment_at ?? row.submitted_at,
+        ),
         appointment_at: (row.appointment_at as string | null) ?? null,
         submitted_at: (row.submitted_at as string | null) ?? null,
         completed_at: (row.completed_at as string | null) ?? null,
@@ -246,8 +264,9 @@ export async function GET(req: NextRequest) {
          external_areas_in_scope, location_lat, location_lng, noc_required,
          developer_contact_name, developer_contact_phone,
          client_contact_name, client_contact_phone,
-         floor_plan_path, floor_plan_width, floor_plan_height,
-         property_record:property_id(*),
+         property_record:property_id(unit_label, building_name, community, property_type,
+           developer_name, bedrooms, built_up_area_sqft, plot_area_sqft, floors,
+           external_areas_in_scope, location_lat, location_lng, noc_required),
          client:client_id(name, email, phone),
          inspector:inspector_id(full_name, email)`,
       )
@@ -265,15 +284,21 @@ export async function GET(req: NextRequest) {
       visit never saw it in Today.
     */
     if (since) {
-      const [{ data: changedJobs, error: changedError }, { data: changedVisits, error: visitsError }] =
-        await Promise.all([
-          admin.from("snagging_jobs").select("id").in("id", jobIds).gt("updated_at", since),
-          admin
-            .from("snagging_job_visits")
-            .select("job_id")
-            .in("job_id", jobIds)
-            .gt("updated_at", since),
-        ]);
+      const [
+        { data: changedJobs, error: changedError },
+        { data: changedVisits, error: visitsError },
+      ] = await Promise.all([
+        admin
+          .from("snagging_jobs")
+          .select("id")
+          .in("id", jobIds)
+          .gt("updated_at", since),
+        admin
+          .from("snagging_job_visits")
+          .select("job_id")
+          .in("job_id", jobIds)
+          .gt("updated_at", since),
+      ]);
       if (changedError) throw new Error(changedError.message);
       if (visitsError) throw new Error(visitsError.message);
 
@@ -287,7 +312,9 @@ export async function GET(req: NextRequest) {
       // no rows, rather than an empty IN list PostgREST would reject.
       jobQuery = jobQuery.in(
         "id",
-        changedIds.length > 0 ? changedIds : ["00000000-0000-0000-0000-000000000000"],
+        changedIds.length > 0
+          ? changedIds
+          : ["00000000-0000-0000-0000-000000000000"],
       );
     }
     const { data: jobs, error: jobError } = await jobQuery;
@@ -306,8 +333,10 @@ export async function GET(req: NextRequest) {
       */
       const rec = firstOf(j.property_record) as Record<string, unknown> | null;
       const pick = (key: string) =>
-        (rec?.[key] ?? (j as unknown as Record<string, unknown>)[key]) ?? null;
-      const team = [insp?.full_name || insp?.email].filter((n): n is string => Boolean(n));
+        rec?.[key] ?? (j as unknown as Record<string, unknown>)[key] ?? null;
+      const team = [insp?.full_name || insp?.email].filter((n): n is string =>
+        Boolean(n),
+      );
       const live = activeVisit.get(j.id as string) ?? null;
       // A live visit outranks a finished one: it is the work in hand.
       const last = live ? null : (lastVisit.get(j.id as string) ?? null);
@@ -350,7 +379,9 @@ export async function GET(req: NextRequest) {
         last_visit_number: last?.visit_number ?? null,
         last_visit_status: last?.status ?? null,
         last_visit_date: last?.at
-          ? new Date(last.at).toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" })
+          ? new Date(last.at).toLocaleDateString("en-CA", {
+              timeZone: "Asia/Dubai",
+            })
           : null,
         finished_visits: finishedVisits.get(j.id as string) ?? [],
         task_type: "single_unit",
@@ -423,10 +454,49 @@ export async function GET(req: NextRequest) {
 
     // 3. Children. Remap the new column names onto the wire keys the app reads.
     const [areaRows, snagRows, photoRows, checklistRows] = await Promise.all([
-      loadChanged(admin, "snagging_areas", "job_id", jobIds, since, "updated_at"),
-      loadChanged(admin, "snagging_snags", "job_id", jobIds, since, "updated_at"),
-      loadChanged(admin, "snagging_snag_photos", "job_id", jobIds, since, "created_at"),
-      loadChanged(admin, "snagging_job_checklist", "job_id", jobIds, since, "updated_at"),
+      loadChanged(
+        admin,
+        "snagging_areas",
+        `id, job_id, name, catalogue_area_code, sort_order, created_at, status, note,
+         confirmed_at, access_state, access_reason, floor_plan_id, pin_x, pin_y, zone,
+         started_at, elements_not_checked`,
+        "job_id",
+        jobIds,
+        since,
+        "updated_at",
+      ),
+      loadChanged(
+        admin,
+        "snagging_snags",
+        `id, job_id, area_id, snag_code, catalogue_entry_id, catalogue_code, element_label,
+         defect_label, severity, note, floor_plan_id, pin_x, pin_y, status, round_created,
+         created_at, locked`,
+        "job_id",
+        jobIds,
+        since,
+        "updated_at",
+      ),
+      // Not the GPS or EXIF: the phone keeps its own for what it shot, and
+      // stores neither for a photo it pulls.
+      loadChanged(
+        admin,
+        "snagging_snag_photos",
+        `id, snag_id, job_id, storage_path, media_type, bytes, width, height, taken_at,
+         round_number, created_at, marker_x, marker_y`,
+        "job_id",
+        jobIds,
+        since,
+        "created_at",
+      ),
+      loadChanged(
+        admin,
+        "snagging_job_checklist",
+        "id, job_id, code, group_name, label, mandatory, status, reason, sort_order, visit_id",
+        "job_id",
+        jobIds,
+        since,
+        "updated_at",
+      ),
     ]);
 
     const areas = areaRows.map((a) => ({
@@ -515,8 +585,6 @@ export async function GET(req: NextRequest) {
       taken_at: p.taken_at as string,
       round_number: (p.round_number as number) ?? 1,
       created_at: (p.created_at as string | null) ?? null,
-      gps_lat: (p.gps_lat as number | null) ?? null,
-      gps_lng: (p.gps_lng as number | null) ?? null,
       // Exact defect spot on the photo (FR-4.06).
       marker_x: (p.marker_x as number | null) ?? null,
       marker_y: (p.marker_y as number | null) ?? null,
@@ -550,7 +618,9 @@ export async function GET(req: NextRequest) {
     ]);
 
     const catalogueChanged =
-      coldStart || parsed.data.include_catalogue === true || (await catalogueChangedSince(admin, since!));
+      coldStart ||
+      parsed.data.include_catalogue === true ||
+      (await catalogueChangedSince(admin, since!));
 
     return NextResponse.json({
       data: {
@@ -572,7 +642,10 @@ export async function GET(req: NextRequest) {
   }
 }
 
-type Joined = { full_name: string | null; email: string | null } | { full_name: string | null; email: string | null }[] | null;
+type Joined =
+  | { full_name: string | null; email: string | null }
+  | { full_name: string | null; email: string | null }[]
+  | null;
 type JobRow = {
   id: string;
   code: string;
@@ -607,29 +680,31 @@ type JobRow = {
   developer_contact_phone: string | null;
   client_contact_name: string | null;
   client_contact_phone: string | null;
-  floor_plan_path: string | null;
-  floor_plan_width: number | null;
-  floor_plan_height: number | null;
   property_record: Record<string, unknown> | Record<string, unknown>[] | null;
-  client: { name: string | null; email: string | null; phone: string | null } | { name: string | null; email: string | null; phone: string | null }[] | null;
+  client:
+    | { name: string | null; email: string | null; phone: string | null }
+    | { name: string | null; email: string | null; phone: string | null }[]
+    | null;
   inspector: Joined;
 };
 
 function firstOf<T>(value: T | T[] | null): T | null {
-  return Array.isArray(value) ? value[0] ?? null : value;
+  return Array.isArray(value) ? (value[0] ?? null) : value;
 }
 
 type ChildRow = Record<string, unknown> & { id: string; job_id: string };
 
+/* `columns` is what the mapping below reads of each table, and no more. */
 async function loadChanged(
   admin: Admin,
   table: string,
+  columns: string,
   foreignKey: string,
   jobIds: string[],
   since: string | undefined,
   timestampColumn: string,
 ): Promise<ChildRow[]> {
-  let query = admin.from(table).select("*").in(foreignKey, jobIds);
+  let query = admin.from(table).select<string, ChildRow>(columns).in(foreignKey, jobIds);
   if (since) query = query.gt(timestampColumn, since);
   const { data, error } = await query;
   if (error) throw new Error(`${table}: ${error.message}`);
@@ -644,7 +719,10 @@ async function loadChanged(
  * editing a defect does, and a device that only watched the leaves would
  * keep offering a branch that had been withdrawn.
  */
-async function catalogueChangedSince(admin: Admin, since: string): Promise<boolean> {
+async function catalogueChangedSince(
+  admin: Admin,
+  since: string,
+): Promise<boolean> {
   const tables = [
     "snagging_catalogue_categories",
     "snagging_catalogue_subcategories",
@@ -693,7 +771,10 @@ async function loadCatalogue(admin: Admin) {
   }
 
   const [categories, subcategories, defects] = await Promise.all([
-    readAll("snagging_catalogue_categories", "id, code, label, sort_order, active"),
+    readAll(
+      "snagging_catalogue_categories",
+      "id, code, label, sort_order, active",
+    ),
     readAll(
       "snagging_catalogue_subcategories",
       "id, category_id, code, label, sort_order, active",
