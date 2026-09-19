@@ -117,16 +117,25 @@ function useSlice<T>(
   fetcher: (signal: AbortSignal) => Promise<T>,
   initial: Slice<T>,
   failure: string,
+  /**
+   * Called when this slice's cleanup cancels a request that had not come
+   * back. A cancel is not an answer: whoever guards "asked already" must
+   * forget it, or the slice waits forever for a reply that will not come.
+   */
+  onCancelled?: () => void,
 ) {
   const [state, setState] = useState<Slice<T>>(initial);
   const ticket = useRef(0);
   const inFlight = useRef<AbortController | null>(null);
+  /* True from sending a request until its answer (or failure) is applied. */
+  const pending = useRef(false);
 
   const run = useCallback(async (): Promise<boolean> => {
     inFlight.current?.abort();
     const controller = new AbortController();
     inFlight.current = controller;
     const mine = ++ticket.current;
+    pending.current = true;
     setState((s) =>
       s.data === null
         ? { ...s, loading: true, error: null }
@@ -135,10 +144,12 @@ function useSlice<T>(
     try {
       const data = await fetcher(controller.signal);
       if (mine !== ticket.current) return true;
+      pending.current = false;
       setState({ data, loading: false, refreshing: false, error: null, lastFetchedAt: Date.now() });
       return true;
     } catch (error) {
       if (mine !== ticket.current || isAbort(error)) return true;
+      pending.current = false;
       // A failed refresh keeps what is on screen and says so; only a slice
       // with nothing to show falls back to its error state.
       setState((s) => ({ ...s, loading: false, refreshing: false, error: messageOf(error, failure) }));
@@ -146,8 +157,29 @@ function useSlice<T>(
     }
   }, [fetcher, failure]);
 
-  // Leaving the page cancels whatever is still on its way.
-  useEffect(() => () => inFlight.current?.abort(), []);
+  /*
+    Leaving the page cancels whatever is still on its way.
+
+    The same cleanup also runs when React re-runs effects on a page that
+    stays mounted -- Strict Mode, Fast Refresh, an <Activity> being hidden
+    -- and the effects then run again. A request cancelled that way has to
+    be asked for again, so the owner is told (onCancelled).
+  */
+  const cancelledRef = useRef(onCancelled);
+  useEffect(() => {
+    cancelledRef.current = onCancelled;
+  }, [onCancelled]);
+  useEffect(
+    () => () => {
+      const wasPending = pending.current;
+      inFlight.current?.abort();
+      if (wasPending) {
+        pending.current = false;
+        cancelledRef.current?.();
+      }
+    },
+    [],
+  );
 
   return { state, run };
 }
@@ -240,7 +272,24 @@ export function JobDetailProvider({ taskId, children }: { taskId: string; childr
 
   const job = useSlice(fetchJob, loadingSlice<SnaggingTask>(), "Could not load the inspection");
   const visits = useSlice(fetchVisits, loadingSlice<VisitsData>(), "Could not load the additional visits");
-  const quotation = useSlice(fetchQuotation, idle<SnaggingQuotation>(), "Could not load the quotation");
+
+  /*
+    The Quotation tab asks for the quotation once (ensureQuotation). If
+    that request is cancelled before it answers -- Strict Mode, Fast
+    Refresh or <Activity> re-running the page's effects -- the "asked"
+    flag is cleared, so the tab's effect, which runs again straight after,
+    asks again instead of waiting on the cancelled request forever.
+  */
+  const quotationRequested = useRef(false);
+  const forgetQuotationRequest = useCallback(() => {
+    quotationRequested.current = false;
+  }, []);
+  const quotation = useSlice(
+    fetchQuotation,
+    idle<SnaggingQuotation>(),
+    "Could not load the quotation",
+    forgetQuotationRequest,
+  );
 
   const { run: runJob } = job;
   const { run: runVisits } = visits;
@@ -252,7 +301,6 @@ export function JobDetailProvider({ taskId, children }: { taskId: string; childr
     void runVisits();
   }, [runJob, runVisits]);
 
-  const quotationRequested = useRef(false);
   const ensureQuotation = useCallback(() => {
     if (quotationRequested.current) return;
     quotationRequested.current = true;
