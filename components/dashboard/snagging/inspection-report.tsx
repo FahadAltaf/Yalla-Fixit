@@ -635,6 +635,73 @@ function Para({ children }: { children: React.ReactNode }) {
  * with a broken-image mark would read as an error in the document rather
  * than as a check that never had a picture to take.
  */
+/**
+ * The pair a de-snag exists to produce, side by side and labelled: the
+ * defect as it was reported, and as the round found it.
+ */
+function BeforeAfterPhotos({
+  before,
+  after,
+}: {
+  before: SnaggingPhoto | null;
+  after: SnaggingPhoto | null;
+}) {
+  const tile = (label: string, photo: SnaggingPhoto | null, accent: string) => (
+    <div style={{ flex: 1, position: "relative", minWidth: 0 }}>
+      {photo && !isVideo(photo) ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={photo.signed_url ?? ""}
+          alt=""
+          crossOrigin="anonymous"
+          style={{ width: "100%", height: PHOTO_H, objectFit: "cover", display: "block" }}
+        />
+      ) : (
+        <div
+          style={{
+            width: "100%",
+            height: PHOTO_H,
+            border: `1px solid ${C.grid}`,
+            background: C.card,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 8,
+            fontWeight: 600,
+            color: C.sub,
+            textAlign: "center",
+          }}
+        >
+          {photo ? "Video evidence" : label === "After" ? "No after photo" : "No earlier photo"}
+        </div>
+      )}
+      <span
+        style={{
+          position: "absolute",
+          top: 4,
+          left: 4,
+          background: accent,
+          color: "#ffffff",
+          fontSize: 6.5,
+          fontWeight: 700,
+          textTransform: "uppercase",
+          letterSpacing: 0.4,
+          padding: "1px 5px",
+          borderRadius: 3,
+        }}
+      >
+        {label}
+      </span>
+    </div>
+  );
+  return (
+    <div style={{ display: "flex", gap: 4 }}>
+      {tile("Before", before, C.ink)}
+      {tile("After", after, C.brand)}
+    </div>
+  );
+}
+
 function DefectCard({
   reference,
   number,
@@ -649,6 +716,8 @@ function DefectCard({
   area,
   floor,
   first,
+  afterPhoto,
+  beforeAfter = false,
 }: {
   reference: string;
   number: number;
@@ -669,6 +738,10 @@ function DefectCard({
   /** The floor plan this area sits on, where the job has more than one. */
   floor?: string | null;
   first: boolean;
+  /** On a de-snag: the photo taken on this round, beside `photo` (the before). */
+  afterPhoto?: SnaggingPhoto | null;
+  /** Show `photo` and `afterPhoto` as a labelled before-and-after pair. */
+  beforeAfter?: boolean;
 }) {
   const forPDF = useContext(PdfMode);
   const grade = SEVERITY[severity] ?? SEVERITY.low;
@@ -714,7 +787,9 @@ function DefectCard({
           ) : null}
         </div>
 
-        {photo ? (
+        {beforeAfter ? (
+          <BeforeAfterPhotos before={photo ?? null} after={afterPhoto ?? null} />
+        ) : photo ? (
           isVideo(photo) ? (
             <div
               style={{
@@ -1177,8 +1252,10 @@ export const InspectionReport = forwardRef<
             <tbody>
               <Fact label="Date of inspection" value={fmtDate(task.scheduled_date)} label2="Client name" value2={property?.client_name ?? "—"} />
               <tr>
-                <Cell label>Location:</Cell>
-                <Cell strong colSpan={7}>
+                {/* Two columns for the label, like every other row, so the
+                    value lines up with the values above and below it. */}
+                <Cell label colSpan={2}>Location:</Cell>
+                <Cell strong colSpan={6}>
                   {[property?.building_name, property?.unit_label]
                     .filter(Boolean)
                     .join(" — ") || "—"}
@@ -1400,10 +1477,28 @@ export const InspectionReport = forwardRef<
             value={String(low)}
             tone={undefined}
           />
-          <Stat
-            label="Areas walked"
-            value={`${confirmedAreas}/${areas.length}`}
-          />
+          {/*
+            A de-snag round is measured on its carried defects, not on rooms:
+            the inspector never ticks a room off on a round, so this read
+            0 / 8 on every one of them.
+          */}
+          {task.visit_type === "desnag" ? (
+            <Stat
+              label="Defects re-checked"
+              value={`${
+                snags.filter(
+                  (s) =>
+                    (s.round_created ?? 1) < (task.round_number ?? 1) &&
+                    s.status !== "pending_verification",
+                ).length
+              }/${snags.filter((s) => (s.round_created ?? 1) < (task.round_number ?? 1)).length}`}
+            />
+          ) : (
+            <Stat
+              label="Areas walked"
+              value={`${confirmedAreas}/${areas.length}`}
+            />
+          )}
         </div>
 
         {/*
@@ -1630,6 +1725,16 @@ export const InspectionReport = forwardRef<
                         const photos = (snag.photos ?? []).filter(
                           (photo) => photo.signed_url,
                         );
+                        /*
+                          A defect carried into a de-snag round is shown as
+                          before and after: the photo it was reported with,
+                          and the one taken on this round.
+                        */
+                        const round = task.round_number ?? 1;
+                        const carried =
+                          task.visit_type === "desnag" && (snag.round_created ?? 1) < round;
+                        const before = photos.filter((p) => (p.round_number ?? 1) < round);
+                        const after = photos.filter((p) => (p.round_number ?? 1) >= round);
                         return (
                           <DefectCard
                             key={snag.id}
@@ -1654,7 +1759,9 @@ export const InspectionReport = forwardRef<
                             severity={snag.severity}
                             note={snag.note}
                             status={snag.status}
-                            photo={photos[0] ?? null}
+                            photo={carried ? (before[0] ?? null) : (photos[0] ?? null)}
+                            afterPhoto={carried ? (after[after.length - 1] ?? null) : undefined}
+                            beforeAfter={carried}
                             area={area.name}
                             floor={floorOf(snag.floor_plan_id)}
                           />

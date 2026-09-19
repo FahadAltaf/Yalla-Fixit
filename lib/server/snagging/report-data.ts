@@ -59,6 +59,8 @@ export type ReportSnag = {
     takenAt: string | null;
     /** FR-7.03 — the marked spot, as a fraction of the image. */
     marker: { x: number; y: number } | null;
+    /** The round the photo was taken on: earlier is "before", this one "after". */
+    round: number;
     width: number | null;
     height: number | null;
     exif: Record<string, unknown> | null;
@@ -121,6 +123,13 @@ export type ReportData = {
     /** Areas the inspector confirmed walking, over every area on the job. */
     areasWalked: number;
     areasTotal: number;
+    /**
+     * A de-snag round's measure: the defects carried in to be re-checked,
+     * and how many have a verdict. Rooms are never ticked off on a round,
+     * so "areas walked" read 0 / 8 on every one.
+     */
+    defectsCarried: number;
+    defectsChecked: number;
     /** Checklist items with a real answer — anything but pending/not checked. */
     checklistDone: number;
     checklistTotal: number;
@@ -219,6 +228,7 @@ function toReportSnag(
         mediaType: String(photo.media_type ?? "photo"),
         takenAt: typeof photo.taken_at === "string" ? photo.taken_at : null,
         marker: marked ? { x: x as number, y: y as number } : null,
+        round: Number(photo.round_number ?? 1),
         width: typeof photo.width === "number" ? photo.width : null,
         height: typeof photo.height === "number" ? photo.height : null,
         exif: (photo.exif as Record<string, unknown> | null) ?? null,
@@ -312,7 +322,7 @@ export async function buildReportData(
           `id, job_id, area_id, snag_code, catalogue_code, category_label, element_label, defect_label,
            severity, note, status, round_created, visit_id,
            photos:snagging_snag_photos(id, snag_id, storage_path, media_type, taken_at,
-             width, height, gps_lat, gps_lng, exif, marker_x, marker_y)`,
+             width, height, gps_lat, gps_lng, exif, marker_x, marker_y, round_number)`,
         )
         .in("job_id", snagJobIds)
         .neq("status", "withdrawn")
@@ -464,6 +474,11 @@ export async function buildReportData(
       // have no finish tick there, so it never carries a sign-off.
       areasWalked: areaRows.filter((area) => area.confirmed_at || area.visit_id).length,
       areasTotal: areaRows.length,
+      defectsCarried: snags.filter((snag) => snag.roundCreated < (job.round_number ?? 1)).length,
+      defectsChecked: snags.filter(
+        (snag) =>
+          snag.roundCreated < (job.round_number ?? 1) && snag.status !== "pending_verification",
+      ).length,
       checklistDone: ((checklist ?? []) as Array<Record<string, unknown>>).filter(
         (item) => item.status !== "pending" && item.status !== "not_checked",
       ).length,
