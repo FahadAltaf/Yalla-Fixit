@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeftRight,
@@ -61,6 +61,7 @@ import {
   useConfirm,
 } from "./shared";
 import { AdditionalVisitDialog } from "./additional-visit-dialog";
+import { useJobDetail } from "./job-detail-context";
 import { VisitEditDialog } from "./visit-edit-dialog";
 
 /**
@@ -127,17 +128,22 @@ function fmtDate(value: string | null): string {
   }).format(new Date(value));
 }
 
-export function AdditionalVisitsPanel({
-  task,
-  onChanged,
-}: {
-  task: SnaggingTask;
-  onChanged: () => void;
-}) {
-  const [visits, setVisits] = useState<VisitRow[]>([]);
-  const [versions, setVersions] = useState<VersionRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+export function AdditionalVisitsPanel({ task }: { task: SnaggingTask }) {
+  /*
+    The visits are the page's (JobDetailContext), not this tab's.
+
+    This tab used to fetch its own copy on every open, alongside the one
+    the page already held for the alerts and the snag labels -- two lists
+    that disagreed after any change until both were re-read. Now there is
+    one, and a change here re-reads it through `visitsChanged`, which also
+    refreshes the job and History for every other tab.
+  */
+  const { visits: visitsSlice, visitsChanged, refreshVisits } = useJobDetail();
+  const visits = (visitsSlice.data?.visits ?? []) as VisitRow[];
+  const versions = (visitsSlice.data?.versions ?? []) as VersionRow[];
+  const loading = visitsSlice.loading;
+  // A failed refresh keeps the list on screen; only a first load fails here.
+  const error = visitsSlice.data ? null : visitsSlice.error;
   const [createOpen, setCreateOpen] = useState(false);
 
   const [busy, setBusy] = useState<string | null>(null);
@@ -155,18 +161,8 @@ export function AdditionalVisitsPanel({
   const [paymentRef, setPaymentRef] = useState("");
 
   const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const body = await snaggingService.listVisits(task.id);
-      setVisits(body.visits ?? []);
-      setVersions((body.versions ?? []) as VersionRow[]);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load the additional visits");
-    } finally {
-      setLoading(false);
-    }
-  }, [task.id]);
+    await refreshVisits();
+  }, [refreshVisits]);
 
   /**
    * Raises the visit's quotation from this job and links it (change 26).
@@ -230,8 +226,7 @@ export function AdditionalVisitsPanel({
           : `Visit ${visit.visit_number} is now charged by quotation`,
       );
       setSwitching(null);
-      await load();
-      onChanged();
+      visitsChanged();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not change how the visit is charged");
     } finally {
@@ -244,18 +239,13 @@ export function AdditionalVisitsPanel({
     try {
       await snaggingService.cancelVisit(task.id, visit.id);
       toast.success(`Visit ${visit.visit_number} cancelled`);
-      await load();
-      onChanged();
+      visitsChanged();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not cancel the visit");
     } finally {
       setBusy(null);
     }
   }
-
-  useEffect(() => {
-    void load();
-  }, [load]);
 
   if (loading) {
     return (
@@ -716,8 +706,7 @@ export function AdditionalVisitsPanel({
           }
         }}
         onSaved={() => {
-          void load();
-          onChanged();
+          visitsChanged();
         }}
       />
 
@@ -726,8 +715,7 @@ export function AdditionalVisitsPanel({
         open={createOpen}
         onOpenChange={setCreateOpen}
         onCreated={() => {
-          void load();
-          onChanged();
+          visitsChanged();
         }}
       />
     </div>

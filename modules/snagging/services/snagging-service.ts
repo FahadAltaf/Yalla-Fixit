@@ -358,9 +358,10 @@ export const snaggingService = {
       params: toParams(filters, page, pageSize),
     }),
 
-  getTask: async (id: string): Promise<SnaggingTask> =>
+  getTask: async (id: string, init: { signal?: AbortSignal } = {}): Promise<SnaggingTask> =>
     executeRESTBackend<SnaggingTask>(`/api/snagging/tasks/${id}`, {
       method: "GET",
+      signal: init.signal,
     }),
 
   /**
@@ -372,7 +373,12 @@ export const snaggingService = {
    */
   getAudit: async (
     id: string,
-    options?: { page?: number; pageSize?: number; order?: "asc" | "desc" },
+    options?: {
+      page?: number;
+      pageSize?: number;
+      order?: "asc" | "desc";
+      signal?: AbortSignal;
+    },
   ): Promise<{ data: SnaggingAuditEvent[]; totalCount: number }> =>
     executeRESTBackend<{ data: SnaggingAuditEvent[]; totalCount: number }>(
       `/api/snagging/tasks/${id}/audit`,
@@ -383,6 +389,7 @@ export const snaggingService = {
           pageSize: options?.pageSize ?? 25,
           order: options?.order ?? "desc",
         },
+        signal: options?.signal,
       },
     ),
 
@@ -427,13 +434,14 @@ export const snaggingService = {
    */
   getQuotation: async (
     taskId: string,
-    options: { preview?: boolean } = {},
+    options: { preview?: boolean; signal?: AbortSignal } = {},
   ): Promise<SnaggingQuotation | null> =>
     executeRESTBackend<SnaggingQuotation | null>(
       `/api/snagging/tasks/${taskId}/quotation`,
       {
         method: "GET",
         params: options.preview ? { preview: "1" } : {},
+        signal: options.signal,
       },
     ),
 
@@ -803,10 +811,11 @@ export const snaggingService = {
 
   listVisits: async (
     id: string,
+    init: { signal?: AbortSignal } = {},
   ): Promise<{ visits: SnaggingJobVisit[]; versions: unknown[] }> =>
     executeRESTBackend<{ visits: SnaggingJobVisit[]; versions: unknown[] }>(
       `/api/snagging/tasks/${id}/visits`,
-      { method: "GET" },
+      { method: "GET", signal: init.signal },
     ),
 
   createVisit: async (

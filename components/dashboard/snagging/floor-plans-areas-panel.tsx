@@ -126,8 +126,16 @@ export function FloorPlansAreasPanel({
   taskId,
   propertyType,
   bedrooms,
+  onChanged,
 }: {
   taskId: string;
+  /**
+   * Called after anything here changes the job's rooms or plans. The page
+   * re-reads the job, so the Areas count, the snag list's pins and the
+   * "Areas walked" card follow -- they used to keep the old rooms until
+   * the page was reloaded.
+   */
+  onChanged?: () => void;
   /** Shapes the suggested room list, the same way it does at job creation. */
   propertyType?: SnaggingPropertyType | null;
   bedrooms?: number | null;
@@ -242,6 +250,7 @@ export function FloorPlansAreasPanel({
         { id },
       );
       await load();
+      onChanged?.();
       return result;
     } catch (error) {
       toast.error(error instanceof Error ? error.message : labels.failed, { id });
@@ -543,6 +552,7 @@ export function FloorPlansAreasPanel({
       setChosen([]);
       setAddAreaOpen(false);
       await load();
+      onChanged?.();
 
       /*
         The last one added is selected and shown, so a single addition is

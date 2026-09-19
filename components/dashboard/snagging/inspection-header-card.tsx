@@ -54,9 +54,12 @@ import {
 export function InspectionHeaderCard({
   task,
   onChanged,
+  onVisitsChanged,
 }: {
   task: SnaggingTask;
   onChanged: () => void;
+  /** After a visit is added here; defaults to `onChanged`. */
+  onVisitsChanged?: () => void;
 }) {
   const { userProfile } = useAuth();
   const { confirm, dialog } = useConfirm();
@@ -665,6 +668,9 @@ export function InspectionHeaderCard({
         taskId={task.id}
         open={visitOpen}
         onOpenChange={setVisitOpen}
+        // The new visit belongs in the page's visit list at once: the
+        // alerts, the Visits tab and its count all read that list.
+        onCreated={onVisitsChanged ?? onChanged}
       />
 
       <DesnagQuotationDialog

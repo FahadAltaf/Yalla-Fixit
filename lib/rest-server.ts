@@ -62,10 +62,12 @@ export async function executeRESTBackend<T = unknown>(
     method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
     params?: Record<string, string | number>;
     body?: Record<string, unknown>;
+    /** Cancels the request, e.g. when the screen that asked has gone. */
+    signal?: AbortSignal;
   } = {}
 ): Promise<T> {
   try {
-    const { method = "GET", params, body } = options;
+    const { method = "GET", params, body, signal } = options;
 
     // Build URL - use relative URL for client-side, absolute for server-side
     let url: URL;
@@ -88,6 +90,7 @@ export async function executeRESTBackend<T = unknown>(
       headers: {
         "Content-Type": "application/json",
       },
+      signal,
     };
 
     if (body && (method === "POST" || method === "PUT" || method === "PATCH")) {
@@ -120,7 +123,10 @@ export async function executeRESTBackend<T = unknown>(
     // Otherwise, return result.data if it exists, or the whole result
     return (result.data !== undefined ? result.data : result) as T;
   } catch (error) {
-    console.error("REST API Error:", error);
+    // A cancelled request is the caller's choice, not a failure worth logging.
+    if ((error as { name?: string } | null)?.name !== "AbortError") {
+      console.error("REST API Error:", error);
+    }
     throw error;
   }
 }

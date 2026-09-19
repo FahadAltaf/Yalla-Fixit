@@ -103,6 +103,7 @@ export function QuotationPanel({
   task,
   quotationId,
   visitNumber,
+  source,
 }: {
   /* Only these two are read, so a visit page can pass them without the
      whole job record. */
@@ -127,6 +128,18 @@ export function QuotationPanel({
    * emailed link, and the job screen reloads on its own.
    */
   onChanged: () => void;
+  /**
+   * The quotation from the page's shared data, where the page holds it
+   * (the job page). The panel then neither fetches nor generates -- the
+   * page did both, once -- and `reload` re-reads it through the page, so
+   * the job's status and the History tab move with it.
+   */
+  source?: {
+    quote: SnaggingQuotation | null;
+    loading: boolean;
+    error: string | null;
+    reload: () => void | Promise<unknown>;
+  };
 }) {
   const { userProfile } = useAuth();
   const canEdit = hasResourceAction(
@@ -134,9 +147,12 @@ export function QuotationPanel({
     ResourceType.SNAGGING,
     ActionType.EDIT,
   );
-  const [quote, setQuote] = useState<SnaggingQuotation | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [ownQuote, setQuote] = useState<SnaggingQuotation | null>(null);
+  const [ownLoading, setLoading] = useState(true);
+  const [ownError, setError] = useState<string | null>(null);
+  const quote = source ? source.quote : ownQuote;
+  const loading = source ? source.loading : ownLoading;
+  const error = source ? source.error : ownError;
   const [working, setWorking] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [sendOpen, setSendOpen] = useState(false);
@@ -225,9 +241,17 @@ export function QuotationPanel({
     }
   }, [task.id, canEdit, quotationId]);
 
+  // Fetched here only when the page does not hold the quotation itself.
   useEffect(() => {
+    if (source) return;
     void load();
-  }, [load]);
+  }, [load, source]);
+
+  /** Re-reads the quotation from wherever it is held. */
+  const reload = useCallback(async () => {
+    if (source) await source.reload();
+    else await load();
+  }, [source, load]);
 
   /**
    * Generate (or regenerate) the quotation. Approve and reject are the
@@ -239,7 +263,7 @@ export function QuotationPanel({
     setWorking(true);
     try {
       await snaggingService.quotationAction(task.id, "generate");
-      await load();
+      await reload();
       toast.success("Quotation generated");
     } catch (error) {
       toast.error(
@@ -320,7 +344,7 @@ export function QuotationPanel({
       }
       await download();
       toast.success("Link copied and PDF downloaded — ready to paste");
-      await load();
+      await reload();
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Could not prepare the link",
@@ -347,7 +371,7 @@ export function QuotationPanel({
       setApprovalUrl(res.approval_url ?? null);
       setSendOpen(false);
       toast.success("Quotation emailed to the client");
-      await load();
+      await reload();
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Could not send the quotation",
@@ -469,7 +493,7 @@ export function QuotationPanel({
         <DataState
           loading={loading || generating}
           error={error}
-          onRetry={() => void load()}
+          onRetry={() => void reload()}
           retrying={loading}
           errorTitle="Could not load the quotation"
           isEmpty={!quote}
