@@ -1,8 +1,8 @@
 import { NextRequest } from "next/server";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
-import { buildUserFromAccess, RoleAccessEntry } from "@/lib/role-permissions";
-import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
+import { buildUserFromAccess } from "@/lib/role-permissions";
+import { getAuthenticatedUserAccess, loadProfileAccess } from "@/lib/server/user-access";
 import { User } from "@/types/types";
 
 /**
@@ -50,46 +50,38 @@ function readBearerToken(req: NextRequest): string | null {
 async function resolveFromToken(token: string): Promise<RequestUserAccess> {
   const admin = await createAdminServerClient();
 
-  // Verifies the JWT signature and expiry against the project's keys —
-  // a forged or stale token resolves to no user.
-  const {
-    data: { user },
-    error,
-  } = await admin.auth.getUser(token);
+  // Verifies the JWT signature and expiry against the project's published
+  // keys, locally -- a forged or stale token resolves to no user. (With a
+  // legacy HS256 token getClaims asks Supabase Auth instead, as getUser
+  // did.) See user-access.ts for the trade-off.
+  const { data, error } = await admin.auth.getClaims(token);
+  const userId = typeof data?.claims?.sub === "string" ? data.claims.sub : null;
 
-  if (error || !user?.id) return UNAUTHENTICATED;
+  if (error || !userId) return UNAUTHENTICATED;
 
-  const { data: profile, error: profileError } = await admin
-    .from("user_profile")
-    .select("id,email,full_name,role_id,is_active,roles(name)")
-    .eq("id", user.id)
-    .single();
+  // Profile and permissions in one query, cached per user (user-access.ts).
+  let access;
+  try {
+    access = await loadProfileAccess(userId);
+  } catch {
+    return { ...UNAUTHENTICATED, authUserId: userId, origin: "mobile" };
+  }
 
-  if (profileError || !profile) {
-    return { ...UNAUTHENTICATED, authUserId: user.id, origin: "mobile" };
+  if (!access) {
+    return { ...UNAUTHENTICATED, authUserId: userId, origin: "mobile" };
   }
 
   // A deactivated inspector keeps a valid token until it expires, so
-  // the flag has to be checked on every request rather than at sign-in.
-  if (profile.is_active === false) {
-    return { ...UNAUTHENTICATED, authUserId: user.id, origin: "mobile" };
-  }
-
-  let roleAccess: RoleAccessEntry[] = [];
-  if (profile.role_id) {
-    const { data: accessRows, error: accessError } = await admin
-      .from("role_access")
-      .select("resource, action, enabled, record_access")
-      .eq("role_id", profile.role_id);
-
-    if (accessError) throw new Error(accessError.message);
-    roleAccess = (accessRows ?? []) as RoleAccessEntry[];
+  // the flag has to be checked on every request rather than at sign-in
+  // (within the access cache's 30 seconds).
+  if (access.profile.is_active === false) {
+    return { ...UNAUTHENTICATED, authUserId: userId, origin: "mobile" };
   }
 
   return {
-    authUserId: user.id,
-    profile,
-    accessUser: buildUserFromAccess(profile, roleAccess),
+    authUserId: userId,
+    profile: access.profile,
+    accessUser: buildUserFromAccess(access.profile, access.roleAccess),
     origin: "mobile",
   };
 }
