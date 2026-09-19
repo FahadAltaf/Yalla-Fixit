@@ -42,7 +42,12 @@ export async function GET(req: NextRequest) {
       .order("sort_order", { ascending: true });
     if (error) throw new Error(error.message);
 
-    const signed = await signMediaPaths(admin, data ?? []);
+    // task_id alongside job_id: the job page reads plans by task_id, and
+    // now takes them from here rather than a second copy in the job route.
+    const signed = await signMediaPaths(
+      admin,
+      (data ?? []).map((plan) => ({ ...plan, task_id: plan.job_id })),
+    );
     return NextResponse.json({ data: signed });
   } catch (error) {
     console.error("Snagging floor-plan GET error:", error);

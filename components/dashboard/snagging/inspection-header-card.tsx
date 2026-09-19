@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Tooltip,
   TooltipContent,
@@ -55,11 +56,19 @@ export function InspectionHeaderCard({
   task,
   onChanged,
   onVisitsChanged,
+  pending = {},
 }: {
   task: SnaggingTask;
   onChanged: () => void;
   /** After a visit is added here; defaults to `onChanged`. */
   onVisitsChanged?: () => void;
+  /**
+   * Sections of the job still on their way, where the page loads them
+   * separately. The header renders from the core job at once; what depends
+   * on the snags (the numbers, the approval check) or on the de-snag
+   * quotation (its button) waits for those rather than showing a zero.
+   */
+  pending?: { snags?: boolean; desnag?: boolean };
 }) {
   const { userProfile } = useAuth();
   const { confirm, dialog } = useConfirm();
@@ -460,6 +469,9 @@ export function InspectionHeaderCard({
                   onClick={() => void approve()}
                   pending={working}
                   pendingLabel="Approving…"
+                  // The approval checks the snags' photos first; it cannot
+                  // until they have loaded.
+                  disabled={pending.snags}
                   icon={<CheckCircle2 className="size-4" />}
                 >
                   Approve inspection
@@ -487,7 +499,8 @@ export function InspectionHeaderCard({
               </span>
             ) : null}
             {(task.status === "approved" || task.status === "delivered") &&
-            canCreate ? (
+            canCreate &&
+            !pending.desnag ? (
               <>
                 {desnagStep === "quote" ? (
                   <SubmitButton
@@ -554,7 +567,7 @@ export function InspectionHeaderCard({
               <RemediationDue due={task.remediation_due_at} />
             ) : null}
           </div>
-        ) : awaitingDecision ? (
+        ) : awaitingDecision && !pending.snags ? (
           <div className="border-warning/30 bg-warning/5 border-t px-5 py-3">
             <p className="text-sm">
               {snagsWithPhoto === snags.length
@@ -571,6 +584,13 @@ export function InspectionHeaderCard({
         every other page uses rather than a divided strip that only
         existed here.
       */}
+      {pending.snags ? (
+        <StatCardGrid columns={4}>
+          {Array.from({ length: 4 }).map((_, index) => (
+            <Skeleton key={index} className="h-[132px] rounded-xl" />
+          ))}
+        </StatCardGrid>
+      ) : (
       <StatCardGrid columns={4}>
         <StatCard
           label="Snags"
@@ -656,6 +676,7 @@ export function InspectionHeaderCard({
           }
         />
       </StatCardGrid>
+      )}
 
       <RejectInspectionDialog
         open={rejectOpen}

@@ -358,11 +358,78 @@ export const snaggingService = {
       params: toParams(filters, page, pageSize),
     }),
 
-  getTask: async (id: string, init: { signal?: AbortSignal } = {}): Promise<SnaggingTask> =>
+  /**
+   * The whole job record, as one object: the core job plus its checklist,
+   * snags, floor plans, visit status and de-snag quotation.
+   *
+   * These are separate endpoints now, fetched here in parallel and merged
+   * into the shape this call always returned, so the pages that want the
+   * whole record (review, report, visit, de-snag builder) are unchanged.
+   * The job page itself reads the sections one by one, through
+   * JobDetailContext, so each renders the moment it arrives.
+   */
+  getTask: async (id: string, init: { signal?: AbortSignal } = {}): Promise<SnaggingTask> => {
+    const [core, checklist, snags, floorPlans, visitStatus, desnag] = await Promise.all([
+      snaggingService.getTaskCore(id, init),
+      snaggingService.getTaskChecklist(id, init),
+      snaggingService.getTaskSnags(id, init),
+      snaggingService.listFloorPlans(id, init),
+      snaggingService.getTaskVisitStatus(id, init),
+      snaggingService.getTaskDesnagQuotation(id, init),
+    ]);
+    return {
+      ...core,
+      floor_plans: floorPlans,
+      snags,
+      checklist,
+      unapproved_visit_ids: visitStatus.unapproved_visit_ids,
+      desnag_quotation: desnag,
+    };
+  },
+
+  /** The job itself: header, property, areas, sign-off. The fast section. */
+  getTaskCore: async (id: string, init: { signal?: AbortSignal } = {}): Promise<SnaggingTask> =>
     executeRESTBackend<SnaggingTask>(`/api/snagging/tasks/${id}`, {
       method: "GET",
       signal: init.signal,
     }),
+
+  getTaskChecklist: async (
+    id: string,
+    init: { signal?: AbortSignal } = {},
+  ): Promise<NonNullable<SnaggingTask["checklist"]>> =>
+    executeRESTBackend<NonNullable<SnaggingTask["checklist"]>>(
+      `/api/snagging/tasks/${id}/checklist`,
+      { method: "GET", signal: init.signal },
+    ),
+
+  /** The snags this record shows (a root's include its visits'), photos signed. */
+  getTaskSnags: async (
+    id: string,
+    init: { signal?: AbortSignal } = {},
+  ): Promise<NonNullable<SnaggingTask["snags"]>> =>
+    executeRESTBackend<NonNullable<SnaggingTask["snags"]>>(`/api/snagging/tasks/${id}/snags`, {
+      method: "GET",
+      signal: init.signal,
+    }),
+
+  getTaskVisitStatus: async (
+    id: string,
+    init: { signal?: AbortSignal } = {},
+  ): Promise<{ unapproved_visit_ids: string[] }> =>
+    executeRESTBackend<{ unapproved_visit_ids: string[] }>(
+      `/api/snagging/tasks/${id}/visit-status`,
+      { method: "GET", signal: init.signal },
+    ),
+
+  getTaskDesnagQuotation: async (
+    id: string,
+    init: { signal?: AbortSignal } = {},
+  ): Promise<SnaggingTask["desnag_quotation"]> =>
+    executeRESTBackend<SnaggingTask["desnag_quotation"]>(
+      `/api/snagging/tasks/${id}/desnag-quotation`,
+      { method: "GET", signal: init.signal },
+    ),
 
   /**
    * One page of the audit trail, newest first by default.
@@ -633,10 +700,14 @@ export const snaggingService = {
     return payload.data;
   },
 
-  listFloorPlans: async (taskId: string): Promise<SnaggingFloorPlan[]> =>
+  listFloorPlans: async (
+    taskId: string,
+    init: { signal?: AbortSignal } = {},
+  ): Promise<SnaggingFloorPlan[]> =>
     executeRESTBackend<SnaggingFloorPlan[]>("/api/snagging/floor-plans", {
       method: "GET",
       params: { task_id: taskId },
+      signal: init.signal,
     }),
 
   deleteFloorPlan: async (id: string): Promise<{ id: string }> =>

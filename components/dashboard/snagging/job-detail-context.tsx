@@ -18,6 +18,7 @@ import {
   ActionType,
   ResourceType,
   type SnaggingAuditEvent,
+  type SnaggingFloorPlan,
   type SnaggingJobVisit,
   type SnaggingTask,
 } from "@/types/types";
@@ -40,13 +41,24 @@ import {
   SLICES AND WHO READS THEM (the dependency map -- extend it when a tab or
   a field is added, rather than giving the new tab its own copy):
 
-    job        getTask            Snags tab (header card, snag list,
-                                   assignment alert), Areas & plan (tab
-                                   count), Checklist, Setup, tab counts,
-                                   breadcrumb, which tab the page opens on.
+    job        getTaskCore        The page header and everything on the
+                                   job row: header card, assignment alert,
+                                   Setup, the Areas count, the breadcrumb,
+                                   which tab the page opens on.
                Fields shared across tabs: status, inspector, reviewer,
-               appointment, areas, floor_plans, checklist, snags,
-               desnag_quotation, unapproved_visit_ids.
+               appointment, property, areas, submissions.
+    checklist  getTaskChecklist   Checklist tab and its count; the snag
+                                   list's summary line.
+    snags      getTaskSnags       Snags tab (header card stats, snag list)
+                                   and its count. The heaviest section: it
+                                   signs every photo.
+    floorPlans listFloorPlans     The snag list's plan pins.
+    visitStatus getTaskVisitStatus The visits not yet approved (report).
+    desnag     getTaskDesnagQuotation The header's de-snag button.
+
+    The job used to be one request carrying all six of those. They are
+    separate endpoints now, fired together; the header renders as soon as
+    `job` arrives and each section as soon as its own does.
     visits     listVisits         Visit alerts above the tabs, the
                                    Additional visits tab, the "Visit N"
                                    labels in the snag list, the count on
@@ -62,9 +74,11 @@ import {
   WHAT A CHANGE REFRESHES (so every tab reading it updates on its own):
 
     jobChanged()        job, plus the History page on screen
-    visitsChanged()     visits, job (its status and snags move with them),
+    areasChanged()      job (areas), floor plans, snags (room names, pins),
                         History
-    quotationChanged()  quotation, job (status, de-snag quotation), History
+    visitsChanged()     visits, job, snags (a visit's finds), visit status,
+                        History
+    quotationChanged()  quotation, job (status), de-snag quotation, History
     refreshAll()        every slice that has been loaded
 
   Consistency: every slice keeps one request in flight. A newer request
@@ -91,6 +105,10 @@ export type Slice<T> = {
 };
 
 export type VisitsData = { visits: SnaggingJobVisit[]; versions: unknown[] };
+export type ChecklistData = NonNullable<SnaggingTask["checklist"]>;
+export type SnagsData = NonNullable<SnaggingTask["snags"]>;
+export type VisitStatusData = { unapproved_visit_ids: string[] };
+export type DesnagData = SnaggingTask["desnag_quotation"];
 export type AuditPage = { data: SnaggingAuditEvent[]; totalCount: number };
 export type AuditQuery = { page: number; pageSize: number; order: "asc" | "desc" };
 
@@ -186,7 +204,13 @@ function useSlice<T>(
 
 type JobDetailValue = {
   taskId: string;
+  /** The core job: header, property, areas, sign-off. */
   job: Slice<SnaggingTask>;
+  checklist: Slice<ChecklistData>;
+  snags: Slice<SnagsData>;
+  floorPlans: Slice<SnaggingFloorPlan[]>;
+  visitStatus: Slice<VisitStatusData>;
+  desnag: Slice<DesnagData>;
   visits: Slice<VisitsData>;
   quotation: Slice<SnaggingQuotation>;
   /** History pages fetched so far, keyed by `auditKey`. */
@@ -198,10 +222,14 @@ type JobDetailValue = {
   loadAudit: (query: AuditQuery) => void;
 
   refreshJob: () => Promise<boolean>;
+  refreshChecklist: () => Promise<boolean>;
+  refreshSnags: () => Promise<boolean>;
   refreshVisits: () => Promise<boolean>;
   refreshQuotation: () => Promise<boolean>;
   /** After something changed the job: re-reads the job and History. */
   jobChanged: () => void;
+  /** After rooms or plans changed: job, floor plans, snags, History. */
+  areasChanged: () => void;
   /** After a visit was added, booked, reviewed or cancelled. */
   visitsChanged: () => void;
   /** After the quotation was generated, sent or decided. */
@@ -233,7 +261,27 @@ export function JobDetailProvider({ taskId, children }: { taskId: string; childr
   const canEdit = hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.EDIT);
 
   const fetchJob = useCallback(
-    (signal: AbortSignal) => snaggingService.getTask(taskId, { signal }),
+    (signal: AbortSignal) => snaggingService.getTaskCore(taskId, { signal }),
+    [taskId],
+  );
+  const fetchChecklist = useCallback(
+    (signal: AbortSignal) => snaggingService.getTaskChecklist(taskId, { signal }),
+    [taskId],
+  );
+  const fetchSnags = useCallback(
+    (signal: AbortSignal) => snaggingService.getTaskSnags(taskId, { signal }),
+    [taskId],
+  );
+  const fetchFloorPlans = useCallback(
+    (signal: AbortSignal) => snaggingService.listFloorPlans(taskId, { signal }),
+    [taskId],
+  );
+  const fetchVisitStatus = useCallback(
+    (signal: AbortSignal) => snaggingService.getTaskVisitStatus(taskId, { signal }),
+    [taskId],
+  );
+  const fetchDesnag = useCallback(
+    (signal: AbortSignal) => snaggingService.getTaskDesnagQuotation(taskId, { signal }),
     [taskId],
   );
   const fetchVisits = useCallback(
@@ -271,6 +319,19 @@ export function JobDetailProvider({ taskId, children }: { taskId: string; childr
   );
 
   const job = useSlice(fetchJob, loadingSlice<SnaggingTask>(), "Could not load the inspection");
+  const checklist = useSlice(fetchChecklist, loadingSlice<ChecklistData>(), "Could not load the checklist");
+  const snags = useSlice(fetchSnags, loadingSlice<SnagsData>(), "Could not load the snags");
+  const floorPlans = useSlice(
+    fetchFloorPlans,
+    loadingSlice<SnaggingFloorPlan[]>(),
+    "Could not load the floor plans",
+  );
+  const visitStatus = useSlice(
+    fetchVisitStatus,
+    loadingSlice<VisitStatusData>(),
+    "Could not load the visit status",
+  );
+  const desnag = useSlice(fetchDesnag, loadingSlice<DesnagData>(), "Could not load the de-snag quotation");
   const visits = useSlice(fetchVisits, loadingSlice<VisitsData>(), "Could not load the additional visits");
 
   /*
@@ -292,14 +353,27 @@ export function JobDetailProvider({ taskId, children }: { taskId: string; childr
   );
 
   const { run: runJob } = job;
+  const { run: runChecklist } = checklist;
+  const { run: runSnags } = snags;
+  const { run: runFloorPlans } = floorPlans;
+  const { run: runVisitStatus } = visitStatus;
+  const { run: runDesnag } = desnag;
   const { run: runVisits } = visits;
   const { run: runQuotation } = quotation;
 
-  // Job and visits together, independently: each renders as it arrives.
+  /*
+    Every section at once, the core job first. Nothing waits on anything
+    else: each slice renders as soon as its own response arrives.
+  */
   useEffect(() => {
     void runJob();
+    void runChecklist();
+    void runSnags();
+    void runFloorPlans();
+    void runVisitStatus();
+    void runDesnag();
     void runVisits();
-  }, [runJob, runVisits]);
+  }, [runJob, runChecklist, runSnags, runFloorPlans, runVisitStatus, runDesnag, runVisits]);
 
   const ensureQuotation = useCallback(() => {
     if (quotationRequested.current) return;
@@ -382,27 +456,52 @@ export function JobDetailProvider({ taskId, children }: { taskId: string; childr
     void refreshAudit();
   }, [runJob, refreshAudit]);
 
+  const areasChanged = useCallback(() => {
+    void runJob();
+    void runFloorPlans();
+    void runSnags();
+    void refreshAudit();
+  }, [runJob, runFloorPlans, runSnags, refreshAudit]);
+
   const visitsChanged = useCallback(() => {
     void runVisits();
     void runJob();
+    void runSnags();
+    void runVisitStatus();
     void refreshAudit();
-  }, [runVisits, runJob, refreshAudit]);
+  }, [runVisits, runJob, runSnags, runVisitStatus, refreshAudit]);
 
   const quotationChanged = useCallback(() => {
     if (quotationRequested.current) void runQuotation();
     void runJob();
+    void runDesnag();
     void refreshAudit();
-  }, [runQuotation, runJob, refreshAudit]);
+  }, [runQuotation, runJob, runDesnag, refreshAudit]);
 
   const refreshAll = useCallback(async () => {
     const results = await Promise.all([
       runJob(),
+      runChecklist(),
+      runSnags(),
+      runFloorPlans(),
+      runVisitStatus(),
+      runDesnag(),
       runVisits(),
       quotationRequested.current ? runQuotation() : Promise.resolve(true),
       refreshAudit(),
     ]);
     return results.every(Boolean);
-  }, [runJob, runVisits, runQuotation, refreshAudit]);
+  }, [
+    runJob,
+    runChecklist,
+    runSnags,
+    runFloorPlans,
+    runVisitStatus,
+    runDesnag,
+    runVisits,
+    runQuotation,
+    refreshAudit,
+  ]);
 
   /*
     Coming back to the page after a while (another browser tab, a phone
@@ -429,20 +528,33 @@ export function JobDetailProvider({ taskId, children }: { taskId: string; childr
     () => ({
       taskId,
       job: job.state,
+      checklist: checklist.state,
+      snags: snags.state,
+      floorPlans: floorPlans.state,
+      visitStatus: visitStatus.state,
+      desnag: desnag.state,
       visits: visits.state,
       quotation: quotation.state,
       audit,
       ensureQuotation,
       loadAudit,
       refreshJob: runJob,
+      refreshChecklist: runChecklist,
+      refreshSnags: runSnags,
       refreshVisits: runVisits,
       refreshQuotation: runQuotation,
       jobChanged,
+      areasChanged,
       visitsChanged,
       quotationChanged,
       refreshAll,
       refreshing:
         job.state.refreshing ||
+        checklist.state.refreshing ||
+        snags.state.refreshing ||
+        floorPlans.state.refreshing ||
+        visitStatus.state.refreshing ||
+        desnag.state.refreshing ||
         visits.state.refreshing ||
         quotation.state.refreshing ||
         auditRefreshing,
@@ -450,15 +562,23 @@ export function JobDetailProvider({ taskId, children }: { taskId: string; childr
     [
       taskId,
       job.state,
+      checklist.state,
+      snags.state,
+      floorPlans.state,
+      visitStatus.state,
+      desnag.state,
       visits.state,
       quotation.state,
       audit,
       ensureQuotation,
       loadAudit,
       runJob,
+      runChecklist,
+      runSnags,
       runVisits,
       runQuotation,
       jobChanged,
+      areasChanged,
       visitsChanged,
       quotationChanged,
       refreshAll,

@@ -89,18 +89,50 @@ function InspectionDetailView() {
   const {
     taskId,
     job,
+    checklist,
+    snags,
+    floorPlans,
+    visitStatus,
+    desnag,
     visits,
     quotation,
     audit,
     ensureQuotation,
     jobChanged,
+    areasChanged,
     visitsChanged,
     quotationChanged,
     refreshJob,
+    refreshChecklist,
+    refreshSnags,
     refreshAll,
     refreshing,
   } = useJobDetail();
-  const task = job.data;
+
+  /*
+    The job record the tabs read, put together from its sections as they
+    arrive. The core job is the page; the rest fill in. A section still
+    loading reads as empty here, so every place that shows one of them
+    checks its own slice (below) and shows a placeholder instead of a
+    misleading zero.
+  */
+  const task = useMemo(
+    () =>
+      job.data
+        ? {
+            ...job.data,
+            checklist: checklist.data ?? [],
+            snags: snags.data ?? [],
+            floor_plans: floorPlans.data ?? [],
+            unapproved_visit_ids: visitStatus.data?.unapproved_visit_ids ?? [],
+            desnag_quotation: desnag.data ?? null,
+          }
+        : null,
+    [job.data, checklist.data, snags.data, floorPlans.data, visitStatus.data, desnag.data],
+  );
+  // The snag list needs its plans (for pins) and the checklist (for its
+  // summary line) as well as the snags themselves.
+  const snagListReady = snags.data !== null && floorPlans.data !== null && checklist.data !== null;
 
   // The tab lives in the URL so a link can point at one, and a refresh
   // keeps the reviewer where they were.
@@ -264,18 +296,18 @@ function InspectionDetailView() {
           */}
           <TabsTrigger value="snags">
             Snags
-            <TabCount value={task.snags?.length} />
-            <TabBusy on={job.refreshing} />
+            <TabCount value={snags.data?.length} />
+            <TabBusy on={job.refreshing || snags.refreshing} />
           </TabsTrigger>
           <TabsTrigger value="areas">
             Areas &amp; plan
             <TabCount value={task.areas?.length} />
-            <TabBusy on={job.refreshing} />
+            <TabBusy on={job.refreshing || floorPlans.refreshing} />
           </TabsTrigger>
           <TabsTrigger value="checklist">
             Checklist
-            <TabCount value={task.checklist?.length} />
-            <TabBusy on={job.refreshing} />
+            <TabCount value={checklist.data?.length} />
+            <TabBusy on={checklist.refreshing} />
           </TabsTrigger>
           <TabsTrigger value="setup">
             Setup
@@ -329,8 +361,24 @@ function InspectionDetailView() {
             />
             {/* The counts and the Approve / Send back decision sit with
                 the snags they are about. */}
-            <InspectionHeaderCard task={task} onChanged={jobChanged} onVisitsChanged={visitsChanged} />
-            <SnagWalkList task={task} visitNumbers={visitNumbers} />
+            <InspectionHeaderCard
+              task={task}
+              onChanged={jobChanged}
+              onVisitsChanged={visitsChanged}
+              pending={{ snags: snags.data === null, desnag: desnag.lastFetchedAt === null }}
+            />
+            {snagListReady ? (
+              <SnagWalkList task={task} visitNumbers={visitNumbers} />
+            ) : snags.error && snags.data === null ? (
+              <ErrorState
+                title="Could not load the snags"
+                message={snags.error}
+                onRetry={() => void refreshSnags()}
+                retrying={snags.loading}
+              />
+            ) : (
+              <PanelSkeleton />
+            )}
           </>,
         )}
         {panel(
@@ -340,10 +388,25 @@ function InspectionDetailView() {
             taskId={task.id}
             propertyType={task.property?.property_type}
             bedrooms={task.property?.bedrooms}
-            onChanged={jobChanged}
+            onChanged={areasChanged}
           />,
         )}
-        {panel("checklist", "mt-4", <ChecklistPanel task={task} />)}
+        {panel(
+          "checklist",
+          "mt-4",
+          checklist.data !== null ? (
+            <ChecklistPanel task={task} />
+          ) : checklist.error ? (
+            <ErrorState
+              title="Could not load the checklist"
+              message={checklist.error}
+              onRetry={() => void refreshChecklist()}
+              retrying={checklist.loading}
+            />
+          ) : (
+            <PanelSkeleton />
+          ),
+        )}
         {panel("setup", "mt-4", <JobSetupPanel task={task} onChanged={jobChanged} />)}
         {panel(
           "quotation",
