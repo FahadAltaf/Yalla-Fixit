@@ -52,13 +52,22 @@ export async function GET(req: NextRequest) {
     if (created.error) throw new Error(created.error.message);
     if (completed.error) throw new Error(completed.error.message);
 
-    const createdByDay = tally((created.data ?? []).map((row) => row.created_at as string));
-    const completedByDay = tally((completed.data ?? []).map((row) => row.approved_at as string));
+    const createdByDay = tally(
+      (created.data ?? []).map((row) => row.created_at as string),
+    );
+    const completedByDay = tally(
+      (completed.data ?? []).map((row) => row.approved_at as string),
+    );
 
     // Every day in the window, including the quiet ones: a line drawn
     // only through the days that had activity reads as steady flow when
     // it was really two busy days either side of a gap.
-    const points: Array<{ day: string; label: string; created: number; completed: number }> = [];
+    const points: Array<{
+      day: string;
+      label: string;
+      created: number;
+      completed: number;
+    }> = [];
     const cursor = new Date(period.fromTs);
     cursor.setUTCHours(0, 0, 0, 0);
     const end = new Date(period.toTs);
@@ -79,7 +88,10 @@ export async function GET(req: NextRequest) {
     );
   } catch (error) {
     console.error("Snagging activity error:", error);
-    return NextResponse.json({ error: "Failed to load inspection activity" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to load inspection activity" },
+      { status: 500 },
+    );
   }
 }
 
@@ -92,7 +104,20 @@ function tally(timestamps: string[]): Map<string, number> {
   return counts;
 }
 
-const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
 
 function formatDay(day: string): string {
   const [, month, date] = day.split("-");

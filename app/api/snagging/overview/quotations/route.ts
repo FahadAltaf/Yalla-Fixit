@@ -33,7 +33,9 @@ export async function GET(req: NextRequest) {
     // Captured before base(), which is hoisted and so cannot see the
     // null check above.
     const me = profile.id;
-    const count = async (refine?: (q: ReturnType<typeof base>) => ReturnType<typeof base>) => {
+    const count = async (
+      refine?: (q: ReturnType<typeof base>) => ReturnType<typeof base>,
+    ) => {
       const query = base();
       const { count: value, error } = await (refine ? refine(query) : query);
       if (error) throw new Error(error.message);
@@ -52,7 +54,9 @@ export async function GET(req: NextRequest) {
         be a ratio of two different populations.
       */
       return myQuotations(
-        admin.from("snagging_quotations").select("id", { count: "exact", head: true }),
+        admin
+          .from("snagging_quotations")
+          .select("id", { count: "exact", head: true }),
         me,
       ).gte("created_at", period.fromTs);
     }
@@ -80,7 +84,8 @@ export async function GET(req: NextRequest) {
             { key: "rejected", label: "Rejected", count: rejected },
             { key: "awaiting", label: "Awaiting", count: awaiting },
           ],
-          approvalRate: decided === 0 ? null : Math.round((approved / decided) * 100),
+          approvalRate:
+            decided === 0 ? null : Math.round((approved / decided) * 100),
           decided,
           periodDays: period.days,
         },
@@ -89,6 +94,9 @@ export async function GET(req: NextRequest) {
     );
   } catch (error) {
     console.error("Quotation analytics error:", error);
-    return NextResponse.json({ error: "Failed to load quotation analytics" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to load quotation analytics" },
+      { status: 500 },
+    );
   }
 }

@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { signMediaPaths, signPaths } from "@/lib/server/snagging/media";
 import { loadJobFamily } from "@/lib/server/snagging/job-family";
+import { QUOTATION_DOCUMENT_COLUMNS } from "@/lib/server/snagging/quotation";
 import { hashReportToken } from "@/lib/server/snagging/report-token";
 
 /**
@@ -77,7 +78,8 @@ async function assembleReport(admin: Admin, jobId: string) {
        signed_at, signer_name, signature_path,
        client:client_id(name, email, phone),
        inspector:inspector_id(id, full_name, email),
-       areas:snagging_areas(*)`,
+       areas:snagging_areas(id, name, status, note, confirmed_at, sort_order, access_state,
+         access_reason, visit_id)`,
     )
     .eq("id", jobId)
     .maybeSingle();
@@ -182,7 +184,7 @@ async function assembleReport(admin: Admin, jobId: string) {
   // The inspection's quotation; a visit's own is not the report's.
   const { data: quotationRow } = await admin
     .from("snagging_quotations")
-    .select("*")
+    .select(QUOTATION_DOCUMENT_COLUMNS)
     .eq("job_id", jobId)
     .neq("quote_kind", "visit")
     .order("created_at", { ascending: false })
@@ -192,8 +194,8 @@ async function assembleReport(admin: Admin, jobId: string) {
   const quotation =
     quotationRow && ["sent", "approved"].includes(quotationRow.status) ? quotationRow : null;
 
-  // Read with `*` so this works before and after the area-visit column
-  // exists, then cut back to what a client-facing page may carry.
+  // Cut back to what a client-facing page may carry; visit_id is read only
+  // to hold back rooms a pending visit added.
   const areas = ((job.areas ?? []) as Array<Record<string, unknown>>)
     .filter((area) => !unapproved(area))
     .map((area) => ({

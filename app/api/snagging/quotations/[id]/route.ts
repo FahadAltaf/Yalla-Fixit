@@ -7,7 +7,7 @@ import { emailMasthead } from "@/lib/email-brand";
 import { sendEmail } from "@/lib/server/send-email";
 import { recordAudit } from "@/lib/server/snagging/audit";
 import { resolveClient } from "@/lib/server/snagging/client";
-import { resolveProperty } from "@/lib/server/snagging/property";
+import { PROPERTY_COLUMNS, resolveProperty } from "@/lib/server/snagging/property";
 import {
   loadPricingConfig,
   priceQuotation,
@@ -16,6 +16,7 @@ import {
 } from "@/lib/server/snagging/quotation-build";
 import {
   approveQuotation,
+  QUOTATION_COLUMNS,
   QuotationDecisionError,
   rejectQuotation,
   type QuoteRef,
@@ -99,9 +100,12 @@ export async function GET(
       quotation cannot answer it, and a second round trip to find out
       whether to draw a button is a poor trade.
     */
+    const sent = { ...quote };
+    delete sent.rate_chosen_by;
+    delete sent.rate_chosen_at;
     return NextResponse.json({
       data: {
-        ...quote,
+        ...sent,
         can_approve_rate: await mayApproveRate(admin, accessUser, profile.id, quote),
         /*
           The LIVE client and property, beside the snapshot the document
@@ -205,7 +209,7 @@ export async function POST(
           updated_at: new Date().toISOString(),
         })
         .eq("id", id)
-        .select("*")
+        .select(QUOTATION_COLUMNS)
         .single();
       if (approveError) throw new Error(approveError.message);
 
@@ -398,7 +402,7 @@ export async function PATCH(
 
     const { data: full, error: propertyError } = await admin
       .from("snagging_properties")
-      .select("*")
+      .select(PROPERTY_COLUMNS)
       .eq("id", property.id)
       .single();
     if (propertyError) throw new Error(propertyError.message);
@@ -480,7 +484,7 @@ export async function PATCH(
         updated_at: new Date().toISOString(),
       })
       .eq("id", id)
-      .select("*")
+      .select(QUOTATION_COLUMNS)
       .single();
     if (error) throw new Error(error.message);
 
@@ -524,7 +528,7 @@ async function records(admin: Admin, quote: Record<string, unknown>) {
     propertyId
       ? admin
           .from("snagging_properties")
-          .select("*")
+          .select(PROPERTY_COLUMNS)
           .eq("id", propertyId)
           .maybeSingle()
           .then((r) => r.data)
@@ -582,10 +586,14 @@ function text(value: unknown): string | null {
   return trimmed ? trimmed : null;
 }
 
+/* The page's columns, plus who chose the rate: the edit keeps that when
+   the rate is unchanged, and GET leaves it out. */
+const LOAD_COLUMNS = `${QUOTATION_COLUMNS}, rate_chosen_by, rate_chosen_at`;
+
 async function load(admin: Admin, id: string) {
   const { data, error } = await admin
     .from("snagging_quotations")
-    .select("*")
+    .select<string, Record<string, unknown>>(LOAD_COLUMNS)
     .eq("id", id)
     .maybeSingle();
   if (error) throw new Error(error.message);
@@ -638,7 +646,7 @@ async function send(
       updated_at: now,
     })
     .eq("id", quote.id as string)
-    .select("*")
+    .select(QUOTATION_COLUMNS)
     .single();
   if (error) throw new Error(error.message);
 
@@ -722,7 +730,7 @@ async function shareLink(
       updated_at: now,
     })
     .eq("id", quote.id as string)
-    .select("*")
+    .select(QUOTATION_COLUMNS)
     .single();
   if (error) throw new Error(error.message);
 
@@ -796,7 +804,7 @@ async function regenerate(
 
   const { data: property, error: propertyError } = await admin
     .from("snagging_properties")
-    .select("*")
+    .select(PROPERTY_COLUMNS)
     .eq("id", quote.property_id as string)
     .maybeSingle();
   if (propertyError) throw new Error(propertyError.message);
@@ -819,7 +827,7 @@ async function regenerate(
     .from("snagging_quotations")
     .update({ ...UNDECIDED, ...priced, updated_at: new Date().toISOString() })
     .eq("id", quote.id as string)
-    .select("*")
+    .select(QUOTATION_COLUMNS)
     .single();
   if (error) throw new Error(error.message);
 

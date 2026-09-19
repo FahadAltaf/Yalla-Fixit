@@ -119,7 +119,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const { data, error, count } = await admin
       .from("snagging_audit_events")
       .select(
-        "id, event_type, entity_type, entity_id, actor_label, origin, justification, payload, created_at, task_id",
+        "id, event_type, entity_type, entity_id, actor_label, justification, payload, created_at",
         // Counted in the same round trip: the pager needs a total, and a
         // separate count query would double the work on every page turn.
         { count: "exact" },

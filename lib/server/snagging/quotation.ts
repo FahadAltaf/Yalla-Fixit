@@ -10,6 +10,27 @@ import { recordAudit } from "@/lib/server/snagging/audit";
  */
 type Admin = SupabaseClient;
 
+/*
+  A quotation as the portal reads it: the document, where it stands, and
+  the pricing decisions it records.
+
+  Never the approval token hash or its expiry, the mail id, the client's
+  contact, the pricing snapshot or the audit columns. Nothing renders them,
+  and the token hash has no business leaving the server.
+*/
+export const QUOTATION_COLUMNS = `id, job_id, source_job_id, quote_kind, client_id, property_id,
+  quote_number, status, currency, subtotal, tax_rate, tax_amount, total, lines, scope_of_work,
+  terms, sent_at, sent_to, created_at, rejected_reason, approved_by_name, decided_at,
+  property_snapshot, furnished, rate_per_sqft, rate_suggested, external_rate_per_sqft,
+  external_rate_suggested, rate_override_reason, rate_outside_band, rate_approved_at`;
+
+/* The job's Quotation tab, its PDF and the client report: the document
+   and its decision, without the pricing-decision fields only the
+   quotation page edits. job_id stays for the decision helpers below. */
+export const QUOTATION_DOCUMENT_COLUMNS = `id, job_id, quote_number, status, currency, subtotal,
+  tax_rate, tax_amount, total, lines, scope_of_work, terms, sent_at, sent_to, created_at,
+  rejected_reason, approved_by_name, decided_at, property_snapshot`;
+
 export type QuoteRef = {
   id: string;
   /** Null on an inspection quotation raised before its job exists. */
@@ -50,7 +71,7 @@ export async function approveQuotation(
     })
     .eq("id", quote.id)
     .in("status", ["draft", "sent"])
-    .select("*")
+    .select(QUOTATION_COLUMNS)
     .single();
   if (error) throw new Error(error.message);
 
@@ -112,7 +133,7 @@ export async function rejectQuotation(
     })
     .eq("id", quote.id)
     .in("status", ["draft", "sent"])
-    .select("*")
+    .select(QUOTATION_COLUMNS)
     .single();
   if (error) throw new Error(error.message);
 

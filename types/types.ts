@@ -326,7 +326,8 @@ export type SnaggingVisitChargeMethod = "quotation" | "payment_link";
 
 export interface SnaggingJobVisit {
   id: string;
-  job_id: string;
+  /** Sent by the visit page only; the list is already one job's. */
+  job_id?: string;
   visit_number: number;
   status: SnaggingVisitStatus;
   scheduled_date: string | null;
@@ -341,11 +342,9 @@ export interface SnaggingJobVisit {
     id: string;
     quote_number: string | null;
     status: string;
-    total: number | null;
   } | null;
   payment_reference: string | null;
   started_at: string | null;
-  completed_at: string | null;
   /** When the inspector handed it to the manager. */
   submitted_at?: string | null;
   /** The manager's reason for sending it back, shown on the phone. */
@@ -818,12 +817,7 @@ export interface SnaggingTaskSummary {
   property_type: SnaggingPropertyType;
   client_name: string;
   developer_name?: string | null;
-  area_count: number;
-  confirmed_area_count: number;
-  snag_count: number;
   high_severity_count: number;
-  open_snag_count: number;
-  photo_count: number;
   /** Attached by the list route from the assignee and snag tables. */
   inspector_name?: string | null;
   medium_severity_count?: number;

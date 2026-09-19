@@ -32,6 +32,69 @@ import { signMediaPaths } from "@/lib/server/snagging/media";
 
 type Admin = SupabaseClient;
 
+/*
+  Column lists, not `*`.
+
+  Each section selects exactly what something reads -- a page, the report
+  or PDF, or this file while building the response -- so a column added to
+  a table later does not ride along to every client unasked. The field
+  audit behind each list (what reads what, file and line) is in the
+  snagging API field audit; add a column here when a reader needs it.
+*/
+
+/* The job row: what the page, report and review read, plus what this file
+   uses to build property / submissions / parent_task_id. The 15
+   denormalised property columns are the fallback for jobs that predate the
+   property record (pick() below); they are read here, not sent on. */
+const JOB_DENORMALISED_PROPERTY = [
+  "unit_label", "building_name", "community", "property_type", "developer_name",
+  "bedrooms", "built_up_area_sqft", "plot_area_sqft", "external_areas_in_scope",
+  "floors", "location_lat", "location_lng", "title_deed_path", "noc_required", "noc_path",
+] as const;
+const JOB_COLUMNS = [
+  "id", "code", "status", "round_number", "parent_job_id", "visit_type", "visit_charge",
+  "client_id", "property_id", "inspector_id", "approval_manager_id", "reviewer_id", "reviewed_at",
+  "scheduled_date", "appointment_at",
+  "developer_contact_name", "developer_contact_phone", "client_contact_name", "client_contact_phone",
+  "locked", "submitted_at", "delivered_at", "delivery_channel", "delivery_recipient",
+  "rejection_reason", "rejection_category", "rejection_count", "remediation_due_at",
+  "signed_at", "signer_name", "signature_path",
+  ...JOB_DENORMALISED_PROPERTY,
+].join(", ");
+const PROPERTY_COLUMNS =
+  "id, client_id, unit_label, building_name, community, property_type, developer_name, " +
+  "bedrooms, built_up_area_sqft, plot_area_sqft, external_areas_in_scope, floors, " +
+  "location_lat, location_lng, title_deed_path, noc_required, noc_path";
+/* The Areas tab reads its own endpoint; the job only needs what the header,
+   snag list and report show, plus creation order. */
+const JOB_AREA_COLUMNS = "id, name, access_state, access_reason, confirmed_at, visit_id, created_at, sort_order";
+const CHECKLIST_COLUMNS =
+  "id, status, label, group_name, mandatory, reason, visit_id, created_at, sort_order";
+/* job_id stays: it decides from_earlier_visit. locked has no reader today
+   but is kept as a business-rule field. */
+const SNAG_COLUMNS =
+  "id, job_id, area_id, category_label, element_label, defect_label, severity, note, " +
+  "pin_x, pin_y, floor_plan_id, status, round_created, visit_id, created_at, locked";
+/* Photo metadata the lightbox shows (gps, exif, marker, size) stays;
+   bytes and the ids that repeat the parent do not. */
+const SNAG_PHOTO_COLUMNS =
+  "id, storage_path, media_type, round_number, taken_at, gps_lat, gps_lng, exif, " +
+  "marker_x, marker_y, width, height";
+
+// Composed select strings are beyond the client's select-string type
+// parser, so these queries name their row type (Row) instead of inferring it.
+type Row = Record<string, any>;
+const CORE_SELECT = `${JOB_COLUMNS},
+  client:client_id(name, email, phone),
+  inspector:inspector_id(id, full_name, email),
+  manager:approval_manager_id(full_name, email),
+  reviewer:reviewer_id(full_name, email),
+  property_record:property_id(${PROPERTY_COLUMNS}),
+  areas:snagging_areas(${JOB_AREA_COLUMNS})`;
+const SNAGS_SELECT = `${SNAG_COLUMNS},
+  area:snagging_areas(id, name),
+  photos:snagging_snag_photos(${SNAG_PHOTO_COLUMNS})`;
+
 function firstOf<T>(v: T | T[] | null | undefined): T | null {
   return Array.isArray(v) ? v[0] ?? null : v ?? null;
 }
@@ -44,15 +107,7 @@ function firstOf<T>(v: T | T[] | null | undefined): T | null {
 export async function loadJobCore(admin: Admin, id: string) {
   const { data: job, error } = await admin
     .from("snagging_jobs")
-    .select(
-      `*,
-       client:client_id(id, name, email, phone, company),
-       inspector:inspector_id(id, full_name, email, profile_image),
-       manager:approval_manager_id(id, full_name, email),
-       reviewer:reviewer_id(id, full_name, email),
-       property_record:property_id(*),
-       areas:snagging_areas(*)`,
-    )
+    .select<string, Row>(CORE_SELECT)
     .eq("id", id)
     .maybeSingle();
 
@@ -161,8 +216,18 @@ export async function loadJobCore(admin: Admin, id: string) {
       }]
     : [];
 
+  /*
+    The raw relations and the denormalised property copies were read to
+    build `property`, `assignees` and `submissions` above; nothing reads
+    them in the response, so they are not sent twice.
+  */
+  const sent: Record<string, unknown> = { ...job };
+  for (const key of ["client", "inspector", "property_record", ...JOB_DENORMALISED_PROPERTY]) {
+    delete sent[key];
+  }
+
   return {
-    ...job,
+    ...(sent as typeof job),
     task_type: "single_unit",
     parent_task_id: job.parent_job_id,
     property: propertyWithDocs,
@@ -188,7 +253,7 @@ export async function loadJobChecklist(admin: Admin, id: string) {
   */
   const { data: checklistRows, error: checklistError } = await admin
     .from("snagging_job_checklist")
-    .select("*")
+    .select<string, Row>(CHECKLIST_COLUMNS)
     .eq("job_id", id);
   if (checklistError) throw new Error(checklistError.message);
   const checklist = byCreation(checklistRows ?? []);
@@ -242,13 +307,7 @@ export async function loadJobSnags(admin: Admin, id: string) {
 
   const { data: snagRows, error: snagError } = await admin
     .from("snagging_snags")
-    .select(
-      `*,
-       area:snagging_areas(id, name),
-       photos:snagging_snag_photos(id, snag_id, job_id, storage_path, media_type,
-         bytes, width, height, taken_at, round_number, gps_lat, gps_lng, exif,
-         marker_x, marker_y)`,
-    )
+    .select<string, Row>(SNAGS_SELECT)
     .in("job_id", snagJobIds)
     // Newest first for the working views. The client report has its
     // own route and still orders by code within each area, so the
@@ -257,12 +316,15 @@ export async function loadJobSnags(admin: Admin, id: string) {
   if (snagError) throw new Error(snagError.message);
 
   const signedSnags = await signMediaPaths(admin, snagRows ?? []);
-  // Keep the pre-merge keys the UI reads (origin_task_id, photo.task_id).
+  /*
+    origin_task_id and photo.task_id -- the pre-merge aliases of job_id --
+    are no longer sent: nothing in the app reads either, and job_id is on
+    the snag already.
+  */
   return signedSnags.map((snag) => {
     const s = snag as Record<string, unknown> & { photos?: Array<Record<string, unknown>> };
     return {
       ...s,
-      origin_task_id: s.job_id,
       /*
         Where this defect was raised, relative to the record being
         viewed. On an additional visit the list mixes what is already
@@ -271,7 +333,6 @@ export async function loadJobSnags(admin: Admin, id: string) {
         own work.
       */
       from_earlier_visit: s.job_id !== id,
-      photos: (s.photos ?? []).map((p) => ({ ...p, task_id: p.job_id })),
     };
   });
 }
@@ -309,7 +370,7 @@ export async function loadJobDesnagQuotation(admin: Admin, id: string) {
   */
   const { data: desnagQuotes, error: desnagError } = await admin
     .from("snagging_quotations")
-    .select("id, quote_number, status, job_id, created_at")
+    .select("id, status, job_id, created_at")
     .eq("source_job_id", family.rootId)
     .eq("quote_kind", "desnag")
     .order("created_at", { ascending: false });
@@ -323,7 +384,6 @@ export async function loadJobDesnagQuotation(admin: Admin, id: string) {
   return desnagRow
     ? {
         id: desnagRow.id as string,
-        quote_number: (desnagRow.quote_number as string | null) ?? null,
         status: desnagRow.status as string,
         job_id: (desnagRow.job_id as string | null) ?? null,
       }

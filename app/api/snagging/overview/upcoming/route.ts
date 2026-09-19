@@ -109,7 +109,9 @@ export async function GET(req: NextRequest) {
     };
 
     const items = ((data ?? []) as unknown as Row[]).map((row) => {
-      const inspector = Array.isArray(row.inspector) ? row.inspector[0] : row.inspector;
+      const inspector = Array.isArray(row.inspector)
+        ? row.inspector[0]
+        : row.inspector;
       return {
         id: row.id,
         day: row.scheduled_date,
@@ -134,6 +136,9 @@ export async function GET(req: NextRequest) {
     );
   } catch (error) {
     console.error("Upcoming inspections error:", error);
-    return NextResponse.json({ error: "Failed to load upcoming inspections" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to load upcoming inspections" },
+      { status: 500 },
+    );
   }
 }

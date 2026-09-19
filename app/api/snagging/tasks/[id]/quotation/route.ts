@@ -13,10 +13,12 @@ import {
 } from "@/lib/server/snagging/pricing";
 import {
   approveQuotation,
+  QUOTATION_DOCUMENT_COLUMNS,
   QuotationDecisionError,
   rejectQuotation,
   type QuoteRef,
 } from "@/lib/server/snagging/quotation";
+import { PRICING_CONFIG_COLUMNS } from "@/lib/server/snagging/quotation-build";
 import { mintReportToken } from "@/lib/server/snagging/report-token";
 import { ActionType, ResourceType } from "@/types/types";
 
@@ -127,7 +129,7 @@ async function latestQuote(admin: Admin, jobId: string) {
     */
   const { data, error } = await admin
     .from("snagging_quotations")
-    .select("*")
+    .select(QUOTATION_DOCUMENT_COLUMNS)
     .eq("job_id", jobId)
     .neq("quote_kind", "visit")
     .order("created_at", { ascending: false })
@@ -161,7 +163,7 @@ async function generate(
         .maybeSingle(),
       admin
         .from("snagging_pricing_config")
-        .select("*")
+        .select(PRICING_CONFIG_COLUMNS)
         .eq("id", true)
         .maybeSingle(),
     ]);
@@ -274,7 +276,7 @@ async function generate(
   const { data, error } = await admin
     .from("snagging_quotations")
     .upsert(row, { onConflict: "id" })
-    .select("*")
+    .select(QUOTATION_DOCUMENT_COLUMNS)
     .single();
   if (error) throw new Error(error.message);
 
@@ -366,7 +368,7 @@ async function shareLink(admin: Admin, jobId: string, actorId: string) {
       updated_at: now,
     })
     .eq("id", quote.id)
-    .select("*")
+    .select(QUOTATION_DOCUMENT_COLUMNS)
     .single();
   if (error) throw new Error(error.message);
 
@@ -457,7 +459,7 @@ async function send(
       updated_at: now,
     })
     .eq("id", quote.id)
-    .select("*")
+    .select(QUOTATION_DOCUMENT_COLUMNS)
     .single();
   if (error) throw new Error(error.message);
 
@@ -649,7 +651,7 @@ async function previewQuotation(admin: Admin, jobId: string) {
         .maybeSingle(),
       admin
         .from("snagging_pricing_config")
-        .select("*")
+        .select(PRICING_CONFIG_COLUMNS)
         .eq("id", true)
         .maybeSingle(),
     ]);

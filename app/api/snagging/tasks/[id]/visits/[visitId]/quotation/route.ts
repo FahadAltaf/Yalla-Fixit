@@ -5,6 +5,7 @@ import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
 import { loadJobFamily } from "@/lib/server/snagging/job-family";
+import { PROPERTY_COLUMNS } from "@/lib/server/snagging/property";
 import {
   loadPricingConfig,
   priceVisit,
@@ -104,7 +105,7 @@ export async function POST(
       .select(
         `id, code, client_id, property_id,
          client:client_id(id, name, email, phone),
-         property:property_id(*)`,
+         property:property_id(${PROPERTY_COLUMNS})`,
       )
       .eq("id", visit.job_id as string)
       .maybeSingle();

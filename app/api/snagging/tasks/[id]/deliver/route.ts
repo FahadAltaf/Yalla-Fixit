@@ -7,7 +7,10 @@ import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
 import { mintReportToken } from "@/lib/server/snagging/report-token";
-import { assertTransition, isDesignatedApprovalManager } from "@/lib/server/snagging/workflow";
+import {
+  assertTransition,
+  isDesignatedApprovalManager,
+} from "@/lib/server/snagging/workflow";
 import { deliverReportSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType, SnaggingTaskStatus } from "@/types/types";
 
@@ -23,20 +26,30 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  * signed photos, so nothing sensitive lives in the URL. Delivery is a
  * manager act, so it checks the same `approve` permission as sign-off.
  */
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+export async function POST(
+  req: NextRequest,
+  ctx: { params: Promise<{ id: string }> },
+) {
   try {
     const { profile, accessUser } = await getRequestUserAccess(req);
     if (!profile || !accessUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.APPROVE)) {
+    if (
+      !hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.APPROVE)
+    ) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
     const { id } = await ctx.params;
-    const parsed = deliverReportSchema.safeParse(await req.json().catch(() => ({})));
+    const parsed = deliverReportSchema.safeParse(
+      await req.json().catch(() => ({})),
+    );
     if (!parsed.success) {
-      return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+      return NextResponse.json(
+        { error: parsed.error.flatten() },
+        { status: 400 },
+      );
     }
     const input = parsed.data;
     const recipient = input.recipient.trim();
@@ -44,16 +57,28 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const admin = await createAdminServerClient();
     const { data: job, error: loadError } = await admin
       .from("snagging_jobs")
-      .select("id, code, status, unit_label, building_name, approval_manager_id")
+      .select(
+        "id, code, status, unit_label, building_name, approval_manager_id",
+      )
       .eq("id", id)
       .maybeSingle();
 
     if (loadError) throw new Error(loadError.message);
-    if (!job) return NextResponse.json({ error: "Inspection not found" }, { status: 404 });
+    if (!job)
+      return NextResponse.json(
+        { error: "Inspection not found" },
+        { status: 404 },
+      );
 
     // FR-6.01 — delivery is a manager act, reserved for the job's designated
     // approval manager (or an admin).
-    if (!isDesignatedApprovalManager(profile.id, job.approval_manager_id, isAdminUser(accessUser))) {
+    if (
+      !isDesignatedApprovalManager(
+        profile.id,
+        job.approval_manager_id,
+        isAdminUser(accessUser),
+      )
+    ) {
       return NextResponse.json(
         { error: "Only this inspection's approval manager can deliver it." },
         { status: 403 },
@@ -67,7 +92,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       try {
         assertTransition(job.status as SnaggingTaskStatus, "delivered");
       } catch (transitionError) {
-        return NextResponse.json({ error: (transitionError as Error).message }, { status: 409 });
+        return NextResponse.json(
+          { error: (transitionError as Error).message },
+          { status: 409 },
+        );
       }
     }
 
@@ -88,7 +116,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     } else {
       await admin
         .from("snagging_jobs")
-        .update({ delivery_channel: input.channel, delivery_recipient: recipient })
+        .update({
+          delivery_channel: input.channel,
+          delivery_recipient: recipient,
+        })
         .eq("id", id);
     }
 
@@ -104,15 +135,17 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       Date.now() + (input.expires_in_days ?? 30) * 24 * 60 * 60 * 1000,
     ).toISOString();
 
-    const { error: tokenError } = await admin.from("snagging_report_tokens").insert({
-      job_id: id,
-      token_hash: token.hash,
-      token_hint: token.hint,
-      channel: input.channel,
-      recipient,
-      expires_at: expiresAt,
-      created_by: profile.id,
-    });
+    const { error: tokenError } = await admin
+      .from("snagging_report_tokens")
+      .insert({
+        job_id: id,
+        token_hash: token.hash,
+        token_hint: token.hint,
+        channel: input.channel,
+        recipient,
+        expires_at: expiresAt,
+        created_by: profile.id,
+      });
     if (tokenError) throw new Error(tokenError.message);
 
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
@@ -129,7 +162,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           to: recipient,
           subject: `Your snagging inspection report for ${job.unit_label ?? job.code}`,
           html: reportEmailHtml({
-            unit: [job.unit_label, job.building_name].filter(Boolean).join(", ") || job.code,
+            unit:
+              [job.unit_label, job.building_name].filter(Boolean).join(", ") ||
+              job.code,
             reportUrl,
             expiresAt,
           }),
@@ -137,7 +172,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         emailSent = true;
       } catch (emailError) {
         console.error("Snagging report email failed:", emailError);
-        deliveryError = emailError instanceof Error ? emailError.message : "Email failed";
+        deliveryError =
+          emailError instanceof Error ? emailError.message : "Email failed";
       }
     }
 
@@ -156,7 +192,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       const digits = recipient.replace(/[^0-9]/g, "");
       if (digits.length >= 8) {
         const unit =
-          [job.unit_label, job.building_name].filter(Boolean).join(", ") || job.code;
+          [job.unit_label, job.building_name].filter(Boolean).join(", ") ||
+          job.code;
         const message =
           `Your snagging inspection report for ${unit} is ready.
 
@@ -168,7 +205,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         whatsappUrl = `https://wa.me/${digits}?text=${encodeURIComponent(message)}`;
         whatsappSent = true;
       } else {
-        deliveryError = "That does not look like a phone number WhatsApp can reach.";
+        deliveryError =
+          "That does not look like a phone number WhatsApp can reach.";
       }
     }
 
@@ -209,7 +247,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     });
   } catch (error) {
     console.error("Snagging deliver error:", error);
-    return NextResponse.json({ error: "Failed to deliver report" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to deliver report" },
+      { status: 500 },
+    );
   }
 }
 
@@ -221,7 +262,11 @@ function escapeHtml(value: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function reportEmailHtml(opts: { unit: string; reportUrl: string; expiresAt: string }): string {
+function reportEmailHtml(opts: {
+  unit: string;
+  reportUrl: string;
+  expiresAt: string;
+}): string {
   const expires = new Date(opts.expiresAt).toLocaleDateString("en-GB", {
     day: "numeric",
     month: "long",

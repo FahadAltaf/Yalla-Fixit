@@ -32,24 +32,31 @@ import { ActionType, ResourceType } from "@/types/types";
  * release.
  */
 
-/** Where each level lives, and what it hangs from. */
+/** Where each level lives, what it hangs from, and what the tree reads of it. */
 const LEVELS = {
   category: {
     table: "snagging_catalogue_categories",
     parent: null,
     schema: catalogueCategorySchema,
+    columns: "id, code, label, sort_order, active",
   },
   subcategory: {
     table: "snagging_catalogue_subcategories",
     parent: "category_id",
     schema: catalogueSubcategorySchema,
+    columns: "id, category_id, code, label, sort_order, active",
   },
   defect: {
     table: "snagging_catalogue_defects",
     parent: "subcategory_id",
     schema: catalogueDefectSchema,
+    columns:
+      "id, subcategory_id, code, label, default_severity, guidance, source_code, sort_order, active",
   },
 } as const;
+
+/* A write answers with the row as the tree reads it. */
+type LevelRow = { id: string; code: string; label: string } & Record<string, unknown>;
 
 /**
  * The whole tree, in one response.
@@ -101,18 +108,9 @@ export async function GET(req: NextRequest) {
     }
 
     const [categories, subcategories, defects] = await Promise.all([
-      readAll<{ active: boolean }>(
-        "snagging_catalogue_categories",
-        "id, code, label, sort_order, active",
-      ),
-      readAll<{ active: boolean }>(
-        "snagging_catalogue_subcategories",
-        "id, category_id, code, label, sort_order, active",
-      ),
-      readAll<{ active: boolean }>(
-        "snagging_catalogue_defects",
-        "id, subcategory_id, code, label, default_severity, guidance, source_code, sort_order, active",
-      ),
+      readAll<{ active: boolean }>(LEVELS.category.table, LEVELS.category.columns),
+      readAll<{ active: boolean }>(LEVELS.subcategory.table, LEVELS.subcategory.columns),
+      readAll<{ active: boolean }>(LEVELS.defect.table, LEVELS.defect.columns),
     ]);
 
     const keep = <T extends { active: boolean }>(rows: T[]) =>
@@ -165,7 +163,7 @@ export async function POST(req: NextRequest) {
     const { data, error } = await admin
       .from(config.table)
       .insert(parsed.data)
-      .select("*")
+      .select<string, LevelRow>(config.columns)
       .single();
 
     if (error) {
@@ -239,7 +237,7 @@ export async function PATCH(req: NextRequest) {
         .from(config.table)
         .update({ active: toggle.data.active, updated_at: new Date().toISOString() })
         .eq("id", toggle.data.id)
-        .select("*")
+        .select<string, LevelRow>(config.columns)
         .single();
       if (error) throw new Error(error.message);
 
@@ -269,7 +267,7 @@ export async function PATCH(req: NextRequest) {
       .from(config.table)
       .update({ ...parsed.data, updated_at: new Date().toISOString() })
       .eq("id", id)
-      .select("*")
+      .select<string, LevelRow>(config.columns)
       .single();
 
     if (error) {

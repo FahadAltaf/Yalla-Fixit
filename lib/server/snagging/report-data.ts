@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { signMediaPaths, signPaths } from "./media";
 import { dedupeDefects } from "./defect-set";
 import { loadJobFamily } from "./job-family";
+import { QUOTATION_DOCUMENT_COLUMNS } from "./quotation";
 
 /**
  * The one description of a client report (FR-7.02 → FR-7.04).
@@ -260,7 +261,8 @@ export async function buildReportData(
        signed_at, signer_name, signature_path,
        client:client_id(name, email, phone),
        inspector:inspector_id(id, full_name, email),
-       areas:snagging_areas(*)`,
+       areas:snagging_areas(id, name, sort_order, access_state, access_reason,
+         elements_not_checked, confirmed_at, visit_id)`,
     )
     .eq("id", jobId)
     .maybeSingle();
@@ -427,9 +429,11 @@ export async function buildReportData(
       ) ?? null
     : null;
 
+  // The document only: this lands in the stored snapshot, so never the
+  // approval token hash or the other server-side columns.
   const { data: quotationRow } = await admin
     .from("snagging_quotations")
-    .select("*")
+    .select(QUOTATION_DOCUMENT_COLUMNS)
     .eq("job_id", jobId)
     .order("created_at", { ascending: false })
     .limit(1)

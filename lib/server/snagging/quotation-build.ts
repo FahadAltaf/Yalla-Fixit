@@ -253,13 +253,20 @@ const TYPE_LABEL: Record<string, string> = {
   commercial: "Commercial",
 };
 
+/* Everything pricing reads from the config row: the card, VAT, the
+   document text, and the pre-card figures older quotations were priced
+   with. Not the row's id or who last edited it. */
+export const PRICING_CONFIG_COLUMNS = `currency, tax_rate, rate_card, out_of_hours_percent,
+  scope_of_work, terms, rate_per_sqft, external_rate_per_sqft, multipliers, desnag_price,
+  additional_visit_price`;
+
 /** The admin-owned rate card, or a 400 the caller can return. */
 export async function loadPricingConfig(
   admin: Admin,
 ): Promise<(PricingConfig & { currency: string }) | null> {
   const { data, error } = await admin
     .from("snagging_pricing_config")
-    .select("*")
+    .select(PRICING_CONFIG_COLUMNS)
     .eq("id", true)
     .maybeSingle();
   if (error) throw new Error(error.message);

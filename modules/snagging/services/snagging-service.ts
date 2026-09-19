@@ -131,32 +131,19 @@ export interface SnaggingPricingConfig {
   additional_visit_price?: number;
 }
 
-/** One row of the Quotations list. */
+/** One row of the Quotations list: what the table shows and filters on. */
 export interface SnaggingQuotationSummary {
   id: string;
   quote_number: string;
   status: "draft" | "sent" | "approved" | "rejected";
   quote_kind: "inspection" | "visit" | "desnag";
   currency: string;
-  subtotal: number;
-  tax_amount: number;
   total: number;
-  sent_at: string | null;
-  approved_at: string | null;
-  decided_at: string | null;
-  rejected_reason: string | null;
   created_at: string;
   /** Null until an approved quotation has been turned into a job. */
   job_id: string | null;
   job_code: string | null;
-  job_status: string | null;
-  /** The original inspection a de-snag quotation returns to (change 31). */
-  source_job_id: string | null;
-  client_id: string | null;
-  property_id: string | null;
   client_name: string | null;
-  client_email: string | null;
-  client_phone: string | null;
   unit_label: string | null;
   building_name: string | null;
 }
@@ -174,52 +161,24 @@ export interface SnaggingVisitDetail {
   visit: SnaggingJobVisit;
   job: {
     id: string;
-    code: string;
     unit_label: string | null;
     building_name: string | null;
-    approval_manager_id: string | null;
     status: string;
   } | null;
-  quotation: {
-    id: string;
-    quote_number: string;
-    status: string;
-    total: number | null;
-    currency: string | null;
-    sent_at: string | null;
-    approved_at: string | null;
-    decided_at: string | null;
-    rejected_reason: string | null;
-    created_at: string;
-  } | null;
+  /** The Quotation tab loads the document itself, by this id. */
+  quotation: { id: string; status: string } | null;
+  /** For the header counts only; the list is the job's snags for this visit. */
   snags: Array<{
     id: string;
-    snag_code: string;
-    category_label: string | null;
-    element_label: string | null;
-    defect_label: string | null;
     severity: "low" | "medium" | "high";
-    status: string;
-    note: string | null;
-    created_at: string;
-    locked: boolean;
-    area: { id: string; name: string } | null;
-    photos: Array<{
-      id: string;
-      storage_path: string;
-      media_type: string;
-      taken_at: string;
-      signed_url: string | null;
-    }>;
+    photos: Array<{ id: string }>;
   }>;
   checklist: Array<{
     id: string;
-    code: string;
     group_name: string | null;
     label: string;
     status: string;
     reason: string | null;
-    updated_at: string;
   }>;
   revisit_areas: Array<{
     id: string;
@@ -247,7 +206,6 @@ export interface SnaggingQuotation {
   status: "draft" | "sent" | "approved" | "rejected";
   currency: string;
   subtotal: number;
-  discount: number;
   tax_rate: number;
   tax_amount: number;
   total: number;
@@ -256,15 +214,12 @@ export interface SnaggingQuotation {
   lines: SnaggingQuoteLine[];
   sent_at: string | null;
   sent_to: string | null;
-  approved_at: string | null;
   rejected_reason: string | null;
   created_at: string;
   // Snapshot + client-decision fields (FR-2.06, §10).
   property_snapshot?: Record<string, unknown> | null;
-  pricing_snapshot?: Record<string, unknown> | null;
   decided_at?: string | null;
   approved_by_name?: string | null;
-  approved_by_contact?: string | null;
   /** Returned by the "send" action so the coordinator can copy the client link. */
   approval_url?: string | null;
 
@@ -279,12 +234,9 @@ export interface SnaggingQuotation {
   /** The external-areas rate, where the property has any. */
   external_rate_per_sqft?: number | null;
   external_rate_suggested?: number | null;
-  rate_chosen_by?: string | null;
-  rate_chosen_at?: string | null;
   /** True when the rate sits outside the card band; blocks sending. */
   rate_outside_band?: boolean;
   rate_override_reason?: string | null;
-  rate_approved_by?: string | null;
   rate_approved_at?: string | null;
   /**
    * Whether the CURRENT reader may sign off pricing outside the band.

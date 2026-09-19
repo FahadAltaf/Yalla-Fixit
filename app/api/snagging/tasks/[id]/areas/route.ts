@@ -15,8 +15,9 @@ import { ActionType, ResourceType } from "@/types/types";
  * floor_plan_id + pin_x/pin_y (0..1), the Floor -> Plan -> Pin -> Area link.
  * Reuses snagging_areas; no new table.
  */
-const AREA_COLUMNS =
-  "id, job_id, name, catalogue_area_code, sort_order, status, floor_plan_id, pin_x, pin_y, zone";
+// What the Areas tab and the job wizard read. The catalogue code, status and
+// sort order are written here but read by neither, so they stay in the table.
+const AREA_COLUMNS = "id, name, floor_plan_id, pin_x, pin_y, zone";
 
 const pinFieldsFrom = (
   input: {

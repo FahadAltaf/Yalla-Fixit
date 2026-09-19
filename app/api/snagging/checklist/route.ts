@@ -25,6 +25,11 @@ import { ActionType, ResourceType } from "@/types/types";
  */
 
 const TABLE = "snagging_checklist_items";
+/* What the library table and its edit form read. The audience is a filter
+   applied here, and the linked catalogue codes have no reader, so neither
+   is sent. */
+const COLUMNS = `id, code, group_name, label, applies_apartment, applies_villa,
+  applies_townhouse, applies_commercial, mandatory, active, sort_order`;
 
 export async function GET(req: NextRequest) {
   try {
@@ -41,7 +46,7 @@ export async function GET(req: NextRequest) {
 
     let query = admin
       .from(TABLE)
-      .select("*", { count: "exact" })
+      .select(COLUMNS, { count: "exact" })
       .order("sort_order", { ascending: true });
 
     if (params.get("activeOnly") === "true") query = query.eq("active", true);
@@ -151,7 +156,7 @@ export async function POST(req: NextRequest) {
     const { data, error } = await admin
       .from(TABLE)
       .insert({ ...input, active: true })
-      .select("*")
+      .select(COLUMNS)
       .single();
 
     if (error) {
@@ -271,7 +276,7 @@ export async function PATCH(req: NextRequest) {
       .from(TABLE)
       .update({ ...updates, updated_at: new Date().toISOString() })
       .eq("id", id)
-      .select("*")
+      .select(COLUMNS)
       .single();
     if (error) throw new Error(error.message);
 
