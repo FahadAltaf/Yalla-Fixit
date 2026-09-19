@@ -33,6 +33,8 @@ export async function GET(req: NextRequest) {
       since: req.nextUrl.searchParams.get("since") ?? undefined,
       include_catalogue:
         req.nextUrl.searchParams.get("include_catalogue") ?? undefined,
+      catalogue_since:
+        req.nextUrl.searchParams.get("catalogue_since") ?? undefined,
     });
     if (!parsed.success) {
       return NextResponse.json(
@@ -46,10 +48,34 @@ export async function GET(req: NextRequest) {
     const admin = await createAdminServerClient();
     const serverTime = new Date().toISOString();
 
+    /*
+      The catalogue: decided once and read alongside everything else.
+
+      It used to be loaded twice on a cold start -- once for the empty
+      response below (then thrown away when the inspector had jobs) and
+      again at the end. A pull without `since` sent it whole every time,
+      which included the reconciling snapshot every ten minutes and the
+      first pull after any app update. Now it goes when the device asks
+      (it has none), when it changed since the cursor, or -- on a pull
+      without a cursor -- when it changed since `catalogue_since`, the last
+      time the device received it.
+    */
+    const cataloguePromise = started(
+      (async () => {
+        const catalogueSince = since ?? parsed.data.catalogue_since;
+        const wanted =
+          parsed.data.include_catalogue === true ||
+          (catalogueSince
+            ? await catalogueChangedSince(admin, catalogueSince)
+            : true);
+        return wanted ? loadCatalogue(admin) : null;
+      })(),
+    );
+
     const empty = {
       server_time: serverTime,
       cold_start: coldStart,
-      catalogue: coldStart ? await loadCatalogue(admin) : null,
+      catalogue: null as Awaited<typeof cataloguePromise>,
       tasks: [] as unknown[],
       areas: [] as unknown[],
       snags: [] as unknown[],
@@ -60,7 +86,7 @@ export async function GET(req: NextRequest) {
     };
 
     // 1. Which jobs is this inspector on? (single inspector per job now)
-    const { data: assigned, error: assignedError } = await admin
+    const assignedQuery = admin
       .from("snagging_jobs")
       .select("id")
       .eq("inspector_id", profile.id)
@@ -73,7 +99,6 @@ export async function GET(req: NextRequest) {
         "approved",
         "delivered",
       ]);
-    if (assignedError) throw new Error(assignedError.message);
 
     /*
       An inspector booked onto an additional VISIT gets the job as well
@@ -85,11 +110,18 @@ export async function GET(req: NextRequest) {
       inspector an empty device on the morning of a trip they are booked
       for.
     */
-    const { data: visitJobs, error: visitJobsError } = await admin
+    const visitJobsQuery = admin
       .from("snagging_job_visits")
-      .select("job_id, id, visit_number, status, scheduled_date")
+      .select("job_id")
       .eq("inspector_id", profile.id)
       .in("status", ["scheduled", "in_progress"]);
+
+    // Neither depends on the other, so they go together.
+    const [
+      { data: assigned, error: assignedError },
+      { data: visitJobs, error: visitJobsError },
+    ] = await Promise.all([assignedQuery, visitJobsQuery]);
+    if (assignedError) throw new Error(assignedError.message);
     if (visitJobsError) throw new Error(visitJobsError.message);
 
     const assignedIds = Array.from(
@@ -98,7 +130,11 @@ export async function GET(req: NextRequest) {
         ...(visitJobs ?? []).map((r) => r.job_id as string),
       ]),
     );
-    if (assignedIds.length === 0) return NextResponse.json({ data: empty });
+    if (assignedIds.length === 0) {
+      return NextResponse.json({
+        data: { ...empty, catalogue: await cataloguePromise },
+      });
+    }
 
     /*
       The live visit per job, so the handset knows which pass it is on.
@@ -108,13 +144,77 @@ export async function GET(req: NextRequest) {
       way to tell a return trip from the original inspection, because they
       are now the same job.
     */
-    const { data: liveVisits, error: liveVisitError } = await admin
+    const liveVisitsQuery = admin
       .from("snagging_job_visits")
       .select("id, job_id, visit_number, review_note, scheduled_date, appointment_at")
       .in("job_id", assignedIds)
       .in("status", ["scheduled", "in_progress"])
       .order("visit_number", { ascending: false });
+
+    /*
+      The most recent FINISHED visit per job: submitted for review, or
+      approved. Once submitted a visit is no longer live, so the phone lost
+      it -- the job fell back to being the original approved inspection,
+      dated weeks ago, with that round's old send-back note on the card,
+      and the inspector could not find the visit they had just submitted.
+    */
+    const doneVisitsQuery = admin
+      .from("snagging_job_visits")
+      .select(
+        "id, job_id, visit_number, status, scheduled_date, appointment_at, submitted_at, completed_at, updated_at",
+      )
+      .in("job_id", assignedIds)
+      .in("status", ["submitted", "completed"])
+      .order("visit_number", { ascending: false });
+
+    /*
+      An additional visit also needs its ORIGINAL inspection on the device.
+
+      The visit exists to cover rooms the first pass could not reach, and
+      an inspector walking it needs to see what is already on record —
+      otherwise the property reads as having no known defects on a unit
+      that has several, and they log the same ones again. The original is
+      frequently assigned to somebody else, so it would never arrive.
+
+      Read-only context: the app shows these as "already on record" and
+      the sync only ever writes back to the job the inspector is on.
+    */
+    const parentsQuery = admin
+      .from("snagging_jobs")
+      .select("parent_job_id")
+      .in("id", assignedIds)
+      .eq("visit_type", "additional")
+      .not("parent_job_id", "is", null);
+
+    // All three hang off the assigned jobs only, so they run together.
+    const [
+      { data: liveVisits, error: liveVisitError },
+      { data: doneVisits, error: doneVisitError },
+      { data: parents, error: parentError },
+    ] = await Promise.all([liveVisitsQuery, doneVisitsQuery, parentsQuery]);
     if (liveVisitError) throw new Error(liveVisitError.message);
+    if (doneVisitError) throw new Error(doneVisitError.message);
+    if (parentError) throw new Error(parentError.message);
+
+    const jobIds = [
+      ...new Set([
+        ...assignedIds,
+        ...(parents ?? []).map((row) => row.parent_job_id as string),
+      ]),
+    ];
+
+    /*
+      Everything below needs only the job ids, so it is all started now and
+      awaited where it is used: the per-visit snag counts, which jobs
+      changed, the four child tables and the floor plans.
+    */
+    const doneVisitIds = (doneVisits ?? []).map((v) => v.id as string);
+    const visitSnagsPromise = started(countVisitSnags(admin, doneVisitIds));
+    const changedPromise = started(
+      since ? changedJobIds(admin, jobIds, since) : Promise.resolve(null),
+    );
+    const childrenPromise = started(loadChildren(admin, jobIds, since));
+    const plansPromise = started(loadPlans(admin, jobIds, since));
 
     const activeVisit = new Map<
       string,
@@ -139,23 +239,6 @@ export async function GET(req: NextRequest) {
         });
       }
     }
-
-    /*
-      The most recent FINISHED visit per job: submitted for review, or
-      approved. Once submitted a visit is no longer live, so the phone lost
-      it -- the job fell back to being the original approved inspection,
-      dated weeks ago, with that round's old send-back note on the card,
-      and the inspector could not find the visit they had just submitted.
-    */
-    const { data: doneVisits, error: doneVisitError } = await admin
-      .from("snagging_job_visits")
-      .select(
-        "id, job_id, visit_number, status, scheduled_date, appointment_at, submitted_at, completed_at, updated_at",
-      )
-      .in("job_id", assignedIds)
-      .in("status", ["submitted", "completed"])
-      .order("visit_number", { ascending: false });
-    if (doneVisitError) throw new Error(doneVisitError.message);
 
     const lastVisit = new Map<
       string,
@@ -186,20 +269,7 @@ export async function GET(req: NextRequest) {
       ever happened. Sent whatever else is live on the job: an earlier
       visit stays history while the next one is being worked.
     */
-    const doneVisitIds = (doneVisits ?? []).map((v) => v.id as string);
-    const visitSnagCount = new Map<string, number>();
-    if (doneVisitIds.length > 0) {
-      const { data: visitSnags, error: visitSnagError } = await admin
-        .from("snagging_snags")
-        .select("visit_id")
-        .in("visit_id", doneVisitIds)
-        .neq("status", "withdrawn");
-      if (visitSnagError) throw new Error(visitSnagError.message);
-      for (const row of visitSnags ?? []) {
-        const key = row.visit_id as string;
-        visitSnagCount.set(key, (visitSnagCount.get(key) ?? 0) + 1);
-      }
-    }
+    const visitSnagCount = await visitSnagsPromise;
     const gstDay = (value: unknown) => {
       if (!value) return null;
       const at = new Date(value as string);
@@ -226,32 +296,6 @@ export async function GET(req: NextRequest) {
       finishedVisits.set(v.job_id as string, list);
     }
 
-    /*
-      An additional visit also needs its ORIGINAL inspection on the device.
-
-      The visit exists to cover rooms the first pass could not reach, and
-      an inspector walking it needs to see what is already on record —
-      otherwise the property reads as having no known defects on a unit
-      that has several, and they log the same ones again. The original is
-      frequently assigned to somebody else, so it would never arrive.
-
-      Read-only context: the app shows these as "already on record" and
-      the sync only ever writes back to the job the inspector is on.
-    */
-    const { data: parents, error: parentError } = await admin
-      .from("snagging_jobs")
-      .select("parent_job_id")
-      .in("id", assignedIds)
-      .eq("visit_type", "additional")
-      .not("parent_job_id", "is", null);
-    if (parentError) throw new Error(parentError.message);
-
-    const jobIds = [
-      ...new Set([
-        ...assignedIds,
-        ...(parents ?? []).map((row) => row.parent_job_id as string),
-      ]),
-    ];
 
     // 2. Jobs -> wire "tasks" (with a property sub-object + team list).
     let jobQuery = admin
@@ -283,31 +327,8 @@ export async function GET(req: NextRequest) {
       it as "approved, nothing to do", and the inspector booked onto the
       visit never saw it in Today.
     */
-    if (since) {
-      const [
-        { data: changedJobs, error: changedError },
-        { data: changedVisits, error: visitsError },
-      ] = await Promise.all([
-        admin
-          .from("snagging_jobs")
-          .select("id")
-          .in("id", jobIds)
-          .gt("updated_at", since),
-        admin
-          .from("snagging_job_visits")
-          .select("job_id")
-          .in("job_id", jobIds)
-          .gt("updated_at", since),
-      ]);
-      if (changedError) throw new Error(changedError.message);
-      if (visitsError) throw new Error(visitsError.message);
-
-      const changedIds = [
-        ...new Set([
-          ...(changedJobs ?? []).map((row) => row.id as string),
-          ...(changedVisits ?? []).map((row) => row.job_id as string),
-        ]),
-      ];
+    const changedIds = await changedPromise;
+    if (changedIds) {
       // Nothing changed: an id no job has keeps the query shape and returns
       // no rows, rather than an empty IN list PostgREST would reject.
       jobQuery = jobQuery.in(
@@ -453,51 +474,7 @@ export async function GET(req: NextRequest) {
     });
 
     // 3. Children. Remap the new column names onto the wire keys the app reads.
-    const [areaRows, snagRows, photoRows, checklistRows] = await Promise.all([
-      loadChanged(
-        admin,
-        "snagging_areas",
-        `id, job_id, name, catalogue_area_code, sort_order, created_at, status, note,
-         confirmed_at, access_state, access_reason, floor_plan_id, pin_x, pin_y, zone,
-         started_at, elements_not_checked`,
-        "job_id",
-        jobIds,
-        since,
-        "updated_at",
-      ),
-      loadChanged(
-        admin,
-        "snagging_snags",
-        `id, job_id, area_id, snag_code, catalogue_entry_id, catalogue_code, element_label,
-         defect_label, severity, note, floor_plan_id, pin_x, pin_y, status, round_created,
-         created_at, locked`,
-        "job_id",
-        jobIds,
-        since,
-        "updated_at",
-      ),
-      // Not the GPS or EXIF: the phone keeps its own for what it shot, and
-      // stores neither for a photo it pulls.
-      loadChanged(
-        admin,
-        "snagging_snag_photos",
-        `id, snag_id, job_id, storage_path, media_type, bytes, width, height, taken_at,
-         round_number, created_at, marker_x, marker_y`,
-        "job_id",
-        jobIds,
-        since,
-        "created_at",
-      ),
-      loadChanged(
-        admin,
-        "snagging_job_checklist",
-        "id, job_id, code, group_name, label, mandatory, status, reason, sort_order, visit_id",
-        "job_id",
-        jobIds,
-        since,
-        "updated_at",
-      ),
-    ]);
+    const [areaRows, snagRows, photoRows, checklistRows] = await childrenPromise;
 
     const areas = areaRows.map((a) => ({
       id: a.id,
@@ -590,19 +567,8 @@ export async function GET(req: NextRequest) {
       marker_y: (p.marker_y as number | null) ?? null,
     }));
 
-    // Every floor plan for the inspector's jobs, each with its own id so a
-    // pinned snag can point at the right floor (G3). Sent in full each pull
-    // rather than by delta — plans are few and rarely change, and the app
-    // upserts them by id.
-    const { data: planData, error: planError } = await admin
-      .from("snagging_floor_plans")
-      .select("id, job_id, label, storage_path, width, height, sort_order")
-      .in("job_id", jobIds)
-      .order("created_at", { ascending: true })
-      .order("sort_order", { ascending: true });
-    if (planError) throw new Error(planError.message);
 
-    const planRows = (planData ?? []).map((p) => ({
+    const planRows = (await plansPromise).map((p) => ({
       id: p.id,
       task_id: p.job_id,
       label: p.label,
@@ -617,16 +583,13 @@ export async function GET(req: NextRequest) {
       signMediaPaths(admin, photos),
     ]);
 
-    const catalogueChanged =
-      coldStart ||
-      parsed.data.include_catalogue === true ||
-      (await catalogueChangedSince(admin, since!));
+    const catalogue = await cataloguePromise;
 
     return NextResponse.json({
       data: {
         server_time: serverTime,
         cold_start: coldStart,
-        catalogue: catalogueChanged ? await loadCatalogue(admin) : null,
+        catalogue,
         tasks,
         areas,
         snags,
@@ -694,6 +657,172 @@ function firstOf<T>(value: T | T[] | null): T | null {
 
 type ChildRow = Record<string, unknown> & { id: string; job_id: string };
 
+/*
+  Marks a promise that is started early and awaited later as handled, so
+  that if an earlier await throws first its rejection is not reported as
+  unhandled. The caller still awaits it and still sees the error.
+*/
+function started<T>(promise: Promise<T>): Promise<T> {
+  promise.catch(() => undefined);
+  return promise;
+}
+
+/** Live (not withdrawn) snags found on each finished visit, by visit id. */
+async function countVisitSnags(
+  admin: Admin,
+  visitIds: string[],
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  if (visitIds.length === 0) return counts;
+  const { data, error } = await admin
+    .from("snagging_snags")
+    .select("visit_id")
+    .in("visit_id", visitIds)
+    .neq("status", "withdrawn");
+  if (error) throw new Error(error.message);
+  for (const row of data ?? []) {
+    const key = row.visit_id as string;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * Which of these jobs changed since the cursor: the job row itself, or any
+ * of its visits (booking one, the client approving its quotation and a
+ * send-back all write the visit row and never touch the job).
+ */
+async function changedJobIds(
+  admin: Admin,
+  jobIds: string[],
+  since: string,
+): Promise<string[]> {
+  const [
+    { data: changedJobs, error: changedError },
+    { data: changedVisits, error: visitsError },
+  ] = await Promise.all([
+    admin.from("snagging_jobs").select("id").in("id", jobIds).gt("updated_at", since),
+    admin
+      .from("snagging_job_visits")
+      .select("job_id")
+      .in("job_id", jobIds)
+      .gt("updated_at", since),
+  ]);
+  if (changedError) throw new Error(changedError.message);
+  if (visitsError) throw new Error(visitsError.message);
+  return [
+    ...new Set([
+      ...(changedJobs ?? []).map((row) => row.id as string),
+      ...(changedVisits ?? []).map((row) => row.job_id as string),
+    ]),
+  ];
+}
+
+/** The four child tables, each delta'd on the cursor when there is one. */
+function loadChildren(admin: Admin, jobIds: string[], since: string | undefined) {
+  return Promise.all([
+    loadChanged(
+      admin,
+      "snagging_areas",
+      `id, job_id, name, catalogue_area_code, sort_order, created_at, status, note,
+       confirmed_at, access_state, access_reason, floor_plan_id, pin_x, pin_y, zone,
+       started_at, elements_not_checked`,
+      "job_id",
+      jobIds,
+      since,
+      "updated_at",
+    ),
+    loadChanged(
+      admin,
+      "snagging_snags",
+      `id, job_id, area_id, snag_code, catalogue_entry_id, catalogue_code, element_label,
+       defect_label, severity, note, floor_plan_id, pin_x, pin_y, status, round_created,
+       created_at, locked`,
+      "job_id",
+      jobIds,
+      since,
+      "updated_at",
+    ),
+    // Not the GPS or EXIF: the phone keeps its own for what it shot, and
+    // stores neither for a photo it pulls.
+    loadChanged(
+      admin,
+      "snagging_snag_photos",
+      `id, snag_id, job_id, storage_path, media_type, bytes, width, height, taken_at,
+       round_number, created_at, marker_x, marker_y`,
+      "job_id",
+      jobIds,
+      since,
+      "created_at",
+    ),
+    loadChanged(
+      admin,
+      "snagging_job_checklist",
+      "id, job_id, code, group_name, label, mandatory, status, reason, sort_order, visit_id",
+      "job_id",
+      jobIds,
+      since,
+      "updated_at",
+    ),
+  ]);
+}
+
+type PlanRow = {
+  id: string;
+  job_id: string;
+  label: string;
+  storage_path: string;
+  width: number | null;
+  height: number | null;
+  sort_order: number;
+};
+
+/*
+  Whether snagging_floor_plans has updated_at yet. The column arrives with
+  20260920100000_floor_plan_updated_at; until then a delta filters on
+  created_at, which still delivers new plans but not renamed or reordered
+  ones (the reconciling snapshot carries those). Asked once per process.
+*/
+let planUpdatedAtColumn: Promise<boolean> | null = null;
+
+function plansHaveUpdatedAt(admin: Admin): Promise<boolean> {
+  planUpdatedAtColumn ??= Promise.resolve(
+    admin.from("snagging_floor_plans").select("updated_at").limit(1),
+  ).then(({ error }) => !error);
+  return planUpdatedAtColumn;
+}
+
+/**
+ * The inspector's floor plans, each with its own id so a pinned snag can
+ * point at the right floor (G3).
+ *
+ * On a delta, only the plans that changed since the cursor. Every plan used
+ * to be re-sent and re-signed on every pull, changed or not -- the whole
+ * payload of a pull that otherwise brought nothing. A pull without a cursor
+ * (cold start, the reconciling snapshot, the offline pack) still sends them
+ * all, freshly signed, which is also what renews a plan's signed URL for a
+ * device that has not cached it to disk.
+ */
+async function loadPlans(
+  admin: Admin,
+  jobIds: string[],
+  since: string | undefined,
+): Promise<PlanRow[]> {
+  let query = admin
+    .from("snagging_floor_plans")
+    .select("id, job_id, label, storage_path, width, height, sort_order")
+    .in("job_id", jobIds);
+  if (since) {
+    const column = (await plansHaveUpdatedAt(admin)) ? "updated_at" : "created_at";
+    query = query.gt(column, since);
+  }
+  const { data, error } = await query
+    .order("created_at", { ascending: true })
+    .order("sort_order", { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as PlanRow[];
+}
+
 /* `columns` is what the mapping below reads of each table, and no more. */
 async function loadChanged(
   admin: Admin,
@@ -728,11 +857,16 @@ async function catalogueChangedSince(
     "snagging_catalogue_subcategories",
     "snagging_catalogue_defects",
   ];
-  for (const table of tables) {
-    const { count, error } = await admin
-      .from(table)
-      .select("id", { count: "exact", head: true })
-      .gt("updated_at", since);
+  // All three at once; they were counted one after another.
+  const results = await Promise.all(
+    tables.map((table) =>
+      admin
+        .from(table)
+        .select("id", { count: "exact", head: true })
+        .gt("updated_at", since),
+    ),
+  );
+  for (const { count, error } of results) {
     if (error) throw new Error(error.message);
     if ((count ?? 0) > 0) return true;
   }

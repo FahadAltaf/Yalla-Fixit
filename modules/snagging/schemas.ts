@@ -478,7 +478,21 @@ export const syncPullSchema = z.object({
   /** Server timestamp from the previous pull; omit for a cold start. */
   since: isoDateTime.optional(),
   task_ids: z.array(z.string().uuid()).optional(),
-  include_catalogue: z.coerce.boolean().optional(),
+  /*
+    A query-string flag, so it arrives as text. z.coerce.boolean() read the
+    string "false" as true (any non-empty string is truthy).
+  */
+  include_catalogue: z
+    .enum(["true", "false"])
+    .transform((value) => value === "true")
+    .optional(),
+  /*
+    When the device last received the catalogue. A pull without `since`
+    (the reconciling snapshot, or the first pull after an app update
+    cleared the cursor) sends the catalogue only if it changed after this;
+    without it, such a pull carries the whole catalogue as before.
+  */
+  catalogue_since: isoDateTime.optional(),
 });
 
 export const mediaSignSchema = z.object({
