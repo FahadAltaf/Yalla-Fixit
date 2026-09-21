@@ -17,7 +17,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { cn } from "@/lib/utils";
 
 import { InlineError, LinesSkeleton, SectionShell } from "./section-shell";
-import { timeAgo } from "../shared";
+import { ListPager, POPUP_PAGE_SIZES, timeAgo } from "../shared";
 import { useSection } from "./use-section";
 
 type AttentionItem = {
@@ -110,12 +110,12 @@ export function NeedsAttention() {
               onClick={() => setAllOpen(true)}
               aria-label={`Show all ${total} items needing attention`}
             >
-              <Badge
+              {/* <Badge
                 variant="secondary"
                 className="bg-danger/10 text-danger hover:bg-danger/20 border-0 font-medium transition-colors"
               >
                 {total}
-              </Badge>
+              </Badge> */}
             </button>
           ) : null
         }
@@ -141,9 +141,9 @@ export function NeedsAttention() {
           */
           inView > shown ? (
             <Button
-              variant="ghost"
+              variant="outline"
               size="sm"
-              className="text-brand h-auto w-full justify-between px-0 hover:bg-transparent"
+              className="whitespace-nowrap"
               onClick={() => setAllOpen(true)}
             >
               View all {inView}
@@ -165,7 +165,7 @@ export function NeedsAttention() {
         ) : (
           <ul className="divide-y">
             {items.map((item) => (
-              <li key={`${item.id}-${item.title}`}>
+              <li key={`${item.id}-${item.category}`}>
                 <AttentionRow item={item} />
               </li>
             ))}
@@ -333,6 +333,17 @@ function AllAttentionDialog({
   );
 
   const items = data?.items ?? [];
+  // A page at a time, back to the first whenever the filter changes.
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(POPUP_PAGE_SIZES[0]);
+  const [pagedFor, setPagedFor] = useState(filter);
+  if (pagedFor !== filter) {
+    setPagedFor(filter);
+    setPage(0);
+  }
+  const pages = Math.max(1, Math.ceil(items.length / pageSize));
+  const safePage = Math.min(page, pages - 1);
+  const shown = items.slice(safePage * pageSize, safePage * pageSize + pageSize);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -392,8 +403,8 @@ function AllAttentionDialog({
             </div>
           ) : (
             <ul className="divide-y">
-              {items.map((item) => (
-                <li key={`${item.id}-${item.title}`}>
+              {shown.map((item) => (
+                <li key={`${item.id}-${item.category}`}>
                   <AttentionRow item={item} className="px-6" />
                 </li>
               ))}
@@ -406,12 +417,26 @@ function AllAttentionDialog({
           rather than letting the dialog imply it is showing everything.
         */}
         {!loading && !error && items.length > 0 ? (
-          <div className="text-muted-foreground border-t px-6 py-3 text-xs">
-            {filter
-              ? "Filtered. Clear the chip above to see the whole backlog."
-              : items.length < total
-                ? `Showing the ${items.length} most urgent of ${total}. Clear these to see the rest.`
-                : "Open a row to go to the inspection."}
+          <div className="border-t">
+            <ListPager
+              page={safePage}
+              pageSize={pageSize}
+              total={items.length}
+              onPageChange={setPage}
+              onPageSizeChange={(size) => {
+                setPageSize(size);
+                setPage(0);
+              }}
+              pageSizes={POPUP_PAGE_SIZES}
+              noun="inspections"
+            />
+            <p className="text-muted-foreground px-6 py-3 text-xs">
+              {filter
+                ? "Filtered. Clear the chip above to see the whole backlog."
+                : items.length < total
+                  ? `Showing the ${items.length} most urgent of ${total}. Clear these to see the rest.`
+                  : "Open a row to go to the inspection."}
+            </p>
           </div>
         ) : null}
       </DialogContent>

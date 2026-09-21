@@ -33,15 +33,15 @@ const STATUS_PARAM: Record<string, string> = {
 export function getSnaggingInspectorPerformanceColumns(): ColumnDef<Row>[] {
   const numeric = (id: keyof Row, header: string): ColumnDef<Row> => ({
     id,
-    header: () => <span className="block text-right">{header}</span>,
+    header,
     accessorKey: id,
     cell: ({ row }) => {
       const value = row.original[id] as number;
       if (!value) {
-        return <div className="text-muted-foreground text-right tabular-nums">0</div>;
+        return <div className="text-muted-foreground tabular-nums">0</div>;
       }
       return (
-        <div className="text-right tabular-nums">
+        <div className="tabular-nums">
           <Link
             href={`/snagging/jobs?status=${STATUS_PARAM[id as string]}&assignee=${row.original.id}`}
             className="hover:text-brand underline-offset-4 hover:underline"

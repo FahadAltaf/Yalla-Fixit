@@ -56,7 +56,7 @@ export function PageHeading({
         <p className="eyebrow">{eyebrow}</p>
         <h1 className="text-3xl">{title}</h1>
         {description ? (
-          <p className="text-muted-foreground max-w-2xl text-[0.9375rem]">
+          <p className="text-muted-foreground max-w-5xl text-[0.9375rem]">
             {description}
           </p>
         ) : null}

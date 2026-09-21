@@ -98,9 +98,16 @@ query CountUsers($filter: user_profileFilter) {
 }
 `;
 
+// Read a page at a time (see usersService.getUsers): with no `first`,
+// pg_graphql returns only its default page, so lists and pickers built
+// from this quietly missed everyone after it.
 export const GET_USERS = `
-    query GetUsers {
-     user_profileCollection {
+    query GetUsers($first: Int, $after: Cursor) {
+     user_profileCollection(first: $first, after: $after, orderBy: [{ created_at: AscNullsLast }]) {
+       pageInfo {
+         hasNextPage
+         endCursor
+       }
        edges {
          node {
            id

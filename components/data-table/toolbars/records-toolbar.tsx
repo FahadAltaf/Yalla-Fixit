@@ -14,50 +14,55 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-interface SnaggingClientsToolbarProps {
+interface RecordsToolbarProps {
   fetchRecords: () => void;
   onGlobalFilterChange: (filter: string) => void;
   globalFilter: string;
   isSearchLoading: boolean;
   pageSize: number;
   onPageSizeChange: (size: number) => void;
-  /** Kept for callers; the create action now lives in the page heading. */
-  canCreate?: boolean;
-  onCreate?: () => void;
+  /** Placeholder for the search box, naming what it matches. */
+  searchPlaceholder?: string;
+  pageSizes?: number[];
+  /** Extra actions on the right, before Refresh (exports and the like). */
+  actions?: React.ReactNode;
+  /** Filters beside the search box (category pickers and the like). */
+  filters?: React.ReactNode;
 }
 
 /**
- * Toolbar for the clients table.
- *
- * Deliberately the same shape as the jobs and users toolbars rather than
- * its own arrangement: search on the left, page size, refresh and the
- * primary create action on the right. A coordinator moves between these
- * screens all day, and a toolbar that reshuffles itself per table makes
- * them look for the same control twice.
+ * The house table toolbar for read-only lists: search on the left, page
+ * size, any extra actions and Refresh on the right. The same shape as the
+ * jobs, quotations and clients toolbars, so every table reads alike.
  */
-export function SnaggingClientsToolbar({
+export function RecordsToolbar({
   fetchRecords,
   onGlobalFilterChange,
   globalFilter,
   isSearchLoading,
   pageSize,
   onPageSizeChange,
-}: SnaggingClientsToolbarProps) {
+  searchPlaceholder = "Search...",
+  pageSizes = [10, 25, 50],
+  actions,
+  filters,
+}: RecordsToolbarProps) {
   const searchInputId = useId();
+  const rowsId = useId();
 
   return (
-    <div className="flex flex-col gap-4 px-4 py-4 sm:py-6">
-      <div className="flex flex-row items-center justify-between gap-2 sm:gap-4">
-        <div className="flex items-center gap-2">
+    <div className="flex flex-col gap-4 px-4 py-4">
+      <div className="flex flex-row flex-wrap items-center justify-between gap-2 sm:gap-4">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
           <div className="relative w-full sm:w-80 sm:flex-none">
             <Input
               id={searchInputId}
               type="search"
-              placeholder="Search..."
+              placeholder={searchPlaceholder}
               className="peer w-full ps-9"
               value={globalFilter}
               onChange={(event) => onGlobalFilterChange(event.target.value)}
-              aria-label="Search clients"
+              aria-label={searchPlaceholder}
             />
             <div className="text-muted-foreground/80 pointer-events-none absolute inset-y-0 start-0 flex items-center justify-center ps-3 peer-disabled:opacity-50">
               {isSearchLoading ? (
@@ -72,25 +77,23 @@ export function SnaggingClientsToolbar({
               )}
             </div>
           </div>
+          {filters}
         </div>
 
-        <div className="flex gap-3 sm:flex-row sm:items-center sm:gap-4">
-          <div className="hidden w-full items-center gap-2 sm:flex sm:w-auto">
-            <Label htmlFor="snagging-clients-rows" className="sr-only">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+          <div className="hidden items-center gap-2 sm:flex">
+            <Label htmlFor={rowsId} className="sr-only">
               Show
             </Label>
             <Select
-              value={pageSize?.toString() || "10"}
+              value={pageSize.toString()}
               onValueChange={(value) => onPageSizeChange(Number(value))}
             >
-              <SelectTrigger
-                id="snagging-clients-rows"
-                className="w-full whitespace-nowrap sm:w-fit"
-              >
-                <SelectValue placeholder="Select number of results" />
+              <SelectTrigger id={rowsId} className="w-fit whitespace-nowrap">
+                <SelectValue placeholder="Rows" />
               </SelectTrigger>
               <SelectContent className="[&_*[role=option]]:pr-8 [&_*[role=option]]:pl-2 [&_*[role=option]>span]:right-2 [&_*[role=option]>span]:left-auto">
-                {[10, 25, 50].map((size) => (
+                {pageSizes.map((size) => (
                   <SelectItem key={size} value={size.toString()}>
                     {size}
                   </SelectItem>
@@ -98,13 +101,15 @@ export function SnaggingClientsToolbar({
               </SelectContent>
             </Select>
           </div>
-
-          <div className="flex items-center gap-2">
-            <Button onClick={fetchRecords} variant="outline" disabled={isSearchLoading}>
-              <RefreshCwIcon className="size-4 sm:mr-1" />
-              <span className="hidden sm:inline">Refresh</span>
-            </Button>
-          </div>
+          {actions}
+          <Button
+            onClick={fetchRecords}
+            variant="outline"
+            disabled={isSearchLoading}
+          >
+            <RefreshCwIcon className="size-4 sm:mr-1" />
+            <span className="hidden sm:inline">Refresh</span>
+          </Button>
         </div>
       </div>
     </div>

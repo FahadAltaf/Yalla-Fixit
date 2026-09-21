@@ -92,7 +92,7 @@ export default function SnaggingOverviewDashboard() {
         description="Your inspections, quotations and anything waiting on you. Analytics has the same work across everyone."
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <LastUpdated refreshing={refreshing} />
+            {/* <LastUpdated refreshing={refreshing} /> */}
             <Select
               value={String(days)}
               onValueChange={(value) => setDays(Number(value))}
@@ -112,12 +112,12 @@ export default function SnaggingOverviewDashboard() {
               <RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />
               Pull changes
             </Button>
-            {canCreate ? (
+            {/* {canCreate ? (
               <Button onClick={() => router.push("/snagging/quotations/new")}>
                 <Plus className="size-4" />
                 New quotation
               </Button>
-            ) : null}
+            ) : null} */}
           </div>
         }
       />

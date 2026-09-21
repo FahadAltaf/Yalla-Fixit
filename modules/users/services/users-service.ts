@@ -48,13 +48,21 @@ export const usersService = {
     return await usersService.insertUser(data);
   },
   /**
-   * Get all users
+   * Get all users, following the cursor page by page so nobody past the
+   * GraphQL page size is left out (staff pickers read this).
    */
   getUsers: async () => {
-    const response = await executeGraphQLBackend(GET_USERS);
-    return response.user_profileCollection.edges.map(
-      (edge: { node: User }) => edge.node
-    );
+    const users: User[] = [];
+    let after: string | null = null;
+    // A hard stop, so a server that never reports the last page cannot loop.
+    for (let page = 0; page < 200; page += 1) {
+      const response = await executeGraphQLBackend(GET_USERS, { first: 100, after });
+      const collection = response.user_profileCollection;
+      users.push(...collection.edges.map((edge: { node: User }) => edge.node));
+      if (!collection.pageInfo?.hasNextPage || !collection.pageInfo.endCursor) break;
+      after = collection.pageInfo.endCursor;
+    }
+    return users;
   },
   getUsersPagination: async (
     search: string,

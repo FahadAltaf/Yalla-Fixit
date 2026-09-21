@@ -9,12 +9,18 @@ import { rolesService } from "@/modules/roles/services/roles-service";
 import { Role } from "@/types/types";
 import { useDebounce } from "@/hooks/use-debounce";
 import { useAuth } from "@/context/AuthContext";
+import { Plus } from "lucide-react";
+
+import { PageHeading } from "@/components/dashboard/shared/kaizen";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/data-table";
 
 export default function UserManagementPage({ type }: { type: string }) {
   const [listUsers, setListUsers] = useState<User[]>([]);
   const [listRoles, setListRoles] = useState<Role[]>([]);
+  // The "Add user" dialog, opened from the page heading.
+  const [createOpen, setCreateOpen] = useState(false);
   const [recordCount, setRecordCount] = useState<number>(0);
   const [currentPage, setCurrentPage] = useState<number>(0);
   const [pageSize, setPageSize] = useState<number>(10);
@@ -91,6 +97,18 @@ export default function UserManagementPage({ type }: { type: string }) {
   };
 
   return (
+    <div className="flex flex-col gap-6">
+      <PageHeading
+        eyebrow="Access management"
+        title="Users"
+        description="Everyone who can sign in to the portal, and the role each one holds."
+        actions={
+          <Button onClick={() => setCreateOpen(true)}>
+            <Plus className="size-4" />
+            Add user
+          </Button>
+        }
+      />
     <Card className="py-0">
       <DataTable
         data={listUsers || []}
@@ -103,6 +121,8 @@ export default function UserManagementPage({ type }: { type: string }) {
             isSearchLoading={isRefetching}
             pageSize={pageSize}
             onPageSizeChange={handlePageSizeChange}
+            createOpen={createOpen}
+            onCreateOpenChange={setCreateOpen}
           />
         }
         columns={getUserColumns(
@@ -122,5 +142,6 @@ export default function UserManagementPage({ type }: { type: string }) {
         isPagination={true}
       />
     </Card>
+    </div>
   );
 }

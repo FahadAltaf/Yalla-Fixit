@@ -1,8 +1,10 @@
 "use client";
 
 import { ColumnDef } from "@tanstack/react-table";
-import { Building2 } from "lucide-react";
+import { Clock, UserRound } from "lucide-react";
 
+import { IconText } from "@/components/data-table/columns/icon-text";
+import { IdentityCell } from "@/components/ui/entity-avatar";
 import {
   SeverityCounts,
   TaskStatusBadge,
@@ -35,22 +37,23 @@ export function getSnaggingJobColumns(): ColumnDef<SnaggingTaskSummary>[] {
       creation date rather than by code.
     */
     {
+      /*
+        Client & property, the same column the Quotations table leads
+        with: who the job is for, and the unit and building under it.
+      */
       id: "unit_label",
-      header: "Unit",
+      header: "Client & property",
       accessorKey: "unit_label",
       cell: ({ row }) => {
         const task = row.original;
+        const place = [task.unit_label, task.building_name].filter(Boolean).join(", ");
         return (
-          <div className="min-w-40">
-            <div className="flex items-center gap-2 font-medium">
-              {task.task_type === "full_building" ? (
-                <Building2 className="text-muted-foreground size-4" aria-hidden />
-              ) : null}
-              {task.unit_label}
-            </div>
-            <div className="text-muted-foreground text-xs">
-              {[task.building_name, task.client_name].filter(Boolean).join(" · ") || "—"}
-            </div>
+          <div className="min-w-48">
+            <IdentityCell
+              title={task.client_name || "—"}
+              subtitle={place || "No property recorded"}
+              icon={UserRound}
+            />
           </div>
         );
       },
@@ -61,7 +64,9 @@ export function getSnaggingJobColumns(): ColumnDef<SnaggingTaskSummary>[] {
       header: "Inspector",
       accessorKey: "inspector_name",
       cell: ({ row }) => (
-        <span className="text-sm">{row.original.inspector_name ?? "—"}</span>
+        <IconText icon={UserRound} muted={!row.original.inspector_name}>
+          {row.original.inspector_name ?? "Unassigned"}
+        </IconText>
       ),
       enableSorting: false,
     },
@@ -105,9 +110,9 @@ export function getSnaggingJobColumns(): ColumnDef<SnaggingTaskSummary>[] {
       header: "Updated",
       accessorKey: "updated_at",
       cell: ({ row }) => (
-        <span className="text-muted-foreground text-sm whitespace-nowrap">
+        <IconText icon={Clock} muted>
           {timeAgo(row.original.updated_at)}
-        </span>
+        </IconText>
       ),
       enableSorting: true,
     },

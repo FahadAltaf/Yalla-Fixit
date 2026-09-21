@@ -1,6 +1,15 @@
 "use client";
 
-import { AlertTriangle, Check, Clock, DoorClosed } from "lucide-react";
+import {
+  AlertTriangle,
+  Building,
+  Building2,
+  Check,
+  Clock,
+  DoorClosed,
+  Home,
+  Store,
+} from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { TASK_STATUS_LABELS } from "@/lib/snagging/status-labels";
@@ -358,6 +367,12 @@ export function SlaBadge({ dueAt }: { dueAt?: string | null }) {
   every reader of those has to see the same time.
 */
 
+/**
+ * Rows per page in a table inside a popup: five to start, so the popup
+ * stays short, with 10 and 25 a click away. Page tables keep 10.
+ */
+export const POPUP_PAGE_SIZES = [5, 10, 25];
+
 export function formatLocalDate(value?: string | null): string {
   if (!value) return "—";
   const date = new Date(value);
@@ -393,6 +408,14 @@ export function formatWindow(startAt?: string | null, endAt?: string | null): st
 
   return endAt ? `${time(startAt)} to ${time(endAt)}` : time(startAt);
 }
+
+/** The icon each property type is shown with, in tables and lists. */
+export const PROPERTY_TYPE_ICON: Record<string, typeof Building2> = {
+  apartment: Building2,
+  villa: Home,
+  townhouse: Building,
+  commercial: Store,
+};
 
 export const PROPERTY_TYPE_LABELS: Record<string, string> = {
   apartment: "Apartment",

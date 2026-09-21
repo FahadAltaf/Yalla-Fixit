@@ -143,7 +143,7 @@ export function UserDataTableToolbar({
     <div className="flex gap-2 sm:gap-4 py-4 sm:py-6 px-4 flex-row items-center justify-between">
       {/* Search Input */}
       <div className="flex items-center gap-2">
-        <div className="relative flex-1 sm:min-w-[260px] sm:max-w-md">
+        <div className="relative w-full sm:w-80 sm:flex-none">
           <Input
             id={searchInputId}
             ref={searchInputRef}

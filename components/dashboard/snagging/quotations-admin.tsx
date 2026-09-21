@@ -11,7 +11,11 @@ import {
 } from "lucide-react";
 
 import { DataTable } from "@/components/data-table";
+import { IconText } from "@/components/data-table/columns/icon-text";
+import { DirhamIcon } from "@/components/ui/dirham-icon";
+import { IdentityCell } from "@/components/ui/entity-avatar";
 import { SnaggingQuotationsToolbar } from "@/components/data-table/toolbars/snagging-quotations-toolbar";
+import { useDebounce } from "@/hooks/use-debounce";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -76,37 +80,38 @@ export default function QuotationsAdmin() {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
   const [desnagOpen, setDesnagOpen] = useState(false);
+  const [total, setTotal] = useState(0);
+  const [counts, setCounts] = useState<Record<string, number>>({});
+  // Searched on the server, a moment after typing stops.
+  const debouncedSearch = useDebounce(search.trim(), 300);
 
+  /*
+    A page at a time from the server, searched there too. The list used
+    to arrive whole and stop silently at the newest 400 quotations.
+  */
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      setRows(await snaggingService.listQuotations({ status }));
+      const result = await snaggingService.listQuotations({
+        status,
+        search: debouncedSearch || undefined,
+        page,
+        pageSize,
+      });
+      setRows(result.data);
+      setTotal(result.totalCount);
+      setCounts(result.counts ?? {});
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load quotations");
     } finally {
       setLoading(false);
     }
-  }, [status]);
+  }, [status, debouncedSearch, page, pageSize]);
 
   useEffect(() => {
     void load();
   }, [load]);
-
-  const filtered = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    if (!term) return rows;
-    return rows.filter((row) =>
-      [row.quote_number, row.client_name, row.unit_label, row.building_name, row.job_code]
-        .filter(Boolean)
-        .some((field) => String(field).toLowerCase().includes(term)),
-    );
-  }, [rows, search]);
-
-  const paginated = useMemo(
-    () => filtered.slice(page * pageSize, page * pageSize + pageSize),
-    [filtered, page, pageSize],
-  );
 
   /*
     Status as pills rather than a dropdown, matching the jobs table: a
@@ -114,8 +119,7 @@ export default function QuotationsAdmin() {
     each pill answers "how much is waiting" without applying the filter.
   */
   const statusTabs = useMemo(() => {
-    const count = (value: string) =>
-      value === "all" ? rows.length : rows.filter((r) => r.status === value).length;
+    const count = (value: string) => counts[value] ?? 0;
     return [
       { value: "all", label: "All", count: count("all") },
       { value: "draft", label: "Draft", count: count("draft") },
@@ -123,7 +127,7 @@ export default function QuotationsAdmin() {
       { value: "approved", label: "Approved", count: count("approved") },
       { value: "rejected", label: "Rejected", count: count("rejected") },
     ];
-  }, [rows]);
+  }, [counts]);
 
   /* The whole point of the section: approved, and nobody has raised it yet. */
   const awaitingJob = useMemo(
@@ -139,9 +143,9 @@ export default function QuotationsAdmin() {
         accessorKey: "quote_number",
         cell: ({ row }) => (
           <div className="flex min-w-0 flex-col">
-            <span className="font-medium tabular-nums">
+            <IconText icon={FileText} className="font-medium tabular-nums">
               {row.original.quote_number}
-            </span>
+            </IconText>
             <span className="text-muted-foreground text-xs">
               {KIND_LABEL[row.original.quote_kind] ?? row.original.quote_kind} ·{" "}
               {formatLocalDate(row.original.created_at)}
@@ -157,25 +161,12 @@ export default function QuotationsAdmin() {
           const q = row.original;
           const place = [q.unit_label, q.building_name].filter(Boolean).join(", ");
           return (
-            <div className="flex items-center gap-2.5">
-              {/*
-                One neutral person mark rather than coloured initials.
-
-                A quotation list is read down the Client column looking
-                for a name, and eight differently-tinted circles pull the
-                eye away from the words that actually distinguish the
-                rows.
-              */}
-              <span className="bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-full">
-                <UserRound className="size-4" />
-              </span>
-              <div className="min-w-0">
-                <div className="truncate font-medium">{q.client_name || "—"}</div>
-                <div className="text-muted-foreground truncate text-sm">
-                  {place || "No property recorded"}
-                </div>
-              </div>
-            </div>
+            // The shared identity cell, as the Jobs table uses it.
+            <IdentityCell
+              title={q.client_name || "—"}
+              subtitle={place || "No property recorded"}
+              icon={UserRound}
+            />
           );
         },
       },
@@ -190,13 +181,23 @@ export default function QuotationsAdmin() {
         header: "Total",
         accessorKey: "total",
         cell: ({ row }) => (
-          <span className="text-sm font-medium tabular-nums">
-            {new Intl.NumberFormat("en-AE", {
-              style: "currency",
-              currency: row.original.currency || "AED",
-              minimumFractionDigits: 2,
-            }).format(row.original.total ?? 0)}
-          </span>
+          // Dirhams carry the dirham sign; any other currency keeps its code.
+          (row.original.currency || "AED") === "AED" ? (
+            <IconText icon={DirhamIcon} className="font-medium tabular-nums">
+              {new Intl.NumberFormat("en-AE", {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              }).format(row.original.total ?? 0)}
+            </IconText>
+          ) : (
+            <span className="text-sm font-medium tabular-nums">
+              {new Intl.NumberFormat("en-AE", {
+                style: "currency",
+                currency: row.original.currency,
+                minimumFractionDigits: 2,
+              }).format(row.original.total ?? 0)}
+            </span>
+          )
         ),
       },
       {
@@ -289,6 +290,16 @@ export default function QuotationsAdmin() {
         eyebrow="Sales"
         title="Quotations"
         description="Price a client's property first. The job is raised once they approve."
+        actions={
+          // A de-snag quotation starts from a finished job, through its own
+          // dialog (setDesnagOpen); that button is off for now.
+          canCreate ? (
+            <Button onClick={() => router.push("/snagging/quotations/new")}>
+              <Plus className="size-4" />
+              New quotation
+            </Button>
+          ) : null
+        }
       />
 
 
@@ -312,9 +323,9 @@ export default function QuotationsAdmin() {
       <Card className="py-0">
         <DataTable
           columns={columns}
-          data={paginated}
+          data={rows}
           loading={loading}
-          rowCount={filtered.length}
+          rowCount={total}
           pageSize={pageSize}
           currentPage={page}
           isPagination

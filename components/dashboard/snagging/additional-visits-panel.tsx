@@ -1,5 +1,6 @@
 "use client";
 
+import { Money } from "@/components/ui/money";
 import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -502,7 +503,13 @@ export function AdditionalVisitsPanel({ task }: { task: SnaggingTask }) {
                       <TableCell>
                         <div className="flex flex-col gap-0.5">
                           <span className="whitespace-nowrap tabular-nums">
-                            {visit.charge ? `AED ${visit.charge.toLocaleString()} + VAT` : "—"}
+                            {visit.charge ? (
+                              <>
+                                <Money value={visit.charge} dp={0} /> + VAT
+                              </>
+                            ) : (
+                              "—"
+                            )}
                           </span>
                           <span className="text-muted-foreground flex items-center gap-1.5 text-xs whitespace-nowrap">
                             {visit.charge_method === "payment_link" ? (

@@ -1,8 +1,9 @@
 "use client";
 
 import { ColumnDef } from "@tanstack/react-table";
-import { Pencil } from "lucide-react";
+import { FolderTree, Layers, Pencil } from "lucide-react";
 
+import { IconText } from "@/components/data-table/columns/icon-text";
 import { SeverityBadge } from "@/components/dashboard/snagging/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -71,7 +72,9 @@ export function getCatalogueV2Columns({
       accessorKey: "category_label",
       cell: ({ row }) => (
         <div className="min-w-44">
-          <div className="text-sm font-medium">{row.original.category_label}</div>
+          <IconText icon={Layers} className="font-medium">
+            {row.original.category_label}
+          </IconText>
           {/* A defect stays offered only while its parents are too, so a
               retired parent is worth seeing on the child's row. */}
           {!row.original.category_active ? (
@@ -89,7 +92,7 @@ export function getCatalogueV2Columns({
       accessorKey: "subcategory_label",
       cell: ({ row }) => (
         <div className="min-w-40">
-          <div className="text-sm">{row.original.subcategory_label}</div>
+          <IconText icon={FolderTree}>{row.original.subcategory_label}</IconText>
           {!row.original.subcategory_active ? (
             <span className="text-muted-foreground text-xs">
               Sub-category retired

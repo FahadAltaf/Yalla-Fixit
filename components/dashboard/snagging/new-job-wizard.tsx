@@ -8,6 +8,7 @@ import {
   ChevronDown,
   Crosshair,
   Eraser,
+  FileText,
   ImageIcon,
   LayoutGrid,
   Loader2,
@@ -23,6 +24,7 @@ import {
 } from "lucide-react";
 import { addDays, format, parseISO } from "date-fns";
 import { toast } from "sonner";
+import { useDebounce } from "@/hooks/use-debounce";
 
 import { compressImage, readImageSize } from "@/lib/media/compress-image";
 import {
@@ -639,6 +641,33 @@ export default function NewJobWizard({
 
   const stepValid = blockers.length === 0;
 
+  /*
+    Errors wait until someone tries to move on. A form that opens already
+    listing everything it is missing reads as a telling-off; after a
+    click on Continue, each reason shows under the field it belongs to.
+  */
+  const [attempted, setAttempted] = useState(false);
+  const [attemptedStep, setAttemptedStep] = useState(step);
+  if (attemptedStep !== step) {
+    setAttemptedStep(step);
+    setAttempted(false);
+  }
+  const fieldErrors = attempted && STEPS[step].key === "property" ? propertyErrors(draft) : {};
+
+  /** Runs the step's action, or shows why it cannot run yet. */
+  function attempt(action: () => void) {
+    if (!stepValid) {
+      setAttempted(true);
+      toast.error(
+        STEPS[step].key === "property"
+          ? "Fill in the fields marked below."
+          : (blockers[0] ?? "Something on this step still needs attention."),
+      );
+      return;
+    }
+    action();
+  }
+
   async function submit() {
     setSubmitting(true);
     try {
@@ -920,6 +949,7 @@ export default function NewJobWizard({
                 setTitleDeedFile={setTitleDeedFile}
                 nocFile={nocFile}
                 setNocFile={setNocFile}
+                errors={fieldErrors}
               />
             ) : STEPS[step].key === "plan_areas" ? (
               <PlanAreasStep
@@ -942,25 +972,21 @@ export default function NewJobWizard({
             )}
           </div>
 
-          <div className="flex items-start justify-between gap-4 border-t px-6 py-4">
+          <div className="flex items-center justify-between gap-4 border-t px-6 py-4">
             <div className="min-w-0">
-              <p className="text-muted-foreground text-xs">
-                {STEPS[step].key === "plan_areas"
-                  ? `${draft.areas.length} area${draft.areas.length === 1 ? "" : "s"} selected, ${draft.areas.filter((a) => a.pinX != null).length
-                  } pinned. Pinning is optional.`
-                  : isEdit
-                    ? "Saving reprices the document. Once it is sent to the client it can no longer be edited."
-                    : quoteOnly
-                      ? "The client and the property are all a quotation needs."
-                      : "Required fields are marked."}
-              </p>
-              {/* A greyed-out Continue used to explain nothing; the first
-                unmet rule is named here, and again under its own field. */}
-              {blockers.map((reason) => (
-                <p key={reason} className="text-destructive mt-1 text-xs">
-                  {reason}
+              {STEPS[step].key === "plan_areas" ? (
+                <p className="text-muted-foreground text-xs">
+                  {`${draft.areas.length} area${draft.areas.length === 1 ? "" : "s"} selected, ${draft.areas.filter((a) => a.pinX != null).length
+                    } pinned. Pinning is optional.`}
                 </p>
-              ))}
+              ) : null}
+              {attempted && STEPS[step].key !== "property"
+                ? blockers.map((reason) => (
+                  <p key={reason} className="text-destructive mt-1 text-xs">
+                    {reason}
+                  </p>
+                ))
+                : null}
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <Button
@@ -982,8 +1008,7 @@ export default function NewJobWizard({
               </Button>
               {isLast ? (
                 <SubmitButton
-                  onClick={() => void submit()}
-                  disabled={!stepValid}
+                  onClick={() => attempt(() => void submit())}
                   pending={submitting}
                   pendingLabel={isEdit ? "Saving…" : "Creating…"}
                 >
@@ -994,7 +1019,7 @@ export default function NewJobWizard({
                       : "Create job"}
                 </SubmitButton>
               ) : (
-                <Button onClick={() => setStep(step + 1)} disabled={!stepValid}>
+                <Button onClick={() => attempt(() => setStep(step + 1))}>
                   Continue
                 </Button>
               )}
@@ -1025,10 +1050,18 @@ function Field({
       <Label className="text-sm">
         {label}
         {required ? <span className="text-brand"> *</span> : null}
-        {hint ? <span className="text-muted-foreground font-normal"> {hint}</span> : null}
       </Label>
       {children}
-      {error ? <p className="text-destructive text-xs">{error}</p> : null}
+      {/*
+        The hint is helper text under the control, not squeezed in beside
+        the label, where a long one wrapped the label onto two lines. An
+        error takes its place when there is one.
+      */}
+      {error ? (
+        <p className="text-destructive text-xs">{error}</p>
+      ) : hint ? (
+        <p className="text-muted-foreground text-xs">{hint}</p>
+      ) : null}
     </div>
   );
 }
@@ -1056,20 +1089,28 @@ function ClientPicker({
   const [open, setOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [clients, setClients] = useState<SnaggingClientOption[]>([]);
-  const [loading, setLoading] = useState(true);
+  // The search the list on screen answers; loading until it is the current one.
+  const [fetchedFor, setFetchedFor] = useState<string | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
+  /*
+    The server searches every client and sends the best few. The picker
+    used to load the first 400 and filter those here, so anyone after
+    them could not be found.
+  */
+  const debouncedSearch = useDebounce(search.trim(), 250);
+  const loading = fetchedFor !== debouncedSearch;
 
   useEffect(() => {
     let active = true;
     snaggingService
-      .searchClients()
+      .searchClients(debouncedSearch || undefined, { limit: 8 })
       .then((rows) => active && setClients(rows))
       .catch(() => undefined)
-      .finally(() => active && setLoading(false));
+      .finally(() => active && setFetchedFor(debouncedSearch));
     return () => {
       active = false;
     };
-  }, []);
+  }, [debouncedSearch]);
 
   useEffect(() => {
     function onClick(event: MouseEvent) {
@@ -1079,17 +1120,7 @@ function ClientPicker({
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
 
-  const matches = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    if (!term) return clients.slice(0, 8);
-    return clients
-      .filter(
-        (c) =>
-          c.client_name.toLowerCase().includes(term) ||
-          (c.client_email ?? "").toLowerCase().includes(term),
-      )
-      .slice(0, 8);
-  }, [clients, search]);
+  const matches = clients;
 
   function choose(client: SnaggingClientOption) {
     set("client_id", client.id ?? "");
@@ -1299,10 +1330,10 @@ function AddClientDialog({
               autoFocus
             />
           </Field>
-          <Field label="Phone" required hint="any country">
+          <Field label="Phone" required hint="Any country code works.">
             <PhoneInput value={phone} onChange={setPhone} />
           </Field>
-          <Field label="Email" hint="(optional)">
+          <Field label="Email" hint="Optional.">
             <Input
               type="email"
               value={email}
@@ -1325,7 +1356,20 @@ function AddClientDialog({
   );
 }
 
-/** A compact optional-document picker (PDF or image). */
+/** What an upload box accepts, and the limit it states. */
+const DOCUMENT_ACCEPT = "image/png,image/jpeg,image/webp,application/pdf";
+const DOCUMENT_MAX_MB = 10;
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * An optional document (PDF or image) as a proper drop box: click to
+ * browse or drag a file onto it. Once chosen, the box becomes the file --
+ * its name, size and a way to swap or remove it.
+ */
 function DocumentField({
   label,
   hint,
@@ -1338,34 +1382,168 @@ function DocumentField({
   onPick: (file: File | null) => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+
+  function accept(next: File | null | undefined) {
+    if (!next) return;
+    const allowed = DOCUMENT_ACCEPT.split(",");
+    if (!allowed.includes(next.type)) {
+      toast.error("That file type is not accepted. Use a PDF, JPG, PNG or WEBP.");
+      return;
+    }
+    if (next.size > DOCUMENT_MAX_MB * 1024 * 1024) {
+      toast.error(`That file is over ${DOCUMENT_MAX_MB} MB. Choose a smaller one.`);
+      return;
+    }
+    onPick(next);
+  }
+
+  const isPdf = file?.type === "application/pdf";
+
   return (
     <Field label={label} hint={hint}>
       <input
         ref={inputRef}
         type="file"
-        accept="image/png,image/jpeg,image/webp,application/pdf"
+        accept={DOCUMENT_ACCEPT}
         className="hidden"
-        onChange={(event) => onPick(event.target.files?.[0] ?? null)}
+        onChange={(event) => {
+          accept(event.target.files?.[0]);
+          // The same file can be picked again after it was removed.
+          event.target.value = "";
+        }}
       />
       {file ? (
-        <div className="border-border flex items-center gap-2 rounded-md border px-3 py-2 text-sm">
-          <ImageIcon className="text-muted-foreground size-4 shrink-0" />
-          <span className="min-w-0 flex-1 truncate">{file.name}</span>
-          <Button type="button" variant="ghost" size="icon" onClick={() => onPick(null)} aria-label="Remove">
+        <div className="border-border bg-muted/30 flex items-center gap-3 rounded-lg border px-3 py-3">
+          <span className="bg-background text-muted-foreground flex size-10 shrink-0 items-center justify-center rounded-md border">
+            {isPdf ? <FileText className="size-5" /> : <ImageIcon className="size-5" />}
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium">{file.name}</p>
+            <p className="text-muted-foreground text-xs">
+              {isPdf ? "PDF" : "Image"} · {formatFileSize(file.size)}
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => inputRef.current?.click()}
+          >
+            Replace
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={() => onPick(null)}
+            aria-label={`Remove ${file.name}`}
+          >
             <X className="size-4" />
           </Button>
         </div>
       ) : (
-        <Button
+        <button
           type="button"
-          variant="outline"
-          className="w-full justify-start font-normal"
           onClick={() => inputRef.current?.click()}
+          onDragOver={(event) => {
+            event.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(event) => {
+            event.preventDefault();
+            setDragging(false);
+            accept(event.dataTransfer.files?.[0]);
+          }}
+          className={cn(
+            "focus-visible:ring-ring flex w-full flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed px-4 py-6 text-center transition-colors focus-visible:ring-2 focus-visible:outline-none",
+            dragging
+              ? "border-brand bg-brand-50"
+              : "border-border hover:border-brand/50 hover:bg-muted/40",
+          )}
         >
-          <Upload className="mr-2 size-4" /> Choose file
-        </Button>
+          <span className="bg-muted text-muted-foreground flex size-10 items-center justify-center rounded-full">
+            <Upload className="size-5" />
+          </span>
+          <span className="text-sm">
+            <span className="text-brand font-medium">Click to upload</span>{" "}
+            <span className="text-muted-foreground">or drag and drop</span>
+          </span>
+          <span className="text-muted-foreground text-xs">
+            PDF, JPG, PNG or WEBP · up to {DOCUMENT_MAX_MB} MB
+          </span>
+        </button>
       )}
     </Field>
+  );
+}
+
+/**
+ * One titled part of the form. The long single column read as one wall
+ * of fields; grouping them the way a coordinator thinks about the job --
+ * who, what, where, paperwork -- makes it scannable.
+ */
+function FormSection({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    // Title and subheading sit above the fields, so the fields get the
+    // full width of the card.
+    <section className="flex flex-col gap-4">
+      <div>
+        <h3 className="text-base font-semibold">{title}</h3>
+        {description ? (
+          <p className="text-muted-foreground mt-0.5 text-sm">{description}</p>
+        ) : null}
+      </div>
+      <div className="min-w-0 space-y-4">{children}</div>
+    </section>
+  );
+}
+
+/**
+ * A yes/no choice as a selectable card: the whole card is the target, and
+ * a chosen option is visibly chosen rather than just a ticked box.
+ */
+function OptionCard({
+  checked,
+  onChange,
+  title,
+  description,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  title: React.ReactNode;
+  description?: React.ReactNode;
+}) {
+  return (
+    <label
+      className={cn(
+        "flex cursor-pointer items-start gap-3 rounded-lg border p-3 text-sm transition-colors",
+        checked ? "border-brand bg-brand-50" : "hover:bg-muted/40",
+      )}
+    >
+      <Checkbox
+        checked={checked}
+        onCheckedChange={(v) => onChange(Boolean(v))}
+        className="mt-0.5"
+      />
+      <span>
+        <span className="font-medium">{title}</span>
+        {description ? (
+          <span className="text-muted-foreground mt-0.5 block text-xs leading-relaxed">
+            {description}
+          </span>
+        ) : null}
+      </span>
+    </label>
   );
 }
 
@@ -1381,6 +1559,7 @@ function PropertyStep({
   setTitleDeedFile,
   nocFile,
   setNocFile,
+  errors,
 }: {
   draft: Draft;
   set: <K extends keyof Draft>(key: K, value: Draft[K]) => void;
@@ -1394,6 +1573,8 @@ function PropertyStep({
   setTitleDeedFile: (file: File | null) => void;
   nocFile: File | null;
   setNocFile: (file: File | null) => void;
+  /** Shown under their fields once someone has tried to continue. */
+  errors: Partial<Record<PropertyErrorKey, string>>;
 }) {
   const isCommercial = draft.property_type === "commercial";
   const isVilla = draft.property_type === "villa";
@@ -1478,144 +1659,78 @@ function PropertyStep({
     : null;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-8">
       <div>
-        <h2 className="text-xl">Property and client</h2>
+        <h2 className="text-xl">{quoteOnly ? "Quotation details" : "Property and client"}</h2>
         <p className="text-muted-foreground mt-1 text-sm">
-          These details ride with the job into the reference pack, so the inspector sees them
-          offline.
+          {quoteOnly
+            ? "Choose the client, describe the property and set the price. The job is raised once the client approves the quotation."
+            : "Who the job is for and the property being inspected. The inspector sees all of this on site, even without signal."}
         </p>
       </div>
 
-      <Field label="Client" required hint="search on file, or + to add new">
-        <ClientPicker draft={draft} set={set} />
-      </Field>
+      <FormSection
+        title="Client"
+        description="Who the quotation is for. Pick someone on file, or add them with +."
+      >
+        <Field label="Client" required hint="Search clients on file, or add a new one with +." error={errors.client}>
+          <ClientPicker draft={draft} set={set} />
+        </Field>
 
-      {draft.client_id && propertiesState === "loading" ? (
-        <Field label="Property" hint="checking what this client already has">
-          {/*
+        {draft.client_id && propertiesState === "loading" ? (
+          <Field label="Property" hint="Checking what this client already has…">
+            {/*
             Shaped like the select it becomes, so the form does not jump when
             the rows land.
           */}
-          <div className="border-input text-muted-foreground flex h-9 w-full items-center gap-2 rounded-[12px] border px-3 text-sm">
-            <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
-            Loading properties on file...
-          </div>
-        </Field>
-      ) : null}
+            <div className="border-input text-muted-foreground flex h-9 w-full items-center gap-2 rounded-[12px] border px-3 text-sm">
+              <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
+              Loading properties on file...
+            </div>
+          </Field>
+        ) : null}
 
-      {draft.client_id && propertiesState === "error" ? (
-        <Field label="Property" hint="reuse one on file, or start a new one">
-          <div className="border-input flex flex-wrap items-center justify-between gap-2 rounded-[12px] border px-3 py-2 text-sm">
-            <span className="text-muted-foreground">
-              Could not load this client&apos;s properties.
-            </span>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => loadClientProperties(draft.client_id)}
+        {draft.client_id && propertiesState === "error" ? (
+          <Field label="Property" hint="Reuse one on file, or start a new one.">
+            <div className="border-input flex flex-wrap items-center justify-between gap-2 rounded-[12px] border px-3 py-2 text-sm">
+              <span className="text-muted-foreground">
+                Could not load this client&apos;s properties.
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => loadClientProperties(draft.client_id)}
+              >
+                Try again
+              </Button>
+            </div>
+          </Field>
+        ) : null}
+
+        {draft.client_id && propertiesState === "ready" && clientProperties.length === 0 ? (
+          <p className="text-muted-foreground text-xs">
+            No properties on file for this client yet. The details below will
+            create the first one.
+          </p>
+        ) : null}
+
+        {draft.client_id && propertiesState === "ready" && clientProperties.length > 0 ? (
+          <Field label="Property" hint="Reuse one on file, or start a new one.">
+            <Select
+              value={draft.property_id || "new"}
+              onValueChange={(value) =>
+                applyProperty(value === "new" ? null : clientProperties.find((p) => p.id === value) ?? null)
+              }
             >
-              Try again
-            </Button>
-          </div>
-        </Field>
-      ) : null}
-
-      {draft.client_id && propertiesState === "ready" && clientProperties.length === 0 ? (
-        <p className="text-muted-foreground text-xs">
-          No properties on file for this client yet. The details below will
-          create the first one.
-        </p>
-      ) : null}
-
-      {draft.client_id && propertiesState === "ready" && clientProperties.length > 0 ? (
-        <Field label="Property" hint="reuse one on file, or start a new one">
-          <Select
-            value={draft.property_id || "new"}
-            onValueChange={(value) =>
-              applyProperty(value === "new" ? null : clientProperties.find((p) => p.id === value) ?? null)
-            }
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="new">New property</SelectItem>
-              {clientProperties.map((p) => (
-                <SelectItem key={p.id} value={p.id}>
-                  {[p.unit_label, p.building_name].filter(Boolean).join(", ") || p.unit_label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
-      ) : null}
-
-      {draft.property_id ? (
-        <p className="text-muted-foreground -mt-2 text-xs">
-          Reusing a saved property. Any edits below update that property record.
-        </p>
-      ) : null}
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Unit reference" required>
-          <Input
-            value={draft.unit_label}
-            onChange={(event) => set("unit_label", event.target.value)}
-            placeholder="e.g. Unit 1904"
-          />
-        </Field>
-        <Field label="Project / tower" required>
-          <Input
-            value={draft.building_name}
-            onChange={(event) => set("building_name", event.target.value)}
-            placeholder="e.g. Riviera Tower 3"
-          />
-        </Field>
-        <Field label="Community">
-          <Input
-            value={draft.community}
-            onChange={(event) => set("community", event.target.value)}
-            placeholder="e.g. Dubai Marina"
-          />
-        </Field>
-        <Field label="Developer">
-          <Input
-            value={draft.developer_name}
-            onChange={(event) => set("developer_name", event.target.value)}
-            placeholder="e.g. Emaar"
-          />
-        </Field>
-        <Field label="Property type" required>
-          <Select
-            value={draft.property_type}
-            onValueChange={(value) => setPropertyType(value as SnaggingPropertyType)}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {Object.entries(PROPERTY_TYPE_LABELS).map(([value, label]) => (
-                <SelectItem key={value} value={value}>
-                  {label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
-
-        {!isCommercial ? (
-          <Field label="Bedrooms" required>
-            <Select value={String(draft.bedrooms)} onValueChange={(v) => setBedrooms(Number(v))}>
               <SelectTrigger className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="0">Studio</SelectItem>
-                {Array.from({ length: 11 }, (_, i) => i + 1).map((n) => (
-                  <SelectItem key={n} value={String(n)}>
-                    {n} bedroom{n > 1 ? "s" : ""}
+                <SelectItem value="new">New property</SelectItem>
+                {clientProperties.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {[p.unit_label, p.building_name].filter(Boolean).join(", ") || p.unit_label}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -1623,50 +1738,131 @@ function PropertyStep({
           </Field>
         ) : null}
 
-        <Field label="Built up area (sq ft)" required hint="pricing is based on this">
-          <Input
-            type="number"
-            inputMode="decimal"
-            value={draft.built_up_area}
-            onChange={(event) => set("built_up_area", event.target.value)}
-            placeholder="e.g. 1200"
-          />
-        </Field>
+        {draft.property_id ? (
+          <p className="text-muted-foreground -mt-2 text-xs">
+            Reusing a saved property. Any edits below update that property record.
+          </p>
+        ) : null}
+      </FormSection>
 
-        {hasPlot ? (
-          <Field label="Plot area (sq ft)">
+      <FormSection
+        title="Property details"
+        description="The unit being inspected. Built up area sets the price."
+      >
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <Field label="Unit reference" required error={errors.unit_label}>
+            <Input
+              value={draft.unit_label}
+              onChange={(event) => set("unit_label", event.target.value)}
+              placeholder="e.g. Unit 1904"
+            />
+          </Field>
+          <Field label="Project / tower" required>
+            <Input
+              value={draft.building_name}
+              onChange={(event) => set("building_name", event.target.value)}
+              placeholder="e.g. Riviera Tower 3"
+            />
+          </Field>
+          <Field label="Community">
+            <Input
+              value={draft.community}
+              onChange={(event) => set("community", event.target.value)}
+              placeholder="e.g. Dubai Marina"
+            />
+          </Field>
+          <Field label="Developer">
+            <Input
+              value={draft.developer_name}
+              onChange={(event) => set("developer_name", event.target.value)}
+              placeholder="e.g. Emaar"
+            />
+          </Field>
+          <Field label="Property type" required>
+            <Select
+              value={draft.property_type}
+              onValueChange={(value) => setPropertyType(value as SnaggingPropertyType)}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(PROPERTY_TYPE_LABELS).map(([value, label]) => (
+                  <SelectItem key={value} value={value}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+
+          {!isCommercial ? (
+            <Field label="Bedrooms" required>
+              <Select value={String(draft.bedrooms)} onValueChange={(v) => setBedrooms(Number(v))}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="0">Studio</SelectItem>
+                  {Array.from({ length: 11 }, (_, i) => i + 1).map((n) => (
+                    <SelectItem key={n} value={String(n)}>
+                      {n} bedroom{n > 1 ? "s" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          ) : null}
+
+          <Field
+            label="Built up area (sq ft)"
+            required
+            hint="The price is based on this."
+            error={errors.built_up_area}
+          >
             <Input
               type="number"
               inputMode="decimal"
-              value={draft.plot_area}
-              onChange={(event) => set("plot_area", event.target.value)}
-              placeholder="e.g. 3500"
+              value={draft.built_up_area}
+              onChange={(event) => set("built_up_area", event.target.value)}
+              placeholder="e.g. 1200"
             />
           </Field>
-        ) : null}
 
-        {isVilla ? (
-          <Field label="Number of floors">
-            <Input
-              type="number"
-              inputMode="numeric"
-              value={draft.floors}
-              onChange={(event) => set("floors", event.target.value)}
-              placeholder="e.g. 2"
-            />
-          </Field>
-        ) : null}
-      </div>
+          {hasPlot ? (
+            <Field label="Plot area (sq ft)">
+              <Input
+                type="number"
+                inputMode="decimal"
+                value={draft.plot_area}
+                onChange={(event) => set("plot_area", event.target.value)}
+                placeholder="e.g. 3500"
+              />
+            </Field>
+          ) : null}
 
-      {hasPlot ? (
-        <label className="border-border flex items-center gap-3 rounded-lg border px-3 py-2.5 text-sm">
-          <Checkbox
+          {isVilla ? (
+            <Field label="Number of floors">
+              <Input
+                type="number"
+                inputMode="numeric"
+                value={draft.floors}
+                onChange={(event) => set("floors", event.target.value)}
+                placeholder="e.g. 2"
+              />
+            </Field>
+          ) : null}
+        </div>
+
+        {hasPlot ? (
+          <OptionCard
             checked={draft.external_areas_in_scope}
-            onCheckedChange={(v) => set("external_areas_in_scope", Boolean(v))}
+            onChange={(v) => set("external_areas_in_scope", v)}
+            title="External areas are in scope"
+            description="Garden, pool and landscaping are inspected too."
           />
-          <span>External areas (garden, pool, landscaping) are inside the inspection scope</span>
-        </label>
-      ) : null}
+        ) : null}
+      </FormSection>
 
       {/*
         What the client is charged (FR-2.15, FR-2.04).
@@ -1675,7 +1871,12 @@ function PropertyStep({
         belong to the document that bills for the work.
       */}
       {quoteOnly ? (
-        <QuotePricingBlock draft={draft} set={set} pricing={pricing} />
+        <FormSection
+          title="Pricing"
+          description="What the client declared, when the visit happens, and the rate this quotation charges."
+        >
+          <QuotePricingBlock draft={draft} set={set} pricing={pricing} />
+        </FormSection>
       ) : null}
 
       {/*
@@ -1684,11 +1885,10 @@ function PropertyStep({
         developer and nothing to search for, but nobody should have to
         type one to say where a building is.
       */}
-      <div className="space-y-3">
-        <p className="text-sm font-medium">
-          Location <span className="text-muted-foreground font-normal">(optional pin)</span>
-        </p>
-
+      <FormSection
+        title="Location"
+        description="Optional. Search or click the map to drop a pin, or paste a coordinate."
+      >
         <LocationPicker
           lat={parsedLat}
           lng={parsedLng}
@@ -1703,7 +1903,7 @@ function PropertyStep({
         />
 
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Latitude" hint="(or paste a lat, lng pair)">
+          <Field label="Latitude" hint="You can paste a lat, lng pair here.">
             <Input
               inputMode="decimal"
               value={draft.location_lat}
@@ -1720,41 +1920,48 @@ function PropertyStep({
             />
           </Field>
         </div>
-      </div>
+      </FormSection>
 
-      <label className="border-border flex items-center gap-3 rounded-lg border px-3 py-2.5 text-sm">
-        <Checkbox
+      <FormSection
+        title="Documents"
+        description="Optional paperwork. Nothing here blocks the quotation or the job."
+      >
+        <OptionCard
           checked={draft.noc_required}
-          onCheckedChange={(v) => set("noc_required", Boolean(v))}
+          onChange={(v) => set("noc_required", v)}
+          title="An NOC or authorization letter is required"
+          description="The person requesting the inspection is not the owner."
         />
-        <span>The person requesting the inspection is not the owner, so an NOC or authorization letter is required</span>
-      </label>
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <DocumentField
-          label="Title deed"
-          hint="(optional, confirms unit and area)"
-          file={titleDeedFile}
-          onPick={setTitleDeedFile}
-        />
-        {draft.noc_required ? (
+        <div className="grid gap-4 md:grid-cols-2">
           <DocumentField
-            label="NOC / authorization letter"
-            hint="(optional, never blocks the job)"
-            file={nocFile}
-            onPick={setNocFile}
+            label="Title deed"
+            hint="Optional. Confirms the unit and its area."
+            file={titleDeedFile}
+            onPick={setTitleDeedFile}
           />
-        ) : null}
-      </div>
+          {draft.noc_required ? (
+            <DocumentField
+              label="NOC / authorization letter"
+              hint="Optional. Never blocks the job."
+              file={nocFile}
+              onPick={setNocFile}
+            />
+          ) : null}
+        </div>
+      </FormSection>
 
-      <Field label="Office notes" hint="(optional)">
+      <FormSection
+        title="Office notes"
+        description="Optional. Anything the inspector should know on site."
+      >
         <Textarea
           rows={3}
           value={draft.notes}
           onChange={(event) => set("notes", event.target.value)}
           placeholder="Access, handover date, anything the inspector should know on site"
+          aria-label="Office notes"
         />
-      </Field>
+      </FormSection>
     </div>
   );
 }
@@ -2530,22 +2737,14 @@ function QuotePricingBlock({
       ? pickRateForSize(externalBand.min, externalBand.max, externalArea)
       : null;
   return (
-    <div className="space-y-4 rounded-lg border p-4">
-      <div>
-        <p className="text-sm font-medium">Pricing</p>
-        <p className="text-muted-foreground mt-0.5 text-xs">
-          What the client declared, when the visit happens, and the rate this
-          quotation charges.
-        </p>
-      </div>
-
-      {/* The declaration. Not asked on commercial, which is flat. */}
-      {!isCommercial ? (
-        <label className="flex items-start gap-2 text-sm">
-          <Checkbox
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-2">
+        {/* The declaration. Not asked on commercial, which is flat. */}
+        {!isCommercial ? (
+          <OptionCard
             checked={draft.furnished}
-            onCheckedChange={(v) => {
-              set("furnished", Boolean(v));
+            onChange={(v) => {
+              set("furnished", v);
               /*
                 The band changes with it, so a rate typed against the old
                 one is no longer the number the coordinator meant.
@@ -2554,34 +2753,25 @@ function QuotePricingBlock({
               */
               set("rate_per_sqft", "");
             }}
+            title="Furnished"
+            description="The client declares the property is furnished, so it is charged at the furnished rate. If the inspector finds otherwise on site, the quotation is void and a revised one is needed."
           />
-          <span>
-            The client declares this property is <strong>furnished</strong>
-            <span className="text-muted-foreground block text-xs">
-              Charged at the furnished rate. If the inspector finds otherwise on
-              site the quotation is void and a revised one is needed.
-            </span>
-          </span>
-        </label>
-      ) : null}
+        ) : null}
 
-      <label className="flex items-start gap-2 text-sm">
-        <Checkbox
+        <OptionCard
           checked={draft.out_of_hours}
-          onCheckedChange={(v) => set("out_of_hours", Boolean(v))}
+          onChange={(v) => set("out_of_hours", v)}
+          title="Out of hours"
+          description={
+            pricing
+              ? `Adds the ${pricing.out_of_hours_percent}% out-of-hours surcharge to the service total, before VAT, as its own line on the quotation.`
+              : "Adds the out-of-hours surcharge to the service total, before VAT, as its own line on the quotation."
+          }
         />
-        <span>
-          The visit is <strong>out of hours</strong>
-          <span className="text-muted-foreground block text-xs">
-            {pricing
-              ? `Adds the ${pricing.out_of_hours_percent}% out-of-hours surcharge to the service total, before VAT. It shows as its own line on the quotation.`
-              : "Adds the out-of-hours surcharge to the service total, before VAT. It shows as its own line on the quotation."}
-          </span>
-        </span>
-      </label>
+      </div>
 
       {row ? (
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           <RateField
             label="Rate per sq ft"
             band={band}

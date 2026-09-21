@@ -557,10 +557,10 @@ export function SubmissionsList({
       {sendBackDialog}
       {/* Toolbar: search left, page size / refresh / primary action right. */}
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="relative w-full max-w-xs">
+        <div className="relative w-full sm:w-80">
           <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2" />
           <Input
-            placeholder="Search customer or address..."
+            placeholder="Search..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="pl-9"

@@ -1,10 +1,10 @@
 "use client";
 
 import { useId, useState } from "react";
-import { LoaderCircleIcon, PlusIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
+import { LoaderCircleIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
 
-import { PillTabs } from "@/components/dashboard/shared/kaizen";
 import { Button } from "@/components/ui/button";
+import { StatusSelect } from "@/components/data-table/toolbars/status-select";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -27,8 +27,9 @@ interface SnaggingJobsToolbarProps {
   statusTabs: ReadonlyArray<{ value: string; label: string }>;
   statusValue: string;
   onStatusChange: (value: string) => void;
-  canCreate: boolean;
-  onCreate: () => void;
+  /** Kept for callers; the create action now lives in the page heading. */
+  canCreate?: boolean;
+  onCreate?: () => void;
 }
 
 /**
@@ -48,8 +49,6 @@ export function SnaggingJobsToolbar({
   statusTabs,
   statusValue,
   onStatusChange,
-  canCreate,
-  onCreate,
 }: SnaggingJobsToolbarProps) {
   const searchInputId = useId();
   const [globalFilter, setGlobalFilter] = useState<string>("");
@@ -63,12 +62,12 @@ export function SnaggingJobsToolbar({
   return (
     <div className="flex flex-col gap-4 px-4 py-4 sm:py-6">
       <div className="flex flex-row items-center justify-between gap-2 sm:gap-4">
-        <div className="flex items-center gap-2">
-          <div className="relative flex-1 sm:max-w-md sm:min-w-[260px]">
+        <div className="flex flex-1 flex-wrap items-center gap-2">
+          <div className="relative w-full sm:w-80 sm:flex-none">
             <Input
               id={searchInputId}
               type="search"
-              placeholder="Search unit, client or code..."
+              placeholder="Search..."
               className="peer w-full ps-9"
               value={globalFilter}
               onChange={handleFilterChange}
@@ -87,6 +86,7 @@ export function SnaggingJobsToolbar({
               )}
             </div>
           </div>
+          <StatusSelect options={statusTabs} value={statusValue} onChange={onStatusChange} />
         </div>
 
         <div className="flex gap-3 sm:flex-row sm:items-center sm:gap-4">
@@ -116,17 +116,9 @@ export function SnaggingJobsToolbar({
               <RefreshCwIcon className="size-4 sm:mr-1" />
               <span className="hidden sm:inline">Refresh</span>
             </Button>
-            {canCreate ? (
-              <Button onClick={onCreate} className="flex-1 sm:flex-initial">
-                <PlusIcon className="size-4 sm:mr-2" />
-                <span className="hidden sm:inline">New quotation</span>
-              </Button>
-            ) : null}
           </div>
         </div>
       </div>
-
-      <PillTabs tabs={statusTabs} value={statusValue} onChange={onStatusChange} />
     </div>
   );
 }

@@ -4,12 +4,9 @@ import { useState } from "react";
 import Link from "next/link";
 import {
   ArrowRight,
-  Building,
   Building2,
   CalendarDays,
   Clock,
-  Home,
-  Store,
   UserRound,
 } from "lucide-react";
 
@@ -26,6 +23,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { formatTimeAmPm } from "@/components/ui/time-select";
 import { cn } from "@/lib/utils";
 
+import { ListPager, POPUP_PAGE_SIZES, PROPERTY_TYPE_ICON } from "../shared";
 import { InlineError, LinesSkeleton, SectionShell } from "./section-shell";
 import { useSection } from "./use-section";
 
@@ -48,12 +46,7 @@ type Upcoming = {
 };
 
 /** The kind of unit, as a glyph — read before the words are. */
-const TYPE_ICON: Record<string, typeof Building2> = {
-  apartment: Building2,
-  villa: Home,
-  townhouse: Building,
-  commercial: Store,
-};
+const TYPE_ICON = PROPERTY_TYPE_ICON;
 
 const ENDPOINT = "/api/snagging/overview/upcoming";
 
@@ -115,9 +108,9 @@ export function UpcomingInspections() {
           // a list already showing everything reads as a bug.
           total > shown ? (
             <Button
-              variant="ghost"
+              variant="outline"
               size="sm"
-              className="text-brand h-auto w-full justify-between px-0 hover:bg-transparent"
+              className="whitespace-nowrap"
               onClick={() => setAllOpen(true)}
             >
               View all {total}
@@ -229,8 +222,16 @@ function AllUpcomingDialog({
   onOpenChange: (open: boolean) => void;
   total: number;
 }) {
+  // A page of the diary at a time; the server counts the whole of it.
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(POPUP_PAGE_SIZES[0]);
+  const [openedAt, setOpenedAt] = useState(open);
+  if (open !== openedAt) {
+    setOpenedAt(open);
+    if (open) setPage(0);
+  }
   const { data, loading, error, reload } = useSection<Upcoming>(
-    `${ENDPOINT}?scope=all`,
+    `${ENDPOINT}?scope=all&page=${page}&pageSize=${pageSize}`,
     { staleMs: 300_000, enabled: open },
   );
 
@@ -283,10 +284,22 @@ function AllUpcomingDialog({
         </div>
 
         {!loading && !error && items.length > 0 ? (
-          <div className="text-muted-foreground border-t px-6 py-3 text-xs">
-            {items.length < total
-              ? `Showing the next ${items.length} of ${total}.`
-              : "Open a row to go to the inspection."}
+          <div className="border-t">
+            <ListPager
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onPageChange={setPage}
+              onPageSizeChange={(size) => {
+                setPageSize(size);
+                setPage(0);
+              }}
+              pageSizes={POPUP_PAGE_SIZES}
+              noun="inspections"
+            />
+            {/* <p className="text-muted-foreground px-6 pb-3 text-xs">
+              Open a row to go to the inspection.
+            </p> */}
           </div>
         ) : null}
       </DialogContent>

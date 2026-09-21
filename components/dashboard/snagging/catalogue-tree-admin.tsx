@@ -39,7 +39,9 @@ import {
   type CatalogueSubcategory,
 } from "@/types/types";
 
-import { ErrorState } from "./shared";
+import { RecordsToolbar } from "@/components/data-table/toolbars/records-toolbar";
+
+import { ErrorState, PageHeading } from "./shared";
 
 type Level = "category" | "subcategory" | "defect";
 
@@ -174,29 +176,18 @@ export default function CatalogueTreeAdmin() {
     }
   }
 
-  if (error) {
-    return (
-      <ErrorState
-        title="Could not load the catalogue"
-        message={error}
-        onRetry={() => void load()}
-        retrying={loading}
-      />
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">Snag catalogue</h1>
-          <p className="text-muted-foreground text-sm">
-            Category, then sub-category, then defect.{" "}
-            {defects.length.toLocaleString()} defects across {categories.length}{" "}
-            categories.
-          </p>
-        </div>
-        {canCreate ? (
+  /*
+    The same page shape as the other snagging pages: the house heading
+    with its actions on the right, then the table in a card with the
+    house toolbar.
+  */
+  const heading = (
+    <PageHeading
+      eyebrow="Master data"
+      title="Snag catalogue"
+      description={`Category, then sub-category, then defect. ${defects.length.toLocaleString()} defects across ${categories.length} categories.`}
+      actions={
+        canCreate ? (
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" onClick={() => setEditing({ level: "category" })}>
               <Plus className="size-4" />
@@ -214,24 +205,49 @@ export default function CatalogueTreeAdmin() {
               Defect
             </Button>
           </div>
-        ) : null}
+        ) : null
+      }
+    />
+  );
+
+  if (error) {
+    return (
+      <div className="flex flex-col gap-6">
+        {heading}
+        <ErrorState
+          title="Could not load the catalogue"
+          message={error}
+          onRetry={() => void load()}
+          retrying={loading}
+        />
       </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-6">
+      {heading}
 
       <Card className="py-0">
         <DataTable
           data={paginated}
           toolbar={
-            <div className="flex flex-wrap items-center gap-2 p-3">
-              <Input
-                value={search}
-                onChange={(event) => {
-                  setSearch(event.target.value);
-                  setPage(0);
-                }}
-                placeholder="Search code, defect, sub-category…"
-                className="w-72"
-                aria-label="Search the catalogue"
-              />
+            <RecordsToolbar
+              fetchRecords={() => void load()}
+              globalFilter={search}
+              onGlobalFilterChange={(value) => {
+                setSearch(value);
+                setPage(0);
+              }}
+              isSearchLoading={loading}
+              pageSize={pageSize}
+              onPageSizeChange={(size) => {
+                setPageSize(size);
+                setPage(0);
+              }}
+              searchPlaceholder="Search..."
+              filters={
+              <>
               <Select
                 value={category}
                 onValueChange={(value) => {
@@ -273,7 +289,9 @@ export default function CatalogueTreeAdmin() {
                   ))}
                 </SelectContent>
               </Select>
-            </div>
+              </>
+              }
+            />
           }
           columns={getCatalogueV2Columns({
             canEdit,

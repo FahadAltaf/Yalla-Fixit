@@ -133,6 +133,10 @@ export async function GET(req: NextRequest) {
       query = query.order(sortBy, { ascending, nullsFirst: false });
     }
 
+    // One client's jobs, for the Clients page.
+    const clientId = params.get("clientId");
+    if (clientId) query = query.eq("client_id", clientId);
+
     // An inspector without All Records access only ever sees their own jobs.
     const assigneeId = params.get("assigneeId");
     if (assigneeId) query = query.eq("inspector_id", assigneeId);

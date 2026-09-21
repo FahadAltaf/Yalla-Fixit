@@ -22,7 +22,9 @@ import { ActionType, ResourceType } from "@/types/types";
  * way, so the card can name a number its own list is not carrying.
  */
 const LIMIT = 6;
-const ALL_LIMIT = 100;
+/* "View all" reads the diary a page at a time (?scope=all&page=&pageSize=). */
+const ALL_PAGE_SIZE = 5;
+const ALL_PAGE_SIZE_MAX = 50;
 
 /*
   Site runs on GST, and appointments are stored as instants.
@@ -65,8 +67,19 @@ export async function GET(req: NextRequest) {
 
     const admin = await createAdminServerClient();
     const today = gstDate(new Date());
-    const limit =
-      req.nextUrl.searchParams.get("scope") === "all" ? ALL_LIMIT : LIMIT;
+    const all = req.nextUrl.searchParams.get("scope") === "all";
+    const page = all
+      ? Math.max(Math.floor(Number(req.nextUrl.searchParams.get("page"))) || 0, 0)
+      : 0;
+    const size = all
+      ? Math.min(
+          Math.max(
+            Math.floor(Number(req.nextUrl.searchParams.get("pageSize"))) || ALL_PAGE_SIZE,
+            1,
+          ),
+          ALL_PAGE_SIZE_MAX,
+        )
+      : LIMIT;
 
     /*
       What counts as booked, asked once.
@@ -93,7 +106,8 @@ export async function GET(req: NextRequest) {
     )
       .order("scheduled_date", { ascending: true })
       .order("appointment_at", { ascending: true, nullsFirst: false })
-      .limit(limit);
+      .order("id")
+      .range(page * size, page * size + size - 1);
     if (error) throw new Error(error.message);
 
     type Joined = { full_name: string | null; email: string | null };

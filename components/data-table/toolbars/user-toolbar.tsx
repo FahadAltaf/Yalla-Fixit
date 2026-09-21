@@ -25,6 +25,12 @@ interface UserDataTableToolbarProps {
   isSearchLoading: boolean;
   pageSize: number;
   onPageSizeChange: (size: number) => void;
+  /**
+   * When given, the page heading owns the "Add" button and opens the
+   * dialog through these; the toolbar then shows no create button.
+   */
+  createOpen?: boolean;
+  onCreateOpenChange?: (open: boolean) => void;
 }
 
 export function UserDataTableToolbar({
@@ -34,11 +40,16 @@ export function UserDataTableToolbar({
   isSearchLoading,
   pageSize,
   onPageSizeChange,
+  createOpen,
+  onCreateOpenChange,
 }: UserDataTableToolbarProps) {
   const searchInputId = useId();
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [ownDialogOpen, setOwnDialogOpen] = useState(false);
+  const controlled = createOpen !== undefined && onCreateOpenChange !== undefined;
+  const isDialogOpen = controlled ? createOpen : ownDialogOpen;
+  const setIsDialogOpen = controlled ? onCreateOpenChange : setOwnDialogOpen;
   const [globalFilter, setGlobalFilter] = useState<string>("");
   const handleFilterChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const value = event.target.value;
@@ -50,7 +61,7 @@ export function UserDataTableToolbar({
     <div className="flex gap-2 sm:gap-4 py-4 sm:py-6 px-4 flex-row items-center justify-between">
       {/* Search Input */}
       <div className="flex items-center gap-2">
-        <div className="relative flex-1 sm:min-w-[260px] sm:max-w-md">
+        <div className="relative w-full sm:w-80 sm:flex-none">
           <Input
             id={searchInputId}
             ref={searchInputRef}
@@ -109,10 +120,12 @@ export function UserDataTableToolbar({
             <RefreshCwIcon className="size-4 sm:mr-1" />
             <span className="hidden sm:inline">Refresh</span>
           </Button>
-          <Button onClick={() => setIsDialogOpen(true)} className="flex-1 sm:flex-initial">
-            <PlusIcon className="size-4 sm:mr-2" />
-            <span className="hidden sm:inline">Add User</span>
-          </Button>
+          {controlled ? null : (
+            <Button onClick={() => setIsDialogOpen(true)} className="flex-1 sm:flex-initial">
+              <PlusIcon className="size-4 sm:mr-2" />
+              <span className="hidden sm:inline">Add User</span>
+            </Button>
+          )}
         </div>
       </div>
 

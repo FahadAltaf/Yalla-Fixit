@@ -1,5 +1,6 @@
 "use client";
 
+import { Money } from "@/components/ui/money";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -27,6 +28,7 @@ import {
   type SnaggingPricingConfig,
   type SnaggingQuotationSummary,
 } from "@/modules/snagging";
+import { useDebounce } from "@/hooks/use-debounce";
 import type { SnaggingTaskSummary } from "@/types/types";
 
 import { PROPERTY_TYPE_LABELS, SubmitButton } from "./shared";
@@ -97,11 +99,26 @@ export function DesnagQuotationDialog({
     };
   }, [open, pricing]);
 
+  /*
+    Finished inspections, searched on the server by code, unit or
+    building. Only the first 200 used to load, so older jobs could never
+    be picked for a de-snag.
+  */
+  const [jobSearch, setJobSearch] = useState("");
+  const debouncedJobSearch = useDebounce(jobSearch.trim(), 300);
+  // The picked job, kept even when a new search leaves it off the list.
+  const [pickedJob, setPickedJob] = useState<SnaggingTaskSummary | null>(null);
+
   useEffect(() => {
     if (!open || sourceJob) return;
     let live = true;
+    setJobsLoading(true);
     snaggingService
-      .listTasks({ status: "approved,delivered" }, 0, 200)
+      .listTasks(
+        { status: "approved,delivered", search: debouncedJobSearch || undefined },
+        0,
+        25,
+      )
       .then((res) => {
         if (live) setJobs(res.data ?? []);
       })
@@ -114,12 +131,16 @@ export function DesnagQuotationDialog({
     return () => {
       live = false;
     };
-  }, [open, sourceJob]);
+  }, [open, sourceJob, debouncedJobSearch]);
+
+  // The picked job stays in the list whatever the search shows.
+  const jobOptions =
+    pickedJob && !jobs.some((job) => job.id === pickedJob.id) ? [pickedJob, ...jobs] : jobs;
 
   // Which property type is being priced: the job passed in, or the one picked.
   const propertyType = sourceJob
     ? sourceJob.property_type
-    : (jobs.find((job) => job.id === jobId)?.property_type ?? null);
+    : (jobOptions.find((job) => job.id === jobId)?.property_type ?? null);
   const chosenJob = sourceJob?.id ?? jobId;
 
   /*
@@ -183,10 +204,18 @@ export function DesnagQuotationDialog({
           {sourceJob ? null : (
             <div className="space-y-1.5">
               <Label htmlFor="desnag-job">Which inspection?</Label>
+              <Input
+                id="desnag-job-search"
+                value={jobSearch}
+                onChange={(event) => setJobSearch(event.target.value)}
+                placeholder="Search by job code, unit or building"
+                aria-label="Search finished inspections"
+              />
               <Select
                 value={jobId}
                 onValueChange={(value) => {
                   setJobId(value);
+                  setPickedJob(jobOptions.find((job) => job.id === value) ?? null);
                   setAmount("");
                 }}
               >
@@ -200,12 +229,16 @@ export function DesnagQuotationDialog({
                   />
                 </SelectTrigger>
                 <SelectContent>
-                  {jobs.length === 0 ? (
+                  {jobOptions.length === 0 ? (
                     <div className="text-muted-foreground px-2 py-1.5 text-sm">
-                      {jobsLoading ? "Loading…" : "No finished inspections yet"}
+                      {jobsLoading
+                        ? "Loading…"
+                        : debouncedJobSearch
+                          ? "No finished inspection matches that"
+                          : "No finished inspections yet"}
                     </div>
                   ) : (
-                    jobs.map((job) => (
+                    jobOptions.map((job) => (
                       <SelectItem key={job.id} value={job.id}>
                         {job.code} — {job.unit_label}
                         {job.building_name ? `, ${job.building_name}` : ""}
@@ -233,14 +266,14 @@ export function DesnagQuotationDialog({
               <Label>De-snagging amount</Label>
               <div className="bg-muted/50 text-muted-foreground flex h-9 items-center rounded-md border px-3 text-sm">
                 <span className="text-foreground font-medium tabular-nums">
-                  {currency} {range.value.toLocaleString()}
+                  <Money value={range.value} currency={currency} dp={0} />
                 </span>
                 <span className="ml-2 text-xs">+ VAT · published rate for a {typeLabel.toLowerCase()}</span>
               </div>
             </div>
           ) : (
             <div className="space-y-1.5">
-              <Label htmlFor="desnag-amount">De-snagging amount ({currency}, before VAT)</Label>
+              <Label htmlFor="desnag-amount">De-snagging amount (before VAT)</Label>
               <AmountInBand
                 id="desnag-amount"
                 band={range}
@@ -248,7 +281,8 @@ export function DesnagQuotationDialog({
                 onChange={setAmount}
               />
               <p className="text-muted-foreground text-xs">
-                Between {currency} {range.min.toLocaleString()} and {range.max.toLocaleString()} for a{" "}
+                Between <Money value={range.min} currency={currency} dp={0} /> and{" "}
+                <Money value={range.max} currency={currency} dp={0} /> for a{" "}
                 {typeLabel.toLowerCase()}, from the rate card.
               </p>
             </div>

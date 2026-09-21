@@ -56,6 +56,8 @@ export interface SnaggingTaskFilters {
   search?: string;
   developer?: string;
   assigneeId?: string;
+  /** Only this client's jobs. */
+  clientId?: string;
   from?: string;
   to?: string;
   /** Raised between these dates (YYYY-MM-DD), as opposed to scheduled. */
@@ -447,17 +449,41 @@ export const snaggingService = {
       body: input as unknown as Record<string, unknown>,
     }),
 
+  /** The best few matches for a picker; the server searches, not the page. */
   searchClients: async (
     search?: string,
-    options?: { withCounts?: boolean },
+    options?: { limit?: number },
   ): Promise<SnaggingClientOption[]> =>
     executeRESTBackend<SnaggingClientOption[]>("/api/snagging/clients", {
       method: "GET",
       params: {
         ...(search ? { search } : {}),
-        ...(options?.withCounts ? { with_counts: "true" } : {}),
+        limit: String(options?.limit ?? 20),
       },
     }),
+
+  /** One page of the Clients table, with each client's job count. */
+  listClientsPage: async (query: {
+    search?: string;
+    page: number;
+    pageSize: number;
+    sortBy?: string;
+    sortDirection?: "asc" | "desc";
+  }): Promise<{ data: SnaggingClientOption[]; totalCount: number }> =>
+    executeRESTBackend<{ data: SnaggingClientOption[]; totalCount: number }>(
+      "/api/snagging/clients",
+      {
+        method: "GET",
+        params: {
+          ...(query.search ? { search: query.search } : {}),
+          with_counts: "true",
+          ...(query.sortBy ? { sortBy: query.sortBy } : {}),
+          ...(query.sortDirection ? { sortDirection: query.sortDirection } : {}),
+          page: String(query.page),
+          pageSize: String(query.pageSize),
+        },
+      },
+    ),
 
   // ── Quotation (F1-F13) ────────────────────────────────────────────────
   getPricing: async (): Promise<SnaggingPricingConfig> =>
@@ -509,15 +535,26 @@ export const snaggingService = {
    * Every quotation, newest first — including the ones with no job yet,
    * which is what the Quotations section exists to show.
    */
-  listQuotations: async (filters?: {
+  /** One page of quotations, with the total and a count per status. */
+  listQuotations: async (filters: {
     status?: string;
     kind?: string;
-  }): Promise<SnaggingQuotationSummary[]> =>
-    executeRESTBackend<SnaggingQuotationSummary[]>("/api/snagging/quotations", {
+    search?: string;
+    page: number;
+    pageSize: number;
+  }): Promise<{
+    data: SnaggingQuotationSummary[];
+    totalCount: number;
+    counts: Record<string, number>;
+  }> =>
+    executeRESTBackend("/api/snagging/quotations", {
       method: "GET",
       params: {
-        ...(filters?.status && filters.status !== "all" ? { status: filters.status } : {}),
-        ...(filters?.kind && filters.kind !== "all" ? { kind: filters.kind } : {}),
+        ...(filters.status && filters.status !== "all" ? { status: filters.status } : {}),
+        ...(filters.kind && filters.kind !== "all" ? { kind: filters.kind } : {}),
+        ...(filters.search ? { search: filters.search } : {}),
+        page: String(filters.page),
+        pageSize: String(filters.pageSize),
       },
     }),
 
@@ -1121,6 +1158,13 @@ export const snaggingService = {
     from?: string;
     to?: string;
     granularity?: SnaggingAnalyticsGranularity;
+    /** Zero-based page; ignored when `all` is set. */
+    page?: number;
+    pageSize?: number;
+    /** Every row, for an export. */
+    all?: boolean;
+    /** Unit, building or job code. */
+    search?: string;
   }): Promise<SnaggingAnalyticsDrilldown> =>
     executeRESTBackend<SnaggingAnalyticsDrilldown>(
       "/api/snagging/analytics/records",
@@ -1132,6 +1176,13 @@ export const snaggingService = {
           ...(query.from ? { from: query.from } : {}),
           ...(query.to ? { to: query.to } : {}),
           ...(query.granularity ? { granularity: query.granularity } : {}),
+          ...(query.search ? { search: query.search } : {}),
+          ...(query.all
+            ? { all: "1" }
+            : {
+                page: String(query.page ?? 0),
+                pageSize: String(query.pageSize ?? 25),
+              }),
         },
       },
     ),

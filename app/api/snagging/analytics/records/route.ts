@@ -70,6 +70,12 @@ const IDENTITY_COLUMNS: Column[] = [
   { key: "status", label: "Status" },
 ];
 
+/** Rows per page of the pop-up table. */
+const DEFAULT_PAGE_SIZE = 25;
+const MAX_PAGE_SIZE = 100;
+/** The most an export will carry, so one click cannot stall the server. */
+const MAX_EXPORT_ROWS = 10_000;
+
 export async function GET(req: NextRequest) {
   try {
     const { profile, accessUser } = await getRequestUserAccess(req);
@@ -115,9 +121,33 @@ export async function GET(req: NextRequest) {
       range,
       granularity,
     );
+    /*
+      One page of rows, unless the export asks for the lot. The figures
+      are computed over every job either way; only what is sent back is
+      cut, so the count above the table is always the whole total.
+    */
+    const all = params.get("all") === "1";
+    // Search narrows the rows, never the figure: the total follows it.
+    const needle = (params.get("search") ?? "").trim().toLowerCase().slice(0, 100);
+    const matching = needle
+      ? built.jobs.filter((job) =>
+          [job.code, job.unit_label, job.building_name]
+            .filter(Boolean)
+            .some((field) => String(field).toLowerCase().includes(needle)),
+        )
+      : built.jobs;
+    const pageSize = Math.min(
+      Math.max(Number(params.get("pageSize")) || DEFAULT_PAGE_SIZE, 1),
+      MAX_PAGE_SIZE,
+    );
+    const page = Math.max(Number(params.get("page")) || 0, 0);
+    const pageJobs = all
+      ? matching.slice(0, MAX_EXPORT_ROWS)
+      : matching.slice(page * pageSize, page * pageSize + pageSize);
+
     const names = await loadInspectorNames(admin, [
       ...new Set(
-        built.jobs
+        pageJobs
           .map((job) => job.inspector_id)
           .filter((id): id is string => !!id),
       ),
@@ -128,11 +158,11 @@ export async function GET(req: NextRequest) {
       title: built.title,
       description: built.description,
       columns: [...IDENTITY_COLUMNS, ...built.columns],
-      rows: built.jobs.map((job) => ({
+      rows: pageJobs.map((job) => ({
         ...identityOf(job),
         ...built.extra(job, names),
       })),
-      totalCount: built.jobs.length,
+      totalCount: matching.length,
     };
 
     return NextResponse.json({ data: drilldown });

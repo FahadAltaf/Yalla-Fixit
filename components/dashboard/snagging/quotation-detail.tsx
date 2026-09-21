@@ -4,9 +4,11 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Check,
+  ChevronDown,
   Copy,
   Download,
   FileText,
+  Mail,
   MessageCircle,
   Plus,
   Send,
@@ -19,6 +21,12 @@ import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Dialog,
   DialogContent,
@@ -284,36 +292,45 @@ export default function QuotationDetail({ id }: { id: string }) {
                   ) : null}
 
                   {!isDecided ? (
-                    <>
-                      <SubmitButton
-                        variant="outline"
-                        size="sm"
-                        disabled={busy}
-                        pending={pending === "share_link"}
-                        pendingLabel="Preparing…"
-                        icon={<MessageCircle className="size-4" />}
-                        onClick={() => void shareByHand()}
-                      >
-                        Share on WhatsApp
-                      </SubmitButton>
-                      <Button
-                        size="sm"
-                        disabled={busy}
-                        onClick={() => {
-                          const snap = (quote.property_snapshot ?? {}) as Record<
-                            string,
-                            unknown
-                          >;
-                          setRecipient(
-                            (snap.client_email as string) ?? quote.sent_to ?? "",
-                          );
-                          setSendOpen(true);
-                        }}
-                      >
-                        <Send className="size-4" />{" "}
-                        {quote.status === "sent" ? "Resend by email" : "Send by email"}
-                      </Button>
-                    </>
+                    /*
+                      One "Share" button with the two ways to send it, not
+                      two buttons side by side.
+                    */
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <SubmitButton
+                          size="sm"
+                          disabled={busy}
+                          pending={pending === "share_link"}
+                          pendingLabel="Preparing…"
+                          icon={<Send className="size-4" />}
+                        >
+                          {quote.status === "sent" ? "Share again" : "Share"}
+                          <ChevronDown className="size-3.5" />
+                        </SubmitButton>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => void shareByHand()}>
+                          <MessageCircle className="size-4" />
+                          Share on WhatsApp
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => {
+                            const snap = (quote.property_snapshot ?? {}) as Record<
+                              string,
+                              unknown
+                            >;
+                            setRecipient(
+                              (snap.client_email as string) ?? quote.sent_to ?? "",
+                            );
+                            setSendOpen(true);
+                          }}
+                        >
+                          <Mail className="size-4" />
+                          {quote.status === "sent" ? "Resend by email" : "Send by email"}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   ) : null}
                 </div>
               ) : null}

@@ -47,6 +47,7 @@ import {
   CompletedIndex,
   ListPager,
   PillTabs,
+  POPUP_PAGE_SIZES,
   SectionCard,
   SeverityBadge,
   SnagIndex,
@@ -1279,7 +1280,7 @@ function AreaSnagsDialog({
                 setPageSize(size);
                 setPage(0);
               }}
-              pageSizes={[5, 10, 25]}
+              pageSizes={POPUP_PAGE_SIZES}
               noun="snags"
               className="border-t"
             />

@@ -737,10 +737,11 @@ export default function DailyScheduleDashboard({ technicians }: Props) {
         <div className={`flex flex-col gap-2 print:hidden ${filtersOpen ? "" : "hidden"}`}>
           <div className="flex flex-wrap items-center gap-2">
             <Input
-              placeholder="Search technician, WO, AP, client, address..."
+              aria-label="Search the schedule"
+              placeholder="Search..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="max-w-sm"
+              className="w-full sm:w-80"
             />
 
             {/* Inverse toggle (#1): flips the role/service/tag filters to show

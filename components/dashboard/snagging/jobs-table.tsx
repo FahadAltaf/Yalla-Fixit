@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ClipboardCheck } from "lucide-react";
+import { ClipboardCheck, Plus } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
 
 import { getSnaggingJobColumns } from "@/components/data-table/columns/column-snagging-job";
 import { SnaggingJobsToolbar } from "@/components/data-table/toolbars/snagging-jobs-toolbar";
@@ -157,6 +159,15 @@ export default function JobsTable() {
         eyebrow="Operations"
         title="Jobs"
         description="Every inspection task, its round, its inspector, and the snag counts the field has sent back."
+        actions={
+          canCreate ? (
+            // A job starts from a quotation the client has approved.
+            <Button onClick={() => router.push("/snagging/quotations/new")}>
+              <Plus className="size-4" />
+              New quotation
+            </Button>
+          ) : null
+        }
       />
 
       {error ? (

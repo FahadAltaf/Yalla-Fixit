@@ -146,7 +146,7 @@ export async function GET(req: NextRequest) {
       myQuotations(
         admin
           .from("snagging_quotations")
-          .select("id, quote_number, status, sent_at, updated_at"),
+          .select("id, quote_number, status, sent_at, updated_at, property_snapshot"),
         me,
       )
         .eq("status", "sent")
@@ -199,6 +199,21 @@ export async function GET(req: NextRequest) {
       status: string;
       sent_at: string | null;
       updated_at: string;
+      property_snapshot: Record<string, unknown> | null;
+    };
+
+    /*
+      Each row is named by the unit, which is what the team recognises;
+      the job code is an internal handle and read as noise. The line
+      underneath says what is wrong.
+    */
+    const quotePlace = (row: QuoteRow) => {
+      const snap = row.property_snapshot ?? {};
+      return (
+        [snap.unit_label, snap.building_name].filter(Boolean).join(", ") ||
+        (snap.client_name as string | undefined) ||
+        `Quotation ${row.quote_number}`
+      );
     };
 
     const place = (row: Row) =>
@@ -224,8 +239,8 @@ export async function GET(req: NextRequest) {
           id: row.id,
           category: "overdue_on_site" as const,
           severity: "urgent" as const,
-          title: `${row.code} overdue on site`,
-          subtitle: due ? `${place(row)} · was due ${due}` : place(row),
+          title: place(row),
+          subtitle: due ? `Inspection overdue on site · was due ${due}` : "Inspection overdue on site",
           // The due date is already spelled out above; a "3 days ago" after
           // it would be the same fact told twice.
           at: null,
@@ -236,8 +251,10 @@ export async function GET(req: NextRequest) {
         id: row.id,
         category: "sent_back" as const,
         severity: "urgent" as const,
-        title: `${row.code} sent back for correction`,
-        subtitle: row.rejection_reason?.trim() || place(row),
+        title: place(row),
+        subtitle: row.rejection_reason?.trim()
+          ? `Sent back for correction: ${row.rejection_reason.trim()}`
+          : "Sent back for correction",
         at: row.updated_at,
         href: `/snagging/${row.id}`,
       })),
@@ -245,8 +262,8 @@ export async function GET(req: NextRequest) {
         id: row.id,
         category: "review_overdue" as const,
         severity: "urgent" as const,
-        title: `${row.code} past the 48-hour review window`,
-        subtitle: place(row),
+        title: place(row),
+        subtitle: "Waiting on review for more than 48 hours",
         at: row.submitted_at ?? row.updated_at,
         href: `/snagging/${row.id}`,
       })),
@@ -254,8 +271,8 @@ export async function GET(req: NextRequest) {
         id: row.id,
         category: "in_review" as const,
         severity: "pending" as const,
-        title: `${row.code} waiting on review`,
-        subtitle: place(row),
+        title: place(row),
+        subtitle: "Submitted and waiting on review",
         at: row.submitted_at ?? row.updated_at,
         href: `/snagging/${row.id}`,
       })),
@@ -263,8 +280,8 @@ export async function GET(req: NextRequest) {
         id: row.id,
         category: "unassigned" as const,
         severity: "pending" as const,
-        title: `${row.code} has no inspector`,
-        subtitle: place(row),
+        title: place(row),
+        subtitle: "No inspector assigned yet",
         at: row.updated_at,
         href: `/snagging/${row.id}`,
       })),
@@ -272,8 +289,8 @@ export async function GET(req: NextRequest) {
         id: row.id,
         category: "quote_unanswered" as const,
         severity: "pending" as const,
-        title: `${row.quote_number} unanswered for 2 days`,
-        subtitle: "Sent to the client, no decision yet",
+        title: quotePlace(row),
+        subtitle: `Quotation ${row.quote_number} sent to the client 2+ days ago, no answer yet`,
         at: row.sent_at ?? row.updated_at,
         href: `/snagging/quotations/${row.id}`,
       })),

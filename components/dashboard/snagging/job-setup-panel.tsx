@@ -31,6 +31,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { PhoneInput } from "@/components/ui/phone-input";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
@@ -1348,11 +1349,11 @@ export function JobSetupPanel({
               />
             </Field>
             <Field label="Phone" htmlFor="dev-phone">
-              <Input
+              <PhoneInput
                 id="dev-phone"
                 value={devPhone}
                 disabled={!canEdit}
-                onChange={(e) => setDevPhone(e.target.value)}
+                onChange={setDevPhone}
               />
             </Field>
           </div>
@@ -1367,11 +1368,11 @@ export function JobSetupPanel({
               />
             </Field>
             <Field label="Phone" htmlFor="cli-phone">
-              <Input
+              <PhoneInput
                 id="cli-phone"
                 value={cliPhone}
                 disabled={!canEdit}
-                onChange={(e) => setCliPhone(e.target.value)}
+                onChange={setCliPhone}
               />
             </Field>
           </div>
