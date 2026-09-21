@@ -89,9 +89,9 @@ export function SnagsByCategory() {
         footer={
           categories.length > top.length ? (
             <Button
-              variant="ghost"
+              variant="outline"
               size="sm"
-              className="text-brand h-auto w-full justify-between px-0 hover:bg-transparent"
+              className="whitespace-nowrap"
               onClick={() => setAllOpen(true)}
             >
               View all {categories.length}

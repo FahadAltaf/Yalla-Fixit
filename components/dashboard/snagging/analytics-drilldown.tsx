@@ -1,10 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Download, FileSpreadsheet, Search } from "lucide-react";
+import type { ColumnDef } from "@tanstack/react-table";
+import { Building2, Search } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { DataTable } from "@/components/data-table";
+import { RecordsToolbar } from "@/components/data-table/toolbars/records-toolbar";
 import {
   Dialog,
   DialogContent,
@@ -14,16 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IdentityCell } from "@/components/ui/entity-avatar";
-import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { cn } from "@/lib/utils";
+import { useDebounce } from "@/hooks/use-debounce";
 import { exportFilename, exportTable } from "@/lib/snagging/export-table";
 import { snaggingService } from "@/modules/snagging";
 import type {
@@ -33,7 +26,10 @@ import type {
   SnaggingTaskStatus,
 } from "@/types/types";
 
-import { ErrorState, TASK_STATUS_LABELS, TaskStatusBadge } from "./shared";
+import { ExportMenu } from "./export-menu";
+import { ErrorState, POPUP_PAGE_SIZES, TASK_STATUS_LABELS, TaskStatusBadge } from "./shared";
+
+type DrilldownRow = SnaggingAnalyticsDrilldown["rows"][number];
 
 /** What a figure on the page needs to say to open itself. */
 export type DrilldownRequest = {
@@ -81,32 +77,71 @@ export function AnalyticsDrilldown({
   const [data, setData] = useState<SnaggingAnalyticsDrilldown | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Rows come a page at a time; a wide date range can hold thousands.
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(POPUP_PAGE_SIZES[0]);
+  const [exporting, setExporting] = useState(false);
+  // Searched on the server by unit, building or job code.
+  const [search, setSearch] = useState("");
+  const debouncedSearch = useDebounce(search.trim(), 300);
+  // Back to the first page, and a clear search, whenever another figure opens.
+  const [shownFor, setShownFor] = useState<DrilldownRequest | null>(null);
+  if (request !== shownFor) {
+    setShownFor(request);
+    setPage(0);
+    setSearch("");
+  }
 
   const load = useCallback(async () => {
     if (!request) return;
     setLoading(true);
     setError(null);
     try {
-      setData(await snaggingService.getAnalyticsRecords(request));
+      setData(
+        await snaggingService.getAnalyticsRecords({
+          ...request,
+          page,
+          pageSize,
+          search: debouncedSearch || undefined,
+        }),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load these records");
     } finally {
       setLoading(false);
     }
+  }, [request, page, pageSize, debouncedSearch]);
+
+  // Clearing first stops the previous metric's rows showing under the
+  // new metric's heading while the request is in flight.
+  useEffect(() => {
+    setData(null);
   }, [request]);
 
   useEffect(() => {
-    // Clearing first stops the previous metric's rows showing under the
-    // new metric's heading while the request is in flight.
-    setData(null);
     void load();
   }, [load]);
 
-  function download(format: "csv" | "xlsx") {
-    if (!data) return;
+  /* The export carries every row, not just the page on screen. */
+  async function download(format: "csv" | "xlsx") {
+    if (!data || !request || exporting) return;
+    setExporting(true);
+    let everything: SnaggingAnalyticsDrilldown;
+    try {
+      everything = await snaggingService.getAnalyticsRecords({
+        ...request,
+        all: true,
+        search: debouncedSearch || undefined,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not prepare the export");
+      return;
+    } finally {
+      setExporting(false);
+    }
     exportTable({
-      columns: data.columns.map(({ key, label }) => ({ key, label })),
-      rows: data.rows,
+      columns: everything.columns.map(({ key, label }) => ({ key, label })),
+      rows: everything.rows,
       filename: exportFilename([
         "snagging",
         data.metric,
@@ -119,17 +154,59 @@ export function AnalyticsDrilldown({
     });
   }
 
-  // Everything the identity cell already says is dropped from the column
-  // list, so the table shows the metric's own fields and nothing twice.
-  const detailColumns = (data?.columns ?? []).filter(
-    (column) => !IDENTITY_KEYS.includes(column.key),
-  );
-  const showExport = canExport && data && data.rows.length > 0;
+  /*
+    The house table: the unit names the row, status sits in its own
+    column, then the metric's own fields as the server lists them.
+    Everything the unit and status columns already say is dropped from
+    that list so nothing shows twice.
+  */
+  const columns = useMemo<ColumnDef<DrilldownRow>[]>(() => {
+    const detail = (data?.columns ?? []).filter(
+      (column) => !IDENTITY_KEYS.includes(column.key),
+    );
+    return [
+      {
+        id: "unit",
+        header: "Job",
+        cell: ({ row }) => (
+          <IdentityCell
+            title={row.original.unit ? String(row.original.unit) : "—"}
+            subtitle={null}
+            icon={Building2}
+          />
+        ),
+        enableSorting: false,
+      },
+      {
+        id: "status",
+        header: "Status",
+        cell: ({ row }) =>
+          row.original.status ? (
+            <TaskStatusBadge status={statusFor(row.original.status)} />
+          ) : (
+            "—"
+          ),
+        enableSorting: false,
+      },
+      ...detail.map<ColumnDef<DrilldownRow>>((column) => ({
+        id: column.key,
+        header: column.label,
+        cell: ({ row }) => (
+          <span className="whitespace-nowrap tabular-nums">
+            {row.original[column.key] ?? "—"}
+          </span>
+        ),
+        enableSorting: false,
+      })),
+    ];
+  }, [data?.columns]);
+
+  const showExport = canExport && data && data.totalCount > 0;
 
   return (
     <Dialog open={request !== null} onOpenChange={(open) => (open ? null : onClose())}>
       <DialogContent
-        className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(72rem,calc(100vw-3rem))]"
+        className="flex max-h-[88vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(72rem,calc(100vw-3rem))]"
         showCloseButton
       >
         <DialogHeader className="px-6 pt-6 pb-4 text-left">
@@ -140,41 +217,12 @@ export function AnalyticsDrilldown({
         </DialogHeader>
 
         {/*
-          The toolbar row the house tables use: what you are looking at on
-          the left, the actions clustered on the right. The two exports
-          used to sit loose under the description, which read as two
-          stray links rather than as the table's controls.
-        */}
-        {data && !error ? (
-          <div className="flex flex-wrap items-center justify-between gap-3 border-y px-6 py-3">
-            <p className="text-muted-foreground text-sm">
-              {data.totalCount === 1 ? "1 record" : `${data.totalCount} records`}
-            </p>
-            {showExport ? (
-              <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" onClick={() => download("csv")}>
-                  <Download className="size-4" />
-                  Export CSV
-                </Button>
-                <Button variant="outline" size="sm" onClick={() => download("xlsx")}>
-                  <FileSpreadsheet className="size-4" />
-                  Export Excel
-                </Button>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-
-        {/*
           min-w-0 matters: without it this flex child is sized by its
-          content, the table's w-full resolves against 800px of nowrap
-          columns, and the whole page scrolls sideways behind the dialog
-          instead of the table scrolling inside it.
+          content and the page scrolls sideways behind the dialog instead
+          of the table scrolling inside it.
         */}
-        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
-          {loading ? (
-            <RowsSkeleton columns={3} />
-          ) : error ? (
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto border-t">
+          {error ? (
             <div className="px-6 py-4">
               <ErrorState
                 title="Could not load these records"
@@ -183,82 +231,66 @@ export function AnalyticsDrilldown({
                 retrying={loading}
               />
             </div>
-          ) : data && data.rows.length === 0 ? (
-            <div className="px-6 py-4">
-              <EmptyState
-                icon={<Search />}
-                title="Nothing behind this figure"
-                description="The number is zero for the dates selected. Widen the range to look further back."
-              />
-            </div>
-          ) : data ? (
-            // Table brings its own horizontal scroll container, so a
-            // narrow screen scrolls the columns rather than the page.
-            <Table>
-              <TableHeader>
-                <TableRow className="hover:bg-transparent">
-                  <TableHead className="h-11 pl-6">Job</TableHead>
-                  {detailColumns.map((column, index) => (
-                    <TableHead
-                      key={column.key}
-                      className={cn(
-                        "h-11 whitespace-nowrap",
-                        index === detailColumns.length - 1 && "pr-6",
-                        column.align === "right" && "text-right",
-                      )}
-                    >
-                      {column.label}
-                    </TableHead>
-                  ))}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {data.rows.map((row) => (
-                  <TableRow
-                    key={row.id}
-                    className="hover:bg-muted/40 cursor-pointer"
-                    onClick={() => router.push(`/snagging/${row.id}`)}
-                  >
-                    <TableCell className="py-3 pl-6">
-                      <IdentityCell
-                        seed={row.id}
-                        // The unit names the row; the job code that used to
-                        // sit here is an internal handle and read as noise
-                        // above the thing people actually recognise.
-                        title={row.unit ? String(row.unit) : "—"}
-                        subtitle={null}
-                        badge={
-                          row.status ? (
-                            <TaskStatusBadge status={statusFor(row.status)} />
-                          ) : null
-                        }
+          ) : (
+            <DataTable
+              columns={columns}
+              data={data?.rows ?? []}
+              loading={loading}
+              rowCount={data?.totalCount ?? 0}
+              pageSize={pageSize}
+              currentPage={page}
+              isPagination
+              onPageChange={setPage}
+              onPageSizeChange={(size) => {
+                setPageSize(size);
+                setPage(0);
+              }}
+              onGlobalFilterChange={(value) => {
+                setSearch(value);
+                setPage(0);
+              }}
+              handleRowClick={(row) => router.push(`/snagging/${row.id}`)}
+              toolbar={
+                <RecordsToolbar
+                  fetchRecords={() => void load()}
+                  globalFilter={search}
+                  onGlobalFilterChange={(value) => {
+                    setSearch(value);
+                    setPage(0);
+                  }}
+                  isSearchLoading={loading}
+                  pageSize={pageSize}
+                  onPageSizeChange={(size) => {
+                    setPageSize(size);
+                    setPage(0);
+                  }}
+                  pageSizes={POPUP_PAGE_SIZES}
+                  searchPlaceholder="Search..."
+                  actions={
+                    showExport ? (
+                      <ExportMenu
+                        size="default"
+                        disabled={exporting}
+                        onExport={(format) => void download(format)}
                       />
-                    </TableCell>
-                    {detailColumns.map((column, index) => (
-                      <TableCell
-                        key={column.key}
-                        className={cn(
-                          "py-3 whitespace-nowrap",
-                          index === detailColumns.length - 1 && "pr-6",
-                          column.align === "right" && "text-right tabular-nums",
-                        )}
-                      >
-                        {row[column.key] ?? "—"}
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          ) : null}
+                    ) : null
+                  }
+                />
+              }
+              emptyState={
+                <EmptyState
+                  icon={<Search />}
+                  title={debouncedSearch ? "Nothing matches that" : "Nothing behind this figure"}
+                  description={
+                    debouncedSearch
+                      ? "Try part of the unit, the building or the job code."
+                      : "The number is zero for the dates selected. Widen the range to look further back."
+                  }
+                />
+              }
+            />
+          )}
         </div>
-
-        {data && data.rows.length > 0 ? (
-          <div className="text-muted-foreground border-t px-6 py-3 text-xs">
-            Showing {data.rows.length} of {data.totalCount}{" "}
-            {data.totalCount === 1 ? "entry" : "entries"}. Open a row to go to the inspection.
-          </div>
-        ) : null}
       </DialogContent>
     </Dialog>
   );
@@ -275,28 +307,4 @@ const STATUS_BY_LABEL = new Map(
 
 function statusFor(value: string | number): SnaggingTaskStatus {
   return (STATUS_BY_LABEL.get(String(value)) ?? "draft") as SnaggingTaskStatus;
-}
-
-/**
- * Rows shaped like the real ones — a circle for the avatar, two stacked
- * bars for the code and unit, then the detail columns — so nothing
- * shifts when the data lands.
- */
-function RowsSkeleton({ columns }: { columns: number }) {
-  return (
-    <div className="divide-y">
-      {Array.from({ length: 5 }).map((_, row) => (
-        <div key={row} className="flex items-center gap-4 px-6 py-3.5">
-          <Skeleton className="size-8 shrink-0 rounded-full" />
-          <div className="min-w-40 flex-1 space-y-1.5">
-            <Skeleton className="h-3.5 w-32" />
-            <Skeleton className="h-3 w-48" />
-          </div>
-          {Array.from({ length: columns }).map((_, cell) => (
-            <Skeleton key={cell} className="h-3.5 w-20 shrink-0" />
-          ))}
-        </div>
-      ))}
-    </div>
-  );
 }

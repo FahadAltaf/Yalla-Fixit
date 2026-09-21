@@ -76,14 +76,15 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ token: str
 
     try {
       if (decision === "approve") {
+        // The page only needs to know it landed; the row stays on the server.
         const data = await approveQuotation(admin, ref, { name, contact, origin: "client" });
-        return NextResponse.json({ data });
+        return NextResponse.json({ data: { status: data.status } });
       }
       if (decision === "reject") {
         const reason = typeof body.reason === "string" ? body.reason.trim() : "";
         if (!reason) return NextResponse.json({ error: "A reason is required to reject" }, { status: 400 });
         const data = await rejectQuotation(admin, ref, { reason, name, contact, origin: "client" });
-        return NextResponse.json({ data });
+        return NextResponse.json({ data: { status: data.status } });
       }
       return NextResponse.json({ error: "Choose approve or reject" }, { status: 400 });
     } catch (e) {

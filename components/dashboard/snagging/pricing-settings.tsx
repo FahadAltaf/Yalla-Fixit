@@ -1,5 +1,7 @@
 "use client";
 
+import { DirhamIcon } from "@/components/ui/dirham-icon";
+import { Money } from "@/components/ui/money";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 import {
@@ -60,7 +62,7 @@ import {
   SectionCard,
   SectionSkeleton,
   SubmitButton,
-  formatGstDateTime,
+  formatLocalDateTime,
   useConfirm,
 } from "./shared";
 
@@ -92,13 +94,9 @@ type RateRow = {
 
 /* ─────────────────────────────── formatting ─────────────────────────────── */
 
+/** An amount, with the dirham sign rather than the "AED" code. */
 function money(value: number, currency: string, dp = 2) {
-  return new Intl.NumberFormat("en-AE", {
-    style: "currency",
-    currency,
-    minimumFractionDigits: dp,
-    maximumFractionDigits: dp,
-  }).format(value);
+  return <Money value={value} currency={currency} dp={dp} />;
 }
 
 /** A published range, read as one figure when both ends agree. */
@@ -120,9 +118,13 @@ function Range({
   }
   return (
     <span className="text-sm tabular-nums">
-      {min === max
-        ? money(min, currency, dp)
-        : `${money(min, currency, dp)} – ${money(max, currency, dp)}`}
+      {min === max ? (
+        money(min, currency, dp)
+      ) : (
+        <>
+          {money(min, currency, dp)} – {money(max, currency, dp)}
+        </>
+      )}
       {suffix ? (
         <span className="text-muted-foreground ml-1 text-xs">{suffix}</span>
       ) : null}
@@ -478,7 +480,7 @@ export default function PricingSettings() {
                         currency={currency}
                         updatedAt={
                           config.updated_at
-                            ? formatGstDateTime(config.updated_at)
+                            ? formatLocalDateTime(config.updated_at)
                             : null
                         }
                       />
@@ -1244,7 +1246,7 @@ function QuotePreview({ config }: { config: SnaggingPricingConfig }) {
   );
 }
 
-function Total({ label, value }: { label: string; value: string }) {
+function Total({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-baseline justify-between gap-4">
       <dt className="text-muted-foreground text-sm">{label}</dt>
@@ -1426,7 +1428,9 @@ function MoneyInput({
   return (
     <InputGroup>
       {prefix ? (
-        <InputGroupAddon className="text-[0.6875rem]">{prefix}</InputGroupAddon>
+        <InputGroupAddon className="text-[0.6875rem]">
+          {prefix === "AED" ? <DirhamIcon className="size-3.5" aria-label="AED" role="img" /> : prefix}
+        </InputGroupAddon>
       ) : null}
       <NumberBox
         value={value}

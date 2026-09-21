@@ -349,6 +349,10 @@ export const updateAreaSchema = z.object({
   pin_x: pinFraction.nullable().optional(),
   pin_y: pinFraction.nullable().optional(),
   zone: zonePolygon.nullable().optional(),
+  /** The inspector's closing note, corrected from the portal. Empty clears it. */
+  note: z.string().trim().max(2000).nullable().optional(),
+  /** Why a room could not be fully inspected, corrected from the portal. */
+  access_reason: z.string().trim().max(500).nullable().optional(),
 });
 
 export type CreateAreaInput = z.infer<typeof createAreaSchema>;
@@ -393,6 +397,17 @@ export const createRoundSchema = z.object({
  * (Q1-Q6). Unlike a de-snag round it carries no snags forward — it is a
  * fresh inspection pass — so there is no snag_ids field.
  */
+/*
+  How a return visit is paid for (change 26 / BR-14).
+
+  Required at creation rather than defaulted, because the two routes
+  diverge immediately: a quotation has to be raised and approved before
+  anyone can be booked, a payment link does not. Leaving it implicit is
+  what made every visit wait on a quotation that half of them never
+  needed.
+*/
+export const visitChargeMethodSchema = z.enum(["quotation", "payment_link"]);
+
 export const createVisitSchema = z.object({
   /*
     Required, like a round's.
@@ -409,14 +424,23 @@ export const createVisitSchema = z.object({
   approval_manager_id: z.string().uuid().optional().nullable(),
   notes: z.string().trim().max(4000).optional().or(z.literal("")),
   reason: z.string().trim().max(4000).optional().or(z.literal("")),
+  charge_method: visitChargeMethodSchema.default("quotation"),
+  /** The reference the coordinator has to hand, when a link was sent. */
+  payment_reference: z.string().trim().max(200).optional().or(z.literal("")),
 });
 
-/** FR-9.04 — what booking an approved additional visit needs. */
-export const scheduleVisitSchema = z.object({
-  scheduled_date: isoDate,
-  /** The confirmed slot, when one has been agreed with the occupier. */
+/** Editing a visit in flight: the charge route, its reference, the notes. */
+export const updateVisitSchema = z.object({
+  charge_method: visitChargeMethodSchema.optional(),
+  payment_reference: z.string().trim().max(200).optional().nullable(),
+  quotation_id: z.string().uuid().optional().nullable(),
+  scheduled_date: isoDate.optional().nullable(),
   appointment_at: z.string().datetime().optional().nullable(),
   inspector_id: z.string().uuid().optional().nullable(),
+  status: z
+    .enum(["requested", "scheduled", "in_progress", "completed", "cancelled"])
+    .optional(),
+  notes: z.string().trim().max(4000).optional().nullable(),
 });
 
 export const deliverReportSchema = z.object({
@@ -458,7 +482,21 @@ export const syncPullSchema = z.object({
   /** Server timestamp from the previous pull; omit for a cold start. */
   since: isoDateTime.optional(),
   task_ids: z.array(z.string().uuid()).optional(),
-  include_catalogue: z.coerce.boolean().optional(),
+  /*
+    A query-string flag, so it arrives as text. z.coerce.boolean() read the
+    string "false" as true (any non-empty string is truthy).
+  */
+  include_catalogue: z
+    .enum(["true", "false"])
+    .transform((value) => value === "true")
+    .optional(),
+  /*
+    When the device last received the catalogue. A pull without `since`
+    (the reconciling snapshot, or the first pull after an app update
+    cleared the cursor) sends the catalogue only if it changed after this;
+    without it, such a pull carries the whole catalogue as before.
+  */
+  catalogue_since: isoDateTime.optional(),
 });
 
 export const mediaSignSchema = z.object({

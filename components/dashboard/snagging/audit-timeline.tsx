@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   CalendarPlus,
@@ -38,8 +38,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { snaggingService } from "@/modules/snagging";
 import type { SnaggingAuditEvent } from "@/types/types";
+
+import { auditKey, useJobDetail } from "./job-detail-context";
 
 /** Human-readable label + icon for each audited event type (BR-5). */
 const EVENT_META: Record<string, { label: string; Icon: LucideIcon }> = {
@@ -89,6 +90,8 @@ const EVENT_META: Record<string, { label: string; Icon: LucideIcon }> = {
   snag_verified: { label: "Snag verified", Icon: CheckCircle2 },
   area_confirmed: { label: "Area confirmed", Icon: CheckCircle2 },
   area_access_changed: { label: "Area access recorded", Icon: DoorClosed },
+  area_note_edited: { label: "Area note edited", Icon: Pencil },
+  checklist_reason_edited: { label: "Checklist reason edited", Icon: Pencil },
   checklist_not_checked: {
     label: "Checklist item skipped",
     Icon: AlertTriangle,
@@ -195,47 +198,39 @@ function formatWhen(value: string): string {
     month: "short",
     hour: "2-digit",
     minute: "2-digit",
-    timeZone: "Asia/Dubai",
   });
 }
 
 /**
  * The inspection's audit trail (BR-5): who did what, when. Read-only.
  */
-export function AuditTimeline({ taskId }: { taskId: string }) {
-  const [events, setEvents] = useState<SnaggingAuditEvent[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+export function AuditTimeline() {
+  /*
+    The trail is the page's (JobDetailContext), cached per page, size and
+    order. Opening History again, or paging back, reads the cache instead
+    of the network; a change anywhere on the job re-reads the page on
+    screen, so a new entry appears without anyone refreshing.
+  */
+  const { audit, loadAudit } = useJobDetail();
   // Paged on the server: the trail is unbounded, so the alternative was a
   // hard limit that silently dropped the older half of a busy job.
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(25);
   const [order, setOrder] = useState<"desc" | "asc">("desc");
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await snaggingService.getAudit(taskId, {
-        page,
-        pageSize,
-        order,
-      });
-      setEvents(result.data);
-      setTotal(result.totalCount);
-    } catch (e) {
-      // A reviewer signing off has to tell "nothing happened yet" from
-      // "the trail did not load" — this used to render as no card at all.
-      setError(e instanceof Error ? e.message : "Could not load the history");
-    } finally {
-      setLoading(false);
-    }
-  }, [taskId, page, pageSize, order]);
+  const query = useMemo(() => ({ page, pageSize, order }), [page, pageSize, order]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    loadAudit(query);
+  }, [loadAudit, query]);
+
+  const slice = audit[auditKey(query)];
+  const events: SnaggingAuditEvent[] = slice?.data?.data ?? [];
+  const total = slice?.data?.totalCount ?? 0;
+  const loading = !slice || slice.loading;
+  // A reviewer signing off has to tell "nothing happened yet" from "the
+  // trail did not load". A failed refresh keeps the page that is showing.
+  const error = slice?.data ? null : (slice?.error ?? null);
+  const load = () => loadAudit(query);
 
   return (
     <SectionCard

@@ -13,10 +13,12 @@ import {
 } from "@/lib/server/snagging/pricing";
 import {
   approveQuotation,
+  QUOTATION_DOCUMENT_COLUMNS,
   QuotationDecisionError,
   rejectQuotation,
   type QuoteRef,
 } from "@/lib/server/snagging/quotation";
+import { PRICING_CONFIG_COLUMNS } from "@/lib/server/snagging/quotation-build";
 import { mintReportToken } from "@/lib/server/snagging/report-token";
 import { ActionType, ResourceType } from "@/types/types";
 
@@ -85,9 +87,12 @@ export async function POST(
     const { id } = await ctx.params;
     const body = await req.json().catch(() => ({}));
     const action = String(body.action ?? "generate");
+    const declaredFurnished =
+      body.furnished === undefined ? null : Boolean(body.furnished);
     const admin = await createAdminServerClient();
 
-    if (action === "generate") return generate(admin, id, profile.id);
+    if (action === "generate")
+      return generate(admin, id, profile.id, declaredFurnished);
     if (action === "send") return send(admin, id, profile.id, body);
     if (action === "share_link") return shareLink(admin, id, profile.id);
     if (action === "approve")
@@ -113,10 +118,20 @@ export async function POST(
 }
 
 async function latestQuote(admin: Admin, jobId: string) {
+    /*
+      The inspection's own quotation, not a visit's.
+
+      An additional visit's quotation is raised from this job and carries
+      its job_id (change 26), so "the newest quotation on the job" became
+      the visit's the moment one existed — and the inspection's tab, its
+      client report and its inspector gate all started reading a AED 500
+      return trip as if it were the agreement for the inspection.
+    */
   const { data, error } = await admin
     .from("snagging_quotations")
-    .select("*")
+    .select(QUOTATION_DOCUMENT_COLUMNS)
     .eq("job_id", jobId)
+    .neq("quote_kind", "visit")
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -124,7 +139,17 @@ async function latestQuote(admin: Admin, jobId: string) {
   return data;
 }
 
-async function generate(admin: Admin, jobId: string, userId: string) {
+async function generate(
+  admin: Admin,
+  jobId: string,
+  userId: string,
+  /*
+    What the client declared for this quotation (FR-2.15). Null when the
+    caller does not offer the control, in which case the unit's own flag
+    stands — which is what this priced against before.
+  */
+  declaredFurnished: boolean | null = null,
+) {
   const [{ data: job, error: jobError }, { data: config, error: configError }] =
     await Promise.all([
       admin
@@ -138,7 +163,7 @@ async function generate(admin: Admin, jobId: string, userId: string) {
         .maybeSingle(),
       admin
         .from("snagging_pricing_config")
-        .select("*")
+        .select(PRICING_CONFIG_COLUMNS)
         .eq("id", true)
         .maybeSingle(),
     ]);
@@ -171,7 +196,12 @@ async function generate(admin: Admin, jobId: string, userId: string) {
     );
   }
   const cfg = config as PricingConfig & { currency: string };
-  const priced = computeQuotation(property as QuoteJob, cfg);
+  const furnished =
+    declaredFurnished != null ? declaredFurnished : property.furnished ?? false;
+  const priced = computeQuotation(
+    { ...(property as QuoteJob), furnished },
+    cfg,
+  );
 
   // Snapshot the exact property + pricing used, so this quotation stays
   // reproducible and immune to later config changes (FR-2.03, §10).
@@ -181,7 +211,8 @@ async function generate(admin: Admin, jobId: string, userId: string) {
     community: property.community ?? null,
     developer_name: property.developer_name ?? null,
     property_type: property.property_type ?? null,
-    furnished: property.furnished ?? false,
+    // The declaration this document was priced with, frozen onto it.
+    furnished,
     bedrooms: property.bedrooms ?? null,
     built_up_area_sqft: property.built_up_area_sqft ?? null,
     client_name: client?.name ?? null,
@@ -223,6 +254,8 @@ async function generate(admin: Admin, jobId: string, userId: string) {
     scope_of_work: (config as PricingConfig).scope_of_work,
     terms: (config as PricingConfig).terms,
     lines: priced.lines,
+    // The client's declaration, on the document it priced (FR-2.15).
+    furnished,
     property_snapshot: propertySnapshot,
     pricing_snapshot: pricingSnapshot,
     // Regenerating always returns to an unsent, undecided draft.
@@ -243,7 +276,7 @@ async function generate(admin: Admin, jobId: string, userId: string) {
   const { data, error } = await admin
     .from("snagging_quotations")
     .upsert(row, { onConflict: "id" })
-    .select("*")
+    .select(QUOTATION_DOCUMENT_COLUMNS)
     .single();
   if (error) throw new Error(error.message);
 
@@ -280,7 +313,8 @@ async function quoteCount(admin: Admin, jobId: string): Promise<number> {
   const { count } = await admin
     .from("snagging_quotations")
     .select("id", { count: "exact", head: true })
-    .eq("job_id", jobId);
+    .eq("job_id", jobId)
+    .neq("quote_kind", "visit");
   return count ?? 0;
 }
 
@@ -334,7 +368,7 @@ async function shareLink(admin: Admin, jobId: string, actorId: string) {
       updated_at: now,
     })
     .eq("id", quote.id)
-    .select("*")
+    .select(QUOTATION_DOCUMENT_COLUMNS)
     .single();
   if (error) throw new Error(error.message);
 
@@ -425,7 +459,7 @@ async function send(
       updated_at: now,
     })
     .eq("id", quote.id)
-    .select("*")
+    .select(QUOTATION_DOCUMENT_COLUMNS)
     .single();
   if (error) throw new Error(error.message);
 
@@ -617,7 +651,7 @@ async function previewQuotation(admin: Admin, jobId: string) {
         .maybeSingle(),
       admin
         .from("snagging_pricing_config")
-        .select("*")
+        .select(PRICING_CONFIG_COLUMNS)
         .eq("id", true)
         .maybeSingle(),
     ]);

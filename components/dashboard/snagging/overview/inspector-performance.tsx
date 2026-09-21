@@ -8,7 +8,8 @@ import { DataTable } from "@/components/data-table";
 import { getSnaggingInspectorPerformanceColumns } from "@/components/data-table/columns/column-snagging-inspector-performance";
 
 import { SectionShell, TableSkeleton } from "./section-shell";
-import { useInView, useSection } from "./use-section";
+import { useRangedSection } from "./range";
+import { useInView } from "./use-section";
 
 type Performance = {
   rows: Array<{
@@ -35,7 +36,7 @@ export function InspectorPerformance() {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
 
-  const { data, loading, error, reload } = useSection<Performance>(
+  const { data, loading, error, reload } = useRangedSection<Performance>(
     `/api/snagging/overview/inspectors?page=${page}&pageSize=${pageSize}`,
     { staleMs: 600_000, enabled: visible },
   );

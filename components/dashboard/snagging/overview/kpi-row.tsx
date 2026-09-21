@@ -2,7 +2,7 @@
 
 import { InlineError } from "./section-shell";
 import { StatCard, StatCardGrid, StatGridSkeleton } from "../shared";
-import { useSection } from "./use-section";
+import { useRangedSection } from "./range";
 
 type Kpis = {
   periodDays: number;
@@ -22,11 +22,9 @@ type Kpis = {
  * and something to do.
  */
 export function KpiRow() {
-  const { data, loading, error, reload } = useSection<Kpis>(
+  const { data, loading, error, reload } = useRangedSection<Kpis>(
     "/api/snagging/overview/kpis",
-    {
-      staleMs: 60_000,
-    },
+    { staleMs: 60_000 },
   );
 
   if (error) {

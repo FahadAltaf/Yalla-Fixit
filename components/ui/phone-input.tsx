@@ -17,16 +17,20 @@ export function PhoneInput({
   value,
   onChange,
   disabled,
+  id,
 }: {
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
+  /** Ties the box to its label. */
+  id?: string;
 }) {
   return (
     <IntlPhoneInput
       defaultCountry="ae"
       value={value}
       disabled={disabled}
+      inputProps={{ id }}
       onChange={(phone, meta) => {
         const digits = phone.replace(/\D/g, "");
         const dial = meta.country.dialCode;
@@ -35,12 +39,12 @@ export function PhoneInput({
       }}
       className="w-full"
       inputClassName={cn(
-        "!h-9 !w-full !rounded-r-md !border-input !bg-transparent !text-sm",
+        "!h-9 !w-full !rounded-r-[12px] !border-input !bg-transparent !text-sm",
         "!text-foreground placeholder:!text-muted-foreground",
         "focus-visible:!ring-ring focus-visible:!ring-[3px]",
       )}
       countrySelectorStyleProps={{
-        buttonClassName: "!h-9 !rounded-l-md !border-input !bg-transparent px-2",
+        buttonClassName: "!h-9 !rounded-l-[12px] !border-input !bg-transparent px-2",
         dropdownStyleProps: { className: "!z-50" },
       }}
     />

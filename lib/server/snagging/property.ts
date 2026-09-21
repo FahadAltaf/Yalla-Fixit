@@ -11,6 +11,13 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  */
 type Admin = SupabaseClient;
 
+/* The property as the quotation and job pages read it, for display and
+   pricing: every field but the audit columns. */
+export const PROPERTY_COLUMNS = `id, client_id, unit_label, building_name, community,
+  developer_name, property_type, bedrooms, built_up_area_sqft, plot_area_sqft,
+  external_areas_in_scope, floors, location_lat, location_lng, title_deed_path, noc_required,
+  noc_path, furnished`;
+
 export type PropertyFields = {
   unit_label: string;
   building_name?: string | null;

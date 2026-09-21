@@ -9,6 +9,7 @@ export type {
   SnaggingQuotation,
   SnaggingQuotationSummary,
   SnaggingQuoteLine,
+  SnaggingVisitDetail,
 } from "./services/snagging-service";
 
 export * from "./schemas";

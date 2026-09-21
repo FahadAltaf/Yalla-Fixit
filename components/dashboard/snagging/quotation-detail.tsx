@@ -3,12 +3,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  Check,
+  ChevronDown,
   Copy,
   Download,
   FileText,
+  Mail,
   MessageCircle,
   Plus,
   Send,
+  TriangleAlert,
   X,
 } from "lucide-react";
 import { saveAs } from "file-saver";
@@ -17,6 +21,12 @@ import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Dialog,
   DialogContent,
@@ -43,8 +53,10 @@ import {
   DataState,
   PageHeading,
   QuotationStatusBadge,
+  StatCard,
+  StatCardGrid,
   SubmitButton,
-  formatGstDateTime,
+  formatLocalDateTime,
   useConfirm,
 } from "./shared";
 
@@ -86,7 +98,7 @@ export default function QuotationDetail({ id }: { id: string }) {
     several seconds of work — looked like a button that did nothing at all.
   */
   const [pending, setPending] = useState<
-    null | "download" | "share_link" | "regenerate" | "send"
+    null | "download" | "share_link" | "regenerate" | "send" | "approve_rate"
   >(null);
   const busy = pending !== null;
 
@@ -206,6 +218,29 @@ export default function QuotationDetail({ id }: { id: string }) {
     }
   }
 
+  /*
+    A rate outside the published band, still waiting on an admin
+    (FR-2.04). Until it is approved the document cannot reach the client,
+    and the server refuses both send and share — so the page has to say
+    so, and offer the way out to whoever can take it.
+  */
+  const rateWaiting = quote?.rate_outside_band === true && !quote?.rate_approved_at;
+  // Admin or this job's approval manager — decided by the server, which
+  // is the only side that can see who manages the job.
+  const canApproveRate = quote?.can_approve_rate === true;
+
+  async function approveRate() {
+    setPending("approve_rate");
+    try {
+      setQuote(await snaggingService.approveQuotationRate(id));
+      toast.success("Rate approved");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not approve the rate");
+    } finally {
+      setPending(null);
+    }
+  }
+
   const isDecided = quote?.status === "approved" || quote?.status === "rejected";
   const isDesnag = quote?.quote_kind === "desnag";
   const needsJob = quote?.status === "approved" && !quote?.job_id;
@@ -217,8 +252,90 @@ export default function QuotationDetail({ id }: { id: string }) {
         title={quote ? `Quotation ${quote.quote_number}` : "Quotation"}
         description={
           quote
-            ? `${isDesnag ? "De-snagging visit" : "Inspection"} · raised ${formatGstDateTime(quote.created_at)}.`
+            ? `${isDesnag ? "De-snagging visit" : "Inspection"} · raised ${formatLocalDateTime(quote.created_at)}.`
             : "Loading the document…"
+        }
+        actions={
+          quote && doc ? (
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {/* Once the job exists, its card below carries the status. */}
+              {quote.job_id ? null : <QuotationStatusBadge status={quote.status} />}
+
+              {canEdit ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <SubmitButton
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void download()}
+                    pending={pending === "download"}
+                    pendingLabel="Preparing…"
+                    disabled={busy}
+                    icon={<Download className="size-4" />}
+                  >
+                    Download PDF
+                  </SubmitButton>
+
+                  {/* A de-snag is priced at the amount chosen for it, not
+                      from the property, so it is never regenerated. */}
+                  {quote.status === "draft" && !isDesnag ? (
+                    <SubmitButton
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      pending={pending === "regenerate"}
+                      pendingLabel="Repricing…"
+                      icon={<FileText className="size-4" />}
+                      onClick={() => void run("regenerate", undefined, "Repriced")}
+                    >
+                      Regenerate
+                    </SubmitButton>
+                  ) : null}
+
+                  {!isDecided ? (
+                    /*
+                      One "Share" button with the two ways to send it, not
+                      two buttons side by side.
+                    */
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <SubmitButton
+                          size="sm"
+                          disabled={busy}
+                          pending={pending === "share_link"}
+                          pendingLabel="Preparing…"
+                          icon={<Send className="size-4" />}
+                        >
+                          {quote.status === "sent" ? "Share again" : "Share"}
+                          <ChevronDown className="size-3.5" />
+                        </SubmitButton>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => void shareByHand()}>
+                          <MessageCircle className="size-4" />
+                          Share on WhatsApp
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => {
+                            const snap = (quote.property_snapshot ?? {}) as Record<
+                              string,
+                              unknown
+                            >;
+                            setRecipient(
+                              (snap.client_email as string) ?? quote.sent_to ?? "",
+                            );
+                            setSendOpen(true);
+                          }}
+                        >
+                          <Mail className="size-4" />
+                          {quote.status === "sent" ? "Resend by email" : "Send by email"}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null
         }
       />
 
@@ -237,72 +354,38 @@ export default function QuotationDetail({ id }: { id: string }) {
       >
         {quote && doc ? (
           <div className="flex flex-col gap-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <QuotationStatusBadge status={quote.status} />
-
-              {canEdit ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  <SubmitButton
-                    variant="outline"
-                    size="sm"
-                    onClick={() => void download()}
-                    pending={pending === "download"}
-                    pendingLabel="Preparing…"
-                    disabled={busy}
-                    icon={<Download className="size-4" />}
-                  >
-                    Download PDF
-                  </SubmitButton>
-
-                  {quote.status === "draft" ? (
-                    <SubmitButton
-                      variant="outline"
-                      size="sm"
-                      disabled={busy}
-                      pending={pending === "regenerate"}
-                      pendingLabel="Repricing…"
-                      icon={<FileText className="size-4" />}
-                      onClick={() => void run("regenerate", undefined, "Repriced")}
-                    >
-                      Regenerate
-                    </SubmitButton>
-                  ) : null}
-
-                  {!isDecided ? (
-                    <>
-                      <SubmitButton
-                        variant="outline"
-                        size="sm"
-                        disabled={busy}
-                        pending={pending === "share_link"}
-                        pendingLabel="Preparing…"
-                        icon={<MessageCircle className="size-4" />}
-                        onClick={() => void shareByHand()}
-                      >
-                        Share on WhatsApp
-                      </SubmitButton>
-                      <Button
-                        size="sm"
-                        disabled={busy}
-                        onClick={() => {
-                          const snap = (quote.property_snapshot ?? {}) as Record<
-                            string,
-                            unknown
-                          >;
-                          setRecipient(
-                            (snap.client_email as string) ?? quote.sent_to ?? "",
-                          );
-                          setSendOpen(true);
-                        }}
-                      >
-                        <Send className="size-4" />{" "}
-                        {quote.status === "sent" ? "Resend by email" : "Send by email"}
-                      </Button>
-                    </>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
+            {/*
+              What the de-snag is charged, above the document. The amount
+              was chosen inside the rate card's range when it was raised,
+              and it is the one figure the coordinator and the client talk
+              about -- it should not have to be found in the line table.
+            */}
+            {isDesnag ? (
+              <StatCardGrid columns={3}>
+                <StatCard
+                  label="De-snagging amount"
+                  value={`${quote.currency} ${Number(quote.subtotal ?? 0).toLocaleString()}`}
+                  headline="Before VAT"
+                  caption="Chosen within the rate card range"
+                />
+                <StatCard
+                  label="VAT"
+                  value={`${quote.currency} ${Number(quote.tax_amount ?? 0).toLocaleString()}`}
+                  // Stored as a fraction (0.05) on some rows and a percentage (5) on
+                  // older ones; either reads as a percentage here.
+                  caption={`At ${(() => {
+                    const rate = Number(quote.tax_rate ?? 0);
+                    return Math.round((rate <= 1 ? rate * 100 : rate) * 100) / 100;
+                  })()}%`}
+                />
+                <StatCard
+                  label="Total"
+                  value={`${quote.currency} ${Number(quote.total ?? 0).toLocaleString()}`}
+                  headline="What the client pays"
+                  tone="good"
+                />
+              </StatCardGrid>
+            ) : null}
 
             {/*
               Approved, and no job yet — the whole reason this section
@@ -350,7 +433,10 @@ export default function QuotationDetail({ id }: { id: string }) {
             {quote.job_id ? (
               <Alert>
                 <FileText />
-                <AlertTitle>This quotation has its job</AlertTitle>
+                <AlertTitle className="flex flex-wrap items-center gap-2">
+                  This quotation has its job
+                  <QuotationStatusBadge status={quote.status} />
+                </AlertTitle>
                 <AlertDescription>
                   <Button
                     variant="link"
@@ -359,6 +445,51 @@ export default function QuotationDetail({ id }: { id: string }) {
                   >
                     Open the job
                   </Button>
+                </AlertDescription>
+              </Alert>
+            ) : null}
+
+            {rateWaiting ? (
+              <Alert variant="destructive">
+                <TriangleAlert />
+                <AlertTitle>This pricing is waiting on an admin</AlertTitle>
+                <AlertDescription className="flex flex-wrap items-center gap-3">
+                  <span>
+                    {/*
+                      Both rates are shown, not just the one that broke
+                      its band: an admin approving a price should see the
+                      whole price, and the suggestion beside each says how
+                      far the coordinator moved.
+                    */}
+                    Inspection {quote.rate_per_sqft} per sq ft
+                    {quote.rate_suggested != null
+                      ? ` (suggested ${quote.rate_suggested})`
+                      : ""}
+                    {quote.external_rate_per_sqft != null
+                      ? `, external areas ${quote.external_rate_per_sqft}${
+                          quote.external_rate_suggested != null
+                            ? ` (suggested ${quote.external_rate_suggested})`
+                            : ""
+                        }`
+                      : ""}
+                    .
+                    {quote.rate_override_reason
+                      ? ` Reason given: ${quote.rate_override_reason}`
+                      : ""}{" "}
+                    It cannot be sent to the client until the pricing is
+                    approved.
+                  </span>
+                  {canApproveRate ? (
+                    <SubmitButton
+                      size="sm"
+                      pending={pending === "approve_rate"}
+                      pendingLabel="Approving…"
+                      icon={<Check className="size-4" />}
+                      onClick={() => void approveRate()}
+                    >
+                      Approve this pricing
+                    </SubmitButton>
+                  ) : null}
                 </AlertDescription>
               </Alert>
             ) : null}

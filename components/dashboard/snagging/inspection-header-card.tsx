@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
   CalendarPlus,
@@ -18,6 +19,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Tooltip,
   TooltipContent,
@@ -30,6 +32,7 @@ import { snaggingService } from "@/modules/snagging";
 import { ActionType, ResourceType, type SnaggingTask } from "@/types/types";
 
 import { AdditionalVisitDialog } from "./additional-visit-dialog";
+import { DesnagQuotationDialog } from "./desnag-quotation-dialog";
 import { OpenRoundDialog } from "./open-round-dialog";
 import { RejectInspectionDialog } from "./reject-inspection-dialog";
 import {
@@ -52,9 +55,20 @@ import {
 export function InspectionHeaderCard({
   task,
   onChanged,
+  onVisitsChanged,
+  pending = {},
 }: {
   task: SnaggingTask;
   onChanged: () => void;
+  /** After a visit is added here; defaults to `onChanged`. */
+  onVisitsChanged?: () => void;
+  /**
+   * Sections of the job still on their way, where the page loads them
+   * separately. The header renders from the core job at once; what depends
+   * on the snags (the numbers, the approval check) or on the de-snag
+   * quotation (its button) waits for those rather than showing a zero.
+   */
+  pending?: { snags?: boolean; desnag?: boolean };
 }) {
   const { userProfile } = useAuth();
   const { confirm, dialog } = useConfirm();
@@ -105,6 +119,19 @@ export function InspectionHeaderCard({
   const canDecide =
     canApprove && (isAdminUser(userProfile) || isApprovalManager);
   const managerName = task.manager?.full_name ?? task.manager?.email ?? null;
+  /*
+    Whoever is reviewing is also the one who will decide.
+
+    canReview admits the approval manager, and on a small team that is
+    the same person as the reviewer — so the middle step was handing the
+    job to yourself and then being shown a button to approve what you had
+    just handed over. Where that is true the hand-off happens on the same
+    click as starting, and its button is not offered at all.
+
+    Where the reviewer and the manager are DIFFERENT people the two steps
+    stay, because the gap between them is the review (FR-6.01).
+  */
+  const selfReview = canDecide;
   const reviewerName = task.reviewer?.full_name ?? task.reviewer?.email ?? null;
   // The reviewer's hand-off. Until this is set the server refuses both
   // approve and reject, so neither button is offered.
@@ -114,8 +141,28 @@ export function InspectionHeaderCard({
   const areas = task.areas ?? [];
 
   const highCount = snags.filter((snag) => snag.severity === "high").length;
-  const confirmedAreas = areas.filter((area) => area.confirmed_at).length;
-  const pendingArea = areas.find((area) => !area.confirmed_at);
+  /*
+    Every room counts, the way the client's report counts them.
+
+    A room is walked once it is signed off on the original walk, or once
+    the visit that added it is approved -- rooms have no finish tick on a
+    visit, so that approval is their sign-off. Counting only the walk's
+    rooms read "6 / 6" beside "Across 8 areas"; counting sign-offs alone
+    held it at "6 / 7" on an approved job. A room from a visit still with
+    the manager is neither: it is said separately.
+  */
+  const pendingVisits = new Set(task.unapproved_visit_ids ?? []);
+  const fromPendingVisit = (area: (typeof areas)[number]) =>
+    Boolean(area.visit_id && pendingVisits.has(area.visit_id));
+  const walkedAreas = areas.filter(
+    (area) => Boolean(area.confirmed_at) || Boolean(area.visit_id && !fromPendingVisit(area)),
+  ).length;
+  const awaitingReviewAreas = areas.filter(
+    (area) => !area.confirmed_at && fromPendingVisit(area),
+  ).length;
+  // Only the original walk's rooms can be left unfinished.
+  const unconfirmedWalkAreas = areas.filter((area) => !area.confirmed_at && !area.visit_id);
+  const pendingArea = unconfirmedWalkAreas[0];
 
   /*
     What a de-snag round is measured on: the carried defects, and how many
@@ -186,8 +233,18 @@ export function InspectionHeaderCard({
     setWorking(true);
     try {
       await snaggingService.reviewTask(task.id);
+      /*
+        Awaited in order: the complete endpoint refuses anything that is
+        not already `in_review`, so the status has to land first. It is
+        idempotent, so a retry after a dropped response costs nothing.
+      */
+      if (selfReview) await snaggingService.completeReview(task.id);
       toast.success(
-        "Review started. Approve or send it back when you're done.",
+        selfReview
+          ? "Review started. Approve or send it back when you're done."
+          : managerName
+            ? `Review started. Hand it to ${managerName} when you're done.`
+            : "Review started. Hand it on when you're done.",
       );
       onChanged();
     } catch (error) {
@@ -208,8 +265,8 @@ export function InspectionHeaderCard({
       snagsWithPhoto < snags.length
         ? `${snags.length - snagsWithPhoto} snag(s) have no photo`
         : null,
-      confirmedAreas < areas.length
-        ? `${areas.length - confirmedAreas} area(s) not confirmed`
+      unconfirmedWalkAreas.length > 0
+        ? `${unconfirmedWalkAreas.length} area(s) not confirmed`
         : null,
       accessIssues.length > 0
         ? `${accessIssues.length} area(s) with access issues`
@@ -254,6 +311,29 @@ export function InspectionHeaderCard({
       snag.status === "verified_poor_quality" ||
       snag.status === "verified_not_done",
   ).length;
+
+  /*
+    Where the de-snag stands, so the button offers the step it is at.
+
+    A de-snag is a new job raised through Quotations (change 31): the
+    client approves a quotation for the return visit first. The button
+    used to open the round dialog straight away, and the server refused
+    it after the date and time were filled in -- "no de-snag quotation
+    yet, raise one from Quotations" -- with nothing on the page to do so.
+  */
+  const router = useRouter();
+  const desnagQuote = task.desnag_quotation ?? null;
+  const desnagStep: "quote" | "awaiting" | "open" =
+    !desnagQuote ||
+    desnagQuote.status === "rejected" ||
+    (desnagQuote.status === "approved" && desnagQuote.job_id)
+      ? "quote"
+      : desnagQuote.status === "approved"
+        ? "open"
+        : "awaiting";
+
+  // The amount is chosen inside the card's range before anything is raised.
+  const [desnagQuoteOpen, setDesnagQuoteOpen] = useState(false);
 
   async function openRound(input: {
     scheduled_date: string;
@@ -361,7 +441,19 @@ export function InspectionHeaderCard({
                 pendingLabel="Sending…"
                 icon={<ClipboardCheck className="size-4" />}
               >
-                {managerName ? `Send to ${managerName}` : "Send to approval manager"}
+                {/*
+                  A self-reviewer normally never sees this: starting the
+                  review completes it. They can still land here on a job
+                  that was already in review — one started before this
+                  behaviour, or by somebody else — and without a way
+                  forward that job would be stranded on this card. So the
+                  button stays, saying what it actually does for them.
+                */}
+                {selfReview
+                  ? "Continue to approval"
+                  : managerName
+                    ? `Send to ${managerName}`
+                    : "Send to approval manager"}
               </SubmitButton>
             ) : awaitingDecision && reviewComplete && canDecide ? (
               <>
@@ -377,6 +469,9 @@ export function InspectionHeaderCard({
                   onClick={() => void approve()}
                   pending={working}
                   pendingLabel="Approving…"
+                  // The approval checks the snags' photos first; it cannot
+                  // until they have loaded.
+                  disabled={pending.snags}
                   icon={<CheckCircle2 className="size-4" />}
                 >
                   Approve inspection
@@ -404,17 +499,37 @@ export function InspectionHeaderCard({
               </span>
             ) : null}
             {(task.status === "approved" || task.status === "delivered") &&
-            canCreate ? (
+            canCreate &&
+            !pending.desnag ? (
               <>
-                <SubmitButton
-                  variant="outline"
-                  onClick={() => setRoundOpen(true)}
-                  pending={working}
-                  pendingLabel="Opening…"
-                  icon={<RotateCcw className="size-4" />}
-                >
-                  Open de-snag round
-                </SubmitButton>
+                {desnagStep === "quote" ? (
+                  <SubmitButton
+                    variant="outline"
+                    onClick={() => setDesnagQuoteOpen(true)}
+                    pending={false}
+                    disabled={working}
+                    icon={<RotateCcw className="size-4" />}
+                  >
+                    Quote de-snag
+                  </SubmitButton>
+                ) : desnagStep === "awaiting" ? (
+                  <Button variant="outline" asChild>
+                    <Link href={`/snagging/quotations/${desnagQuote!.id}`}>
+                      <FileText className="size-4" />
+                      De-snag quotation · {desnagQuote!.status === "draft" ? "Draft" : "Sent"}
+                    </Link>
+                  </Button>
+                ) : (
+                  <SubmitButton
+                    variant="outline"
+                    onClick={() => setRoundOpen(true)}
+                    pending={working}
+                    pendingLabel="Opening…"
+                    icon={<RotateCcw className="size-4" />}
+                  >
+                    Open de-snag round
+                  </SubmitButton>
+                )}
                 <Button
                   variant="outline"
                   onClick={() => setVisitOpen(true)}
@@ -452,7 +567,7 @@ export function InspectionHeaderCard({
               <RemediationDue due={task.remediation_due_at} />
             ) : null}
           </div>
-        ) : awaitingDecision ? (
+        ) : awaitingDecision && !pending.snags ? (
           <div className="border-warning/30 bg-warning/5 border-t px-5 py-3">
             <p className="text-sm">
               {snagsWithPhoto === snags.length
@@ -469,6 +584,13 @@ export function InspectionHeaderCard({
         every other page uses rather than a divided strip that only
         existed here.
       */}
+      {pending.snags ? (
+        <StatCardGrid columns={4}>
+          {Array.from({ length: 4 }).map((_, index) => (
+            <Skeleton key={index} className="h-[132px] rounded-xl" />
+          ))}
+        </StatCardGrid>
+      ) : (
       <StatCardGrid columns={4}>
         <StatCard
           label="Snags"
@@ -515,13 +637,17 @@ export function InspectionHeaderCard({
           />
         ) : (
           <StatCard
-            label="Areas confirmed"
-            value={`${confirmedAreas} / ${areas.length}`}
+            label="Areas walked"
+            value={`${walkedAreas} / ${areas.length}`}
             headline={
-              pendingArea ? `${pendingArea.name} still pending` : "All walked"
+              pendingArea
+                ? `${pendingArea.name} still pending`
+                : awaitingReviewAreas > 0
+                  ? `${awaitingReviewAreas} from a visit awaiting review`
+                  : "All walked"
             }
-            caption="Rooms the inspector signed off"
-            tone={pendingArea ? "progress" : "good"}
+            caption="Signed off on the walk or an approved visit"
+            tone={pendingArea || awaitingReviewAreas > 0 ? "progress" : "good"}
           />
         )}
         {/*
@@ -550,6 +676,7 @@ export function InspectionHeaderCard({
           }
         />
       </StatCardGrid>
+      )}
 
       <RejectInspectionDialog
         open={rejectOpen}
@@ -562,6 +689,25 @@ export function InspectionHeaderCard({
         taskId={task.id}
         open={visitOpen}
         onOpenChange={setVisitOpen}
+        // The new visit belongs in the page's visit list at once: the
+        // alerts, the Visits tab and its count all read that list.
+        onCreated={onVisitsChanged ?? onChanged}
+      />
+
+      <DesnagQuotationDialog
+        open={desnagQuoteOpen}
+        onOpenChange={setDesnagQuoteOpen}
+        // Always the original inspection: that is what a de-snag returns
+        // to, and what opening the round checks the quotation by.
+        sourceJob={{
+          id: task.parent_task_id ?? task.id,
+          label: task.property?.unit_label ?? task.code,
+          property_type: (task.property?.property_type as string | null) ?? null,
+        }}
+        onCreated={(quote) => {
+          setDesnagQuoteOpen(false);
+          router.push(`/snagging/quotations/${quote.id}`);
+        }}
       />
 
       <OpenRoundDialog
@@ -590,7 +736,6 @@ function RemediationDue({ due }: { due: string }) {
     month: "short",
     hour: "2-digit",
     minute: "2-digit",
-    timeZone: "Asia/Dubai",
   });
   return (
     <p

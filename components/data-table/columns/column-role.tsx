@@ -1,6 +1,9 @@
 "use client";
 
 import type { ColumnDef } from "@tanstack/react-table";
+import { CalendarDays, ShieldCheck } from "lucide-react";
+
+import { IconText } from "@/components/data-table/columns/icon-text";
 import type { Role } from "@/types/types";
 import { RoleRowActions } from "@/components/data-table/actions/role-actions";
 
@@ -14,9 +17,9 @@ export function getRoleColumns(onChanged: () => void): ColumnDef<Role>[] {
         return (
           <div className="flex items-center w-full">
             <div className="grid flex-1 text-left text-sm leading-tight">
-              <span className="font-semibold capitalize">
+              <IconText icon={ShieldCheck} className="font-semibold capitalize">
                 {row.original.name || "-"}
-              </span>
+              </IconText>
             </div>
           </div>
         );
@@ -56,9 +59,9 @@ export function getRoleColumns(onChanged: () => void): ColumnDef<Role>[] {
           return <span className="text-xs text-muted-foreground">N/A</span>;
         }
         return (
-          <span className="text-sm">
+          <IconText icon={CalendarDays}>
             {new Date(createdAt).toLocaleDateString()}
-          </span>
+          </IconText>
         );
       },
       enableSorting: true,

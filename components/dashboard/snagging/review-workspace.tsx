@@ -11,7 +11,10 @@ import { snaggingService } from "@/modules/snagging";
 import type { SnaggingTask, SnaggingTaskSummary } from "@/types/types";
 
 import { ReviewPanel } from "./review-panel";
-import { ErrorState, PageHeading, timeAgo } from "./shared";
+import { ErrorState, ListPager, PageHeading, timeAgo } from "./shared";
+
+/* Queue rows per page: enough to work through, short enough to scan. */
+const QUEUE_PAGE_SIZE = 20;
 
 /**
  * The review queue as a workspace: the waiting list on the left, the
@@ -45,17 +48,27 @@ export default function ReviewWorkspace() {
   const [loadingTask, setLoadingTask] = useState(false);
   const [queueError, setQueueError] = useState<string | null>(null);
   const [taskError, setTaskError] = useState<string | null>(null);
+  // The queue a page at a time, oldest first; the total is the whole backlog.
+  const [queuePage, setQueuePage] = useState(0);
+  const [queueTotal, setQueueTotal] = useState(0);
 
   const loadQueue = useCallback(async () => {
     setQueueError(null);
     try {
       const response = await snaggingService.listTasks(
         { queue: "approval", status: "submitted,in_review" },
-        0,
-        50,
+        queuePage,
+        QUEUE_PAGE_SIZE,
       );
       const rows = response.data ?? [];
+      const total = response.totalCount ?? rows.length;
+      // A decision can empty the last page; step back rather than show nothing.
+      if (rows.length === 0 && queuePage > 0) {
+        setQueuePage((page) => page - 1);
+        return;
+      }
       setQueue(rows);
+      setQueueTotal(total);
       setSelectedId((current) => {
         if (current && rows.some((row) => row.id === current)) return current;
         return rows[0]?.id ?? null;
@@ -69,7 +82,7 @@ export default function ReviewWorkspace() {
     } finally {
       setLoadingQueue(false);
     }
-  }, []);
+  }, [queuePage]);
 
   const loadTask = useCallback(async (id: string) => {
     setLoadingTask(true);
@@ -126,7 +139,7 @@ export default function ReviewWorkspace() {
       ) : (
         <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
           <Card className="gap-0 self-start p-0">
-            <p className="eyebrow px-4 pt-4 pb-2">Queue · {queue.length}</p>
+            <p className="eyebrow px-4 pt-4 pb-2">Queue · {queueTotal}</p>
             {loadingQueue ? (
               // Real queue rows are edge-to-edge and bordered with two
               // lines of text -- not free-floating bars inside p-4 padding.
@@ -225,6 +238,16 @@ export default function ReviewWorkspace() {
                 })}
               </ul>
             )}
+            {!loadingQueue && !queueError ? (
+              <ListPager
+                page={queuePage}
+                pageSize={QUEUE_PAGE_SIZE}
+                total={queueTotal}
+                onPageChange={setQueuePage}
+                noun="inspections"
+                className="border-t"
+              />
+            ) : null}
           </Card>
 
           <div>

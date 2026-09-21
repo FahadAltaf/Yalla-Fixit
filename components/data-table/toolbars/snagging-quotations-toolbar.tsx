@@ -1,10 +1,10 @@
 "use client";
 
 import { useId } from "react";
-import { LoaderCircleIcon, PlusIcon, RefreshCwIcon, RotateCcwIcon, SearchIcon } from "lucide-react";
+import { LoaderCircleIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
 
-import { PillTabs } from "@/components/dashboard/shared/kaizen";
 import { Button } from "@/components/ui/button";
+import { StatusSelect } from "@/components/data-table/toolbars/status-select";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -25,9 +25,10 @@ interface SnaggingQuotationsToolbarProps {
   statusTabs: ReadonlyArray<{ value: string; label: string; count?: number }>;
   statusValue: string;
   onStatusChange: (value: string) => void;
-  canCreate: boolean;
-  onCreate: () => void;
-  onCreateDesnag: () => void;
+  /** Kept for callers; the create action now lives in the page heading. */
+  canCreate?: boolean;
+  onCreate?: () => void;
+  onCreateDesnag?: () => void;
 }
 
 /**
@@ -52,21 +53,18 @@ export function SnaggingQuotationsToolbar({
   statusTabs,
   statusValue,
   onStatusChange,
-  canCreate,
-  onCreate,
-  onCreateDesnag,
 }: SnaggingQuotationsToolbarProps) {
   const searchInputId = useId();
 
   return (
     <div className="flex flex-col gap-4 px-4 py-4 sm:py-6">
       <div className="flex flex-row items-center justify-between gap-2 sm:gap-4">
-        <div className="flex items-center gap-2">
-          <div className="relative flex-1 sm:max-w-md sm:min-w-[260px]">
+        <div className="flex flex-1 flex-wrap items-center gap-2">
+          <div className="relative w-full sm:w-80 sm:flex-none">
             <Input
               id={searchInputId}
               type="search"
-              placeholder="Search number, client, unit or job..."
+              placeholder="Search..."
               className="peer w-full ps-9"
               value={globalFilter}
               onChange={(event) => onGlobalFilterChange(event.target.value)}
@@ -85,6 +83,7 @@ export function SnaggingQuotationsToolbar({
               )}
             </div>
           </div>
+          <StatusSelect options={statusTabs} value={statusValue} onChange={onStatusChange} />
         </div>
 
         <div className="flex gap-3 sm:flex-row sm:items-center sm:gap-4">
@@ -117,23 +116,9 @@ export function SnaggingQuotationsToolbar({
               <RefreshCwIcon className="size-4 sm:mr-1" />
               <span className="hidden sm:inline">Refresh</span>
             </Button>
-            {canCreate ? (
-              <>
-                <Button onClick={onCreateDesnag} variant="outline">
-                  <RotateCcwIcon className="size-4 sm:mr-1" />
-                  <span className="hidden sm:inline">De-snag</span>
-                </Button>
-                <Button onClick={onCreate} className="flex-1 sm:flex-initial">
-                  <PlusIcon className="size-4 sm:mr-2" />
-                  <span className="hidden sm:inline">New quotation</span>
-                </Button>
-              </>
-            ) : null}
           </div>
         </div>
       </div>
-
-      <PillTabs tabs={statusTabs} value={statusValue} onChange={onStatusChange} />
     </div>
   );
 }

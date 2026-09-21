@@ -26,11 +26,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { snaggingService } from "@/modules/snagging";
 import { EmptyState } from "@/components/ui/empty-state";
 import { cn } from "@/lib/utils";
 import { coverPhoto, splitEvidence } from "@/lib/snagging/evidence";
 import { EvidenceThumbnail, EvidenceViewer } from "./evidence-media";
 
+import { NoteEditButton, NoteEditDialog } from "./note-edit";
 import { SnagHistory } from "./snag-history";
 import type {
   SnaggingFloorPlan,
@@ -42,13 +44,15 @@ import type {
 import {
   AccessIndex,
   AccessStateBadge,
+  CompletedIndex,
   ListPager,
   PillTabs,
+  POPUP_PAGE_SIZES,
   SectionCard,
   SeverityBadge,
   SnagIndex,
   SnagStatusBadge,
-  formatGstDateTime,
+  formatLocalDateTime,
 } from "./shared";
 
 type Snag = NonNullable<SnaggingTask["snags"]>[number];
@@ -116,15 +120,71 @@ function describeWalk(
 type SeverityFilter = "all" | SnaggingSeverity;
 type SortMode = "newest" | "oldest";
 
-export function SnagWalkList({ task }: { task: SnaggingTask }) {
+export function SnagWalkList({
+  task,
+  visitNumbers,
+  canEdit = false,
+  onSnagsChanged,
+  onAreasChanged,
+}: {
+  task: SnaggingTask;
+  /** The reader may correct a snag's note (SNAGGING/EDIT). */
+  canEdit?: boolean;
+  /** Re-read the snags after an edit, so every view of them agrees. */
+  onSnagsChanged?: () => void;
+  /** Re-read the job's rooms after a room's note is edited. */
+  onAreasChanged?: () => void;
+  /**
+   * Visit number by visit id. Given on the job page, where the list mixes
+   * the original walk with what return visits found, so each visit's
+   * snags carry a "Visit N" label and can be filtered to. The visit's own
+   * page shows only its snags and passes nothing.
+   */
+  visitNumbers?: Record<string, number>;
+}) {
   const [preview, setPreview] = useState<SnaggingPhoto | null>(null);
   const [detail, setDetail] = useState<Snag | null>(null);
+  // The snag whose note is being edited.
+  const [editingNote, setEditingNote] = useState<Snag | null>(null);
+  // The snag whose verdict comment is being edited.
+  const [editingVerdict, setEditingVerdict] = useState<Snag | null>(null);
+  const [savedVerdicts, setSavedVerdicts] = useState<Record<string, string | null>>({});
+  // The completed room whose snags are open in a popup.
+  const [openAreaId, setOpenAreaId] = useState<string | null>(null);
+  /*
+    Saved notes, shown at once rather than after the snags are read
+    again: the list does not jump while the refresh is in flight, and a
+    page without a refresh (the visit page) still shows the new text.
+  */
+  const [savedNotes, setSavedNotes] = useState<Record<string, string | null>>({});
+  const [savedAreaNotes, setSavedAreaNotes] = useState<Record<string, string | null>>({});
+  // The completed room whose closing note is being edited.
+  const [editingAreaNote, setEditingAreaNote] = useState<string | null>(null);
+  // The room whose access reason is being edited.
+  const [editingReason, setEditingReason] = useState<string | null>(null);
+  const [savedReasons, setSavedReasons] = useState<Record<string, string | null>>({});
   const [severity, setSeverity] = useState<SeverityFilter>("all");
+  /* "all", "walk" (the original inspection), or a visit id. */
+  const [source, setSource] = useState<string>("all");
   const [sort, setSort] = useState<SortMode>("newest");
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
 
-  const all = useMemo(() => task.snags ?? [], [task]);
+  const all = useMemo(
+    () =>
+      (task.snags ?? []).map((snag) => ({
+        ...snag,
+        ...(snag.id in savedNotes ? { note: savedNotes[snag.id] } : {}),
+        ...(snag.id in savedVerdicts ? { verdict_note: savedVerdicts[snag.id] } : {}),
+      })),
+    [task, savedNotes, savedVerdicts],
+  );
+
+  function noteSaved(snag: Snag, note: string | null) {
+    setSavedNotes((current) => ({ ...current, [snag.id]: note }));
+    setDetail((current) => (current?.id === snag.id ? { ...current, note } : current));
+    onSnagsChanged?.();
+  }
 
   /*
     On an additional visit the list carries the original inspection's
@@ -136,7 +196,15 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
   const snags = useMemo(() => all.filter((s) => !s.from_earlier_visit), [all]);
   const earlier = useMemo(() => all.filter((s) => s.from_earlier_visit), [all]);
   const plans = useMemo(() => task.floor_plans ?? [], [task]);
-  const areas = task.areas ?? [];
+  const areas = useMemo(
+    () =>
+      (task.areas ?? []).map((area) => ({
+        ...area,
+        ...(area.id in savedAreaNotes ? { note: savedAreaNotes[area.id] } : {}),
+        ...(area.id in savedReasons ? { access_reason: savedReasons[area.id] } : {}),
+      })),
+    [task, savedAreaNotes, savedReasons],
+  );
 
   /*
     Filter, order, then cut to a page.
@@ -154,11 +222,31 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
     return tally;
   }, [snags]);
 
+  /*
+    The visits that raised any of these snags, in number order, for the
+    source filter. Absent when the job has had no visit find anything, and
+    the filter with it.
+  */
+  const visitSources = useMemo(() => {
+    const seen = new Map<string, number>();
+    for (const snag of snags) {
+      const number = snag.visit_id ? visitNumbers?.[snag.visit_id] : undefined;
+      if (snag.visit_id && number) seen.set(snag.visit_id, number);
+    }
+    return [...seen.entries()].sort((a, b) => a[1] - b[1]);
+  }, [snags, visitNumbers]);
+
   const visible = useMemo(() => {
+    const bySource =
+      source === "all"
+        ? snags
+        : source === "walk"
+          ? snags.filter((snag) => !snag.visit_id)
+          : snags.filter((snag) => snag.visit_id === source);
     const filtered =
       severity === "all"
-        ? snags
-        : snags.filter((snag) => snag.severity === severity);
+        ? bySource
+        : bySource.filter((snag) => snag.severity === severity);
 
     // Sorted here rather than trusted from the API: the walk arrives with
     // the task and nothing downstream guarantees its order.
@@ -167,7 +255,7 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
       const right = new Date(b.created_at ?? 0).getTime();
       return sort === "newest" ? right - left : left - right;
     });
-  }, [snags, severity, sort]);
+  }, [snags, severity, sort, source]);
 
   // A page that no longer exists (the filter shrank the list under it)
   // would render empty with no way back, so it clamps.
@@ -190,6 +278,23 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
   const accessIssues = areas.filter(
     (area) => area.access_state && area.access_state !== "accessible",
   );
+  /*
+    Rooms walked and signed off with full access, beside the ones that
+    were not. A room signed off with an access problem stays in the list
+    above, so no room appears twice. Newest sign-off first: that is the
+    order a reviewer follows an inspection in progress.
+  */
+  const completedAreas = areas
+    .filter(
+      (area) =>
+        area.confirmed_at && (!area.access_state || area.access_state === "accessible"),
+    )
+    .sort((a, b) => (b.confirmed_at ?? "").localeCompare(a.confirmed_at ?? ""));
+  const snagsByArea = new Map<string, number>();
+  for (const snag of snags) {
+    const areaId = snag.area?.id ?? snag.area_id;
+    if (areaId) snagsByArea.set(areaId, (snagsByArea.get(areaId) ?? 0) + 1);
+  }
   return (
     <div className="flex flex-col gap-6">
       {accessIssues.length > 0 ? (
@@ -216,9 +321,18 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
 
                 <div className="min-w-48 flex-1">
                   <p className="font-medium">{area.name}</p>
-                  <p className="text-muted-foreground mt-0.5 text-sm">
-                    {area.access_reason || "No reason given."}
-                  </p>
+                  <div className="mt-0.5 flex items-start gap-1.5">
+                    <p className="text-muted-foreground text-sm whitespace-pre-line">
+                      {area.access_reason || "No reason given."}
+                    </p>
+                    {canEdit ? (
+                      <NoteEditButton
+                        hasNote={Boolean(area.access_reason)}
+                        noun="reason"
+                        onClick={() => setEditingReason(area.id)}
+                      />
+                    ) : null}
+                  </div>
                 </div>
 
                 <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -226,6 +340,59 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
                 </div>
               </li>
             ))}
+          </ul>
+        </SectionCard>
+      ) : null}
+
+      {completedAreas.length > 0 ? (
+        <SectionCard
+          title="Completed areas"
+          icon={<CheckCircle2 />}
+          description={`${completedAreas.length} of ${areas.length} area${
+            areas.length === 1 ? "" : "s"
+          } walked and signed off`}
+          bodyClassName="border-t"
+        >
+          <ul>
+            {completedAreas.map((area) => {
+              const found = snagsByArea.get(area.id) ?? 0;
+              return (
+                <li key={area.id} className="border-b last:border-b-0">
+                  <button
+                    type="button"
+                    onClick={() => setOpenAreaId(area.id)}
+                    aria-label={`${area.name}: show its ${found} snag${found === 1 ? "" : "s"}`}
+                    className="hover:bg-mist-soft/60 focus-visible:ring-ring flex w-full flex-wrap items-start gap-3 px-5 py-4 text-left transition-colors focus-visible:ring-2 focus-visible:outline-none focus-visible:ring-inset"
+                  >
+                  <CompletedIndex />
+
+                  <div className="min-w-48 flex-1">
+                    <p className="font-medium">{area.name}</p>
+                    <p className="text-muted-foreground mt-0.5 text-sm">
+                      {found === 0
+                        ? "No defects found"
+                        : `${found} snag${found === 1 ? "" : "s"}`}
+                      {area.confirmed_at
+                        ? ` · signed off ${formatLocalDateTime(area.confirmed_at)}`
+                        : ""}
+                    </p>
+                    {area.note ? (
+                      <p className="text-muted-foreground mt-1 text-sm whitespace-pre-line">
+                        {area.note}
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <div className="ml-auto flex flex-wrap items-center gap-2">
+                    <Badge variant="secondary" className="bg-success/10 text-success border-0 font-medium">
+                      Completed
+                    </Badge>
+                    <ArrowRight className="text-muted-foreground size-4" aria-hidden />
+                  </div>
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         </SectionCard>
       ) : null}
@@ -260,6 +427,33 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
                 }}
               />
               <div className="ml-auto flex items-center gap-1.5">
+                {/* Which pass found it: the original walk or a visit. */}
+                {visitSources.length > 0 ? (
+                  <Select
+                    value={source}
+                    onValueChange={(value) => {
+                      setSource(value);
+                      setPage(0);
+                    }}
+                  >
+                    <SelectTrigger
+                      size="sm"
+                      className="w-[170px]"
+                      aria-label="Filter by visit"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All visits</SelectItem>
+                      <SelectItem value="walk">Original inspection</SelectItem>
+                      {visitSources.map(([id, number]) => (
+                        <SelectItem key={id} value={id}>
+                          Visit {number}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : null}
                 {/* <span className="text-muted-foreground text-xs">Sort</span> */}
                 <Select
                   value={sort}
@@ -339,7 +533,7 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
                         </button>
                         <p className="text-muted-foreground mt-0.5 flex flex-wrap items-center gap-x-2 text-xs">
                           {snag.created_at ? (
-                            <span>{formatGstDateTime(snag.created_at)}</span>
+                            <span>{formatLocalDateTime(snag.created_at)}</span>
                           ) : null}
                           {/*
                         FR-6.03 — a round mixes two kinds of defect: the
@@ -362,10 +556,37 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
                             {photoCount === 1 ? "photo" : "photos"}
                           </span>
                         </p>
-                        {snag.note ? (
-                          <p className="text-muted-foreground mt-1 text-sm">
-                            {snag.note}
-                          </p>
+                        {snag.note || canEdit ? (
+                          <div className="mt-1 flex items-start gap-1.5">
+                            {snag.note ? (
+                              <p className="text-muted-foreground text-sm whitespace-pre-line">
+                                {snag.note}
+                              </p>
+                            ) : null}
+                            {canEdit ? (
+                              <NoteEditButton
+                                hasNote={Boolean(snag.note)}
+                                onClick={() => setEditingNote(snag)}
+                              />
+                            ) : null}
+                          </div>
+                        ) : null}
+                        {showsVerdictComment(snag, canEdit) ? (
+                          <div className="mt-1 flex items-start gap-1.5 text-sm">
+                            {snag.verdict_note ? (
+                              <p className="whitespace-pre-line">
+                                <span className="text-muted-foreground">Verdict comment: </span>
+                                {snag.verdict_note}
+                              </p>
+                            ) : null}
+                            {canEdit ? (
+                              <NoteEditButton
+                                hasNote={Boolean(snag.verdict_note)}
+                                noun="verdict comment"
+                                onClick={() => setEditingVerdict(snag)}
+                              />
+                            ) : null}
+                          </div>
                         ) : null}
 
                         {/*
@@ -462,6 +683,18 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
                             Not pinned
                           </span>
                         )}
+                        {/*
+                          Raised on a return visit, not on the original
+                          walk -- the defects a visit's review is about.
+                        */}
+                        {snag.visit_id && visitNumbers?.[snag.visit_id] ? (
+                          <Badge
+                            variant="secondary"
+                            className="bg-brand/10 text-brand border-0"
+                          >
+                            Visit {visitNumbers[snag.visit_id]}
+                          </Badge>
+                        ) : null}
                         <SeverityBadge severity={snag.severity} />
                         <SnagStatusBadge status={snag.status} />
                         {photoCount === 0 ? (
@@ -528,7 +761,7 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
           <DialogHeader>
             <DialogTitle>Photo evidence</DialogTitle>
             <DialogDescription>
-              Captured {formatGstDateTime(preview?.taken_at)}
+              Captured {formatLocalDateTime(preview?.taken_at)}
               {preview?.gps_lat && preview?.gps_lng
                 ? ` · ${preview.gps_lat.toFixed(5)}, ${preview.gps_lng.toFixed(5)}`
                 : ""}
@@ -552,8 +785,80 @@ export function SnagWalkList({ task }: { task: SnaggingTask }) {
         snag={detail}
         plans={task.floor_plans ?? []}
         visitRound={task.round_number ?? 1}
+        visitNumbers={visitNumbers}
         onClose={() => setDetail(null)}
         onOpenPhoto={(photo) => setPreview(photo)}
+        onEditNote={canEdit ? (snag) => setEditingNote(snag) : undefined}
+        onEditVerdict={canEdit ? (snag) => setEditingVerdict(snag) : undefined}
+      />
+
+      <NoteEditDialog
+        open={editingVerdict !== null}
+        title={editingVerdict?.verdict_note ? "Edit verdict comment" : "Add a verdict comment"}
+        context={`${
+          [editingVerdict?.area?.name ?? editingVerdict?.area_label, editingVerdict?.defect_label]
+            .filter(Boolean)
+            .join(" · ") || "Snag"
+        }. What the inspector said about the fix on this round.`}
+        initial={editingVerdict?.verdict_note ?? ""}
+        seedKey={editingVerdict?.id ?? null}
+        onClose={() => setEditingVerdict(null)}
+        onSave={async (text) => {
+          const snag = editingVerdict;
+          if (!snag) return;
+          await snaggingService.updateSnagVerdictNote(snag.id, text);
+          setSavedVerdicts((current) => ({ ...current, [snag.id]: text }));
+          setDetail((current) => (current?.id === snag.id ? { ...current, verdict_note: text } : current));
+          onSnagsChanged?.();
+        }}
+      />
+
+      <SnagNoteDialog
+        snag={editingNote}
+        onClose={() => setEditingNote(null)}
+        onSaved={noteSaved}
+      />
+
+      <AreaSnagsDialog
+        area={areas.find((area) => area.id === openAreaId) ?? null}
+        snags={snags.filter((snag) => (snag.area?.id ?? snag.area_id) === openAreaId)}
+        onClose={() => setOpenAreaId(null)}
+        onOpenSnag={(snag) => setDetail(snag)}
+        onOpenPhoto={(photo) => setPreview(photo)}
+        onEditNote={canEdit ? (areaId) => setEditingAreaNote(areaId) : undefined}
+        onEditSnagNote={canEdit ? (snag) => setEditingNote(snag) : undefined}
+      />
+
+      <NoteEditDialog
+        open={editingReason !== null}
+        title={areas.find((a) => a.id === editingReason)?.access_reason ? "Edit access reason" : "Add an access reason"}
+        context={`${areas.find((a) => a.id === editingReason)?.name ?? "Room"}. Why the inspector could not fully inspect it; the client report shows this.`}
+        initial={areas.find((a) => a.id === editingReason)?.access_reason ?? ""}
+        seedKey={editingReason}
+        onClose={() => setEditingReason(null)}
+        onSave={async (text) => {
+          const areaId = editingReason;
+          if (!areaId) return;
+          await snaggingService.updateArea(task.id, { id: areaId, access_reason: text });
+          setSavedReasons((current) => ({ ...current, [areaId]: text }));
+          onAreasChanged?.();
+        }}
+      />
+
+      <NoteEditDialog
+        open={editingAreaNote !== null}
+        title={areas.find((a) => a.id === editingAreaNote)?.note ? "Edit room note" : "Add a room note"}
+        context={`${areas.find((a) => a.id === editingAreaNote)?.name ?? "Room"}. The inspector's closing note for this room.`}
+        initial={areas.find((a) => a.id === editingAreaNote)?.note ?? ""}
+        seedKey={editingAreaNote}
+        onClose={() => setEditingAreaNote(null)}
+        onSave={async (text) => {
+          const areaId = editingAreaNote;
+          if (!areaId) return;
+          await snaggingService.updateArea(task.id, { id: areaId, note: text });
+          setSavedAreaNotes((current) => ({ ...current, [areaId]: text }));
+          onAreasChanged?.();
+        }}
       />
     </div>
   );
@@ -564,13 +869,21 @@ function SnagDetailDialog({
   snag,
   plans,
   visitRound,
+  visitNumbers,
   onClose,
   onOpenPhoto,
+  onEditNote,
+  onEditVerdict,
 }: {
+  /** Given when the reader may correct the note. */
+  onEditNote?: (snag: Snag) => void;
+  /** Given when the reader may correct the verdict comment. */
+  onEditVerdict?: (snag: Snag) => void;
   snag: Snag | null;
   plans: SnaggingFloorPlan[];
   /** The round being viewed, which is what makes a photo "before" or "after". */
   visitRound: number;
+  visitNumbers?: Record<string, number>;
   onClose: () => void;
   onOpenPhoto: (photo: SnaggingPhoto) => void;
 }) {
@@ -608,13 +921,17 @@ function SnagDetailDialog({
                 label="Status"
                 value={<SnagStatusBadge status={snag.status} />}
               />
-              <Detail
-                label="Round"
-                value={snag.round_created ? `Round ${snag.round_created}` : "1"}
-              />
+              {snag.visit_id && visitNumbers?.[snag.visit_id] ? (
+                <Detail label="Found on" value={`Visit ${visitNumbers[snag.visit_id]}`} />
+              ) : (
+                <Detail
+                  label="Round"
+                  value={snag.round_created ? `Round ${snag.round_created}` : "1"}
+                />
+              )}
               <Detail
                 label="Captured"
-                value={formatGstDateTime(snag.created_at)}
+                value={formatLocalDateTime(snag.created_at)}
               />
             </dl>
 
@@ -636,10 +953,33 @@ function SnagDetailDialog({
               <SnagHistory snagId={snag.id} />
             </div>
 
-            {snag.note ? (
+            {snag.note || onEditNote ? (
               <div>
-                <p className="text-muted-foreground text-xs">Note</p>
-                <p className="mt-0.5">{snag.note}</p>
+                <div className="flex items-center gap-1.5">
+                  <p className="text-muted-foreground text-xs">Note</p>
+                  {onEditNote && snag ? (
+                    <NoteEditButton hasNote={Boolean(snag.note)} onClick={() => onEditNote(snag)} />
+                  ) : null}
+                </div>
+                {snag.note ? <p className="mt-0.5 whitespace-pre-line">{snag.note}</p> : null}
+              </div>
+            ) : null}
+
+            {snag && showsVerdictComment(snag, Boolean(onEditVerdict)) ? (
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <p className="text-muted-foreground text-xs">Verdict comment</p>
+                  {onEditVerdict ? (
+                    <NoteEditButton
+                      hasNote={Boolean(snag.verdict_note)}
+                      noun="verdict comment"
+                      onClick={() => onEditVerdict(snag)}
+                    />
+                  ) : null}
+                </div>
+                {snag.verdict_note ? (
+                  <p className="mt-0.5 whitespace-pre-line">{snag.verdict_note}</p>
+                ) : null}
               </div>
             ) : null}
 
@@ -783,6 +1123,267 @@ function SnagPlanPin({
     </div>
   );
 }
+
+/* The statuses a de-snag verdict leaves a snag in. */
+const VERDICT_STATUSES = new Set([
+  "verified_closed",
+  "verified_poor_quality",
+  "verified_not_done",
+]);
+
+/**
+ * Whether a snag has a verdict comment line: it has a comment, or it has a
+ * verdict and the reader could add one.
+ */
+function showsVerdictComment(snag: Snag, canEdit: boolean) {
+  return Boolean(snag.verdict_note) || (canEdit && VERDICT_STATUSES.has(snag.status));
+}
+
+const AREA_PAGE_SIZE = 5;
+
+/**
+ * One completed room's snags, a page at a time.
+ *
+ * Opened from "Completed areas", so a reviewer can check what a signed-off
+ * room actually recorded without filtering the whole walk. A snag opens
+ * its full detail over this list, and closing the detail comes back here.
+ */
+function AreaSnagsDialog({
+  area,
+  snags,
+  onClose,
+  onOpenSnag,
+  onOpenPhoto,
+  onEditNote,
+  onEditSnagNote,
+}: {
+  area: NonNullable<SnaggingTask["areas"]>[number] | null;
+  snags: Snag[];
+  onClose: () => void;
+  onOpenSnag: (snag: Snag) => void;
+  onOpenPhoto: (photo: SnaggingPhoto) => void;
+  /** Given when the reader may correct the room's closing note. */
+  onEditNote?: (areaId: string) => void;
+  /** Given when the reader may correct a snag's note. */
+  onEditSnagNote?: (snag: Snag) => void;
+}) {
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(AREA_PAGE_SIZE);
+  // Back to the first page whenever a different room opens.
+  const [shownFor, setShownFor] = useState<string | null>(null);
+  if ((area?.id ?? null) !== shownFor) {
+    setShownFor(area?.id ?? null);
+    setPage(0);
+  }
+
+  // Newest first, as the main list opens.
+  const ordered = useMemo(
+    () => [...snags].sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? "")),
+    [snags],
+  );
+  const pages = Math.max(1, Math.ceil(ordered.length / pageSize));
+  const safePage = Math.min(page, pages - 1);
+  const shown = ordered.slice(safePage * pageSize, safePage * pageSize + pageSize);
+
+  return (
+    <Dialog open={Boolean(area)} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-h-[88vh] overflow-y-auto p-0 sm:max-w-2xl">
+        <DialogHeader className="px-6 pt-6">
+          <DialogTitle>{area?.name ?? "Area"}</DialogTitle>
+          <DialogDescription>
+            {ordered.length === 0
+              ? "Walked and signed off with no defects found"
+              : `${ordered.length} snag${ordered.length === 1 ? "" : "s"} recorded`}
+            {area?.confirmed_at ? ` · signed off ${formatLocalDateTime(area.confirmed_at)}` : ""}
+          </DialogDescription>
+          {area?.note || (area && onEditNote) ? (
+            <div className="bg-mist-soft mt-2 flex items-start gap-2 rounded-md px-3 py-2 text-sm">
+              {area?.note ? (
+                <p className="flex-1 whitespace-pre-line">{area.note}</p>
+              ) : (
+                <p className="text-muted-foreground flex-1">No closing note.</p>
+              )}
+              {area && onEditNote ? (
+                <NoteEditButton hasNote={Boolean(area.note)} onClick={() => onEditNote(area.id)} />
+              ) : null}
+            </div>
+          ) : null}
+        </DialogHeader>
+
+        {ordered.length === 0 ? (
+          <EmptyState
+            icon={<CheckCircle2 className="size-6" />}
+            title="No defects recorded"
+            description="The inspector walked this room and found nothing to snag."
+            className="py-10"
+          />
+        ) : (
+          <>
+            <ul className="border-t">
+              {shown.map((snag, index) => (
+                <li
+                  key={snag.id}
+                  className="hover:bg-mist-soft/60 flex items-start gap-3 border-b px-6 py-4 transition-colors last:border-b-0"
+                >
+                  <SnagIndex index={safePage * pageSize + index + 1} severity={snag.severity} />
+                  <div className="min-w-0 flex-1">
+                    {/* The title opens the snag; the note beside it edits in place. */}
+                    <button
+                      type="button"
+                      onClick={() => onOpenSnag(snag)}
+                      className="hover:text-primary text-left font-medium hover:underline"
+                    >
+                      {[snag.category_label, snag.element_label, snag.defect_label]
+                        .filter(Boolean)
+                        .join(" · ") || "Snag"}
+                    </button>
+                    <p className="text-muted-foreground mt-0.5 text-xs">
+                      {snag.created_at ? formatLocalDateTime(snag.created_at) : null}
+                      {" · "}
+                      {snag.photos?.length ?? 0}{" "}
+                      {(snag.photos?.length ?? 0) === 1 ? "photo" : "photos"}
+                    </p>
+                    {snag.note || onEditSnagNote ? (
+                      <div className="mt-1 flex items-start gap-1.5">
+                        {snag.note ? (
+                          <p className="text-muted-foreground text-sm whitespace-pre-line">
+                            {snag.note}
+                          </p>
+                        ) : null}
+                        {onEditSnagNote ? (
+                          <NoteEditButton
+                            hasNote={Boolean(snag.note)}
+                            onClick={() => onEditSnagNote(snag)}
+                          />
+                        ) : null}
+                      </div>
+                    ) : null}
+                    <AreaSnagPhotos
+                      snag={snag}
+                      onOpenPhoto={onOpenPhoto}
+                      onOpenSnag={onOpenSnag}
+                    />
+                  </div>
+                  <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                    <SeverityBadge severity={snag.severity} />
+                    <SnagStatusBadge status={snag.status} />
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <ListPager
+              page={safePage}
+              pageSize={pageSize}
+              total={ordered.length}
+              onPageChange={setPage}
+              onPageSizeChange={(size) => {
+                setPageSize(size);
+                setPage(0);
+              }}
+              pageSizes={POPUP_PAGE_SIZES}
+              noun="snags"
+              className="border-t"
+            />
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* How many photos a row in the room popup shows before "+N more". */
+const AREA_PHOTO_LIMIT = 4;
+
+/**
+ * A snag's photos in the room popup, oldest first so the defect as found
+ * comes before any fix shot. Each opens full size; the rest are one click
+ * away in the snag's detail.
+ */
+function AreaSnagPhotos({
+  snag,
+  onOpenPhoto,
+  onOpenSnag,
+}: {
+  snag: Snag;
+  onOpenPhoto: (photo: SnaggingPhoto) => void;
+  onOpenSnag: (snag: Snag) => void;
+}) {
+  const photos = [...(snag.photos ?? [])].sort(
+    (a, b) =>
+      (a.round_number ?? 1) - (b.round_number ?? 1) ||
+      (a.taken_at ?? "").localeCompare(b.taken_at ?? ""),
+  );
+  if (photos.length === 0) return null;
+  const shown = photos.slice(0, AREA_PHOTO_LIMIT);
+  const label = snag.defect_label ?? "this snag";
+  const rounds = new Set(photos.map((photo) => photo.round_number ?? 1));
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      {shown.map((photo, index) => (
+        <button
+          key={photo.id}
+          type="button"
+          onClick={() => onOpenPhoto(photo)}
+          className="focus-visible:ring-ring relative size-16 shrink-0 overflow-hidden rounded-md border focus-visible:ring-2 focus-visible:outline-none"
+          aria-label={`Photo ${index + 1} for ${label}`}
+        >
+          <EvidenceThumbnail photo={photo} />
+          {rounds.size > 1 ? (
+            <span className="absolute bottom-0.5 left-0.5 rounded bg-black/60 px-1 text-[10px] leading-4 text-white">
+              R{photo.round_number ?? 1}
+            </span>
+          ) : null}
+        </button>
+      ))}
+      {photos.length > shown.length ? (
+        <button
+          type="button"
+          onClick={() => onOpenSnag(snag)}
+          className="text-muted-foreground hover:text-foreground flex size-16 items-center justify-center rounded-md border border-dashed text-xs hover:underline"
+          aria-label={`All ${photos.length} photos for ${label}`}
+        >
+          +{photos.length - shown.length}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Correcting a snag's note. The note goes into the client's report word
+ * for word, so a reviewer can fix the wording without sending the job
+ * back to the inspector. Empty text clears it.
+ */
+function SnagNoteDialog({
+  snag,
+  onClose,
+  onSaved,
+}: {
+  snag: Snag | null;
+  onClose: () => void;
+  onSaved: (snag: Snag, note: string | null) => void;
+}) {
+  return (
+    <NoteEditDialog
+      open={Boolean(snag)}
+      title={snag?.note ? "Edit note" : "Add a note"}
+      context={`${
+        [snag?.area?.name ?? snag?.area_label, snag?.defect_label].filter(Boolean).join(" · ") ||
+        "Snag"
+      }. The note appears in the client report as written.`}
+      initial={snag?.note ?? ""}
+      seedKey={snag?.id ?? null}
+      onClose={onClose}
+      onSave={async (text) => {
+        if (!snag) return;
+        const saved = await snaggingService.updateSnagNote(snag.id, text);
+        onSaved(snag, saved.note);
+      }}
+    />
+  );
+}
+
 
 function Detail({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -995,7 +1596,7 @@ function PhotoExif({ photo }: { photo: SnaggingPhoto }) {
   if (software) rows.push({ label: "Software", value: software });
   rows.push({
     label: "Captured",
-    value: formatGstDateTime(photo.taken_at) || "Unknown",
+    value: formatLocalDateTime(photo.taken_at) || "Unknown",
   });
   rows.push({
     label: "Location",

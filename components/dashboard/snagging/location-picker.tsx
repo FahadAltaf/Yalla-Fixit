@@ -261,7 +261,7 @@ export function LocationPicker({
       */}
       <div
         className={cn(
-          "bg-muted h-72 w-full overflow-hidden rounded-lg border",
+          "bg-muted isolate h-72 w-full overflow-hidden rounded-lg border",
           !ready && "animate-pulse",
         )}
       >

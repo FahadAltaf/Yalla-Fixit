@@ -299,6 +299,64 @@ export type SnaggingTaskType = "single_unit" | "full_building";
 /** Which kind of visit a job is (Q1-Q6). */
 export type SnaggingVisitType = "initial" | "desnag" | "additional";
 
+/**
+ * A return appointment on an existing job (BA v2, change 25 / FR-9.01).
+ *
+ * Not a job of its own. A visit is another trip to the same property
+ * under the same record, so what it finds lands on the original job and
+ * reaches the client in the one report they were promised.
+ */
+export type SnaggingVisitStatus =
+  | "requested"
+  | "scheduled"
+  | "in_progress"
+  /** Finished on site, waiting for the approval manager (2026-09-18). */
+  | "submitted"
+  | "completed"
+  | "cancelled";
+
+/**
+ * How the client pays for it (change 26 / BR-14).
+ *
+ * A return visit is usually a penalty rather than work the client chose
+ * to buy, so the team often sends a payment link instead of raising a
+ * quotation. Both are legitimate; the coordinator records which was used.
+ */
+export type SnaggingVisitChargeMethod = "quotation" | "payment_link";
+
+export interface SnaggingJobVisit {
+  id: string;
+  /** Sent by the visit page only; the list is already one job's. */
+  job_id?: string;
+  visit_number: number;
+  status: SnaggingVisitStatus;
+  scheduled_date: string | null;
+  appointment_at: string | null;
+  inspector_id: string | null;
+  inspector?: { id: string; full_name?: string | null; email?: string | null } | null;
+  /** Fixed per visit per property (change 30), stamped when it is raised. */
+  charge: number | null;
+  charge_method: SnaggingVisitChargeMethod;
+  quotation_id: string | null;
+  quotation?: {
+    id: string;
+    quote_number: string | null;
+    status: string;
+  } | null;
+  payment_reference: string | null;
+  started_at: string | null;
+  /** When the inspector handed it to the manager. */
+  submitted_at?: string | null;
+  /** The manager's reason for sending it back, shown on the phone. */
+  review_note?: string | null;
+  reviewed_at?: string | null;
+  notes: string | null;
+  /** Defects this visit raised onto the job it belongs to. */
+  snag_count?: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export type SnaggingPropertyType =
   "apartment" | "villa" | "townhouse" | "commercial";
 
@@ -408,6 +466,8 @@ export interface SnaggingArea {
   /** How reachable the room was on the day (R1-R6/J3). */
   access_state?: SnaggingAreaAccessState;
   access_reason?: string | null;
+  /** The return visit that added this room; null on the original walk. */
+  visit_id?: string | null;
 }
 
 export type SnaggingAreaAccessState =
@@ -450,6 +510,8 @@ export interface SnaggingSnag {
    * original and are never edited or re-counted here.
    */
   from_earlier_visit?: boolean;
+  /** The additional visit that raised it; null on the original walk. */
+  visit_id?: string | null;
   area_id: string;
   snag_code: string;
   catalogue_entry_id?: string | null;
@@ -466,6 +528,8 @@ export interface SnaggingSnag {
   defect_label?: string | null;
   severity: SnaggingSeverity;
   note?: string | null;
+  /** The inspector's comment on this round's de-snag verdict. */
+  verdict_note?: string | null;
   floor_plan_id?: string | null;
   /** 0..1 fractions of the plan, so a pin survives any zoom level. */
   pin_x?: number | null;
@@ -525,6 +589,24 @@ export interface SnaggingApprovalAction {
 
 export interface SnaggingTask {
   id: string;
+  /**
+   * Visits on this job not yet approved by the manager (booked, on site,
+   * submitted, cancelled). What they recorded stays out of the client's
+   * report until approval reissues it.
+   */
+  unapproved_visit_ids?: string[];
+  /**
+   * The de-snag quotation for this job that matters now (change 31): an
+   * approved one not yet used to open a round, else a draft or sent one
+   * the client has not decided, else the latest. Null when none exists.
+   * `job_id` is set once it has paid for a round.
+   */
+  desnag_quotation?: {
+    id: string;
+    quote_number: string | null;
+    status: string;
+    job_id: string | null;
+  } | null;
   code: string;
   project_id?: string | null;
   property_id: string;
@@ -691,6 +773,8 @@ export interface SnaggingChecklistItem {
   status: SnaggingChecklistStatus;
   reason?: string | null;
   sort_order: number;
+  /** The return visit that answered it; null when answered on the walk. */
+  visit_id?: string | null;
 }
 
 /** Row shape of the snagging_task_summaries view. */
@@ -735,12 +819,7 @@ export interface SnaggingTaskSummary {
   property_type: SnaggingPropertyType;
   client_name: string;
   developer_name?: string | null;
-  area_count: number;
-  confirmed_area_count: number;
-  snag_count: number;
   high_severity_count: number;
-  open_snag_count: number;
-  photo_count: number;
   /** Attached by the list route from the assignee and snag tables. */
   inspector_name?: string | null;
   medium_severity_count?: number;

@@ -358,7 +358,9 @@ export function DataTable<TData, TValue>({
                   <>
                     <PaginationItem>
                       <Button
-                        className={`${
+                        // A circle, not a pill: the active page reads as a dot.
+                        size="icon"
+                        className={`rounded-full tabular-nums ${
                           currentPage !== 0 &&
                           "bg-primary/10 text-primary hover:bg-primary/20 focus-visible:ring-primary/20 dark:focus-visible:ring-primary/40"
                         }`}
@@ -394,7 +396,9 @@ export function DataTable<TData, TValue>({
                   return (
                     <PaginationItem key={page}>
                       <Button
-                        className={`${
+                        // A circle, not a pill: the active page reads as a dot.
+                        size="icon"
+                        className={`rounded-full tabular-nums ${
                           !isActive &&
                           "bg-primary/10 text-primary hover:bg-primary/20 focus-visible:ring-primary/20 dark:focus-visible:ring-primary/40"
                         }`}
@@ -428,8 +432,9 @@ export function DataTable<TData, TValue>({
                       )}
                     <PaginationItem>
                       <Button
-                        // size="icon"
-                        className={`${
+                        // A circle, not a pill: the active page reads as a dot.
+                        size="icon"
+                        className={`rounded-full tabular-nums ${
                           currentPage !== totalPages - 1 &&
                           "bg-primary/10 text-primary hover:bg-primary/20 focus-visible:ring-primary/20 dark:focus-visible:ring-primary/40"
                         }`}

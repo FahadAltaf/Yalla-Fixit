@@ -50,9 +50,25 @@ export const OUTSTANDING_SNAG_STATUSES = new Set([
 
 export type DateRange = { from: string; to: string; fromTs: string; toTs: string };
 
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+function validDay(value: string | null): string | null {
+  if (!value || !ISO_DAY.test(value)) return null;
+  return Number.isNaN(Date.parse(`${value}T00:00:00Z`)) ? null : value;
+}
+
+/**
+ * The dates asked for, made safe: a malformed date falls back to the
+ * default, neither end runs past today (tomorrow in UTC, so a reader
+ * east of Greenwich can still ask for their own today), and a start
+ * after the end is pulled back to it.
+ */
 export function resolveRange(fromParam: string | null, toParam: string | null): DateRange {
-  const to = toParam ?? new Date().toISOString().slice(0, 10);
-  const from = fromParam ?? defaultFrom();
+  const latest = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+  let to = validDay(toParam) ?? new Date().toISOString().slice(0, 10);
+  if (to > latest) to = latest;
+  let from = validDay(fromParam) ?? defaultFrom();
+  if (from > to) from = to;
   return {
     from,
     to,
@@ -65,6 +81,35 @@ function defaultFrom(): string {
   const date = new Date();
   date.setDate(date.getDate() - 30);
   return date.toISOString().slice(0, 10);
+}
+
+/** Rows per request; PostgREST stops at 1,000 whatever is asked for. */
+const READ_PAGE = 1000;
+/** Ids per `.in()` filter, so the request URL stays well under limits. */
+const ID_CHUNK = 200;
+
+/**
+ * Reads every row a query matches, a page at a time. A plain select
+ * stops silently at 1,000 rows, which would quietly under-count every
+ * figure once the business passes that many jobs or snags.
+ */
+async function readAll<T>(
+  page: (from: number, to: number) => PromiseLike<{ data: unknown; error: { message: string } | null }>,
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (let from = 0; ; from += READ_PAGE) {
+    const { data, error } = await page(from, from + READ_PAGE - 1);
+    if (error) throw new Error(error.message);
+    const batch = (data ?? []) as T[];
+    rows.push(...batch);
+    if (batch.length < READ_PAGE) return rows;
+  }
+}
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
 }
 
 /**
@@ -84,13 +129,16 @@ export async function loadJobsTouchingRange(
     .map((column) => `and(${column}.gte.${range.fromTs},${column}.lte.${range.toTs})`)
     .join(",");
 
-  const { data, error } = await admin
-    .from("snagging_jobs")
-    .select(JOB_COLUMNS)
-    .or(anchors)
-    .order("created_at", { ascending: false });
-  if (error) throw new Error(error.message);
-  return (data ?? []) as unknown as AnalyticsJob[];
+  // Ordered on a unique tiebreak too, so pages never overlap or skip.
+  return readAll<AnalyticsJob>((from, to) =>
+    admin
+      .from("snagging_jobs")
+      .select(JOB_COLUMNS)
+      .or(anchors)
+      .order("created_at", { ascending: false })
+      .order("id")
+      .range(from, to),
+  );
 }
 
 /**
@@ -101,13 +149,15 @@ export async function loadJobsTouchingRange(
  * should not be told there is less waiting than there is.
  */
 export async function loadReviewQueue(admin: SupabaseClient): Promise<AnalyticsJob[]> {
-  const { data, error } = await admin
-    .from("snagging_jobs")
-    .select(JOB_COLUMNS)
-    .in("status", REVIEW_QUEUE_STATUSES)
-    .order("submitted_at", { ascending: true, nullsFirst: false });
-  if (error) throw new Error(error.message);
-  return (data ?? []) as unknown as AnalyticsJob[];
+  return readAll<AnalyticsJob>((from, to) =>
+    admin
+      .from("snagging_jobs")
+      .select(JOB_COLUMNS)
+      .in("status", REVIEW_QUEUE_STATUSES)
+      .order("submitted_at", { ascending: true, nullsFirst: false })
+      .order("id")
+      .range(from, to),
+  );
 }
 
 export type SnagRow = {
@@ -124,12 +174,19 @@ export async function loadSnagsForJobs(
   jobIds: string[],
 ): Promise<SnagRow[]> {
   if (jobIds.length === 0) return [];
-  const { data, error } = await admin
-    .from("snagging_snags")
-    .select("job_id, status, defect_label, catalogue_code")
-    .in("job_id", jobIds);
-  if (error) throw new Error(error.message);
-  return (data ?? []) as SnagRow[];
+  const batches = await Promise.all(
+    chunk(jobIds, ID_CHUNK).map((ids) =>
+      readAll<SnagRow>((from, to) =>
+        admin
+          .from("snagging_snags")
+          .select("job_id, status, defect_label, catalogue_code")
+          .in("job_id", ids)
+          .order("id")
+          .range(from, to),
+      ),
+    ),
+  );
+  return batches.flat();
 }
 
 export async function loadInspectorNames(
@@ -137,13 +194,19 @@ export async function loadInspectorNames(
   ids: string[],
 ): Promise<Map<string, string>> {
   if (ids.length === 0) return new Map();
-  const { data, error } = await admin
-    .from("user_profile")
-    .select("id, full_name, email")
-    .in("id", ids);
-  if (error) throw new Error(error.message);
+  type Profile = { id: string; full_name: string | null; email: string | null };
+  const batches = await Promise.all(
+    chunk(ids, ID_CHUNK).map(async (slice) => {
+      const { data, error } = await admin
+        .from("user_profile")
+        .select("id, full_name, email")
+        .in("id", slice);
+      if (error) throw new Error(error.message);
+      return (data ?? []) as Profile[];
+    }),
+  );
   return new Map(
-    ((data ?? []) as Array<{ id: string; full_name: string | null; email: string | null }>).map(
+    batches.flat().map(
       (row) => [row.id, row.full_name ?? row.email ?? "Unknown"] as const,
     ),
   );

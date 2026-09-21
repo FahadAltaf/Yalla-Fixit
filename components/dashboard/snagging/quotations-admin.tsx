@@ -1,59 +1,41 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
 import {
   Briefcase,
   FileText,
   Plus,
+  UserRound,
 } from "lucide-react";
-import { toast } from "sonner";
 
 import { DataTable } from "@/components/data-table";
+import { IconText } from "@/components/data-table/columns/icon-text";
+import { DirhamIcon } from "@/components/ui/dirham-icon";
+import { IdentityCell } from "@/components/ui/entity-avatar";
 import { SnaggingQuotationsToolbar } from "@/components/data-table/toolbars/snagging-quotations-toolbar";
+import { useDebounce } from "@/hooks/use-debounce";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
-import { IdentityCell } from "@/components/ui/entity-avatar";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
 import {
   snaggingService,
   type SnaggingQuotationSummary,
 } from "@/modules/snagging";
-import {
-  ActionType,
-  ResourceType,
-  type SnaggingTaskSummary,
-} from "@/types/types";
+import { ActionType, ResourceType } from "@/types/types";
 
 import {
   ErrorState,
   PageHeading,
   QuotationStatusBadge,
-  SubmitButton,
-  formatGstDate,
+  formatLocalDate,
 } from "./shared";
+import { DesnagQuotationDialog } from "./desnag-quotation-dialog";
 
 
 const KIND_LABEL: Record<string, string> = {
@@ -98,37 +80,38 @@ export default function QuotationsAdmin() {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
   const [desnagOpen, setDesnagOpen] = useState(false);
+  const [total, setTotal] = useState(0);
+  const [counts, setCounts] = useState<Record<string, number>>({});
+  // Searched on the server, a moment after typing stops.
+  const debouncedSearch = useDebounce(search.trim(), 300);
 
+  /*
+    A page at a time from the server, searched there too. The list used
+    to arrive whole and stop silently at the newest 400 quotations.
+  */
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      setRows(await snaggingService.listQuotations({ status }));
+      const result = await snaggingService.listQuotations({
+        status,
+        search: debouncedSearch || undefined,
+        page,
+        pageSize,
+      });
+      setRows(result.data);
+      setTotal(result.totalCount);
+      setCounts(result.counts ?? {});
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load quotations");
     } finally {
       setLoading(false);
     }
-  }, [status]);
+  }, [status, debouncedSearch, page, pageSize]);
 
   useEffect(() => {
     void load();
   }, [load]);
-
-  const filtered = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    if (!term) return rows;
-    return rows.filter((row) =>
-      [row.quote_number, row.client_name, row.unit_label, row.building_name, row.job_code]
-        .filter(Boolean)
-        .some((field) => String(field).toLowerCase().includes(term)),
-    );
-  }, [rows, search]);
-
-  const paginated = useMemo(
-    () => filtered.slice(page * pageSize, page * pageSize + pageSize),
-    [filtered, page, pageSize],
-  );
 
   /*
     Status as pills rather than a dropdown, matching the jobs table: a
@@ -136,8 +119,7 @@ export default function QuotationsAdmin() {
     each pill answers "how much is waiting" without applying the filter.
   */
   const statusTabs = useMemo(() => {
-    const count = (value: string) =>
-      value === "all" ? rows.length : rows.filter((r) => r.status === value).length;
+    const count = (value: string) => counts[value] ?? 0;
     return [
       { value: "all", label: "All", count: count("all") },
       { value: "draft", label: "Draft", count: count("draft") },
@@ -145,7 +127,7 @@ export default function QuotationsAdmin() {
       { value: "approved", label: "Approved", count: count("approved") },
       { value: "rejected", label: "Rejected", count: count("rejected") },
     ];
-  }, [rows]);
+  }, [counts]);
 
   /* The whole point of the section: approved, and nobody has raised it yet. */
   const awaitingJob = useMemo(
@@ -161,12 +143,12 @@ export default function QuotationsAdmin() {
         accessorKey: "quote_number",
         cell: ({ row }) => (
           <div className="flex min-w-0 flex-col">
-            <span className="font-medium tabular-nums">
+            <IconText icon={FileText} className="font-medium tabular-nums">
               {row.original.quote_number}
-            </span>
+            </IconText>
             <span className="text-muted-foreground text-xs">
               {KIND_LABEL[row.original.quote_kind] ?? row.original.quote_kind} ·{" "}
-              {formatGstDate(row.original.created_at)}
+              {formatLocalDate(row.original.created_at)}
             </span>
           </div>
         ),
@@ -179,10 +161,11 @@ export default function QuotationsAdmin() {
           const q = row.original;
           const place = [q.unit_label, q.building_name].filter(Boolean).join(", ");
           return (
+            // The shared identity cell, as the Jobs table uses it.
             <IdentityCell
               title={q.client_name || "—"}
               subtitle={place || "No property recorded"}
-              seed={q.client_id ?? q.id}
+              icon={UserRound}
             />
           );
         },
@@ -198,13 +181,23 @@ export default function QuotationsAdmin() {
         header: "Total",
         accessorKey: "total",
         cell: ({ row }) => (
-          <span className="text-sm font-medium tabular-nums">
-            {new Intl.NumberFormat("en-AE", {
-              style: "currency",
-              currency: row.original.currency || "AED",
-              minimumFractionDigits: 2,
-            }).format(row.original.total ?? 0)}
-          </span>
+          // Dirhams carry the dirham sign; any other currency keeps its code.
+          (row.original.currency || "AED") === "AED" ? (
+            <IconText icon={DirhamIcon} className="font-medium tabular-nums">
+              {new Intl.NumberFormat("en-AE", {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              }).format(row.original.total ?? 0)}
+            </IconText>
+          ) : (
+            <span className="text-sm font-medium tabular-nums">
+              {new Intl.NumberFormat("en-AE", {
+                style: "currency",
+                currency: row.original.currency,
+                minimumFractionDigits: 2,
+              }).format(row.original.total ?? 0)}
+            </span>
+          )
         ),
       },
       {
@@ -214,16 +207,28 @@ export default function QuotationsAdmin() {
         cell: ({ row }) => {
           const q = row.original;
 
+          /*
+            One button per state, and the code is not one of them.
+
+            The column used to print a job code, which reads as an
+            identifier to memorise when the only thing anybody wants from
+            it is to go there. Whoever raised the job is on the job
+            itself; repeating it here made the cell wide and told nobody
+            anything they act on.
+          */
           if (q.job_id) {
             return (
-              <Link
-                href={`/snagging/${q.job_id}`}
-                className="text-primary inline-flex items-center gap-1.5 text-sm hover:underline"
-                onClick={(event) => event.stopPropagation()}
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  router.push(`/snagging/${q.job_id}`);
+                }}
               >
-                <Briefcase className="size-3.5" />
-                {q.job_code ?? "Open job"}
-              </Link>
+                <Briefcase className="size-4" />
+                Open job
+              </Button>
             );
           }
 
@@ -281,18 +286,28 @@ export default function QuotationsAdmin() {
 
   return (
     <div className="flex flex-col gap-6">
-        <PageHeading
-          eyebrow="Sales"
-          title="Quotations"
-          description="Price a client's property first. The job is raised once they approve."
-        />
+      <PageHeading
+        eyebrow="Sales"
+        title="Quotations"
+        description="Price a client's property first. The job is raised once they approve."
+        actions={
+          // A de-snag quotation starts from a finished job, through its own
+          // dialog (setDesnagOpen); that button is off for now.
+          canCreate ? (
+            <Button onClick={() => router.push("/snagging/quotations/new")}>
+              <Plus className="size-4" />
+              New quotation
+            </Button>
+          ) : null
+        }
+      />
 
 
       {/*
         One line, because one number matters: how much agreed work has not
         been turned into a job yet.
       */}
-      {awaitingJob > 0 ? (
+      {/* {awaitingJob > 0 ? (
         <Alert>
           <Briefcase />
           <AlertTitle>
@@ -303,14 +318,14 @@ export default function QuotationsAdmin() {
             Raise the job from the row, and the client and property carry over.
           </AlertDescription>
         </Alert>
-      ) : null}
+      ) : null} */}
 
       <Card className="py-0">
         <DataTable
           columns={columns}
-          data={paginated}
+          data={rows}
           loading={loading}
-          rowCount={filtered.length}
+          rowCount={total}
           pageSize={pageSize}
           currentPage={page}
           isPagination
@@ -366,130 +381,12 @@ export default function QuotationsAdmin() {
 
       <DesnagQuotationDialog
         open={desnagOpen}
-        onClose={() => setDesnagOpen(false)}
-        onCreated={(id) => {
+        onOpenChange={setDesnagOpen}
+        onCreated={(quote) => {
           setDesnagOpen(false);
-          router.push(`/snagging/quotations/${id}`);
+          router.push(`/snagging/quotations/${quote.id}`);
         }}
       />
     </div>
-  );
-}
-
-/**
- * Raises a de-snag quotation against a job already carried out.
- *
- * Only finished jobs are offered. A de-snag verifies fixes to defects that
- * have been reported, so quoting one against an inspection still being
- * walked would price a return visit to a first visit that has not
- * happened.
- */
-function DesnagQuotationDialog({
-  open,
-  onClose,
-  onCreated,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onCreated: (quotationId: string) => void;
-}) {
-  const [jobs, setJobs] = useState<SnaggingTaskSummary[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [jobId, setJobId] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    void (async () => {
-      setLoading(true);
-      try {
-        const res = await snaggingService.listTasks(
-          { status: "approved,delivered" },
-          0,
-          200,
-        );
-        if (!cancelled) setJobs(res.data ?? []);
-      } catch {
-        if (!cancelled) setJobs([]);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
-
-  async function create() {
-    if (!jobId) return;
-    setSaving(true);
-    try {
-      const quote = await snaggingService.createDesnagQuotation(jobId);
-      toast.success(`De-snag quotation ${quote.quote_number} created`);
-      onCreated(quote.id);
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Could not raise the quotation",
-      );
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Quote a de-snagging visit</DialogTitle>
-          <DialogDescription>
-            The client, the unit and the price come from the original
-            inspection. Once they approve it, the round is opened from that
-            job with its outstanding defects carried across.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-1.5">
-          <Label htmlFor="desnag-job" className="text-muted-foreground text-xs font-medium">
-            Which inspection?
-          </Label>
-          <Select value={jobId} onValueChange={setJobId} disabled={loading}>
-            <SelectTrigger id="desnag-job" className="w-full">
-              <SelectValue
-                placeholder={
-                  loading
-                    ? "Loading finished inspections…"
-                    : jobs.length === 0
-                      ? "No finished inspections yet"
-                      : "Pick the inspection to return to"
-                }
-              />
-            </SelectTrigger>
-            <SelectContent>
-              {jobs.map((job) => (
-                <SelectItem key={job.id} value={job.id}>
-                  {job.code} — {job.unit_label}
-                  {job.building_name ? `, ${job.building_name}` : ""}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={saving}>
-            Cancel
-          </Button>
-          <SubmitButton
-            onClick={() => void create()}
-            pending={saving}
-            pendingLabel="Pricing…"
-            disabled={!jobId}
-          >
-            Raise quotation
-          </SubmitButton>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }

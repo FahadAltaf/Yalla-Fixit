@@ -6,7 +6,6 @@ import React from "react";
 
 import { checkRoutePermission } from "@/components/auth/check-route-access";
 import { User } from "@/types/types";
-import { checkAuthentication } from "@/utils/check-authentication";
 import { useAuth } from "@/context/AuthContext";
 import Loader from "@/components/ui/loader";
 
@@ -32,7 +31,14 @@ const AUTH_ROUTES = [
 export default function CheckUserRole({ children }: CheckUserRoleProps) {
   const [loading, setLoading] = useState(true);
   const pathname = usePathname();
-  const { signOut, userProfile } = useAuth();
+  /*
+    The signed-in user comes from AuthContext, which has already asked the
+    server by the time this renders: AuthProvider shows its loader until
+    that check is done, so `user` here is its final answer (null when
+    signed out). This component used to call checkAuthentication() a
+    second time on every load, in production too.
+  */
+  const { signOut, user, userProfile } = useAuth();
 
   const handleLogout = () => {
     signOut();
@@ -41,17 +47,15 @@ export default function CheckUserRole({ children }: CheckUserRoleProps) {
   useEffect(() => {
     const checkAccess = async () => {
       try {
-        const res = await checkAuthentication();
-
         if (
-          res.user?.id &&
+          user?.id &&
           AUTH_ROUTES.some((route) => pathname.startsWith(route))
         ) {
           window.location.href = "/";
           return;
         }
 
-        if (!res?.user?.id) {
+        if (!user?.id) {
           window.location.href = "/auth/login";
           // setLoading(false);
           return;

@@ -5,16 +5,16 @@ import type { ColumnDef } from "@tanstack/react-table";
 import {
   Briefcase,
   Mail,
-  MoreHorizontal,
   Pencil,
   Phone,
+  Plus,
   Users,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { DataTable } from "@/components/data-table";
 import { SnaggingClientsToolbar } from "@/components/data-table/toolbars/snagging-clients-toolbar";
-import { Badge } from "@/components/ui/badge";
+import { useDebounce } from "@/hooks/use-debounce";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -25,26 +25,21 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IdentityCell } from "@/components/ui/entity-avatar";
+import { PhoneInput } from "@/components/ui/phone-input";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
-import { cn } from "@/lib/utils";
 import {
   snaggingService,
   type SnaggingClientOption,
 } from "@/modules/snagging";
 import { ActionType, ResourceType } from "@/types/types";
 
+import { ClientJobsDialog } from "./client-jobs-dialog";
 import { ErrorState, PageHeading, SubmitButton } from "./shared";
 
 
@@ -81,46 +76,45 @@ export default function ClientsAdmin() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
+  const [total, setTotal] = useState(0);
+  const [sort, setSort] = useState<{ sortBy?: string; sortOrder?: "asc" | "desc" }>({});
+  // The client whose jobs are open in a popup.
+  const [jobsFor, setJobsFor] = useState<SnaggingClientOption | null>(null);
   const [editing, setEditing] = useState<SnaggingClientOption | null>(null);
   /** Distinguishes "add a client" from "edit this one" in the same dialog. */
   const [creating, setCreating] = useState(false);
+  // Searched on the server, a moment after typing stops.
+  const debouncedSearch = useDebounce(search.trim(), 300);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      setClients(await snaggingService.searchClients(undefined, { withCounts: true }));
+      const result = await snaggingService.listClientsPage({
+        search: debouncedSearch || undefined,
+        page,
+        pageSize,
+        sortBy: sort.sortBy,
+        sortDirection: sort.sortOrder,
+      });
+      setClients(result.data);
+      setTotal(result.totalCount);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load clients");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [debouncedSearch, page, pageSize, sort]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   /*
-    Filtered here rather than by refetching on every keystroke. The whole
-    list is already on the page — the API caps at 400 — so searching is a
-    local operation, and making it a request would put a network round trip
-    between a letter and the row it reveals.
+    Paged and searched on the server. The list used to arrive whole and
+    be filtered here, which quietly stopped at the first 400 clients:
+    anyone after that could not be found at all.
   */
-  const filtered = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    if (!term) return clients;
-    return clients.filter((c) =>
-      [c.client_name, c.client_email, c.client_phone, c.company]
-        .filter(Boolean)
-        .some((field) => String(field).toLowerCase().includes(term)),
-    );
-  }, [clients, search]);
-
-  const paginated = useMemo(
-    () => filtered.slice(page * pageSize, page * pageSize + pageSize),
-    [filtered, page, pageSize],
-  );
 
   const columns = useMemo<ColumnDef<SnaggingClientOption>[]>(
     () => [
@@ -162,20 +156,28 @@ export default function ClientsAdmin() {
         id: "job_count",
         header: "Jobs",
         accessorKey: "job_count",
+        // Counted per page on the server, so it cannot be sorted across
+        // every client. The button opens the client's jobs, the same way
+        // "View defects" opens a developer's defects on Analytics.
+        enableSorting: false,
         cell: ({ row }) => {
           const count = row.original.job_count ?? 0;
+          if (count === 0) {
+            return <span className="text-muted-foreground text-sm">None yet</span>;
+          }
           return (
-            <Badge
-              className={cn(
-                "rounded-sm border-none",
-                count > 0
-                  ? "bg-primary/10 text-primary"
-                  : "bg-muted text-muted-foreground",
-              )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={(event) => {
+                event.stopPropagation();
+                setJobsFor(row.original);
+              }}
+              aria-label={`View ${count} jobs for ${row.original.client_name}`}
             >
-              <Briefcase className="mr-1 size-3" />
-              {count === 0 ? "None yet" : count}
-            </Badge>
+              <Briefcase className="size-3.5" aria-hidden />
+              View jobs ({count})
+            </Button>
           );
         },
       },
@@ -184,30 +186,23 @@ export default function ClientsAdmin() {
         header: () => "Actions",
         enableHiding: false,
         enableSorting: false,
+        // One action, so one icon rather than a menu holding it.
         cell: ({ row }) =>
           canEdit ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-8"
-                  aria-label={`Actions for ${row.original.client_name}`}
-                >
-                  <MoreHorizontal className="size-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem
-                  onClick={() => {
-                    setCreating(false);
-                    setEditing(row.original);
-                  }}
-                >
-                  <Pencil className="size-4" /> Edit details
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8"
+              onClick={(event) => {
+                event.stopPropagation();
+                setCreating(false);
+                setEditing(row.original);
+              }}
+              aria-label={`Edit ${row.original.client_name}`}
+              title="Edit details"
+            >
+              <Pencil className="size-4" />
+            </Button>
           ) : null,
       },
     ],
@@ -238,21 +233,38 @@ export default function ClientsAdmin() {
           eyebrow="Master data"
           title="Clients"
           description="Everyone jobs and quotations are raised for. Correct a phone number or an email here and every future document picks it up."
+          actions={
+            canCreate ? (
+              <Button
+                onClick={() => {
+                  setCreating(true);
+                  setEditing({ client_name: "", client_email: null, client_phone: null });
+                }}
+              >
+                <Plus className="size-4" />
+                Add client
+              </Button>
+            ) : null
+          }
         />
 
 
       <Card className="py-0">
         <DataTable
           columns={columns}
-          data={paginated}
+          data={clients}
           loading={loading}
-          rowCount={filtered.length}
+          rowCount={total}
           pageSize={pageSize}
           currentPage={page}
           isPagination
           onPageChange={setPage}
           onPageSizeChange={(size) => {
             setPageSize(size);
+            setPage(0);
+          }}
+          onSortingChange={(sortBy, sortOrder) => {
+            setSort({ sortBy, sortOrder });
             setPage(0);
           }}
           onGlobalFilterChange={(value) => {
@@ -311,6 +323,8 @@ export default function ClientsAdmin() {
           void load();
         }}
       />
+
+      <ClientJobsDialog client={jobsFor} onClose={() => setJobsFor(null)} />
     </div>
   );
 }
@@ -405,7 +419,7 @@ function ClientDialog({
 
   return (
     <Dialog open={Boolean(client)} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent>
+      <DialogContent className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>
             {creating ? "Add a client" : `Edit ${client?.client_name}`}
@@ -430,13 +444,7 @@ function ClientDialog({
 
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Phone" htmlFor="client-phone">
-              <Input
-                id="client-phone"
-                value={phone}
-                onChange={(event) => setPhone(event.target.value)}
-                placeholder="+971…"
-                inputMode="tel"
-              />
+              <PhoneInput id="client-phone" value={phone} onChange={setPhone} />
             </Field>
             <Field label="Email" htmlFor="client-email">
               <Input

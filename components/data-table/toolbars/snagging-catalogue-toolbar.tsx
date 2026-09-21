@@ -57,11 +57,11 @@ export function SnaggingCatalogueToolbar({
   return (
     <div className="flex flex-row flex-wrap items-center justify-between gap-2 px-4 py-4 sm:gap-4 sm:py-6">
       <div className="flex flex-1 items-center gap-2">
-        <div className="relative flex-1 sm:max-w-xs sm:min-w-[240px]">
+        <div className="relative w-full sm:w-80 sm:flex-none">
           <Input
             id={searchInputId}
             type="search"
-            placeholder="Search code or defect..."
+            placeholder="Search..."
             className="peer w-full ps-9"
             value={globalFilter}
             onChange={handleFilterChange}

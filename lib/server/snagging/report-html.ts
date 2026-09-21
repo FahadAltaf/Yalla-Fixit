@@ -92,16 +92,24 @@ function esc(value: unknown): string {
     .replace(/'/g, "&#39;");
 }
 
+/**
+ * A date on the report. Rendered in UAE time, which is what the PDF keeps
+ * (it has no reader to ask). On the web link the `<time>` tag carries the
+ * instant, and the page re-reads it in the viewer's own zone once it loads.
+ */
 function fmtDate(iso: string | null): string {
   if (!iso) return "—";
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleDateString("en-GB", {
+  const text = date.toLocaleDateString("en-GB", {
     day: "numeric",
     month: "short",
     year: "numeric",
     timeZone: "Asia/Dubai",
   });
+  // A calendar date ("2026-09-18") is the same day everywhere.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return text;
+  return `<time datetime="${date.toISOString()}" data-local-date>${text}</time>`;
 }
 
 function severityChip(severity: string): string {
@@ -132,8 +140,41 @@ function photoFigure(photo: ReportSnag["photos"][number]): string {
   </figure>`;
 }
 
-function snagBlock(snag: ReportSnag): string {
+/**
+ * A carried defect on a de-snag, shown as the pair the round exists to
+ * produce: how it looked when it was reported, and how it looks now.
+ * Listing every photo in one grid left the client to work out which was
+ * which from the dates.
+ */
+function beforeAfter(snag: ReportSnag, round: number): string {
+  const shown = snag.photos.filter((photo) => photo.url);
+  const before = shown.filter((photo) => photo.round < round).map(photoFigure).join("");
+  const after = shown.filter((photo) => photo.round >= round).map(photoFigure).join("");
+  return `<div class="compare">
+    <div>
+      <p class="compare__label">Before</p>
+      ${before ? `<div class="photos">${before}</div>` : `<p class="snag__none">No earlier photo.</p>`}
+    </div>
+    <div>
+      <p class="compare__label compare__label--after">After</p>
+      ${after ? `<div class="photos">${after}</div>` : `<p class="snag__none">No after photo.</p>`}
+    </div>
+  </div>`;
+}
+
+function snagBlock(snag: ReportSnag, round: number | null = null): string {
+  // Only a defect carried INTO the round has a before; one found on it is new.
+  if (round !== null && snag.roundCreated < round) {
+    return snagShell(snag, beforeAfter(snag, round));
+  }
   const photos = snag.photos.filter((photo) => photo.url).map(photoFigure).join("");
+  return snagShell(
+    snag,
+    photos ? `<div class="photos">${photos}</div>` : `<p class="snag__none">No photo evidence recorded.</p>`,
+  );
+}
+
+function snagShell(snag: ReportSnag, evidence: string): string {
   return `<article class="snag">
     <header class="snag__head">
       <div class="snag__title">
@@ -150,11 +191,11 @@ function snagBlock(snag: ReportSnag): string {
         : ""
     }
     ${snag.note ? `<p class="snag__note"><span class="label">Inspector note</span>${esc(snag.note)}</p>` : ""}
-    ${photos ? `<div class="photos">${photos}</div>` : `<p class="snag__none">No photo evidence recorded.</p>`}
+    ${evidence}
   </article>`;
 }
 
-function areaSection(area: ReportArea): string {
+function areaSection(area: ReportArea, round: number | null = null): string {
   const access =
     area.accessState && area.accessState !== "accessible"
       ? `<div class="area__access">
@@ -165,7 +206,7 @@ function areaSection(area: ReportArea): string {
 
   const body =
     area.snags.length > 0
-      ? area.snags.map(snagBlock).join("")
+      ? area.snags.map((snag) => snagBlock(snag, round)).join("")
       : `<p class="area__clear">No defects recorded in this area.</p>`;
 
   return `<section class="area">
@@ -300,10 +341,17 @@ function coverBlock(data: ReportData, version: number | null): string {
     ${severityStat("high", cover.severity.high)}
     ${severityStat("medium", cover.severity.medium)}
     ${severityStat("low", cover.severity.low)}
-    <div class="stat">
+    ${
+      data.visitType === "desnag"
+        ? `<div class="stat">
+      <span class="stat__value">${data.tally.defectsChecked}/${data.tally.defectsCarried}</span>
+      <span class="stat__label">Defects re-checked</span>
+    </div>`
+        : `<div class="stat">
       <span class="stat__value">${data.tally.areasWalked}/${data.tally.areasTotal}</span>
       <span class="stat__label">Areas walked</span>
-    </div>
+    </div>`
+    }
     <div class="stat">
       <span class="stat__value">${data.tally.checklistDone}/${data.tally.checklistTotal}</span>
       <span class="stat__label">Checklist</span>
@@ -341,7 +389,9 @@ export function renderReportHtml(
   const { mode, version = null, reportType = "inspection", fragment = false } = options;
   const print = mode === "print";
 
-  const areas = data.areas.map(areaSection).join("");
+  // A de-snag shows its carried defects as before-and-after pairs.
+  const round = data.visitType === "desnag" ? data.roundNumber : null;
+  const areas = data.areas.map((area) => areaSection(area, round)).join("");
   const unassigned =
     data.unassignedSnags.length > 0
       ? areaSection({
@@ -353,7 +403,7 @@ export function renderReportHtml(
           elementsNotChecked: null,
           confirmedAt: null,
           snags: data.unassignedSnags,
-        })
+        }, round)
       : "";
 
   const roundBanner =
@@ -478,6 +528,10 @@ export function renderReportHtml(
   .chip { display: inline-block; border-radius: 9px; padding: 1px 7px; font-size: ${print ? "7.5px" : "11px"}; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; white-space: nowrap; }
   .chip--warn { background: #fbf1e4; color: #9a5108; }
 
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
+  .compare .photos { grid-template-columns: repeat(${print ? 2 : 1}, 1fr); margin-top: 4px; }
+  .compare__label { margin: 0; font-size: ${print ? "8px" : "11px"}; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: var(--sub); }
+  .compare__label--after { color: var(--brand); }
   .photos { display: grid; grid-template-columns: repeat(${print ? 4 : 2}, 1fr); gap: 8px; margin-top: 8px; }
   .photo { position: relative; margin: 0; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--card); aspect-ratio: 4 / 3; }
   .photo img { display: block; width: 100%; height: 100%; object-fit: cover; }

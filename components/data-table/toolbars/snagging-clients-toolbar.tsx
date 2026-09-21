@@ -1,7 +1,7 @@
 "use client";
 
 import { useId } from "react";
-import { LoaderCircleIcon, PlusIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
+import { LoaderCircleIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,8 +21,9 @@ interface SnaggingClientsToolbarProps {
   isSearchLoading: boolean;
   pageSize: number;
   onPageSizeChange: (size: number) => void;
-  canCreate: boolean;
-  onCreate: () => void;
+  /** Kept for callers; the create action now lives in the page heading. */
+  canCreate?: boolean;
+  onCreate?: () => void;
 }
 
 /**
@@ -41,8 +42,6 @@ export function SnaggingClientsToolbar({
   isSearchLoading,
   pageSize,
   onPageSizeChange,
-  canCreate,
-  onCreate,
 }: SnaggingClientsToolbarProps) {
   const searchInputId = useId();
 
@@ -50,11 +49,11 @@ export function SnaggingClientsToolbar({
     <div className="flex flex-col gap-4 px-4 py-4 sm:py-6">
       <div className="flex flex-row items-center justify-between gap-2 sm:gap-4">
         <div className="flex items-center gap-2">
-          <div className="relative flex-1 sm:max-w-md sm:min-w-[260px]">
+          <div className="relative w-full sm:w-80 sm:flex-none">
             <Input
               id={searchInputId}
               type="search"
-              placeholder="Search name, phone, email or company..."
+              placeholder="Search..."
               className="peer w-full ps-9"
               value={globalFilter}
               onChange={(event) => onGlobalFilterChange(event.target.value)}
@@ -105,12 +104,6 @@ export function SnaggingClientsToolbar({
               <RefreshCwIcon className="size-4 sm:mr-1" />
               <span className="hidden sm:inline">Refresh</span>
             </Button>
-            {canCreate ? (
-              <Button onClick={onCreate} className="flex-1 sm:flex-initial">
-                <PlusIcon className="size-4 sm:mr-2" />
-                <span className="hidden sm:inline">Add client</span>
-              </Button>
-            ) : null}
           </div>
         </div>
       </div>

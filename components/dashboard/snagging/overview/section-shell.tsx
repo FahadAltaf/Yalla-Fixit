@@ -47,12 +47,10 @@ export function SectionShell({
   /** Shaped like the content it stands in for, so nothing reflows. */
   skeleton: React.ReactNode;
   /**
-   * The "View all" link at the foot of a list card.
+   * The "View all" button, shown in the header beside `action`.
    *
-   * A slot rather than the last child of `children`, because `children` is
-   * only rendered in the loaded state -- a card whose list happened to be
-   * empty lost its footer, so two cards side by side had one link between
-   * them.
+   * A slot rather than part of `children`, because `children` is only
+   * rendered in the loaded state.
    */
   footer?: React.ReactNode;
   /** Below-the-fold analytics: a quieter header so it does not compete. */
@@ -72,26 +70,27 @@ export function SectionShell({
   children: React.ReactNode;
 }) {
   /*
-    A footer has to sit on the floor of the card, not under the last row.
-
-    These cards are `h-full` in a grid row, so one is routinely taller
-    than its own content -- and a "View all" that stops where the list
-    stops left a band of white space beneath it, reading as the end of
-    nothing. Stretching the content region instead pushes the footer down
-    to the border, which is where the eye goes looking for it.
+    "View all" sits in the header, at the end of the description line,
+    where the Export menu sits on the other cards -- not in a band of its
+    own at the foot of the card.
   */
-  const stretch = Boolean(footer) && !error;
+  const headerAction =
+    error || (!action && !footer) ? null : (
+      <div className="flex items-center gap-2">
+        {action}
+        {footer}
+      </div>
+    );
 
   return (
     <SectionCard
       title={title}
       description={description}
       icon={icon}
-      action={error ? null : action}
+      action={headerAction}
       className={cn("h-full", muted && "bg-muted/20", className)}
       bodyClassName={cn(
         centerBody && "flex flex-1 flex-col justify-center",
-        stretch && "flex flex-1 flex-col",
       )}
     >
       {/*
@@ -105,18 +104,15 @@ export function SectionShell({
           <InlineError message={error} onRetry={onRetry} />
         </div>
       ) : loading ? (
-        <div className={cn("px-5 pb-5", stretch && "flex-1")}>{skeleton}</div>
+        <div className={"px-5 pb-5"}>{skeleton}</div>
       ) : isEmpty ? (
-        <div className={cn("px-5 pb-5", stretch && "flex-1")}>{empty}</div>
+        <div className={"px-5 pb-5"}>{empty}</div>
       ) : (
-        <div className={cn("px-5 pb-5", stretch && "flex-1", bodyClassName)}>
+        <div className={cn("px-5 pb-5", bodyClassName)}>
           {children}
         </div>
       )}
 
-      {footer && !error ? (
-        <div className="border-t px-5 py-3">{footer}</div>
-      ) : null}
     </SectionCard>
   );
 }

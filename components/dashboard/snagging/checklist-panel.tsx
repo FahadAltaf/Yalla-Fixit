@@ -7,25 +7,69 @@ import {
   MinusCircle,
   XCircle,
 } from "lucide-react";
+import { useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
+import { snaggingService } from "@/modules/snagging";
 import { EmptyState } from "@/components/ui/empty-state";
 import { cn } from "@/lib/utils";
 import type { SnaggingChecklistItem, SnaggingTask } from "@/types/types";
 
+import { NoteEditButton, NoteEditDialog } from "./note-edit";
 import { SectionCard, StatCard, StatCardGrid, SubHeading } from "./shared";
 
 /**
- * The job checklist and its progress (N6). Read-only here — the
- * inspector answers each item on the mobile app; this shows the office
- * how far the mandatory list has been worked through.
+ * The job checklist and its progress (N6). The inspector answers each item
+ * on the mobile app; this shows the office how far the mandatory list has
+ * been worked through. The answers are the inspector's, but the reasons
+ * they wrote can be corrected here (`canEdit`).
  *
  * Progress leads, because that is the question a reviewer opens this tab
  * with. The list underneath answers the follow-up: which ones, and what
  * did they say.
  */
-export function ChecklistPanel({ task }: { task: SnaggingTask }) {
-  const items = task.checklist ?? [];
+export function ChecklistPanel({
+  task,
+  canEdit = false,
+  onChanged,
+}: {
+  task: SnaggingTask;
+  /** The reader may correct the reasons on items (SNAGGING/EDIT). */
+  canEdit?: boolean;
+  /** Re-read the checklist after an edit. */
+  onChanged?: () => void;
+}) {
+  // Saved reasons, shown at once rather than after the checklist reloads.
+  const [savedReasons, setSavedReasons] = useState<Record<string, string | null>>({});
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const items = useMemo(
+    () =>
+      (task.checklist ?? []).map((item) =>
+        item.id in savedReasons ? { ...item, reason: savedReasons[item.id] } : item,
+      ),
+    [task, savedReasons],
+  );
+  const editing = items.find((item) => item.id === editingId) ?? null;
+
+  /* The reason line with its pencil, where a reason is shown or owed. */
+  const reasonLine = (item: SnaggingChecklistItem, prefix: string) =>
+    item.reason || (canEdit && item.status === "not_checked") ? (
+      <span className="text-muted-foreground mt-0.5 flex items-start gap-1.5 text-xs">
+        {item.reason ? (
+          <span className="whitespace-pre-line">
+            {prefix}
+            {item.reason}
+          </span>
+        ) : null}
+        {canEdit ? (
+          <NoteEditButton
+            hasNote={Boolean(item.reason)}
+            noun="reason"
+            onClick={() => setEditingId(item.id)}
+          />
+        ) : null}
+      </span>
+    ) : null;
 
   /*
     An item is answered when it is not pending — and, on a round, when it is
@@ -71,114 +115,83 @@ export function ChecklistPanel({ task }: { task: SnaggingTask }) {
   }
 
   return (
-    <SectionCard
-      title="Inspection checklist"
-      icon={<ClipboardList />}
-      description="The mandatory list the inspector works through on site."
-      bodyClassName="border-t"
-    >
-      {items.length === 0 ? (
-        // Used to render nothing at all, which reads as a broken tab
-        // rather than as a job that has no checklist attached.
-        <div className="p-5">
-          <EmptyState
-            icon={<ClipboardList />}
-            title="No checklist on this job"
-            description="A checklist is attached when the job is set up. Nothing was attached to this one, so there is nothing for the inspector to answer."
-          />
-        </div>
-      ) : (
-        <>
-          {/*
-            The same stat card as every other page. A checklist tab is not
-            a reason to invent a fourth way of drawing a number.
-          */}
-          <div className="border-b p-5">
-            <StatCardGrid columns={4}>
-              <StatCard
-                label="Answered"
-                value={`${answered} / ${items.length}`}
-                headline={
-                  answered === items.length
-                    ? "Complete"
-                    : "Still working through"
-                }
-                caption={`${percent(answered, items.length)}% of the list`}
-                tone={answered === items.length ? "good" : "progress"}
-              />
-              <StatCard
-                label="Passed"
-                value={passed}
-                headline={
-                  passed === 0 ? "Nothing passed yet" : "Checked and clear"
-                }
-                caption="Items the inspector marked as passing"
-                tone={passed === 0 ? "neutral" : "good"}
-              />
-              <StatCard
-                label="Failed"
-                value={failed}
-                headline={failed === 0 ? "Nothing failed" : "Raised as defects"}
-                caption="Items the inspector marked as failing"
-                tone={failed > 0 ? "bad" : "good"}
-              />
-              <StatCard
-                label="Not checked"
-                value={notChecked}
-                headline={
-                  notChecked === 0 ? "Nothing skipped" : "Skipped on site"
-                }
-                caption="Items the inspector could not check"
-                tone={notChecked > 0 ? "progress" : "good"}
-              />
-            </StatCardGrid>
+    <>
+      <SectionCard
+        title="Inspection checklist"
+        icon={<ClipboardList />}
+        description="The mandatory list the inspector works through on site."
+        bodyClassName="border-t"
+      >
+        {items.length === 0 ? (
+          // Used to render nothing at all, which reads as a broken tab
+          // rather than as a job that has no checklist attached.
+          <div className="p-5">
+            <EmptyState
+              icon={<ClipboardList />}
+              title="No checklist on this job"
+              description="A checklist is attached when the job is set up. Nothing was attached to this one, so there is nothing for the inspector to answer."
+            />
           </div>
-
-          {isRound && needsRecheck.length > 0 ? (
-            <div className="border-t px-5 py-4">
-              <SubHeading count={needsRecheck.length} className="mb-2">
-                Carried in to re-check
-              </SubHeading>
-              <p className="text-muted-foreground mb-3 text-xs">
-                Failed or not checked on the previous visit. Each has to be
-                answered again on this round before it can be signed off.
-              </p>
-              <ul className="divide-y">
-                {needsRecheck.map((item) => (
-                  <li
-                    key={`recheck-${item.id}`}
-                    className="flex items-start gap-3 py-2 text-sm"
-                  >
-                    <span className="min-w-0 flex-1">
-                      {item.label}
-                      {item.mandatory ? (
-                        <span className="text-danger" title="Mandatory">
-                          {" "}
-                          *
-                        </span>
-                      ) : null}
-                      <span className="text-muted-foreground block text-xs">
-                        {item.group_name}
-                        {item.reason ? ` · ${item.reason}` : ""}
-                      </span>
-                    </span>
-                    <StatusPill status={item.status} />
-                  </li>
-                ))}
-              </ul>
+        ) : (
+          <>
+            {/*
+              The same stat card as every other page. A checklist tab is not
+              a reason to invent a fourth way of drawing a number.
+            */}
+            <div className="border-b p-5">
+              <StatCardGrid columns={4}>
+                <StatCard
+                  label="Answered"
+                  value={`${answered} / ${items.length}`}
+                  headline={
+                    answered === items.length
+                      ? "Complete"
+                      : "Still working through"
+                  }
+                  caption={`${percent(answered, items.length)}% of the list`}
+                  tone={answered === items.length ? "good" : "progress"}
+                />
+                <StatCard
+                  label="Passed"
+                  value={passed}
+                  headline={
+                    passed === 0 ? "Nothing passed yet" : "Checked and clear"
+                  }
+                  caption="Items the inspector marked as passing"
+                  tone={passed === 0 ? "neutral" : "good"}
+                />
+                <StatCard
+                  label="Failed"
+                  value={failed}
+                  headline={failed === 0 ? "Nothing failed" : "Raised as defects"}
+                  caption="Items the inspector marked as failing"
+                  tone={failed > 0 ? "bad" : "good"}
+                />
+                <StatCard
+                  label="Not checked"
+                  value={notChecked}
+                  headline={
+                    notChecked === 0 ? "Nothing skipped" : "Skipped on site"
+                  }
+                  caption="Items the inspector could not check"
+                  tone={notChecked > 0 ? "progress" : "good"}
+                />
+              </StatCardGrid>
             </div>
-          ) : null}
 
-          <div className="divide-y">
-            {[...groups.entries()].map(([group, list]) => (
-              <div key={group} className="px-5 py-4">
-                <SubHeading count={list.length} className="mb-2">
-                  {group}
+            {isRound && needsRecheck.length > 0 ? (
+              <div className="border-t px-5 py-4">
+                <SubHeading count={needsRecheck.length} className="mb-2">
+                  Carried in to re-check
                 </SubHeading>
+                <p className="text-muted-foreground mb-3 text-xs">
+                  Failed or not checked on the previous visit. Each has to be
+                  answered again on this round before it can be signed off.
+                </p>
                 <ul className="divide-y">
-                  {list.map((item) => (
+                  {needsRecheck.map((item) => (
                     <li
-                      key={item.id}
+                      key={`recheck-${item.id}`}
                       className="flex items-start gap-3 py-2 text-sm"
                     >
                       <span className="min-w-0 flex-1">
@@ -189,29 +202,77 @@ export function ChecklistPanel({ task }: { task: SnaggingTask }) {
                             *
                           </span>
                         ) : null}
-                        {item.status === "not_checked" && item.reason ? (
-                          <span className="text-muted-foreground block text-xs">
-                            Not checked. {item.reason}
-                          </span>
-                        ) : null}
+                        <span className="text-muted-foreground block text-xs">
+                          {item.group_name}
+                        </span>
+                        {reasonLine(item, "")}
                       </span>
                       <StatusPill status={item.status} />
                     </li>
                   ))}
                 </ul>
               </div>
-            ))}
-          </div>
+            ) : null}
 
-          {mandatory.length > 0 ? (
-            <p className="text-muted-foreground border-t px-5 py-3 text-xs">
-              Items marked <span className="text-danger">*</span> are mandatory
-              and must be answered before the inspection can be signed off.
-            </p>
-          ) : null}
-        </>
-      )}
-    </SectionCard>
+            <div className="divide-y">
+              {[...groups.entries()].map(([group, list]) => (
+                <div key={group} className="px-5 py-4">
+                  <SubHeading count={list.length} className="mb-2">
+                    {group}
+                  </SubHeading>
+                  <ul className="divide-y">
+                    {list.map((item) => (
+                      <li
+                        key={item.id}
+                        className="flex items-start gap-3 py-2 text-sm"
+                      >
+                        <span className="min-w-0 flex-1">
+                          {item.label}
+                          {item.mandatory ? (
+                            <span className="text-danger" title="Mandatory">
+                              {" "}
+                              *
+                            </span>
+                          ) : null}
+                          {item.status === "not_checked"
+                            ? reasonLine(item, "Not checked. ")
+                            : item.reason
+                              ? reasonLine(item, "")
+                              : null}
+                        </span>
+                        <StatusPill status={item.status} />
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+
+            {mandatory.length > 0 ? (
+              <p className="text-muted-foreground border-t px-5 py-3 text-xs">
+                Items marked <span className="text-danger">*</span> are mandatory
+                and must be answered before the inspection can be signed off.
+              </p>
+            ) : null}
+          </>
+        )}
+      </SectionCard>
+
+      <NoteEditDialog
+        open={editing !== null}
+        title={editing?.reason ? "Edit reason" : "Add a reason"}
+        context={`${editing?.label ?? "Checklist item"}. The reason the inspector gave for this answer.`}
+        initial={editing?.reason ?? ""}
+        seedKey={editingId}
+        onClose={() => setEditingId(null)}
+        onSave={async (text) => {
+          if (!editing) return;
+          await snaggingService.updateChecklistReason(task.id, editing.id, text);
+          setSavedReasons((current) => ({ ...current, [editing.id]: text }));
+          onChanged?.();
+        }}
+      />
+    </>
   );
 }
 

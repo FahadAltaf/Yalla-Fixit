@@ -4,9 +4,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CalendarIcon,
   CheckCircle2,
-  ChevronDown,
-  Download,
-  FileSpreadsheet,
   HardHat,
   Hourglass,
   Inbox,
@@ -25,12 +22,6 @@ import {
   ChartTooltip,
   ChartTooltipContent,
 } from "@/components/ui/chart";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import {
@@ -43,7 +34,10 @@ import { DataTable } from "@/components/data-table";
 import {
   getSnaggingDeveloperColumns,
   getSnaggingInspectorColumns,
+  type SnaggingDeveloperRow,
 } from "@/components/data-table/columns/column-snagging-analytics";
+import { DeveloperDefectsDialog } from "./developer-defects-dialog";
+import { ExportMenu } from "./export-menu";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
 import {
@@ -79,17 +73,34 @@ import {
   timeAgo,
 } from "./shared";
 
-/** A shadcn date picker (Popover + Calendar) writing a YYYY-MM-DD string. */
+/** Today as YYYY-MM-DD on the reader's own calendar. */
+function todayIso(): string {
+  return format(new Date(), "yyyy-MM-dd");
+}
+
+/**
+ * A shadcn date picker (Popover + Calendar) writing a YYYY-MM-DD string.
+ * Days outside `min`..`max` cannot be picked, and a date cannot be
+ * cleared: a range always has both ends.
+ */
 function DateField({
   label,
   value,
   onChange,
+  min,
+  max,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  min?: string;
+  max?: string;
 }) {
   const date = value ? parseISO(value) : undefined;
+  const disabled = [
+    ...(min ? [{ before: parseISO(min) }] : []),
+    ...(max ? [{ after: parseISO(max) }] : []),
+  ];
   return (
     <div className="text-sm">
       <span className="text-muted-foreground mb-1 block text-xs">{label}</span>
@@ -111,7 +122,12 @@ function DateField({
           <Calendar
             mode="single"
             selected={date}
-            onSelect={(d) => onChange(d ? format(d, "yyyy-MM-dd") : "")}
+            defaultMonth={date}
+            disabled={disabled}
+            endMonth={max ? parseISO(max) : undefined}
+            onSelect={(d) => {
+              if (d) onChange(format(d, "yyyy-MM-dd"));
+            }}
             autoFocus
           />
         </PopoverContent>
@@ -120,36 +136,17 @@ function DateField({
   );
 }
 
-/** CSV or Excel, for one table (FR-10.06). */
-function ExportMenu({
-  onExport,
-  disabled,
-}: {
-  onExport: (format: ExportFormat) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm" disabled={disabled}>
-          <Download className="size-4" />
-          Export
-          <ChevronDown className="size-3.5" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuItem onClick={() => onExport("csv")}>
-          <Download className="size-4" />
-          CSV
-        </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => onExport("xlsx")}>
-          <FileSpreadsheet className="size-4" />
-          Excel
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
+/* Stands in while a refresh is in flight, or when the dates drop a developer. */
+const EMPTY_DEVELOPER: SnaggingDeveloperRow = {
+  developer_name: "",
+  unit_count: 0,
+  snag_count: 0,
+  snags_per_unit: 0,
+  outstanding_count: 0,
+  unit_trend: 0,
+  last_inspection_at: null,
+  defect_mix: [],
+};
 
 const GRANULARITY_TABS = [
   { value: "day" as const, label: "Day" },
@@ -197,12 +194,17 @@ export default function SnaggingAnalyticsDashboard() {
   const [data, setData] = useState<SnaggingAnalytics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Local calendar dates: toISOString() gave yesterday's date to anyone
+  // east of UTC before their clock passed UTC midnight.
   const [from, setFrom] = useState(() => {
     const date = new Date();
     date.setDate(date.getDate() - 30);
-    return date.toISOString().slice(0, 10);
+    return format(date, "yyyy-MM-dd");
   });
-  const [to, setTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const [to, setTo] = useState(todayIso);
+  // The developer whose defects are open in a popup, by name, so a
+  // refresh shows their new figures rather than the ones it opened with.
+  const [defectsFor, setDefectsFor] = useState<string | null>(null);
   const [granularity, setGranularity] =
     useState<SnaggingAnalyticsGranularity>("day");
   const [drilldown, setDrilldown] = useState<DrilldownRequest | null>(null);
@@ -319,8 +321,9 @@ export default function SnaggingAnalyticsDashboard() {
         description="Throughput, turnaround, and where the work is sitting. Every figure opens the jobs behind it."
         actions={
           <div className="flex flex-wrap items-end gap-2">
-            <DateField label="From" value={from} onChange={setFrom} />
-            <DateField label="To" value={to} onChange={setTo} />
+            {/* From runs up to To; To runs from From up to today. */}
+            <DateField label="From" value={from} onChange={setFrom} max={to} />
+            <DateField label="To" value={to} onChange={setTo} min={from} max={todayIso()} />
           </div>
         }
       />
@@ -640,7 +643,9 @@ export default function SnaggingAnalyticsDashboard() {
             >
               <DataTable
                 data={developerPageRows}
-                columns={getSnaggingDeveloperColumns()}
+                columns={getSnaggingDeveloperColumns({
+                  onViewDefects: (row) => setDefectsFor(row.developer_name),
+                })}
                 // A breakdown, not a list to search: the heading above
                 // already says what these rows are, so no toolbar.
                 onGlobalFilterChange={() => { }}
@@ -682,71 +687,6 @@ export default function SnaggingAnalyticsDashboard() {
                 ) : null
               }
             >
-              {inspectorRows.length > 0 &&
-                inspectorRows.length < inspectorPageSize ? (
-                /*
-                  One or two inspectors do not need a header row, a page
-                  size selector and a pager to be read. Below a full page
-                  the table shell is more furniture than the data it holds,
-                  so the same figures render as a plain list — and the
-                  table comes back once there is enough to page through.
-                */
-                <ul className="divide-y">
-                  {inspectorRows.map((row) => (
-                    <li key={row.user_id}>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          open({ metric: "inspector", value: row.user_id })
-                        }
-                        className="hover:bg-muted/50 focus-visible:ring-ring flex w-full flex-wrap items-center gap-x-6 gap-y-2 px-5 py-4 text-left focus-visible:ring-2 focus-visible:outline-none"
-                      >
-                        <span className="min-w-40 flex-1 font-medium">
-                          {row.name}
-                        </span>
-                        <InspectorFigure
-                          label="Inspections"
-                          value={row.inspection_count}
-                        />
-                        <InspectorFigure
-                          label="First-time approval"
-                          value={
-                            row.firstTimeApprovalRate === null
-                              ? "—"
-                              : `${row.firstTimeApprovalRate}%`
-                          }
-                          caption={
-                            row.approvalSample > 0
-                              ? `over ${row.approvalSample}`
-                              : "no approvals"
-                          }
-                        />
-                        <InspectorFigure
-                          label="Submit to approval"
-                          value={
-                            row.avgSubmitToApprovalMinutes === null
-                              ? "—"
-                              : formatMinutes(row.avgSubmitToApprovalMinutes)
-                          }
-                        />
-                        <InspectorFigure
-                          label="Average time"
-                          value={
-                            row.avgMinutesPerInspection === null
-                              ? "—"
-                              : formatMinutes(row.avgMinutesPerInspection)
-                          }
-                          caption={
-                            row.timedSample < row.inspection_count
-                              ? `over ${row.timedSample} of ${row.inspection_count}`
-                              : undefined
-                          }
-                        />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
                 <DataTable
                   data={inspectorPageRows}
                   columns={getSnaggingInspectorColumns()}
@@ -773,7 +713,6 @@ export default function SnaggingAnalyticsDashboard() {
                     />
                   }
                 />
-              )}
             </SectionCard>
           </div>
         ) : null}
@@ -789,6 +728,20 @@ export default function SnaggingAnalyticsDashboard() {
         the third, and org-wide figures are what Analytics is for.
       */}
       <SnagsByCategory />
+
+      <DeveloperDefectsDialog
+        developer={
+          defectsFor === null
+            ? null
+            : (developerRows.find((row) => row.developer_name === defectsFor) ?? {
+                ...EMPTY_DEVELOPER,
+                developer_name: defectsFor,
+              })
+        }
+        onClose={() => setDefectsFor(null)}
+        onRefresh={() => void load()}
+        refreshing={loading}
+      />
 
       <AnalyticsDrilldown
         request={drilldown}
@@ -820,27 +773,6 @@ function percent(value: number | null): string {
 function sampleCaption(sample: number, noun: string): string {
   if (sample === 0) return `No ${noun}s in this period`;
   return `Over ${sample} ${sample === 1 ? noun : `${noun}s`}`;
-}
-
-/** One figure in the compact inspector list. */
-function InspectorFigure({
-  label,
-  value,
-  caption,
-}: {
-  label: string;
-  value: React.ReactNode;
-  caption?: string;
-}) {
-  return (
-    <span className="min-w-28">
-      <span className="text-muted-foreground block text-xs">{label}</span>
-      <span className="block font-medium tabular-nums">{value}</span>
-      {caption ? (
-        <span className="text-muted-foreground block text-xs">{caption}</span>
-      ) : null}
-    </span>
-  );
 }
 
 /** The per-status movement, in the same badge shape as the stat cards. */

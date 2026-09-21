@@ -1,5 +1,6 @@
 "use client";
 
+import { Money } from "@/components/ui/money";
 import {
   Table,
   TableBody,
@@ -46,11 +47,8 @@ export function QuotationLinesTable({
   taxAmount: number;
   total: number;
 }) {
-  const money = (value: number) =>
-    `${currency} ${Number(value).toLocaleString("en-AE", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })}`;
+  // The dirham sign for dirhams, the currency code for anything else.
+  const money = (value: number) => <Money value={value} currency={currency} />;
 
   return (
     <div className="overflow-x-auto rounded-lg border">

@@ -3,7 +3,6 @@
 import { useId, useState } from "react";
 import {
   LoaderCircleIcon,
-  PlusIcon,
   RefreshCwIcon,
   SearchIcon,
 } from "lucide-react";
@@ -38,8 +37,9 @@ interface SnaggingChecklistToolbarProps {
   onGroupChange: (value: string) => void;
   propertyTypeValue: string;
   onPropertyTypeChange: (value: string) => void;
-  canCreate: boolean;
-  onCreate: () => void;
+  /** Kept for callers; the create action now lives in the page heading. */
+  canCreate?: boolean;
+  onCreate?: () => void;
 }
 
 const PROPERTY_TYPES = [
@@ -60,8 +60,6 @@ export function SnaggingChecklistToolbar({
   onGroupChange,
   propertyTypeValue,
   onPropertyTypeChange,
-  canCreate,
-  onCreate,
 }: SnaggingChecklistToolbarProps) {
   const searchInputId = useId();
   const [globalFilter, setGlobalFilter] = useState<string>("");
@@ -75,11 +73,11 @@ export function SnaggingChecklistToolbar({
   return (
     <div className="flex flex-row flex-wrap items-center justify-between gap-2 px-4 py-4 sm:gap-4 sm:py-6">
       <div className="flex flex-1 flex-wrap items-center gap-2">
-        <div className="relative flex-1 sm:max-w-xs sm:min-w-[240px]">
+        <div className="relative w-full sm:w-80 sm:flex-none">
           <Input
             id={searchInputId}
             type="search"
-            placeholder="Search a check or code..."
+            placeholder="Search..."
             className="peer w-full ps-9"
             value={globalFilter}
             onChange={handleFilterChange}
@@ -158,12 +156,6 @@ export function SnaggingChecklistToolbar({
             <RefreshCwIcon className="size-4 sm:mr-1" />
             <span className="hidden sm:inline">Refresh</span>
           </Button>
-          {canCreate ? (
-            <Button onClick={onCreate} className="flex-1 sm:flex-initial">
-              <PlusIcon className="size-4 sm:mr-2" />
-              <span className="hidden sm:inline">Add check</span>
-            </Button>
-          ) : null}
         </div>
       </div>
     </div>

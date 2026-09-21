@@ -7,19 +7,39 @@
  * of them ended up defaulting to a time that had already passed by the time
  * anybody read it.
  *
- * Dubai does not observe daylight saving, so the offset is a constant rather
- * than something to look up per date.
+ * Dates and times are typed, and shown back, in the viewer's own time zone
+ * (the browser's). They were fixed to Gulf time, so a coordinator outside the
+ * UAE typed 10:00 and saw 11:00 everywhere else on the page. Nothing is
+ * stored in any zone: a typed date and time becomes an instant here.
  */
-const GULF_OFFSET_MS = 4 * 60 * 60 * 1000;
+
+/** A Date's local calendar day and clock, as YYYY-MM-DD and HH:mm. */
+function localParts(at: Date): { date: string; time: string } {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return {
+    date: `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`,
+    time: `${pad(at.getHours())}:${pad(at.getMinutes())}`,
+  };
+}
 
 /** How far ahead a default slot is placed, so it cannot open in the past. */
 const NOTICE_MINUTES = 60;
 
-/** Today in Gulf time, as YYYY-MM-DD — the earliest bookable day. */
-export function todayInGulf(): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Dubai" }).format(
-    new Date(),
-  );
+/** Today on the viewer's clock, as YYYY-MM-DD — the earliest bookable day. */
+export function todayLocal(): string {
+  return localParts(new Date()).date;
+}
+
+/** The viewer's date and time right now, as YYYY-MM-DD and HH:mm. */
+export function nowLocal(): { date: string; time: string } {
+  return localParts(new Date());
+}
+
+/** A stored instant as the viewer's date and time, for a form to edit. */
+export function splitInstant(iso: string | null | undefined): { date: string; time: string } {
+  if (!iso) return { date: "", time: "" };
+  const at = new Date(iso);
+  return Number.isNaN(at.getTime()) ? { date: "", time: "" } : localParts(at);
 }
 
 /**
@@ -30,44 +50,37 @@ export function todayInGulf(): string {
  * carries the date with it — a form opened at 23:40 offers tomorrow morning,
  * not a time yesterday.
  *
- * Gulf wall-clock is expressed as a UTC instant so the arithmetic below
- * reads as the clock an inspector is looking at, then sliced back out.
+ * On the viewer's own clock, like everything else they type and read.
  */
 export function nextBookableSlot(stepMinutes = 30): {
   date: string;
   time: string;
 } {
-  const gulf = new Date(Date.now() + GULF_OFFSET_MS);
-  gulf.setUTCSeconds(0, 0);
-  gulf.setUTCMinutes(gulf.getUTCMinutes() + NOTICE_MINUTES);
+  const at = new Date();
+  at.setSeconds(0, 0);
+  at.setMinutes(at.getMinutes() + NOTICE_MINUTES);
 
-  const past = gulf.getUTCMinutes() % stepMinutes;
-  if (past !== 0) {
-    gulf.setUTCMinutes(gulf.getUTCMinutes() + (stepMinutes - past));
-  }
+  const past = at.getMinutes() % stepMinutes;
+  if (past !== 0) at.setMinutes(at.getMinutes() + (stepMinutes - past));
 
-  const iso = gulf.toISOString();
-  return { date: iso.slice(0, 10), time: iso.slice(11, 16) };
+  return localParts(at);
 }
 
 /**
- * The instant a date + time pair refers to, or null when either is missing.
- *
- * Times are entered as the local clock, which is Gulf time for every job
- * this product handles, so the offset is stated rather than left to the
- * browser — a coordinator working from another timezone would otherwise
- * book a slot four hours out from the one they typed.
+ * The instant a typed date + time refers to, on the viewer's clock, or null
+ * when either is missing. (An ISO date-time with no offset is read as local
+ * time.)
  */
-export function toGulfInstant(date: string, time: string): Date | null {
+export function toLocalInstant(date: string, time: string): Date | null {
   if (!date || !time) return null;
-  const instant = new Date(`${date}T${time}:00+04:00`);
+  const instant = new Date(`${date}T${time}:00`);
   return Number.isNaN(instant.getTime()) ? null : instant;
 }
 
 /** Whether a chosen date + time has already passed. */
 export function isPastSlot(date: string, time: string): boolean {
-  const instant = toGulfInstant(date, time);
+  const instant = toLocalInstant(date, time);
   if (instant) return instant.getTime() <= Date.now();
   // A date with no time yet: only the day itself can be judged.
-  return Boolean(date) && date < todayInGulf();
+  return Boolean(date) && date < todayLocal();
 }

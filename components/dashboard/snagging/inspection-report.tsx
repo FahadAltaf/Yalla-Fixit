@@ -270,15 +270,16 @@ const SEVERITY: Record<string, { label: string; tone: keyof typeof TONE }> = {
   conformity: { label: "Conformity", tone: "pass" },
 };
 
-const GST = "Asia/Dubai";
-
+/*
+  Dates and times read in the viewer's own time zone, as everywhere else in
+  the portal: the report is opened in the browser and printed from there.
+*/
 function fmtDate(value?: string | null): string {
   if (!value) return "—";
   return new Intl.DateTimeFormat("en-GB", {
     day: "numeric",
     month: "short",
     year: "numeric",
-    timeZone: GST,
   }).format(new Date(value));
 }
 
@@ -289,7 +290,6 @@ function fmtDateTime(value?: string | null): string {
     month: "short",
     hour: "2-digit",
     minute: "2-digit",
-    timeZone: GST,
   }).format(new Date(value));
 }
 
@@ -635,6 +635,73 @@ function Para({ children }: { children: React.ReactNode }) {
  * with a broken-image mark would read as an error in the document rather
  * than as a check that never had a picture to take.
  */
+/**
+ * The pair a de-snag exists to produce, side by side and labelled: the
+ * defect as it was reported, and as the round found it.
+ */
+function BeforeAfterPhotos({
+  before,
+  after,
+}: {
+  before: SnaggingPhoto | null;
+  after: SnaggingPhoto | null;
+}) {
+  const tile = (label: string, photo: SnaggingPhoto | null, accent: string) => (
+    <div style={{ flex: 1, position: "relative", minWidth: 0 }}>
+      {photo && !isVideo(photo) ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={photo.signed_url ?? ""}
+          alt=""
+          crossOrigin="anonymous"
+          style={{ width: "100%", height: PHOTO_H, objectFit: "cover", display: "block" }}
+        />
+      ) : (
+        <div
+          style={{
+            width: "100%",
+            height: PHOTO_H,
+            border: `1px solid ${C.grid}`,
+            background: C.card,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 8,
+            fontWeight: 600,
+            color: C.sub,
+            textAlign: "center",
+          }}
+        >
+          {photo ? "Video evidence" : label === "After" ? "No after photo" : "No earlier photo"}
+        </div>
+      )}
+      <span
+        style={{
+          position: "absolute",
+          top: 4,
+          left: 4,
+          background: accent,
+          color: "#ffffff",
+          fontSize: 6.5,
+          fontWeight: 700,
+          textTransform: "uppercase",
+          letterSpacing: 0.4,
+          padding: "1px 5px",
+          borderRadius: 3,
+        }}
+      >
+        {label}
+      </span>
+    </div>
+  );
+  return (
+    <div style={{ display: "flex", gap: 4 }}>
+      {tile("Before", before, C.ink)}
+      {tile("After", after, C.brand)}
+    </div>
+  );
+}
+
 function DefectCard({
   reference,
   number,
@@ -649,6 +716,8 @@ function DefectCard({
   area,
   floor,
   first,
+  afterPhoto,
+  beforeAfter = false,
 }: {
   reference: string;
   number: number;
@@ -669,6 +738,10 @@ function DefectCard({
   /** The floor plan this area sits on, where the job has more than one. */
   floor?: string | null;
   first: boolean;
+  /** On a de-snag: the photo taken on this round, beside `photo` (the before). */
+  afterPhoto?: SnaggingPhoto | null;
+  /** Show `photo` and `afterPhoto` as a labelled before-and-after pair. */
+  beforeAfter?: boolean;
 }) {
   const forPDF = useContext(PdfMode);
   const grade = SEVERITY[severity] ?? SEVERITY.low;
@@ -714,7 +787,9 @@ function DefectCard({
           ) : null}
         </div>
 
-        {photo ? (
+        {beforeAfter ? (
+          <BeforeAfterPhotos before={photo ?? null} after={afterPhoto ?? null} />
+        ) : photo ? (
           isVideo(photo) ? (
             <div
               style={{
@@ -950,7 +1025,9 @@ export const InspectionReport = forwardRef<
   const high = snags.filter((s) => s.severity === "high").length;
   const medium = snags.filter((s) => s.severity === "medium").length;
   const low = snags.filter((s) => s.severity === "low").length;
-  const confirmedAreas = areas.filter((a) => a.confirmed_at).length;
+  // A room added on a return visit was walked on that visit, though it
+  // carries no sign-off (rooms have no finish tick on a visit).
+  const confirmedAreas = areas.filter((a) => a.confirmed_at || a.visit_id).length;
 
   /*
     Defects by catalogue category, worst first (BA v2, change 20).
@@ -1077,7 +1154,6 @@ export const InspectionReport = forwardRef<
     ? new Date(task.appointment_at).toLocaleTimeString("en-GB", {
       hour: "2-digit",
       minute: "2-digit",
-      timeZone: "Asia/Dubai",
     })
     : "—";
   const visitTypeLabel =
@@ -1092,8 +1168,6 @@ export const InspectionReport = forwardRef<
   ]
     .filter(Boolean)
     .join(" — ");
-  /* The unit's plan, used as the cover image where one is on file. */
-  const coverPlan = (task.floor_plans ?? []).find((plan) => plan.signed_url);
 
   const propertyLine = [
     property?.building_name,
@@ -1121,20 +1195,19 @@ export const InspectionReport = forwardRef<
         }}
       >
         {/*
-          ── Page 1: the cover, as the issued handover reports set it ──
+          ── Page 1: the project information ──
 
-          A block of its own with a full page's height, so the sheet the
-          client opens on is the cover and nothing else: the paginator keeps
-          a [data-pdf-block] whole, and the height pushes what follows onto
-          page two.
+          Sized to its content, and the property description follows it on
+          the same sheet. The cover used to be a full page on purpose, with
+          the unit's floor plan filling the space under the table; with the
+          plan gone, that height was two thirds of an empty page before the
+          report had said anything. The paginator still keeps this block
+          whole, so the table is never split across a page.
         */}
         <div
           data-pdf-block
           style={{
             position: "relative",
-            // The cover is deliberately a full sheet; the space is the design.
-            minHeight: forPDF ? 1020 : 980,
-            breakAfter: "page",
             paddingTop: 0,
             paddingBottom: forPDF ? "24px" : "12px",
           }}
@@ -1178,8 +1251,10 @@ export const InspectionReport = forwardRef<
             <tbody>
               <Fact label="Date of inspection" value={fmtDate(task.scheduled_date)} label2="Client name" value2={property?.client_name ?? "—"} />
               <tr>
-                <Cell label>Location:</Cell>
-                <Cell strong colSpan={7}>
+                {/* Two columns for the label, like every other row, so the
+                    value lines up with the values above and below it. */}
+                <Cell label colSpan={2}>Location:</Cell>
+                <Cell strong colSpan={6}>
                   {[property?.building_name, property?.unit_label]
                     .filter(Boolean)
                     .join(" — ") || "—"}
@@ -1206,60 +1281,6 @@ export const InspectionReport = forwardRef<
             </tbody>
           </table>
 
-          {/* The heavy orange bar that separates the table from the project. */}
-          <div style={{ height: 5, background: C.orange, marginTop: 22 }} />
-
-          <div style={{ paddingTop: 0, paddingBottom: "10px", marginTop: 12 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>
-              {[property?.building_name, property?.community]
-                .filter(Boolean)
-                .join(" — ") || "Property"}
-            </div>
-            <div style={{ fontSize: 13, color: C.ink, marginTop: 4 }}>
-              Unit:{" "}
-              <span style={{ color: C.deep, fontWeight: 700 }}>
-                {unitNumber(property?.unit_label)}
-              </span>
-            </div>
-            <div
-              style={{
-                fontSize: 13,
-                fontWeight: 700,
-                color: C.ink,
-                marginTop: 4,
-                textTransform: "uppercase",
-              }}
-            >
-              {[
-                property?.bedrooms ? `${property.bedrooms}-bedroom` : null,
-                property?.property_type ?? "property",
-              ]
-                .filter(Boolean)
-                .join(" ")}
-            </div>
-          </div>
-
-          {/*
-            The unit's own plan, where one is on file. The issued reports
-            print a building photograph here; nothing in an inspection
-            record holds one, and a defect close-up as the cover image
-            would misrepresent the whole document.
-          */}
-          {coverPlan?.signed_url ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={coverPlan.signed_url}
-              alt=""
-              crossOrigin="anonymous"
-              style={{
-                display: "block",
-                margin: "0 auto",
-                maxWidth: "70%",
-                maxHeight: 420,
-                objectFit: "contain",
-              }}
-            />
-          ) : null}
         </div>
 
         {/*
@@ -1455,10 +1476,28 @@ export const InspectionReport = forwardRef<
             value={String(low)}
             tone={undefined}
           />
-          <Stat
-            label="Areas walked"
-            value={`${confirmedAreas}/${areas.length}`}
-          />
+          {/*
+            A de-snag round is measured on its carried defects, not on rooms:
+            the inspector never ticks a room off on a round, so this read
+            0 / 8 on every one of them.
+          */}
+          {task.visit_type === "desnag" ? (
+            <Stat
+              label="Defects re-checked"
+              value={`${
+                snags.filter(
+                  (s) =>
+                    (s.round_created ?? 1) < (task.round_number ?? 1) &&
+                    s.status !== "pending_verification",
+                ).length
+              }/${snags.filter((s) => (s.round_created ?? 1) < (task.round_number ?? 1)).length}`}
+            />
+          ) : (
+            <Stat
+              label="Areas walked"
+              value={`${confirmedAreas}/${areas.length}`}
+            />
+          )}
         </div>
 
         {/*
@@ -1685,6 +1724,16 @@ export const InspectionReport = forwardRef<
                         const photos = (snag.photos ?? []).filter(
                           (photo) => photo.signed_url,
                         );
+                        /*
+                          A defect carried into a de-snag round is shown as
+                          before and after: the photo it was reported with,
+                          and the one taken on this round.
+                        */
+                        const round = task.round_number ?? 1;
+                        const carried =
+                          task.visit_type === "desnag" && (snag.round_created ?? 1) < round;
+                        const before = photos.filter((p) => (p.round_number ?? 1) < round);
+                        const after = photos.filter((p) => (p.round_number ?? 1) >= round);
                         return (
                           <DefectCard
                             key={snag.id}
@@ -1709,7 +1758,9 @@ export const InspectionReport = forwardRef<
                             severity={snag.severity}
                             note={snag.note}
                             status={snag.status}
-                            photo={photos[0] ?? null}
+                            photo={carried ? (before[0] ?? null) : (photos[0] ?? null)}
+                            afterPhoto={carried ? (after[after.length - 1] ?? null) : undefined}
+                            beforeAfter={carried}
                             area={area.name}
                             floor={floorOf(snag.floor_plan_id)}
                           />

@@ -42,6 +42,7 @@ export interface SnaggingPropertyInput {
   noc_required?: boolean;
   noc_path?: string;
 }
+import type { SnaggingJobVisit } from "@/types/types";
 import type {
   CatalogueEntryInput,
   ChecklistItemInput,
@@ -55,6 +56,8 @@ export interface SnaggingTaskFilters {
   search?: string;
   developer?: string;
   assigneeId?: string;
+  /** Only this client's jobs. */
+  clientId?: string;
   from?: string;
   to?: string;
   /** Raised between these dates (YYYY-MM-DD), as opposed to scheduled. */
@@ -130,32 +133,19 @@ export interface SnaggingPricingConfig {
   additional_visit_price?: number;
 }
 
-/** One row of the Quotations list. */
+/** One row of the Quotations list: what the table shows and filters on. */
 export interface SnaggingQuotationSummary {
   id: string;
   quote_number: string;
   status: "draft" | "sent" | "approved" | "rejected";
   quote_kind: "inspection" | "visit" | "desnag";
   currency: string;
-  subtotal: number;
-  tax_amount: number;
   total: number;
-  sent_at: string | null;
-  approved_at: string | null;
-  decided_at: string | null;
-  rejected_reason: string | null;
   created_at: string;
   /** Null until an approved quotation has been turned into a job. */
   job_id: string | null;
   job_code: string | null;
-  job_status: string | null;
-  /** The original inspection a de-snag quotation returns to (change 31). */
-  source_job_id: string | null;
-  client_id: string | null;
-  property_id: string | null;
   client_name: string | null;
-  client_email: string | null;
-  client_phone: string | null;
   unit_label: string | null;
   building_name: string | null;
 }
@@ -166,6 +156,39 @@ export interface SnaggingQuoteLine {
   unit: string;
   unit_price: number;
   amount: number;
+}
+
+/** One additional visit, with everything that belongs to it. */
+export interface SnaggingVisitDetail {
+  visit: SnaggingJobVisit;
+  job: {
+    id: string;
+    unit_label: string | null;
+    building_name: string | null;
+    status: string;
+  } | null;
+  /** The Quotation tab loads the document itself, by this id. */
+  quotation: { id: string; status: string } | null;
+  /** For the header counts only; the list is the job's snags for this visit. */
+  snags: Array<{
+    id: string;
+    severity: "low" | "medium" | "high";
+    photos: Array<{ id: string }>;
+  }>;
+  checklist: Array<{
+    id: string;
+    group_name: string | null;
+    label: string;
+    status: string;
+    reason: string | null;
+  }>;
+  revisit_areas: Array<{
+    id: string;
+    name: string;
+    access_state: string;
+    access_reason: string | null;
+    elements_not_checked: string | null;
+  }>;
 }
 
 export interface SnaggingQuotation {
@@ -185,7 +208,6 @@ export interface SnaggingQuotation {
   status: "draft" | "sent" | "approved" | "rejected";
   currency: string;
   subtotal: number;
-  discount: number;
   tax_rate: number;
   tax_amount: number;
   total: number;
@@ -194,17 +216,57 @@ export interface SnaggingQuotation {
   lines: SnaggingQuoteLine[];
   sent_at: string | null;
   sent_to: string | null;
-  approved_at: string | null;
   rejected_reason: string | null;
   created_at: string;
   // Snapshot + client-decision fields (FR-2.06, §10).
   property_snapshot?: Record<string, unknown> | null;
-  pricing_snapshot?: Record<string, unknown> | null;
   decided_at?: string | null;
   approved_by_name?: string | null;
-  approved_by_contact?: string | null;
   /** Returned by the "send" action so the coordinator can copy the client link. */
   approval_url?: string | null;
+
+  /* ── The pricing decisions this document records (FR-2.04, FR-2.15) ── */
+
+  /** What the client declared when it was raised. */
+  furnished?: boolean;
+  /** Whether it carries the out-of-hours surcharge. Null on older quotations. */
+  out_of_hours?: boolean | null;
+  /** The built-up rate it was actually priced at. */
+  rate_per_sqft?: number | null;
+  /** What the size rule proposed, for comparison. */
+  rate_suggested?: number | null;
+  /** The external-areas rate, where the property has any. */
+  external_rate_per_sqft?: number | null;
+  external_rate_suggested?: number | null;
+  /** True when the rate sits outside the card band; blocks sending. */
+  rate_outside_band?: boolean;
+  rate_override_reason?: string | null;
+  rate_approved_at?: string | null;
+  /**
+   * Whether the CURRENT reader may sign off pricing outside the band.
+   *
+   * Computed by the server, because the answer depends on the approval
+   * manager of the job this quotation belongs to — which the quotation
+   * itself does not carry.
+   */
+  can_approve_rate?: boolean;
+
+  /**
+   * The live client and property behind the document, beside the frozen
+   * snapshot the PDF renders from.
+   *
+   * Only the edit form reads these. The snapshot is deliberately a
+   * five-field copy taken when the quotation was priced, so filling an
+   * edit form from it would silently drop the plot area, the map pin and
+   * everything else it never held.
+   */
+  property?: Record<string, unknown> | null;
+  client?: {
+    id: string;
+    name: string | null;
+    email: string | null;
+    phone: string | null;
+  } | null;
 }
 
 export interface SnaggingClientOption {
@@ -252,10 +314,103 @@ export const snaggingService = {
       params: toParams(filters, page, pageSize),
     }),
 
-  getTask: async (id: string): Promise<SnaggingTask> =>
+  /**
+   * The whole job record, as one object: the core job plus its checklist,
+   * snags, floor plans, visit status and de-snag quotation.
+   *
+   * These are separate endpoints now, fetched here in parallel and merged
+   * into the shape this call always returned, so the pages that want the
+   * whole record (review, report, visit, de-snag builder) are unchanged.
+   * The job page itself reads the sections one by one, through
+   * JobDetailContext, so each renders the moment it arrives.
+   */
+  getTask: async (id: string, init: { signal?: AbortSignal } = {}): Promise<SnaggingTask> => {
+    const [core, checklist, snags, floorPlans, visitStatus, desnag] = await Promise.all([
+      snaggingService.getTaskCore(id, init),
+      snaggingService.getTaskChecklist(id, init),
+      snaggingService.getTaskSnags(id, init),
+      snaggingService.listFloorPlans(id, init),
+      snaggingService.getTaskVisitStatus(id, init),
+      snaggingService.getTaskDesnagQuotation(id, init),
+    ]);
+    return {
+      ...core,
+      floor_plans: floorPlans,
+      snags,
+      checklist,
+      unapproved_visit_ids: visitStatus.unapproved_visit_ids,
+      desnag_quotation: desnag,
+    };
+  },
+
+  /** The job itself: header, property, areas, sign-off. The fast section. */
+  getTaskCore: async (id: string, init: { signal?: AbortSignal } = {}): Promise<SnaggingTask> =>
     executeRESTBackend<SnaggingTask>(`/api/snagging/tasks/${id}`, {
       method: "GET",
+      signal: init.signal,
     }),
+
+  getTaskChecklist: async (
+    id: string,
+    init: { signal?: AbortSignal } = {},
+  ): Promise<NonNullable<SnaggingTask["checklist"]>> =>
+    executeRESTBackend<NonNullable<SnaggingTask["checklist"]>>(
+      `/api/snagging/tasks/${id}/checklist`,
+      { method: "GET", signal: init.signal },
+    ),
+
+  /** The snags this record shows (a root's include its visits'), photos signed. */
+  getTaskSnags: async (
+    id: string,
+    init: { signal?: AbortSignal } = {},
+  ): Promise<NonNullable<SnaggingTask["snags"]>> =>
+    executeRESTBackend<NonNullable<SnaggingTask["snags"]>>(`/api/snagging/tasks/${id}/snags`, {
+      method: "GET",
+      signal: init.signal,
+    }),
+
+  /** Corrects the reason on a checklist item from the portal; empty clears it. */
+  updateChecklistReason: async (
+    taskId: string,
+    itemId: string,
+    reason: string | null,
+  ): Promise<{ id: string; reason: string | null }> =>
+    executeRESTBackend<{ id: string; reason: string | null }>(
+      `/api/snagging/tasks/${taskId}/checklist`,
+      { method: "PATCH", body: { item_id: itemId, reason } },
+    ),
+
+  /** Corrects the comment given with a de-snag verdict; empty clears it. */
+  updateSnagVerdictNote: async (snagId: string, note: string | null) =>
+    executeRESTBackend<{ id: string; verdict_note: string | null }>(`/api/snagging/snags/${snagId}`, {
+      method: "PATCH",
+      body: { verdict_note: note },
+    }),
+
+  /** Corrects a snag's note from the portal; empty text clears it. */
+  updateSnagNote: async (snagId: string, note: string | null): Promise<{ id: string; note: string | null }> =>
+    executeRESTBackend<{ id: string; note: string | null }>(`/api/snagging/snags/${snagId}`, {
+      method: "PATCH",
+      body: { note },
+    }),
+
+  getTaskVisitStatus: async (
+    id: string,
+    init: { signal?: AbortSignal } = {},
+  ): Promise<{ unapproved_visit_ids: string[] }> =>
+    executeRESTBackend<{ unapproved_visit_ids: string[] }>(
+      `/api/snagging/tasks/${id}/visit-status`,
+      { method: "GET", signal: init.signal },
+    ),
+
+  getTaskDesnagQuotation: async (
+    id: string,
+    init: { signal?: AbortSignal } = {},
+  ): Promise<SnaggingTask["desnag_quotation"]> =>
+    executeRESTBackend<SnaggingTask["desnag_quotation"]>(
+      `/api/snagging/tasks/${id}/desnag-quotation`,
+      { method: "GET", signal: init.signal },
+    ),
 
   /**
    * One page of the audit trail, newest first by default.
@@ -266,7 +421,12 @@ export const snaggingService = {
    */
   getAudit: async (
     id: string,
-    options?: { page?: number; pageSize?: number; order?: "asc" | "desc" },
+    options?: {
+      page?: number;
+      pageSize?: number;
+      order?: "asc" | "desc";
+      signal?: AbortSignal;
+    },
   ): Promise<{ data: SnaggingAuditEvent[]; totalCount: number }> =>
     executeRESTBackend<{ data: SnaggingAuditEvent[]; totalCount: number }>(
       `/api/snagging/tasks/${id}/audit`,
@@ -277,6 +437,7 @@ export const snaggingService = {
           pageSize: options?.pageSize ?? 25,
           order: options?.order ?? "desc",
         },
+        signal: options?.signal,
       },
     ),
 
@@ -288,17 +449,41 @@ export const snaggingService = {
       body: input as unknown as Record<string, unknown>,
     }),
 
+  /** The best few matches for a picker; the server searches, not the page. */
   searchClients: async (
     search?: string,
-    options?: { withCounts?: boolean },
+    options?: { limit?: number },
   ): Promise<SnaggingClientOption[]> =>
     executeRESTBackend<SnaggingClientOption[]>("/api/snagging/clients", {
       method: "GET",
       params: {
         ...(search ? { search } : {}),
-        ...(options?.withCounts ? { with_counts: "true" } : {}),
+        limit: String(options?.limit ?? 20),
       },
     }),
+
+  /** One page of the Clients table, with each client's job count. */
+  listClientsPage: async (query: {
+    search?: string;
+    page: number;
+    pageSize: number;
+    sortBy?: string;
+    sortDirection?: "asc" | "desc";
+  }): Promise<{ data: SnaggingClientOption[]; totalCount: number }> =>
+    executeRESTBackend<{ data: SnaggingClientOption[]; totalCount: number }>(
+      "/api/snagging/clients",
+      {
+        method: "GET",
+        params: {
+          ...(query.search ? { search: query.search } : {}),
+          with_counts: "true",
+          ...(query.sortBy ? { sortBy: query.sortBy } : {}),
+          ...(query.sortDirection ? { sortDirection: query.sortDirection } : {}),
+          page: String(query.page),
+          pageSize: String(query.pageSize),
+        },
+      },
+    ),
 
   // ── Quotation (F1-F13) ────────────────────────────────────────────────
   getPricing: async (): Promise<SnaggingPricingConfig> =>
@@ -321,13 +506,14 @@ export const snaggingService = {
    */
   getQuotation: async (
     taskId: string,
-    options: { preview?: boolean } = {},
+    options: { preview?: boolean; signal?: AbortSignal } = {},
   ): Promise<SnaggingQuotation | null> =>
     executeRESTBackend<SnaggingQuotation | null>(
       `/api/snagging/tasks/${taskId}/quotation`,
       {
         method: "GET",
         params: options.preview ? { preview: "1" } : {},
+        signal: options.signal,
       },
     ),
 
@@ -349,15 +535,26 @@ export const snaggingService = {
    * Every quotation, newest first — including the ones with no job yet,
    * which is what the Quotations section exists to show.
    */
-  listQuotations: async (filters?: {
+  /** One page of quotations, with the total and a count per status. */
+  listQuotations: async (filters: {
     status?: string;
     kind?: string;
-  }): Promise<SnaggingQuotationSummary[]> =>
-    executeRESTBackend<SnaggingQuotationSummary[]>("/api/snagging/quotations", {
+    search?: string;
+    page: number;
+    pageSize: number;
+  }): Promise<{
+    data: SnaggingQuotationSummary[];
+    totalCount: number;
+    counts: Record<string, number>;
+  }> =>
+    executeRESTBackend("/api/snagging/quotations", {
       method: "GET",
       params: {
-        ...(filters?.status && filters.status !== "all" ? { status: filters.status } : {}),
-        ...(filters?.kind && filters.kind !== "all" ? { kind: filters.kind } : {}),
+        ...(filters.status && filters.status !== "all" ? { status: filters.status } : {}),
+        ...(filters.kind && filters.kind !== "all" ? { kind: filters.kind } : {}),
+        ...(filters.search ? { search: filters.search } : {}),
+        page: String(filters.page),
+        pageSize: String(filters.pageSize),
       },
     }),
 
@@ -366,6 +563,16 @@ export const snaggingService = {
     client_id?: string;
     property_id?: string;
     property: Record<string, unknown>;
+    /** What the client declared for this quotation (FR-2.15). */
+    furnished?: boolean;
+    /** Booked outside working hours: adds the out-of-hours surcharge (FR-2.08). */
+    out_of_hours?: boolean;
+    /** The coordinator's rate, if they moved it off the suggestion (FR-2.04). */
+    rate_per_sqft?: number;
+    /** The same choice for external areas, where they apply (FR-2.07). */
+    external_rate_per_sqft?: number;
+    /** Required when the rate sits outside the published band. */
+    rate_override_reason?: string;
   }): Promise<SnaggingQuotationSummary> =>
     executeRESTBackend<SnaggingQuotationSummary>("/api/snagging/quotations", {
       method: "POST",
@@ -378,10 +585,12 @@ export const snaggingService = {
    */
   createDesnagQuotation: async (
     sourceJobId: string,
+    /** The chosen amount, inside the card's de-snagging range. */
+    price?: number,
   ): Promise<SnaggingQuotationSummary> =>
     executeRESTBackend<SnaggingQuotationSummary>("/api/snagging/quotations", {
       method: "POST",
-      body: { quote_kind: "desnag", source_job_id: sourceJobId },
+      body: { quote_kind: "desnag", source_job_id: sourceJobId, price },
     }),
 
   getQuotationById: async (id: string): Promise<SnaggingQuotation> =>
@@ -389,7 +598,39 @@ export const snaggingService = {
       method: "GET",
     }),
 
+  /**
+   * Corrects a quotation that has not gone out yet.
+   *
+   * Takes the same shape as createQuotation, because it is the same form:
+   * a draft is edited in the wizard it was written in rather than in a
+   * second, smaller copy of it that would drift on the first field either
+   * of them gained.
+   */
+  updateQuotation: async (
+    id: string,
+    input: {
+      client_id?: string;
+      property: Record<string, unknown>;
+      furnished?: boolean;
+      out_of_hours?: boolean;
+      rate_per_sqft?: number;
+      external_rate_per_sqft?: number;
+      rate_override_reason?: string;
+    },
+  ): Promise<SnaggingQuotation> =>
+    executeRESTBackend<SnaggingQuotation>(`/api/snagging/quotations/${id}`, {
+      method: "PATCH",
+      body: input as unknown as Record<string, unknown>,
+    }),
+
   /** send / share_link / regenerate / approve / reject, by quotation id. */
+  /** Admin sign-off on a rate outside the published band (FR-2.04). */
+  approveQuotationRate: async (id: string): Promise<SnaggingQuotation> =>
+    executeRESTBackend<SnaggingQuotation>(`/api/snagging/quotations/${id}`, {
+      method: "POST",
+      body: { action: "approve_rate" },
+    }),
+
   quotationActionById: async (
     id: string,
     action: "send" | "share_link" | "regenerate" | "approve" | "reject",
@@ -478,10 +719,14 @@ export const snaggingService = {
     return payload.data;
   },
 
-  listFloorPlans: async (taskId: string): Promise<SnaggingFloorPlan[]> =>
+  listFloorPlans: async (
+    taskId: string,
+    init: { signal?: AbortSignal } = {},
+  ): Promise<SnaggingFloorPlan[]> =>
     executeRESTBackend<SnaggingFloorPlan[]>("/api/snagging/floor-plans", {
       method: "GET",
       params: { task_id: taskId },
+      signal: init.signal,
     }),
 
   deleteFloorPlan: async (id: string): Promise<{ id: string }> =>
@@ -649,7 +894,21 @@ export const snaggingService = {
       body: input as unknown as Record<string, unknown>,
     }),
 
-  scheduleVisit: async (
+  // ── Additional visits (BA v2, changes 25-30) ─────────────────────────
+  //
+  // A visit is an appointment on the job, not a job of its own, so these
+  // all address a row under `/tasks/:id/visits` rather than a second task.
+
+  listVisits: async (
+    id: string,
+    init: { signal?: AbortSignal } = {},
+  ): Promise<{ visits: SnaggingJobVisit[]; versions: unknown[] }> =>
+    executeRESTBackend<{ visits: SnaggingJobVisit[]; versions: unknown[] }>(
+      `/api/snagging/tasks/${id}/visits`,
+      { method: "GET", signal: init.signal },
+    ),
+
+  createVisit: async (
     id: string,
     input: {
       /** Required: a visit is a trip and is requested for a specific slot. */
@@ -659,17 +918,83 @@ export const snaggingService = {
       notes?: string;
       reason?: string;
       approval_manager_id?: string | null;
+      /** How the client pays for it (change 26). */
+      charge_method?: "quotation" | "payment_link";
+      payment_reference?: string;
     },
   ) =>
     executeRESTBackend<{
       id: string;
-      code: string;
-      round_number: number;
-      visit_charge: number | null;
+      visit_number: number;
+      charge: number | null;
+      charge_method: string;
     }>(`/api/snagging/tasks/${id}/visits`, {
       method: "POST",
       body: input as unknown as Record<string, unknown>,
     }),
+
+  updateVisit: async (
+    id: string,
+    visitId: string,
+    input: Partial<{
+      charge_method: "quotation" | "payment_link";
+      payment_reference: string | null;
+      quotation_id: string | null;
+      scheduled_date: string | null;
+      appointment_at: string | null;
+      inspector_id: string | null;
+      status: "requested" | "scheduled" | "in_progress" | "completed" | "cancelled";
+      notes: string | null;
+    }>,
+  ): Promise<SnaggingJobVisit> =>
+    executeRESTBackend<SnaggingJobVisit>(
+      `/api/snagging/tasks/${id}/visits/${visitId}`,
+      { method: "PATCH", body: input as unknown as Record<string, unknown> },
+    ),
+
+  /**
+   * Raises the quotation a visit is charged by, from this job, and links
+   * it to the visit (BA v2, change 26). The visit can be booked once the
+   * client approves it.
+   */
+  raiseVisitQuotation: async (
+    id: string,
+    visitId: string,
+  ): Promise<{ id: string; quote_number: string; status: string; total: number }> =>
+    executeRESTBackend<{ id: string; quote_number: string; status: string; total: number }>(
+      `/api/snagging/tasks/${id}/visits/${visitId}/quotation`,
+      { method: "POST" },
+    ),
+
+  /** One visit with its snags, quotation, checklist answers and rooms. */
+  getVisit: async (id: string, visitId: string): Promise<SnaggingVisitDetail> =>
+    executeRESTBackend<SnaggingVisitDetail>(
+      `/api/snagging/tasks/${id}/visits/${visitId}`,
+      { method: "GET" },
+    ),
+
+  /**
+   * The approval manager's decision on a submitted visit. Approving
+   * reissues the client's report with what the visit found.
+   */
+  reviewVisit: async (
+    id: string,
+    visitId: string,
+    input: { decision: "approve" } | { decision: "send_back"; reason: string },
+  ): Promise<{
+    status: string;
+    generation?: { status: "generated" | "failed"; version: number; error?: string } | null;
+  }> =>
+    executeRESTBackend(`/api/snagging/tasks/${id}/visits/${visitId}/review`, {
+      method: "POST",
+      body: input as unknown as Record<string, unknown>,
+    }),
+
+  cancelVisit: async (id: string, visitId: string) =>
+    executeRESTBackend<{ id: string; status: string }>(
+      `/api/snagging/tasks/${id}/visits/${visitId}`,
+      { method: "DELETE" },
+    ),
 
   listCatalogue: async (
     filters: { search?: string; element?: string; activeOnly?: boolean } = {},
@@ -833,6 +1158,13 @@ export const snaggingService = {
     from?: string;
     to?: string;
     granularity?: SnaggingAnalyticsGranularity;
+    /** Zero-based page; ignored when `all` is set. */
+    page?: number;
+    pageSize?: number;
+    /** Every row, for an export. */
+    all?: boolean;
+    /** Unit, building or job code. */
+    search?: string;
   }): Promise<SnaggingAnalyticsDrilldown> =>
     executeRESTBackend<SnaggingAnalyticsDrilldown>(
       "/api/snagging/analytics/records",
@@ -844,6 +1176,13 @@ export const snaggingService = {
           ...(query.from ? { from: query.from } : {}),
           ...(query.to ? { to: query.to } : {}),
           ...(query.granularity ? { granularity: query.granularity } : {}),
+          ...(query.search ? { search: query.search } : {}),
+          ...(query.all
+            ? { all: "1" }
+            : {
+                page: String(query.page ?? 0),
+                pageSize: String(query.pageSize ?? 25),
+              }),
         },
       },
     ),

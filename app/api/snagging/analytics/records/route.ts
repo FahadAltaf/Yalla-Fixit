@@ -70,13 +70,21 @@ const IDENTITY_COLUMNS: Column[] = [
   { key: "status", label: "Status" },
 ];
 
+/** Rows per page of the pop-up table. */
+const DEFAULT_PAGE_SIZE = 25;
+const MAX_PAGE_SIZE = 100;
+/** The most an export will carry, so one click cannot stall the server. */
+const MAX_EXPORT_ROWS = 10_000;
+
 export async function GET(req: NextRequest) {
   try {
     const { profile, accessUser } = await getRequestUserAccess(req);
     if (!profile || !accessUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.VIEW)) {
+    if (
+      !hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.VIEW)
+    ) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -88,40 +96,82 @@ export async function GET(req: NextRequest) {
 
     const value = params.get("value");
     const range = resolveRange(params.get("from"), params.get("to"));
-    const granularity = (params.get("granularity") ?? "day") as SnaggingAnalyticsGranularity;
+    const granularity = (params.get("granularity") ??
+      "day") as SnaggingAnalyticsGranularity;
 
     const admin = await createAdminServerClient();
 
     // The two live worklists read the queue; everything else is scoped
     // to the period, exactly as the summary computes them.
-    const usesQueue = metric === "review_queue" || metric === "overdue_approvals";
+    const usesQueue =
+      metric === "review_queue" || metric === "overdue_approvals";
     const [jobs, queue] = await Promise.all([
-      usesQueue ? Promise.resolve([] as AnalyticsJob[]) : loadJobsTouchingRange(admin, range),
-      usesQueue ? loadReviewQueue(admin) : Promise.resolve([] as AnalyticsJob[]),
+      usesQueue
+        ? Promise.resolve([] as AnalyticsJob[])
+        : loadJobsTouchingRange(admin, range),
+      usesQueue
+        ? loadReviewQueue(admin)
+        : Promise.resolve([] as AnalyticsJob[]),
     ]);
 
-    const built = build(metric, value, usesQueue ? queue : jobs, range, granularity);
-    const names = await loadInspectorNames(
-      admin,
-      [...new Set(built.jobs.map((job) => job.inspector_id).filter((id): id is string => !!id))],
+    const built = build(
+      metric,
+      value,
+      usesQueue ? queue : jobs,
+      range,
+      granularity,
     );
+    /*
+      One page of rows, unless the export asks for the lot. The figures
+      are computed over every job either way; only what is sent back is
+      cut, so the count above the table is always the whole total.
+    */
+    const all = params.get("all") === "1";
+    // Search narrows the rows, never the figure: the total follows it.
+    const needle = (params.get("search") ?? "").trim().toLowerCase().slice(0, 100);
+    const matching = needle
+      ? built.jobs.filter((job) =>
+          [job.code, job.unit_label, job.building_name]
+            .filter(Boolean)
+            .some((field) => String(field).toLowerCase().includes(needle)),
+        )
+      : built.jobs;
+    const pageSize = Math.min(
+      Math.max(Number(params.get("pageSize")) || DEFAULT_PAGE_SIZE, 1),
+      MAX_PAGE_SIZE,
+    );
+    const page = Math.max(Number(params.get("page")) || 0, 0);
+    const pageJobs = all
+      ? matching.slice(0, MAX_EXPORT_ROWS)
+      : matching.slice(page * pageSize, page * pageSize + pageSize);
+
+    const names = await loadInspectorNames(admin, [
+      ...new Set(
+        pageJobs
+          .map((job) => job.inspector_id)
+          .filter((id): id is string => !!id),
+      ),
+    ]);
 
     const drilldown: SnaggingAnalyticsDrilldown = {
       metric,
       title: built.title,
       description: built.description,
       columns: [...IDENTITY_COLUMNS, ...built.columns],
-      rows: built.jobs.map((job) => ({
+      rows: pageJobs.map((job) => ({
         ...identityOf(job),
         ...built.extra(job, names),
       })),
-      totalCount: built.jobs.length,
+      totalCount: matching.length,
     };
 
     return NextResponse.json({ data: drilldown });
   } catch (error) {
     console.error("Snagging analytics records error:", error);
-    return NextResponse.json({ error: "Failed to load the records" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to load the records" },
+      { status: 500 },
+    );
   }
 }
 
@@ -159,7 +209,8 @@ function build(
 
   switch (metric) {
     case "status": {
-      const label = TASK_STATUS_LABELS[value as SnaggingTaskStatus] ?? value ?? "All";
+      const label =
+        TASK_STATUS_LABELS[value as SnaggingTaskStatus] ?? value ?? "All";
       return {
         title: `${label} jobs`,
         description: `Raised ${period}.`,
@@ -167,7 +218,9 @@ function build(
           { key: "developer", label: "Developer" },
           { key: "raised", label: "Raised" },
         ],
-        jobs: source.filter((job) => inRange(job.created_at, range) && job.status === value),
+        jobs: source.filter(
+          (job) => inRange(job.created_at, range) && job.status === value,
+        ),
         extra: (job) => ({
           developer: job.developer_name ?? "—",
           raised: date(job.created_at),
@@ -178,9 +231,14 @@ function build(
     case "review_queue":
     case "overdue_approvals": {
       const bucket = metric === "overdue_approvals" ? "over_48h" : value;
-      const jobs = source.filter((job) => !bucket || queueBucketOf(job.submitted_at) === bucket);
+      const jobs = source.filter(
+        (job) => !bucket || queueBucketOf(job.submitted_at) === bucket,
+      );
       return {
-        title: metric === "overdue_approvals" ? "Approvals past 48 hours" : "Waiting on review",
+        title:
+          metric === "overdue_approvals"
+            ? "Approvals past 48 hours"
+            : "Waiting on review",
         description:
           metric === "overdue_approvals"
             ? "Submitted more than 48 hours ago and still not approved. Live, not filtered by the dates above."
@@ -192,7 +250,9 @@ function build(
         jobs,
         extra: (job) => ({
           submitted: dateTime(job.submitted_at),
-          waiting: duration(minutesBetween(job.submitted_at, new Date().toISOString())),
+          waiting: duration(
+            minutesBetween(job.submitted_at, new Date().toISOString()),
+          ),
         }),
       };
     }
@@ -201,7 +261,8 @@ function build(
       const jobs = source.filter(
         (job) =>
           inRange(job.approved_at, range) &&
-          (!value || periodKeyOf(job.approved_at as string, granularity) === value),
+          (!value ||
+            periodKeyOf(job.approved_at as string, granularity) === value),
       );
       return {
         title: "Jobs completed",
@@ -215,7 +276,9 @@ function build(
         jobs,
         extra: (job) => ({
           approved: dateTime(job.approved_at),
-          turnaround: duration(minutesBetween(job.submitted_at, job.approved_at)),
+          turnaround: duration(
+            minutesBetween(job.submitted_at, job.approved_at),
+          ),
         }),
       };
     }
@@ -261,7 +324,9 @@ function build(
         extra: (job) => ({
           submitted: dateTime(job.submitted_at),
           approved: dateTime(job.approved_at),
-          turnaround: duration(minutesBetween(job.submitted_at, job.approved_at)),
+          turnaround: duration(
+            minutesBetween(job.submitted_at, job.approved_at),
+          ),
         }),
       };
     }
@@ -270,13 +335,17 @@ function build(
       const approved = source.filter((job) => inRange(job.approved_at, range));
       const wantReturned = value === "returned";
       const jobs = value
-        ? approved.filter((job) => ((job.rejection_count ?? 0) > 0) === wantReturned)
+        ? approved.filter(
+            (job) => (job.rejection_count ?? 0) > 0 === wantReturned,
+          )
         : approved;
       return {
-        title: wantReturned ? "Sent back before approval" : "Approved first time",
+        title: wantReturned
+          ? "Sent back before approval"
+          : "Approved first time",
         description: `Approved ${period}.`,
         columns: [
-          { key: "returns", label: "Times returned", align: "right" },
+          { key: "returns", label: "Times returned" },
           { key: "approved", label: "Approved" },
         ],
         jobs,
@@ -300,7 +369,9 @@ function build(
           })
         : delivered;
       return {
-        title: wantLate ? "Delivered outside 24 hours" : "Delivered within 24 hours",
+        title: wantLate
+          ? "Delivered outside 24 hours"
+          : "Delivered within 24 hours",
         description: `Approval to delivery, for reports sent ${period}.`,
         columns: [
           { key: "approved", label: "Approved" },
@@ -325,7 +396,9 @@ function build(
           { key: "submitted", label: "Submitted" },
         ],
         jobs: source.filter(
-          (job) => inRange(job.created_at, range) && (job.developer_name?.trim() ?? "") === value,
+          (job) =>
+            inRange(job.created_at, range) &&
+            (job.developer_name?.trim() ?? "") === value,
         ),
         extra: (job) => ({
           raised: date(job.created_at),
@@ -343,9 +416,12 @@ function build(
           { key: "raised", label: "Raised" },
           { key: "onSite", label: "On site", align: "right" },
         ],
-        jobs: source.filter((job) => inRange(job.created_at, range) && job.inspector_id === value),
+        jobs: source.filter(
+          (job) => inRange(job.created_at, range) && job.inspector_id === value,
+        ),
         extra: (job, names) => ({
-          inspector: (job.inspector_id && names.get(job.inspector_id)) || "Unassigned",
+          inspector:
+            (job.inspector_id && names.get(job.inspector_id)) || "Unassigned",
           raised: date(job.created_at),
           onSite: duration(minutesBetween(job.started_at, job.submitted_at)),
         }),
@@ -358,11 +434,16 @@ function build(
  * Same week rule as the summary chart, restated here rather than
  * imported so a chart click and its list cannot land in different weeks.
  */
-function periodKeyOf(iso: string, granularity: SnaggingAnalyticsGranularity): string {
+function periodKeyOf(
+  iso: string,
+  granularity: SnaggingAnalyticsGranularity,
+): string {
   if (granularity === "month") return iso.slice(0, 7);
   if (granularity === "day") return iso.slice(0, 10);
   const date = new Date(iso);
-  const monday = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const monday = new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+  );
   monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
   return monday.toISOString().slice(0, 10);
 }

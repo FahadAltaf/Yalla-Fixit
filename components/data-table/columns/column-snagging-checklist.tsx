@@ -1,8 +1,9 @@
 "use client";
 
 import { ColumnDef } from "@tanstack/react-table";
-import { Pencil } from "lucide-react";
+import { FolderOpen, Home, Pencil } from "lucide-react";
 
+import { IconText } from "@/components/data-table/columns/icon-text";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -40,7 +41,7 @@ export function getSnaggingChecklistColumns({
       header: "Group",
       accessorKey: "group_name",
       cell: ({ row }) => (
-        <span className="text-sm">{row.original.group_name}</span>
+        <IconText icon={FolderOpen}>{row.original.group_name}</IconText>
       ),
       enableSorting: true,
     },
@@ -67,7 +68,11 @@ export function getSnaggingChecklistColumns({
         // All four is the common case and listing it as four chips is noise;
         // the point of this column is spotting the exceptions.
         if (on.length === PROPERTY_TYPES.length) {
-          return <span className="text-muted-foreground text-xs">All types</span>;
+          return (
+            <IconText icon={Home} muted>
+              All types
+            </IconText>
+          );
         }
         if (on.length === 0) {
           return (
@@ -101,27 +106,29 @@ export function getSnaggingChecklistColumns({
     },
     {
       id: "active",
-      header: () => <span className="block text-right">In use</span>,
+      header: "In use",
+      // Laid out as the snag catalogue lays it out: the switch, then edit,
+      // reading from the left like every other column.
       cell: ({ row }) => {
         const item = row.original;
         return (
-          <div className="flex items-center justify-end gap-1">
-            {canEdit ? (
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => onEdit(item)}
-                aria-label={`Edit ${item.label}`}
-              >
-                <Pencil className="size-4" />
-              </Button>
-            ) : null}
+          <div className="flex items-center gap-2">
             <Switch
               checked={item.active}
               disabled={!canEdit || togglingId === item.id}
               onCheckedChange={(checked) => onToggle(item, checked)}
               aria-label={`${item.active ? "Deactivate" : "Reactivate"} ${item.label}`}
             />
+            {canEdit ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => onEdit(item)}
+                aria-label={`Edit ${item.label}`}
+              >
+                <Pencil className="size-3.5" />
+              </Button>
+            ) : null}
           </div>
         );
       },

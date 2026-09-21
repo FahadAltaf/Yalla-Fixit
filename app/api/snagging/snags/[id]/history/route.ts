@@ -30,7 +30,10 @@ type Leg = {
   photo_count: number;
 };
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+export async function GET(
+  req: NextRequest,
+  ctx: { params: Promise<{ id: string }> },
+) {
   try {
     const { profile, accessUser } = await getRequestUserAccess(req);
     if (!profile || !accessUser) {
@@ -45,11 +48,12 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 
     const { data: snag, error: snagError } = await admin
       .from("snagging_snags")
-      .select("id, job_id, snag_code, element_label, defect_label, severity, status")
+      .select("job_id, snag_code")
       .eq("id", id)
       .maybeSingle();
     if (snagError) throw new Error(snagError.message);
-    if (!snag) return NextResponse.json({ error: "Snag not found" }, { status: 404 });
+    if (!snag)
+      return NextResponse.json({ error: "Snag not found" }, { status: 404 });
 
     const family = await loadJobFamily(admin, snag.job_id as string);
 
@@ -57,11 +61,11 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const [{ data: jobs }, { data: rows }] = await Promise.all([
       admin
         .from("snagging_jobs")
-        .select("id, code, round_number, visit_type, scheduled_date")
+        .select("id, code, round_number, visit_type")
         .in("id", family.allIds),
       admin
         .from("snagging_snags")
-        .select("id, job_id, status, updated_at, created_at")
+        .select("id, job_id, status")
         .in("job_id", family.allIds)
         .eq("snag_code", snag.snag_code as string),
     ]);
@@ -69,23 +73,16 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const jobById = new Map((jobs ?? []).map((job) => [job.id as string, job]));
     const snagIds = (rows ?? []).map((row) => row.id as string);
 
-    // Photos and verdict events are the evidence behind each leg.
-    const [{ data: photos }, { data: events }] = await Promise.all([
-      snagIds.length
-        ? admin
-            .from("snagging_snag_photos")
-            .select("id, snag_id, storage_path, round_number, taken_at")
-            .in("snag_id", snagIds)
-            .order("taken_at", { ascending: true })
-        : Promise.resolve({ data: [] as Record<string, unknown>[] }),
-      snagIds.length
-        ? admin
-            .from("snagging_audit_events")
-            .select("id, event_type, actor_label, justification, payload, created_at, entity_id")
-            .in("entity_id", snagIds)
-            .order("created_at", { ascending: true })
-        : Promise.resolve({ data: [] as Record<string, unknown>[] }),
-    ]);
+    /*
+      Each leg shows how many photos back it, so only the photos' snag ids
+      are read. The legs are the whole response: both the portal and the
+      phone read nothing else, so the defect itself, the photo rows and its
+      audit events are not sent (the events were a scan of the audit table
+      on every open).
+    */
+    const { data: photos } = snagIds.length
+      ? await admin.from("snagging_snag_photos").select("snag_id").in("snag_id", snagIds)
+      : { data: [] as Array<{ snag_id: string }> };
 
     const photoCount = new Map<string, number>();
     for (const photo of photos ?? []) {
@@ -113,23 +110,12 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       })
       .sort((a, b) => a.round_number - b.round_number);
 
-    return NextResponse.json({
-      data: {
-        snag: {
-          id: snag.id,
-          snag_code: snag.snag_code,
-          element_label: snag.element_label,
-          defect_label: snag.defect_label,
-          severity: snag.severity,
-          status: snag.status,
-        },
-        legs,
-        photos: photos ?? [],
-        events: events ?? [],
-      },
-    });
+    return NextResponse.json({ data: { legs } });
   } catch (error) {
     console.error("Snag history GET error:", error);
-    return NextResponse.json({ error: "Failed to load the defect history" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to load the defect history" },
+      { status: 500 },
+    );
   }
 }

@@ -355,7 +355,9 @@ function computeByDeveloper(
       defect_mix: [...value.defects.entries()]
         .map(([label, count]) => ({ label, count }))
         .sort((a, b) => b.count - a.count)
-        .slice(0, 5),
+        // The full breakdown opens in a popup, a page at a time; the cap
+        // only keeps a sprawling developer from bloating the payload.
+        .slice(0, 100),
     }))
     .sort((a, b) => b.snags_per_unit - a.snags_per_unit);
 }

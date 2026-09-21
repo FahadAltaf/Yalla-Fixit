@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { signMediaPaths, signPaths } from "./media";
 import { dedupeDefects } from "./defect-set";
 import { loadJobFamily } from "./job-family";
+import { QUOTATION_DOCUMENT_COLUMNS } from "./quotation";
 
 /**
  * The one description of a client report (FR-7.02 → FR-7.04).
@@ -59,6 +60,8 @@ export type ReportSnag = {
     takenAt: string | null;
     /** FR-7.03 — the marked spot, as a fraction of the image. */
     marker: { x: number; y: number } | null;
+    /** The round the photo was taken on: earlier is "before", this one "after". */
+    round: number;
     width: number | null;
     height: number | null;
     exif: Record<string, unknown> | null;
@@ -121,6 +124,13 @@ export type ReportData = {
     /** Areas the inspector confirmed walking, over every area on the job. */
     areasWalked: number;
     areasTotal: number;
+    /**
+     * A de-snag round's measure: the defects carried in to be re-checked,
+     * and how many have a verdict. Rooms are never ticked off on a round,
+     * so "areas walked" read 0 / 8 on every one.
+     */
+    defectsCarried: number;
+    defectsChecked: number;
     /** Checklist items with a real answer — anything but pending/not checked. */
     checklistDone: number;
     checklistTotal: number;
@@ -219,6 +229,7 @@ function toReportSnag(
         mediaType: String(photo.media_type ?? "photo"),
         takenAt: typeof photo.taken_at === "string" ? photo.taken_at : null,
         marker: marked ? { x: x as number, y: y as number } : null,
+        round: Number(photo.round_number ?? 1),
         width: typeof photo.width === "number" ? photo.width : null,
         height: typeof photo.height === "number" ? photo.height : null,
         exif: (photo.exif as Record<string, unknown> | null) ?? null,
@@ -250,8 +261,8 @@ export async function buildReportData(
        signed_at, signer_name, signature_path,
        client:client_id(name, email, phone),
        inspector:inspector_id(id, full_name, email),
-       areas:snagging_areas(id, name, status, note, confirmed_at, sort_order,
-         access_state, access_reason, elements_not_checked)`,
+       areas:snagging_areas(id, name, sort_order, access_state, access_reason,
+         elements_not_checked, confirmed_at, visit_id)`,
     )
     .eq("id", jobId)
     .maybeSingle();
@@ -281,26 +292,53 @@ export async function buildReportData(
           ? family.allIds
           : [jobId];
 
-  const [{ data: checklist }, { data: snagRows }, { data: catalogue }] =
+  /*
+    Visits the manager has not approved. What they recorded -- snags, a
+    room added on the visit, checklist answers -- stays out of the client's
+    report until approval reissues it; a submitted visit is not yet
+    anything YFI stands behind.
+  */
+  const { data: visitStates, error: visitStateError } = await admin
+    .from("snagging_job_visits")
+    .select("id, status")
+    .eq("job_id", family.rootId);
+  if (visitStateError) throw new Error(visitStateError.message);
+  const unapprovedVisits = new Set(
+    (visitStates ?? [])
+      .filter((visit) => visit.status !== "completed")
+      .map((visit) => visit.id as string),
+  );
+  const unapproved = (row: Record<string, unknown>) =>
+    typeof row.visit_id === "string" && unapprovedVisits.has(row.visit_id);
+
+  const [{ data: checklistRows }, { data: allSnagRows }, { data: catalogue }] =
     await Promise.all([
       admin
         .from("snagging_job_checklist")
-        .select("id, code, group_name, label, mandatory, status, reason, sort_order")
+        .select("id, code, group_name, label, mandatory, status, reason, sort_order, visit_id")
         .eq("job_id", jobId)
         .order("sort_order", { ascending: true }),
       admin
         .from("snagging_snags")
         .select(
           `id, job_id, area_id, snag_code, catalogue_code, category_label, element_label, defect_label,
-           severity, note, status, round_created,
+           severity, note, status, round_created, visit_id,
            photos:snagging_snag_photos(id, snag_id, storage_path, media_type, taken_at,
-             width, height, gps_lat, gps_lng, exif, marker_x, marker_y)`,
+             width, height, gps_lat, gps_lng, exif, marker_x, marker_y, round_number)`,
         )
         .in("job_id", snagJobIds)
         .neq("status", "withdrawn")
         .order("snag_code", { ascending: true }),
       admin.from("snagging_catalogue_entries").select("code, guidance"),
     ]);
+
+  const snagRows = (allSnagRows ?? []).filter(
+    (row) => !unapproved(row as Record<string, unknown>),
+  );
+  // An item a pending visit answered reads as the walk left it.
+  const checklist = ((checklistRows ?? []) as Array<Record<string, unknown>>).map((row) =>
+    unapproved(row) ? { ...row, status: "not_checked", reason: null } : row,
+  );
 
   /*
     Collapse the per-round copies before anything else looks at them, so
@@ -331,7 +369,8 @@ export async function buildReportData(
 
   // FR-7.03 — the inspection's configured order, never alphabetical.
   const areaRows = ((job.areas ?? []) as Array<Record<string, unknown>>)
-    .slice()
+    // A room a pending visit added is not in the report yet.
+    .filter((area) => !unapproved(area))
     .sort((a, b) => Number(a.sort_order ?? 0) - Number(b.sort_order ?? 0));
 
   const byArea = new Map<string, ReportSnag[]>();
@@ -390,9 +429,11 @@ export async function buildReportData(
       ) ?? null
     : null;
 
+  // The document only: this lands in the stored snapshot, so never the
+  // approval token hash or the other server-side columns.
   const { data: quotationRow } = await admin
     .from("snagging_quotations")
-    .select("*")
+    .select(QUOTATION_DOCUMENT_COLUMNS)
     .eq("job_id", jobId)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -433,8 +474,15 @@ export async function buildReportData(
     areas,
     unassignedSnags,
     tally: {
-      areasWalked: areaRows.filter((area) => area.confirmed_at).length,
+      // A room added on a return visit was walked on that visit; rooms
+      // have no finish tick there, so it never carries a sign-off.
+      areasWalked: areaRows.filter((area) => area.confirmed_at || area.visit_id).length,
       areasTotal: areaRows.length,
+      defectsCarried: snags.filter((snag) => snag.roundCreated < (job.round_number ?? 1)).length,
+      defectsChecked: snags.filter(
+        (snag) =>
+          snag.roundCreated < (job.round_number ?? 1) && snag.status !== "pending_verification",
+      ).length,
       checklistDone: ((checklist ?? []) as Array<Record<string, unknown>>).filter(
         (item) => item.status !== "pending" && item.status !== "not_checked",
       ).length,

@@ -6,6 +6,7 @@ import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import {
   cacheHeaders,
   myQuotations,
+  resolvePeriod,
 } from "@/lib/server/snagging/overview-queries";
 import { ActionType, ResourceType } from "@/types/types";
 
@@ -26,22 +27,38 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
+    const period = resolvePeriod(req.nextUrl.searchParams.get("days"));
+
     const admin = await createAdminServerClient();
     // Captured before base(), which is hoisted and so cannot see the
     // null check above.
     const me = profile.id;
-    const count = async (refine?: (q: ReturnType<typeof base>) => ReturnType<typeof base>) => {
+    const count = async (
+      refine?: (q: ReturnType<typeof base>) => ReturnType<typeof base>,
+    ) => {
       const query = base();
       const { count: value, error } = await (refine ? refine(query) : query);
       if (error) throw new Error(error.message);
       return value ?? 0;
     };
     function base() {
-      // The reader's own quotations (FR-10.01).
+      /*
+        The reader's own quotations (FR-10.01), raised inside the window
+        the page is being read through.
+
+        On created_at rather than sent_at or decided_at, so one quotation
+        belongs to exactly one period and the five figures below always
+        add up against the same set. Windowing each stage by its own
+        timestamp would let a quotation be counted as generated in one
+        month and approved in the next, and the approval rate would then
+        be a ratio of two different populations.
+      */
       return myQuotations(
-        admin.from("snagging_quotations").select("id", { count: "exact", head: true }),
+        admin
+          .from("snagging_quotations")
+          .select("id", { count: "exact", head: true }),
         me,
-      );
+      ).gte("created_at", period.fromTs);
     }
 
     const [generated, sent, approved, rejected, awaiting] = await Promise.all([
@@ -67,14 +84,19 @@ export async function GET(req: NextRequest) {
             { key: "rejected", label: "Rejected", count: rejected },
             { key: "awaiting", label: "Awaiting", count: awaiting },
           ],
-          approvalRate: decided === 0 ? null : Math.round((approved / decided) * 100),
+          approvalRate:
+            decided === 0 ? null : Math.round((approved / decided) * 100),
           decided,
+          periodDays: period.days,
         },
       },
       { headers: cacheHeaders(600) },
     );
   } catch (error) {
     console.error("Quotation analytics error:", error);
-    return NextResponse.json({ error: "Failed to load quotation analytics" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to load quotation analytics" },
+      { status: 500 },
+    );
   }
 }

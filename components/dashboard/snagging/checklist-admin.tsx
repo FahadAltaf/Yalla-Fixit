@@ -252,6 +252,19 @@ export default function ChecklistAdmin() {
             ? "The checks an inspector works through on site, copied onto every job. Owned by Operations."
             : "The published list, stored once and shared with clients on request. Never copied onto a job."
         }
+        actions={
+          canCreate ? (
+            <Button
+              onClick={() => {
+                setEditing(null);
+                setFormOpen(true);
+              }}
+            >
+              <Plus className="size-4" />
+              Add check
+            </Button>
+          ) : null
+        }
       />
 
       {/*

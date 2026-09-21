@@ -1,6 +1,15 @@
 "use client";
 
-import { AlertTriangle, Clock, DoorClosed } from "lucide-react";
+import {
+  AlertTriangle,
+  Building,
+  Building2,
+  Check,
+  Clock,
+  DoorClosed,
+  Home,
+  Store,
+} from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { TASK_STATUS_LABELS } from "@/lib/snagging/status-labels";
@@ -277,6 +286,21 @@ export function AccessIndex({ state }: { state: SnaggingAreaAccessState }) {
 }
 
 /**
+ * The row marker for an area signed off with full access: the same size and
+ * shape as AccessIndex and SnagIndex, so the three lists line up.
+ */
+export function CompletedIndex() {
+  return (
+    <span
+      className="bg-success inline-flex size-7 shrink-0 items-center justify-center rounded-full text-white"
+      aria-label="Completed"
+    >
+      <Check className="size-3.5" aria-hidden />
+    </span>
+  );
+}
+
+/**
  * Short names for the three rejection categories, derived from the
  * definitions the API enforces so a label can never drift from the rule
  * behind it. `REJECTION_RULES` holds the full description, remediation
@@ -332,10 +356,24 @@ export function SlaBadge({ dueAt }: { dueAt?: string | null }) {
   );
 }
 
-/** Everything is quoted in Gulf time; nothing is stored in it. */
-const GST = "Asia/Dubai";
+/*
+  Times on screen are shown in the viewer's own time zone.
 
-export function formatGstDate(value?: string | null): string {
+  They used to be fixed to Gulf time, so a coordinator outside the UAE read
+  every timestamp an hour or more away from their own clock ("updated
+  11:01" at noon). Nothing is stored in any zone -- the values are instants
+  -- so this only changes how they are read. Documents that go to a client
+  (the report, the quotation, emails) keep Gulf time and say so, because
+  every reader of those has to see the same time.
+*/
+
+/**
+ * Rows per page in a table inside a popup: five to start, so the popup
+ * stays short, with 10 and 25 a click away. Page tables keep 10.
+ */
+export const POPUP_PAGE_SIZES = [5, 10, 25];
+
+export function formatLocalDate(value?: string | null): string {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
@@ -343,11 +381,10 @@ export function formatGstDate(value?: string | null): string {
     day: "numeric",
     month: "short",
     year: "numeric",
-    timeZone: GST,
   }).format(date);
 }
 
-export function formatGstDateTime(value?: string | null): string {
+export function formatLocalDateTime(value?: string | null): string {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
@@ -357,7 +394,6 @@ export function formatGstDateTime(value?: string | null): string {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
-    timeZone: GST,
   }).format(date);
 }
 
@@ -368,11 +404,18 @@ export function formatWindow(startAt?: string | null, endAt?: string | null): st
       hour: "2-digit",
       minute: "2-digit",
       hour12: false,
-      timeZone: GST,
     }).format(new Date(value));
 
   return endAt ? `${time(startAt)} to ${time(endAt)}` : time(startAt);
 }
+
+/** The icon each property type is shown with, in tables and lists. */
+export const PROPERTY_TYPE_ICON: Record<string, typeof Building2> = {
+  apartment: Building2,
+  villa: Home,
+  townhouse: Building,
+  commercial: Store,
+};
 
 export const PROPERTY_TYPE_LABELS: Record<string, string> = {
   apartment: "Apartment",

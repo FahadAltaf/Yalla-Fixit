@@ -44,11 +44,11 @@ export function SnaggingPricingToolbar({
     <div className="flex flex-col gap-4 px-4 py-4 sm:py-6">
       <div className="flex flex-row items-center justify-between gap-2 sm:gap-4">
         <div className="flex items-center gap-2">
-          <div className="relative flex-1 sm:max-w-md sm:min-w-[260px]">
+          <div className="relative w-full sm:w-80 sm:flex-none">
             <Input
               id={searchInputId}
               type="search"
-              placeholder="Search property type..."
+              placeholder="Search..."
               className="peer w-full ps-9"
               value={globalFilter}
               onChange={(event) => onGlobalFilterChange(event.target.value)}

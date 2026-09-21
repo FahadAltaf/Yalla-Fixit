@@ -125,6 +125,20 @@ export function rateCardFor(
   return card.types?.[type] ?? card.types?.apartment ?? null;
 }
 
+/**
+ * The de-snagging range for a property type (min and max), or null where
+ * the card leaves it "to be confirmed". A single published figure is a
+ * range whose ends are equal.
+ */
+export function desnagBand(
+  card: RateCard,
+  type: string,
+): { min: number; max: number } | null {
+  const row = rateCardFor(card, type);
+  if (!row || row.desnag_min == null) return null;
+  return { min: row.desnag_min, max: row.desnag_max ?? row.desnag_min };
+}
+
 /** The de-snagging charge for a property type, or null where unpublished. */
 export function desnagPrice(card: RateCard, type: string): number | null {
   const row = rateCardFor(card, type);
@@ -140,11 +154,29 @@ export function desnagPrice(card: RateCard, type: string): number | null {
  *
  * `outOfHours` adds the surcharge as its own line, which is the coordinator's
  * call rather than something derived from a calendar (F17, F18, FR-2.08).
+ *
+ * `ratePerSqft` is the coordinator's choice of built-up rate (FR-2.04).
+ * The size rule below still produces a figure, but it is a SUGGESTION:
+ * a person decides what the client is charged, and the quotation records
+ * who. Omitted — previewing, or repricing a quotation raised before the
+ * choice existed — the suggestion stands, which is what the system did on
+ * its own before.
  */
 export function computeQuotation(
   job: QuoteJob,
   config: PricingConfig,
-  options: { outOfHours?: boolean } = {},
+  options: {
+    outOfHours?: boolean;
+    ratePerSqft?: number | null;
+    /**
+     * The coordinator's choice of EXTERNAL rate (FR-2.04, FR-2.07).
+     *
+     * Its own band and its own decision: external areas are charged on
+     * the plot beyond the built-up area, and a villa with a large garden
+     * is a different conversation from the unit inside it.
+     */
+    externalRatePerSqft?: number | null;
+  } = {},
 ) {
   const lines: QuoteLine[] = [];
   const type = job.property_type ?? "apartment";
@@ -153,17 +185,49 @@ export function computeQuotation(
   const row = card ? rateCardFor(card, type) : null;
 
   if (!card || !row) {
-    // Nothing to price against. Returning empty rather than falling back to
-    // the old multiplier keeps a mispriced quotation from being issued
-    // quietly; the caller surfaces "pricing is not configured".
-    return summarise(lines, config, { minimumApplied: false });
+    /*
+      Nothing to price against. Returning empty rather than falling back
+      to the old multiplier keeps a mispriced quotation from being issued
+      quietly; the caller surfaces "pricing is not configured".
+
+      The rate fields are present and null so this returns the same shape
+      as the priced path — a caller reading `rate_per_sqft` should not
+      have to know which branch produced its result.
+    */
+    return {
+      ...summarise(lines, config, { minimumApplied: false }),
+      rate_per_sqft: null as number | null,
+      rate_suggested: null as number | null,
+      rate_band: null as { min: number; max: number } | null,
+      external_rate_per_sqft: null as number | null,
+      external_rate_suggested: null as number | null,
+      external_rate_band: null as { min: number; max: number } | null,
+      rate_outside_band: false,
+    };
   }
 
-  // 1. Built-up area, at the card rate for this type and furnished state.
+  /*
+    1. Built-up area.
+
+    Furnished is a single published rate, so there is no band and nothing
+    to choose. Unfurnished is a range: the size rule proposes a point in
+    it and the coordinator's choice, when there is one, wins.
+  */
+  /*
+    The external decision, when there is one. Null on a property with no
+    external areas in scope, which is most of them.
+  */
+  let externalUsed: number | null = null;
+  let externalSuggestedRate: number | null = null;
+  let externalBand: { min: number; max: number } | null = null;
+
   const furnished = job.furnished === true;
-  const buaRate = furnished
+  const suggestedRate = furnished
     ? row.furnished
     : pickRateForSize(row.unfurnished_min, row.unfurnished_max, bua);
+  const chosen = options.ratePerSqft;
+  const buaRate =
+    chosen != null && Number.isFinite(chosen) && chosen >= 0 ? chosen : suggestedRate;
 
   const bedrooms =
     type === "commercial"
@@ -195,11 +259,19 @@ export function computeQuotation(
     Number(job.plot_area_sqft) > bua
   ) {
     const external = round2(Number(job.plot_area_sqft) - bua);
-    const externalRate = pickRateForSize(
+    const externalSuggested = pickRateForSize(
       card.external_min,
       card.external_max,
       external,
     );
+    const chosenExternal = options.externalRatePerSqft;
+    const externalRate =
+      chosenExternal != null && Number.isFinite(chosenExternal) && chosenExternal >= 0
+        ? chosenExternal
+        : externalSuggested;
+    externalUsed = externalRate;
+    externalSuggestedRate = externalSuggested;
+    externalBand = { min: card.external_min, max: card.external_max };
     lines.push({
       description: `External areas (plot ${Number(job.plot_area_sqft)} − built-up ${bua})`,
       qty: external,
@@ -248,7 +320,39 @@ export function computeQuotation(
     });
   }
 
-  return summarise(lines, config, { minimumApplied });
+  return {
+    ...summarise(lines, config, { minimumApplied }),
+    /*
+      What the rate WAS, and what it would have been.
+
+      Carried out of the pricing so the caller can record the choice and
+      decide whether it needs an admin, without re-deriving the band and
+      risking a different answer from the one the lines were built with.
+    */
+    rate_per_sqft: buaRate as number | null,
+    rate_suggested: suggestedRate as number | null,
+    rate_band: furnished
+      ? null
+      : { min: row.unfurnished_min, max: row.unfurnished_max },
+    external_rate_per_sqft: externalUsed,
+    external_rate_suggested: externalSuggestedRate,
+    external_rate_band: externalBand,
+    /*
+      One flag for the whole document, true when EITHER rate has left its
+      band.
+
+      The approval is of this quotation's pricing, not of one line in it:
+      an admin asked to sign off a price should not have to be told which
+      of two numbers triggered it, and two independent gates would let a
+      quotation be half-approved.
+    */
+    rate_outside_band:
+      (!furnished &&
+        (buaRate < row.unfurnished_min || buaRate > row.unfurnished_max)) ||
+      (externalUsed != null &&
+        externalBand != null &&
+        (externalUsed < externalBand.min || externalUsed > externalBand.max)),
+  };
 }
 
 export function summarise(

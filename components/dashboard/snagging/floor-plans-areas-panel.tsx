@@ -2,8 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowDown,
-  ArrowUp,
   Crosshair,
   Eraser,
   ImageOff,
@@ -14,7 +12,7 @@ import {
   Plus,
   Shapes,
   Trash2,
-  Upload,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -53,12 +51,12 @@ import {
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/actions/utils";
+import MultipleSelector, { type Option } from "@/components/ui/multiselect";
 import AddFloorPlanDialog from "./add-floor-plan-dialog";
 import { PlanZoneCanvas } from "./plan-zone-canvas";
 import { zoneLabelPoint, type ZonePoint } from "@/lib/snagging/zone-geometry";
 
 import {
-  DataRow,
   DataState,
   ListSkeleton,
   SectionCard,
@@ -128,8 +126,16 @@ export function FloorPlansAreasPanel({
   taskId,
   propertyType,
   bedrooms,
+  onChanged,
 }: {
   taskId: string;
+  /**
+   * Called after anything here changes the job's rooms or plans. The page
+   * re-reads the job, so the Areas count, the snag list's pins and the
+   * "Areas walked" card follow -- they used to keep the old rooms until
+   * the page was reloaded.
+   */
+  onChanged?: () => void;
   /** Shapes the suggested room list, the same way it does at job creation. */
   propertyType?: SnaggingPropertyType | null;
   bedrooms?: number | null;
@@ -149,10 +155,16 @@ export function FloorPlansAreasPanel({
   const [busy, setBusy] = useState(false);
   // `busy` disables every control; `running` names the one mutation in
   // flight so only that button spins — a PDF can take seconds to convert.
-  const [running, setRunning] = useState<
-    null | "upload" | "pin" | "area" | "rename"
-  >(null);
+  type Running = null | "upload" | "pin" | "area" | "rename" | "plan" | "order";
+  const [running, setRunning] = useState<Running>(null);
   const [addOpen, setAddOpen] = useState(false);
+  /* Renaming happens on the chip itself, so only its id and its text. */
+  const [renamingPlan, setRenamingPlan] = useState<{
+    id: string;
+    label: string;
+  } | null>(null);
+  /* A file is being dragged over the plan column. */
+  const [dropping, setDropping] = useState(false);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [overIndex, setOverIndex] = useState<number | null>(null);
   const [activePlanId, setActivePlanId] = useState<string | null>(null);
@@ -166,7 +178,17 @@ export function FloorPlansAreasPanel({
   const [activeAreaId, setActiveAreaId] = useState<string | null>(null);
   const [placeMode, setPlaceMode] = useState<"pin" | "zone">("pin");
   const [addAreaOpen, setAddAreaOpen] = useState(false);
-  const [newAreaOnly, setNewAreaOnly] = useState("");
+  /*
+    The rooms the add dialog is holding.
+
+    One list rather than a ticked set plus a separate text field: the
+    selector is creatable, so a room the template does not have is typed
+    into the same control and arrives here as an option like any other.
+    Several at once because the common case is a new job needing eight
+    rooms, and adding them one at a time meant eight round trips with the
+    list shifting under the finger between each.
+  */
+  const [chosen, setChosen] = useState<Option[]>([]);
   const areaListRef = useRef<HTMLDivElement>(null);
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(
     null,
@@ -200,34 +222,101 @@ export function FloorPlansAreasPanel({
 
   const activePlan = plans.find((p) => p.id === activePlanId) ?? null;
 
-  async function upload(planLabel: string, file: File) {
+  /**
+   * Runs one action behind a toast that says what is happening, then what
+   * happened — the same toast, updated in place.
+   *
+   * Everything on this panel talks to the server and several are slow
+   * enough to look broken: a PDF plan is rasterised and re-encoded before
+   * it uploads, and adding eight rooms is eight round trips. Announcing
+   * only the result left those seconds silent, so people clicked again.
+   *
+   * `running` drives which button spins; `busy` disables the rest. Both
+   * are set here so no caller can forget to clear them.
+   */
+  async function act<T>(
+    key: Exclude<Running, null>,
+    labels: { loading: string; done: string | ((result: T) => string); failed: string },
+    work: () => Promise<T>,
+    options: { reloadOnError?: boolean } = {},
+  ): Promise<T | null> {
     setBusy(true);
-    setRunning("upload");
+    setRunning(key);
+    const id = toast.loading(labels.loading);
     try {
-      const prepared = await toPinnablePlan(file);
-      await snaggingService.uploadFloorPlan(taskId, prepared.file, {
-        // The dialog requires a label, so there is no "Floor N"
-        // fallback producing plans nobody can tell apart.
-        label: planLabel,
-        width: prepared.width,
-        height: prepared.height,
-      });
-      setAddOpen(false);
+      const result = await work();
       toast.success(
-        file.type === "application/pdf"
-          ? "PDF converted and added"
-          : "Floor plan added",
+        typeof labels.done === "function" ? labels.done(result) : labels.done,
+        { id },
       );
       await load();
+      onChanged?.();
+      return result;
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Could not upload the plan",
-      );
+      toast.error(error instanceof Error ? error.message : labels.failed, { id });
+      // A failed reorder left the optimistic order on screen, so the list
+      // disagreed with the server until something else refreshed it.
+      if (options.reloadOnError) await load();
+      return null;
     } finally {
       setBusy(false);
       setRunning(null);
-
     }
+  }
+
+  async function upload(planLabel: string, file: File) {
+    const isPdf = file.type === "application/pdf";
+    await act(
+      "upload",
+      {
+        // A PDF is rendered to an image before it uploads, which is the
+        // slowest thing this panel does — so it says which stage it is at.
+        loading: isPdf ? "Converting the PDF…" : "Uploading the plan…",
+        done: isPdf ? "PDF converted and added" : "Floor plan added",
+        failed: "Could not upload the plan",
+      },
+      async () => {
+        const prepared = await toPinnablePlan(file);
+        await snaggingService.uploadFloorPlan(taskId, prepared.file, {
+          // The dialog requires a label, so there is no "Floor N"
+          // fallback producing plans nobody can tell apart.
+          label: planLabel,
+          width: prepared.width,
+          height: prepared.height,
+        });
+        setAddOpen(false);
+      },
+    );
+  }
+
+  /**
+   * A plan dropped straight onto the column.
+   *
+   * Named from the file, because the dialog's one job is to ask for a
+   * label and a file that arrived by hand has already given both — the
+   * name it was saved under is what the person dragging it calls that
+   * floor. It can be renamed on the chip in a double-click if it is not.
+   */
+  async function dropUpload(file: File) {
+    const named = file.name.replace(/\.[^.]+$/, "").trim();
+    await upload(named || `Floor ${plans.length + 1}`, file);
+  }
+
+  async function renamePlan(id: string, label: string) {
+    const next = label.trim();
+    const current = plans.find((p) => p.id === id);
+    setRenamingPlan(null);
+    if (!next || !current || next === current.label) return;
+
+    await act(
+      "plan",
+      {
+        loading: "Renaming the plan…",
+        done: "Floor plan renamed",
+        failed: "Could not rename the plan",
+      },
+      () => snaggingService.renameFloorPlan(id, next),
+    );
   }
 
   async function removePlan(plan: SnaggingFloorPlan) {
@@ -242,36 +331,35 @@ export function FloorPlansAreasPanel({
     });
     if (!ok) return;
 
-    setBusy(true);
-    try {
-      await snaggingService.deleteFloorPlan(plan.id);
-      if (activePlanId === plan.id) setActivePlanId(null);
-      toast.success("Floor plan removed");
-      await load();
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Could not remove the plan",
-      );
-    } finally {
-      setBusy(false);
-    }
+    await act(
+      "plan",
+      {
+        loading: `Removing ${plan.label}…`,
+        done: "Floor plan removed",
+        failed: "Could not remove the plan",
+      },
+      async () => {
+        await snaggingService.deleteFloorPlan(plan.id);
+        if (activePlanId === plan.id) setActivePlanId(null);
+      },
+    );
   }
 
   // Both the Move up/down menu items and drag-and-drop end here, so the
   // optimistic update and its rollback exist in one place.
   async function applyOrder(next: SnaggingFloorPlan[]) {
     setPlans(next);
-    setBusy(true);
-    try {
-      await snaggingService.reorderFloorPlans(next.map((p) => p.id));
-      toast.success("Floor order updated");
-      await load();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not reorder");
-      await load();
-    } finally {
-      setBusy(false);
-    }
+    await act(
+      "order",
+      {
+        loading: "Saving the floor order…",
+        done: "Floor order updated",
+        failed: "Could not reorder",
+      },
+      () => snaggingService.reorderFloorPlans(next.map((p) => p.id)),
+      // The optimistic order above has to be undone if the save failed.
+      { reloadOnError: true },
+    );
   }
 
   async function move(index: number, dir: -1 | 1) {
@@ -316,22 +404,13 @@ export function FloorPlansAreasPanel({
       pin_y: number | null;
       zone: ZonePoint[] | null;
     },
-    success: string,
+    labels: { loading: string; done: string },
   ) {
-    setBusy(true);
-    setRunning("pin");
-    try {
-      await snaggingService.updateArea(taskId, { id: area.id, ...patch });
-      toast.success(success);
-      await load();
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Could not save the placement",
-      );
-    } finally {
-      setBusy(false);
-      setRunning(null);
-    }
+    await act(
+      "pin",
+      { ...labels, failed: "Could not save the placement" },
+      () => snaggingService.updateArea(taskId, { id: area.id, ...patch }),
+    );
   }
 
   function placePin(key: string, x: number, y: number) {
@@ -340,7 +419,7 @@ export function FloorPlansAreasPanel({
     void place(
       area,
       { floor_plan_id: activePlanId, pin_x: x, pin_y: y, zone: null },
-      `${area.name} pinned`,
+      { loading: `Pinning ${area.name}…`, done: `${area.name} pinned` },
     );
     // The room stays selected, so the mark you just made is the one the
     // list is still showing.
@@ -359,7 +438,7 @@ export function FloorPlansAreasPanel({
         pin_y: area.pin_y ?? centre.y,
         zone: points,
       },
-      `${area.name} drawn`,
+      { loading: `Saving ${area.name}…`, done: `${area.name} drawn` },
     );
   }
 
@@ -377,19 +456,20 @@ export function FloorPlansAreasPanel({
     await place(
       area,
       { floor_plan_id: null, pin_x: null, pin_y: null, zone: null },
-      "Taken off the plan",
+      {
+        loading: `Taking ${area.name} off the plan…`,
+        done: "Taken off the plan",
+      },
     );
   }
 
   /*
-    The rooms a job of this shape normally has, offered as one tap each.
+    The rooms a job of this shape normally has, offered in the add dialog.
 
-    Adding a room here meant typing its name, while creating the job had
-    offered exactly the same list as a template — so the one place an area
-    is most often MISSING was the one place the list was not available.
     Same source as the wizard, so a room added here carries the catalogue
     code too and the inspector's capture sheet offers the right elements
-    in it.
+    in it. Anything already on the job is filtered out, so the list only
+    ever offers what is missing.
   */
   const suggestions = useMemo(() => {
     const existing = new Set(areas.map((a) => a.name.trim().toLowerCase()));
@@ -398,53 +478,96 @@ export function FloorPlansAreasPanel({
     );
   }, [areas, propertyType, bedrooms]);
 
-  async function addSuggested(room: { name: string; code: string }) {
-    setBusy(true);
-    setRunning("area");
-    try {
-      const created = await snaggingService.createArea(taskId, {
-        name: room.name,
-        catalogue_area_code: room.code,
-      });
-      toast.success(`${room.name} added`);
-      await load();
-      setActiveAreaId(created.id);
-      requestAnimationFrame(() => {
-        areaListRef.current
-          ?.querySelector(`[data-area-id="${created.id}"]`)
-          ?.scrollIntoView({ block: "nearest" });
-      });
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not add the area");
-    } finally {
-      setBusy(false);
-      setRunning(null);
-    }
-  }
+  /**
+   * Adds everything the dialog is holding: the ticked suggestions, and a
+   * typed name if there is one.
+   *
+   * Written as one pass so the panel reloads once at the end rather than
+   * after each room, and so a failure part way through still leaves the
+   * rooms that did land.
+   */
+  async function addPickedAreas() {
+    const rooms = chosen
+      .map((option) => option.label.trim())
+      .filter((name) => name.length > 0);
+    if (rooms.length === 0) return;
 
-  async function addAreaOnly() {
-    const name = newAreaOnly.trim();
-    if (!name) return;
+    /*
+      A room from the template carries its catalogue code, so the
+      inspector's capture sheet offers the right elements in it. One
+      typed by hand has no code and falls back to the whole catalogue —
+      which is the honest answer for a room nobody has classified.
+    */
+    /*
+      A record, not a Map: this file imports `Map` from lucide-react for
+      the section icon, so `new Map()` resolves to the icon component.
+    */
+    const codeFor: Record<string, string> = {};
+    for (const room of suggestions) codeFor[room.name.toLowerCase()] = room.code;
+
     setBusy(true);
     setRunning("area");
+    /*
+      One toast for the whole batch, counting up as it goes.
+
+      Each room is its own request, so adding eight is eight round trips
+      — long enough that a silent dialog looks stuck. The toast is
+      updated per room rather than replaced, so the screen never stacks
+      eight of them.
+    */
+    const id = toast.loading(
+      rooms.length === 1 ? `Adding ${rooms[0]}…` : `Adding 0 of ${rooms.length} areas…`,
+    );
+    let last: { id: string } | null = null;
+    let failed = 0;
     try {
-      const created = await snaggingService.createArea(taskId, { name });
-      setNewAreaOnly("");
+      for (const [index, name] of rooms.entries()) {
+        if (rooms.length > 1) {
+          toast.loading(`Adding ${index + 1} of ${rooms.length} areas…`, { id });
+        }
+        try {
+          const code = codeFor[name.toLowerCase()];
+          last = await snaggingService.createArea(taskId, {
+            name,
+            ...(code ? { catalogue_area_code: code } : {}),
+          });
+        } catch {
+          failed += 1;
+        }
+      }
+
+      const added = rooms.length - failed;
+      if (failed === 0) {
+        toast.success(added === 1 ? "Area added" : `${added} areas added`, { id });
+      } else if (added === 0) {
+        toast.error(
+          rooms.length === 1 ? "That area could not be added" : "No areas could be added",
+          { id },
+        );
+      } else {
+        // Partly through is its own outcome: some rooms ARE on the job now.
+        toast.warning(`${added} added, ${failed} could not be`, { id });
+      }
+
+      setChosen([]);
       setAddAreaOpen(false);
-      toast.success(`${name} added`);
       await load();
-      // Selected and scrolled to, so it is ready to mark on the plan and
-      // is not lost at the bottom of a list of twenty.
-      setActiveAreaId(created.id);
-      requestAnimationFrame(() => {
-        areaListRef.current
-          ?.querySelector(`[data-area-id="${created.id}"]`)
-          ?.scrollIntoView({ block: "nearest" });
-      });
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Could not add the area",
-      );
+      onChanged?.();
+
+      /*
+        The last one added is selected and shown, so a single addition is
+        ready to mark on the plan straight away. Adding eight leaves the
+        eighth active, which is as good a starting point as any.
+      */
+      const lastId = last?.id;
+      if (lastId) {
+        setActiveAreaId(lastId);
+        requestAnimationFrame(() => {
+          areaListRef.current
+            ?.querySelector(`[data-area-id="${lastId}"]`)
+            ?.scrollIntoView({ block: "nearest" });
+        });
+      }
     } finally {
       setBusy(false);
       setRunning(null);
@@ -455,21 +578,16 @@ export function FloorPlansAreasPanel({
     if (!renaming) return;
     const name = renaming.name.trim();
     if (!name) return;
-    setBusy(true);
-    setRunning("rename");
-    try {
-      await snaggingService.updateArea(taskId, { id: renaming.id, name });
-      setRenaming(null);
-      toast.success("Area renamed");
-      await load();
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Could not rename the area",
-      );
-    } finally {
-      setBusy(false);
-      setRunning(null);
-    }
+    const ok = await act(
+      "rename",
+      {
+        loading: `Renaming to ${name}…`,
+        done: "Area renamed",
+        failed: "Could not rename the area",
+      },
+      () => snaggingService.updateArea(taskId, { id: renaming.id, name }),
+    );
+    if (ok !== null) setRenaming(null);
   }
 
   async function removeArea(area: SnaggingArea) {
@@ -483,18 +601,15 @@ export function FloorPlansAreasPanel({
     });
     if (!ok) return;
 
-    setBusy(true);
-    try {
-      await snaggingService.deleteArea(taskId, area.id);
-      toast.success("Area removed");
-      await load();
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Could not remove the area",
-      );
-    } finally {
-      setBusy(false);
-    }
+    await act(
+      "area",
+      {
+        loading: `Removing ${area.name}…`,
+        done: "Area removed",
+        failed: "Could not remove the area",
+      },
+      () => snaggingService.deleteArea(taskId, area.id),
+    );
   }
 
   const planLabel = (id?: string | null) =>
@@ -531,151 +646,244 @@ export function FloorPlansAreasPanel({
           </div>
         }
       >
-        <div className="grid gap-6 lg:grid-cols-2">
+        <div className="grid gap-6 lg:grid-cols-3">
           {/* Left: floors + the active plan with pins */}
-          <div className="space-y-4">
-            {/* Floor list with ordering */}
-            <SubHeading
-              count={plans.length}
-              action={
-                canEdit ? (
-                  <Button variant="outline" size="sm" onClick={() => setAddOpen(true)} disabled={busy}>
-                    <Upload className="size-4" />
-                    Add plan
-                  </Button>
-                ) : null
-              }
-            >
-              Floor plans
-            </SubHeading>
-            <div className="overflow-hidden rounded-lg border">
-              {plans.length === 0 ? (
-                <EmptyState
-                  icon={<Map />}
-                  title="No floor plans yet"
-                  description={
-                    canEdit
-                      ? "Add a plan per floor (PNG, JPG or PDF) to pin each area to its place on the unit."
-                      : "No plan has been uploaded for this unit yet."
-                  }
-                  className="py-10"
-                />
-              ) : (
-                <div className="divide-y">
+          {/*
+            The whole column is a drop target.
+
+            A plan arrives as a file somebody already has open; making them
+            find a button, then a dialog, then a file picker for it is
+            three steps to do what dropping it does in one. The dialog
+            stays for the click route and for naming as you add.
+          */}
+          <div
+            className={cn(
+              "space-y-4 rounded-lg transition-colors col-span-2",
+              dropping && "ring-brand bg-brand-50/30 ring-2 ring-offset-4",
+            )}
+            onDragOver={(event) => {
+              // Files only. A chip being dragged to reorder passes over
+              // this same element and must not light it up.
+              if (!canEdit || busy) return;
+              if (!event.dataTransfer.types.includes("Files")) return;
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "copy";
+              setDropping(true);
+            }}
+            onDragLeave={(event) => {
+              // Only when the pointer actually leaves the column, not on
+              // every child it crosses on the way in.
+              if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+              setDropping(false);
+            }}
+            onDrop={(event) => {
+              if (!canEdit || busy) return;
+              if (!event.dataTransfer.types.includes("Files")) return;
+              event.preventDefault();
+              setDropping(false);
+              const file = event.dataTransfer.files?.[0];
+              if (file) void dropUpload(file);
+            }}
+          >
+            {plans.length === 0 ? (
+              <EmptyState
+                icon={<Map />}
+                title="No floor plans yet"
+                description={
+                  canEdit
+                    ? "Drop a plan here, or add one per floor (PNG, JPG or PDF), to pin each area to its place."
+                    : "No plan has been uploaded for this unit yet."
+                }
+                className="rounded-lg border border-dashed py-10"
+                action={
+                  canEdit
+                    ? {
+                      label: "Add plan",
+                      onClick: () => setAddOpen(true),
+                      variant: "outline",
+                    }
+                    : undefined
+                }
+              />
+            ) : (
+              <>
+                {/*
+                  One chip per floor, the shape the job wizard uses.
+
+                  A bordered list with a number, a subtitle and a kebab
+                  spent a third of the column on two or three plans, and
+                  pushed the drawing — the thing this panel is actually
+                  about — below the fold.
+                */}
+                <div className="flex flex-wrap items-center gap-2">
                   {plans.map((plan, i) => {
                     const pins = areas.filter(
                       (a) => a.floor_plan_id === plan.id && a.pin_x != null,
                     ).length;
+                    const active = plan.id === activePlanId;
+
+                    if (renamingPlan?.id === plan.id) {
+                      return (
+                        <Input
+                          key={plan.id}
+                          autoFocus
+                          value={renamingPlan.label}
+                          className="h-8 w-44 rounded-full text-xs"
+                          aria-label={`Rename ${plan.label}`}
+                          onChange={(event) =>
+                            setRenamingPlan({
+                              id: plan.id,
+                              label: event.target.value,
+                            })
+                          }
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              void renamePlan(plan.id, renamingPlan.label);
+                            }
+                            if (event.key === "Escape") setRenamingPlan(null);
+                          }}
+                          onBlur={() => void renamePlan(plan.id, renamingPlan.label)}
+                        />
+                      );
+                    }
+
                     return (
-                      <div
+                      <span
                         key={plan.id}
-                        // The tint lives on the WRAPPER, not just the
-                        // DataRow: the kebab sits outside the row, so a
-                        // highlight on the row alone left a white strip at
-                        // the right of the selected item.
                         draggable={canEdit && !busy}
                         onDragStart={() => setDragIndex(i)}
                         onDragEnd={() => {
                           setDragIndex(null);
                           setOverIndex(null);
                         }}
-                        onDragOver={(e) => {
+                        onDragOver={(event) => {
                           if (dragIndex === null) return;
-                          e.preventDefault();
+                          event.preventDefault();
+                          event.stopPropagation();
                           setOverIndex(i);
                         }}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          if (dragIndex !== null) void dropPlan(dragIndex, i);
+                        onDrop={(event) => {
+                          if (dragIndex === null) return;
+                          event.preventDefault();
+                          event.stopPropagation();
+                          void dropPlan(dragIndex, i);
                           setDragIndex(null);
                           setOverIndex(null);
                         }}
                         className={cn(
-                          "flex items-center transition-colors",
-                          plan.id === activePlanId && "bg-brand-100",
+                          "inline-flex items-center rounded-full border text-xs font-medium transition-colors",
+                          active
+                            ? "border-brand bg-brand-50 text-brand"
+                            : "border-border hover:bg-mist-soft",
                           canEdit && !busy && "cursor-grab active:cursor-grabbing",
                           dragIndex === i && "opacity-50",
-                          // A line where the row would land, rather than
-                          // guessing from a floating ghost.
-                          overIndex === i && dragIndex !== i && "border-t-brand border-t-2",
+                          overIndex === i &&
+                          dragIndex !== i &&
+                          "ring-brand/50 ring-2",
                         )}
                       >
-                        <DataRow
-                          className="flex-1 py-2.5"
-                          active={plan.id === activePlanId}
+                        <button
+                          type="button"
+                          className="py-1 pl-3 pr-2"
                           onClick={() => setActivePlanId(plan.id)}
-                          icon={
-                            <span className="text-xs font-semibold tabular-nums">
-                              {i + 1}
+                          onDoubleClick={() => {
+                            if (!canEdit || busy) return;
+                            setRenamingPlan({ id: plan.id, label: plan.label });
+                          }}
+                          onKeyDown={(event) => {
+                            if (!canEdit || busy) return;
+                            // Reordering has to be reachable without a
+                            // mouse; dragging never is.
+                            if (event.key === "ArrowLeft" && event.ctrlKey) {
+                              event.preventDefault();
+                              void move(i, -1);
+                            }
+                            if (event.key === "ArrowRight" && event.ctrlKey) {
+                              event.preventDefault();
+                              void move(i, 1);
+                            }
+                            if (event.key === "F2") {
+                              event.preventDefault();
+                              setRenamingPlan({ id: plan.id, label: plan.label });
+                            }
+                          }}
+                          title={
+                            canEdit
+                              ? "Double-click to rename · drag to reorder"
+                              : plan.label
+                          }
+                        >
+                          {plan.label.trim() || "Untitled plan"}
+                          {pins > 0 ? (
+                            <span className="ml-1.5 opacity-60 tabular-nums">
+                              {pins}
                             </span>
-                          }
-                          title={plan.label}
-                          subtitle={
-                            pins === 1
-                              ? "1 area pinned"
-                              : `${pins} areas pinned`
-                          }
-                        />
+                          ) : null}
+                        </button>
+
                         {/*
-                          One menu rather than three inline icon buttons.
-                          A row of bare icons reads as decoration until you
-                          hover each one, and the destructive action sat
-                          two pixels from "move down".
+                          Removal on the chip rather than behind a menu,
+                          and only on the one you are looking at — a row
+                          of crosses invites the wrong one to be clicked.
                         */}
-                        {canEdit ? (
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon-sm"
-                                className="mr-3 shrink-0"
-                                disabled={busy}
-                                aria-label={`Actions for ${plan.label}`}
-                              >
-                                <MoreHorizontal className="size-4" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem
-                                disabled={i === 0}
-                                onClick={() => void move(i, -1)}
-                              >
-                                <ArrowUp className="size-4" />
-                                Move up
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                disabled={i === plans.length - 1}
-                                onClick={() => void move(i, 1)}
-                              >
-                                <ArrowDown className="size-4" />
-                                Move down
-                              </DropdownMenuItem>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem
-                                variant="destructive"
-                                onClick={() => void removePlan(plan)}
-                              >
-                                <Trash2 className="size-4" />
-                                Remove plan
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        ) : null}
-                      </div>
+                        {canEdit && active ? (
+                          <button
+                            type="button"
+                            className="hover:text-destructive rounded-full py-1 pl-0.5 pr-2.5 opacity-70 transition-opacity hover:opacity-100"
+                            disabled={busy}
+                            aria-label={`Remove ${plan.label}`}
+                            onClick={() => void removePlan(plan)}
+                          >
+                            <X className="size-3.5" />
+                          </button>
+                        ) : (
+                          <span className="pr-1.5" />
+                        )}
+                      </span>
                     );
                   })}
+
+                  {canEdit ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setAddOpen(true)}
+                      disabled={busy}
+                    >
+                      <Plus className="size-4" />
+                      Add plan
+                    </Button>
+                  ) : null}
                 </div>
-              )}
-            </div>
+
+                {/* The two gestures on the chips, said once. */}
+                {/* {canEdit ? (
+                  <p className="text-muted-foreground text-xs">
+                    Double-click a plan to rename it
+                    {plans.length > 1 ? ", drag to reorder" : ""}. Drop an image
+                    here to add another.
+                  </p>
+                ) : null} */}
+              </>
+            )}
 
             {/* Active plan: pins and outlines */}
             {activePlan?.signed_url ? (
               <div className="space-y-2">
+                {/*
+                  One strip above the plan: what a click will do on the
+                  left, what it will do it to on the right.
+
+                  These were two competing lines — a toggle, then a
+                  sentence in brand red running the width of the column
+                  with "Done" buried at the end of it. The instruction is
+                  the quiet half; the room being placed is the half worth
+                  seeing, so it is a chip rather than prose.
+                */}
                 {canEdit ? (
-                  <div className="flex flex-wrap items-center gap-2">
-                    {/* Pin or outline — the same choice the job wizard
-                        offers, so the two screens teach one gesture. */}
-                    <div className="bg-muted inline-flex rounded-md p-0.5">
+                  <div className="bg-muted/40 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-2 py-1.5">
+                    <div className="bg-background inline-flex rounded-md border p-0.5">
                       {(["pin", "zone"] as const).map((option) => (
                         <button
                           key={option}
@@ -683,39 +891,46 @@ export function FloorPlansAreasPanel({
                           onClick={() => setPlaceMode(option)}
                           aria-pressed={placeMode === option}
                           className={cn(
-                            "rounded px-2.5 py-1 text-xs font-medium transition-colors",
+                            "flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors",
                             placeMode === option
-                              ? "bg-background text-foreground shadow-sm"
+                              ? "bg-brand-50 text-brand"
                               : "text-muted-foreground hover:text-foreground",
                           )}
                         >
+                          {option === "pin" ? (
+                            <MapPin className="size-3.5" />
+                          ) : (
+                            <Shapes className="size-3.5" />
+                          )}
                           {option === "pin" ? "Drop a pin" : "Draw the room"}
                         </button>
                       ))}
                     </div>
 
                     {activeArea ? (
-                      <p className="text-muted-foreground flex min-w-0 flex-wrap items-center gap-x-1.5 text-xs">
-                        <span className="text-brand font-medium">
-                          Placing {activeArea.name}
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="bg-brand text-primary-foreground inline-flex max-w-[12rem] items-center gap-1.5 truncate rounded-full px-2.5 py-1 text-xs font-medium">
+                          <Crosshair className="size-3 shrink-0" />
+                          <span className="truncate">{activeArea.name}</span>
                         </span>
-                        <span>
+                        <span className="text-muted-foreground hidden text-xs sm:inline">
                           {placeMode === "pin"
-                            ? "— click the plan."
-                            : "— click each corner, then Enter to close it. Backspace undoes a corner, Esc starts over."}
+                            ? "Click the plan"
+                            : "Click each corner · Enter closes · Esc restarts"}
                         </span>
-                        <button
-                          type="button"
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-2 text-xs"
                           onClick={() => setActiveAreaId(null)}
-                          className="hover:text-foreground underline underline-offset-2"
                         >
                           Done
-                        </button>
-                      </p>
+                        </Button>
+                      </div>
                     ) : (
-                      <p className="text-muted-foreground text-xs">
-                        Pick a room in the list to mark it on the plan.
-                      </p>
+                      <span className="text-muted-foreground text-xs">
+                        Pick a room to mark it
+                      </span>
                     )}
                   </div>
                 ) : (
@@ -764,7 +979,7 @@ export function FloorPlansAreasPanel({
             a job with twenty rooms used to stretch the row well past the
             bottom of the plan beside it.
           */}
-          <div className="relative">
+          <div className="relative col-span-1">
             <div className="flex flex-col gap-3 lg:absolute lg:inset-0">
               <SubHeading
                 count={areas.length}
@@ -810,15 +1025,34 @@ export function FloorPlansAreasPanel({
                   const isActive = a.id === activeAreaId;
                   const elsewhere =
                     placed && a.floor_plan_id && a.floor_plan_id !== activePlanId;
+                  const Marker = drawn ? Shapes : placed ? MapPin : Crosshair;
+                  /*
+                    Where the room is, in words.
+
+                    The state used to live only in which of four icons was
+                    lit, so telling "pinned" from "not placed" meant
+                    hovering each row in turn. A line of muted text under
+                    the name reads at a glance and says WHICH floor when
+                    there is more than one.
+                  */
+                  const state = !placed
+                    ? "Not on the plan"
+                    : elsewhere
+                      ? `${drawn ? "Drawn" : "Pinned"} on ${planLabel(a.floor_plan_id)}`
+                      : drawn
+                        ? "Drawn as a room"
+                        : "Pinned";
                   return (
                     <div
                       key={a.id}
                       data-area-id={a.id}
                       className={cn(
-                        "flex items-center gap-2 rounded-md border p-2 text-sm transition-colors",
+                        "flex items-center gap-2 rounded-lg border px-2.5 py-2 text-sm transition-colors",
+                        // A quiet selected state: the ring-2 plus tint was
+                        // shouting next to a plan it is only annotating.
                         isActive
-                          ? "border-brand/40 bg-brand-50/40 ring-brand/60 ring-2"
-                          : "border-border",
+                          ? "border-brand bg-brand-50/50"
+                          : "border-border hover:bg-muted/40",
                       )}
                     >
                       <button
@@ -827,114 +1061,87 @@ export function FloorPlansAreasPanel({
                         disabled={!canEdit}
                         className="min-w-0 flex-1 text-left disabled:cursor-default"
                       >
-                        <span
-                          className={cn(
-                            "block truncate",
-                            placed && "text-brand font-medium",
-                          )}
-                        >
-                          {a.name}
+                        <span className="block truncate font-medium">{a.name}</span>
+                        <span className="text-muted-foreground block truncate text-xs">
+                          {state}
                         </span>
-                        {elsewhere ? (
-                          <span className="text-muted-foreground block truncate text-xs">
-                            on {planLabel(a.floor_plan_id)}
-                          </span>
-                        ) : null}
                       </button>
 
+                      {/*
+                        The marker sits at the end, beside the row's menu,
+                        so it lines up down the list and the names all
+                        start at the same x. It reads rather than acts —
+                        selecting the row is what the row itself does.
+                      */}
+                      <span
+                        className={cn(
+                          "flex size-7 shrink-0 items-center justify-center rounded-md border [&_svg]:size-3.5",
+                          placed
+                            ? "border-brand/30 bg-brand-50 text-brand"
+                            : "text-muted-foreground bg-muted/50",
+                        )}
+                        title={state}
+                      >
+                        <Marker />
+                      </span>
+
+                      {/*
+                        One menu, not four icons.
+
+                        Four bare icons per row is sixteen on a job with
+                        four areas, and the destructive one sat two pixels
+                        from the one that only renames. Placing stays on
+                        the row itself because it is the common act; the
+                        rest are occasional and belong behind a menu.
+                      */}
                       {canEdit ? (
-                        <div className="flex shrink-0 items-center gap-0.5">
-                          {/* The room's state, as the control that changes
-                              it: a marker when it is on a plan, a target
-                              when it is not. */}
-                          <button
-                            type="button"
-                            disabled={busy || plans.length === 0}
-                            onClick={() => select(a)}
-                            aria-label={
-                              placed
-                                ? `${a.name} is on the plan. Select it to place it again.`
-                                : `Place ${a.name} on the plan`
-                            }
-                            title={
-                              placed
-                                ? drawn
-                                  ? "Drawn as a room. Select to place again."
-                                  : "Pinned. Select to place again."
-                                : "Place on the plan"
-                            }
-                            className={cn(
-                              "hover:bg-brand/10 rounded p-1 transition-colors disabled:opacity-40",
-                              placed ? "text-brand" : "text-muted-foreground",
-                            )}
-                          >
-                            {drawn ? (
-                              <Shapes className="size-3.5" />
-                            ) : placed ? (
-                              <MapPin className="size-3.5" />
-                            ) : (
-                              <Crosshair className="size-3.5" />
-                            )}
-                          </button>
-
-                          {placed ? (
-                            <button
-                              type="button"
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-7 shrink-0"
                               disabled={busy}
-                              onClick={() => void clearPlacement(a)}
-                              title="Take off the plan"
-                              className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded p-1 transition-colors"
+                              aria-label={`Actions for ${a.name}`}
                             >
-                              <Eraser className="size-3.5" />
-                            </button>
-                          ) : null}
-
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => setRenaming({ id: a.id, name: a.name })}
-                            className="text-muted-foreground hover:text-foreground hover:bg-accent rounded p-1 transition-colors"
-                            title="Rename"
-                          >
-                            <Pencil className="size-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => void removeArea(a)}
-                            className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded p-1 transition-colors"
-                            title="Remove"
-                          >
-                            <Trash2 className="size-3.5" />
-                          </button>
-                        </div>
+                              <MoreHorizontal className="size-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem
+                              disabled={plans.length === 0}
+                              onClick={() => select(a)}
+                            >
+                              <Crosshair className="size-4" />
+                              {placed ? "Place again" : "Place on the plan"}
+                            </DropdownMenuItem>
+                            {placed ? (
+                              <DropdownMenuItem onClick={() => void clearPlacement(a)}>
+                                <Eraser className="size-4" />
+                                Take off the plan
+                              </DropdownMenuItem>
+                            ) : null}
+                            <DropdownMenuItem
+                              onClick={() => setRenaming({ id: a.id, name: a.name })}
+                            >
+                              <Pencil className="size-4" />
+                              Rename
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              variant="destructive"
+                              onClick={() => void removeArea(a)}
+                            >
+                              <Trash2 className="size-4" />
+                              Remove area
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       ) : null}
                     </div>
                   );
                 })}
               </div>
-
-              {canEdit && suggestions.length > 0 ? (
-                <div className="shrink-0">
-                  <p className="text-muted-foreground mb-2 text-xs">
-                    Rooms this property usually has. Tap to add.
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {suggestions.map((room) => (
-                      <button
-                        key={room.name}
-                        type="button"
-                        onClick={() => void addSuggested(room)}
-                        disabled={busy}
-                        className="border-input hover:bg-accent focus-visible:ring-ring inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs disabled:opacity-50 focus-visible:ring-2 focus-visible:outline-none"
-                      >
-                        <Plus className="size-3" aria-hidden />
-                        {room.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
             </div>
           </div>
         </div>
@@ -945,33 +1152,67 @@ export function FloorPlansAreasPanel({
         open={addAreaOpen}
         onOpenChange={(open) => {
           setAddAreaOpen(open);
-          if (!open) setNewAreaOnly("");
+          if (!open) setChosen([]);
         }}
       >
-        <DialogContent className="sm:max-w-sm">
+        <DialogContent
+          className="sm:max-w-md"
+          /*
+            Nothing is focused when this opens.
+
+            Radix focuses the first control it finds, which here is the
+            room search — and that control opens its suggestion list on
+            focus. The dialog therefore appeared with a list already up,
+            covering its own title before anybody had asked for a room.
+          */
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            (event.currentTarget as HTMLElement | null)?.focus();
+          }}
+        >
           <DialogHeader>
-            <DialogTitle>Add an area</DialogTitle>
+            <DialogTitle>Add areas</DialogTitle>
             <DialogDescription>
-              A room this job covers. It is selected as soon as it is added,
-              so you can mark it on the plan straight away.
+              Pick the rooms this job covers, or type one the list does not
+              have. They are added together.
             </DialogDescription>
           </DialogHeader>
+
+          {/*
+            One searchable control, not a wall of chips.
+
+            The template can offer thirty rooms, and laid out as chips
+            they filled the dialog and still had to be read one by one to
+            find "Bathroom 6". A selector searches, and because it is
+            creatable the room the template does NOT have is typed into
+            the same box rather than a second field underneath it.
+          */}
           <div className="space-y-1.5">
-            <Label htmlFor="new-job-area">Name</Label>
-            <Input
-              id="new-job-area"
-              autoFocus
-              value={newAreaOnly}
-              onChange={(e) => setNewAreaOnly(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  void addAreaOnly();
-                }
-              }}
-              placeholder="e.g. Roof terrace"
+            <Label>Rooms</Label>
+            <MultipleSelector
+              value={chosen}
+              onChange={setChosen}
+              options={suggestions.map((room) => ({
+                value: room.name,
+                label: room.name,
+              }))}
+              creatable
+              hidePlaceholderWhenSelected
+              placeholder="Search the usual rooms, or type one of your own…"
+              emptyIndicator={
+                <span className="text-muted-foreground text-sm">
+                  {suggestions.length === 0
+                    ? "Every room this property usually has is already on the job."
+                    : "No match. Keep typing to add it as a new room."}
+                </span>
+              }
             />
+            {/* <p className="text-muted-foreground text-xs">
+              A room from the list carries its catalogue code, so the
+              inspector is offered the right elements in it.
+            </p> */}
           </div>
+
           <DialogFooter>
             <Button
               variant="outline"
@@ -981,13 +1222,13 @@ export function FloorPlansAreasPanel({
               Cancel
             </Button>
             <SubmitButton
-              onClick={() => void addAreaOnly()}
-              disabled={busy || !newAreaOnly.trim()}
+              onClick={() => void addPickedAreas()}
+              disabled={busy || chosen.length === 0}
               pending={running === "area"}
               pendingLabel="Adding…"
               icon={<Plus className="size-4" />}
             >
-              Add area
+              {chosen.length > 1 ? `Add ${chosen.length} areas` : "Add area"}
             </SubmitButton>
           </DialogFooter>
         </DialogContent>

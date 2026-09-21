@@ -49,21 +49,33 @@ export async function GET(req: NextRequest) {
       completedNow,
       completedBefore,
     ] = await Promise.all([
-      countJobs(admin, (q) => myJobs(q, me).gte("created_at", period.fromTs).lte("created_at", period.toTs)),
       countJobs(admin, (q) =>
-        myJobs(q, me).gte("created_at", period.previousFromTs).lt("created_at", period.previousToTs),
+        myJobs(q, me)
+          .gte("created_at", period.fromTs)
+          .lte("created_at", period.toTs),
+      ),
+      countJobs(admin, (q) =>
+        myJobs(q, me)
+          .gte("created_at", period.previousFromTs)
+          .lt("created_at", period.previousToTs),
       ),
       countJobs(admin, (q) => myJobs(q, me).eq("status", "assigned")),
-      countJobs(admin, (q) => myJobs(q, me).eq("status", "assigned").gte("created_at", today)),
+      countJobs(admin, (q) =>
+        myJobs(q, me).eq("status", "assigned").gte("created_at", today),
+      ),
       countJobs(admin, (q) => myJobs(q, me).eq("status", "in_progress")),
       // Distinct inspectors currently walking a unit. The rows are the
       // in-progress jobs only, so this stays small however big the table
       // gets, and it is the one place a row set is genuinely needed —
       // Postgres has no DISTINCT COUNT through PostgREST.
       distinctInspectors(admin),
-      countJobs(admin, (q) => myJobs(q, me).in("status", ["submitted", "in_review"])),
       countJobs(admin, (q) =>
-        myJobs(q, me).in("status", ["approved", "delivered"]).gte("approved_at", period.fromTs),
+        myJobs(q, me).in("status", ["submitted", "in_review"]),
+      ),
+      countJobs(admin, (q) =>
+        myJobs(q, me)
+          .in("status", ["approved", "delivered"])
+          .gte("approved_at", period.fromTs),
       ),
       countJobs(admin, (q) =>
         q
@@ -77,18 +89,27 @@ export async function GET(req: NextRequest) {
       {
         data: {
           periodDays: period.days,
-          total: { value: totalNow, trend: trendPercent(totalNow, totalBefore) },
+          total: {
+            value: totalNow,
+            trend: trendPercent(totalNow, totalBefore),
+          },
           assigned: { value: assigned, today: assignedToday },
           inProgress: { value: inProgress, activeInspectors },
           waitingReview: { value: waitingReview },
-          completed: { value: completedNow, trend: trendPercent(completedNow, completedBefore) },
+          completed: {
+            value: completedNow,
+            trend: trendPercent(completedNow, completedBefore),
+          },
         },
       },
       { headers: cacheHeaders(60) },
     );
   } catch (error) {
     console.error("Snagging overview KPI error:", error);
-    return NextResponse.json({ error: "Failed to load the headline figures" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to load the headline figures" },
+      { status: 500 },
+    );
   }
 }
 

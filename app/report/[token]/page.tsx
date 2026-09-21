@@ -6,6 +6,7 @@ import { buildReportData, type ReportData } from "@/lib/server/snagging/report-d
 import { renderReportHtml } from "@/lib/server/snagging/report-html";
 import { signReportPdf } from "@/lib/server/snagging/report-generate";
 import { recordAudit } from "@/lib/server/snagging/audit";
+import { LocalDates } from "@/components/report/local-dates";
 
 /**
  * The client's report, at a secure link (FR-7.04, FR-7.05).
@@ -208,5 +209,10 @@ export default async function PublicReportPage({
        </div>`
     : "";
 
-  return <div dangerouslySetInnerHTML={{ __html: html + download }} />;
+  return (
+    <>
+      <div dangerouslySetInnerHTML={{ __html: html + download }} />
+      <LocalDates />
+    </>
+  );
 }

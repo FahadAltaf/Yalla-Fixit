@@ -7,6 +7,7 @@ import {
   cacheHeaders,
   countJobs,
   myJobs,
+  resolvePeriod,
 } from "@/lib/server/snagging/overview-queries";
 import { ActionType, ResourceType } from "@/types/types";
 
@@ -29,8 +30,12 @@ export async function GET(req: NextRequest) {
     }
 
     const params = req.nextUrl.searchParams;
+    const period = resolvePeriod(params.get("days"));
     const page = Math.max(0, Number(params.get("page") ?? 0));
-    const pageSize = Math.min(50, Math.max(1, Number(params.get("pageSize") ?? 10)));
+    const pageSize = Math.min(
+      50,
+      Math.max(1, Number(params.get("pageSize") ?? 10)),
+    );
 
     const admin = await createAdminServerClient();
 
@@ -47,10 +52,16 @@ export async function GET(req: NextRequest) {
       ...new Set((assignedRows ?? []).map((row) => row.inspector_id as string)),
     ];
     const rowCount = inspectorIds.length;
-    const pageIds = inspectorIds.slice(page * pageSize, page * pageSize + pageSize);
+    const pageIds = inspectorIds.slice(
+      page * pageSize,
+      page * pageSize + pageSize,
+    );
 
     if (pageIds.length === 0) {
-      return NextResponse.json({ data: { rows: [], rowCount } }, { headers: cacheHeaders(600) });
+      return NextResponse.json(
+        { data: { rows: [], rowCount } },
+        { headers: cacheHeaders(600) },
+      );
     }
 
     const { data: profiles, error: profileError } = await admin
@@ -60,17 +71,47 @@ export async function GET(req: NextRequest) {
     if (profileError) throw new Error(profileError.message);
 
     const nameById = new Map(
-      ((profiles ?? []) as Array<{ id: string; full_name: string | null; email: string | null }>)
-        .map((row) => [row.id, row.full_name ?? row.email ?? "Unknown"] as const),
+      (
+        (profiles ?? []) as Array<{
+          id: string;
+          full_name: string | null;
+          email: string | null;
+        }>
+      ).map(
+        (row) => [row.id, row.full_name ?? row.email ?? "Unknown"] as const,
+      ),
     );
 
     const rows = await Promise.all(
       pageIds.map(async (id) => {
+        /*
+          Each figure over the window the page is read through, so
+          "completed" is work done in the period rather than a career
+          total that only ever goes up.
+
+          The chain is written out three times rather than hoisted into a
+          helper: countJobs hands its refiner a builder type that is
+          awkward to name, and a local alias for it costs more than the
+          repetition saves.
+        */
         const [assigned, inProgress, completed] = await Promise.all([
-          countJobs(admin, (q) => myJobs(q, profile.id).eq("inspector_id", id).eq("status", "assigned")),
-          countJobs(admin, (q) => myJobs(q, profile.id).eq("inspector_id", id).eq("status", "in_progress")),
           countJobs(admin, (q) =>
-            myJobs(q, profile.id).eq("inspector_id", id).in("status", ["approved", "delivered"]),
+            myJobs(q, profile.id)
+              .eq("inspector_id", id)
+              .gte("created_at", period.fromTs)
+              .eq("status", "assigned"),
+          ),
+          countJobs(admin, (q) =>
+            myJobs(q, profile.id)
+              .eq("inspector_id", id)
+              .gte("created_at", period.fromTs)
+              .eq("status", "in_progress"),
+          ),
+          countJobs(admin, (q) =>
+            myJobs(q, profile.id)
+              .eq("inspector_id", id)
+              .gte("created_at", period.fromTs)
+              .in("status", ["approved", "delivered"]),
           ),
         ]);
         return {
@@ -83,11 +124,19 @@ export async function GET(req: NextRequest) {
       }),
     );
 
-    rows.sort((a, b) => b.completed - a.completed || a.name.localeCompare(b.name));
+    rows.sort(
+      (a, b) => b.completed - a.completed || a.name.localeCompare(b.name),
+    );
 
-    return NextResponse.json({ data: { rows, rowCount } }, { headers: cacheHeaders(600) });
+    return NextResponse.json(
+      { data: { rows, rowCount, periodDays: period.days } },
+      { headers: cacheHeaders(600) },
+    );
   } catch (error) {
     console.error("Inspector performance error:", error);
-    return NextResponse.json({ error: "Failed to load inspector performance" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to load inspector performance" },
+      { status: 500 },
+    );
   }
 }

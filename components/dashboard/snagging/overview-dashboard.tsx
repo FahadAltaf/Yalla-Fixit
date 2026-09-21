@@ -10,12 +10,21 @@ import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { ActionType, ResourceType } from "@/types/types";
 
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
 import { InspectionActivity } from "./overview/inspection-activity";
 import { InspectionPipeline } from "./overview/inspection-pipeline";
 import { InspectorPerformance } from "./overview/inspector-performance";
 import { KpiRow } from "./overview/kpi-row";
 import { NeedsAttention } from "./overview/needs-attention";
 import { QuotationAnalytics } from "./overview/quotation-analytics";
+import { OverviewRange, RANGES, rangeLabel } from "./overview/range";
 import { UpcomingInspections } from "./overview/upcoming-inspections";
 import { lastFetchedAt, refreshAll } from "./overview/use-section";
 import { PageHeading } from "./shared";
@@ -46,6 +55,18 @@ export default function SnaggingOverviewDashboard() {
 
   const [refreshing, setRefreshing] = useState(false);
 
+  /*
+    The window every measured card is read through.
+
+    Held here rather than in each card, so the KPI row, the activity
+    chart, the pipeline and the two analytics sections are always
+    answering for the same stretch of time. It reaches them through the
+    URL of their requests — see OverviewRange — which means each range
+    is cached separately and flicking back to one already seen is
+    instant.
+  */
+  const [days, setDays] = useState(30);
+
   const pull = useCallback(() => {
     setRefreshing(true);
     refreshAll();
@@ -71,59 +92,89 @@ export default function SnaggingOverviewDashboard() {
         description="Your inspections, quotations and anything waiting on you. Analytics has the same work across everyone."
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <LastUpdated refreshing={refreshing} />
+            {/* <LastUpdated refreshing={refreshing} /> */}
+            <Select
+              value={String(days)}
+              onValueChange={(value) => setDays(Number(value))}
+            >
+              <SelectTrigger className="w-36" aria-label="Date range">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent align="end">
+                {RANGES.map((range) => (
+                  <SelectItem key={range.days} value={String(range.days)}>
+                    Last {range.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Button variant="outline" onClick={pull} disabled={refreshing}>
               <RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />
               Pull changes
             </Button>
-            {canCreate ? (
-              <Button onClick={() => router.push("/snagging/jobs/new")}>
+            {/* {canCreate ? (
+              <Button onClick={() => router.push("/snagging/quotations/new")}>
                 <Plus className="size-4" />
-                New job
+                New quotation
               </Button>
-            ) : null}
+            ) : null} */}
           </div>
         }
       />
 
-      <KpiRow />
+      <OverviewRange days={days}>
+        <KpiRow />
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="">
-          <InspectionActivity />
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="">
+            <InspectionActivity />
+          </div>
+          <div className="">
+            <InspectionPipeline />
+          </div>
         </div>
-        <div className="">
-          <InspectionPipeline />
+
+        {/*
+          These two are outside the range on purpose, and the line above
+          them says so.
+
+          "Needs attention" is what is wrong now and "Upcoming" is what
+          is booked next. Neither measures a period, and hiding a late
+          job because it was raised before the chosen window would be
+          the dashboard quietly losing work.
+        */}
+        <p className="text-muted-foreground mt-2 text-xs">
+          Figures above cover the last {rangeLabel(days)}. The two lists
+          below are always current.
+        </p>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="">
+            <NeedsAttention />
+          </div>
+          <div className="">
+            <UpcomingInspections />
+          </div>
         </div>
-      </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-
-        <div className="">
-          <NeedsAttention />
+        {/* Everything below here is analysis rather than action. The
+            divider and the quieter cards are what stop it competing with
+            the attention list above. */}
+        <div
+          className="mt-4 flex items-center gap-4"
+          role="separator"
+          aria-label="Analytics"
+        >
+          <Separator className="flex-1" />
+          <span className="text-muted-foreground shrink-0 text-xs font-semibold tracking-[0.14em] uppercase">
+            Analytics
+          </span>
+          <Separator className="flex-1" />
         </div>
-        <div className="">
-          <UpcomingInspections />
-        </div>
-      </div>
 
-      {/* Everything below here is analysis rather than action. The
-          divider and the quieter cards are what stop it competing with
-          the attention list above. */}
-      <div
-        className="mt-4 flex items-center gap-4"
-        role="separator"
-        aria-label="Analytics"
-      >
-        <Separator className="flex-1" />
-        <span className="text-muted-foreground shrink-0 text-xs font-semibold tracking-[0.14em] uppercase">
-          Analytics
-        </span>
-        <Separator className="flex-1" />
-      </div>
-
-      <InspectorPerformance />
-      <QuotationAnalytics />
+        <InspectorPerformance />
+        <QuotationAnalytics />
+      </OverviewRange>
     </div>
   );
 }
