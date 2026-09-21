@@ -876,6 +876,12 @@ export default function NewJobWizard({
 
   return (
     <div className="flex flex-col gap-6">
+      {/*
+        No page heading on New quotation: the form's own "Quotation
+        details" heading already says what the page is. Editing a
+        quotation and raising a job keep theirs.
+      */}
+      {quoteOnly && !isEdit ? null : (
       <PageHeading
         eyebrow={quoteOnly ? "Sales" : "Work"}
         title={
@@ -897,6 +903,7 @@ export default function NewJobWizard({
                 : "Three steps to a reference pack an inspector can pull before losing signal."
         }
       />
+      )}
 
       {/*
         Only the two states worth interrupting for: still fetching, and
