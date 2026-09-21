@@ -60,7 +60,7 @@ import {
   SectionCard,
   SectionSkeleton,
   SubmitButton,
-  formatGstDateTime,
+  formatLocalDateTime,
   useConfirm,
 } from "./shared";
 
@@ -478,7 +478,7 @@ export default function PricingSettings() {
                         currency={currency}
                         updatedAt={
                           config.updated_at
-                            ? formatGstDateTime(config.updated_at)
+                            ? formatLocalDateTime(config.updated_at)
                             : null
                         }
                       />

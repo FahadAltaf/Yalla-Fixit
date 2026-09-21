@@ -17,7 +17,7 @@ import TimeSelect from "@/components/ui/time-select";
 import {
   isPastSlot,
   nextBookableSlot,
-  toGulfInstant,
+  toLocalInstant,
 } from "@/lib/snagging/schedule-defaults";
 
 /**
@@ -77,7 +77,7 @@ export function OpenRoundDialog({
 
   // A time on today's date has to be later than now; the date alone only
   // has to be today or after. Mirrors the server's two-part rule.
-  const appointment = toGulfInstant(date, time);
+  const appointment = toLocalInstant(date, time);
   const inPast = isPastSlot(date, time);
 
   const ready = Boolean(date) && Boolean(time) && !inPast && !busy;

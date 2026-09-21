@@ -44,6 +44,11 @@ export function priceQuotation(
   client: QuotedClient | null,
   config: PricingConfig & { currency: string },
   options: {
+    /**
+     * The visit is booked outside working hours (F17, FR-2.08), so the
+     * surcharge goes on as its own line over the service total. Like
+     * furnished, a fact about this quotation rather than the unit.
+     */
     outOfHours?: boolean;
     ratePerSqft?: number | null;
     /** The coordinator's external-areas rate, where they apply. */
@@ -98,6 +103,12 @@ export function priceQuotation(
   const pricingSnapshot = {
     rate_card: config.rate_card,
     out_of_hours_percent: config.out_of_hours_percent,
+    /*
+      Whether that percentage was charged. Recorded here, beside it, so an
+      edit or a regenerate keeps the surcharge the coordinator chose; the
+      API reads it back as `out_of_hours` (see QUOTATION_COLUMNS).
+    */
+    out_of_hours: options.outOfHours === true,
     tax_rate: config.tax_rate,
     currency: config.currency,
   };

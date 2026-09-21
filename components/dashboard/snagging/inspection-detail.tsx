@@ -13,6 +13,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useAuth } from "@/context/AuthContext";
+import { hasResourceAction } from "@/lib/role-permissions";
+import { ActionType, ResourceType } from "@/types/types";
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
 
 import { ErrorState } from "./shared";
@@ -108,6 +111,9 @@ function InspectionDetailView() {
     refreshAll,
     refreshing,
   } = useJobDetail();
+  const { userProfile } = useAuth();
+  // Correcting a snag's note is an edit of the job's record.
+  const canEditSnags = hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.EDIT);
 
   /*
     The job record the tabs read, put together from its sections as they
@@ -368,7 +374,13 @@ function InspectionDetailView() {
               pending={{ snags: snags.data === null, desnag: desnag.lastFetchedAt === null }}
             />
             {snagListReady ? (
-              <SnagWalkList task={task} visitNumbers={visitNumbers} />
+              <SnagWalkList
+                task={task}
+                visitNumbers={visitNumbers}
+                canEdit={canEditSnags}
+                onSnagsChanged={() => void refreshSnags()}
+                onAreasChanged={jobChanged}
+              />
             ) : snags.error && snags.data === null ? (
               <ErrorState
                 title="Could not load the snags"
@@ -395,7 +407,11 @@ function InspectionDetailView() {
           "checklist",
           "mt-4",
           checklist.data !== null ? (
-            <ChecklistPanel task={task} />
+            <ChecklistPanel
+              task={task}
+              canEdit={canEditSnags}
+              onChanged={() => void refreshChecklist()}
+            />
           ) : checklist.error ? (
             <ErrorState
               title="Could not load the checklist"
@@ -466,12 +482,11 @@ function BackToJobs() {
   );
 }
 
-/** "14:32", in Gulf time, for the "Updated" note beside Refresh. */
+/** "14:32" on the viewer's own clock, for the "Updated" note beside Refresh. */
 function formatClock(at: number): string {
   return new Intl.DateTimeFormat("en-GB", {
     hour: "2-digit",
     minute: "2-digit",
-    timeZone: "Asia/Dubai",
   }).format(new Date(at));
 }
 

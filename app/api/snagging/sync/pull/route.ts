@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
+import { hasVerdictNote } from "@/lib/server/snagging/columns";
 import { signMediaPaths } from "@/lib/server/snagging/media";
 import { syncPullSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType } from "@/types/types";
@@ -525,6 +526,8 @@ export async function GET(req: NextRequest) {
       round_created: s.round_created,
       captured_at: s.created_at,
       locked: s.locked,
+      // The inspector's comment on the round's verdict (null until given).
+      verdict_note: s.verdict_note ?? null,
     }));
 
     const checklist = checklistRows.map((c) => ({
@@ -719,7 +722,9 @@ async function changedJobIds(
 }
 
 /** The four child tables, each delta'd on the cursor when there is one. */
-function loadChildren(admin: Admin, jobIds: string[], since: string | undefined) {
+async function loadChildren(admin: Admin, jobIds: string[], since: string | undefined) {
+  // The verdict comment, once its migration has run.
+  const verdict = (await hasVerdictNote(admin)) ? ", verdict_note" : "";
   return Promise.all([
     loadChanged(
       admin,
@@ -737,7 +742,7 @@ function loadChildren(admin: Admin, jobIds: string[], since: string | undefined)
       "snagging_snags",
       `id, job_id, area_id, snag_code, catalogue_entry_id, catalogue_code, element_label,
        defect_label, severity, note, floor_plan_id, pin_x, pin_y, status, round_created,
-       created_at, locked`,
+       created_at, locked${verdict}`,
       "job_id",
       jobIds,
       since,

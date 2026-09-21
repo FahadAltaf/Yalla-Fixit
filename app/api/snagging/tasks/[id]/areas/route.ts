@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
+import { recordAudit } from "@/lib/server/snagging/audit";
 import { createAreaSchema, updateAreaSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType } from "@/types/types";
 
@@ -115,7 +116,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }
 }
 
-/** PATCH — rename an area, and/or place / move / clear its floor-plan pin. */
+/** PATCH — rename an area, place / move / clear its floor-plan pin, or correct its note. */
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
     const { profile, accessUser } = await getRequestUserAccess(req);
@@ -131,11 +132,29 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     const updates: Record<string, unknown> = { ...pinFieldsFrom(input) };
     if (input.name !== undefined) updates.name = input.name;
     if (input.catalogue_area_code !== undefined) updates.catalogue_area_code = input.catalogue_area_code;
+    // The inspector's own words, corrected from the portal. Stamped so the
+    // phone picks the new wording up on its next pull.
+    const texts = (["note", "access_reason"] as const).filter((field) => input[field] !== undefined);
+    for (const field of texts) updates[field] = input[field] || null;
+    if (texts.length > 0) updates.updated_at = new Date().toISOString();
     if (Object.keys(updates).length === 0) {
       return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
     }
 
     const admin = await createAdminServerClient();
+
+    // The wording before, for the History entry an edit leaves.
+    const before =
+      texts.length > 0
+        ? (
+            await admin
+              .from("snagging_areas")
+              .select("note, access_reason")
+              .eq("id", input.id)
+              .eq("job_id", id)
+              .maybeSingle()
+          ).data
+        : null;
     const { data, error } = await admin
       .from("snagging_areas")
       .update(updates)
@@ -150,6 +169,22 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       throw new Error(error.message);
     }
     if (!data) return NextResponse.json({ error: "Area not found" }, { status: 404 });
+
+    for (const field of texts) {
+      const was = (before as Record<string, string | null> | null)?.[field] ?? null;
+      const now = input[field] || null;
+      if (was === now) continue;
+      await recordAudit(admin, {
+        entityType: "area",
+        entityId: input.id,
+        taskId: id,
+        eventType: "area_note_edited",
+        actorId: profile.id,
+        actorLabel: profile.full_name ?? profile.email ?? null,
+        origin: "portal",
+        payload: { area: data.name, field, before: was, after: now },
+      });
+    }
     return NextResponse.json({ data });
   } catch (error) {
     console.error("Snagging areas PATCH error:", error);

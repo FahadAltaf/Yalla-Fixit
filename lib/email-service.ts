@@ -111,13 +111,17 @@ export const emailService = {
     dueAt: string;
     jobUrl: string;
   }) => {
-    const due = new Date(dueAt).toLocaleString("en-GB", {
+    /*
+      The server cannot know the reader's time zone, so the deadline names
+      the one it is given in rather than leaving the reader to guess.
+    */
+    const due = `${new Date(dueAt).toLocaleString("en-GB", {
       day: "numeric",
       month: "short",
       hour: "2-digit",
       minute: "2-digit",
       timeZone: "Asia/Dubai",
-    });
+    })} (UAE time)`;
     const subject = `Sent back for correction — ${code} (${categoryLabel})`;
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #1f2937;">

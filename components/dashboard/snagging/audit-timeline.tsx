@@ -90,6 +90,8 @@ const EVENT_META: Record<string, { label: string; Icon: LucideIcon }> = {
   snag_verified: { label: "Snag verified", Icon: CheckCircle2 },
   area_confirmed: { label: "Area confirmed", Icon: CheckCircle2 },
   area_access_changed: { label: "Area access recorded", Icon: DoorClosed },
+  area_note_edited: { label: "Area note edited", Icon: Pencil },
+  checklist_reason_edited: { label: "Checklist reason edited", Icon: Pencil },
   checklist_not_checked: {
     label: "Checklist item skipped",
     Icon: AlertTriangle,
@@ -196,7 +198,6 @@ function formatWhen(value: string): string {
     month: "short",
     hour: "2-digit",
     minute: "2-digit",
-    timeZone: "Asia/Dubai",
   });
 }
 

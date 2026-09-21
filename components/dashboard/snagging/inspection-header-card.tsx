@@ -736,7 +736,6 @@ function RemediationDue({ due }: { due: string }) {
     month: "short",
     hour: "2-digit",
     minute: "2-digit",
-    timeZone: "Asia/Dubai",
   });
   return (
     <p

@@ -1,5 +1,7 @@
 "use client";
 
+import { UserRound, type LucideIcon } from "lucide-react";
+
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { cn } from "@/lib/actions/utils";
 
@@ -52,23 +54,33 @@ export function EntityAvatar({
   );
 }
 
-// Avatar + bold primary line over a muted secondary line. The standard shape
-// for any column that identifies something by a name plus a qualifier
+// Icon mark + bold primary line over a muted secondary line. The standard
+// shape for any column that identifies something by a name plus a qualifier
 // (customer + address, technician + id, company + domain).
+//
+// The mark is one neutral icon saying what kind of thing the row is (a
+// person, a property), not coloured initials: a column of differently
+// tinted circles pulls the eye away from the names that tell rows apart.
+// Status belongs in its own column, not beside the name.
 export function IdentityCell({
   title,
   subtitle,
-  seed,
+  icon: Icon = UserRound,
   badge,
 }: {
   title: string;
   subtitle?: string | null;
-  seed: string;
+  /** What kind of thing the row is; a person unless said otherwise. */
+  icon?: LucideIcon;
+  /** Kept for callers that still pass it; the mark no longer uses it. */
+  seed?: string;
   badge?: React.ReactNode;
 }) {
   return (
     <div className="flex items-center gap-2.5">
-      <EntityAvatar name={title} seed={seed} />
+      <span className="bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-full">
+        <Icon className="size-4" aria-hidden />
+      </span>
       <div className="flex min-w-0 flex-col">
         <span className="flex items-center gap-1.5 truncate font-medium">
           {title}

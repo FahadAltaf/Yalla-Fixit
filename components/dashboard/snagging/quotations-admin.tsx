@@ -29,7 +29,7 @@ import {
   ErrorState,
   PageHeading,
   QuotationStatusBadge,
-  formatGstDate,
+  formatLocalDate,
 } from "./shared";
 import { DesnagQuotationDialog } from "./desnag-quotation-dialog";
 
@@ -144,7 +144,7 @@ export default function QuotationsAdmin() {
             </span>
             <span className="text-muted-foreground text-xs">
               {KIND_LABEL[row.original.quote_kind] ?? row.original.quote_kind} ·{" "}
-              {formatGstDate(row.original.created_at)}
+              {formatLocalDate(row.original.created_at)}
             </span>
           </div>
         ),

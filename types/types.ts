@@ -528,6 +528,8 @@ export interface SnaggingSnag {
   defect_label?: string | null;
   severity: SnaggingSeverity;
   note?: string | null;
+  /** The inspector's comment on this round's de-snag verdict. */
+  verdict_note?: string | null;
   floor_plan_id?: string | null;
   /** 0..1 fractions of the plan, so a pin survives any zoom level. */
   pin_x?: number | null;

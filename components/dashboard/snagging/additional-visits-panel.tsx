@@ -57,7 +57,7 @@ import {
   SectionSkeleton,
   FieldsSkeleton,
   SubmitButton,
-  formatGstDateTime,
+  formatLocalDateTime,
   useConfirm,
 } from "./shared";
 import { AdditionalVisitDialog } from "./additional-visit-dialog";
@@ -124,7 +124,6 @@ function fmtDate(value: string | null): string {
     day: "numeric",
     month: "short",
     year: "numeric",
-    timeZone: "Asia/Dubai",
   }).format(new Date(value));
 }
 
@@ -463,7 +462,7 @@ export function AdditionalVisitsPanel({ task }: { task: SnaggingTask }) {
                 {newestFirst.map((visit) => {
                   const quote = visit.quotation;
                   const when = visit.appointment_at
-                    ? formatGstDateTime(visit.appointment_at)
+                    ? formatLocalDateTime(visit.appointment_at)
                     : visit.scheduled_date
                       ? fmtDate(visit.scheduled_date)
                       : null;

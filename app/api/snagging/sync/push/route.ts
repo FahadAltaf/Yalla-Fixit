@@ -5,6 +5,7 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAuditBatch, type AuditEntry } from "@/lib/server/snagging/audit";
+import { hasVerdictNote } from "@/lib/server/snagging/columns";
 import { inParallel, planWaves } from "@/lib/server/snagging/push-plan";
 import {
   approvalDueAt,
@@ -621,9 +622,20 @@ async function applyVerification(admin: Admin, ctx: Ctx, payload: Record<string,
   const status = statusFromVerdict(verdict);
   const snagId = payload.snag_id as string;
 
+  /*
+    The comment the inspector wrote with the verdict, kept on the round's
+    snag (it used to reach only the audit trail). Only when the payload
+    carries one: an older phone sends no note key, and a verdict re-tapped
+    without touching the comment must not wipe it.
+  */
+  const update: Record<string, unknown> = { status };
+  if ("note" in payload && (await hasVerdictNote(admin))) {
+    update.verdict_note = typeof payload.note === "string" ? payload.note.trim() || null : null;
+  }
+
   const { error } = await admin
     .from("snagging_snags")
-    .update({ status })
+    .update(update)
     .eq("id", snagId);
   if (error) throw new Error(error.message);
 

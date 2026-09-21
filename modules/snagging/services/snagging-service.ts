@@ -227,6 +227,8 @@ export interface SnaggingQuotation {
 
   /** What the client declared when it was raised. */
   furnished?: boolean;
+  /** Whether it carries the out-of-hours surcharge. Null on older quotations. */
+  out_of_hours?: boolean | null;
   /** The built-up rate it was actually priced at. */
   rate_per_sqft?: number | null;
   /** What the size rule proposed, for comparison. */
@@ -365,6 +367,31 @@ export const snaggingService = {
       signal: init.signal,
     }),
 
+  /** Corrects the reason on a checklist item from the portal; empty clears it. */
+  updateChecklistReason: async (
+    taskId: string,
+    itemId: string,
+    reason: string | null,
+  ): Promise<{ id: string; reason: string | null }> =>
+    executeRESTBackend<{ id: string; reason: string | null }>(
+      `/api/snagging/tasks/${taskId}/checklist`,
+      { method: "PATCH", body: { item_id: itemId, reason } },
+    ),
+
+  /** Corrects the comment given with a de-snag verdict; empty clears it. */
+  updateSnagVerdictNote: async (snagId: string, note: string | null) =>
+    executeRESTBackend<{ id: string; verdict_note: string | null }>(`/api/snagging/snags/${snagId}`, {
+      method: "PATCH",
+      body: { verdict_note: note },
+    }),
+
+  /** Corrects a snag's note from the portal; empty text clears it. */
+  updateSnagNote: async (snagId: string, note: string | null): Promise<{ id: string; note: string | null }> =>
+    executeRESTBackend<{ id: string; note: string | null }>(`/api/snagging/snags/${snagId}`, {
+      method: "PATCH",
+      body: { note },
+    }),
+
   getTaskVisitStatus: async (
     id: string,
     init: { signal?: AbortSignal } = {},
@@ -501,6 +528,8 @@ export const snaggingService = {
     property: Record<string, unknown>;
     /** What the client declared for this quotation (FR-2.15). */
     furnished?: boolean;
+    /** Booked outside working hours: adds the out-of-hours surcharge (FR-2.08). */
+    out_of_hours?: boolean;
     /** The coordinator's rate, if they moved it off the suggestion (FR-2.04). */
     rate_per_sqft?: number;
     /** The same choice for external areas, where they apply (FR-2.07). */
@@ -546,6 +575,7 @@ export const snaggingService = {
       client_id?: string;
       property: Record<string, unknown>;
       furnished?: boolean;
+      out_of_hours?: boolean;
       rate_per_sqft?: number;
       external_rate_per_sqft?: number;
       rate_override_reason?: string;

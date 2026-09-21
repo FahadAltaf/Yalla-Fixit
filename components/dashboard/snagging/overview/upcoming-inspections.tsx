@@ -34,6 +34,8 @@ type UpcomingItem = {
   unit: string | null;
   day: string | null;
   time: string | null;
+  /** The appointment instant, when there is one. */
+  at?: string | null;
   propertyType: string | null;
   place: string | null;
   inspector: string | null;
@@ -193,7 +195,7 @@ function AppointmentList({
               </span>
               <span className="text-muted-foreground mt-0.5 flex items-center justify-end gap-1.5 text-xs tabular-nums">
                 <Clock className="size-3.5 shrink-0" aria-hidden />
-                {whenLabel(item.day, item.time)}
+                {whenLabel(item.day, item.time, item.at)}
               </span>
             </span>
           </Link>
@@ -293,12 +295,23 @@ function AllUpcomingDialog({
 }
 
 /**
- * "Wed 16 Sep · 9:00 AM" — the actual day, not a relative one.
- *
- * Formatted in GST, like the appointment itself: on a browser set to UTC
- * an evening appointment would otherwise print the previous day.
+ * "Wed 16 Sep · 9:00 AM" — the actual day, not a relative one, on the
+ * viewer's own clock when the appointment has a time. A job with only a
+ * date keeps that calendar date as written.
  */
-function whenLabel(day: string | null, time: string | null): string {
+function whenLabel(day: string | null, time: string | null, at?: string | null): string {
+  if (at) {
+    const instant = new Date(at);
+    if (!Number.isNaN(instant.getTime())) {
+      const date = instant.toLocaleDateString("en-GB", {
+        weekday: "short",
+        day: "numeric",
+        month: "short",
+      });
+      const clock = instant.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+      return `${date} · ${clock}`;
+    }
+  }
   if (!day) return time ? formatTimeAmPm(time) : "Not scheduled";
   const date = new Date(`${day}T00:00:00Z`).toLocaleDateString("en-GB", {
     weekday: "short",

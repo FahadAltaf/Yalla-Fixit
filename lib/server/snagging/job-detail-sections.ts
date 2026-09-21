@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { byCreation } from "@/lib/snagging/creation-order";
+import { hasVerdictNote } from "@/lib/server/snagging/columns";
 import { loadJobFamily } from "@/lib/server/snagging/job-family";
 import { signMediaPaths } from "@/lib/server/snagging/media";
 
@@ -67,7 +68,9 @@ const PROPERTY_COLUMNS =
   "location_lat, location_lng, title_deed_path, noc_required, noc_path";
 /* The Areas tab reads its own endpoint; the job only needs what the header,
    snag list and report show, plus creation order. */
-const JOB_AREA_COLUMNS = "id, name, access_state, access_reason, confirmed_at, visit_id, created_at, sort_order";
+/* note: the inspector's closing note, shown on "Completed areas". */
+const JOB_AREA_COLUMNS =
+  "id, name, access_state, access_reason, confirmed_at, note, visit_id, created_at, sort_order";
 const CHECKLIST_COLUMNS =
   "id, status, label, group_name, mandatory, reason, visit_id, created_at, sort_order";
 /* job_id stays: it decides from_earlier_visit. locked has no reader today
@@ -92,6 +95,10 @@ const CORE_SELECT = `${JOB_COLUMNS},
   property_record:property_id(${PROPERTY_COLUMNS}),
   areas:snagging_areas(${JOB_AREA_COLUMNS})`;
 const SNAGS_SELECT = `${SNAG_COLUMNS},
+  area:snagging_areas(id, name),
+  photos:snagging_snag_photos(${SNAG_PHOTO_COLUMNS})`;
+/* With the de-snag verdict comment, once its migration has run. */
+const SNAGS_SELECT_WITH_VERDICT = `${SNAG_COLUMNS}, verdict_note,
   area:snagging_areas(id, name),
   photos:snagging_snag_photos(${SNAG_PHOTO_COLUMNS})`;
 
@@ -307,7 +314,9 @@ export async function loadJobSnags(admin: Admin, id: string) {
 
   const { data: snagRows, error: snagError } = await admin
     .from("snagging_snags")
-    .select<string, Row>(SNAGS_SELECT)
+    .select<string, Row>(
+      (await hasVerdictNote(admin)) ? SNAGS_SELECT_WITH_VERDICT : SNAGS_SELECT,
+    )
     .in("job_id", snagJobIds)
     // Newest first for the working views. The client report has its
     // own route and still orders by code within each area, so the

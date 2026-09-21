@@ -12,6 +12,7 @@ import {
   LayoutGrid,
   Loader2,
   MapPin,
+  Pencil,
   Plus,
   Search,
   Shapes,
@@ -28,6 +29,7 @@ import {
   zoneLabelPoint,
   type ZonePoint,
 } from "@/lib/snagging/zone-geometry";
+import { nowLocal, toLocalInstant } from "@/lib/snagging/schedule-defaults";
 import { PlanZoneCanvas } from "./plan-zone-canvas";
 import { LocationPicker } from "./location-picker";
 
@@ -135,6 +137,8 @@ type Draft = {
     document has to record.
   */
   furnished: boolean;
+  /* Booked outside working hours: the surcharge is added (FR-2.08). */
+  out_of_hours: boolean;
   rate_per_sqft: string;
   external_rate_per_sqft: string;
   appointment_date: string; // YYYY-MM-DD
@@ -158,34 +162,11 @@ type Draft = {
  * a property is — one form, one set of rules, one validation.
  */
 /*
-  Appointments are written in GST (+04:00 — see submit), so "is this in the
-  past" has to be asked in GST too. Reading the browser's own clock would
-  let a coordinator on another machine's timezone either book a slot that
-  has already gone or be refused one that has not.
+  Appointments are typed on the coordinator's own clock (see
+  lib/snagging/schedule-defaults), so "is this in the past" is asked on it
+  too, and submit turns the pair into an instant.
 */
-function gstNow() {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Dubai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(new Date());
-  const at = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
-  return {
-    date: `${at("year")}-${at("month")}-${at("day")}`,
-    time: `${at("hour")}:${at("minute")}`,
-  };
-}
 
-/** The instant an appointment names, or null when it is not fully set. */
-function appointmentAtGst(date: string, time: string) {
-  if (!date || !time) return null;
-  const at = new Date(`${date}T${time}:00+04:00`);
-  return Number.isNaN(at.getTime()) ? null : at;
-}
 
 /*
   The first slot worth offering: tomorrow at the start of the working day.
@@ -196,7 +177,7 @@ function appointmentAtGst(date: string, time: string) {
 */
 function defaultAppointment() {
   return {
-    date: format(addDays(parseISO(gstNow().date), 1), "yyyy-MM-dd"),
+    date: format(addDays(parseISO(nowLocal().date), 1), "yyyy-MM-dd"),
     time: "09:00",
   };
 }
@@ -335,6 +316,7 @@ export default function NewJobWizard({
     noc_required: false,
     noc_path: "",
     furnished: false,
+    out_of_hours: false,
     rate_per_sqft: "",
     external_rate_per_sqft: "",
     appointment_date: defaultAppointment().date,
@@ -521,6 +503,7 @@ export default function NewJobWizard({
           location_lng: text(prop.location_lng),
           noc_required: Boolean(prop.noc_required),
           furnished: Boolean(quote.furnished ?? snap.furnished),
+          out_of_hours: quote.out_of_hours === true,
           // The rate this document was priced at, so leaving the field
           // alone saves the same figure rather than resuggesting one.
           rate_per_sqft: text(quote.rate_per_sqft),
@@ -640,7 +623,7 @@ export default function NewJobWizard({
         // the job only after the client approves the quotation (FR-3.08).
         // What is NOT optional is that a slot which is set is a slot that
         // can still be kept.
-        const at = appointmentAtGst(draft.appointment_date, draft.appointment_time);
+        const at = toLocalInstant(draft.appointment_date, draft.appointment_time);
         if (at && at.getTime() < Date.now()) {
           return ["The appointment is in the past. Pick a later date or time."];
         }
@@ -690,6 +673,7 @@ export default function NewJobWizard({
             location_lng: num0(draft.location_lng),
           },
           furnished: draft.furnished,
+          out_of_hours: draft.out_of_hours,
           rate_per_sqft: num0(draft.rate_per_sqft),
           external_rate_per_sqft: num0(draft.external_rate_per_sqft),
         };
@@ -714,9 +698,9 @@ export default function NewJobWizard({
         return;
       }
 
-      // Combine appointment date + time into one instant (GST) when set.
+      // Combine appointment date + time into one instant, on the coordinator's clock.
       const appointmentAt = draft.appointment_date
-        ? `${draft.appointment_date}T${draft.appointment_time || "09:00"}:00+04:00`
+        ? toLocalInstant(draft.appointment_date, draft.appointment_time || "09:00")?.toISOString()
         : undefined;
       const num = (v: string) => (v.trim() && Number(v) ? Number(v) : undefined);
 
@@ -785,7 +769,8 @@ export default function NewJobWizard({
       }
 
       /*
-        The pins placed while the job was being created (BA change 5).
+        The rooms placed while the job was being created (BA change 5/6):
+        pins, and the outlines drawn with "Draw the room".
 
         They can only be written once both ends exist: the plan needs the id
         its upload returned, and the room needs the id the job gave it.
@@ -816,6 +801,12 @@ export default function NewJobWizard({
               floor_plan_id: planId,
               pin_x: area.pinX,
               pin_y: area.pinY,
+              /*
+                The outline too. Only the pin was sent, so a room drawn here
+                opened on the job as a plain pin at the outline's centre (the
+                point a zone keeps as its fallback).
+              */
+              ...(area.zone && area.zone.length >= 3 ? { zone: area.zone } : {}),
             });
           }
         } catch {
@@ -915,7 +906,7 @@ export default function NewJobWizard({
       */}
       {quotationLoading || (isEdit && quotationError) ? null : (
         <Card className="gap-0 p-0">
-          <div className="p-6">
+          <div className="p-4">
             {STEPS[step].key === "property" ? (
               <PropertyStep
                 draft={draft}
@@ -1804,6 +1795,8 @@ function PlanAreasStep({
     rooms where edges earn their keep.
   */
   const [placeMode, setPlaceMode] = useState<"pin" | "zone">("pin");
+  // The plan being renamed, and the name as typed so far.
+  const [renaming, setRenaming] = useState<{ id: string; label: string } | null>(null);
 
   const activePlan =
     plans.find((plan) => plan.id === activePlanId) ?? plans[0] ?? null;
@@ -1900,10 +1893,12 @@ function PlanAreasStep({
       if (target) URL.revokeObjectURL(target.url);
       return current.filter((plan) => plan.id !== id);
     });
-    // A pin cannot outlive the plan it was placed on.
+    // A pin or an outline cannot outlive the plan it was placed on.
     setAreas(
       areas.map((a) =>
-        a.planId === id ? { ...a, planId: null, pinX: undefined, pinY: undefined } : a,
+        a.planId === id
+          ? { ...a, planId: null, pinX: undefined, pinY: undefined, zone: null }
+          : a,
       ),
     );
     if (activePlanId === id) setActivePlanId(null);
@@ -2046,21 +2041,53 @@ function PlanAreasStep({
           ) : (
             <>
               <div className="flex flex-wrap items-center gap-2">
-                {plans.map((plan) => (
-                  <button
-                    key={plan.id}
-                    type="button"
-                    onClick={() => setActivePlanId(plan.id)}
-                    className={cn(
-                      "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
-                      plan.id === activePlan?.id
-                        ? "border-brand bg-brand-50 text-brand"
-                        : "border-border hover:bg-mist-soft",
-                    )}
-                  >
-                    {plan.label.trim() || "Untitled plan"}
-                  </button>
-                ))}
+                {/*
+                  Each plan's own rename and remove sit on its chip, so
+                  they act on the plan you are pointing at rather than on
+                  whichever one happens to be open underneath.
+                */}
+                {plans.map((plan) => {
+                  const name = plan.label.trim() || "Untitled plan";
+                  const active = plan.id === activePlan?.id;
+                  return (
+                    <div
+                      key={plan.id}
+                      className={cn(
+                        "inline-flex items-center rounded-full border text-xs font-medium transition-colors",
+                        active
+                          ? "border-brand bg-brand-50 text-brand"
+                          : "border-border hover:bg-mist-soft",
+                      )}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setActivePlanId(plan.id)}
+                        aria-pressed={active}
+                        className="max-w-[14rem] truncate py-1 pr-1 pl-3"
+                      >
+                        {name}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRenaming({ id: plan.id, label: plan.label })}
+                        aria-label={`Rename ${name}`}
+                        title="Rename"
+                        className="rounded-full p-1 opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100"
+                      >
+                        <Pencil className="size-3" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => remove(plan.id)}
+                        aria-label={`Remove ${name}`}
+                        title="Remove"
+                        className="hover:text-destructive mr-1 rounded-full p-1 opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100"
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </div>
+                  );
+                })}
                 <Button
                   type="button"
                   variant="outline"
@@ -2175,24 +2202,6 @@ function PlanAreasStep({
                     </div>
                   )}
 
-                  <div className="flex items-center gap-2">
-                    <Input
-                      value={activePlan.label}
-                      onChange={(event) => rename(activePlan.id, event.target.value)}
-                      placeholder="e.g. Ground floor"
-                      aria-label="Plan name"
-                      className="h-8"
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => remove(activePlan.id)}
-                      aria-label="Remove plan"
-                    >
-                      <X className="size-4" />
-                    </Button>
-                  </div>
                 </>
               ) : null}
             </>
@@ -2333,6 +2342,62 @@ function PlanAreasStep({
             </div>
 
             <Dialog
+              open={renaming !== null}
+              onOpenChange={(next) => {
+                if (!next) setRenaming(null);
+              }}
+            >
+              <DialogContent className="sm:max-w-sm">
+                <DialogHeader>
+                  <DialogTitle>Rename plan</DialogTitle>
+                  <DialogDescription>
+                    The name the inspector sees when switching floors, on the
+                    job and on the phone.
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="plan-name">Name</Label>
+                  <Input
+                    id="plan-name"
+                    autoFocus
+                    value={renaming?.label ?? ""}
+                    onChange={(event) =>
+                      setRenaming((current) =>
+                        current ? { ...current, label: event.target.value } : current,
+                      )
+                    }
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && renaming?.label.trim()) {
+                        event.preventDefault();
+                        rename(renaming.id, renaming.label.trim());
+                        setRenaming(null);
+                      }
+                    }}
+                    placeholder="e.g. Ground floor"
+                  />
+                </div>
+
+                <DialogFooter>
+                  <Button type="button" variant="outline" onClick={() => setRenaming(null)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    type="button"
+                    disabled={!renaming?.label.trim()}
+                    onClick={() => {
+                      if (!renaming?.label.trim()) return;
+                      rename(renaming.id, renaming.label.trim());
+                      setRenaming(null);
+                    }}
+                  >
+                    Save
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog
               open={addOpen}
               onOpenChange={(next) => {
                 setAddOpen(next);
@@ -2397,13 +2462,18 @@ function PlanAreasStep({
 }
 
 /**
- * The two pricing decisions a coordinator makes when raising a quotation.
+ * The pricing decisions a coordinator makes when raising a quotation.
  *
  * FURNISHED is the client's declaration, recorded per quotation rather
  * than per unit: the same property is let furnished to one client and
  * empty to the next, and the rate follows what is being inspected on the
  * day. Commercial is a flat rate either way, so the question is not asked
  * there.
+ *
+ * OUT OF HOURS is when the visit happens: outside working hours the card
+ * adds a percentage of the service total, as its own line. It is the
+ * coordinator's call rather than something read off the appointment time
+ * (F17), and it applies to every property type, commercial included.
  *
  * THE RATE is a person's choice inside the published band. The size rule
  * still proposes a figure — smaller properties toward the top of the
@@ -2464,7 +2534,8 @@ function QuotePricingBlock({
       <div>
         <p className="text-sm font-medium">Pricing</p>
         <p className="text-muted-foreground mt-0.5 text-xs">
-          What the client declared, and the rate this quotation charges.
+          What the client declared, when the visit happens, and the rate this
+          quotation charges.
         </p>
       </div>
 
@@ -2493,6 +2564,21 @@ function QuotePricingBlock({
           </span>
         </label>
       ) : null}
+
+      <label className="flex items-start gap-2 text-sm">
+        <Checkbox
+          checked={draft.out_of_hours}
+          onCheckedChange={(v) => set("out_of_hours", Boolean(v))}
+        />
+        <span>
+          The visit is <strong>out of hours</strong>
+          <span className="text-muted-foreground block text-xs">
+            {pricing
+              ? `Adds the ${pricing.out_of_hours_percent}% out-of-hours surcharge to the service total, before VAT. It shows as its own line on the quotation.`
+              : "Adds the out-of-hours surcharge to the service total, before VAT. It shows as its own line on the quotation."}
+          </span>
+        </span>
+      </label>
 
       {row ? (
         <div className="grid gap-3 sm:grid-cols-2">
@@ -2687,7 +2773,7 @@ function AssignStep({
   retryUsers: () => void;
 }) {
   const scheduled = draft.appointment_date ? parseISO(draft.appointment_date) : undefined;
-  const now = gstNow();
+  const now = nowLocal();
   // Only today's times need a floor; every later day is open from 00:00.
   const earliestTime = draft.appointment_date === now.date ? now.time : undefined;
 

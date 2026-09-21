@@ -349,6 +349,10 @@ export const updateAreaSchema = z.object({
   pin_x: pinFraction.nullable().optional(),
   pin_y: pinFraction.nullable().optional(),
   zone: zonePolygon.nullable().optional(),
+  /** The inspector's closing note, corrected from the portal. Empty clears it. */
+  note: z.string().trim().max(2000).nullable().optional(),
+  /** Why a room could not be fully inspected, corrected from the portal. */
+  access_reason: z.string().trim().max(500).nullable().optional(),
 });
 
 export type CreateAreaInput = z.infer<typeof createAreaSchema>;

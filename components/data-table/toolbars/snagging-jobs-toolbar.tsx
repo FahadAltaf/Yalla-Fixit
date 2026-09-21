@@ -119,7 +119,7 @@ export function SnaggingJobsToolbar({
             {canCreate ? (
               <Button onClick={onCreate} className="flex-1 sm:flex-initial">
                 <PlusIcon className="size-4 sm:mr-2" />
-                <span className="hidden sm:inline">New job</span>
+                <span className="hidden sm:inline">New quotation</span>
               </Button>
             ) : null}
           </div>

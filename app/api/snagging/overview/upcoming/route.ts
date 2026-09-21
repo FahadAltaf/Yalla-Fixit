@@ -116,6 +116,8 @@ export async function GET(req: NextRequest) {
         id: row.id,
         day: row.scheduled_date,
         time: row.appointment_at ? gstTime(row.appointment_at) : null,
+        // The instant itself, so the page can show it on the viewer's clock.
+        at: row.appointment_at,
         propertyType: row.property_type,
         /*
           The unit names the row now that the job code no longer does, so it

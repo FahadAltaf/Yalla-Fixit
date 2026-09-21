@@ -207,6 +207,8 @@ export async function POST(req: NextRequest) {
       ratePerSqft: chosenRate,
       externalRatePerSqft: externalRate,
       furnished: declaredFurnished,
+      // Booked outside working hours: the surcharge goes on as its own line.
+      outOfHours: body?.out_of_hours === true,
     });
 
     /*

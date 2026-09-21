@@ -92,16 +92,24 @@ function esc(value: unknown): string {
     .replace(/'/g, "&#39;");
 }
 
+/**
+ * A date on the report. Rendered in UAE time, which is what the PDF keeps
+ * (it has no reader to ask). On the web link the `<time>` tag carries the
+ * instant, and the page re-reads it in the viewer's own zone once it loads.
+ */
 function fmtDate(iso: string | null): string {
   if (!iso) return "—";
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleDateString("en-GB", {
+  const text = date.toLocaleDateString("en-GB", {
     day: "numeric",
     month: "short",
     year: "numeric",
     timeZone: "Asia/Dubai",
   });
+  // A calendar date ("2026-09-18") is the same day everywhere.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return text;
+  return `<time datetime="${date.toISOString()}" data-local-date>${text}</time>`;
 }
 
 function severityChip(severity: string): string {

@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { SnaggingJobVisit } from "@/types/types";
 
-import { formatGstDate, formatGstDateTime } from "./shared";
+import { formatLocalDate, formatLocalDateTime } from "./shared";
 
 type Tone = "action" | "info";
 
@@ -109,7 +109,7 @@ function describe(taskId: string, visit: SnaggingJobVisit): VisitNotice | null {
         tone: "action",
         icon: ClipboardCheck,
         title: `Visit ${n} is waiting for your review`,
-        body: `${who} submitted it${visit.submitted_at ? ` on ${formatGstDateTime(visit.submitted_at)}` : ""} with ${foundLine}. Open it to check the snags and checklist, then approve it to reissue the client's report with them, or send it back to the inspector with a note.`,
+        body: `${who} submitted it${visit.submitted_at ? ` on ${formatLocalDateTime(visit.submitted_at)}` : ""} with ${foundLine}. Open it to check the snags and checklist, then approve it to reissue the client's report with them, or send it back to the inspector with a note.`,
         cta: { label: `Review visit ${n}`, href: page },
       };
 
@@ -131,15 +131,15 @@ function describe(taskId: string, visit: SnaggingJobVisit): VisitNotice | null {
         tone: "info",
         icon: PlayCircle,
         title: `Visit ${n} is in progress`,
-        body: `${who} started on site${visit.started_at ? ` on ${formatGstDateTime(visit.started_at)}` : ""}. ${found > 0 ? `${foundLine} so far, marked "Visit ${n}" in the list below. ` : ""}It comes here for review once they submit it from the phone.`,
+        body: `${who} started on site${visit.started_at ? ` on ${formatLocalDateTime(visit.started_at)}` : ""}. ${found > 0 ? `${foundLine} so far, marked "Visit ${n}" in the list below. ` : ""}It comes here for review once they submit it from the phone.`,
         cta: { label: `Open visit ${n}`, href: page },
       };
 
     case "scheduled": {
       const when = visit.appointment_at
-        ? formatGstDateTime(visit.appointment_at)
+        ? formatLocalDateTime(visit.appointment_at)
         : visit.scheduled_date
-          ? formatGstDate(visit.scheduled_date)
+          ? formatLocalDate(visit.scheduled_date)
           : null;
       if (!visit.inspector_id) {
         return {

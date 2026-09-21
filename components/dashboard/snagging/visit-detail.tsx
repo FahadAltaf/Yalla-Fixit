@@ -51,7 +51,7 @@ import {
   StatCard,
   StatCardGrid,
   SubmitButton,
-  formatGstDateTime,
+  formatLocalDateTime,
 } from "./shared";
 import { QuotationPanel } from "./quotation-panel";
 import { SnagWalkList } from "./snag-walk-list";
@@ -375,7 +375,7 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
                     {[
                       detail.job?.building_name,
                       visit.appointment_at
-                        ? formatGstDateTime(visit.appointment_at)
+                        ? formatLocalDateTime(visit.appointment_at)
                         : visit.scheduled_date ?? "no date yet",
                       visit.inspector?.full_name
                         ? `inspector ${visit.inspector.full_name}`
@@ -527,7 +527,14 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
                   numbered rows with their photos and plan pins — given only
                   this visit's defects.
                 */}
-                {visitTask ? <SnagWalkList task={visitTask} /> : null}
+                {visitTask ? (
+                  <SnagWalkList
+                    task={visitTask}
+                    canEdit={canEdit}
+                    onSnagsChanged={() => void load()}
+                    onAreasChanged={() => void load()}
+                  />
+                ) : null}
               </TabsContent>
 
               <TabsContent value="checklist" className="mt-4">

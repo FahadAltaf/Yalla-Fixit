@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import TimeSelect from "@/components/ui/time-select";
-import { toGulfInstant } from "@/lib/snagging/schedule-defaults";
+import { splitInstant, toLocalInstant } from "@/lib/snagging/schedule-defaults";
 import { snaggingService } from "@/modules/snagging";
 import { usersService } from "@/modules/users/services/users-service";
 import type { SnaggingJobVisit, User } from "@/types/types";
@@ -32,14 +32,6 @@ import { SubmitButton } from "./shared";
 
 const UNASSIGNED = "__none__";
 
-/** A stored instant, split into its GST date and time. */
-function splitGst(iso: string | null): { date: string; time: string } {
-  if (!iso) return { date: "", time: "" };
-  const shifted = new Date(new Date(iso).getTime() + 4 * 3600 * 1000);
-  if (Number.isNaN(shifted.getTime())) return { date: "", time: "" };
-  const text = shifted.toISOString();
-  return { date: text.slice(0, 10), time: text.slice(11, 16) };
-}
 
 /**
  * Who goes, and when (BA v2, change 25).
@@ -92,7 +84,7 @@ export function VisitEditDialog({
   if (key !== seededFor) {
     setSeededFor(key);
     if (visit) {
-      const split = splitGst(visit.appointment_at);
+      const split = splitInstant(visit.appointment_at);
       setInspectorId(visit.inspector_id ?? UNASSIGNED);
       setDate(split.date || visit.scheduled_date || "");
       setTime(split.time || "09:00");
@@ -122,7 +114,7 @@ export function VisitEditDialog({
     if (!visit) return;
     setSaving(true);
     try {
-      const appointment = date ? toGulfInstant(date, time || "09:00") : null;
+      const appointment = date ? toLocalInstant(date, time || "09:00") : null;
       await snaggingService.updateVisit(taskId, visit.id, {
         inspector_id: inspectorId === UNASSIGNED ? null : inspectorId,
         scheduled_date: date || null,

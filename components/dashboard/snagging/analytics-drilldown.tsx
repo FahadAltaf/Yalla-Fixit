@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Download, FileSpreadsheet, Search } from "lucide-react";
+import { Building2, Download, FileSpreadsheet, Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -173,7 +173,7 @@ export function AnalyticsDrilldown({
         */}
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
           {loading ? (
-            <RowsSkeleton columns={3} />
+            <RowsSkeleton columns={4} />
           ) : error ? (
             <div className="px-6 py-4">
               <ErrorState
@@ -198,13 +198,13 @@ export function AnalyticsDrilldown({
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
                   <TableHead className="h-11 pl-6">Job</TableHead>
+                  <TableHead className="h-11">Status</TableHead>
                   {detailColumns.map((column, index) => (
                     <TableHead
                       key={column.key}
                       className={cn(
                         "h-11 whitespace-nowrap",
                         index === detailColumns.length - 1 && "pr-6",
-                        column.align === "right" && "text-right",
                       )}
                     >
                       {column.label}
@@ -227,12 +227,15 @@ export function AnalyticsDrilldown({
                         // above the thing people actually recognise.
                         title={row.unit ? String(row.unit) : "—"}
                         subtitle={null}
-                        badge={
-                          row.status ? (
-                            <TaskStatusBadge status={statusFor(row.status)} />
-                          ) : null
-                        }
+                        icon={Building2}
                       />
+                    </TableCell>
+                    <TableCell className="py-3 whitespace-nowrap">
+                      {row.status ? (
+                        <TaskStatusBadge status={statusFor(row.status)} />
+                      ) : (
+                        "—"
+                      )}
                     </TableCell>
                     {detailColumns.map((column, index) => (
                       <TableCell
@@ -240,7 +243,7 @@ export function AnalyticsDrilldown({
                         className={cn(
                           "py-3 whitespace-nowrap",
                           index === detailColumns.length - 1 && "pr-6",
-                          column.align === "right" && "text-right tabular-nums",
+                          "tabular-nums",
                         )}
                       >
                         {row[column.key] ?? "—"}

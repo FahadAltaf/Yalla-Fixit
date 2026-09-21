@@ -113,9 +113,9 @@ export default function SnaggingOverviewDashboard() {
               Pull changes
             </Button>
             {canCreate ? (
-              <Button onClick={() => router.push("/snagging/jobs/new")}>
+              <Button onClick={() => router.push("/snagging/quotations/new")}>
                 <Plus className="size-4" />
-                New job
+                New quotation
               </Button>
             ) : null}
           </div>

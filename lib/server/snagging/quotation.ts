@@ -22,7 +22,8 @@ export const QUOTATION_COLUMNS = `id, job_id, source_job_id, quote_kind, client_
   quote_number, status, currency, subtotal, tax_rate, tax_amount, total, lines, scope_of_work,
   terms, sent_at, sent_to, created_at, rejected_reason, approved_by_name, decided_at,
   property_snapshot, furnished, rate_per_sqft, rate_suggested, external_rate_per_sqft,
-  external_rate_suggested, rate_override_reason, rate_outside_band, rate_approved_at`;
+  external_rate_suggested, rate_override_reason, rate_outside_band, rate_approved_at,
+  out_of_hours:pricing_snapshot->out_of_hours`;
 
 /* The job's Quotation tab, its PDF and the client report: the document
    and its decision, without the pricing-decision fields only the

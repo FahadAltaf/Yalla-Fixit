@@ -48,7 +48,7 @@ import {
   StatCard,
   StatCardGrid,
   SubmitButton,
-  formatGstDateTime,
+  formatLocalDateTime,
   useConfirm,
 } from "./shared";
 
@@ -244,28 +244,14 @@ export default function QuotationDetail({ id }: { id: string }) {
         title={quote ? `Quotation ${quote.quote_number}` : "Quotation"}
         description={
           quote
-            ? `${isDesnag ? "De-snagging visit" : "Inspection"} · raised ${formatGstDateTime(quote.created_at)}.`
+            ? `${isDesnag ? "De-snagging visit" : "Inspection"} · raised ${formatLocalDateTime(quote.created_at)}.`
             : "Loading the document…"
         }
-      />
-
-      <DataState
-        loading={loading}
-        error={error}
-        onRetry={() => void load()}
-        retrying={loading}
-        errorTitle="Could not load the quotation"
-        skeleton={
-          <div className="flex flex-col gap-4">
-            <Skeleton className="h-9 w-64" />
-            <Skeleton className="h-[28rem] w-full" />
-          </div>
-        }
-      >
-        {quote && doc ? (
-          <div className="flex flex-col gap-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <QuotationStatusBadge status={quote.status} />
+        actions={
+          quote && doc ? (
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {/* Once the job exists, its card below carries the status. */}
+              {quote.job_id ? null : <QuotationStatusBadge status={quote.status} />}
 
               {canEdit ? (
                 <div className="flex flex-wrap items-center gap-2">
@@ -332,7 +318,25 @@ export default function QuotationDetail({ id }: { id: string }) {
                 </div>
               ) : null}
             </div>
+          ) : null
+        }
+      />
 
+      <DataState
+        loading={loading}
+        error={error}
+        onRetry={() => void load()}
+        retrying={loading}
+        errorTitle="Could not load the quotation"
+        skeleton={
+          <div className="flex flex-col gap-4">
+            <Skeleton className="h-9 w-64" />
+            <Skeleton className="h-[28rem] w-full" />
+          </div>
+        }
+      >
+        {quote && doc ? (
+          <div className="flex flex-col gap-4">
             {/*
               What the de-snag is charged, above the document. The amount
               was chosen inside the rate card's range when it was raised,
@@ -412,7 +416,10 @@ export default function QuotationDetail({ id }: { id: string }) {
             {quote.job_id ? (
               <Alert>
                 <FileText />
-                <AlertTitle>This quotation has its job</AlertTitle>
+                <AlertTitle className="flex flex-wrap items-center gap-2">
+                  This quotation has its job
+                  <QuotationStatusBadge status={quote.status} />
+                </AlertTitle>
                 <AlertDescription>
                   <Button
                     variant="link"

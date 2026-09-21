@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { splitInstant, toLocalInstant } from "@/lib/snagging/schedule-defaults";
 import {
   AlertTriangle,
   Building2,
@@ -74,14 +75,8 @@ import {
 
 const UNASSIGNED = "none";
 
-/** Splits a stored appointment instant into GST (+04:00) date + time parts. */
-function splitAppointment(iso: string | null): { date: string; time: string } {
-  if (!iso) return { date: "", time: "" };
-  const shifted = new Date(new Date(iso).getTime() + 4 * 3600 * 1000);
-  if (Number.isNaN(shifted.getTime())) return { date: "", time: "" };
-  const s = shifted.toISOString();
-  return { date: s.slice(0, 10), time: s.slice(11, 16) };
-}
+/** Splits a stored appointment instant into the viewer's date + time. */
+const splitAppointment = splitInstant;
 
 // Which map the Setup tab draws. Google when a key is configured,
 // Leaflet otherwise -- so a missing env var degrades to the old map
@@ -238,7 +233,7 @@ export function JobSetupPanel({
     setSaving("appt");
     try {
       const appointment_at = apptDate
-        ? `${apptDate}T${apptTime || "09:00"}:00+04:00`
+        ? (toLocalInstant(apptDate, apptTime || "09:00")?.toISOString() ?? null)
         : null;
       await snaggingService.updateTask(task.id, { appointment_at });
       toast.success("Appointment saved");
@@ -636,7 +631,7 @@ export function JobSetupPanel({
                     label: "Bedrooms",
                     value:
                       property?.bedrooms !== null &&
-                      property?.bedrooms !== undefined
+                        property?.bedrooms !== undefined
                         ? String(property.bedrooms)
                         : null,
                   },
@@ -884,7 +879,7 @@ export function JobSetupPanel({
             </div>
 
             {propDraft.property_type === "villa" ||
-            propDraft.property_type === "townhouse" ? (
+              propDraft.property_type === "townhouse" ? (
               <div className="space-y-1.5">
                 <Label htmlFor="prop-plot">Plot area (sq ft)</Label>
                 <Input
@@ -1241,7 +1236,8 @@ export function JobSetupPanel({
               {canAssign ? (
                 <div className="flex justify-end">
                   <SubmitButton
-                    size="sm"
+                    // size="sm"
+                    variant={"outline"}
                     onClick={() => void saveAssignment()}
                     disabled={saving !== null}
                     pending={saving === "assign"}
@@ -1281,11 +1277,11 @@ export function JobSetupPanel({
       <SetupSection
         icon={CalendarClock}
         title="Appointment"
-        description="When the inspector is expected on site. Quoted in Gulf time."
+        description="When the inspector is expected on site, in your time zone."
         footer={
           canEdit ? (
             <SubmitButton
-              size="sm"
+              // size="sm"
               variant="outline"
               onClick={() => void saveAppointment()}
               disabled={saving !== null}
@@ -1308,7 +1304,7 @@ export function JobSetupPanel({
               aria-label="Appointment date"
             />
           </Field>
-          <Field label="Time (GST)" htmlFor="appt-time">
+          <Field label="Time" htmlFor="appt-time">
             <TimeSelect
               value={apptTime}
               disabled={!canEdit || !apptDate}
@@ -1327,7 +1323,7 @@ export function JobSetupPanel({
         footer={
           canEdit ? (
             <SubmitButton
-              size="sm"
+              // size="sm"
               variant="outline"
               onClick={() => void saveContacts()}
               disabled={saving !== null}

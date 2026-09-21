@@ -185,7 +185,7 @@ export default function JobsTable() {
               statusValue={filter}
               onStatusChange={handleStatusChange}
               canCreate={canCreate}
-              onCreate={() => router.push("/snagging/jobs/new")}
+              onCreate={() => router.push("/snagging/quotations/new")}
             />
           }
           columns={getSnaggingJobColumns()}
@@ -212,8 +212,8 @@ export default function JobsTable() {
               {...(canCreate && !error
                 ? {
                     action: {
-                      label: "New job",
-                      onClick: () => router.push("/snagging/jobs/new"),
+                      label: "New quotation",
+                      onClick: () => router.push("/snagging/quotations/new"),
                     },
                   }
                 : {})}

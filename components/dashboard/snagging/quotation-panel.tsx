@@ -47,7 +47,7 @@ import {
   SectionCard,
   SubHeading,
   SubmitButton,
-  formatGstDateTime,
+  formatLocalDateTime,
 } from "./shared";
 
 /** Builds the document snapshot the shared quotation template renders from. */
@@ -590,7 +590,7 @@ export function QuotationPanel({
                   <AlertDescription>
                     Sent to {quote.sent_to}
                     {quote.sent_at
-                      ? ` on ${formatGstDateTime(quote.sent_at)}`
+                      ? ` on ${formatLocalDateTime(quote.sent_at)}`
                       : ""}
                     .
                   </AlertDescription>
@@ -605,7 +605,7 @@ export function QuotationPanel({
                       ? `${quote.approved_by_name} approved this`
                       : "Approved"}
                     {quote.decided_at
-                      ? ` on ${formatGstDateTime(quote.decided_at)}`
+                      ? ` on ${formatLocalDateTime(quote.decided_at)}`
                       : ""}
                     {quotationId
                       ? `. Visit ${visitNumber ?? ""} can be booked.`.replace("  ", " ")

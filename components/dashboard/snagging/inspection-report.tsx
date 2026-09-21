@@ -270,15 +270,16 @@ const SEVERITY: Record<string, { label: string; tone: keyof typeof TONE }> = {
   conformity: { label: "Conformity", tone: "pass" },
 };
 
-const GST = "Asia/Dubai";
-
+/*
+  Dates and times read in the viewer's own time zone, as everywhere else in
+  the portal: the report is opened in the browser and printed from there.
+*/
 function fmtDate(value?: string | null): string {
   if (!value) return "—";
   return new Intl.DateTimeFormat("en-GB", {
     day: "numeric",
     month: "short",
     year: "numeric",
-    timeZone: GST,
   }).format(new Date(value));
 }
 
@@ -289,7 +290,6 @@ function fmtDateTime(value?: string | null): string {
     month: "short",
     hour: "2-digit",
     minute: "2-digit",
-    timeZone: GST,
   }).format(new Date(value));
 }
 
@@ -1154,7 +1154,6 @@ export const InspectionReport = forwardRef<
     ? new Date(task.appointment_at).toLocaleTimeString("en-GB", {
       hour: "2-digit",
       minute: "2-digit",
-      timeZone: "Asia/Dubai",
     })
     : "—";
   const visitTypeLabel =

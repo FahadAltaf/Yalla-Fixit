@@ -432,6 +432,11 @@ export async function PATCH(
       ratePerSqft: chosenRate,
       externalRatePerSqft: externalRate,
       furnished: body?.furnished === undefined ? null : Boolean(body.furnished),
+      // Absent from an older caller: keep what the quotation already had.
+      outOfHours:
+        body?.out_of_hours === undefined
+          ? quote.out_of_hours === true
+          : Boolean(body.out_of_hours),
     });
 
     /*
@@ -821,7 +826,16 @@ async function regenerate(
     .eq("id", quote.client_id as string)
     .maybeSingle();
 
-  const priced = priceQuotation(property as QuotedProperty, client, config);
+  /*
+    Repriced against today's card, but with this quotation's own
+    declarations: whether the client said furnished, and whether the visit
+    is out of hours. Leaving them out repriced a furnished quotation at the
+    unit's flag and dropped an out-of-hours surcharge nobody had removed.
+  */
+  const priced = priceQuotation(property as QuotedProperty, client, config, {
+    furnished: typeof quote.furnished === "boolean" ? quote.furnished : null,
+    outOfHours: quote.out_of_hours === true,
+  });
 
   const { data, error } = await admin
     .from("snagging_quotations")

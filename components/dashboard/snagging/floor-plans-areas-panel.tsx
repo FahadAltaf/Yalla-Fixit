@@ -858,13 +858,13 @@ export function FloorPlansAreasPanel({
                 </div>
 
                 {/* The two gestures on the chips, said once. */}
-                {canEdit ? (
+                {/* {canEdit ? (
                   <p className="text-muted-foreground text-xs">
                     Double-click a plan to rename it
                     {plans.length > 1 ? ", drag to reorder" : ""}. Drop an image
                     here to add another.
                   </p>
-                ) : null}
+                ) : null} */}
               </>
             )}
 

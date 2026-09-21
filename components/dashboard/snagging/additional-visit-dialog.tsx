@@ -18,7 +18,7 @@ import TimeSelect from "@/components/ui/time-select";
 import {
   isPastSlot,
   nextBookableSlot,
-  toGulfInstant,
+  toLocalInstant,
 } from "@/lib/snagging/schedule-defaults";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -69,7 +69,7 @@ export function AdditionalVisitDialog({
     setTime(slot.time);
   }, [open]);
 
-  const appointment = toGulfInstant(scheduledDate, time);
+  const appointment = toLocalInstant(scheduledDate, time);
   const inPast = isPastSlot(scheduledDate, time);
   const ready = Boolean(scheduledDate) && Boolean(time) && !inPast && !working;
 
