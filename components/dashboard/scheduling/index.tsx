@@ -43,6 +43,18 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/actions/utils";
 import {
+  formatZonedDate,
+  zonedTimeToUtc,
+} from "@/lib/scheduling/org-time";
+import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
   Check,
   ChevronLeft,
   ChevronRight,
@@ -426,7 +438,7 @@ export default function SchedulingDashboard({ technicians }: Props) {
                   const technicianTags = assignments[technician.fsm_resource_id] ?? [];
                   const id = technician.fsm_resource_id;
                   const leaveDetail = leave
-                    ? `${new Date(leave.record.start_at).toLocaleDateString()} – ${new Date(
+                    ? `${formatZonedDate(leave.record.start_at)} – ${new Date(
                       leave.record.end_at,
                     ).toLocaleDateString()}`
                     : undefined;
@@ -559,8 +571,9 @@ export default function SchedulingDashboard({ technicians }: Props) {
             title="Manage Roles"
             noun="role"
             items={roles}
+            colorable
             onCreate={(n) => rolesService.create(n)}
-            onRename={(id, n) => rolesService.update(id, n)}
+            onRename={(id, n, c) => rolesService.update(id, n, c)}
             onDelete={(id) => rolesService.remove(id).then(() => undefined)}
             onOpenChange={(o) => !o && setManageList(null)}
             onChanged={loadAll}
@@ -658,7 +671,192 @@ function BulkTagMenu({
   );
 }
 
-type ListItem = { id: string; name: string; technician_count?: number };
+type ListItem = { id: string; name: string; color?: string | null; technician_count?: number };
+
+// FR-2: preset highlight colours, readable as a row tint and as text.
+const PRESET_COLORS = [
+  "#dc2626", "#ea580c", "#d97706", "#ca8a04", "#65a30d", "#16a34a",
+  "#059669", "#0d9488", "#0891b2", "#0284c7", "#2563eb", "#4f46e5",
+  "#7c3aed", "#9333ea", "#c026d3", "#db2777", "#475569", "#78716c",
+];
+const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+
+// Pick a role's highlight colour: presets first, a custom colour as an option,
+// and nothing is saved until OK -- the native picker fires on every drag, so
+// saving on change sent a request per pixel.
+function RoleColorPicker({
+  name,
+  value,
+  disabled,
+  onApply,
+}: {
+  name: string;
+  value: string | null;
+  disabled?: boolean;
+  onApply: (color: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<string | null>(value);
+  const [customOpen, setCustomOpen] = useState(false);
+  const [hexText, setHexText] = useState(value ?? "");
+
+  const isPreset = (c: string | null) => !!c && PRESET_COLORS.includes(c.toLowerCase());
+
+  const handleOpenChange = (next: boolean) => {
+    if (next) {
+      // Start from the saved colour every time; Cancel/close discards.
+      setDraft(value);
+      setHexText(value ?? "");
+      setCustomOpen(!!value && !isPreset(value));
+    }
+    setOpen(next);
+  };
+
+  const setCustom = (color: string) => {
+    setDraft(color.toLowerCase());
+    setHexText(color.toLowerCase());
+  };
+
+  const unchanged = (draft ?? "").toLowerCase() === (value ?? "").toLowerCase();
+
+  return (
+    <Popover open={open} onOpenChange={handleOpenChange}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          disabled={disabled}
+          className="relative size-6 shrink-0 cursor-pointer overflow-hidden rounded border disabled:cursor-not-allowed disabled:opacity-50"
+          style={{ backgroundColor: value ?? "transparent" }}
+          title={value ? `Highlight colour ${value}` : "No highlight colour — click to choose"}
+          aria-label={`Highlight colour for ${name}`}
+        >
+          {!value && (
+            // A diagonal slash reads as "none" at a glance.
+            <span className="bg-muted-foreground/50 absolute top-1/2 left-1/2 h-px w-[130%] -translate-x-1/2 -translate-y-1/2 -rotate-45" />
+          )}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-72">
+        <PopoverHeader>
+          <PopoverTitle>Colour for {name}</PopoverTitle>
+          <PopoverDescription className="text-xs">
+            Tints this role&apos;s technicians on the schedule board.
+          </PopoverDescription>
+        </PopoverHeader>
+
+        <div className="grid grid-cols-6 gap-1.5" role="radiogroup" aria-label="Preset colours">
+          {PRESET_COLORS.map((c) => {
+            const selected = draft?.toLowerCase() === c;
+            return (
+              <button
+                key={c}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                aria-label={c}
+                onClick={() => setCustom(c)}
+                className={cn(
+                  "ring-offset-background flex size-9 items-center justify-center rounded-md transition-transform hover:scale-110 focus-visible:outline-none",
+                  selected ? "ring-foreground ring-2 ring-offset-2" : "focus-visible:ring-ring focus-visible:ring-2",
+                )}
+                style={{ backgroundColor: c }}
+              >
+                {selected && <Check className="size-4 text-white drop-shadow" />}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant={draft === null ? "secondary" : "outline"}
+            onClick={() => setDraft(null)}
+            aria-pressed={draft === null}
+          >
+            <X className="size-3.5" /> No colour
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={customOpen ? "secondary" : "outline"}
+            onClick={() => {
+              setCustomOpen((v) => !v);
+              if (!customOpen && draft) setHexText(draft);
+            }}
+            aria-expanded={customOpen}
+          >
+            Custom colour…
+          </Button>
+        </div>
+
+        {customOpen && (
+          <div className="flex items-center gap-2">
+            <input
+              type="color"
+              value={draft && HEX_COLOR.test(draft) ? draft : "#dc2626"}
+              onChange={(e) => setCustom(e.target.value)}
+              className="h-9 w-12 shrink-0 cursor-pointer rounded border bg-transparent p-0.5"
+              aria-label="Pick a custom colour"
+            />
+            <Input
+              value={hexText}
+              onChange={(e) => {
+                const text = e.target.value.trim();
+                setHexText(text);
+                if (HEX_COLOR.test(text)) setDraft(text.toLowerCase());
+              }}
+              placeholder="#1a2b3c"
+              className="h-9 font-mono text-sm"
+              aria-label="Hex colour"
+              aria-invalid={hexText !== "" && !HEX_COLOR.test(hexText)}
+            />
+          </div>
+        )}
+
+        {/* Preview of how the row will read on the board. */}
+        <div
+          className="flex items-center gap-2 rounded-md border px-2 py-1.5 text-sm"
+          style={{
+            backgroundColor: draft ? `${draft}0f` : undefined,
+            borderLeft: draft ? `3px solid ${draft}` : undefined,
+          }}
+        >
+          <span className="font-medium" style={{ color: draft ?? undefined }}>
+            Technician name
+          </span>
+          {draft && (
+            <span
+              className="rounded px-1 py-0.5 text-[9px] font-semibold tracking-wide uppercase"
+              style={{ backgroundColor: `${draft}22`, color: draft }}
+            >
+              {name}
+            </span>
+          )}
+          {!draft && <span className="text-muted-foreground text-xs">No highlight</span>}
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <Button type="button" size="sm" variant="ghost" onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            disabled={unchanged}
+            onClick={() => {
+              onApply(draft);
+              setOpen(false);
+            }}
+          >
+            OK
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 function ManageListDialog({
   title,
@@ -669,15 +867,18 @@ function ManageListDialog({
   onDelete,
   onOpenChange,
   onChanged,
+  colorable,
 }: {
   title: string;
   noun: string;
   items: ListItem[];
   onCreate: (name: string) => Promise<unknown>;
-  onRename: (id: string, name: string) => Promise<unknown>;
+  onRename: (id: string, name: string, color?: string | null) => Promise<unknown>;
   onDelete: (id: string) => Promise<void>;
   onOpenChange: (open: boolean) => void;
   onChanged: () => void;
+  // FR-2: when set, each item gets a highlight-colour swatch (roles).
+  colorable?: boolean;
 }) {
   const [newName, setNewName] = useState("");
   const [saving, setSaving] = useState(false);
@@ -713,6 +914,19 @@ function ManageListDialog({
       onChanged();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : `Failed to rename ${noun}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // FR-2: colour is persisted through onRename (name unchanged, colour set).
+  const changeColor = async (item: ListItem, color: string | null) => {
+    setSaving(true);
+    try {
+      await onRename(item.id, item.name, color);
+      onChanged();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : `Failed to update ${noun} colour`);
     } finally {
       setSaving(false);
     }
@@ -785,6 +999,14 @@ function ManageListDialog({
                     {item.name}{" "}
                     <span className="text-muted-foreground text-xs">({item.technician_count ?? 0} technicians)</span>
                   </button>
+                )}
+                {colorable && (
+                  <RoleColorPicker
+                    name={item.name}
+                    value={item.color ?? null}
+                    disabled={saving}
+                    onApply={(color) => changeColor(item, color)}
+                  />
                 )}
                 <Button size="icon" variant="ghost" onClick={() => setDeleteTarget(item)}>
                   <Trash2 className="text-destructive size-4" />
@@ -881,8 +1103,8 @@ function ManageTechnicianDialog({
       const { conflicts } = await leaveService.createLeave({
         technicianFsmId: technician.fsm_resource_id,
         leaveType: leaveType.trim(),
-        startAt: new Date(`${startDate}T${startTime}:00`).toISOString(),
-        endAt: new Date(`${endDate}T${endTime}:00`).toISOString(),
+        startAt: zonedTimeToUtc(startDate, startTime).toISOString(),
+        endAt: zonedTimeToUtc(endDate, endTime).toISOString(),
         notes: notes.trim() || null,
       });
       toast.success(
@@ -981,7 +1203,7 @@ function ManageTechnicianDialog({
                 <div>
                   <span className="font-medium">{record.leave_type}</span>{" "}
                   <span className="text-muted-foreground text-xs">
-                    {new Date(record.start_at).toLocaleDateString()} – {new Date(record.end_at).toLocaleDateString()}
+                    {formatZonedDate(record.start_at)} – {formatZonedDate(record.end_at)}
                   </span>{" "}
                   <StatusBadge status={record.status} />
                 </div>

@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
 import { reconcileFsmAppointments } from "@/lib/server/zoho/reconcile";
+import { importFsmAppointmentsForDay } from "@/lib/server/zoho/import-appointments";
 import { ActionType, ResourceType } from "@/types/types";
 
 // Reconciliation can take a few seconds per FSM read; a busy all-days sweep
@@ -45,7 +47,34 @@ export async function POST(req: NextRequest) {
     const result = await reconcileFsmAppointments({ operatingDate: parsed.data.date });
     if (!result.ok) return NextResponse.json(result.json, { status: result.status });
 
-    return NextResponse.json({ data: result.json });
+    // FR-4: Refresh also picks up appointments booked directly in FSM since
+    // the day was last opened. Only for the date being viewed, and only while
+    // that day is still editable.
+    let imported = 0;
+    let fsmImport: Awaited<ReturnType<typeof importFsmAppointmentsForDay>> | null = null;
+    const date = parsed.data.date;
+    if (date) {
+      const admin = await createAdminServerClient();
+      const { data: version } = await admin
+        .from("schedule_versions")
+        .select("id, status")
+        .eq("schedule_date", date)
+        .eq("is_current", true)
+        .maybeSingle();
+      if (version && (version.status === "draft" || version.status === "draft_revision")) {
+        const importResult = await importFsmAppointmentsForDay(admin, { date, versionId: version.id });
+        fsmImport = importResult;
+        imported = importResult.imported;
+        if (!importResult.error) {
+          await admin
+            .from("schedule_versions")
+            .update({ fsm_imported_at: new Date().toISOString() })
+            .eq("id", version.id);
+        }
+      }
+    }
+
+    return NextResponse.json({ data: { ...result.json, imported, fsmImport } });
   } catch (error) {
     console.error("Scheduling reconcile error:", error);
     return NextResponse.json({ error: "Failed to trigger reconciliation" }, { status: 500 });

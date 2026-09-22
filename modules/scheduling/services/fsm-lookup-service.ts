@@ -1,4 +1,5 @@
 import { executeRESTBackend } from "@/lib/rest-server";
+import type { AppointmentState } from "@/lib/scheduling/appointment-status";
 
 export interface FsmWorkOrderAppointmentRef {
   id: string;
@@ -35,11 +36,26 @@ export interface FsmServiceLineItem {
   description: string | null;
   status: string | null;
   scheduled: boolean;
+  // The existing FSM appointment(s) this line already sits on. A line can be
+  // "scheduled" here while its appointment is still unscheduled in FSM.
+  appointments: { id: string; name: string }[];
 }
 
 export interface FsmServiceTaskLineItem {
   id: string;
   name: string;
+  status: string | null;
+}
+
+export interface FsmWorkOrderAppointmentSummary {
+  id: string;
+  name: string;
+  // The service lines this appointment covers (code + service name).
+  lines: { code: string; service: string | null }[];
+  // Mapped with the display board's resolver. "cancelled" appointments don't
+  // cover their lines and can't be scheduled, so the dialog hides them.
+  state: AppointmentState;
+  // FSM's raw status text, for reference.
   status: string | null;
 }
 
@@ -49,6 +65,7 @@ export interface FsmWorkOrderLines {
   workOrderType: string | null;
   serviceLineItems: FsmServiceLineItem[];
   serviceTaskLineItems: FsmServiceTaskLineItem[];
+  appointments: FsmWorkOrderAppointmentSummary[];
 }
 
 export interface FsmWorkOrderSearchResult {

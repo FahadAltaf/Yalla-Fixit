@@ -1,6 +1,6 @@
 import type { TechnicianReference, TechnicianRole, TechnicianServiceType } from "@/types/types";
 
-export type SortMode = "default" | "name" | "role" | "service";
+export type SortMode = "custom" | "default" | "site" | "name" | "role" | "service";
 
 // Which technicians are DRIVERS — role "Driver", or referenced as another
 // technician's driver (the team_leader_fsm_id link, now used as "assigned
@@ -35,6 +35,8 @@ export function orderTechnicians(
   sortMode: SortMode,
   roles: TechnicianRole[],
   services: TechnicianServiceType[],
+  // FR-6: technician fsm id → site (appointment address), for the "site" mode.
+  siteOf?: Map<string, string>,
 ): TechnicianReference[] {
   const serviceOrder = new Map(services.map((s) => [s.id, s.sort_order]));
   const roleOrder = new Map(roles.map((r) => [r.id, r.sort_order]));
@@ -42,6 +44,26 @@ export function orderTechnicians(
   const list = [...techs];
 
   if (sortMode === "name") return list.sort(byName);
+  // The team's own arrangement (rows dragged on the board); technicians not
+  // arranged yet follow, by name.
+  if (sortMode === "custom") {
+    return list.sort(
+      (a, b) => (a.board_position ?? Infinity) - (b.board_position ?? Infinity) || byName(a, b),
+    );
+  }
+  // FR-6: group technicians by site (appointment address); those with no
+  // appointment that day (no site) sink to the bottom.
+  if (sortMode === "site") {
+    const site = siteOf ?? new Map<string, string>();
+    return list.sort((a, b) => {
+      const sa = site.get(a.fsm_resource_id) ?? "";
+      const sb = site.get(b.fsm_resource_id) ?? "";
+      if (!sa && !sb) return byName(a, b);
+      if (!sa) return 1;
+      if (!sb) return -1;
+      return sa.localeCompare(sb) || byName(a, b);
+    });
+  }
   if (sortMode === "role") {
     return list.sort(
       (a, b) =>

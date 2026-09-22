@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   scheduleService,
@@ -25,9 +25,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertTriangle, Loader2, Search } from "lucide-react";
 import TimeSelect, { formatTimeAmPm } from "@/components/ui/time-select";
+import { APPOINTMENT_STATE_LABELS, APPOINTMENT_STATE_STYLES } from "@/lib/scheduling/appointment-status";
+import {
+  zonedTimeToUtc,
+} from "@/lib/scheduling/org-time";
 import {
   resolveShift,
   shiftWindowLabel,
@@ -114,8 +119,8 @@ export default function AddEntryDialog({
   const shiftMoved = !isAllDay && resolvedShift !== null && resolvedShift !== shift;
 
   const onLeaveByTechnician = useMemo(() => {
-    const startAt = new Date(`${date}T${startTime}:00`).getTime();
-    const endAt = new Date(`${date}T${endTime}:00`).getTime();
+    const startAt = zonedTimeToUtc(date, startTime).getTime();
+    const endAt = zonedTimeToUtc(date, endTime).getTime();
     const map = new Map<string, LeaveRecord>();
     leaveRecords.forEach((r) => {
       if (r.status !== "active") return;
@@ -126,28 +131,35 @@ export default function AddEntryDialog({
     return map;
   }, [leaveRecords, date, startTime, endTime]);
 
+  // Only the most recent lines request may write state, so a slow response for
+  // a previously picked work order can't show (and pre-tick) the wrong lines.
+  const linesRequestRef = useRef(0);
   const loadWorkOrderLines = async (workOrderId: string) => {
+    const requestId = ++linesRequestRef.current;
     setLinesLoading(true);
     setWoLines(null);
     try {
       const lines = await fsmLookupService.getWorkOrderLines(workOrderId);
+      if (requestId !== linesRequestRef.current) return;
       setWoLines(lines);
       // Default: all UNSCHEDULED lines selected (YFI: all lines by default).
       setSelectedLineIds((lines?.serviceLineItems ?? []).filter((l) => !l.scheduled).map((l) => l.id));
     } catch {
-      setWoLines(null);
+      if (requestId === linesRequestRef.current) setWoLines(null);
     } finally {
-      setLinesLoading(false);
+      if (requestId === linesRequestRef.current) setLinesLoading(false);
     }
   };
 
   // Hydrate the full work order (with appointments) once one is picked, and
-  // pre-select the obvious appointment choice.
-  const selectWorkOrder = async (name: string) => {
+  // pre-select the obvious appointment choice. When the search already gave us
+  // the id, the lines/status read starts in parallel instead of waiting.
+  const selectWorkOrder = async (name: string, id?: string) => {
     setSearching(true);
     setWorkOrder(null);
     setAppointmentChoice("");
     setWoLines(null);
+    if (id) loadWorkOrderLines(id);
     try {
       const result = await fsmLookupService.findWorkOrder(name.trim());
       if (!result) {
@@ -157,11 +169,10 @@ export default function AddEntryDialog({
       setSearchResults(null);
       setWorkOrder(result);
       setTitle(result.summary || result.name);
+      // Lines drive each existing appointment's coverage + status badge.
+      if (result.id !== id) loadWorkOrderLines(result.id);
       if (result.appointments.length === 1) setAppointmentChoice(result.appointments[0].id);
-      else if (result.appointments.length === 0) {
-        setAppointmentChoice(NEW_APPOINTMENT);
-        loadWorkOrderLines(result.id);
-      }
+      else if (result.appointments.length === 0) setAppointmentChoice(NEW_APPOINTMENT);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Lookup failed");
     } finally {
@@ -181,7 +192,7 @@ export default function AddEntryDialog({
         return;
       }
       if (results.length === 1) {
-        await selectWorkOrder(results[0].name ?? woQuery.trim());
+        await selectWorkOrder(results[0].name ?? woQuery.trim(), results[0].id);
         return;
       }
       setSearchScope(scope);
@@ -221,7 +232,7 @@ export default function AddEntryDialog({
 
   const chooseAppointment = (value: string) => {
     setAppointmentChoice(value);
-    if (value === NEW_APPOINTMENT && workOrder && !woLines) loadWorkOrderLines(workOrder.id);
+    if (value === NEW_APPOINTMENT && workOrder && !woLines && !linesLoading) loadWorkOrderLines(workOrder.id);
   };
 
   const filteredTechnicians = technicians.filter((t) => {
@@ -247,6 +258,36 @@ export default function AddEntryDialog({
     setSelectedLineIds((prev) => (prev.includes(id) ? prev.filter((l) => l !== id) : [...prev, id]));
 
   const selectableLines = (woLines?.serviceLineItems ?? []).filter((l) => !l.scheduled);
+
+  // When every line is already covered, name the existing appointment(s) so the
+  // scheduler knows what to pick above. In FSM these may still be "yet to be
+  // scheduled" (an appointment record exists but has no time/technician yet),
+  // which is exactly what the scheduler places on the board.
+  const coveringAppointmentNames = useMemo(() => {
+    const names = new Set<string>();
+    (woLines?.serviceLineItems ?? []).forEach((l) => l.appointments.forEach((a) => names.add(a.name)));
+    return [...names].sort();
+  }, [woLines]);
+
+  // Coverage + FSM status per appointment id, to annotate the existing-
+  // appointment options (loaded eagerly with the work order).
+  const appointmentInfoById = useMemo(
+    () => new Map((woLines?.appointments ?? []).map((a) => [a.id, a] as const)),
+    [woLines],
+  );
+
+  // A cancelled appointment can't be scheduled onto the board (publish rejects
+  // it), so hide it from the "Use existing appointment" list. Until statuses
+  // load, nothing is marked cancelled yet, so everything shows.
+  const isReleased = (id: string) => {
+    const state = appointmentInfoById.get(id)?.state;
+    return state === "cancelled" || state === "cannot_complete";
+  };
+  const visibleAppointments = (workOrder?.appointments ?? []).filter((a) => !isReleased(a.id));
+  const hiddenCannotComplete = (workOrder?.appointments ?? []).filter(
+    (a) => appointmentInfoById.get(a.id)?.state === "cannot_complete",
+  ).length;
+  const hiddenCancelledCount = (workOrder?.appointments.length ?? 0) - visibleAppointments.length;
 
   const handleSave = async () => {
     if (mode === "free_text" && !title.trim()) {
@@ -292,8 +333,8 @@ export default function AddEntryDialog({
       const bounds = shiftBoundsFor(effectiveShift, config);
       const startHhmm = isAllDay ? minutesToHhmm(bounds.start) : startTime;
       const endHhmm = isAllDay ? minutesToHhmm(bounds.end) : endTime;
-      const startAt = new Date(`${date}T${startHhmm}:00`).toISOString();
-      const endAt = new Date(`${date}T${endHhmm}:00`).toISOString();
+      const startAt = zonedTimeToUtc(date, startHhmm).toISOString();
+      const endAt = zonedTimeToUtc(date, endHhmm).toISOString();
 
       if (mode === "free_text") {
         await scheduleService.addEntry({
@@ -437,7 +478,7 @@ export default function AddEntryDialog({
                         <button
                           key={r.id}
                           type="button"
-                          onClick={() => r.name && selectWorkOrder(r.name)}
+                          onClick={() => r.name && selectWorkOrder(r.name, r.id)}
                           className="hover:bg-muted/60 flex flex-col rounded border px-2 py-1.5 text-left text-sm"
                         >
                           <span className="font-medium">
@@ -477,18 +518,73 @@ export default function AddEntryDialog({
                         onValueChange={chooseAppointment}
                         className="gap-1"
                       >
-                        {workOrder.appointments.map((a) => (
-                          <Label
-                            key={a.id}
-                            htmlFor={`appointment-${a.id}`}
-                            className="hover:bg-muted/50 flex cursor-pointer items-center gap-2 rounded border px-2 py-1.5 font-normal"
-                          >
-                            <RadioGroupItem id={`appointment-${a.id}`} value={a.id} />
-                            <span>
-                              Use existing appointment <b>{a.name}</b>
-                            </span>
-                          </Label>
-                        ))}
+                        {visibleAppointments.map((a) => {
+                          const info = appointmentInfoById.get(a.id);
+                          const lines = info?.lines ?? [];
+                          const label = (
+                            <Label
+                              htmlFor={`appointment-${a.id}`}
+                              className="hover:bg-muted/50 flex cursor-pointer items-start gap-2 rounded border px-2 py-1.5 font-normal"
+                            >
+                              <RadioGroupItem id={`appointment-${a.id}`} value={a.id} className="mt-0.5" />
+                              <span className="flex min-w-0 flex-col gap-0.5">
+                                <span>
+                                  Use existing appointment <b>{a.name}</b>
+                                </span>
+                                <span className="flex flex-wrap items-center gap-1.5">
+                                  {info && (
+                                    <span
+                                      className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium"
+                                      title={info.status ?? undefined}
+                                    >
+                                      <span className={`size-1.5 rounded-full ${APPOINTMENT_STATE_STYLES[info.state].dot}`} />
+                                      <span className={APPOINTMENT_STATE_STYLES[info.state].text}>
+                                        {APPOINTMENT_STATE_LABELS[info.state]}
+                                      </span>
+                                    </span>
+                                  )}
+                                  {lines.length > 0 && (
+                                    <span className="text-muted-foreground text-[11px]">
+                                      covers {lines.map((l) => l.code).join(", ")}
+                                    </span>
+                                  )}
+                                </span>
+                              </span>
+                            </Label>
+                          );
+                          // Hover tooltip: the covered service line items, with names.
+                          if (lines.length > 0) {
+                            return (
+                              <Tooltip key={a.id}>
+                                <TooltipTrigger asChild>{label}</TooltipTrigger>
+                                <TooltipContent side="right" className="max-w-xs">
+                                  <span className="mb-1 block font-medium">Service lines covered</span>
+                                  <span className="flex flex-col gap-0.5">
+                                    {lines.map((l) => (
+                                      <span key={l.code}>
+                                        {l.code}
+                                        {l.service ? ` — ${l.service}` : ""}
+                                      </span>
+                                    ))}
+                                  </span>
+                                </TooltipContent>
+                              </Tooltip>
+                            );
+                          }
+                          return <span key={a.id}>{label}</span>;
+                        })}
+                        {hiddenCancelledCount > 0 && (
+                          <span className="text-muted-foreground px-1 text-[11px]">
+                            {hiddenCancelledCount}{" "}
+                            {hiddenCannotComplete === 0
+                              ? "cancelled"
+                              : hiddenCannotComplete === hiddenCancelledCount
+                                ? "cannot-complete"
+                                : "cancelled or cannot-complete"}{" "}
+                            appointment{hiddenCancelledCount > 1 ? "s" : ""} hidden —
+                            their service lines are available to schedule below.
+                          </span>
+                        )}
                         <Label
                           htmlFor="appointment-new"
                           className="hover:bg-muted/50 flex cursor-pointer items-center gap-2 rounded border px-2 py-1.5 font-normal"
@@ -523,8 +619,10 @@ export default function AddEntryDialog({
                     </div>
                   ) : selectableLines.length === 0 ? (
                     <div className="rounded border border-warning/40 bg-warning/10 px-2 py-1.5 text-[11px] text-warning">
-                      Every service line on this work order already has an appointment. Use the existing appointment
-                      instead.
+                      Every service line already has an appointment in FSM
+                      {coveringAppointmentNames.length > 0 && <> ({coveringAppointmentNames.join(", ")})</>}. In FSM
+                      these may still be <b>unscheduled</b> (&ldquo;yet to be scheduled&rdquo;) — to put them on the
+                      board, choose <b>&ldquo;Use existing appointment&rdquo;</b> above instead of creating a new one.
                     </div>
                   ) : (
                     <div className="flex flex-col gap-0.5 rounded-md border p-2">

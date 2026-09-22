@@ -11,6 +11,7 @@ import {
 import StatusBadge from "@/components/ui/status-badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Loader2 } from "lucide-react";
+import { formatZonedDateTime, formatZonedTime } from "@/lib/scheduling/org-time";
 
 type Props = {
   date: string;
@@ -159,7 +160,7 @@ export default function HistoryDialog({ date, onOpenChange }: Props) {
                     <StatusBadge status={STATUS_LABELS[v.status] ?? v.status} />
                     {v.submitted_at && (
                       <span className="text-muted-foreground text-[11px]">
-                        Submitted {new Date(v.submitted_at).toLocaleString()}
+                        Submitted {formatZonedDateTime(v.submitted_at)}
                       </span>
                     )}
                   </button>
@@ -190,9 +191,9 @@ export default function HistoryDialog({ date, onOpenChange }: Props) {
                               <div className="flex items-center justify-between gap-2">
                                 <span className="font-medium">{entryLabel(e)}</span>
                                 <span className="text-muted-foreground text-xs tabular-nums">
-                                  {new Date(e.start_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                                  {formatZonedTime(e.start_at)}
                                   {" – "}
-                                  {new Date(e.end_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                                  {formatZonedTime(e.end_at)}
                                 </span>
                               </div>
                               <div className="text-muted-foreground mt-0.5 text-xs">
@@ -224,7 +225,7 @@ export default function HistoryDialog({ date, onOpenChange }: Props) {
                             />
                             <div className="text-sm font-medium capitalize">{t.kind}</div>
                             <div className="text-muted-foreground text-xs">
-                              {t.who} · {new Date(t.at).toLocaleString()}
+                              {t.who} · {formatZonedDateTime(t.at)}
                             </div>
                             {t.detail && (
                               <div className={`mt-0.5 text-xs ${t.tone === "bad" ? "text-destructive" : ""}`}>

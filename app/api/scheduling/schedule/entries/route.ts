@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
+import { versionStatusFromResults } from "@/lib/server/schedule-sync";
 import { ActionType, ResourceType } from "@/types/types";
 
 const baseEntrySchema = {
@@ -268,6 +269,9 @@ const updateEntrySchema = z.object({
   technicianFsmIds: z.array(z.string().trim().min(1)).optional(),
   title: z.string().trim().optional().nullable(),
   notes: z.string().trim().optional().nullable(),
+  // Only for a "new_appointment" entry (its FSM appointment isn't created
+  // until approval, so the lines it will cover can still change).
+  serviceLineItemIds: z.array(z.string().trim().min(1)).min(1, "Select at least one service line").optional(),
 });
 
 export async function PUT(req: NextRequest) {
@@ -313,6 +317,40 @@ export async function PUT(req: NextRequest) {
       }
     }
 
+    if (payload.serviceLineItemIds) {
+      // Once the FSM appointment exists, approval only reschedules it, so a
+      // line change here would silently never reach FSM.
+      if (existing.entry_type !== "new_appointment" || existing.fsm_appointment_id) {
+        return NextResponse.json(
+          {
+            error:
+              "Service lines can only be changed on an appointment that hasn't been created in Zoho FSM yet. This appointment's lines are managed in FSM.",
+          },
+          { status: 400 },
+        );
+      }
+      // Same rule as adding: a service line can only be on one new appointment
+      // per day (ignoring this entry itself).
+      const { data: siblings } = await admin
+        .from("schedule_entries")
+        .select("id, fsm_service_line_item_ids, fsm_work_order_name, fsm_appointment_name, title")
+        .eq("schedule_version_id", existing.schedule_version_id)
+        .eq("entry_type", "new_appointment")
+        .neq("id", payload.id);
+      const owner = (siblings ?? []).find((s) =>
+        ((s.fsm_service_line_item_ids as string[] | null) ?? []).some((id) => payload.serviceLineItemIds!.includes(id)),
+      );
+      if (owner) {
+        const ownerLabel = `${owner.fsm_work_order_name || "a work order"} · ${owner.fsm_appointment_name || owner.title || "another new appointment"}`;
+        return NextResponse.json(
+          {
+            error: `Service line already scheduled on ${ownerLabel} for this day. A service line can only be on one appointment per day.`,
+          },
+          { status: 409 },
+        );
+      }
+    }
+
     const updateData: Record<string, unknown> = {
       updated_by: profile.id,
       updated_at: new Date().toISOString(),
@@ -322,14 +360,16 @@ export async function PUT(req: NextRequest) {
     if (payload.endAt !== undefined) updateData.end_at = payload.endAt;
     if (payload.title !== undefined) updateData.title = payload.title || null;
     if (payload.notes !== undefined) updateData.notes = payload.notes || null;
+    if (payload.serviceLineItemIds !== undefined) updateData.fsm_service_line_item_ids = payload.serviceLineItemIds;
 
-    // A change to time, shift or technicians means FSM must be updated on the
-    // next approval. (Time/shift below; technicians further down.)
+    // A change to time, shift, technicians or service lines means FSM must be
+    // updated on the next approval. (Technicians are written further down.)
     const editsSchedule =
       payload.startAt !== undefined ||
       payload.endAt !== undefined ||
       payload.shift !== undefined ||
-      payload.technicianFsmIds !== undefined;
+      payload.technicianFsmIds !== undefined ||
+      payload.serviceLineItemIds !== undefined;
     if (editsSchedule) updateData.needs_sync = true;
 
     const { data: updated, error: updateError } = await admin
@@ -383,9 +423,6 @@ export async function DELETE(req: NextRequest) {
     if (!profile || !accessUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    if (!hasResourceAction(accessUser, ResourceType.SCHEDULING, ActionType.DELETE)) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
 
     const id = req.nextUrl.searchParams.get("id");
     if (!id) return NextResponse.json({ error: "ID is required" }, { status: 400 });
@@ -399,13 +436,70 @@ export async function DELETE(req: NextRequest) {
     if (existingError || !existing) {
       return NextResponse.json({ error: "Entry not found" }, { status: 404 });
     }
+
+    const { data: version, error: versionError } = await admin
+      .from("schedule_versions")
+      .select("id, status")
+      .eq("id", existing.schedule_version_id)
+      .single();
+    if (versionError || !version) {
+      return NextResponse.json({ error: "Schedule version not found" }, { status: 404 });
+    }
+    const isDraft = version.status === "draft" || version.status === "draft_revision";
+    // An approved day can still shed an entry that FSM refused (e.g. its
+    // appointment was cancelled in FSM). Nothing reached FSM for it, so
+    // removing it only tidies the board. Approver-only, like Retry.
+    const removingFailed =
+      ["published", "partially_synced", "sync_failed"].includes(version.status) && existing.sync_status === "failed";
+
+    if (!isDraft && !removingFailed) {
+      return NextResponse.json(
+        { error: `Cannot modify entries while the version is ${version.status}` },
+        { status: 409 },
+      );
+    }
+    if (isDraft && !hasResourceAction(accessUser, ResourceType.SCHEDULING, ActionType.DELETE)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+    if (removingFailed && !hasResourceAction(accessUser, ResourceType.SCHEDULING, ActionType.APPROVE)) {
+      return NextResponse.json(
+        { error: "Only an approver can remove a failed entry from an approved day" },
+        { status: 403 },
+      );
+    }
+
     // PLAN-017: removing a Pending Appointment Creation entry leaves FSM
     // unchanged because no appointment has been created yet -- true here
     // since draft entries never touch FSM regardless of entry_type.
-    await assertDraftEditable(admin, existing.schedule_version_id);
-
     const { error } = await admin.from("schedule_entries").delete().eq("id", id);
     if (error) throw new Error(error.message);
+
+    // With the failed entry gone, the day may now be fully synced.
+    let updatedVersion: Record<string, unknown> | null = null;
+    if (removingFailed) {
+      const { data: remaining } = await admin
+        .from("schedule_entries")
+        .select("id, entry_type, sync_status")
+        .eq("schedule_version_id", existing.schedule_version_id);
+      const overall = versionStatusFromResults(
+        (remaining ?? [])
+          .filter((e) => e.entry_type !== "free_text")
+          .map((e) => ({
+            entryId: e.id,
+            status: e.sync_status === "synced" ? "succeeded" : e.sync_status === "failed" ? "failed" : "skipped",
+          })),
+      );
+      const versionUpdate: Record<string, unknown> = { status: overall };
+      if (overall === "published") versionUpdate.published_at = new Date().toISOString();
+      const { data: v, error: vError } = await admin
+        .from("schedule_versions")
+        .update(versionUpdate)
+        .eq("id", existing.schedule_version_id)
+        .select("*")
+        .single();
+      if (vError) throw new Error(vError.message);
+      updatedVersion = v;
+    }
 
     await admin.from("schedule_audit_events").insert({
       event_type: "entry_removed",
@@ -415,9 +509,10 @@ export async function DELETE(req: NextRequest) {
       affected_entity_type: "schedule_entry",
       affected_entity_id: id,
       before_value: existing,
+      after_value: removingFailed ? { reason: "failed_sync_removed_after_approval" } : null,
     });
 
-    return NextResponse.json({ data: { success: true } });
+    return NextResponse.json({ data: { success: true, version: updatedVersion } });
   } catch (error) {
     console.error("Schedule entry DELETE error:", error);
     const message = error instanceof Error ? error.message : "Failed to remove schedule entry";
