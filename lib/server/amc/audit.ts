@@ -90,3 +90,44 @@ export function diffSettingsKeys(
 
   return changed;
 }
+
+export type AmcSettingsHistoryEntry = {
+  id: number;
+  actorLabel: string | null;
+  changedKeys: string[];
+  createdAt: string;
+};
+
+/**
+ * FR6.5 — the latest settings changes, for the AMC Settings page. Recording
+ * who changed what is only half of it; an admin also has to be able to see
+ * it without going to the database.
+ */
+export async function listAmcSettingsHistory(
+  admin: SupabaseClient,
+  limit = 10,
+): Promise<AmcSettingsHistoryEntry[]> {
+  const { data, error } = await admin
+    .from(AUDIT_TABLE)
+    .select("id, actor_label, payload, created_at")
+    .eq("entity_type", "settings")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  /* History is supporting detail. If it cannot be read, the settings
+     themselves still load. */
+  if (error) {
+    console.error("[amc:audit] history read failed:", error.message);
+    return [];
+  }
+
+  return (data ?? []).map((row) => {
+    const keys = (row.payload as { changedKeys?: unknown } | null)?.changedKeys;
+    return {
+      id: row.id as number,
+      actorLabel: (row.actor_label as string | null) ?? null,
+      changedKeys: Array.isArray(keys) ? keys.map(String) : [],
+      createdAt: row.created_at as string,
+    };
+  });
+}

@@ -3,11 +3,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import { emailMasthead } from "@/lib/email-brand";
+import { clientEmailHtml, escapeEmailHtml } from "@/lib/email-brand";
 import { sendEmail } from "@/lib/server/send-email";
 import { recordAudit } from "@/lib/server/snagging/audit";
 import { resolveClient } from "@/lib/server/snagging/client";
-import { PROPERTY_COLUMNS, resolveProperty } from "@/lib/server/snagging/property";
+import {
+  PROPERTY_COLUMNS,
+  resolveProperty,
+} from "@/lib/server/snagging/property";
 import {
   loadPricingConfig,
   priceQuotation,
@@ -84,7 +87,9 @@ export async function GET(
     const { profile, accessUser } = await getRequestUserAccess(req);
     if (!profile || !accessUser)
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.VIEW)) {
+    if (
+      !hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.VIEW)
+    ) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -92,7 +97,10 @@ export async function GET(
     const admin = await createAdminServerClient();
     const quote = await load(admin, id);
     if (!quote)
-      return NextResponse.json({ error: "Quotation not found" }, { status: 404 });
+      return NextResponse.json(
+        { error: "Quotation not found" },
+        { status: 404 },
+      );
 
     /*
       Computed here rather than left to the client to work out: the
@@ -106,7 +114,12 @@ export async function GET(
     return NextResponse.json({
       data: {
         ...sent,
-        can_approve_rate: await mayApproveRate(admin, accessUser, profile.id, quote),
+        can_approve_rate: await mayApproveRate(
+          admin,
+          accessUser,
+          profile.id,
+          quote,
+        ),
         /*
           The LIVE client and property, beside the snapshot the document
           was built from.
@@ -137,7 +150,9 @@ export async function POST(
     const { profile, accessUser } = await getRequestUserAccess(req);
     if (!profile || !accessUser)
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.EDIT)) {
+    if (
+      !hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.EDIT)
+    ) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -148,7 +163,10 @@ export async function POST(
 
     const quote = await load(admin, id);
     if (!quote)
-      return NextResponse.json({ error: "Quotation not found" }, { status: 404 });
+      return NextResponse.json(
+        { error: "Quotation not found" },
+        { status: 404 },
+      );
 
     const ref: QuoteRef = {
       id: quote.id as string,
@@ -197,7 +215,10 @@ export async function POST(
       }
       if (quote.rate_outside_band !== true) {
         return NextResponse.json(
-          { error: "This quotation is priced inside the band, so it needs no approval." },
+          {
+            error:
+              "This quotation is priced inside the band, so it needs no approval.",
+          },
           { status: 409 },
         );
       }
@@ -231,8 +252,10 @@ export async function POST(
 
     try {
       if (action === "send") return await send(admin, quote, profile.id, body);
-      if (action === "share_link") return await shareLink(admin, quote, profile.id);
-      if (action === "regenerate") return await regenerate(admin, quote, profile.id);
+      if (action === "share_link")
+        return await shareLink(admin, quote, profile.id);
+      if (action === "regenerate")
+        return await regenerate(admin, quote, profile.id);
       if (action === "approve") {
         const data = await approveQuotation(admin, ref, {
           name: body.approved_by_name ?? null,
@@ -292,7 +315,9 @@ export async function PATCH(
     const { profile, accessUser } = await getRequestUserAccess(req);
     if (!profile || !accessUser)
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.EDIT)) {
+    if (
+      !hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.EDIT)
+    ) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -300,7 +325,10 @@ export async function PATCH(
     const admin = await createAdminServerClient();
     const quote = await load(admin, id);
     if (!quote)
-      return NextResponse.json({ error: "Quotation not found" }, { status: 404 });
+      return NextResponse.json(
+        { error: "Quotation not found" },
+        { status: 404 },
+      );
 
     if (quote.status !== "draft") {
       return NextResponse.json(
@@ -423,7 +451,10 @@ export async function PATCH(
     const externalRate = optionalRate(body?.external_rate_per_sqft);
     if (externalRate === false) {
       return NextResponse.json(
-        { error: "The external areas rate must be a number, and cannot be negative." },
+        {
+          error:
+            "The external areas rate must be a number, and cannot be negative.",
+        },
         { status: 400 },
       );
     }
@@ -463,7 +494,8 @@ export async function PATCH(
       sending whatever you liked.
     */
     const rateMoved =
-      Number(quote.rate_per_sqft ?? NaN) !== Number(priced.rate_per_sqft ?? NaN) ||
+      Number(quote.rate_per_sqft ?? NaN) !==
+        Number(priced.rate_per_sqft ?? NaN) ||
       Number(quote.external_rate_per_sqft ?? NaN) !==
         Number(priced.external_rate_per_sqft ?? NaN);
 
@@ -511,7 +543,12 @@ export async function PATCH(
     return NextResponse.json({
       data: {
         ...data,
-        can_approve_rate: await mayApproveRate(admin, accessUser, profile.id, data),
+        can_approve_rate: await mayApproveRate(
+          admin,
+          accessUser,
+          profile.id,
+          data,
+        ),
         ...(await records(admin, data)),
       },
     });
@@ -636,7 +673,9 @@ async function send(
   }
 
   const token = mintReportToken();
-  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+  const expiresAt = new Date(
+    Date.now() + 30 * 24 * 60 * 60 * 1000,
+  ).toISOString();
   const approvalUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? ""}/quote/${token.raw}`;
   const now = new Date().toISOString();
 
@@ -687,7 +726,8 @@ async function send(
       })
       .eq("id", quote.id as string);
 
-    const reason = sendError instanceof Error ? sendError.message : "Unknown error";
+    const reason =
+      sendError instanceof Error ? sendError.message : "Unknown error";
     console.error("Quotation email failed:", reason);
     return NextResponse.json(
       { error: `The quotation was not sent: ${reason}` },
@@ -864,19 +904,21 @@ function quotationEmailHtml(opts: {
   total: string;
   approvalUrl: string;
 }): string {
-  return `
-    <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #1f2937;">
-      ${emailMasthead()}
-      <h2 style="margin: 0 0 12px; font-size: 18px;">Your snagging quotation</h2>
-      <p style="margin: 0 0 16px;">Dear ${opts.clientName},</p>
-      <p style="margin: 0 0 16px;">
-        Please find attached quotation <strong>#${opts.quoteNumber}</strong> for
-        <strong>${opts.unit}</strong>, totalling <strong>${opts.total}</strong>.
-      </p>
-      <a href="${opts.approvalUrl}" style="display: inline-block; background: #83201e; color: #ffffff; padding: 12px 18px; border-radius: 6px; text-decoration: none;">Review and approve</a>
-      <p style="margin: 16px 0 0; font-size: 12px; color: #6b7280;">
-        This link is valid for 30 days.
-      </p>
-    </div>
-  `;
+  return clientEmailHtml({
+    eyebrow: "Snagging quotation",
+    heading: "Your snagging quotation",
+    greeting: `Dear ${opts.clientName},`,
+    paragraphs: [
+      `Thank you for choosing Yalla Fix It. Please find attached your snagging inspection quotation <strong>#${escapeEmailHtml(opts.quoteNumber)}</strong> for <strong>${escapeEmailHtml(opts.unit)}</strong>.`,
+      "Review the quotation and approve it, or tell us what you would like changed.",
+    ],
+    details: [
+      { label: "Quotation", value: `#${opts.quoteNumber}` },
+      { label: "Property", value: opts.unit },
+      { label: "Total", value: opts.total },
+    ],
+    cta: { label: "Review and approve", url: opts.approvalUrl },
+    footnote:
+      "This private link is valid for 30 days. Please don't share it. The quotation is also attached as a PDF.",
+  });
 }

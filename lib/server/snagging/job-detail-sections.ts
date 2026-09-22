@@ -1,8 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { byCreation } from "@/lib/snagging/creation-order";
-import { hasVerdictNote } from "@/lib/server/snagging/columns";
-import { loadJobFamily } from "@/lib/server/snagging/job-family";
+import { hasReviewNote, hasVerdictNote } from "@/lib/server/snagging/columns";
+import { loadJobFamily, readOnRoot } from "@/lib/server/snagging/job-family";
 import { signMediaPaths } from "@/lib/server/snagging/media";
 
 /*
@@ -94,13 +94,19 @@ const CORE_SELECT = `${JOB_COLUMNS},
   reviewer:reviewer_id(full_name, email),
   property_record:property_id(${PROPERTY_COLUMNS}),
   areas:snagging_areas(${JOB_AREA_COLUMNS})`;
-const SNAGS_SELECT = `${SNAG_COLUMNS},
+/*
+  The snags, with the de-snag verdict comment and the reviewer's note to
+  the inspector once their migrations have run.
+*/
+function snagsSelect(verdict: boolean, review: boolean) {
+  return `${SNAG_COLUMNS}${verdict ? ", verdict_note" : ""}${
+    review
+      ? ", review_note, review_note_at, review_note_author:review_note_by(full_name, email)"
+      : ""
+  },
   area:snagging_areas(id, name),
   photos:snagging_snag_photos(${SNAG_PHOTO_COLUMNS})`;
-/* With the de-snag verdict comment, once its migration has run. */
-const SNAGS_SELECT_WITH_VERDICT = `${SNAG_COLUMNS}, verdict_note,
-  area:snagging_areas(id, name),
-  photos:snagging_snag_photos(${SNAG_PHOTO_COLUMNS})`;
+}
 
 function firstOf<T>(v: T | T[] | null | undefined): T | null {
   return Array.isArray(v) ? v[0] ?? null : v ?? null;
@@ -285,7 +291,26 @@ export async function loadJobSnags(admin: Admin, id: string) {
     round writes its verdict through to it (BRD 5.2), so the two never
     disagree even though both exist.
   */
-  const family = await loadJobFamily(admin, id);
+  /*
+    The job's own snags are read at the same time as its family, not after:
+    they are always part of the list, and the family only ever ADDS jobs
+    (additional visits). The extra jobs are read afterwards, only when there
+    are any -- so the usual job is two round trips, not three.
+  */
+  const select = snagsSelect(await hasVerdictNote(admin), await hasReviewNote(admin));
+  const readSnags = async (jobIds: string[]) => {
+    const { data, error } = await admin
+      .from("snagging_snags")
+      .select<string, Row>(select)
+      .in("job_id", jobIds)
+      // Newest first for the working views. The client report has its
+      // own route and still orders by code within each area, so the
+      // delivered document is unaffected.
+      .order("created_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return data ?? [];
+  };
+  const [family, ownRows] = await Promise.all([loadJobFamily(admin, id), readSnags([id])]);
 
   /*
     Viewing an ADDITIONAL VISIT also shows the original's defects.
@@ -312,17 +337,13 @@ export async function loadJobSnags(admin: Admin, id: string) {
         ? [id, family.rootId]
         : [id];
 
-  const { data: snagRows, error: snagError } = await admin
-    .from("snagging_snags")
-    .select<string, Row>(
-      (await hasVerdictNote(admin)) ? SNAGS_SELECT_WITH_VERDICT : SNAGS_SELECT,
-    )
-    .in("job_id", snagJobIds)
-    // Newest first for the working views. The client report has its
-    // own route and still orders by code within each area, so the
-    // delivered document is unaffected.
-    .order("created_at", { ascending: false });
-  if (snagError) throw new Error(snagError.message);
+  const extraIds = snagJobIds.filter((jobId) => jobId !== id);
+  const snagRows =
+    extraIds.length === 0
+      ? ownRows
+      : [...ownRows, ...(await readSnags(extraIds))].sort((x, y) =>
+          String(y.created_at ?? "").localeCompare(String(x.created_at ?? "")),
+        );
 
   const signedSnags = await signMediaPaths(admin, snagRows ?? []);
   /*
@@ -348,19 +369,21 @@ export async function loadJobSnags(admin: Admin, id: string) {
 
 /** Which of the family's additional visits the manager has not approved. */
 export async function loadJobVisitStatus(admin: Admin, id: string) {
-  const family = await loadJobFamily(admin, id);
 
   /*
     Visits whose findings the manager has not approved yet. The job page
     shows everything, labelled; the report view leaves these out, so the
     client's report never carries a visit before it is signed off.
   */
-  const { data: visitStates, error: visitStateError } = await admin
-    .from("snagging_job_visits")
-    .select("id, status")
-    .eq("job_id", family.rootId);
-  if (visitStateError) throw new Error(visitStateError.message);
-  const unapprovedVisitIds = (visitStates ?? [])
+  const { result: visitStates } = await readOnRoot(admin, id, async (rootId) => {
+    const { data, error } = await admin
+      .from("snagging_job_visits")
+      .select("id, status")
+      .eq("job_id", rootId);
+    if (error) throw new Error(error.message);
+    return data ?? [];
+  });
+  const unapprovedVisitIds = visitStates
     .filter((visit) => visit.status !== "completed")
     .map((visit) => visit.id as string);
 
@@ -369,7 +392,6 @@ export async function loadJobVisitStatus(admin: Admin, id: string) {
 
 /** The de-snag quotation that matters now, or null when there is none. */
 export async function loadJobDesnagQuotation(admin: Admin, id: string) {
-  const family = await loadJobFamily(admin, id);
 
   /*
     Where this job's de-snag stands (change 31). A de-snag is a new job
@@ -377,13 +399,16 @@ export async function loadJobDesnagQuotation(admin: Admin, id: string) {
     actually at -- quote it, wait for the client, open it -- instead of
     a round dialog that could only fail until a quotation existed.
   */
-  const { data: desnagQuotes, error: desnagError } = await admin
-    .from("snagging_quotations")
-    .select("id, status, job_id, created_at")
-    .eq("source_job_id", family.rootId)
-    .eq("quote_kind", "desnag")
-    .order("created_at", { ascending: false });
-  if (desnagError) throw new Error(desnagError.message);
+  const { result: desnagQuotes } = await readOnRoot(admin, id, async (rootId) => {
+    const { data, error } = await admin
+      .from("snagging_quotations")
+      .select("id, status, job_id, created_at")
+      .eq("source_job_id", rootId)
+      .eq("quote_kind", "desnag")
+      .order("created_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return data ?? [];
+  });
   const desnagRow =
     (desnagQuotes ?? []).find((q) => q.status === "approved" && !q.job_id) ??
     (desnagQuotes ?? []).find((q) => q.status === "draft" || q.status === "sent") ??

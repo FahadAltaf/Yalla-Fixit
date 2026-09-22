@@ -3,16 +3,9 @@
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Alert, AlertTitle } from "@/components/ui/alert";
 import {
   Select,
@@ -33,11 +26,21 @@ import {
   Sparkles,
   Mail,
   Download,
+  FileType2,
   MoreVertical,
   AlertTriangle,
   GitBranchPlus,
   ImagePlus,
+  Loader2,
 } from "lucide-react";
+
+import {
+  PageHeading,
+  PillTabs,
+  SectionCard,
+  SubHeading,
+} from "@/components/dashboard/shared/kaizen";
+import { Money } from "@/components/ui/money";
 
 import {
   QUOTATION_TEMPLATES,
@@ -49,7 +52,7 @@ import { QuotationPreviewModal } from "./quotation-preview-modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { YallaClassicTemplate } from "./templates/YallaClassicTemplate";
-import { generateQuotationPDFBlob } from "./pdf-utils";
+import { generateQuotationDocxBlob, generateQuotationPDFBlob } from "./pdf-utils";
 import {
   Dialog,
   DialogContent,
@@ -60,7 +63,6 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AttachServiceItemImagesDialog, ServiceItemOption } from "./attach-service-item-images-dialog";
 import { buildRevisionChain, EstimateRevision } from "./revision-chain";
 import { useServiceItemImages } from "./use-service-item-images";
@@ -177,26 +179,31 @@ export function QuotationTemplatesPage() {
 
   const toastId = "dashboard-quotation-templates-download-pdf";
   // ── Download handler ──────────────────────────────────────────────────
-  const handleDownloadPDF = async () => {
+  const handleDownload = async (format: "pdf" | "docx") => {
     if (!activeData) {
       toast.error("No quotation data found. Please search for a quotation first.");
       return;
     }
+    const label = format === "pdf" ? "PDF" : "Word file";
     setIsGenerating(true);
-    toast.loading("Generating PDF...", { id: toastId });
+    toast.loading(`Generating ${label}...`, { id: toastId });
     try {
-      const blob = await generateQuotationPDFBlob(
-        yallaClassicTemplate.id,
-        activeData,
-        {
-          scale: 2,
-          imageFormat: "JPEG",
-          imageQuality: 0.92,
-        },
-        discountMode,
-        templateImageMode === "with-images",
-        revisionChain[0]?.label || "",
-      );
+      const blob =
+        format === "pdf"
+          ? await generateQuotationPDFBlob(
+              yallaClassicTemplate.id,
+              activeData,
+              { scale: 2, imageFormat: "JPEG", imageQuality: 0.92 },
+              discountMode,
+              templateImageMode === "with-images",
+              revisionChain[0]?.label || "",
+            )
+          : await generateQuotationDocxBlob(
+              activeData,
+              discountMode,
+              templateImageMode === "with-images",
+              revisionChain[0]?.label || "",
+            );
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -204,16 +211,17 @@ export function QuotationTemplatesPage() {
         /[\s/\\:*?"<>|]/g,
         "_"
       );
-      a.download = `Quotation_${safeName}.pdf`;
+      a.download = `Quotation_${safeName}.${format}`;
       a.click();
       URL.revokeObjectURL(url);
+      /* Success only on success: this used to be in the finally block, so
+         a failed download still reported "downloaded successfully". */
+      toast.success(`${label} downloaded successfully!`, { id: toastId });
     } catch (err) {
       console.error(err);
-      toast.error("Failed to generate PDF. Please try again.");
+      toast.error(`Failed to generate the ${label}. Please try again.`, { id: toastId });
     } finally {
       setIsGenerating(false);
-      toast.dismiss(toastId);
-      toast.success("PDF downloaded successfully!");
     }
   };
 
@@ -330,42 +338,30 @@ export function QuotationTemplatesPage() {
   };
 
   return (
+    <div className="flex w-full flex-1 flex-col gap-6">
+      <PageHeading
+        eyebrow="Extensions"
+        title="Quotation templates"
+        description="Search a quotation by number or customer name, pick a template, preview it, and send it via email."
+      />
 
-    <Card className="w-full flex-1  relative top-px right-px gap-6">
-      {/* <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div className="flex  gap-1 flex-col">
-          <CardTitle className="text-xl flex items-center gap-2">
-            <FileText className="size-5 text-primary" />
-            Quotation Templates
-          </CardTitle>
-          <CardDescription>
-            Search a quotation by number or customer name, pick a template, preview it, and send it via email.
-          </CardDescription>
-        </div>
-      </CardHeader> */}
-
-      <div className="print:hidden px-4">
-        <p className="eyebrow">Extension</p>
-        <h1 className="mt-1.5 text-3xl">Quotation Templates</h1>
-        <p className="text-muted-foreground mt-1 text-[0.9375rem]">
-          Search a quotation by number or customer name, pick a template, preview it, and send it via email.
-        </p>
-      </div>
-
-
-      <CardContent className="space-y-4">
-
-        {/* ── Search card ── */}
+      {/* ── Search card ── */}
+      <SectionCard
+        icon={<Search />}
+        title="Find a quotation"
+        description="Search by quotation number or customer name."
+        bodyClassName="px-5 pb-5"
+      >
         <form
           onSubmit={handleSubmit}
           className="flex flex-col gap-3 sm:flex-row sm:items-end"
         >
-          <div className="flex-1 space-y-2">
-            {/* <Label htmlFor="appointment-name">Quotation Number or Customer Name</Label> */}
+          <div className="flex-1">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
               <Input
                 id="quotation-number-or-customer-name"
+                aria-label="Quotation number or customer name"
                 placeholder="e.g 17086..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
@@ -374,370 +370,329 @@ export function QuotationTemplatesPage() {
               />
             </div>
           </div>
-          <Button type="submit" disabled={isSearching} className="w-full sm:w-auto gap-2 min-w-[110px]">
-            {isSearching ? (
-              <>
-                <span className="size-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" />
-                Searching…
-              </>
-            ) : (
-              <>
-                <Search className="size-4" />
-                Search
-              </>
-            )}
+          <Button type="submit" disabled={isSearching} className="w-full sm:w-auto min-w-[110px]">
+            {isSearching ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
+            {isSearching ? "Searching..." : "Search"}
           </Button>
         </form>
+      </SectionCard>
 
-        {/* Loading skeleton */}
-        {isSearching && (
-          <Card className="border-dashed">
-            <CardHeader>
-              <Skeleton className="h-5 w-48" />
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {[32, 56, 40].map((w, i) => (
-                <div key={i} className="space-y-2">
-                  <Skeleton className="h-3 w-24" />
-                  <Skeleton className={`h-4 w-${w > 50 ? "full max-w-md" : "full max-w-sm"}`} />
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Loaded data summary */}
-        {hasSearched && searchResults && (
-          <div className=" space-y-4">
-            <div className="flex items-center gap-3 p-3 bg-primary/5 rounded-lg border border-primary/20">
-              <FileText className="size-5 text-primary shrink-0" />
-              <div className="min-w-0">
-                <p className="text-sm font-semibold truncate">
-                  {searchResults.quotationNumber} {searchResults.customerCompanyName ? `· ${searchResults.customerCompanyName}` : ""}
-                </p>
-                <p className="text-xs text-muted-foreground truncate">
-                  {searchResults.serviceAddress ?? "No service address"} ·{" "}
-                  {searchResults.quotationDate}
-                </p>
-              </div>
-              <Badge variant="default" className="ml-auto shrink-0">
-                AED{" "}
-                {(
-                  searchResults.grandTotal ??
-                  calculateTotals(searchResults).grandTotal
-                ).toFixed(2)}
-              </Badge>
+      {/* Loading skeleton */}
+      {isSearching && (
+        <Card className="space-y-4 p-5">
+          <Skeleton className="h-5 w-52" />
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="space-y-2">
+              <Skeleton className="h-3 w-24" />
+              <Skeleton className="h-4 w-full max-w-md" />
             </div>
+          ))}
+        </Card>
+      )}
 
-            {currentStatus && currentStatus.toLowerCase() !== "new" && (
-              <Alert className="border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-50">
-                <div className="flex items-center gap-2">
-                  <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
-                  <div>
-                    <AlertTitle className="text-xs font-medium">
-                      Quotation status: {currentStatus}
-                    </AlertTitle>
-
-                  </div>
+      {/* Loaded data summary */}
+      {hasSearched && searchResults && (
+        <SectionCard
+          icon={<FileText />}
+          title={searchResults.quotationNumber}
+          description={[
+            searchResults.customerCompanyName,
+            searchResults.serviceAddress ?? "No service address",
+            searchResults.quotationDate,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+          action={
+            <Money
+              value={searchResults.grandTotal ?? calculateTotals(searchResults).grandTotal}
+              className="text-lg font-semibold"
+            />
+          }
+          bodyClassName={
+            (currentStatus && currentStatus.toLowerCase() !== "new") || revisionChain.length > 0
+              ? "space-y-4 border-t p-5"
+              : undefined
+          }
+        >
+          {currentStatus && currentStatus.toLowerCase() !== "new" && (
+            <Alert className="border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-50">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                <div>
+                  <AlertTitle className="text-xs font-medium">
+                    Quotation status: {currentStatus}
+                  </AlertTitle>
                 </div>
-              </Alert>
-            )}
-            {revisionChain.length > 0 && (
-              <Tabs
+              </div>
+            </Alert>
+          )}
+          {revisionChain.length > 0 && (
+            <div className="space-y-2">
+              <SubHeading count={revisionChain.length}>Revisions</SubHeading>
+              <PillTabs<string>
                 value={selectedRevisionQuery ?? ""}
-                onValueChange={(value) => {
-
+                onChange={(value) => {
                   void handleSelectRevision(value);
                 }}
-              >
-                <TabsList className="w-full justify-start ">
-                  {revisionChain.map((node) => (
-                    <TabsTrigger
-                      key={node.key}
-                      value={node.queryName}
-                      className="min-w-max text-xs"
-                    >
-                      {node.label}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-              </Tabs>
-            )}
-          </div>
-        )}
-
-        {hasSearched && !searchResults && (
-          <EmptyState
-            title="No quotation found"
-            description="The quotation you are looking for does not exist. Please check the name and try again."
-            icon={<FileText className="" />}
-          // action={{ label: "Try again", onClick: () => setSearchError(null), variant: "default" }}
-          />
-        )}
-        {!hasSearched && !searchResults && !isSearching && (
-          <EmptyState
-            title="Search for a quotation"
-            description="Enter the name of the quotation you are looking for and click the search button."
-            icon={<Search className="" />}
-          />
-        )}
-
-
-        {/* <Separator /> */}
-
-        {/* ── Templates section ── */}
-        {hasSearched && searchResults && yallaClassicTemplate && (
-          <div className="space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-semibold flex items-center gap-2">
-                  <Sparkles className="size-4 text-primary" />
-                  Template Preview
-                </h2>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Switch between quotation template modes and use quick actions.
-                </p>
-              </div>
-              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
-                <div className="flex items-center gap-2">
-                  {/* <Label className="text-xs text-muted-foreground">Mode:</Label> */}
-                  <Select
-                    value={discountMode}
-                    onValueChange={(value) =>
-                      setDiscountMode(value as "with" | "without" | "with-total" | "with-total-no-list")
-                    }
-                  >
-                    <SelectTrigger className="w-max h-8 text-xs">
-                      <SelectValue placeholder="Select quotation template mode" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="with-total">
-                        Discount Template By Total
-                      </SelectItem>
-                      <SelectItem value="with-total-no-list">
-                        Discount Template By Total (Unit Price)
-                      </SelectItem>
-                      <SelectItem value="with">
-                        Discount Template By Line Items
-                      </SelectItem>
-                      <SelectItem value="without">
-                        Without Discount Template
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Select
-                    value={templateImageMode}
-                    onValueChange={(value) =>
-                      setTemplateImageMode(value as TemplateImageMode)
-                    }
-                  >
-                    <SelectTrigger className="w-max h-8 text-xs">
-                      <SelectValue placeholder="Select image mode" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="without-images">Without Images</SelectItem>
-                      <SelectItem value="with-images">With Images</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        className="gap-1 text-xs"
-                      >
-                        <MoreVertical className="size-3.5" />
-                        {/* Actions */}
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-44">
-
-                      <DropdownMenuItem
-                        className="text-xs"
-                        onClick={() => setIsModalOpen(true)}
-                      >
-                        <Mail className="mr-2 size-3.5" />
-                        {
-                          currentStatus && currentStatus.toLowerCase() !== "new" ? "Resend email" : "Send email"
-                        }
-                      </DropdownMenuItem>
-                      {/* <DropdownMenuItem
-                    className="text-xs"
-                    onClick={() => window.print()}
-                  >
-                    <Printer className="mr-2 size-3.5" />
-                    Print
-                  </DropdownMenuItem> */}
-                      <DropdownMenuItem
-                        className="text-xs"
-                        onClick={handleDownloadPDF}
-                        disabled={isGenerating}
-                      >
-                        <Download className="mr-2 size-3.5" />
-                        Download PDF
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        className="text-xs"
-                        onClick={() => {
-                          resetAttachImagesState();
-                          setIsAttachImagesOpen(true);
-                        }}
-                        disabled={!serviceItemOptions.length}
-                      >
-                        <ImagePlus className="mr-2 size-3.5" />
-                        Attach images
-                      </DropdownMenuItem>
-                      {canCreateRevision && (
-                        <DropdownMenuItem
-                          className="text-xs"
-                          onClick={() => setIsCreateRevisionOpen(true)}
-                          disabled={!activeData?.zohoEstimateId || isCreatingRevision}
-                        >
-                          <GitBranchPlus className="mr-2 size-3.5" />
-                          Create revision
-                        </DropdownMenuItem>
-                      )}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-              </div>
+                tabs={revisionChain.map((node) => ({
+                  value: node.queryName,
+                  label: node.label,
+                }))}
+              />
             </div>
+          )}
+        </SectionCard>
+      )}
 
-            <div className="border rounded-lg overflow-hidden bg-slate-100">
-
-              <div className="bg-slate-100 overflow-auto flex items-start justify-center p-6">
-                {/* <div style={{ width: 794 * 0.95 }}>
-                  <div
-                    style={{
-                      transform: "scale(0.95)",
-                      transformOrigin: "top left",
-                      width: 794,
-                      pointerEvents: "none",
-                      userSelect: "none",
-                      // marginBottom: "-500px",
-                    }}
-                  >
-                    { */}
-                {activeData && (
-                  <div className="shadow-2xl ring-1 ring-black/5 rounded overflow-hidden bg-white">
-                    <YallaClassicTemplate
-                      data={activeData}
-                      hideDiscount={discountMode === "without"}
-                      discountMode={discountMode}
-                      includeServiceItemImages={templateImageMode === "with-images"}
-                      rootQuotationNumber={revisionChain[0]?.label || ""}
-                    />
-                  </div>
-                )
-                }
-                {/* </div> */}
-                {/* </div> */}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {hasSearched && searchResults && yallaClassicTemplate && activeData && (
-          <QuotationPreviewModal
-            open={isModalOpen}
-            onClose={() => setIsModalOpen(false)}
-            template={yallaClassicTemplate}
-            data={activeData}
-            discountMode={discountMode}
-            imageMode={templateImageMode}
-            shouldMarkAsSent={currentStatus === "New"}
-            setCurrentStatus={setCurrentStatus}
-          />
-        )}
-        <AttachServiceItemImagesDialog
-          open={isAttachImagesOpen}
-          onOpenChangeAction={(nextOpen) => {
-            console.log("🚀 ~ QuotationTemplatesPage ~ nextOpen:", nextOpen)
-
-            setIsAttachImagesOpen(nextOpen);
-          }}
-          serviceItemOptions={serviceItemOptions}
-          selectedServiceItemId={selectedServiceItemId}
-          onSelectServiceItemAction={onSelectServiceItem}
-          onFileChangeAction={handleImageFilesChange}
-          remainingAfterSelection={remainingAfterSelection}
-          selectedImagePreviews={selectedImagePreviews}
-          selectedServiceItemImages={selectedServiceItemImages}
-          onRemoveSelectedImageAction={handleRemoveSelectedImage}
-          onDeleteUploadedImageAction={(url) => void handleDeleteServiceItemImage(url)}
-          deletingImageUrl={deletingImageUrl}
-          isUploadingServiceItemImages={isUploadingServiceItemImages}
-          onUploadAction={() => {
-            void (async () => {
-              const isSuccess = await handleAttachImages();
-              if (isSuccess) {
-                setIsAttachImagesOpen(false);
-              }
-            })();
-          }}
-          uploadDisabled={
-            isUploadingServiceItemImages ||
-            Boolean(deletingImageUrl) ||
-            !selectedServiceItemId ||
-            selectedImageFiles.length === 0
-          }
+      {hasSearched && !searchResults && (
+        <EmptyState
+          title="No quotation found"
+          description="The quotation you are looking for does not exist. Please check the name and try again."
+          icon={<FileText className="size-5" />}
         />
-        <Dialog open={isCreateRevisionOpen} onOpenChange={setIsCreateRevisionOpen}>
-          <DialogContent className="sm:max-w-[400px]">
-            <DialogHeader>
-              <DialogTitle>Create Revision</DialogTitle>
-              <DialogDescription>
-                Create a new estimate revision from quotation{" "}
-                <span className="font-medium">{activeData?.quotationNumber}</span>.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="revision-type">Quotation type</Label>
-                <Select
-                  value={revisionType}
-                  onValueChange={(value) =>
-                    setRevisionType(value as "Internal" | "External")
-                  }
-                >
-                  <SelectTrigger id="revision-type" className="w-full">
-                    <SelectValue placeholder="Select quotation type" />
-                  </SelectTrigger>
-                  <SelectContent className="w-full">
-                    <SelectItem value="Internal">Internal</SelectItem>
-                    <SelectItem value="External">External</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="revision-reason">Reason (optional)</Label>
-                <Textarea
-                  id="revision-reason"
-                  placeholder="Enter reason for creating this revision..."
-                  value={revisionReason}
-                  onChange={(event) => setRevisionReason(event.target.value)}
-                  rows={3}
+      )}
+      {!hasSearched && !searchResults && !isSearching && (
+        <EmptyState
+          title="Search for a quotation"
+          description="Enter the name of the quotation you are looking for and click the search button."
+          icon={<Search className="size-5" />}
+        />
+      )}
+
+      {/* ── Templates section ── */}
+      {hasSearched && searchResults && yallaClassicTemplate && (
+        <SectionCard
+          icon={<Sparkles />}
+          title="Template preview"
+          description="Switch between quotation template modes and use quick actions."
+          bodyClassName="border-t"
+          action={
+            <div className="flex flex-wrap items-center gap-2">
+              <Select
+                value={discountMode}
+                onValueChange={(value) =>
+                  setDiscountMode(value as "with" | "without" | "with-total" | "with-total-no-list")
+                }
+              >
+                <SelectTrigger size="sm" className="w-max" aria-label="Template mode">
+                  <SelectValue placeholder="Select quotation template mode" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="with-total">
+                    Discount Template By Total
+                  </SelectItem>
+                  <SelectItem value="with-total-no-list">
+                    Discount Template By Total (Unit Price)
+                  </SelectItem>
+                  <SelectItem value="with">
+                    Discount Template By Line Items
+                  </SelectItem>
+                  <SelectItem value="without">
+                    Without Discount Template
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              <Select
+                value={templateImageMode}
+                onValueChange={(value) =>
+                  setTemplateImageMode(value as TemplateImageMode)
+                }
+              >
+                <SelectTrigger size="sm" className="w-max" aria-label="Image mode">
+                  <SelectValue placeholder="Select image mode" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="without-images">Without Images</SelectItem>
+                  <SelectItem value="with-images">With Images</SelectItem>
+                </SelectContent>
+              </Select>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="size-8"
+                    aria-label="Quotation actions"
+                  >
+                    <MoreVertical className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-44">
+                  <DropdownMenuItem
+                    className="text-xs"
+                    onClick={() => setIsModalOpen(true)}
+                  >
+                    <Mail className="mr-2 size-3.5" />
+                    {
+                      currentStatus && currentStatus.toLowerCase() !== "new" ? "Resend email" : "Send email"
+                    }
+                  </DropdownMenuItem>
+                  {/* <DropdownMenuItem
+                className="text-xs"
+                onClick={() => window.print()}
+              >
+                <Printer className="mr-2 size-3.5" />
+                Print
+              </DropdownMenuItem> */}
+                  <DropdownMenuItem
+                    className="text-xs"
+                    onClick={() => void handleDownload("pdf")}
+                    disabled={isGenerating}
+                  >
+                    <Download className="mr-2 size-3.5" />
+                    Download PDF
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    className="text-xs"
+                    onClick={() => void handleDownload("docx")}
+                    disabled={isGenerating}
+                  >
+                    <FileType2 className="mr-2 size-3.5" />
+                    Download Word
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    className="text-xs"
+                    onClick={() => {
+                      resetAttachImagesState();
+                      setIsAttachImagesOpen(true);
+                    }}
+                    disabled={!serviceItemOptions.length}
+                  >
+                    <ImagePlus className="mr-2 size-3.5" />
+                    Attach images
+                  </DropdownMenuItem>
+                  {canCreateRevision && (
+                    <DropdownMenuItem
+                      className="text-xs"
+                      onClick={() => setIsCreateRevisionOpen(true)}
+                      disabled={!activeData?.zohoEstimateId || isCreatingRevision}
+                    >
+                      <GitBranchPlus className="mr-2 size-3.5" />
+                      Create revision
+                    </DropdownMenuItem>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          }
+        >
+          {/* The document itself is untouched: only the frame around it. */}
+          <div className="bg-muted/50 overflow-auto flex items-start justify-center p-6">
+            {activeData && (
+              <div className="shadow-2xl ring-1 ring-black/5 rounded overflow-hidden bg-white">
+                <YallaClassicTemplate
+                  data={activeData}
+                  hideDiscount={discountMode === "without"}
+                  discountMode={discountMode}
+                  includeServiceItemImages={templateImageMode === "with-images"}
+                  rootQuotationNumber={revisionChain[0]?.label || ""}
                 />
               </div>
+            )}
+          </div>
+        </SectionCard>
+      )}
+
+      {hasSearched && searchResults && yallaClassicTemplate && activeData && (
+        <QuotationPreviewModal
+          open={isModalOpen}
+          onClose={() => setIsModalOpen(false)}
+          template={yallaClassicTemplate}
+          data={activeData}
+          discountMode={discountMode}
+          imageMode={templateImageMode}
+          shouldMarkAsSent={currentStatus === "New"}
+          setCurrentStatus={setCurrentStatus}
+        />
+      )}
+      <AttachServiceItemImagesDialog
+        open={isAttachImagesOpen}
+        onOpenChangeAction={(nextOpen) => {
+          console.log("🚀 ~ QuotationTemplatesPage ~ nextOpen:", nextOpen)
+
+          setIsAttachImagesOpen(nextOpen);
+        }}
+        serviceItemOptions={serviceItemOptions}
+        selectedServiceItemId={selectedServiceItemId}
+        onSelectServiceItemAction={onSelectServiceItem}
+        onFileChangeAction={handleImageFilesChange}
+        remainingAfterSelection={remainingAfterSelection}
+        selectedImagePreviews={selectedImagePreviews}
+        selectedServiceItemImages={selectedServiceItemImages}
+        onRemoveSelectedImageAction={handleRemoveSelectedImage}
+        onDeleteUploadedImageAction={(url) => void handleDeleteServiceItemImage(url)}
+        deletingImageUrl={deletingImageUrl}
+        isUploadingServiceItemImages={isUploadingServiceItemImages}
+        onUploadAction={() => {
+          void (async () => {
+            const isSuccess = await handleAttachImages();
+            if (isSuccess) {
+              setIsAttachImagesOpen(false);
+            }
+          })();
+        }}
+        uploadDisabled={
+          isUploadingServiceItemImages ||
+          Boolean(deletingImageUrl) ||
+          !selectedServiceItemId ||
+          selectedImageFiles.length === 0
+        }
+      />
+      <Dialog open={isCreateRevisionOpen} onOpenChange={setIsCreateRevisionOpen}>
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle>Create Revision</DialogTitle>
+            <DialogDescription>
+              Create a new estimate revision from quotation{" "}
+              <span className="font-medium">{activeData?.quotationNumber}</span>.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="revision-type">Quotation type</Label>
+              <Select
+                value={revisionType}
+                onValueChange={(value) =>
+                  setRevisionType(value as "Internal" | "External")
+                }
+              >
+                <SelectTrigger id="revision-type" className="w-full">
+                  <SelectValue placeholder="Select quotation type" />
+                </SelectTrigger>
+                <SelectContent className="w-full">
+                  <SelectItem value="Internal">Internal</SelectItem>
+                  <SelectItem value="External">External</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
-            <DialogFooter>
-              <Button
-                variant="outline"
-                onClick={() => setIsCreateRevisionOpen(false)}
-                disabled={isCreatingRevision}
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={handleCreateRevision}
-                disabled={!activeData?.zohoEstimateId || isCreatingRevision}
-              >
-                {isCreatingRevision ? "Creating..." : "Create"}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      </CardContent>
-    </Card>
+            <div className="space-y-2">
+              <Label htmlFor="revision-reason">Reason (optional)</Label>
+              <Textarea
+                id="revision-reason"
+                placeholder="Enter reason for creating this revision..."
+                value={revisionReason}
+                onChange={(event) => setRevisionReason(event.target.value)}
+                rows={3}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setIsCreateRevisionOpen(false)}
+              disabled={isCreatingRevision}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleCreateRevision}
+              disabled={!activeData?.zohoEstimateId || isCreatingRevision}
+            >
+              {isCreatingRevision ? "Creating..." : "Create"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 }

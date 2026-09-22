@@ -1,8 +1,9 @@
 "use client";
 
 import { DirhamIcon } from "@/components/ui/dirham-icon";
+import { FormatToolbar, ScopeView, TermsView } from "./quote-text-view";
 import { Money } from "@/components/ui/money";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 import {
   Building,
@@ -570,10 +571,10 @@ export default function PricingSettings() {
             >
               <div className="grid lg:grid-cols-2">
                 <div className="border-b p-5 lg:border-r lg:border-b-0">
-                  <TextBlock label="Scope of work" value={config.scope_of_work} />
+                  <TextBlock label="Scope of work" value={config.scope_of_work} kind="scope" />
                 </div>
                 <div className="p-5">
-                  <TextBlock label="Terms & conditions" value={config.terms} />
+                  <TextBlock label="Terms & conditions" value={config.terms} kind="terms" />
                 </div>
               </div>
             </SectionCard>
@@ -990,6 +991,8 @@ function TermsDialog({
 }) {
   const [scope, setScope] = useState(config?.scope_of_work ?? "");
   const [terms, setTerms] = useState(config?.terms ?? "");
+  const scopeRef = useRef<HTMLTextAreaElement>(null);
+  const termsRef = useRef<HTMLTextAreaElement>(null);
 
   /* Seeded on the way open, during render — see TypeDialog. */
   const [wasOpen, setWasOpen] = useState(open);
@@ -1020,24 +1023,47 @@ function TermsDialog({
         <div className="grid gap-5 lg:grid-cols-2">
           <Field
             label="Scope of work"
-            hint="A heading on its own line, items prefixed with a dash."
+            hint="Use the buttons, or type: # heading, ## sub-heading, - bullet, **bold**."
           >
+            <FormatToolbar
+              target={scopeRef}
+              value={scope}
+              onChange={setScope}
+              kinds={["heading", "subheading", "bullet", "bold"]}
+            />
             <Textarea
+              ref={scopeRef}
               rows={8}
               value={scope}
               onChange={(event) => setScope(event.target.value)}
               placeholder="What the snagging inspection covers…"
-              className="resize-none text-xs leading-relaxed [field-sizing:content]"
+              className="mt-2 resize-none font-mono text-xs leading-relaxed [field-sizing:content]"
             />
+            <PreviewBox>
+              <ScopeView value={scope} />
+            </PreviewBox>
           </Field>
-          <Field label="Terms & conditions" hint="One numbered note per line.">
+          <Field
+            label="Terms & conditions"
+            hint="One term per line; they are numbered for you. **bold** works here too."
+          >
+            <FormatToolbar
+              target={termsRef}
+              value={terms}
+              onChange={setTerms}
+              kinds={["number", "bold"]}
+            />
             <Textarea
+              ref={termsRef}
               rows={8}
               value={terms}
               onChange={(event) => setTerms(event.target.value)}
-              placeholder="1- This quotation is valid for 30 calendar days…"
-              className="resize-none text-xs leading-relaxed [field-sizing:content]"
+              placeholder="This quotation is valid for 30 calendar days…"
+              className="mt-2 resize-none font-mono text-xs leading-relaxed [field-sizing:content]"
             />
+            <PreviewBox>
+              <TermsView value={terms} />
+            </PreviewBox>
           </Field>
         </div>
 
@@ -1341,16 +1367,39 @@ function Figure({
  * end to end before a client does — which a 200px window with a scrollbar
  * actively discourages.
  */
-function TextBlock({ label, value }: { label: string; value?: string | null }) {
+/** How the text will print, under the box it is typed in. */
+function PreviewBox({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="bg-muted/40 mt-3 rounded-lg border p-3">
+      <p className="text-muted-foreground mb-2 text-[0.6875rem] font-medium tracking-wide uppercase">
+        Preview on the quotation
+      </p>
+      {children}
+    </div>
+  );
+}
+
+/** Shown formatted, as the quotation prints it (point 14). */
+function TextBlock({
+  label,
+  value,
+  kind,
+}: {
+  label: string;
+  value?: string | null;
+  kind: "scope" | "terms";
+}) {
   return (
     <div className="space-y-2">
       <p className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
         {label}
       </p>
       {value?.trim() ? (
-        <p className="text-muted-foreground text-xs leading-relaxed whitespace-pre-wrap">
-          {value}
-        </p>
+        kind === "scope" ? (
+          <ScopeView value={value} />
+        ) : (
+          <TermsView value={value} />
+        )
       ) : (
         <p className="text-muted-foreground rounded-md border border-dashed p-3 text-xs">
           Nothing set. This block will not print on the quotation.

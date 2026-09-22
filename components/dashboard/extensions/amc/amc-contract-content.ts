@@ -1,3 +1,5 @@
+import { formatPhoneForDocument } from "./amc-phone";
+
 export interface ScopeSectionContent {
   serviceId: string;
   sectionNumber: string;
@@ -5,9 +7,6 @@ export interface ScopeSectionContent {
   intro?: string;
   bullets: string[];
 }
-
-export const FOOTER_TEXT =
-  "Office 102, Commercial Bank of Dubai (Al Quoz Branch), Dubai, UAE Tel. +971 800 7373328 / 800-PERFECT.";
 
 /*
   FR4.4 / §8.2 — clause 1.1 carried two placeholders:
@@ -19,9 +18,100 @@ export const FOOTER_TEXT =
   Hotline service is checked. When it is not, the customer is not buying a
   24/7 hotline and the contract must not describe one.
 */
+type TokenServiceRow = {
+  serviceId: string;
+  included: boolean;
+  units: number;
+  frequency: number;
+};
+
+function plural(n: number, word: string) {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+/*
+  FR4.3 — the clauses that used to defer to "the selected AMC package" now
+  state the figures entered in the service table. They are written as
+  tokens rather than baked in, because the same text is editable in AMC
+  Settings (FR6.2): an admin can reword the clause and keep the token, and
+  every proposal still gets its own numbers.
+
+    {{handymanHours}}       "12 hours per year"
+    {{nonEmergencyVisits}}  "(6 free non-emergency visits per year are
+                            included.)" -- or nothing at all when the
+                            service is not on the contract, so the clause
+                            never promises visits the customer is not buying.
+
+  Units are the multiplier in the price (base price x units x frequency), so
+  they are stated too whenever there is more than one.
+*/
+export function fillAmcTokens(text: string, serviceRows: TokenServiceRow[]): string {
+  const row = (id: string) =>
+    serviceRows.find((item) => item.serviceId === id && item.included);
+  const perUnit = (units: number) =>
+    units > 1 ? ` for each of the ${units} units` : "";
+
+  const handyman = row("handyman");
+  const nonEmergency = row("non-emergency");
+  const emergency = row("emergency");
+
+  return text
+    .replace(
+      /\{\{handymanHours\}\}/g,
+      handyman
+        ? `${plural(handyman.frequency, "hour")} per year${perUnit(handyman.units)}`
+        : "the agreed number of hours",
+    )
+    .replace(
+      /\{\{nonEmergencyVisits\}\}/g,
+      nonEmergency
+        ? `(${plural(nonEmergency.frequency, "free non-emergency visit")} per year${perUnit(nonEmergency.units)} ${nonEmergency.frequency === 1 ? "is" : "are"} included.)`
+        : "",
+    )
+    /* FR4.1 — the two call-out lines of clause 1.1. Each is a whole line
+       that disappears when its service is not on the contract, so 1.1
+       never promises call-outs the customer is not buying. */
+    .replace(
+      /\{\{emergencyCallOuts\}\}/g,
+      emergency
+        ? "Unlimited emergency call-outs (as per definition of emergency on Clause No 3.1)"
+        : "",
+    )
+    .replace(
+      /\{\{nonEmergencyCallOuts\}\}/g,
+      nonEmergency
+        ? `${plural(nonEmergency.frequency, "free non-emergency call-out")} per year${perUnit(nonEmergency.units)} (as per definition of non-emergency on Clause No 3.2)`
+        : "",
+    )
+    /* An emptied token can leave a double space behind. Newlines are left
+       alone -- they carry the clause's line structure. */
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+/* FR6.2 — settings store clause text as blank-line separated blocks,
+   which is how getAmcSettingsDefaults joined the original lines. So
+   splitting here round-trips an unedited clause exactly, and an edited
+   one keeps whatever structure the admin typed. */
+export function textBlocks(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(/\n\s*\n/)
+    .map((block) => block.trim())
+    .filter(Boolean);
+}
+
 export function buildClause1Operation(opts: {
   accountManagers: { name: string; phone: string }[];
   helpdeskIncluded: boolean;
+  /* FR4.1 — clause 1.1 promises emergency and non-emergency call-outs. It
+     may only promise the ones this proposal actually includes. */
+  serviceRows: TokenServiceRow[];
+  /* FR6.2 — the standard text of 1.1, 1.2 and 1.3, from AMC Settings. */
+  text: {
+    helpdeskScheduling: string;
+    maintenanceTeam: string;
+    workingHours: string;
+  };
 }) {
   const named = opts.accountManagers.filter(
     (manager) => manager.name.trim() || manager.phone.trim(),
@@ -31,7 +121,7 @@ export function buildClause1Operation(opts: {
     named.length > 0
       ? `Direct contact No. ${named
           .map((manager) =>
-            [manager.phone.trim(), manager.name.trim()]
+            [formatPhoneForDocument(manager.phone), manager.name.trim()]
               .filter(Boolean)
               .join(" – "),
           )
@@ -49,20 +139,36 @@ export function buildClause1Operation(opts: {
     ...(directContactLine ? [directContactLine] : []),
   ];
 
+  /* The call-out lines are {{emergencyCallOuts}} / {{nonEmergencyCallOuts}}
+     tokens, so a line whose service is not on the contract fills to
+     nothing — and textBlocks then drops it, rather than leaving a gap. */
+  const fill = (value: string) =>
+    textBlocks(value)
+      .map((block) => fillAmcTokens(block, opts.serviceRows))
+      .filter(Boolean);
+
   return {
-    ...CLAUSE_1_OPERATION,
-    sections: CLAUSE_1_OPERATION.sections.map((section) =>
-      section.title === "1.1 Helpdesk and Scheduling"
-        ? {
-            ...section,
-            listItems,
-            /* The direct-contact line is the highlighted one. Keyed off
-               its position rather than a fixed index, because the line
-               above it can be absent. */
-            highlightIndex: directContactLine ? listItems.length - 1 : -1,
-          }
-        : section,
-    ),
+    title: CLAUSE_1_OPERATION.title,
+    sections: [
+      {
+        title: "1.1 Helpdesk and Scheduling",
+        paragraphs: fill(opts.text.helpdeskScheduling),
+        listItems,
+        /* The direct-contact line is the highlighted one. Keyed off its
+           position rather than a fixed index, because the line above it
+           can be absent. */
+        highlightIndex: directContactLine ? listItems.length - 1 : -1,
+        listType: "letter" as const,
+      },
+      {
+        title: "1.2 Maintenance team",
+        bullets: fill(opts.text.maintenanceTeam),
+      },
+      {
+        title: "1.3 Working hours",
+        paragraphs: fill(opts.text.workingHours),
+      },
+    ],
   };
 }
 
@@ -75,15 +181,11 @@ export const CLAUSE_1_OPERATION = {
         "Toll free No. 800-PERFECT (7373328).",
         "Dedicated account manager for direct coordination.",
         "All calls will be attended or call-back will be arranged within maximum 90 minutes.",
-        "Unlimited emergency call-outs (as per definition of emergency on Clause No 3.1)",
-        "Unlimited non-emergency call-outs (as per definition of non-emergency on Clause No 3.2)",
+        /* Filled per proposal, and dropped when the service is not on it. */
+        "{{emergencyCallOuts}}",
+        "{{nonEmergencyCallOuts}}",
         "Planned Preventive Maintenance (PPM) to be scheduled (proposal to be shared 15 days after signing of AMC).",
       ],
-      /* Replaced at render time by buildClause1Operation. Kept as the
-         shape the renderer expects; the strings here are never printed. */
-      listItems: [] as string[],
-      highlightIndex: -1,
-      listType: "letter" as const,
     },
     {
       title: "1.2 Maintenance team",
@@ -166,7 +268,10 @@ export const SCOPE_SECTIONS: ScopeSectionContent[] = [
   {
     serviceId: "water-pump",
     sectionNumber: "2.4",
-    title: "Water Pump Maintenance: (if applicable):",
+    /* FR4.5 / §8.3 — "(if applicable)" dropped: this section now prints
+       only when the water pump service is ticked, so when it appears it
+       always applies. */
+    title: "Water Pump Maintenance:",
     bullets: [
       "Ensure pump is working without any unusual noise and report any abnormality.",
       "Check the pressure kit, pressure switch functionality and report any abnormality.",
@@ -244,9 +349,14 @@ export const SCOPE_SECTIONS: ScopeSectionContent[] = [
   {
     serviceId: "handyman",
     sectionNumber: "2.9",
-    title: "Free Handyman service (If applicable)",
+    /* FR4.5 — see Water Pump above: printed only when ticked. */
+    title: "Free Handyman service",
+    /* FR4.3 — the hours used to "depend on the selected AMC package". They
+       are now the hours entered in the service table, filled in per
+       proposal by fillAmcTokens. The token survives an admin editing this
+       text in AMC Settings, as long as they keep it. */
     intro:
-      "Handyman service is delivered to the customer up to the number of hours stated for it in this contract, upon request (to be scheduled at least 48 hours ahead of time).\nHandyman is defined as team of two (one technician and one helper) with all necessary standard tools and basic consumables (supply materials and spare parts is not part of the handyman service)\nBelow will be considered as handyman service:",
+      "Up to {{handymanHours}} of handyman service is delivered to the customer upon request (to be scheduled at least 48 hours ahead of time).\nHandyman is defined as team of two (one technician and one helper) with all necessary standard tools and basic consumables (supply materials and spare parts is not part of the handyman service)\nBelow will be considered as handyman service:",
     bullets: [
       "Repair of the fly screen, aluminum/wooden door adjustment/alignments.",
       "Repair and adjustment of hinges, drawer rails, cabinet/cupboard catches, lock cylinder.",
@@ -288,7 +398,7 @@ export const CLAUSE_3_EMERGENCY = {
       bullets: [
         "Non-Emergency call outs are the inquiries that are not covered under the Planned preventive maintenance, Emergency call-out and handyman definition.",
         "If physical visit is required, schedule of non-emergency visit to be agreed as per available slots and customer request, within 48 hours from the logging the inquiry.",
-        "Non-Emergency visits are designed for inspection and identification of the root cause of the reported issue and/or minor adjustments, rectifications that not required any material replacement and can be done maximum within 2 hours. (the number of free non-emergency visits per year is the frequency stated for non-emergency call-outs in this contract)",
+        "Non-Emergency visits are designed for inspection and identification of the root cause of the reported issue and/or minor adjustments, rectifications that not required any material replacement and can be done maximum within 2 hours. {{nonEmergencyVisits}}",
         "Where replacement of parts and/or extensive time (more than 2 hours) is required, the quotation, based on estimated material + handling fee and required manpower/hours, along with the job sheet to be shared with the customer for review and approval, within 24 hours from the site visit. Customer's written approval is mandatory prior to scheduling.",
       ],
     },
@@ -375,14 +485,23 @@ export function buildPriceListRows(
 }
 
 export const BANK_DETAILS = [
-  { label: "ACCOUNT NAME", value: "YALLA FIX IT ONE PERSON COMPANY LLC" },
-  { label: "BANK NAME", value: "ABU DHABI COMMERCIAL BANK" },
-  { label: "CID NUMBER", value: "11214542" },
-  { label: "ACCOUNT NUMBER", value: "11214542920001" },
-  { label: "IBAN NUMBER", value: "AE360030011214542920001" },
-  { label: "BRANCH", value: "SHEIKH ZAYED ROAD" },
-  { label: "SWIFT CODE", value: "ADCBAEAA" },
+  { label: "Account Name", value: "Yalla Fix It One Person Company LLC" },
+  { label: "Bank Name", value: "Abu Dhabi Commercial Bank" },
+  { label: "CID Number", value: "11214542" },
+  { label: "Account Number", value: "11214542920001" },
+  { label: "IBAN Number", value: "AE360030011214542920001" },
+  { label: "Branch", value: "Sheikh Zayed Road" },
+  { label: "SWIFT Code", value: "ADCBAEAA" },
 ];
+
+/* The proposal's closing notes. Default text for AMC Settings. */
+export const PROPOSAL_IMPORTANT_NOTES = [
+  "Spare parts, materials & major repairs are not included unless specified in writing.",
+  "Any work outside the defined scope will be quoted separately for client approval.",
+  "Access to the property must be provided as scheduled for PPM and call-out visits.",
+  "Response times are subject to traffic conditions and site / community access.",
+  "This proposal is valid for 30 days from the date of issue.",
+] as const;
 
 export const CLAUSE_7_TERMS = [
   "7.1 Water and electricity required to perform the maintenance job to be provided by customer.",
@@ -401,7 +520,7 @@ export const CLAUSE_7_TERMS = [
   "7.14 YALLA FIX IT ONE PERSON COMPANY LLC strongly recommends that a home/property insurance plan is in place to cover any damage caused to the property through water leakage, fire, and/or malfunctioning equipment/system, and will support the customer with repair/remediation quotations.",
   "7.15 Neither Party shall be liable to the other for any failure to perform its obligations hereunder to the extent that such failure results from acts of God, war (whether declared or not), sabotage, riot, explosion, government control, restrictions or prohibitions or any other Government act or omission whether local, national, or within the region known as the Middle East, fire, accident, earthquake, storm, flood, epidemic, pandemic, drought, or other natural catastrophes, strikes, lockouts, except where such strikes or lockouts are caused directly by YALLA FIX IT ONE PERSON COMPANY LLC, or any other cause beyond the control of that Party. Any Party, which is prevented by reason of such unforeseen circumstances aforesaid, shall notify the other immediately thereof and shall use all reasonable endeavors to mitigate the effects thereof. During the period of any such Force Majeure failure the client will be entitled to use a Third Party to provide the service if YALLA FIX IT ONE PERSON COMPANY LLC is unable to do so as a result of Force Majeure, but not at the expense of YALLA FIX IT ONE PERSON COMPANY LLC. In these circumstances the client is entitled to reduce his payments to YALLA FIX IT ONE PERSON COMPANY LLC during the period that YALLA FIX IT ONE PERSON COMPANY LLC is unable to perform the relevant services.",
   "If an event of Force Majeure lasts for more than three months, or when it becomes reasonably apparent that an event of Force Majeure will last for more than three months, either Party may, following consultation with the other, give one month's notice of termination.",
-  "7.16 Moods of payment (cash, cheque or bank transfer)",
+  "7.16 Modes of payment (cash, cheque or bank transfer)",
 ];
 
 export const CLAUSE_8_TERMINATION = {
@@ -425,4 +544,3 @@ export function getSelectedScopeSections(selectedServiceIds: string[]) {
   return SCOPE_SECTIONS.filter((section) => selected.has(section.serviceId));
 }
 
-export const TOTAL_PAGES = 8;

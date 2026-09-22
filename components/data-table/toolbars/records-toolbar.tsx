@@ -28,6 +28,8 @@ interface RecordsToolbarProps {
   actions?: React.ReactNode;
   /** Filters beside the search box (category pickers and the like). */
   filters?: React.ReactNode;
+  /** The create button, last on the right after Refresh, as on every table. */
+  primaryAction?: React.ReactNode;
 }
 
 /**
@@ -46,6 +48,7 @@ export function RecordsToolbar({
   pageSizes = [10, 25, 50],
   actions,
   filters,
+  primaryAction,
 }: RecordsToolbarProps) {
   const searchInputId = useId();
   const rowsId = useId();
@@ -110,6 +113,7 @@ export function RecordsToolbar({
             <RefreshCwIcon className="size-4 sm:mr-1" />
             <span className="hidden sm:inline">Refresh</span>
           </Button>
+          {primaryAction}
         </div>
       </div>
     </div>

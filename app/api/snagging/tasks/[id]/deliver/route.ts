@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { emailService } from "@/lib/email-service";
-import { emailMasthead } from "@/lib/email-brand";
+import { clientEmailHtml, escapeEmailHtml } from "@/lib/email-brand";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
@@ -254,14 +254,6 @@ export async function POST(
   }
 }
 
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
 function reportEmailHtml(opts: {
   unit: string;
   reportUrl: string;
@@ -272,19 +264,18 @@ function reportEmailHtml(opts: {
     month: "long",
     year: "numeric",
   });
-  return `
-  <div style="font-family:Arial,Helvetica,sans-serif;color:#1f2937;max-width:560px;margin:0 auto">
-    ${emailMasthead()}
-    <p>Your snagging inspection report for <strong>${escapeHtml(opts.unit)}</strong> is ready.</p>
-    <p>
-      <a href="${escapeHtml(opts.reportUrl)}"
-         style="display:inline-block;background:#0f766e;color:#ffffff;text-decoration:none;
-                padding:11px 20px;border-radius:8px;font-weight:700">
-        View your report
-      </a>
-    </p>
-    <p style="font-size:12px;color:#6b7280">
-      This private link is available until ${escapeHtml(expires)}. Please do not share it.
-    </p>
-  </div>`;
+  return clientEmailHtml({
+    eyebrow: "Inspection report",
+    heading: "Your inspection report is ready",
+    paragraphs: [
+      `Your snagging inspection report for <strong>${escapeEmailHtml(opts.unit)}</strong> is ready to view.`,
+      "It lists every snag we found, with photos and where each one is.",
+    ],
+    details: [
+      { label: "Property", value: opts.unit },
+      { label: "Link available until", value: expires },
+    ],
+    cta: { label: "View your report", url: opts.reportUrl },
+    footnote: "This private link is for you. Please don't share it.",
+  });
 }

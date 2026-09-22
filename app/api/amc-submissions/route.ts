@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { canAccessAmcContracts } from "@/components/dashboard/extensions/amc/amc-constants";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
 import { hasResourceAction } from "@/lib/role-permissions";
+import { canApproveAmc } from "@/components/dashboard/extensions/amc/amc-settings";
+import { readAmcSettings } from "@/lib/server/amc/settings";
+import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
 import { isAmcSubmissionEditable } from "@/components/dashboard/extensions/amc/amc-types";
 import { ActionType, ResourceType } from "@/types/types";
 import type {
@@ -88,6 +90,8 @@ const submissionUpdateSchema = submissionPayloadSchema.partial().extend({
 type AmcSubmissionRow = {
   id: string;
   owner_id: string;
+  /* Server-allocated from amc_proposal_number_seq (step 1.7). */
+  proposal_number: string;
   status: AmcSubmissionStatus;
   property: AmcSubmission["property"];
   customer: AmcSubmission["customer"];
@@ -98,20 +102,39 @@ type AmcSubmissionRow = {
   final_price: number;
   generated_documents: AmcDocumentType[];
   settings_snapshot: AmcSubmission["settings_snapshot"];
+  contract_settings_snapshot?: AmcSubmission["contract_settings_snapshot"];
   submitted_at: string | null;
   decided_at: string | null;
   sent_back_reason: string | null;
+  /* Absent until the client-links migration is applied. */
+  proposal_sent_at?: string | null;
+  contract_sent_at?: string | null;
+  client_decision?: "approved" | "rejected" | null;
+  client_decided_at?: string | null;
+  client_decided_by_name?: string | null;
+  client_rejected_reason?: string | null;
+  signed_by_name?: string | null;
+  signed_at?: string | null;
   created_at: string;
   updated_at: string;
 };
 
-function mapRow(row: AmcSubmissionRow): AmcSubmission {
+function mapRow(
+  row: AmcSubmissionRow,
+  owner?: { viewerId: string; names: Map<string, string> },
+): AmcSubmission {
   return {
+    ...(owner
+      ? {
+          owner_name: owner.names.get(row.owner_id) ?? null,
+          is_own: row.owner_id === owner.viewerId,
+        }
+      : {}),
     id: row.id,
     owner_id: row.owner_id,
     status: row.status,
     property: row.property,
-    customer: row.customer,
+    customer: { ...row.customer, proposalNumber: row.proposal_number },
     document_options: row.document_options,
     services: row.services,
     discount_percent: Number(row.discount_percent),
@@ -119,9 +142,18 @@ function mapRow(row: AmcSubmissionRow): AmcSubmission {
     final_price: Number(row.final_price),
     generated_documents: row.generated_documents ?? [],
     settings_snapshot: row.settings_snapshot ?? null,
+    contract_settings_snapshot: row.contract_settings_snapshot ?? null,
     submitted_at: row.submitted_at ?? null,
     decided_at: row.decided_at ?? null,
     sent_back_reason: row.sent_back_reason ?? null,
+    proposal_sent_at: row.proposal_sent_at ?? null,
+    contract_sent_at: row.contract_sent_at ?? null,
+    client_decision: row.client_decision ?? null,
+    client_decided_at: row.client_decided_at ?? null,
+    client_decided_by_name: row.client_decided_by_name ?? null,
+    client_rejected_reason: row.client_rejected_reason ?? null,
+    signed_by_name: row.signed_by_name ?? null,
+    signed_at: row.signed_at ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -148,7 +180,7 @@ async function requireAmcAccess(): Promise<AmcAccessResult> {
     };
   }
 
-  if (!canAccessAmcContracts(access.profile.email)) {
+  if (!canUseAmc(access.accessUser)) {
     return {
       ok: false,
       error: NextResponse.json({ error: "Forbidden" }, { status: 403 }),
@@ -186,17 +218,22 @@ export async function GET(req: NextRequest) {
 
   /*
     FR3.2: "My AMC Submissions shows each user their own submissions. The
-    approver also sees every submission sent for review."
+    approver also sees every submission sent for review." An approver sees
+    them through the whole life of the proposal, not only while it waits:
+    what they approved, sent back, and what the client did with it. Other
+    people's drafts stay private.
 
     Two reads rather than one `or` filter: the owner clause and the
     approver clause select on different columns, and an `or` spanning
     both is easy to get subtly wrong in a way that leaks drafts. Union by
     id here instead, where the intent is legible.
   */
-  const canApprove = hasResourceAction(
-    gate.accessUser,
-    ResourceType.AMC,
-    ActionType.APPROVE,
+  /* FR5.3: the approvers chosen in AMC Settings, or the role permission
+     when none are chosen. */
+  const canApprove = canApproveAmc(
+    await readAmcSettings(admin),
+    profile.email,
+    hasResourceAction(gate.accessUser, ResourceType.AMC, ActionType.APPROVE),
   );
 
   const { data: own, error } = await admin
@@ -215,8 +252,9 @@ export async function GET(req: NextRequest) {
     const { data: queue, error: queueError } = await admin
       .from("amc_submissions")
       .select("*")
-      .eq("status", "awaiting_approval")
-      .order("submitted_at", { ascending: true });
+      .neq("owner_id", profile.id)
+      .neq("status", "draft")
+      .order("updated_at", { ascending: false });
 
     if (queueError) {
       return NextResponse.json({ error: queueError.message }, { status: 500 });
@@ -228,7 +266,33 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const submissions = rows.map(mapRow);
+  /* Waiting for approval first, then the most recently touched. */
+  rows.sort((a, b) => {
+    const waiting =
+      Number(b.status === "awaiting_approval") -
+      Number(a.status === "awaiting_approval");
+    return waiting || b.updated_at.localeCompare(a.updated_at);
+  });
+
+  const ownerIds = [...new Set(rows.map((row) => row.owner_id))];
+  const names = new Map<string, string>();
+  if (ownerIds.length > 0) {
+    const { data: owners } = await admin
+      .from("user_profile")
+      .select("id, full_name, email")
+      .in("id", ownerIds);
+    for (const owner of owners ?? []) {
+      names.set(
+        String(owner.id),
+        ((owner.full_name as string | null) ?? "").trim() ||
+          String(owner.email ?? ""),
+      );
+    }
+  }
+
+  const submissions = rows.map((row) =>
+    mapRow(row, { viewerId: profile.id, names }),
+  );
   return NextResponse.json({
     submissions,
     totalCount: submissions.length,
@@ -334,6 +398,15 @@ export async function PUT(req: NextRequest) {
         ]),
       )
     : existingRow.generated_documents;
+
+  /* Pin the JSONB copy to the allocated number, whatever the form sent,
+     so the two cannot drift apart through an edit. */
+  if (updates.customer) {
+    updates.customer = {
+      ...updates.customer,
+      proposalNumber: existingRow.proposal_number,
+    };
+  }
 
   const { data, error } = await admin
     .from("amc_submissions")

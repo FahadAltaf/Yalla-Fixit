@@ -16,6 +16,26 @@ export interface PDFGeneratorOptions {
   imageQuality?: number;
 }
 
+/** Resolves once fonts and every <img> in the container have loaded (or failed), or after `capMs`. */
+async function settleImages(container: HTMLElement, capMs = 5000) {
+  const ready = (async () => {
+    await document.fonts?.ready;
+    await Promise.all(
+      Array.from(container.querySelectorAll("img")).map((img) =>
+        img.complete && img.naturalWidth > 0
+          ? img.decode?.().catch(() => undefined)
+          : new Promise<void>((resolve) => {
+              img.addEventListener("load", () => resolve(), { once: true });
+              img.addEventListener("error", () => resolve(), { once: true });
+            }),
+      ),
+    );
+  })();
+  await Promise.race([ready, new Promise((resolve) => setTimeout(resolve, capMs))]);
+  // One more tick so the decoded images are painted before the capture.
+  await new Promise((resolve) => setTimeout(resolve, 30));
+}
+
 export async function generateQuotationPDFBlob(
   templateId: string,
   data: QuotationData,
@@ -65,6 +85,14 @@ export async function generateQuotationPDFBlob(
       root.render(TemplateEl);
       setTimeout(resolve, 300);
     });
+    /*
+      A fixed pause was not enough: the capture ran whether or not the
+      logo had loaded, and when it arrived late the PDF went out with a
+      blank space where the logo belongs. Wait for fonts and every image,
+      as the AMC documents do, capped so one image that never answers
+      cannot hang the download.
+    */
+    await settleImages(tempDiv);
 
     const fullHeight = tempDiv.scrollHeight;
 
@@ -96,4 +124,23 @@ export async function generateQuotationPDFBlob(
       document.body.removeChild(tempDiv);
     }
   }
+}
+
+/**
+ * The quotation as an editable Word file, in the same design as the PDF
+ * (see quotation-docx.ts). The Word writer is loaded only when asked for.
+ */
+export async function generateQuotationDocxBlob(
+  data: QuotationData,
+  discountMode: "with" | "without" | "with-total" | "with-total-no-list" = "with",
+  includeServiceItemImages = false,
+  rootQuotationNumber = "",
+): Promise<Blob> {
+  const { generateQuotationWordBlob } = await import("./quotation-docx");
+  return generateQuotationWordBlob(data, {
+    hideDiscount: discountMode === "without",
+    discountMode,
+    includeServiceItemImages,
+    rootQuotationNumber,
+  });
 }

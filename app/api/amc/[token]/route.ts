@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { hashLinkToken } from "@/lib/server/link-token";
+import { readAmcSettings } from "@/lib/server/amc/settings";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 
 /**
@@ -40,6 +41,8 @@ const PUBLIC_SELECT = [
   "client_decided_at",
   "signed_by_name",
   "signed_at",
+  "proposal_sent_at",
+  "contract_sent_at",
 ].join(", ");
 
 type Row = Record<string, unknown> & {
@@ -63,11 +66,23 @@ async function findByToken(token: string) {
   const admin = await createAdminServerClient();
   const hash = hashLinkToken(token);
 
-  const { data, error } = await admin
-    .from("amc_submissions")
-    .select(PUBLIC_SELECT)
-    .or(`proposal_token_hash.eq.${hash},contract_token_hash.eq.${hash}`)
-    .maybeSingle();
+  /*
+    The lookup also reads the contract's own settings copy (FR6.4). If the
+    database has not been migrated to have that column yet, it reads
+    without it, and a contract shows the proposal's copy, which is what
+    every contract used before. A client link must never fail over a
+    column the page can do without. Read only, so the retry is safe.
+  */
+  const lookup = (columns: string) =>
+    admin
+      .from("amc_submissions")
+      .select(columns)
+      .or(`proposal_token_hash.eq.${hash},contract_token_hash.eq.${hash}`)
+      .maybeSingle();
+  let { data, error } = await lookup(`${PUBLIC_SELECT}, contract_settings_snapshot`);
+  if (error && (error.code === "42703" || error.code === "PGRST204")) {
+    ({ data, error } = await lookup(PUBLIC_SELECT));
+  }
 
   if (error) throw new Error(error.message);
   if (!data) return { error: NextResponse.json(NOT_FOUND, { status: 404 }) };
@@ -119,6 +134,40 @@ function toPublicPayload(row: Row, kind: "proposal" | "contract") {
   };
 }
 
+/**
+ * FR5.5 / FR5.7 — what the client page needs to rebuild the full document
+ * the team sent, with the same renderer. Only fields that print on the
+ * document: the internal customer id stays behind, as do owner, status
+ * history and the token columns.
+ */
+async function toPublicDocument(
+  admin: Awaited<ReturnType<typeof createAdminServerClient>>,
+  row: Row,
+  kind: "proposal" | "contract",
+) {
+  const customer = { ...((row.customer ?? {}) as Record<string, unknown>) };
+  delete customer.customerId;
+  return {
+    source: {
+      property: row.property ?? {},
+      customer: { ...customer, proposalNumber: row.proposal_number ?? "" },
+      document_options: row.document_options ?? {},
+      services: row.services ?? [],
+      discount_percent: Number(row.discount_percent ?? 0),
+    },
+    documentType: kind,
+    /* FR6.4: the text this document was sent with. A contract has its own
+       copy; contracts sent before it did went out with the proposal's. The
+       live fallback only covers rows sent before snapshots existed. */
+    settings:
+      (kind === "contract" ? row.contract_settings_snapshot : null) ??
+      row.settings_snapshot ??
+      (await readAmcSettings(admin)),
+    sentAt:
+      (kind === "contract" ? row.contract_sent_at : row.proposal_sent_at) ?? null,
+  };
+}
+
 export async function GET(
   _req: NextRequest,
   ctx: { params: Promise<{ token: string }> },
@@ -129,7 +178,10 @@ export async function GET(
     if (found.error) return found.error;
 
     return NextResponse.json(
-      { data: toPublicPayload(found.row, found.kind) },
+      {
+        data: toPublicPayload(found.row, found.kind),
+        document: await toPublicDocument(found.admin, found.row, found.kind),
+      },
       { headers: { "Cache-Control": "no-store", "X-Robots-Tag": "noindex" } },
     );
   } catch (error) {

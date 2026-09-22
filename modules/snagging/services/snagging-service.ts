@@ -387,6 +387,13 @@ export const snaggingService = {
       body: { verdict_note: note },
     }),
 
+  /** Leaves the inspector a note on a snag, shown on their phone; empty clears it. */
+  updateSnagReviewNote: async (snagId: string, note: string | null) =>
+    executeRESTBackend<{ id: string; review_note: string | null }>(`/api/snagging/snags/${snagId}`, {
+      method: "PATCH",
+      body: { review_note: note },
+    }),
+
   /** Corrects a snag's note from the portal; empty text clears it. */
   updateSnagNote: async (snagId: string, note: string | null): Promise<{ id: string; note: string | null }> =>
     executeRESTBackend<{ id: string; note: string | null }>(`/api/snagging/snags/${snagId}`, {

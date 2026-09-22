@@ -4,13 +4,6 @@ import { Building2, UserRound, Users } from "lucide-react";
 import type { UseFormReturn } from "react-hook-form";
 
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
   FormControl,
   FormField,
   FormItem,
@@ -18,6 +11,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { AmcPhoneInput } from "../components/amc-phone-input";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
@@ -40,26 +34,26 @@ export function PropertyCustomerStep({ form }: StepProps) {
   const startDate = form.watch("startDate");
 
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Building2 className="size-4 text-primary" />
-            Property Details
-          </CardTitle>
-          <CardDescription>
+    <div className="space-y-8">
+      <section className="space-y-4">
+        <div>
+          <h3 className="flex items-center gap-2 text-base font-semibold">
+            <Building2 className="text-brand size-4" />
+            Property details
+          </h3>
+          <p className="text-muted-foreground mt-0.5 text-sm">
             Property type, location, and unit details for this AMC.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-4 sm:grid-cols-2">
+          </p>
+        </div>
+        <div>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             <FormField
               control={form.control}
               name="propertyCategory"
               render={({ field }) => (
                 <FormItem className="flex flex-col">
 
-                  <FormLabel>Property Category</FormLabel>
+                  <FormLabel>Property category</FormLabel>
                   <Select onValueChange={field.onChange} value={field.value}>
                     <FormControl className="w-full">
                       <SelectTrigger className="w-full">
@@ -82,7 +76,7 @@ export function PropertyCustomerStep({ form }: StepProps) {
               render={({ field }) => (
                 <FormItem className="flex flex-col">
 
-                  <FormLabel>Unit Type</FormLabel>
+                  <FormLabel>Unit type</FormLabel>
                   <Select onValueChange={field.onChange} value={field.value}>
                     <FormControl className="w-full">
                       <SelectTrigger className="w-full">
@@ -105,7 +99,7 @@ export function PropertyCustomerStep({ form }: StepProps) {
               name="propertyAddress"
               render={({ field }) => (
                 <FormItem className="sm:col-span-2">
-                  <FormLabel>Property Address</FormLabel>
+                  <FormLabel>Property address</FormLabel>
                   <FormControl>
                     <Textarea
                       rows={2}
@@ -123,7 +117,7 @@ export function PropertyCustomerStep({ form }: StepProps) {
               name="propertyDetail"
               render={({ field }) => (
                 <FormItem className="sm:col-span-2">
-                  <FormLabel>Property Detail</FormLabel>
+                  <FormLabel>Property detail</FormLabel>
                   <FormControl>
                     <Input placeholder="e.g. Villa 12, Al Barsha, Dubai" {...field} />
                   </FormControl>
@@ -132,30 +126,30 @@ export function PropertyCustomerStep({ form }: StepProps) {
               )}
             />
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <UserRound className="size-4 text-primary" />
-            Customer & Contract
-          </CardTitle>
-          <CardDescription>
+      <section className="space-y-4">
+        <div>
+          <h3 className="flex items-center gap-2 text-base font-semibold">
+            <UserRound className="text-brand size-4" />
+            Customer and contract
+          </h3>
+          <p className="text-muted-foreground mt-0.5 text-sm">
             Client details, contract period, and proposal reference.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-4 sm:grid-cols-2">
+          </p>
+        </div>
+        <div>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             <FormField
               control={form.control}
               name="customerName"
               render={({ field }) => (
                 <FormItem className="flex flex-col">
 
-                  <FormLabel>Customer Name</FormLabel>
+                  <FormLabel>Customer name</FormLabel>
                   <FormControl>
-                    <Input placeholder="MR/MS. Customer Name" {...field} />
+                    <Input placeholder="e.g. Mr. Ahmed Khan" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -167,9 +161,9 @@ export function PropertyCustomerStep({ form }: StepProps) {
               name="customerId"
               render={({ field }) => (
                 <FormItem className="flex flex-col">
-                  <FormLabel>Customer ID *</FormLabel>
+                  <FormLabel>Customer ID</FormLabel>
                   <FormControl className="">
-                    <Input placeholder="Customer reference ID (optional)" {...field} />
+                    <Input placeholder="e.g. YFI1806" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -184,7 +178,12 @@ export function PropertyCustomerStep({ form }: StepProps) {
 
                   <FormLabel>Phone</FormLabel>
                   <FormControl>
-                    <Input placeholder="05X XXX XXXX" {...field} />
+                    <AmcPhoneInput
+                      id={field.name}
+                      value={field.value}
+                      onChange={field.onChange}
+                      disabled={field.disabled}
+                    />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -215,7 +214,7 @@ export function PropertyCustomerStep({ form }: StepProps) {
               name="startDate"
               render={({ field }) => (
                 <FormItem className="flex flex-col">
-                  <FormLabel>Contract Start Date</FormLabel>
+                  <FormLabel>Contract start date</FormLabel>
                   <FormControl>
                     <DatePickerField
                       value={field.value}
@@ -253,7 +252,7 @@ export function PropertyCustomerStep({ form }: StepProps) {
               name="endDate"
               render={({ field }) => (
                 <FormItem className="flex flex-col">
-                  <FormLabel>Contract End Date</FormLabel>
+                  <FormLabel>Contract end date</FormLabel>
                   <FormControl>
                     <DatePickerField
                       value={field.value}
@@ -278,7 +277,7 @@ export function PropertyCustomerStep({ form }: StepProps) {
               render={({ field }) => (
                 <FormItem className="flex flex-col">
 
-                  <FormLabel>Payment Terms</FormLabel>
+                  <FormLabel>Payment terms</FormLabel>
                   <Select onValueChange={field.onChange} value={field.value}>
                     <FormControl className="w-full">
                       <SelectTrigger className="w-full">
@@ -302,28 +301,37 @@ export function PropertyCustomerStep({ form }: StepProps) {
               render={({ field }) => (
                 <FormItem className="flex flex-col">
 
-                  <FormLabel>Proposal Number</FormLabel>
+                  <FormLabel>Proposal number</FormLabel>
                   <FormControl>
-                    <Input placeholder="e.g. AMC-2026-1234" {...field} />
+                    {/* Step 1.7 — allocated by the server so two proposals
+                        can never share a reference. Read-only, and blank
+                        until the first save. */}
+                    <Input
+                      {...field}
+                      readOnly
+                      tabIndex={-1}
+                      className="bg-muted/50 text-muted-foreground"
+                      placeholder="Assigned automatically when saved"
+                    />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
               )}
             />
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Users className="size-4 text-primary" />
-            Coordination Contacts
-          </CardTitle>          <CardDescription>
-            Two contact persons for day-to-day coordination on the contract.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
+      <section className="space-y-4">
+        <div>
+          <h3 className="flex items-center gap-2 text-base font-semibold">
+            <Users className="text-brand size-4" />
+            Coordination contacts
+          </h3>          <p className="text-muted-foreground mt-0.5 text-sm">
+            The two people the team coordinates with day to day.
+          </p>
+        </div>
+        <div className="space-y-6">
           <div className="space-y-4">
             <h4 className="text-sm font-medium text-muted-foreground">
               Contact Person 1
@@ -351,7 +359,12 @@ export function PropertyCustomerStep({ form }: StepProps) {
 
                     <FormLabel>Phone</FormLabel>
                     <FormControl>
-                      <Input placeholder="05X XXX XXXX" {...field} />
+                      <AmcPhoneInput
+                      id={field.name}
+                      value={field.value}
+                      onChange={field.onChange}
+                      disabled={field.disabled}
+                    />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -412,7 +425,12 @@ export function PropertyCustomerStep({ form }: StepProps) {
 
                     <FormLabel>Phone</FormLabel>
                     <FormControl>
-                      <Input placeholder="05X XXX XXXX" {...field} />
+                      <AmcPhoneInput
+                      id={field.name}
+                      value={field.value}
+                      onChange={field.onChange}
+                      disabled={field.disabled}
+                    />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -445,8 +463,8 @@ export function PropertyCustomerStep({ form }: StepProps) {
               />
             </div>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
     </div>
   );
 }

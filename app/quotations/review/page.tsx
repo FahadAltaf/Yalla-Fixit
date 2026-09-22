@@ -1,6 +1,7 @@
 "use client";
 
-import { AlertCircle, AlertTriangle, CheckCircle2, XCircle, Clock } from "lucide-react";
+import { AlertCircle, AlertTriangle, CheckCircle2, Clock, XCircle } from "lucide-react";
+import { saveAs } from "file-saver";
 
 import { QuotationData } from "@/components/dashboard/extensions/quotation-templates/quotation-templates";
 import { YallaClassicTemplate } from "@/components/dashboard/extensions/quotation-templates/templates/YallaClassicTemplate";
@@ -10,6 +11,21 @@ import { useEffect, useState } from "react";
 import Loader from "@/components/ui/loader";
 import { EmptyState } from "@/components/ui/empty-state";
 import { StatusMessageCard } from "@/components/quotations/status-message-card";
+import {
+  ClientDocumentShell,
+  ClientDownloadMenu,
+  FitToWidth,
+  type ClientFileFormat,
+} from "@/components/client-document/client-document-shell";
+import {
+  generateQuotationDocxBlob,
+  generateQuotationPDFBlob,
+} from "@/components/dashboard/extensions/quotation-templates/pdf-utils";
+import {
+  quotationDisplayNumber,
+  quotationFigures,
+} from "@/components/dashboard/extensions/quotation-templates/quotation-figures";
+import { formatCurrencyAED } from "@/utils/format-currency";
 
 
 
@@ -232,35 +248,65 @@ export default function ReviewQuotationPage() {
     );
   }
 
+  const mode = (discountMode ?? "with") as "with" | "without" | "with-total" | "with-total-no-list";
+  const figures = quotationFigures(quotation);
+
   return (
     <EstimateStatusGuard currentStatus={currentStatus}>
-      <main className="min-h-screen bg-slate-100 flex items-center justify-center px-4 py-10">
-        <div className="flex flex-col items-center gap-4">
-
-          {/* Approve / Reject actions at the top */}
-          <div className="w-full flex justify-center">
-            <div className="w-full max-w-[794px]">
-              <ActionSection
-                estimateId={quotation.zohoEstimateId}
-                quotationNumber={quotation.quotationNumber}
-                currentStatus={currentStatus}
-                setCurrentStatus={setCurrentStatus}
-                ownerEmail={quotation.ownerEmail}
-                ownerName={quotation.ownerName}
-                customerName={quotation.customerContact || quotation.customerCompanyName}
-                customerEmail={quotation.customerEmail}
-                quotationDate={quotation.quotationDate}
-              />
-            </div>
-          </div>
-
-          {/* Exact quotation design using YallaClassicTemplate */}
-          <div className="overflow-x-auto">
-            <YallaClassicTemplate data={quotation} type="review" discountMode={discountMode ?? "with"} />
-          </div>
-        </div>
-      </main>
+      <ClientDocumentShell
+        actions={
+          <>
+            <DownloadQuotationButton quotation={quotation} discountMode={mode} />
+            <ActionSection
+              estimateId={quotation.zohoEstimateId}
+              quotationNumber={quotation.quotationNumber}
+              currentStatus={currentStatus}
+              setCurrentStatus={setCurrentStatus}
+              ownerEmail={quotation.ownerEmail}
+              ownerName={quotation.ownerName}
+              customerName={quotation.customerContact || quotation.customerCompanyName}
+              customerEmail={quotation.customerEmail}
+              quotationDate={quotation.quotationDate}
+            />
+          </>
+        }
+        facts={[
+          {
+            label: "Prepared for",
+            value: quotation.customerCompanyName || quotation.customerContact || "—",
+            hint: quotation.serviceAddress,
+          },
+          { label: "Total", value: formatCurrencyAED(figures.grandTotal), hint: "incl. VAT" },
+          { label: "Quotation", value: quotationDisplayNumber(quotation), hint: quotation.quotationDate },
+        ]}
+      >
+        <FitToWidth>
+          <YallaClassicTemplate
+            data={quotation}
+            type="review"
+            discountMode={mode}
+            hideDiscount={mode === "without"}
+          />
+        </FitToWidth>
+      </ClientDocumentShell>
     </EstimateStatusGuard>
   );
 }
 
+/* PDF (the same one the team attaches to the email) or Word. */
+function DownloadQuotationButton({
+  quotation,
+  discountMode,
+}: {
+  quotation: QuotationData;
+  discountMode: "with" | "without" | "with-total" | "with-total-no-list";
+}) {
+  const download = async (format: ClientFileFormat) => {
+    const blob =
+      format === "pdf"
+        ? await generateQuotationPDFBlob("yalla-classic", quotation, { scale: 2 }, discountMode)
+        : await generateQuotationDocxBlob(quotation, discountMode);
+    saveAs(blob, `Quotation-${quotation.quotationNumber}.${format}`);
+  };
+  return <ClientDownloadMenu onDownload={download} />;
+}

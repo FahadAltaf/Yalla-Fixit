@@ -4,7 +4,6 @@ import { AlertTriangle, ListChecks, SlidersHorizontal, UserRound } from "lucide-
 import type { UseFormReturn } from "react-hook-form";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   FormControl,
   FormField,
@@ -13,6 +12,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { AmcPhoneInput } from "../components/amc-phone-input";
 import { Switch } from "@/components/ui/switch";
 import {
   Table,
@@ -64,20 +64,20 @@ export function ServicesPricingStep({ form }: StepProps) {
   };
 
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <ListChecks className="size-4 text-primary" />
-            Contract Services
-          </CardTitle>
+    <div className="space-y-8">
+      <section className="space-y-4">
+        <div>
+          <h3 className="flex items-center gap-2 text-base font-semibold">
+            <ListChecks className="text-brand size-4" />
+            Contract services
+          </h3>
           <p className="text-sm text-muted-foreground">
             Tick each service this AMC covers, then set its units, visits per
-            year and base price. Price is base price × units × frequency and
-            updates as you type.
+            year and base price. The price is base price × units × frequency,
+            and it updates as you type.
           </p>
-        </CardHeader>
-        <CardContent className="space-y-4">
+        </div>
+        <div className="space-y-4">
           {/* FR1.4 — villa-only services stay hidden for apartments and
               offices. Naming them, so an absence reads as a rule rather
               than as a missing row. */}
@@ -95,36 +95,40 @@ export function ServicesPricingStep({ form }: StepProps) {
           )}
 
           <ServiceTable form={form} />
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
       {/* FR4.4 / §8.2 — clause 1.1 named two account managers as
           "05X XXX XXX – NAME". Entered here, per client. */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <UserRound className="size-4 text-primary" />
-            Account Managers
-          </CardTitle>
-          <p className="text-sm text-muted-foreground">
+      <section className="space-y-4">
+        <div>
+          <h3 className="flex items-center gap-2 text-base font-semibold">
+            <UserRound className="text-brand size-4" />
+            Account managers
+          </h3>
+          <p className="text-muted-foreground mt-0.5 text-sm">
             Printed in clause 1.1 as the client&apos;s direct contacts. Leave
             the second blank if there is only one.
           </p>
-        </CardHeader>
-        <CardContent className="grid gap-4 sm:grid-cols-2">
+        </div>
+        {/* One row per contact, name beside number -- no boxes inside
+            the section, as in the snagging forms. */}
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {([0, 1] as const).map((index) => (
-            <div key={index} className="space-y-3 rounded-md border p-3">
-              <p className="text-xs font-medium text-muted-foreground">
-                Contact {index + 1}
-              </p>
+            <div key={index} className="contents">
               <FormField
                 control={form.control}
                 name={`accountManagers.${index}.name` as const}
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel className="text-xs">Name</FormLabel>
+                    <FormLabel>
+                      Account manager {index + 1}
+                      {index === 1 ? (
+                        <span className="text-muted-foreground font-normal"> (optional)</span>
+                      ) : null}
+                    </FormLabel>
                     <FormControl>
-                      <Input className="h-8 text-xs" placeholder="Full name" {...field} />
+                      <Input placeholder="Full name" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -135,9 +139,14 @@ export function ServicesPricingStep({ form }: StepProps) {
                 name={`accountManagers.${index}.phone` as const}
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel className="text-xs">Direct number</FormLabel>
+                    <FormLabel>Direct number</FormLabel>
                     <FormControl>
-                      <Input className="h-8 text-xs" placeholder="05X XXX XXXX" {...field} />
+                      <AmcPhoneInput
+                      id={field.name}
+                      value={field.value}
+                      onChange={field.onChange}
+                      disabled={field.disabled}
+                    />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -145,24 +154,24 @@ export function ServicesPricingStep({ form }: StepProps) {
               />
             </div>
           ))}
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
       {/* FR4.5 / §8.3 — a section that is switched off is left out of the
           document completely. The other three optional sections are service
           rows, so their own checkbox above already decides. */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <SlidersHorizontal className="size-4 text-primary" />
-            Optional Contract Sections
-          </CardTitle>
+      <section className="space-y-4">
+        <div>
+          <h3 className="flex items-center gap-2 text-base font-semibold">
+            <SlidersHorizontal className="text-brand size-4" />
+            Optional contract sections
+          </h3>
           <p className="text-sm text-muted-foreground">
-            Switched off by default. A section that is off does not appear in
-            the contract at all.
+            These are off by default. A section that stays off is left out of
+            the contract completely.
           </p>
-        </CardHeader>
-        <CardContent className="space-y-4">
+        </div>
+        <div className="space-y-4">
           <FormField
             control={form.control}
             name="optionalSections.supplyInstallPriceList"
@@ -173,7 +182,7 @@ export function ServicesPricingStep({ form }: StepProps) {
                     Supply and installation price list
                   </FormLabel>
                   <p className="text-xs text-muted-foreground">
-                    Clause 6.2. Fill in the rows below when this is on.
+                    Clause 6.2. Fill in the rows below once it is on.
                   </p>
                 </div>
                 <FormControl>
@@ -268,7 +277,7 @@ export function ServicesPricingStep({ form }: StepProps) {
                     Additional fixed price services
                   </FormLabel>
                   <p className="text-xs text-muted-foreground">
-                    Clause 6.3 — the hourly rates for handyman work beyond the
+                    Clause 6.3. The hourly rates for handyman work beyond the
                     free hours.
                   </p>
                 </div>
@@ -282,8 +291,8 @@ export function ServicesPricingStep({ form }: StepProps) {
               </FormItem>
             )}
           />
-        </CardContent>
-      </Card>
+        </div>
+      </section>
     </div>
   );
 }

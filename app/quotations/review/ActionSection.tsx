@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import { AlertCircle, CheckCircle2, XCircle } from "lucide-react";
+import { CheckCircle2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
@@ -44,8 +44,6 @@ export function ActionSection({
   quotationDate
 }: Props) {
   const [isLoading, setIsLoading] = useState<Action | null>(null);
-  const [lastAction, setLastAction] = useState<Action | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [isRejectDialogOpen, setIsRejectDialogOpen] = useState(false);
@@ -99,7 +97,6 @@ export function ActionSection({
     }
 
     setIsLoading(action);
-    setError(null);
 
     const note = action === "reject" && feedback.trim() ? `${feedback.trim()}` : `Accepted by ${customerName}`;
 
@@ -119,14 +116,10 @@ export function ActionSection({
       const json = await res.json().catch(() => null);
 
       if (!res.ok || !json?.success) {
-        setError(
-          "We couldn't update this quotation in Zoho. Please try again or contact support."
-        );
-        toast.error("Failed to update quotation in Zoho.");
+        toast.error("We couldn't update this quotation. Please try again or contact support.");
         return;
       }
 
-      setLastAction(action);
       setCurrentStatus(action === "approve" ? "Approved2" : "Rejected2");
       toast.success(
         action === "approve"
@@ -137,9 +130,6 @@ export function ActionSection({
       await sendOwnerEmail(action);
     } catch (err) {
       console.error(err);
-      setError(
-        "Unexpected error while talking to Zoho. Please try again."
-      );
       toast.error("Something went wrong. Please try again.");
     } finally {
       setIsLoading(null);
@@ -157,68 +147,32 @@ export function ActionSection({
   const disabledApprove = !estimateId || !!isLoading;
   const disabledReject = !estimateId || !!isLoading;
 
+  /*
+    Buttons only: they sit in the client page navbar (ClientDocumentShell),
+    beside Download. A failure is reported by toast, and a recorded answer
+    replaces the page with its status card, so nothing else is needed here.
+  */
   return (
-    <section className="space-y-4 rounded-lg border bg-white px-4 py-3">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <p className="text-sm font-medium text-slate-900">
-            Approve or reject this quotation
-          </p>
-          <p className="text-xs text-slate-600">
-            Your choice will be saved in our system
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <Button
-            size="sm"
-            disabled={disabledApprove}
-            onClick={() => handleAction("approve")}
-          >
-            {isLoading === "approve" ? "Approving…" : "Approve"}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={disabledReject}
-            onClick={() => handleAction("reject")}
-          >
-            {isLoading === "reject" ? "Rejecting…" : "Reject"}
-          </Button>
-        </div>
-      </div>
-
-      {error && (
-        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          <p>{error}</p>
-        </div>
-      )}
-
-      {lastAction && !error && (
-        <div className="flex items-start gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
-          {lastAction === "approve" ? (
-            <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          ) : (
-            <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          )}
-          <p>
-            Quotation has been{" "}
-            <span className="font-semibold">
-              {lastAction === "approve" ? "approved" : "rejected"}
-            </span>{" "}
-            in Zoho FSM.
-          </p>
-        </div>
-      )}
-
-      {!estimateId && (
-        <p className="text-[11px] text-slate-500">
-          This quotation was loaded successfully, but it does not
-          include a Zoho estimate id. You can still review the details
-          in the email/PDF, but approve/reject must be handled manually
-          in Zoho.
-        </p>
-      )}
+    <>
+      <Button
+        className="flex-1 sm:flex-none"
+        variant="outline"
+        disabled={disabledReject}
+        onClick={() => handleAction("reject")}
+        title={estimateId ? undefined : "This quotation cannot be answered online. Please contact Yalla Fix It."}
+      >
+        {isLoading === "reject" ? <Loader2 className="size-4 animate-spin" /> : <XCircle className="size-4" />}
+        {isLoading === "reject" ? "Rejecting…" : "Reject"}
+      </Button>
+      <Button
+        className="flex-1 sm:flex-none"
+        disabled={disabledApprove}
+        onClick={() => handleAction("approve")}
+        title={estimateId ? undefined : "This quotation cannot be answered online. Please contact Yalla Fix It."}
+      >
+        {isLoading === "approve" ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
+        {isLoading === "approve" ? "Approving…" : "Approve quotation"}
+      </Button>
 
       <ConfirmationAlertDialog
         isOpen={isDialogOpen}
@@ -283,7 +237,7 @@ export function ActionSection({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </section>
+    </>
   );
 }
 

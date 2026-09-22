@@ -1,37 +1,36 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { format } from "date-fns";
+import type { ColumnDef } from "@tanstack/react-table";
 import {
   CheckCircle2,
-  ChevronLeft,
+  Clock,
   Link as LinkIcon,
   Mail,
-  ChevronRight,
   EllipsisVerticalIcon,
   EyeIcon,
   FileText,
+  Info,
   Loader2,
   PencilIcon,
   Plus,
-  RefreshCw,
   ScrollText,
-  Search,
   Undo2,
+  UserRound,
 } from "lucide-react";
+import { saveAs } from "file-saver";
 import { toast } from "sonner";
 
+import { DataTable } from "@/components/data-table";
+import { useConfirm } from "@/components/dashboard/shared/kaizen-states";
+import { IconText } from "@/components/data-table/columns/icon-text";
+import { RecordsToolbar } from "@/components/data-table/toolbars/records-toolbar";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Card } from "@/components/ui/card";
 import { IdentityCell } from "@/components/ui/entity-avatar";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { cn } from "@/lib/actions/utils";
+import { Money } from "@/components/ui/money";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -39,15 +38,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -58,46 +48,54 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { formatCurrencyAED } from "@/utils/format-currency";
-import { amcSubmissionsService } from "@/modules/amc-submissions";
+import {
+  amcSettingsService,
+  amcSubmissionsService,
+} from "@/modules/amc-submissions";
+import type { AmcSettings } from "./amc-settings";
 
-import { openAmcPdfFromSubmission } from "./amc-document-utils";
+import {
+  buildAmcPdfFromSubmission,
+  savedSettingsFor,
+} from "./amc-document-utils";
+import { useAmcPdfViewer } from "./amc-pdf-viewer";
+import { AMC_APPROVALS_CHANGED } from "./amc-approval-notice";
+import { amcStatusTone } from "./amc-status";
+import { SubmissionDetailsDialog } from "./submission-details-dialog";
+import { AmcSendDialog, type AmcSendRequest } from "./amc-send-dialog";
 import {
   AMC_STATUS_LABELS,
   isAmcSubmissionEditable,
   type AmcDocumentType,
   type AmcSubmission,
-  type AmcSubmissionStatus,
 } from "./amc-types";
-
-/* FR5.8 — nine statuses across four parties. Colour carries the same
-   information as the label so the queue reads at a glance: amber is
-   waiting on someone, red needs the team to act, green has landed. */
-function amcStatusTone(status: AmcSubmissionStatus): string {
-  switch (status) {
-    case "signed":
-    case "proposal_approved":
-      return "bg-green-600/10 text-green-700 dark:bg-green-400/10 dark:text-green-400";
-    case "awaiting_approval":
-    case "proposal_sent":
-    case "contract_sent":
-      return "bg-amber-600/10 text-amber-700 dark:bg-amber-400/10 dark:text-amber-400";
-    case "sent_back":
-    case "proposal_rejected":
-      return "bg-destructive/10 text-destructive";
-    case "approved":
-      return "bg-sky-600/10 text-sky-700 dark:bg-sky-400/10 dark:text-sky-400";
-    case "draft":
-    default:
-      return "bg-muted text-muted-foreground";
-  }
-}
 
 interface SubmissionsListProps {
   refreshKey: number;
   onEdit: (submissionId: string) => void;
   onCreateNew: () => void;
+}
+
+/* The PDF as base64, for the email attachment. */
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result ?? "");
+      resolve(result.slice(result.indexOf(",") + 1));
+    };
+    reader.onerror = () =>
+      reject(reader.error ?? new Error("Couldn't read the PDF."));
+    reader.readAsDataURL(blob);
+  });
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -121,9 +119,32 @@ export function SubmissionsList({
   const [sendBackReason, setSendBackReason] = useState("");
   const [deciding, setDeciding] = useState(false);
   const [sendingId, setSendingId] = useState<string | null>(null);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  /* Email always asks first (check the address); Copy link asks only when
+     a link already exists, since a new one stops the old one working. */
+  const [sendRequest, setSendRequest] = useState<AmcSendRequest | null>(null);
+  const { confirm, dialog: confirmDialog } = useConfirm();
+  const viewer = useAmcPdfViewer();
+  const [detailsFor, setDetailsFor] = useState<AmcSubmission | null>(null);
   const [search, setSearch] = useState("");
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
+  /* Approvers see everyone's submitted proposals as well as their own. */
+  const [scope, setScope] = useState<"all" | "mine" | "waiting">("all");
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const reviewId = searchParams.get("review");
+  /* "Show all" on the approval notice lands here filtered (?scope=waiting). */
+  const scopeParam = searchParams.get("scope");
+  useEffect(() => {
+    if (scopeParam !== "waiting") return;
+    setScope("waiting");
+    setPage(0);
+    const next = new URLSearchParams(searchParams.toString());
+    next.delete("scope");
+    router.replace(`${pathname}?${next.toString()}`, { scroll: false });
+  }, [scopeParam, searchParams, router, pathname]);
 
   const loadSubmissions = useCallback(async () => {
     setIsLoading(true);
@@ -139,7 +160,7 @@ export function SubmissionsList({
       setSubmissions([]);
       setLoadError(true);
       toast.error(
-        getErrorMessage(error, "Failed to load submissions. Please try again."),
+        getErrorMessage(error, "Couldn't load submissions. Try again."),
       );
     } finally {
       setIsLoading(false);
@@ -150,27 +171,49 @@ export function SubmissionsList({
     void loadSubmissions();
   }, [loadSubmissions, refreshKey]);
 
+  /* The header bell found a new request: show it without a manual refresh. */
+  useEffect(() => {
+    const reload = () => void loadSubmissions();
+    window.addEventListener(AMC_APPROVALS_CHANGED, reload);
+    return () => window.removeEventListener(AMC_APPROVALS_CHANGED, reload);
+  }, [loadSubmissions]);
+
+  /* Opened from the bell (?review=<id>): show that proposal's details,
+     then drop the id from the address so a reload does not reopen it. */
+  useEffect(() => {
+    if (!reviewId || isLoading) return;
+    const match = submissions.find((sub) => sub.id === reviewId);
+    if (match) setDetailsFor(match);
+    else toast.info("That proposal is no longer waiting for your approval.");
+    const next = new URLSearchParams(searchParams.toString());
+    next.delete("review");
+    router.replace(`${pathname}?${next.toString()}`, { scroll: false });
+  }, [reviewId, isLoading, submissions, searchParams, router, pathname]);
+
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return submissions;
-    return submissions.filter((sub) =>
-      [sub.customer.customerName, sub.property.propertyAddress]
+    return submissions.filter((sub) => {
+      if (scope === "mine" && sub.is_own === false) return false;
+      if (scope === "waiting" && sub.status !== "awaiting_approval")
+        return false;
+      if (!q) return true;
+      return [
+        sub.customer.customerName,
+        sub.property.propertyAddress,
+        sub.owner_name,
+      ]
         .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(q)),
-    );
-  }, [submissions, search]);
+        .some((value) => String(value).toLowerCase().includes(q));
+    });
+  }, [submissions, search, scope]);
 
   const total = visible.length;
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
-  const currentPage = Math.min(page, pageCount);
-  const pageStart = (currentPage - 1) * pageSize;
-  const pageRows = visible.slice(pageStart, pageStart + pageSize);
-
-  // A narrowed result set should never leave you stranded on a page that no
+  // A narrowed result set never leaves you stranded on a page that no
   // longer exists.
-  useEffect(() => {
-    setPage(1);
-  }, [search, pageSize]);
+  const currentPage = Math.min(page, pageCount - 1);
+  const pageStart = currentPage * pageSize;
+  const pageRows = visible.slice(pageStart, pageStart + pageSize);
 
   /*
     FR5.2 — approve, or send back with a reason. The list reloads rather
@@ -183,6 +226,17 @@ export function SubmissionsList({
     action: "approve" | "send_back",
     reason?: string,
   ) => {
+    /* Send back already asks, in its own dialog with the reason. */
+    if (
+      action === "approve" &&
+      !(await confirm({
+        title: "Approve this proposal?",
+        description: `${submission.customer.customerName || "This proposal"}${submission.customer.proposalNumber ? ` (${submission.customer.proposalNumber})` : ""} will be approved and can then be sent to the client. It can't be edited after this.`,
+        confirmText: "Approve",
+      }))
+    ) {
+      return;
+    }
     setDeciding(true);
     try {
       await amcSubmissionsService.decide(
@@ -192,11 +246,13 @@ export function SubmissionsList({
       );
       toast.success(
         action === "approve"
-          ? "Approved. It can now be sent to the client."
-          : "Sent back to the owner with your reason.",
+          ? "Approved. You can now send it to the client."
+          : "Sent back to the owner with your note.",
       );
       setSendBackFor(null);
       setSendBackReason("");
+      setDetailsFor(null);
+      window.dispatchEvent(new Event(AMC_APPROVALS_CHANGED));
       await loadSubmissions();
     } catch (error) {
       console.error(error);
@@ -204,8 +260,8 @@ export function SubmissionsList({
         getErrorMessage(
           error,
           action === "approve"
-            ? "Failed to approve this proposal."
-            : "Failed to send this proposal back.",
+            ? "Couldn't approve this proposal."
+            : "Couldn't send this proposal back.",
         ),
       );
     } finally {
@@ -219,283 +275,385 @@ export function SubmissionsList({
     differs, so they are one call with a `deliver` flag rather than two
     code paths that could drift.
   */
-  const handleSend = async (
+  const requestSend = (
     submission: AmcSubmission,
     document: "proposal" | "contract",
     deliver: "email" | "link",
   ) => {
+    setSendRequest({ submission, document, deliver });
+  };
+
+  const handleSend = async (
+    submission: AmcSubmission,
+    document: "proposal" | "contract",
+    deliver: "email" | "link",
+    to?: string,
+  ) => {
     setSendingId(submission.id);
+    const label = document === "proposal" ? "proposal" : "contract";
+    /* One toast from start to finish: building the link or sending the
+       email takes a moment, and a click with no feedback gets repeated. */
+    const toastId = toast.loading(
+      deliver === "link"
+        ? `Creating the ${label} link…`
+        : `Emailing the ${label} to the client…`,
+    );
     try {
+      /* Email carries the PDF, like the snagging quotation. It is built
+         with the text it will be sent with (FR6.4). */
+      let pdf: { pdf_base64: string; pdf_filename: string } | undefined;
+      if (deliver === "email") {
+        toast.loading(`Preparing the ${label} PDF…`, { id: toastId });
+        const settings = savedSettingsFor(submission, document)
+          ? undefined
+          : (await amcSettingsService.getSettings().catch(() => null))
+              ?.settings;
+        const built = await buildAmcPdfFromSubmission(
+          submission,
+          document,
+          settings,
+        );
+        pdf = {
+          pdf_base64: await blobToBase64(built.blob),
+          pdf_filename: built.filename,
+        };
+        toast.loading(`Emailing the ${label} to the client…`, {
+          id: toastId,
+        });
+      }
       const result = await amcSubmissionsService.send({
         id: submission.id,
         document,
         deliver,
+        to,
+        ...pdf,
       });
+      setSendRequest(null);
 
       if (deliver === "link") {
         await navigator.clipboard.writeText(result.link).catch(() => {
           /* Clipboard access can be refused; the link still has to reach
              the person, so it is shown rather than silently lost. */
-          window.prompt("Copy this link and send it to the client:", result.link);
+          window.prompt(
+            "Copy this link and send it to the client:",
+            result.link,
+          );
         });
-        toast.success("Link copied. Paste it into WhatsApp to send it.");
+        toast.success(
+          "Link copied. Paste it into WhatsApp or an email to send it.",
+          { id: toastId },
+        );
       } else if (result.warning) {
-        toast.warning(result.warning);
+        toast.warning(result.warning, { id: toastId });
       } else {
         toast.success(
           document === "proposal"
             ? "Proposal emailed to the client."
             : "Contract emailed to the client.",
+          { id: toastId },
         );
       }
       await loadSubmissions();
     } catch (error) {
       console.error(error);
-      toast.error(getErrorMessage(error, "Failed to send this document."));
+      toast.error(getErrorMessage(error, "Couldn't send this document."), {
+        id: toastId,
+      });
     } finally {
       setSendingId(null);
     }
   };
 
+  /* Download a proposal or contract as PDF or Word, with a toast while it
+     builds (a contract can take a few seconds). */
+  const handleDownload = async (
+    submission: AmcSubmission,
+    documentType: AmcDocumentType,
+    fileFormat: "pdf" | "docx",
+  ) => {
+    const label = documentType === "proposal" ? "proposal" : "contract";
+    setDownloadingId(submission.id);
+    const toastId = toast.loading(
+      `Preparing the ${label} (${fileFormat === "pdf" ? "PDF" : "Word"})…`,
+    );
+    try {
+      const settings = savedSettingsFor(submission, documentType)
+        ? undefined
+        : (await amcSettingsService.getSettings().catch(() => null))?.settings;
+      const { blob, filename } = await buildAmcPdfFromSubmission(
+        submission,
+        documentType,
+        settings,
+        fileFormat,
+      );
+      saveAs(blob, filename);
+      toast.success(`Downloaded ${filename}`, { id: toastId });
+    } catch (error) {
+      console.error(error);
+      toast.error(getErrorMessage(error, `Couldn't download the ${label}.`), {
+        id: toastId,
+      });
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
+  /*
+    View a submission's proposal or contract in the in-page viewer (see
+    amc-pdf-viewer.tsx). The title names the proposal and the customer, so
+    an approver working through the queue always knows which one is open.
+  */
   const handleView = async (
     submission: AmcSubmission,
     documentType: AmcDocumentType,
   ) => {
-    const toastId = `amc-view-pdf-${submission.id}-${documentType}`;
     const viewKey = `${submission.id}:${documentType}`;
+    const label = documentType === "proposal" ? "Proposal" : "Contract";
+    const who = submission.customer.customerName || "Customer";
+    const number = submission.customer.proposalNumber;
 
     setViewingKey(viewKey);
-    toast.loading(
-      documentType === "proposal"
-        ? "Opening proposal PDF..."
-        : "Opening contract PDF...",
-      { id: toastId },
-    );
-
     try {
-      await openAmcPdfFromSubmission(submission, documentType);
-      toast.success(
-        documentType === "proposal"
-          ? "Proposal opened in a new tab."
-          : "Contract opened in a new tab.",
-        { id: toastId },
-      );
-    } catch (error) {
-      console.error(error);
-      toast.error(
-        getErrorMessage(
-          error,
-          "Failed to generate the PDF. Please try again.",
-        ),
-        { id: toastId },
+      /* A document not sent yet renders with the current settings; a sent
+         one uses the text it was sent with (FR6.4). Loaded on demand,
+         since most views are of sent documents that do not need it. */
+      const liveSettings = async (): Promise<AmcSettings | undefined> =>
+        savedSettingsFor(submission, documentType)
+          ? undefined
+          : (await amcSettingsService.getSettings().catch(() => null))
+              ?.settings;
+
+      await viewer.open(
+        [label, number, who].filter(Boolean).join(" · "),
+        async () =>
+          buildAmcPdfFromSubmission(
+            submission,
+            documentType,
+            await liveSettings(),
+          ),
+        {
+          buildWord: async () =>
+            buildAmcPdfFromSubmission(
+              submission,
+              documentType,
+              await liveSettings(),
+              "docx",
+            ),
+        },
       );
     } finally {
       setViewingKey(null);
     }
   };
 
-  // Everything below the toolbar swaps between skeleton / empty / error /
-  // rows, but the toolbar and table header stay mounted throughout so search
-  // and refresh remain usable while loading and nothing reflows.
-  const body = () => {
-    if (isLoading) {
-      return Array.from({ length: 5 }).map((_, i) => (
-        <TableRow key={i}>
-          <TableCell>
-            <div className="flex items-center gap-2.5">
-              <Skeleton className="size-8 rounded-full" />
-              <div className="flex flex-col gap-1.5">
-                <Skeleton className="h-3.5 w-36" />
-                <Skeleton className="h-3 w-28" />
-              </div>
-            </div>
-          </TableCell>
-          <TableCell className="">
-            <Skeleton className=" h-4 w-20" />
-          </TableCell>
-          <TableCell>
-            <Skeleton className="h-5 w-16 rounded-sm" />
-          </TableCell>
-          <TableCell>
-            <Skeleton className="h-4 w-32" />
-          </TableCell>
-          <TableCell>
-            <Skeleton className=" size-8 rounded-md" />
-          </TableCell>
-        </TableRow>
-      ));
-    }
-
-    if (loadError) {
-      return (
-        <TableRow className="hover:bg-transparent">
-          <TableCell colSpan={5} className="p-0">
-            <EmptyState
-              className="border-0"
-              icon={<ScrollText className="size-5" />}
-              title="Could not load submissions"
-              description="Something went wrong while fetching your AMC submissions."
-              action={{ label: "Retry", onClick: () => void loadSubmissions() }}
-            />
-          </TableCell>
-        </TableRow>
-      );
-    }
-
-    if (pageRows.length === 0) {
-      return (
-        <TableRow className="hover:bg-transparent">
-          <TableCell colSpan={5} className="p-0">
-            <EmptyState
-              className="border-0"
-              icon={<ScrollText className="size-5" />}
-              title={search ? "No matching submissions" : "No AMC submissions yet"}
-              description={
-                search
-                  ? `Nothing matches “${search}”. Try a different customer or address.`
-                  : "Start a new proposal to create your first draft."
-              }
-              action={
-                search
-                  ? { label: "Clear search", onClick: () => setSearch(""), variant: "outline" }
-                  : { label: "Create New", onClick: onCreateNew }
-              }
-            />
-          </TableCell>
-        </TableRow>
-      );
-    }
-
-    return pageRows.map((submission) => {
-      const isViewing = viewingKey?.startsWith(`${submission.id}:`);
-      const customer = submission.customer.customerName || "Unnamed customer";
-
-      return (
-        <TableRow key={submission.id}>
-          <TableCell>
-            <IdentityCell
-              title={customer}
-              subtitle={submission.property.propertyAddress || "No address"}
-              seed={submission.id}
-            />
-          </TableCell>
-          {/* Currency right-aligns so the magnitudes line up down the column. */}
-          <TableCell className=" text-sm tabular-nums">
-            {formatCurrencyAED(Number(submission.final_price))}
-          </TableCell>
-          <TableCell>
-            <div className="flex flex-col items-start gap-1">
-              <Badge variant="secondary" className={`border-none ${amcStatusTone(submission.status)}`}>
-                {AMC_STATUS_LABELS[submission.status] ?? submission.status}
-              </Badge>
-              {/* FR5.2 — the owner has to see WHY it came back, or the
-                  send-back tells them nothing actionable. */}
-              {submission.status === "sent_back" && submission.sent_back_reason && (
-                <span className="text-muted-foreground max-w-[26ch] text-xs leading-snug">
-                  {submission.sent_back_reason}
-                </span>
+  /*
+    The house table: the same DataTable, toolbar, identity cell, dirham
+    amounts and page numbers as every other list in the portal.
+  */
+  const columns: ColumnDef<AmcSubmission>[] = [
+    {
+      id: "customer",
+      header: "Customer / Property",
+      cell: ({ row }) => (
+        <IdentityCell
+          title={row.original.customer.customerName || "Unnamed customer"}
+          subtitle={row.original.property.propertyAddress || "No address"}
+          icon={UserRound}
+        />
+      ),
+      enableSorting: false,
+    },
+    ...(canApprove
+      ? ([
+          {
+            id: "owner",
+            header: "Submitted by",
+            cell: ({ row }) => (
+              <span className="text-sm">
+                {row.original.is_own === false
+                  ? row.original.owner_name || "Someone else"
+                  : "You"}
+              </span>
+            ),
+            enableSorting: false,
+          },
+        ] satisfies ColumnDef<AmcSubmission>[])
+      : []),
+    {
+      id: "final_price",
+      header: "Final price",
+      cell: ({ row }) => (
+        <Money
+          value={Number(row.original.final_price)}
+          className="text-sm font-medium"
+        />
+      ),
+      enableSorting: false,
+    },
+    {
+      id: "status",
+      header: "Status",
+      cell: ({ row }) => {
+        const submission = row.original;
+        return (
+          <div className="flex flex-col items-start gap-1">
+            <Badge
+              variant="secondary"
+              className={`border-none ${amcStatusTone(submission.status)}`}
+            >
+              {AMC_STATUS_LABELS[submission.status] ?? submission.status}
+            </Badge>
+            {/* FR5.2 — the owner has to see WHY it came back, or the
+                send-back tells them nothing actionable. */}
+            {submission.status === "sent_back" &&
+            submission.sent_back_reason ? (
+              <span className="text-muted-foreground max-w-[26ch] text-xs leading-snug">
+                {submission.sent_back_reason}
+              </span>
+            ) : null}
+            {/* The client asked for changes: the owner edits and resubmits. */}
+            {submission.status === "proposal_rejected" &&
+            submission.client_rejected_reason ? (
+              <span className="text-muted-foreground max-w-[26ch] text-xs leading-snug">
+                {submission.client_rejected_reason}
+              </span>
+            ) : null}
+          </div>
+        );
+      },
+      enableSorting: false,
+    },
+    {
+      id: "updated_at",
+      header: "Last updated",
+      cell: ({ row }) => (
+        <IconText icon={Clock} muted>
+          {format(new Date(row.original.updated_at), "dd MMM yyyy, HH:mm")}
+        </IconText>
+      ),
+      enableSorting: false,
+    },
+    {
+      id: "actions",
+      header: "Actions",
+      enableSorting: false,
+      cell: ({ row }) => {
+        const submission = row.original;
+        const isViewing = viewingKey?.startsWith(`${submission.id}:`);
+        const customer = submission.customer.customerName || "Unnamed customer";
+        return (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                aria-label={`Actions for ${customer}`}
+                disabled={isViewing || sendingId === submission.id}
+              >
+                {isViewing || sendingId === submission.id ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <EllipsisVerticalIcon className="size-4" />
+                )}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {/* FR3.4 — locked once sent for review. Hidden rather
+                  than shown-and-refused: opening a locked submission in
+                  the wizard would let the team type into a form whose
+                  every autosave the server rejects. */}
+              {isAmcSubmissionEditable(submission.status) &&
+              submission.is_own !== false ? (
+                <DropdownMenuItem onClick={() => onEdit(submission.id)}>
+                  <PencilIcon className="size-4" />
+                  Edit
+                </DropdownMenuItem>
+              ) : (
+                /* Locked submissions still need to be readable: the
+                   customer, services, prices and what has happened. */
+                <DropdownMenuItem onClick={() => setDetailsFor(submission)}>
+                  <Info className="size-4" />
+                  View details
+                </DropdownMenuItem>
               )}
-            </div>
-          </TableCell>
-          <TableCell className="text-muted-foreground text-sm">
-            {format(new Date(submission.updated_at), "dd MMM yyyy, HH:mm")}
-          </TableCell>
-          <TableCell className="">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-8"
-                  aria-label={`Actions for ${customer}`}
-                  disabled={isViewing || sendingId === submission.id}
-                >
-                  {isViewing || sendingId === submission.id ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <EllipsisVerticalIcon className="size-4" />
-                  )}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-max">
-                {/* FR3.4 — locked once sent for review. Hidden rather
-                    than shown-and-refused: opening a locked submission in
-                    the wizard would let the team type into a form whose
-                    every autosave the server rejects. */}
-                {isAmcSubmissionEditable(submission.status) && (
-                  <DropdownMenuItem onClick={() => onEdit(submission.id)}>
-                    <PencilIcon className="size-4" />
-                    Edit
+
+              {/* FR5.4 — a proposal may only be sent once it has been
+                  approved internally. FR5.6 — a contract only once the
+                  client has approved the proposal. */}
+              {(submission.status === "approved" ||
+                submission.status === "proposal_sent") && (
+                <>
+                  <DropdownMenuItem
+                    onClick={() => requestSend(submission, "proposal", "email")}
+                  >
+                    <Mail className="size-4" />
+                    {submission.status === "proposal_sent"
+                      ? "Email proposal again"
+                      : "Email proposal to client"}
                   </DropdownMenuItem>
-                )}
+                  <DropdownMenuItem
+                    onClick={() => requestSend(submission, "proposal", "link")}
+                  >
+                    <LinkIcon className="size-4" />
+                    Copy proposal link
+                  </DropdownMenuItem>
+                </>
+              )}
+              {(submission.status === "proposal_approved" ||
+                submission.status === "contract_sent") && (
+                <>
+                  <DropdownMenuItem
+                    onClick={() => requestSend(submission, "contract", "email")}
+                  >
+                    <Mail className="size-4" />
+                    {submission.status === "contract_sent"
+                      ? "Email contract again"
+                      : "Email contract to client"}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => requestSend(submission, "contract", "link")}
+                  >
+                    <LinkIcon className="size-4" />
+                    Copy contract link
+                  </DropdownMenuItem>
+                </>
+              )}
 
-                {/* FR5.4 — a proposal may only be sent once it has been
-                    approved internally. FR5.6 — a contract only once the
-                    client has approved the proposal. */}
-                {submission.status === "approved" && (
-                  <>
-                    <DropdownMenuItem
-                      onClick={() => void handleSend(submission, "proposal", "email")}
-                    >
-                      <Mail className="size-4" />
-                      Email proposal to client
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => void handleSend(submission, "proposal", "link")}
-                    >
-                      <LinkIcon className="size-4" />
-                      Copy proposal link
-                    </DropdownMenuItem>
-                  </>
-                )}
-                {submission.status === "proposal_approved" && (
-                  <>
-                    <DropdownMenuItem
-                      onClick={() => void handleSend(submission, "contract", "email")}
-                    >
-                      <Mail className="size-4" />
-                      Email contract to client
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => void handleSend(submission, "contract", "link")}
-                    >
-                      <LinkIcon className="size-4" />
-                      Copy contract link
-                    </DropdownMenuItem>
-                  </>
-                )}
-
-                {/* FR5.2 — the approver's two decisions, on the queue rows
-                    only. */}
-                {canApprove && submission.status === "awaiting_approval" && (
-                  <>
-                    <DropdownMenuItem
-                      onClick={() => void handleDecision(submission, "approve")}
-                    >
-                      <CheckCircle2 className="size-4" />
-                      Approve
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setSendBackFor(submission)}>
-                      <Undo2 className="size-4" />
-                      Send back…
-                    </DropdownMenuItem>
-                  </>
-                )}
-                <DropdownMenuItem onClick={() => void handleView(submission, "proposal")}>
-                  <FileText className="size-4" />
-                  View Proposal
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => void handleView(submission, "contract")}>
-                  <EyeIcon className="size-4" />
-                  View Contract
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </TableCell>
-        </TableRow>
-      );
-    });
-  };
+              {/* FR5.2 — the approver's two decisions, on the queue rows
+                  only. */}
+              {canApprove && submission.status === "awaiting_approval" && (
+                <>
+                  <DropdownMenuItem
+                    onClick={() => void handleDecision(submission, "approve")}
+                  >
+                    <CheckCircle2 className="size-4" />
+                    Approve
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setSendBackFor(submission)}>
+                    <Undo2 className="size-4" />
+                    Send back…
+                  </DropdownMenuItem>
+                </>
+              )}
+              <DropdownMenuItem
+                onClick={() => void handleView(submission, "proposal")}
+              >
+                <FileText className="size-4" />
+                View proposal
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => void handleView(submission, "contract")}
+              >
+                <EyeIcon className="size-4" />
+                View contract
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        );
+      },
+    },
+  ];
 
   const sendBackDialog = (
     <Dialog
@@ -510,8 +668,8 @@ export function SubmissionsList({
         <DialogHeader>
           <DialogTitle>Send back for changes</DialogTitle>
           <DialogDescription>
-            The owner sees this reason on their submission and can edit and
-            resubmit. Nothing is sent to the client.
+            The owner sees your note on their submission, makes the changes and
+            resubmits. Nothing goes to the client.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-2">
@@ -540,11 +698,19 @@ export function SubmissionsList({
           <Button
             onClick={() =>
               sendBackFor &&
-              void handleDecision(sendBackFor, "send_back", sendBackReason.trim())
+              void handleDecision(
+                sendBackFor,
+                "send_back",
+                sendBackReason.trim(),
+              )
             }
             disabled={deciding || sendBackReason.trim().length === 0}
           >
-            {deciding ? <Loader2 className="size-4 animate-spin" /> : <Undo2 className="size-4" />}
+            {deciding ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Undo2 className="size-4" />
+            )}
             Send back
           </Button>
         </DialogFooter>
@@ -555,91 +721,152 @@ export function SubmissionsList({
   return (
     <div className="flex flex-col gap-4">
       {sendBackDialog}
-      {/* Toolbar: search left, page size / refresh / primary action right. */}
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="relative w-full sm:w-80">
-          <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2" />
-          <Input
-            placeholder="Search..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-9"
-            aria-label="Search submissions"
+      {confirmDialog}
+      <AmcSendDialog
+        key={
+          sendRequest
+            ? `${sendRequest.submission.id}:${sendRequest.document}:${sendRequest.deliver}`
+            : "closed"
+        }
+        request={sendRequest}
+        pending={
+          Boolean(sendRequest) && sendingId === sendRequest?.submission.id
+        }
+        onCancel={() => setSendRequest(null)}
+        onConfirm={(request, to) =>
+          void handleSend(
+            request.submission,
+            request.document,
+            request.deliver,
+            to,
+          )
+        }
+      />
+      {viewer.viewer}
+      <SubmissionDetailsDialog
+        submission={detailsFor}
+        onOpenChange={(open) => !open && setDetailsFor(null)}
+        onView={(submission, documentType) => {
+          setDetailsFor(null);
+          void handleView(submission, documentType);
+        }}
+        onEdit={(id) => {
+          setDetailsFor(null);
+          onEdit(id);
+        }}
+        canApprove={canApprove}
+        deciding={deciding}
+        onApprove={(submission) => void handleDecision(submission, "approve")}
+        onSendBack={(submission) => setSendBackFor(submission)}
+        onDownload={(submission, documentType, fileFormat) =>
+          void handleDownload(submission, documentType, fileFormat)
+        }
+        downloading={downloadingId === detailsFor?.id}
+        sending={sendingId === detailsFor?.id}
+        onSend={(submission, document, deliver) =>
+          requestSend(submission, document, deliver)
+        }
+      />
+      <Card className="py-0">
+        {loadError ? (
+          <EmptyState
+            className="border-0"
+            icon={<ScrollText className="size-5" />}
+            title="Could not load submissions"
+            description="Something went wrong while loading your AMC submissions."
+            action={{ label: "Retry", onClick: () => void loadSubmissions() }}
           />
-        </div>
-        <div className="flex items-center gap-2">
-          <Select value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
-            <SelectTrigger size="sm" className="h-8 w-[110px]" aria-label="Rows per page">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {[10, 25, 50, 100].map((n) => (
-                <SelectItem key={n} value={String(n)}>
-                  {n} / page
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8"
-            onClick={() => void loadSubmissions()}
-            disabled={isLoading}
-          >
-            <RefreshCw className={cn("size-4", isLoading && "animate-spin")} />
-            Refresh
-          </Button>
-          <Button size="sm" className="h-8" onClick={onCreateNew}>
-            <Plus className="size-4" />
-            Create New
-          </Button>
-        </div>
-      </div>
-
-      <div className="overflow-hidden rounded-md border">
-        <Table>
-          <TableHeader>
-            <TableRow className="hover:bg-transparent">
-              <TableHead>Customer / Property</TableHead>
-              <TableHead className="">Final Price</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Last Updated</TableHead>
-              <TableHead className="">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>{body()}</TableBody>
-        </Table>
-
-        {!isLoading && !loadError && total > 0 && (
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3">
-            <p className="text-muted-foreground text-sm">
-              Showing {pageStart + 1} to {Math.min(pageStart + pageSize, total)} of {total} submissions
-            </p>
-            <div className="flex items-center gap-1">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
-              >
-                <ChevronLeft className="size-4" /> Previous
-              </Button>
-              <span className="text-muted-foreground px-2 text-sm tabular-nums">
-                Page {currentPage} of {pageCount}
-              </span>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
-                disabled={currentPage === pageCount}
-              >
-                Next <ChevronRight className="size-4" />
-              </Button>
-            </div>
-          </div>
+        ) : (
+          <DataTable
+            columns={columns}
+            data={pageRows}
+            loading={isLoading}
+            rowCount={total}
+            pageSize={pageSize}
+            currentPage={currentPage}
+            isPagination
+            onPageChange={setPage}
+            onPageSizeChange={(size) => {
+              setPageSize(size);
+              setPage(0);
+            }}
+            onGlobalFilterChange={(value) => {
+              setSearch(value);
+              setPage(0);
+            }}
+            toolbar={
+              <RecordsToolbar
+                fetchRecords={() => void loadSubmissions()}
+                globalFilter={search}
+                onGlobalFilterChange={(value) => {
+                  setSearch(value);
+                  setPage(0);
+                }}
+                isSearchLoading={isLoading}
+                filters={
+                  canApprove ? (
+                    <Select
+                      value={scope}
+                      onValueChange={(value) => {
+                        setScope(value as typeof scope);
+                        setPage(0);
+                      }}
+                    >
+                      <SelectTrigger
+                        className="w-[200px]"
+                        aria-label="Show submissions"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All submissions</SelectItem>
+                        <SelectItem value="waiting">
+                          Waiting for approval
+                        </SelectItem>
+                        <SelectItem value="mine">Mine only</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  ) : null
+                }
+                pageSize={pageSize}
+                onPageSizeChange={(size) => {
+                  setPageSize(size);
+                  setPage(0);
+                }}
+                primaryAction={
+                  <Button onClick={onCreateNew}>
+                    <Plus className="size-4" />
+                    Create New
+                  </Button>
+                }
+              />
+            }
+            emptyState={
+              <EmptyState
+                className="border-0"
+                icon={<ScrollText className="size-5" />}
+                title={
+                  search ? "No matching submissions" : "No AMC submissions yet"
+                }
+                description={
+                  search
+                    ? `Nothing matches "${search}". Try another customer name or address.`
+                    : "Start a new proposal and it will show up here."
+                }
+                action={
+                  search
+                    ? {
+                        label: "Clear search",
+                        onClick: () => setSearch(""),
+                        variant: "outline",
+                      }
+                    : { label: "Create New", onClick: onCreateNew }
+                }
+              />
+            }
+          />
         )}
-      </div>
+      </Card>
     </div>
   );
 }

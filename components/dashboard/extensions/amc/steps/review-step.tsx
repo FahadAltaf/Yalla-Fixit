@@ -3,25 +3,27 @@
 import { useMemo, useState } from "react";
 import {
   Building2,
+  CalendarRange,
+  ChevronDown,
   CreditCard,
-  Eye,
+  Download,
   FileText,
+  FileType,
   ListCheck,
-  ScrollText,
+  Loader2,
   Sparkles,
-  User,
 } from "lucide-react";
 import type { UseFormReturn } from "react-hook-form";
 
-import { Badge } from "@/components/ui/badge";
+import { PillTabs } from "@/components/dashboard/shared/kaizen";
+import { Button } from "@/components/ui/button";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Money } from "@/components/ui/money";
 import {
   Table,
   TableBody,
@@ -30,223 +32,253 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { formatCurrencyAED } from "@/utils/format-currency";
 
 import type { AmcComputedData, AmcDocumentType, AmcFormData } from "../amc-types";
 import { computeAmcData, formatDisplayDate } from "../amc-pricing";
-import { AmcContractTemplate } from "../templates/AmcContractTemplate";
-import { AmcProposalTemplate } from "../templates/AmcProposalTemplate";
+import type { AmcSettings } from "../amc-settings";
+import { AmcDocumentSheet } from "../templates/AmcDocumentSheet";
 
 interface StepProps {
   form: UseFormReturn<AmcFormData>;
   computed: AmcComputedData;
+  /** Saves the document in the preview as a PDF or Word file. */
+  onDownload: (documentType: AmcDocumentType, format: "pdf" | "docx") => void;
+  /** "proposal:pdf" and so on while a file is being built. */
+  downloading: string | null;
+  /**
+   * FR6.2 — the AMC Settings text and values the documents are built from.
+   * The same settings the download uses, so the preview shows exactly what
+   * the PDF will say. Without them it fell back to the shipped defaults:
+   * default clause wording and XXX contact numbers.
+   */
+  settings?: AmcSettings;
 }
 
-export function ReviewStep({ form, computed }: StepProps) {
+/** A titled part of the step, laid out like the other two steps. */
+function ReviewSection({
+  icon: Icon,
+  title,
+  description,
+  action,
+  children,
+}: {
+  icon: typeof Building2;
+  title: string;
+  description?: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="space-y-4">
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <h3 className="flex items-center gap-2 text-base font-semibold">
+            <Icon className="text-brand size-4" />
+            {title}
+          </h3>
+          {description ? (
+            <p className="text-muted-foreground mt-0.5 text-sm">{description}</p>
+          ) : null}
+        </div>
+        {action}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/** One label over its value, as a read-only field. */
+function Fact({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-muted-foreground text-xs">{label}</dt>
+      <dd className="mt-0.5 truncate text-sm font-medium">{children || "—"}</dd>
+    </div>
+  );
+}
+
+export function ReviewStep({ form, computed, onDownload, downloading, settings }: StepProps) {
   const values = form.watch();
   const [previewTab, setPreviewTab] = useState<AmcDocumentType>("proposal");
 
   const proposalPreview = useMemo(
-    () => computeAmcData(values, "proposal"),
-    [values],
+    () => computeAmcData(values, "proposal", settings),
+    [values, settings],
   );
   const contractPreview = useMemo(
-    () => computeAmcData(values, "contract"),
-    [values],
+    () => computeAmcData(values, "contract", settings),
+    [values, settings],
   );
 
+  const { totals } = computed;
+
   return (
-    <div className="space-y-5">
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Building2 className="size-4 text-primary" />
-              Property & Package
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            <p>
-              <span className="text-muted-foreground">Category:</span>{" "}
-              <span className="capitalize">{values.propertyCategory}</span>
-            </p>
-            <p>
-              <span className="text-muted-foreground">Unit:</span>{" "}
-              <span className="capitalize">{values.unitType}</span>
-            </p>
-            <p>
-              <span className="text-muted-foreground">Address:</span>{" "}
-              {values.propertyAddress || "—"}
-            </p>
-            <p>
-              <span className="text-muted-foreground">Detail:</span>{" "}
-              {values.propertyDetail || "—"}
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base flex items-center gap-2">
-              <User className="size-4 text-primary" />
-              Customer
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            <p>
-              <span className="text-muted-foreground">Name:</span>{" "}
-              {values.customerName || "—"}
-            </p>
-            <p>
-              <span className="text-muted-foreground">Proposal #:</span>{" "}
-              {values.proposalNumber}
-            </p>
-            <p>
-              <span className="text-muted-foreground">Period:</span>{" "}
-              {formatDisplayDate(values.startDate)} →{" "}
-              {formatDisplayDate(values.endDate)}
-            </p>
-            <p>
-              <span className="text-muted-foreground">Payment:</span>{" "}
-              <span className="capitalize">{values.paymentTerms}</span>
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base flex items-center gap-2">
-            <CreditCard className="size-4 text-primary" />
-            Cost Summary
-          </CardTitle>
-          <CardDescription>
-            Service subtotal, discount, and final price with 5% VAT
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-2 text-sm">
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Subtotal</span>
-            <span>{formatCurrencyAED(computed.totals.subtotal)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">
-              Discount ({computed.totals.discountPercent}%)
+    <div className="space-y-8">
+      {/* Everything entered in step 1, read back in one place. */}
+      <ReviewSection
+        icon={Building2}
+        title="Property and customer"
+        description="Check these before submitting. Go back a step to change anything."
+      >
+        <dl className="grid gap-x-6 gap-y-4 rounded-lg border p-4 sm:grid-cols-2 xl:grid-cols-4">
+          <Fact label="Customer">{values.customerName}</Fact>
+          <Fact label="Proposal number">{values.proposalNumber}</Fact>
+          <Fact label="Property category">
+            <span className="capitalize">{values.propertyCategory}</span>
+          </Fact>
+          <Fact label="Unit type">
+            <span className="capitalize">{values.unitType}</span>
+          </Fact>
+          <Fact label="Address">{values.propertyAddress}</Fact>
+          <Fact label="Property detail">{values.propertyDetail}</Fact>
+          <Fact label="Contract period">
+            <span className="inline-flex items-center gap-1.5">
+              <CalendarRange className="text-muted-foreground size-3.5" aria-hidden />
+              {formatDisplayDate(values.startDate)} → {formatDisplayDate(values.endDate)}
             </span>
-            <span>- {formatCurrencyAED(computed.totals.discountAmount)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Final price (ex VAT)</span>
-            <span>{formatCurrencyAED(computed.totals.finalPrice)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">VAT (5%)</span>
-            <span>{formatCurrencyAED(computed.totals.vatAmount)}</span>
-          </div>
-          <Separator />
-          <div className="flex justify-between font-semibold">
-            <span>Grand total</span>
-            <span>{formatCurrencyAED(computed.totals.grandTotal)}</span>
-          </div>
-          <p className="pt-2 text-xs text-muted-foreground">
-            {computed.totals.amountInWords}
-          </p>
-        </CardContent>
-      </Card>
+          </Fact>
+          <Fact label="Payment terms">
+            <span className="capitalize">{values.paymentTerms}</span>
+          </Fact>
+        </dl>
+      </ReviewSection>
 
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base flex items-center gap-2">
-            <ListCheck className="size-4 text-primary" />
-            Selected Services (Clause 6.1)
-          </CardTitle>
-          <CardDescription>
-            These rows will appear in the generated PDF
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Scope</TableHead>
-                <TableHead>Frequency</TableHead>
-                <TableHead>Reference</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {computed.frequencyRows.map((row) => (
-                <TableRow key={row.scope}>
-                  <TableCell className="text-xs">{row.scope}</TableCell>
-                  <TableCell className="text-xs">{row.frequency}</TableCell>
-                  <TableCell className="text-xs">{row.reference}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
-
-      <div className="space-y-3">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div>
-            <h3 className="text-lg font-semibold flex items-center gap-2">
-              <Sparkles className="size-4 text-primary" />
-              Document Preview
-            </h3>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Switch between proposal and contract previews before downloading.
-            </p>
-          </div>
-          <Badge variant="outline" className="w-fit gap-1 text-xs">
-            <Eye className="size-3" />
-            Live preview
-          </Badge>
-        </div>
-
-        <Tabs
-          value={previewTab}
-          onValueChange={(value) => setPreviewTab(value as AmcDocumentType)}
-          className="w-full gap-3"
+      {/* The services and what they cost, side by side. */}
+      <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_22rem]">
+        <ReviewSection
+          icon={ListCheck}
+          title="Selected services"
+          description="Clause 6.1. These rows appear in the generated documents."
         >
-          <TabsList className="w-full sm:w-auto">
-            {/*
-              Named for what they are. These switch the preview; the two
-              buttons below the wizard are what actually generate, and
-              having four controls reading "Generate Proposal" on one
-              screen made the harmless pair look like the real ones.
-            */}
-            <TabsTrigger value="proposal" className="gap-2">
-              <FileText className="size-4" />
-              Proposal
-            </TabsTrigger>
-            <TabsTrigger value="contract" className="gap-2">
-              <ScrollText className="size-4" />
-              Contract
-            </TabsTrigger>
-          </TabsList>
+          <div className="overflow-hidden rounded-lg border">
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="h-10">Scope</TableHead>
+                  <TableHead className="h-10">Frequency</TableHead>
+                  <TableHead className="h-10">Reference</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {computed.frequencyRows.length === 0 ? (
+                  <TableRow className="hover:bg-transparent">
+                    <TableCell colSpan={3} className="text-muted-foreground py-6 text-center text-sm">
+                      No services selected yet. Go back to Services and pricing to add some.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  computed.frequencyRows.map((row) => (
+                    <TableRow key={row.scope}>
+                      <TableCell className="text-sm font-medium">{row.scope}</TableCell>
+                      <TableCell className="text-sm">{row.frequency}</TableCell>
+                      <TableCell className="text-muted-foreground text-sm">{row.reference}</TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </ReviewSection>
 
-          <TabsContent value="proposal" className="mt-0">
-            <div className="border rounded-lg overflow-hidden bg-slate-100">
-              <div className="bg-slate-100 overflow-auto flex items-start justify-center p-6 max-h-[600px]">
-                <div className="shadow-2xl ring-1 ring-black/5 rounded overflow-hidden bg-white">
-                  <AmcProposalTemplate data={proposalPreview} />
-                </div>
-              </div>
+        <ReviewSection
+          icon={CreditCard}
+          title="Cost summary"
+          description="Before and after 5% VAT."
+        >
+          <dl className="space-y-2.5 rounded-lg border p-4 text-sm">
+            <div className="flex items-center justify-between gap-4">
+              <dt className="text-muted-foreground">Subtotal</dt>
+              <dd>
+                <Money value={totals.subtotal} />
+              </dd>
             </div>
-          </TabsContent>
-
-          <TabsContent value="contract" className="mt-0">
-            <div className="border rounded-lg overflow-hidden bg-slate-100">
-              <div className="bg-slate-100 overflow-auto flex items-start justify-center p-6 max-h-[600px]">
-                <div className="shadow-2xl ring-1 ring-black/5 rounded overflow-hidden bg-white">
-                  <AmcContractTemplate data={contractPreview} />
-                </div>
-              </div>
+            <div className="flex items-center justify-between gap-4">
+              <dt className="text-muted-foreground">Discount ({totals.discountPercent}%)</dt>
+              <dd className="inline-flex items-center gap-1">
+                − <Money value={totals.discountAmount} />
+              </dd>
             </div>
-          </TabsContent>
-        </Tabs>
+            <div className="flex items-center justify-between gap-4">
+              <dt className="text-muted-foreground">Final price (excl. VAT)</dt>
+              <dd>
+                <Money value={totals.finalPrice} />
+              </dd>
+            </div>
+            <div className="flex items-center justify-between gap-4">
+              <dt className="text-muted-foreground">VAT (5%)</dt>
+              <dd>
+                <Money value={totals.vatAmount} />
+              </dd>
+            </div>
+            <div className="flex items-center justify-between gap-4 border-t pt-3">
+              <dt className="font-semibold">Grand total</dt>
+              <dd className="text-lg font-semibold">
+                <Money value={totals.grandTotal} />
+              </dd>
+            </div>
+            <p className="text-muted-foreground pt-1 text-xs leading-relaxed">
+              {totals.amountInWords}
+            </p>
+          </dl>
+        </ReviewSection>
       </div>
+
+      {/* The two documents, exactly as they will be generated. */}
+      <ReviewSection
+        icon={Sparkles}
+        title="Document preview"
+        description="Switch between the proposal and the contract, download either one, then submit below."
+      >
+        {/*
+          Named for what they are. These switch the preview; the buttons
+          below the wizard are what actually generate, and having four
+          controls reading "Generate Proposal" on one screen made the
+          harmless pair look like the real ones. Download, at the end of
+          the same row, saves whichever document is showing.
+        */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <PillTabs<AmcDocumentType>
+            value={previewTab}
+            onChange={setPreviewTab}
+            tabs={[
+              { value: "proposal", label: "Proposal" },
+              { value: "contract", label: "Contract" },
+            ]}
+          />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button type="button" variant="outline" size="sm" disabled={downloading !== null}>
+                {downloading ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Download className="size-4" />
+                )}
+                Download {previewTab}
+                <ChevronDown className="size-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => onDownload(previewTab, "pdf")}>
+                <FileText className="size-4" />
+                PDF
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onDownload(previewTab, "docx")}>
+                <FileType className="size-4" />
+                Word (.docx)
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+        <div className="bg-muted/50 overflow-hidden rounded-lg border">
+          <div className="flex max-h-[600px] items-start justify-center overflow-auto p-6">
+            <div className="overflow-hidden rounded bg-white shadow-lg ring-1 ring-black/5">
+              <AmcDocumentSheet
+                data={previewTab === "proposal" ? proposalPreview : contractPreview}
+              />
+            </div>
+          </div>
+        </div>
+      </ReviewSection>
     </div>
   );
 }

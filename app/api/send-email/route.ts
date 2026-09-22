@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Resend } from "resend";
 
+import { withInlineLogo } from "@/lib/server/email-logo-attachment";
+
 export async function POST(request: NextRequest) {
   try {
     const apiKey = process.env.NEXT_PUBLIC_RESEND_API_KEY;
@@ -9,22 +11,26 @@ export async function POST(request: NextRequest) {
     if (!apiKey || !from) {
       return NextResponse.json(
         { error: "Email service is not configured" },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
     const resend = new Resend(apiKey);
     const { to, subject, html, cc, attachment } = await request.json();
 
-    const attachments = attachment
-      ? [
-          {
-            filename: attachment.filename,
-            content: Buffer.from(attachment.content, "base64"),
-            contentType: attachment.contentType,
-          },
-        ]
-      : undefined;
+    /* The logo is embedded, so it shows whatever URL the app runs on. */
+    const attachments = withInlineLogo(
+      String(html ?? ""),
+      attachment
+        ? [
+            {
+              filename: attachment.filename,
+              content: Buffer.from(attachment.content, "base64"),
+              contentType: attachment.contentType,
+            },
+          ]
+        : [],
+    );
 
     let primaryTo = to as string | undefined;
     let ccList = cc as string[] | undefined;
@@ -57,7 +63,10 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ data });
   } catch (error) {
-    console.error('Error sending email:', error);
-    return NextResponse.json({ error: 'Failed to send email' }, { status: 500 });
+    console.error("Error sending email:", error);
+    return NextResponse.json(
+      { error: "Failed to send email" },
+      { status: 500 },
+    );
   }
 }

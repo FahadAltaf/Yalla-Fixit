@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Download, FileText, PanelLeftClose, PanelLeftOpen, Settings2, Wrench } from "lucide-react";
 import {
   Sidebar,
@@ -14,18 +15,18 @@ import {
 } from "@/components/ui/sidebar";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SidebarGroupLabel } from "@/components/ui/sidebar";
 import { cn } from "@/lib/actions/utils";
 import { EXTENSIONS_NAV_COOKIE } from "@/lib/extensions/nav-preference";
 
 import Link from "next/link";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAuth } from "@/context/AuthContext";
 import { ExtensionsPageClient } from "./bulk-download";
 import { QuotationTemplatesPage } from "./quotation-templates/index";
 import { AmcContractsPage } from "./amc/index";
-import { canAccessAmcContracts } from "./amc/amc-constants";
 import { AmcSettingsPage } from "./amc/amc-settings-page";
+import { canUseAmc } from "./amc/amc-constants";
 
 const ALL_NAV_ITEMS = [
   { name: "Bulk Download", icon: Download },
@@ -37,9 +38,41 @@ const ALL_NAV_ITEMS = [
   { name: "AMC Settings", icon: Settings2 },
 ] as const;
 
+/*
+  Each section's address, so a reload or a shared link opens the section
+  it was on (?section=amc-proposals) rather than always the first one.
+*/
+const SECTION_SLUGS: Record<(typeof ALL_NAV_ITEMS)[number]["name"], string> = {
+  "Bulk Download": "bulk-download",
+  "Quotation Templates": "quotation-templates",
+  "AMC Proposals": "amc-proposals",
+  "AMC Settings": "amc-settings",
+};
+
+function sectionFromSlug(slug: string | null): string {
+  const found = Object.entries(SECTION_SLUGS).find(([, value]) => value === slug);
+  return found ? found[0] : "Bulk Download";
+}
+
 export default function Extensions({ defaultNavOpen = false }: { defaultNavOpen?: boolean }) {
   const { userProfile } = useAuth();
-  const [activeSection, setActiveSection] = useState("Bulk Download");
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const activeSection = sectionFromSlug(searchParams.get("section"));
+  /*
+    Switching section is a new entry in the history, so Back returns to
+    the section before. A section's own state (the AMC tab, the open
+    proposal) is dropped, since it belongs to the section being left.
+  */
+  const setActiveSection = useCallback(
+    (name: string) => {
+      const slug = SECTION_SLUGS[name as keyof typeof SECTION_SLUGS];
+      if (!slug || name === activeSection) return;
+      router.push(`${pathname}?section=${slug}`, { scroll: false });
+    },
+    [router, pathname, activeSection],
+  );
   // Collapsed by default, matching the Scheduling section nav. The
   // preference is a cookie so the server renders the right width on the
   // first paint rather than correcting it after mount.
@@ -52,8 +85,10 @@ export default function Extensions({ defaultNavOpen = false }: { defaultNavOpen?
       return next;
     });
 
-  const canAccessAmc = canAccessAmcContracts(userProfile?.email);
+  /* AMC Proposals: admins, and roles with the AMC Proposals permission.
+     AMC Settings: admins only. */
   const isAdmin = userProfile?.roles?.name === "admin";
+  const canAccessAmc = canUseAmc(userProfile);
 
   const nav = useMemo(
     () =>
@@ -99,22 +134,35 @@ export default function Extensions({ defaultNavOpen = false }: { defaultNavOpen?
           <Sidebar
             collapsible="none"
             className={cn(
-              "hidden shrink-0 transition-[width] duration-200 md:flex",
-              navOpen ? "w-(--sidebar-width)" : "w-14",
+              /*
+                Pinned: it stays put while the page scrolls under it. The
+                offset clears the sticky page header (about 5rem tall), so
+                the rail never slides beneath it, and a long list scrolls
+                inside the rail rather than running off the screen.
+
+                Styled like the Settings rail: the sidebar's own ground, a
+                gradient pill on the open section.
+              */
+              "hidden shrink-0 transition-[width] duration-200 md:sticky md:top-[5.5rem] md:flex md:max-h-[calc(100dvh-6.5rem)] md:self-start md:overflow-y-auto",
+              navOpen ? "w-56" : "w-14",
             )}
           >
             <SidebarContent>
-              <SidebarGroup>
-                {/* Toggle lives in the group header beside the section label,
-                    so it never floats alone; collapsed, it centres on the
-                    rail at the same 36px square as the items below it. */}
+              <SidebarGroup className="p-1.5">
+                {/* Toggle in the header row beside the section label;
+                    collapsed, it centres on the rail at the same 40px
+                    square as the items below it. */}
                 <SidebarGroupLabel
                   className={cn(
                     "mb-1 h-9 gap-2",
-                    navOpen ? "justify-between px-2" : "justify-center px-0",
+                    navOpen ? "justify-between pl-2 pr-0" : "justify-center px-0",
                   )}
                 >
-                  {navOpen && <span className="tracking-wide uppercase">Extensions</span>}
+                  {navOpen && (
+                    <span className="text-muted-foreground text-xs font-semibold tracking-wider uppercase">
+                      Extensions
+                    </span>
+                  )}
                   <Button
                     type="button"
                     variant="ghost"
@@ -122,47 +170,65 @@ export default function Extensions({ defaultNavOpen = false }: { defaultNavOpen?
                     aria-expanded={navOpen}
                     aria-label={navOpen ? "Collapse section menu" : "Expand section menu"}
                     title={navOpen ? "Collapse section menu" : "Expand section menu"}
-                    className={cn(
-                      "text-muted-foreground hover:text-foreground size-9 shrink-0 p-0",
-                      navOpen && "-mr-1",
-                    )}
+                    className="text-muted-foreground hover:text-foreground size-8 shrink-0 p-0"
                   >
                     {navOpen ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />}
                   </Button>
                 </SidebarGroupLabel>
                 <SidebarGroupContent>
-                  <SidebarMenu>
-                    {nav.map((item) => (
-                      <SidebarMenuItem key={item.name}>
+                  <SidebarMenu className="gap-0.5">
+                    {nav.map((item) => {
+                      const active = item.name === resolvedActiveSection;
+                      const button = (
                         <SidebarMenuButton
                           asChild
-                          isActive={item.name === resolvedActiveSection}
-                          onClick={() => setActiveSection(item.name)}
+                          isActive={active}
                           className={cn(
-                            "group/menu-button font-medium gap-3 h-9 rounded-md border border-transparent bg-linear-to-r hover:bg-transparent hover:from-sidebar-accent hover:to-sidebar-accent/40 data-[active=true]:border-primary/20 data-[active=true]:from-primary/20 data-[active=true]:to-primary/5 [&>svg]:size-auto",
+                            "group/menu-button h-9 gap-3 rounded-md bg-linear-to-r font-medium hover:bg-transparent hover:from-sidebar-accent hover:to-sidebar-accent/40 data-[active=true]:from-primary/20 data-[active=true]:to-primary/5 [&>svg]:size-auto",
                             // Square and centred when collapsed, so the rail
-                            // is one aligned column rather than wide pills
-                            // wrapped around small glyphs.
-                            !navOpen && "size-9 w-9 justify-center p-0 mx-auto",
+                            // is one aligned column of equal buttons.
+                            !navOpen && "mx-auto size-9 justify-center p-0",
                           )}
                         >
-                          <Link href={"#"} title={navOpen ? undefined : item.name}>
-                            {item.icon && (
-                              <item.icon
-                                className="text-muted-foreground/60 group-data-[active=true]/menu-button:text-primary"
-                                size={20}
-                                aria-hidden="true"
-                              />
-                            )}
+                          {/*
+                            A real link to the section's address. It used to
+                            point at "#", and following that link undid the
+                            section change the click had just made.
+                          */}
+                          <Link
+                            href={`${pathname}?section=${SECTION_SLUGS[item.name]}`}
+                            scroll={false}
+                            aria-current={active ? "page" : undefined}
+                          >
+                            <item.icon
+                              className={cn(
+                                "size-4 shrink-0",
+                                active ? "text-primary" : "text-muted-foreground/70",
+                              )}
+                              aria-hidden="true"
+                            />
                             {navOpen ? (
-                              <span>{item.name}</span>
+                              <span className="truncate">{item.name}</span>
                             ) : (
                               <span className="sr-only">{item.name}</span>
                             )}
                           </Link>
                         </SidebarMenuButton>
-                      </SidebarMenuItem>
-                    ))}
+                      );
+                      return (
+                        <SidebarMenuItem key={item.name}>
+                          {navOpen ? (
+                            button
+                          ) : (
+                            // Collapsed, the name appears beside the icon on hover.
+                            <Tooltip>
+                              <TooltipTrigger asChild>{button}</TooltipTrigger>
+                              <TooltipContent side="right">{item.name}</TooltipContent>
+                            </Tooltip>
+                          )}
+                        </SidebarMenuItem>
+                      );
+                    })}
                   </SidebarMenu>
                 </SidebarGroupContent>
               </SidebarGroup>
@@ -196,11 +262,14 @@ export default function Extensions({ defaultNavOpen = false }: { defaultNavOpen?
               </Tabs>
             </div>
 
-            <ScrollArea className="h-[calc(100vh-110px)] sm:h-[calc(100vh-11Opx)] overflow-y-auto ">
-              <div className="flex flex-col gap-4 md:pl-4 pr-0 pt-0 pb-0 ">
-                {renderSettingsContent()}
-              </div>
-            </ScrollArea>
+            {/*
+              The page scrolls, as every other page does. A fixed-height
+              inner scroll box (screen height minus 110px) inside a page that
+              also scrolls left a band of empty space under any short section.
+            */}
+            <div className="flex flex-col gap-4 md:pl-4">
+              {renderSettingsContent()}
+            </div>
           </main>
         </SidebarProvider>
       </div>

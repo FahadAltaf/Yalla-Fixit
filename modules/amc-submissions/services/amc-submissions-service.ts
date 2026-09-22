@@ -4,6 +4,8 @@ import type {
   AmcDocumentType,
   AmcSubmission,
   AmcSubmissionListResponse,
+  AmcPendingApprovalsResponse,
+  AmcHistoryEvent,
 } from "@/components/dashboard/extensions/amc/amc-types";
 
 export interface AmcSubmissionInput {
@@ -33,6 +35,11 @@ export type AmcSendInput = {
   id: string;
   document: "proposal" | "contract";
   deliver: "email" | "link";
+  /* The address confirmed in the send dialog. */
+  to?: string;
+  /* The document as a PDF, attached to the email. */
+  pdf_base64?: string;
+  pdf_filename?: string;
 };
 
 export interface AmcSendResult {
@@ -60,10 +67,29 @@ export const amcSubmissionsService = {
     ),
 
   listSubmissions: async (): Promise<AmcSubmissionListResponse> => {
-    return executeRESTBackend<AmcSubmissionListResponse>("/api/amc-submissions", {
-      method: "GET",
-    });
+    return executeRESTBackend<AmcSubmissionListResponse>(
+      "/api/amc-submissions",
+      {
+        method: "GET",
+      },
+    );
   },
+
+  /* The approver's queue, for the header bell. Never throws for someone
+     without AMC access: they get an empty queue. */
+  listPendingApprovals: async (): Promise<AmcPendingApprovalsResponse> => {
+    return executeRESTBackend<AmcPendingApprovalsResponse>(
+      "/api/amc-submissions/pending-approvals",
+      { method: "GET" },
+    );
+  },
+
+  /* Every step a submission has been through, oldest first. */
+  getHistory: async (id: string): Promise<{ events: AmcHistoryEvent[] }> =>
+    executeRESTBackend<{ events: AmcHistoryEvent[] }>(
+      `/api/amc-submissions/history?id=${encodeURIComponent(id)}`,
+      { method: "GET" },
+    ),
 
   getSubmission: async (id: string): Promise<AmcSubmission> => {
     return executeRESTBackend<AmcSubmission>("/api/amc-submissions", {
@@ -72,7 +98,9 @@ export const amcSubmissionsService = {
     });
   },
 
-  createSubmission: async (data: AmcSubmissionInput): Promise<AmcSubmission> => {
+  createSubmission: async (
+    data: AmcSubmissionInput,
+  ): Promise<AmcSubmission> => {
     return executeRESTBackend<AmcSubmission>("/api/amc-submissions", {
       method: "POST",
       body: data as unknown as Record<string, unknown>,

@@ -65,9 +65,9 @@ export function ServiceTable({ form }: ServiceTableProps) {
                   <TableRow>
                     <TableHead className="w-10" />
                     <TableHead>Service</TableHead>
-                    <TableHead className="w-[100px]">No. of Units</TableHead>
+                    <TableHead className="w-[100px]">Units</TableHead>
                     <TableHead className="w-[100px]">Frequency</TableHead>
-                    <TableHead className="w-[120px]">Base Price</TableHead>
+                    <TableHead className="w-[120px]">Base price</TableHead>
                     <TableHead className="w-[120px] text-right">Price</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -230,14 +230,14 @@ export function ServiceTable({ form }: ServiceTableProps) {
         <Separator />
 
         <div className="flex justify-between text-sm font-semibold">
-          <span>Final Price</span>
+          <span>Final price</span>
           <span>{formatCurrencyAED(totals.finalPrice)}</span>
         </div>
       </div>
 
       {availableServices.length !== AMC_SERVICES.length && (
         <p className="text-xs text-muted-foreground">
-          Villa-only services are hidden for non-villa unit types.
+          Villa-only services are hidden for apartments and offices.
         </p>
       )}
     </div>

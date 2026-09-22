@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { canAccessAmcContracts } from "@/components/dashboard/extensions/amc/amc-constants";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
-import { snapshotAmcSettings } from "@/lib/server/amc/settings";
+import { readAmcSettings } from "@/lib/server/amc/settings";
+import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
+import { canApproveAmc } from "@/components/dashboard/extensions/amc/amc-settings";
+import { hasResourceAction } from "@/lib/role-permissions";
+import { ActionType, ResourceType } from "@/types/types";
 import { linkTokenExpiry, mintLinkToken } from "@/lib/server/link-token";
 import { sendEmail } from "@/lib/server/send-email";
+import { clientEmailHtml, escapeEmailHtml } from "@/lib/email-brand";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
 
@@ -28,6 +32,13 @@ const sendSchema = z.object({
   id: z.string().uuid(),
   document: z.enum(["proposal", "contract"]),
   deliver: z.enum(["email", "link"]).default("email"),
+  /* The address confirmed in the send dialog. Falls back to the
+     customer email saved on the proposal. */
+  to: z.string().trim().email().optional(),
+  /* The document as a PDF, built in the browser like the snagging
+     quotation, attached to the email. */
+  pdf_base64: z.string().optional(),
+  pdf_filename: z.string().max(200).optional(),
 });
 
 /** Which status a document may be sent from, and what it becomes. */
@@ -37,22 +48,80 @@ const TRANSITIONS = {
 } as const;
 
 const SELECT =
-  "id, owner_id, status, customer, proposal_number, final_price, settings_snapshot";
+  "id, owner_id, status, customer, property, proposal_number, final_price, settings_snapshot, contract_settings_snapshot";
 
-function appUrl(): string {
-  return (
-    process.env.NEXT_PUBLIC_APP_URL ??
-    process.env.APP_URL ??
-    ""
-  ).replace(/\/$/, "");
+/* A column this route reads or writes is not in the database: a
+   deployment gap the user cannot fix, so name the migrations instead of
+   echoing the raw error. */
+function missingMigration(detail: string) {
+  console.error("AMC send: a column is missing:", detail);
+  return NextResponse.json(
+    {
+      error:
+        "Sending to clients isn't set up on this database yet. An administrator needs to apply the latest AMC migrations (20260916110000_amc_client_links.sql and 20260922130000_amc_contract_settings_snapshot.sql).",
+    },
+    { status: 503 },
+  );
 }
 
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+function appUrl(): string {
+  return (process.env.NEXT_PUBLIC_APP_URL ?? process.env.APP_URL ?? "").replace(
+    /\/$/,
+    "",
+  );
+}
+
+function formatAed(value: number): string {
+  return `AED ${value.toLocaleString("en-AE", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+/* The client email, in the same layout as the snagging emails. */
+function amcEmailHtml(o: {
+  document: "proposal" | "contract";
+  customerName: string;
+  proposalNumber: string;
+  property: string;
+  finalPrice: number;
+  link: string;
+  expiresAt: string;
+}): string {
+  const isProposal = o.document === "proposal";
+  const expires = new Date(o.expiresAt).toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+  return clientEmailHtml({
+    eyebrow: isProposal ? "AMC proposal" : "AMC contract",
+    heading: isProposal
+      ? "Your maintenance proposal is ready"
+      : "Your maintenance contract is ready to sign",
+    greeting: `Dear ${o.customerName.trim() || "customer"},`,
+    paragraphs: isProposal
+      ? [
+          `Thank you for considering Yalla Fix It. Your annual maintenance contract proposal${o.property ? ` for <strong>${escapeEmailHtml(o.property)}</strong>` : ""} is ready.`,
+          "Please review it and approve it, or tell us what you would like changed.",
+        ]
+      : [
+          "Thank you for approving the proposal.",
+          `Your annual maintenance contract${o.property ? ` for <strong>${escapeEmailHtml(o.property)}</strong>` : ""} is ready. Please review it and sign it online.`,
+        ],
+    details: [
+      ...(o.proposalNumber
+        ? [{ label: "Reference", value: o.proposalNumber }]
+        : []),
+      ...(o.property ? [{ label: "Property", value: o.property }] : []),
+      { label: "Annual fee (excl. VAT)", value: formatAed(o.finalPrice) },
+    ],
+    cta: {
+      label: isProposal ? "Review the proposal" : "Review and sign",
+      url: o.link,
+    },
+    footnote: `This link is personal to you and works until ${expires}. Please don't share it. The ${isProposal ? "proposal" : "contract"} is also attached as a PDF.`,
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -60,17 +129,27 @@ export async function POST(req: NextRequest) {
   if (!access.profile) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (!canAccessAmcContracts(access.profile.email)) {
+  if (!canUseAmc(access.accessUser)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const parsed = sendSchema.safeParse(await req.json());
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    return NextResponse.json(
+      { error: parsed.error.flatten() },
+      { status: 400 },
+    );
   }
 
   const { profile } = access;
-  const { id, document, deliver } = parsed.data;
+  const {
+    id,
+    document,
+    deliver,
+    to: confirmedTo,
+    pdf_base64: pdfBase64,
+    pdf_filename: pdfFilename,
+  } = parsed.data;
   const transition = TRANSITIONS[document];
   const admin = await createAdminServerClient();
 
@@ -81,18 +160,36 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
 
   if (fetchError) {
+    if (fetchError.code === "42703" || fetchError.code === "PGRST204")
+      return missingMigration(fetchError.message);
     return NextResponse.json({ error: fetchError.message }, { status: 500 });
   }
   if (!existing) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-  if (existing.owner_id !== profile.id) {
+  /* The owner sends it, or an approver, who can see every submitted
+     proposal in their list (FR3.2). */
+  if (
+    existing.owner_id !== profile.id &&
+    !canApproveAmc(
+      await readAmcSettings(admin),
+      profile.email,
+      hasResourceAction(
+        access.accessUser,
+        ResourceType.AMC,
+        ActionType.APPROVE,
+      ),
+    )
+  ) {
     return NextResponse.json(
-      { error: "Only the owner can send this document" },
+      { error: "Only the owner or an approver can send this document" },
       { status: 403 },
     );
   }
-  if (existing.status !== transition.from) {
+  /* A document already sent can be sent again (a new email, or a fresh
+     link to share). The status stays where it is. */
+  const isResend = existing.status === transition.to;
+  if (existing.status !== transition.from && !isResend) {
     return NextResponse.json(
       {
         error:
@@ -105,12 +202,36 @@ export async function POST(req: NextRequest) {
   }
 
   /*
-    FR6.4 — freeze the text before the document leaves the building. Taken
-    once only (the helper filters on settings_snapshot IS NULL), so
-    re-sending a proposal cannot re-freeze it against wording that has
-    changed since the client first saw it.
+    FR4.4 — "no document ever prints XXX". The TPH contact numbers and
+    coordination emails live in AMC Settings and ship as XXX until an admin
+    enters them, so without this check the first proposal sent would carry
+    them straight to the client.
+
+    Checked BEFORE the snapshot below, never after: a document keeps its
+    snapshot for ever (FR6.4), so a placeholder frozen into one could never
+    be corrected.
+
+    Which settings a send uses: the proposal keeps the copy taken when it
+    was first sent, so a re-send matches what the client already has. The
+    contract takes the settings as they are now, so a clause edited after
+    the proposal went out does reach the contract.
   */
-  await snapshotAmcSettings(admin, id);
+  const effectiveSettings =
+    document === "proposal"
+      ? (existing.settings_snapshot ?? (await readAmcSettings(admin)))
+      : isResend && existing.contract_settings_snapshot
+        ? /* A re-sent contract matches the one the client already has. */
+          existing.contract_settings_snapshot
+        : await readAmcSettings(admin);
+  if (/XXX/.test(JSON.stringify(effectiveSettings))) {
+    return NextResponse.json(
+      {
+        error:
+          "AMC Settings still has placeholder values (XXX), usually the TPH contact numbers or coordination emails. An admin needs to fill them in under Extensions > AMC Settings before anything can be sent to a client.",
+      },
+      { status: 409 },
+    );
+  }
 
   const token = mintLinkToken();
   const expiresAt = linkTokenExpiry();
@@ -125,21 +246,39 @@ export async function POST(req: NextRequest) {
       [`${prefix}_token_hint`]: token.hint,
       [`${prefix}_token_expires_at`]: expiresAt,
       [`${prefix}_sent_at`]: now,
+      /*
+        FR6.4: freeze the text the document is sent with, in this same
+        write so a failed send freezes nothing. The proposal's copy is
+        taken once and never replaced; the contract gets its own, which
+        leaves the proposal the client already holds unchanged.
+      */
+      ...(document === "contract"
+        ? isResend && existing.contract_settings_snapshot
+          ? {}
+          : { contract_settings_snapshot: effectiveSettings }
+        : existing.settings_snapshot
+          ? {}
+          : { settings_snapshot: effectiveSettings }),
       updated_at: now,
     })
     .eq("id", id)
     /* Re-asserted, so two tabs sending at once cannot both mint a token
        and leave the second one's link as the only working copy. */
-    .eq("status", transition.from)
+    .eq("status", existing.status)
     .select(SELECT)
     .maybeSingle();
 
   if (error) {
+    if (error.code === "PGRST204" || error.code === "42703")
+      return missingMigration(error.message);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
   if (!data) {
     return NextResponse.json(
-      { error: "Someone else updated this proposal a moment ago. Reload and try again." },
+      {
+        error:
+          "Someone else updated this proposal a moment ago. Reload and try again.",
+      },
       { status: 409 },
     );
   }
@@ -152,7 +291,7 @@ export async function POST(req: NextRequest) {
 
   let emailed = false;
   if (deliver === "email") {
-    const to = customer.customerEmail?.trim();
+    const to = confirmedTo || customer.customerEmail?.trim();
     if (!to) {
       /*
         The status change and the token are already committed, so this is
@@ -179,26 +318,26 @@ export async function POST(req: NextRequest) {
           document === "proposal"
             ? `Your AMC proposal ${existing.proposal_number ?? ""}`.trim()
             : `Your AMC contract ${existing.proposal_number ?? ""}`.trim(),
-        html: `
-          <div style="font-family:system-ui,Segoe UI,Arial,sans-serif;font-size:15px;color:#17120e">
-            <p>Dear ${escapeHtml(customer.customerName ?? "customer")},</p>
-            <p>
-              ${
-                document === "proposal"
-                  ? "Your annual maintenance contract proposal is ready to review."
-                  : "Thank you for approving the proposal. Your contract is ready to sign."
-              }
-            </p>
-            <p style="margin:20px 0">
-              <a href="${link}" style="background:#0e7c70;color:#fff;padding:10px 18px;border-radius:4px;text-decoration:none">
-                ${document === "proposal" ? "Review the proposal" : "Review and sign"}
-              </a>
-            </p>
-            <p style="color:#6e655b;font-size:13px">
-              This link is personal to you and expires in 30 days.
-            </p>
-            <p style="color:#6e655b;font-size:13px">Yalla Fix It</p>
-          </div>`,
+        html: amcEmailHtml({
+          document,
+          customerName: customer.customerName ?? "",
+          proposalNumber: existing.proposal_number ?? "",
+          property:
+            (existing.property as { propertyAddress?: string } | null)
+              ?.propertyAddress ?? "",
+          finalPrice: Number(existing.final_price ?? 0),
+          link,
+          expiresAt,
+        }),
+        attachment: pdfBase64
+          ? {
+              filename:
+                pdfFilename?.replace(/[^\w.\- ]+/g, "_") ||
+                `${document === "proposal" ? "Proposal" : "Contract"}-${existing.proposal_number ?? "AMC"}.pdf`,
+              content: pdfBase64,
+              contentType: "application/pdf",
+            }
+          : undefined,
       });
       emailed = true;
     } catch (mailError) {
@@ -227,7 +366,11 @@ export async function POST(req: NextRequest) {
       emailed,
       tokenHint: token.hint,
       expiresAt,
-      to: deliver === "email" ? customer.customerEmail ?? null : null,
+      resend: isResend,
+      to:
+        deliver === "email"
+          ? confirmedTo || customer.customerEmail || null
+          : null,
     },
   });
 

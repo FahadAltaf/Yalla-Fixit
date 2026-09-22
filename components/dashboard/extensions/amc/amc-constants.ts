@@ -1,5 +1,7 @@
 import type { AmcFormData, AmcService, AmcServiceRow } from "./amc-types";
 import { getDefaultEndDateFromStart } from "./amc-date-utils";
+import { hasResourceAction } from "@/lib/role-permissions";
+import { ActionType, ResourceType } from "@/types/types";
 
 
 
@@ -10,7 +12,7 @@ export const AMC_SERVICES: AmcService[] = [
     label: "24/7 Technical Support Hotline",
     scope: "24/7 Technical Support Hotline",
     reference: "Clause 1.1",
-    frequencyType: "covered",
+    frequencyType: "covered",
     villaOnly: false,
     hasScopeSection: false,
   },
@@ -19,7 +21,7 @@ export const AMC_SERVICES: AmcService[] = [
     label: "AC Planned Preventive Maintenance",
     scope: "Planned Preventive Maintenance ~ Air conditioning service",
     reference: "Clause 2.1",
-    frequencyType: "ppm",
+    frequencyType: "ppm",
     villaOnly: false,
     sectionNumber: "2.1",
     sectionTitle: "Air Condition Service and Maintenance (PPM)",
@@ -30,7 +32,7 @@ export const AMC_SERVICES: AmcService[] = [
     label: "Electrical PPM",
     scope: "Planned Preventive Maintenance ~ Electrical Service",
     reference: "Clause 2.2",
-    frequencyType: "ppm",
+    frequencyType: "ppm",
     villaOnly: false,
     sectionNumber: "2.2",
     sectionTitle: "Electrical Service and Maintenance (PPM)",
@@ -41,7 +43,7 @@ export const AMC_SERVICES: AmcService[] = [
     label: "Plumbing PPM",
     scope: "Planned Preventive Maintenance ~ Plumbing Service",
     reference: "Clause 2.3",
-    frequencyType: "ppm",
+    frequencyType: "ppm",
     villaOnly: false,
     sectionNumber: "2.3",
     sectionTitle: "Plumbing Service and Maintenance",
@@ -53,7 +55,7 @@ export const AMC_SERVICES: AmcService[] = [
     scope: "Planned Preventive Maintenance ~ Water Pump Service",
     reference: "Clause 2.4",
     frequencyType: "fixed",
-    frequencyPerYear: 1,
+    frequencyPerYear: 1,
     villaOnly: true,
     sectionNumber: "2.4",
     sectionTitle: "Water Pump Maintenance",
@@ -65,7 +67,7 @@ export const AMC_SERVICES: AmcService[] = [
     scope: "Roof drain cleaning",
     reference: "Clause 2.5",
     frequencyType: "fixed",
-    frequencyPerYear: 1,
+    frequencyPerYear: 1,
     villaOnly: true,
     sectionNumber: "2.5",
     sectionTitle: "Roof Drain cleaning",
@@ -77,7 +79,7 @@ export const AMC_SERVICES: AmcService[] = [
     scope: "Water tank cleaning and disinfection",
     reference: "Clause 2.6",
     frequencyType: "fixed",
-    frequencyPerYear: 2,
+    frequencyPerYear: 2,
     villaOnly: true,
     sectionNumber: "2.6",
     sectionTitle: "Water tank cleaning",
@@ -89,7 +91,7 @@ export const AMC_SERVICES: AmcService[] = [
     scope: "Air duct cleaning and sanitization",
     reference: "Clause 2.7",
     frequencyType: "fixed",
-    frequencyPerYear: 1,
+    frequencyPerYear: 1,
     villaOnly: false,
     sectionNumber: "2.7",
     sectionTitle: "Duct cleaning",
@@ -101,7 +103,7 @@ export const AMC_SERVICES: AmcService[] = [
     scope: "Evaporator coil cleaning",
     reference: "Clause 2.8",
     frequencyType: "fixed",
-    frequencyPerYear: 1,
+    frequencyPerYear: 1,
     villaOnly: false,
     sectionNumber: "2.8",
     sectionTitle: "Coil cleaning",
@@ -112,7 +114,7 @@ export const AMC_SERVICES: AmcService[] = [
     label: "Free Handyman Service",
     scope: "Free Handyman service",
     reference: "Clause 2.9",
-    frequencyType: "handyman",
+    frequencyType: "handyman",
     villaOnly: false,
     sectionNumber: "2.9",
     sectionTitle: "Free Handyman service",
@@ -123,7 +125,7 @@ export const AMC_SERVICES: AmcService[] = [
     label: "Emergency Call-out",
     scope: "Free Emergency Call-out / Visit",
     reference: "Clause 3.1",
-    frequencyType: "unlimited",
+    frequencyType: "unlimited",
     villaOnly: false,
     hasScopeSection: false,
   },
@@ -132,7 +134,15 @@ export const AMC_SERVICES: AmcService[] = [
     label: "Non-Emergency Call-out",
     scope: "Free Non-Emergency Call-out",
     reference: "Clause 3.2",
-    frequencyType: "unlimited",
+    /*
+      FR4.3 — was "unlimited", which made the frequency uneditable and
+      printed "Unlimited". But the clause itself always spoke of "the number
+      of free non-emergency visits per year" -- it was the package that
+      supplied that number. With packages gone the team enters it, so this
+      is a counted service like any other. Emergency call-outs stay
+      unlimited; the FRD only changes non-emergency.
+    */
+    frequencyType: "fixed",
     villaOnly: false,
     hasScopeSection: false,
   },
@@ -154,16 +164,19 @@ export const AMC_PROVIDER = {
   contactNo: "800-PERFECT / 05X XXX XX / 05X XXX XX",
   email: "info@yallafixit.ae",
   coordinationEmails: ["XXX@TPHGROUP.ME", "XXX@TPHGROUP.ME"],
+  /* As on the current AMC document design (Le Majilis, 2025). */
   address:
-    "PO Box 392512, Office 102, Commercial Bank of Dubai, Al Quoz Industrial 3 Dubai, UAE",
+    "Gold & Diamond Park, Building 6, Al Quoz, Al Quoz Industrial Area 3, Dubai",
   contractType: "ANNUAL – MEP",
 };
 
-export function generateProposalNumber(): string {
-  const year = new Date().getFullYear();
-  const suffix = String(Math.floor(Math.random() * 9000) + 1000);
-  return `AMC-${year}-${suffix}`;
-}
+/*
+  generateProposalNumber() is gone. It built AMC-{year}-{random 1000-9999}
+  in the browser with no uniqueness check: 9,000 values a year, so a
+  collision became more likely than not at about 112 proposals, and the
+  number is the customer-facing reference. amc_proposal_number_seq
+  allocates it inside the INSERT instead.
+*/
 
 export function getServicesForUnitType(unitType: string) {
   return AMC_SERVICES.filter(
@@ -248,7 +261,9 @@ export function getDefaultFormValues(): AmcFormData {
     startDate,
     endDate: getDefaultEndDate(startDate),
     paymentTerms: "annual",
-    proposalNumber: generateProposalNumber(),
+    /* Allocated by the server on first save -- see generateProposalNumber
+       below for why the browser no longer invents one. */
+    proposalNumber: "",
   };
 }
 
@@ -256,15 +271,14 @@ export function getDefaultSelectedServices() {
   return [...DEFAULT_SERVICE_IDS];
 }
 
-const AMC_CONTRACTS_ALLOWED_EMAILS = new Set([
-  "sharon.v@tphgroup.me",
-  "balochdanish2020@gmail.com",
-  "m.bahsas@tphgroup.me",
-  "sami.f@tphgroup.me",
-  "samifarah2013@gmail.com",
-]);
-
-export function canAccessAmcContracts(email?: string | null): boolean {
-  if (!email) return false;
-  return AMC_CONTRACTS_ALLOWED_EMAILS.has(email.trim().toLowerCase());
+/**
+ * Who can use AMC Proposals: admins, and anyone whose role has the AMC
+ * Proposals permission (view or approve) in role settings. The same rule
+ * in the browser (the Extensions menu) and on the server (every AMC route).
+ */
+export function canUseAmc(user: Parameters<typeof hasResourceAction>[0]): boolean {
+  return (
+    hasResourceAction(user, ResourceType.AMC, ActionType.VIEW) ||
+    hasResourceAction(user, ResourceType.AMC, ActionType.APPROVE)
+  );
 }

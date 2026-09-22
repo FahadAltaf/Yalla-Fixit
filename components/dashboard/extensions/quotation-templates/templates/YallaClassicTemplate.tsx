@@ -1,4 +1,5 @@
 import { QuotationData, calculateTotals } from "../quotation-templates";
+import { inlineParts, parseScope, parseTerms } from "@/lib/snagging/quote-text";
 import yallaFixit from "@/public/yalla-fixit.png";
 import { formatCurrencyAED } from "@/utils/format-currency";
 
@@ -49,49 +50,13 @@ export function YallaClassicTemplate({
     discountMode === "with-total" || discountMode === "with-total-no-list";
   const discountPct = subTotal > 0 ? (discount / subTotal) * 100 : 0;
 
-  // Parse Terms & Conditions from API:
-  // - Strip leading "Notes:" label
-  // - Split into items on newlines that start with "1-", "2-", etc.
-  const termsLines = data.termsAndConditions
-    ? data.termsAndConditions
-      .replace(/^Notes:\s*/i, "")
-      .split(/\r?\n(?=\d+-)/)
-      .map((s) => s.trim())
-      .filter(Boolean)
-    : null;
   /*
-    Scope of work, in the three shapes the team's quotation uses.
-
-    Their document opens with a sentence naming what is being inspected,
-    groups the work under trade headings — "Mechanical, electrical and
-    plumbing", "Carpentry", "Civil and structural" — and closes on a note
-    about de-snagging. So a line is one of three things, decided by how it
-    is written in the admin field:
-
-      bullet   a line starting "-", "•" or "*"
-      heading  a short line with no bullet and no sentence punctuation
-      text     anything else — the opening sentence, the closing note
-
-    Getting that third case wrong is what makes a scope read badly: an
-    opening sentence rendered as a bullet looks like the first item of a
-    list it is actually introducing.
+    Scope and terms, read by the same rules as the Word file and the
+    Settings preview (lib/snagging/quote-text): headings, sub-headings,
+    real bullets, **bold**, and terms numbered for you (point 14).
   */
-  const scopeLines = data.scopeOfWork
-    ? data.scopeOfWork
-        .split(/\r?\n/)
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .map((raw) => {
-          const bulleted = /^[-•*]\s+/.test(raw);
-          const text = raw.replace(/^[-•*]\s+/, "");
-          const kind: "bullet" | "heading" | "text" = bulleted
-            ? "bullet"
-            : text.length < 60 && !/[.;:!?]$/.test(text)
-              ? "heading"
-              : "text";
-          return { text, kind };
-        })
-    : null;
+  const termsLines = data.termsAndConditions ? parseTerms(data.termsAndConditions) : null;
+  const scopeLines = data.scopeOfWork ? parseScope(data.scopeOfWork) : null;
 
   const isRevision =
     typeof data.quotationType === "string" &&
@@ -171,7 +136,7 @@ export function YallaClassicTemplate({
       {/* ── Customer + Service Address ── */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px", marginBottom: "28px" }}>
         <div>
-          <div style={{ fontWeight: 800, fontSize: "14px", marginBottom: "4px" }}>
+          <div style={{ fontWeight: 700, fontSize: "14px", marginBottom: "4px" }}>
             Customer
           </div>
           <div style={{ fontWeight: 600 }}>{data.customerCompanyName}</div>
@@ -231,6 +196,7 @@ export function YallaClassicTemplate({
             return (
               <tr
                 key={idx}
+                data-pdf-block
                 style={{ background: idx % 2 === 0 ? "#f8fafc" : "#ffffff", borderBottom: "1px solid #e2e8f0" }}
               >
                 <td style={{
@@ -287,7 +253,7 @@ export function YallaClassicTemplate({
                 <td style={{
                   fontSize: "11px", width: "100px", ...(forPDF
                     ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
-                    : { padding: "12px" }), textAlign: "right", verticalAlign: "top"
+                    : { padding: "12px" }), textAlign: "right", verticalAlign: "top", whiteSpace: "nowrap"
                 }}>{formatCurrencyAED(item.unitPrice)}</td>
                 {(discountMode === "with") && (
                   <td style={{
@@ -301,7 +267,7 @@ export function YallaClassicTemplate({
                 <td style={{
                   fontSize: "11px", width: "100px", ...(forPDF
                     ? { paddingBottom: "15px", paddingLeft: "12px", paddingRight: "12px" }
-                    : { padding: "12px" }), textAlign: "right", fontWeight: 600, verticalAlign: "top", color: "black"
+                    : { padding: "12px" }), textAlign: "right", fontWeight: 600, verticalAlign: "top", color: "black", whiteSpace: "nowrap"
                 }}>
                   {formatCurrencyAED(lineItemAmount)}
                 </td>
@@ -312,7 +278,7 @@ export function YallaClassicTemplate({
       </table>
 
       {/* ── Totals ── */}
-      <div id="totals-block" style={{ display: "flex", justifyContent: "flex-end", marginBottom: "32px" }}>
+      <div id="totals-block" data-pdf-block style={{ display: "flex", justifyContent: "flex-end", marginBottom: "8px" }}>
         <div style={{ minWidth: "260px" }}>
           {[
             { key: "subTotal", label: "Sub Total", value: subTotal, muted: false },
@@ -339,7 +305,7 @@ export function YallaClassicTemplate({
                 }}
               >
                 <span style={{ color: muted ? "#64748b" : "#1e293b", fontSize: "11px" }}>{label}</span>
-                <span style={{ color: muted ? "#64748b" : "#1e293b", fontSize: "11px" }}>{formatCurrencyAED(typeof value === "number" ? value : value)}</span>
+                <span style={{ color: muted ? "#64748b" : "#1e293b", fontSize: "11px", whiteSpace: "nowrap" }}>{formatCurrencyAED(typeof value === "number" ? value : value)}</span>
               </div>
             ))}
           <div style={{
@@ -367,7 +333,7 @@ export function YallaClassicTemplate({
         template used elsewhere in the product is unaffected.
       */}
       {scopeLines && scopeLines.length > 0 ? (
-        <div id="scope-block" style={{ paddingTop: "32px" }}>
+        <div id="scope-block" style={{ paddingTop: "24px" }}>
           <div
             style={{
               fontWeight: 700,
@@ -381,41 +347,66 @@ export function YallaClassicTemplate({
           {scopeLines.map((line, i) => (
             <div
               key={i}
+              data-pdf-block
               style={{
-                fontSize: line.kind === "heading" ? "10px" : "9px",
-                fontWeight: line.kind === "heading" ? 700 : 400,
+                display: "flex",
+                gap: "6px",
+                fontSize: line.kind === "heading" ? "13px" : "11px",
+                lineHeight: 1.5,
+                fontWeight: line.kind === "heading" || line.kind === "subheading" ? 700 : 400,
                 color: line.kind === "bullet" ? "#334155" : "#1e293b",
-                marginTop: line.kind === "heading" && i > 0 ? "8px" : "0px",
-                marginBottom: "4px",
-                paddingLeft: line.kind === "bullet" ? "10px" : "0px",
+                marginTop:
+                  i === 0
+                    ? "0px"
+                    : line.kind === "heading"
+                      ? "12px"
+                      : line.kind === "subheading"
+                        ? "8px"
+                        : "0px",
+                marginBottom: line.kind === "heading" ? "5px" : "3px",
+                paddingLeft: line.kind === "bullet" ? "12px" : "0px",
               }}
             >
-              {line.kind === "bullet" ? `• ${line.text}` : line.text}
+              {/* Bullet in its own column, so a wrapped line lines up
+                  under the text rather than under the bullet. */}
+              {line.kind === "bullet" && <span style={{ fontWeight: 700 }}>•</span>}
+              <span>
+                {inlineParts(line.text).map((part, k) =>
+                  part.bold ? <strong key={k}>{part.text}</strong> : <span key={k}>{part.text}</span>,
+                )}
+              </span>
             </div>
           ))}
         </div>
       ) : null}
 
       {/* ── Terms ── */}
-      <div id="terms-block" style={{ paddingTop: "40px" }}>
+      <div id="terms-block" style={{ paddingTop: "24px" }}>
         <div style={{ fontWeight: 700, fontSize: "11px", textTransform: "uppercase", marginBottom: "10px" }}>
           Terms and Conditions
         </div>
         {termsLines && termsLines.length > 0 && (
-          termsLines.map((line, i) => (
-            <div key={i} style={{ display: "flex", gap: "8px", marginBottom: "5px" }}>
-              <span style={{ fontSize: "9px" }}>{line}</span>
+          termsLines.map((term) => (
+            /* The number in its own column, so every wrapped line of a
+               term lines up under its text. */
+            <div key={term.number} data-pdf-block style={{ display: "flex", gap: "8px", marginBottom: "5px", fontSize: "11px", lineHeight: 1.5 }}>
+              <span style={{ minWidth: "18px", fontWeight: 700 }}>{term.number}.</span>
+              <span>
+                {inlineParts(term.text).map((part, k) =>
+                  part.bold ? <strong key={k}>{part.text}</strong> : <span key={k}>{part.text}</span>,
+                )}
+              </span>
             </div>
           ))
         )}
       </div>
 
       {/* ── Bank Details & Support ── */}
-      <div id="bank-details-block" style={{ paddingTop: "20px", }}>
+      <div id="bank-details-block" data-pdf-block style={{ paddingTop: "24px" }}>
         <div style={{ fontWeight: 700, fontSize: "11px", textTransform: "uppercase" }}>
           Bank Details & Support
         </div>
-        <div style={{ fontSize: "10px", lineHeight: 1.7 }}>
+        <div style={{ fontSize: "11px", lineHeight: 1.7 }}>
           <p style={{ marginBottom: "10px" }}>For any questions contact <strong style={{ color: "#1e293b" }}>800-PERFECT</strong></p>
           <div style={{ display: "grid", gap: "4px" }}>
             <div><strong style={{ color: "#1e293b" }}>ACCOUNT NAME:</strong> YALLA FIX IT ONE PERSON COMPANY LLC</div>

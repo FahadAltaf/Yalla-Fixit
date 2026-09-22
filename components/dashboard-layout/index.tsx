@@ -7,6 +7,7 @@ import { ChevronRightIcon, SearchIcon } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { MenuItem, MenuSection, User } from "@/types/types";
 import { getNavData } from "./menu-items";
+import { cn } from "@/lib/utils";
 import Image from "next/image";
 import { Input } from "@/components/ui/input";
 import {
@@ -53,6 +54,19 @@ function claimedDepth(pathname: string, item: MenuItem): number {
   return 0;
 }
 
+/*
+  One look for every item in the app menu: a 40px row, a muted icon that
+  turns brand-red with the text when the page is open, and a soft tint
+  behind the open page -- the same treatment as the section rails.
+*/
+const ITEM_CLASS = cn(
+  "h-9 gap-2.5 rounded-md px-2.5 text-sm font-medium text-foreground/80",
+  "hover:bg-muted hover:text-foreground",
+  "[&>svg]:!size-4 [&>svg]:shrink-0 [&>svg]:text-muted-foreground",
+  "data-[active=true]:bg-primary/10 data-[active=true]:font-semibold data-[active=true]:text-primary",
+  "data-[active=true]:[&>svg]:text-primary",
+);
+
 const SidebarGroupedMenuItems = ({ section }: { section: MenuSection }) => {
   const pathname = usePathname();
 
@@ -63,10 +77,14 @@ const SidebarGroupedMenuItems = ({ section }: { section: MenuSection }) => {
   };
 
   return (
-    <SidebarGroup>
-      {section.title && <SidebarGroupLabel>{section.title}</SidebarGroupLabel>}
+    <SidebarGroup className="px-2 py-1">
+      {section.title && (
+        <SidebarGroupLabel className="text-muted-foreground/80 px-2.5 text-[11px] font-semibold tracking-wider uppercase">
+          {section.title}
+        </SidebarGroupLabel>
+      )}
       <SidebarGroupContent>
-        <SidebarMenu>
+        <SidebarMenu className="gap-0.5">
           {section.items.map((item) => {
             // Within a group, exactly one sub-item is selected: the one
             // whose claimed path is the longest prefix of where you are.
@@ -93,20 +111,20 @@ const SidebarGroupedMenuItems = ({ section }: { section: MenuSection }) => {
                   <CollapsibleTrigger asChild>
                     <SidebarMenuButton
                       tooltip={item.title}
-                      className="truncate"
+                      className={cn(ITEM_CLASS, "truncate")}
                       isActive={activeSubUrl !== null}
                     >
                       {renderIcon(item.icon)}
                       <span>{item.title}</span>
-                      <ChevronRightIcon className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
+                      <ChevronRightIcon className="text-muted-foreground ml-auto !size-4 transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
                     </SidebarMenuButton>
                   </CollapsibleTrigger>
                   <CollapsibleContent>
-                    <SidebarMenuSub>
+                    <SidebarMenuSub className="ml-4 gap-0.5 border-l pl-2.5">
                       {item.items.map((subItem) => (
                         <SidebarMenuSubItem key={subItem.title}>
                           <SidebarMenuSubButton
-                            className="justify-between"
+                            className="text-muted-foreground hover:bg-muted hover:text-foreground data-[active=true]:bg-primary/10 data-[active=true]:text-primary h-8 justify-between rounded-md px-2 text-[13px] data-[active=true]:font-semibold"
                             asChild
                             isActive={subItem.url === activeSubUrl}
                           >
@@ -131,6 +149,7 @@ const SidebarGroupedMenuItems = ({ section }: { section: MenuSection }) => {
                   tooltip={item.title}
                   asChild
                   isActive={pathname === item.url}
+                  className={ITEM_CLASS}
                 >
                   <Link href={item.url}>
                     {renderIcon(item.icon)}
@@ -173,8 +192,10 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
   return (
     <div className="flex min-h-dvh w-full">
       <SidebarProvider>
-        <Sidebar collapsible="icon">
-          <SidebarHeader>
+        <Sidebar collapsible="icon" className="border-r">
+          {/* The logo sits in a band the height of the page header, so the
+              two line up across the top of the screen. */}
+          <SidebarHeader className="border-b px-2 py-2">
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton
@@ -203,7 +224,7 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
               </SidebarMenuItem>
             </SidebarMenu>
           </SidebarHeader>
-          <SidebarContent>
+          <SidebarContent className="gap-0 py-1">
             {navMain.map((section) => (
               <SidebarGroupedMenuItems key={section.title} section={section} />
             ))}

@@ -1,5 +1,7 @@
 import { Resend } from "resend";
 
+import { withInlineLogo } from "@/lib/server/email-logo-attachment";
+
 /**
  * Sends an email from server code, in process.
  *
@@ -63,15 +65,19 @@ export async function sendEmail({
     from,
     subject,
     html,
-    attachments: attachment
-      ? [
-          {
-            filename: attachment.filename,
-            content: Buffer.from(attachment.content, "base64"),
-            contentType: attachment.contentType,
-          },
-        ]
-      : undefined,
+    /* The logo is embedded, so it shows whatever URL the app runs on. */
+    attachments: withInlineLogo(
+      html,
+      attachment
+        ? [
+            {
+              filename: attachment.filename,
+              content: Buffer.from(attachment.content, "base64"),
+              contentType: attachment.contentType,
+            },
+          ]
+        : [],
+    ),
   } as Parameters<Resend["emails"]["send"]>[0]);
 
   if (error) {

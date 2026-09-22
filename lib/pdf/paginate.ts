@@ -46,8 +46,10 @@ export type PaginateOptions = {
   header?: {
     /** The line of text, centred under the mark. */
     text: string;
-    /** Optional data URI for the logo, drawn centred above the text. */
+    /** Optional data URI for the logo, drawn at the left of the text. */
     logo?: { dataUrl: string; widthMm: number; heightMm: number };
+    /** Small marks drawn at the right, e.g. the ISO certifications. */
+    badges?: { dataUrl: string; widthMm: number; heightMm: number }[];
     /** The cover carries its own masthead, so page 1 is normally skipped. */
     skipFirstPage?: boolean;
     /** Rule and text colour, as [r, g, b]. */
@@ -92,7 +94,8 @@ function findLastInkedRow(
   canvasWidth: number,
   canvasHeight: number,
 ): number {
-  const inked = (y: number) => rowInk(ctx, canvasWidth, y, INK_RATIO) / canvasWidth > INK_RATIO;
+  const inked = (y: number) =>
+    rowInk(ctx, canvasWidth, y, INK_RATIO) / canvasWidth > INK_RATIO;
 
   for (let y = canvasHeight - 1; y >= 0; y -= COARSE_STEP) {
     if (!inked(y)) continue;
@@ -117,7 +120,10 @@ function whiteRowNear(
   const from = Math.floor(target);
   const to = Math.max(minOffset, from - maxBacktrack);
   for (let y = from; y >= to; y--) {
-    if (rowInk(ctx, canvasWidth, y, BREAKABLE_RATIO) / canvasWidth < BREAKABLE_RATIO) {
+    if (
+      rowInk(ctx, canvasWidth, y, BREAKABLE_RATIO) / canvasWidth <
+      BREAKABLE_RATIO
+    ) {
       return y;
     }
   }
@@ -129,7 +135,11 @@ function whiteRowNear(
  * nested card breaks at the outer card's top rather than between the two.
  * Returns null when no viable block boundary exists above `minOffset`.
  */
-function breakAboveBlocks(target: number, blocks: PdfBlock[], minOffset: number): number | null {
+function breakAboveBlocks(
+  target: number,
+  blocks: PdfBlock[],
+  minOffset: number,
+): number | null {
   let at = target;
   // Bounded rather than `while (true)`: each pass strictly decreases `at`,
   // but a malformed range should not be able to spin.
@@ -244,6 +254,21 @@ export function canvasToPdfBlob(
       const logo = header.logo;
       const bandH = logo ? logo.heightMm : 4;
 
+      /* The marks at the right, centred on the band, last one flush right. */
+      let badgeX = pageWidthMm - marginMm;
+      for (const badge of [...(header.badges ?? [])].reverse()) {
+        badgeX -= badge.widthMm;
+        pdf.addImage(
+          badge.dataUrl,
+          "PNG",
+          badgeX,
+          marginMm + (bandH - badge.heightMm) / 2,
+          badge.widthMm,
+          badge.heightMm,
+        );
+        badgeX -= 1.5;
+      }
+
       /*
         Mark first, then the title on the same line — the way the issued
         reports set their running head. Stacking the two centred it above
@@ -260,7 +285,7 @@ export function canvasToPdfBlob(
         );
       }
 
-      pdf.setFontSize(6.5);
+      pdf.setFontSize(header.badges?.length ? 7.5 : 6.5);
       pdf.setTextColor(r, g, b);
       pdf.text(
         header.text,
@@ -312,15 +337,17 @@ export function collectPdfBlocks(
   const scale = canvas.width / node.offsetWidth;
   const top = node.getBoundingClientRect().top;
 
-  return Array.from(node.querySelectorAll<HTMLElement>(selector))
-    .map((el) => {
-      const rect = el.getBoundingClientRect();
-      return {
-        start: Math.floor((rect.top - top) * scale),
-        end: Math.ceil((rect.bottom - top) * scale),
-      };
-    })
-    .filter((block) => block.end > block.start)
-    // Outermost first, so the break walk climbs out of nesting in one pass.
-    .sort((a, b) => a.start - b.start || b.end - a.end);
+  return (
+    Array.from(node.querySelectorAll<HTMLElement>(selector))
+      .map((el) => {
+        const rect = el.getBoundingClientRect();
+        return {
+          start: Math.floor((rect.top - top) * scale),
+          end: Math.ceil((rect.bottom - top) * scale),
+        };
+      })
+      .filter((block) => block.end > block.start)
+      // Outermost first, so the break walk climbs out of nesting in one pass.
+      .sort((a, b) => a.start - b.start || b.end - a.end)
+  );
 }

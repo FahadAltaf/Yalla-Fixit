@@ -25,6 +25,23 @@ export type PlacedArea = {
 };
 
 /**
+ * A snag pinned on the plan (point 7). Drawn over the rooms, coloured by
+ * its latest result, and never editable here.
+ */
+export type PlanMarker = {
+  key: string;
+  /** 0..1 fractions of the plan. */
+  x: number;
+  y: number;
+  /** Short text inside the dot, e.g. its number in the list. */
+  label: string;
+  /** Tailwind classes for the dot's fill and text. */
+  tone: string;
+  /** Shown on hover: code, defect, result. */
+  title: string;
+};
+
+/**
  * A floor plan you can place rooms on, by pin or by zone (BA change 6).
  *
  * Shared by the job wizard and the job's own Areas and Plans tab, because
@@ -45,6 +62,7 @@ export function PlanZoneCanvas({
   onPlacePin,
   onPlaceZone,
   onPickArea,
+  markers = [],
 }: {
   src: string;
   alt: string;
@@ -57,6 +75,8 @@ export function PlanZoneCanvas({
   onPlaceZone?: (key: string, points: ZonePoint[]) => void;
   /** A click inside an existing zone, when nothing is being placed. */
   onPickArea?: (key: string) => void;
+  /** Snag pins drawn over the rooms (point 7). */
+  markers?: PlanMarker[];
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [draft, setDraft] = useState<ZonePoint[]>([]);
@@ -258,6 +278,21 @@ export function PlanZoneCanvas({
             {area.name}
           </span>
           <MapPin className="text-brand size-4 drop-shadow-sm" />
+        </span>
+      ))}
+
+      {/* Snag pins, over the rooms. Each says what it is on hover. */}
+      {markers.map((marker) => (
+        <span
+          key={marker.key}
+          title={marker.title}
+          style={{ left: `${marker.x * 100}%`, top: `${marker.y * 100}%` }}
+          className={cn(
+            "absolute flex size-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-white text-[0.625rem] font-semibold shadow-md",
+            marker.tone,
+          )}
+        >
+          {marker.label}
         </span>
       ))}
 

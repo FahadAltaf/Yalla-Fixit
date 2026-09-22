@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { canAccessAmcContracts } from "@/components/dashboard/extensions/amc/amc-constants";
 import { hasResourceAction } from "@/lib/role-permissions";
+import { canApproveAmc } from "@/components/dashboard/extensions/amc/amc-settings";
+import { readAmcSettings } from "@/lib/server/amc/settings";
+import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
@@ -32,24 +34,31 @@ const actionSchema = z.discriminatedUnion("action", [
     id: z.string().uuid(),
     /* FR5.2 — "send it back with a reason". A blank reason gives the owner
        nothing to act on, so it is required rather than merely prompted. */
-    reason: z.string().trim().min(1, "Give a reason so the owner knows what to fix"),
+    reason: z
+      .string()
+      .trim()
+      .min(1, "Give a reason so the owner knows what to fix"),
   }),
 ]);
 
-const SELECT = "id, owner_id, status, customer, final_price, submitted_at, decided_at, sent_back_reason";
+const SELECT =
+  "id, owner_id, status, customer, final_price, submitted_at, decided_at, sent_back_reason";
 
 export async function POST(req: NextRequest) {
   const access = await getAuthenticatedUserAccess();
   if (!access.profile || !access.accessUser) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (!canAccessAmcContracts(access.profile.email)) {
+  if (!canUseAmc(access.accessUser)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const parsed = actionSchema.safeParse(await req.json());
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    return NextResponse.json(
+      { error: parsed.error.flatten() },
+      { status: 400 },
+    );
   }
 
   const { profile, accessUser } = access;
@@ -70,10 +79,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  const canApprove = hasResourceAction(
-    accessUser,
-    ResourceType.AMC,
-    ActionType.APPROVE,
+  /* FR5.3: the approvers chosen in AMC Settings, or the role permission
+     when none are chosen. */
+  const canApprove = canApproveAmc(
+    await readAmcSettings(admin),
+    profile.email,
+    hasResourceAction(accessUser, ResourceType.AMC, ActionType.APPROVE),
   );
   const isOwner = existing.owner_id === profile.id;
   const now = new Date().toISOString();
@@ -90,9 +101,15 @@ export async function POST(req: NextRequest) {
     }
     /* FR3.4 — resubmitting after a send-back is allowed; resubmitting
        something already under review, or already sent, is not. */
-    if (existing.status !== "draft" && existing.status !== "sent_back") {
+    if (
+      existing.status !== "draft" &&
+      existing.status !== "sent_back" &&
+      existing.status !== "proposal_rejected"
+    ) {
       return NextResponse.json(
-        { error: `A proposal that is ${existing.status.replace(/_/g, " ")} cannot be submitted for approval` },
+        {
+          error: `A proposal that is ${existing.status.replace(/_/g, " ")} cannot be submitted for approval`,
+        },
         { status: 409 },
       );
     }
@@ -105,8 +122,25 @@ export async function POST(req: NextRequest) {
       sent_back_reason: null,
       decided_at: null,
       decided_by: null,
+      /*
+        The client asked for changes and this is the revised proposal. The
+        link they have shows the old one, so it stops working now; the
+        approved revision goes out with a new link. It also takes the
+        current AMC Settings, like any proposal not yet sent (FR6.4).
+      */
+      ...(existing.status === "proposal_rejected"
+        ? {
+            proposal_token_hash: null,
+            proposal_token_hint: null,
+            proposal_token_expires_at: null,
+            settings_snapshot: null,
+          }
+        : {}),
     };
-    eventType = "submitted_for_approval";
+    eventType =
+      existing.status === "proposal_rejected"
+        ? "resubmitted_after_client_changes"
+        : "submitted_for_approval";
   } else {
     if (!canApprove) {
       return NextResponse.json(
@@ -116,7 +150,9 @@ export async function POST(req: NextRequest) {
     }
     if (existing.status !== "awaiting_approval") {
       return NextResponse.json(
-        { error: `A proposal that is ${existing.status.replace(/_/g, " ")} is not awaiting approval` },
+        {
+          error: `A proposal that is ${existing.status.replace(/_/g, " ")} is not awaiting approval`,
+        },
         { status: 409 },
       );
     }
@@ -156,7 +192,10 @@ export async function POST(req: NextRequest) {
   }
   if (!data) {
     return NextResponse.json(
-      { error: "Someone else updated this proposal a moment ago. Reload and try again." },
+      {
+        error:
+          "Someone else updated this proposal a moment ago. Reload and try again.",
+      },
       { status: 409 },
     );
   }

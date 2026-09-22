@@ -29,6 +29,14 @@ export function hasColumn(admin: SupabaseClient, table: string, column: string):
   return answer;
 }
 
+/** A room's own inspector, for several inspectors on one job (20260922100000_area_inspector). */
+export const hasAreaInspector = (admin: SupabaseClient) =>
+  hasColumn(admin, "snagging_areas", "inspector_id");
+
 /** The de-snag verdict comment (20260921100000_snag_verdict_note). */
 export const hasVerdictNote = (admin: SupabaseClient) =>
   hasColumn(admin, "snagging_snags", "verdict_note");
+
+/** The reviewer's note to the inspector (20260922110000_snag_review_note). */
+export const hasReviewNote = (admin: SupabaseClient) =>
+  hasColumn(admin, "snagging_snags", "review_note");

@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import { hasVerdictNote } from "@/lib/server/snagging/columns";
+import { hasAreaInspector, hasReviewNote, hasVerdictNote } from "@/lib/server/snagging/columns";
 import { signMediaPaths } from "@/lib/server/snagging/media";
 import { syncPullSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType } from "@/types/types";
@@ -125,10 +125,43 @@ export async function GET(req: NextRequest) {
     if (assignedError) throw new Error(assignedError.message);
     if (visitJobsError) throw new Error(visitJobsError.message);
 
+    /*
+      Several inspectors on one job (point 6): an inspector given only
+      some of the rooms still gets the job, in the same statuses the lead
+      inspector would.
+    */
+    let roomJobIds: string[] = [];
+    if (await hasAreaInspector(admin)) {
+      const { data: roomRows, error: roomError } = await admin
+        .from("snagging_areas")
+        .select("job_id")
+        .eq("inspector_id", profile.id);
+      if (roomError) throw new Error(roomError.message);
+      const candidates = [...new Set((roomRows ?? []).map((r) => r.job_id as string))];
+      if (candidates.length > 0) {
+        const { data: roomJobs, error: roomJobsError } = await admin
+          .from("snagging_jobs")
+          .select("id")
+          .in("id", candidates)
+          .in("status", [
+            "assigned",
+            "in_progress",
+            "submitted",
+            "in_review",
+            "rejected",
+            "approved",
+            "delivered",
+          ]);
+        if (roomJobsError) throw new Error(roomJobsError.message);
+        roomJobIds = (roomJobs ?? []).map((r) => r.id as string);
+      }
+    }
+
     const assignedIds = Array.from(
       new Set([
         ...(assigned ?? []).map((r) => r.id as string),
         ...(visitJobs ?? []).map((r) => r.job_id as string),
+        ...roomJobIds,
       ]),
     );
     if (assignedIds.length === 0) {
@@ -306,13 +339,14 @@ export async function GET(req: NextRequest) {
          locked, rejection_reason, rejection_category, remediation_due_at, updated_at, created_at,
          unit_label, building_name, community, property_type, developer_name,
          appointment_at, bedrooms, built_up_area_sqft, plot_area_sqft, floors,
-         external_areas_in_scope, location_lat, location_lng, noc_required,
+         external_areas_in_scope, location_lat, location_lng, noc_required, noc_path,
          developer_contact_name, developer_contact_phone,
          client_contact_name, client_contact_phone,
          property_record:property_id(unit_label, building_name, community, property_type,
            developer_name, bedrooms, built_up_area_sqft, plot_area_sqft, floors,
-           external_areas_in_scope, location_lat, location_lng, noc_required),
+           external_areas_in_scope, location_lat, location_lng, noc_required, noc_path),
          client:client_id(name, email, phone),
+         inspector_id,
          inspector:inspector_id(full_name, email)`,
       )
       .in("id", jobIds);
@@ -407,6 +441,11 @@ export async function GET(req: NextRequest) {
           : null,
         finished_visits: finishedVisits.get(j.id as string) ?? [],
         task_type: "single_unit",
+        /*
+          The job's own inspector. With rooms split between several, only
+          the lead submits, once every room is done (point 6).
+        */
+        lead_inspector_id: j.inspector_id ?? null,
         status: j.status,
         round_number: j.round_number,
         visit_type: j.visit_type ?? "initial",
@@ -468,6 +507,9 @@ export async function GET(req: NextRequest) {
           location_lat: pick("location_lat"),
           location_lng: pick("location_lng"),
           noc_required: pick("noc_required"),
+          // Whether there is a NOC to open; the phone fetches the file
+          // itself on demand (/api/snagging/tasks/[id]/noc), never the path.
+          noc_on_file: Boolean(pick("noc_path")),
         },
         appointment_at: j.appointment_at,
         team,
@@ -528,6 +570,9 @@ export async function GET(req: NextRequest) {
       locked: s.locked,
       // The inspector's comment on the round's verdict (null until given).
       verdict_note: s.verdict_note ?? null,
+      // The reviewer or approver's note to the inspector, and when it was left.
+      review_note: s.review_note ?? null,
+      review_note_at: s.review_note_at ?? null,
     }));
 
     const checklist = checklistRows.map((c) => ({
@@ -615,6 +660,8 @@ type Joined =
 type JobRow = {
   id: string;
   code: string;
+  /** The lead inspector (point 6). */
+  inspector_id: string | null;
   status: string;
   round_number: number;
   visit_type: string | null;
@@ -642,6 +689,7 @@ type JobRow = {
   location_lat: number | null;
   location_lng: number | null;
   noc_required: boolean | null;
+  noc_path: string | null;
   developer_contact_name: string | null;
   developer_contact_phone: string | null;
   client_contact_name: string | null;
@@ -723,15 +771,17 @@ async function changedJobIds(
 
 /** The four child tables, each delta'd on the cursor when there is one. */
 async function loadChildren(admin: Admin, jobIds: string[], since: string | undefined) {
-  // The verdict comment, once its migration has run.
+  // The verdict comment, and a room's own inspector, once their migrations have run.
   const verdict = (await hasVerdictNote(admin)) ? ", verdict_note" : "";
+  const review = (await hasReviewNote(admin)) ? ", review_note, review_note_at" : "";
+  const roomInspector = (await hasAreaInspector(admin)) ? ", inspector_id" : "";
   return Promise.all([
     loadChanged(
       admin,
       "snagging_areas",
       `id, job_id, name, catalogue_area_code, sort_order, created_at, status, note,
        confirmed_at, access_state, access_reason, floor_plan_id, pin_x, pin_y, zone,
-       started_at, elements_not_checked`,
+       started_at, elements_not_checked${roomInspector}`,
       "job_id",
       jobIds,
       since,
@@ -742,7 +792,7 @@ async function loadChildren(admin: Admin, jobIds: string[], since: string | unde
       "snagging_snags",
       `id, job_id, area_id, snag_code, catalogue_entry_id, catalogue_code, element_label,
        defect_label, severity, note, floor_plan_id, pin_x, pin_y, status, round_created,
-       created_at, locked${verdict}`,
+       created_at, locked${verdict}${review}`,
       "job_id",
       jobIds,
       since,

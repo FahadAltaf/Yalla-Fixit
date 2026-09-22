@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { dedupeDefects } from "./defect-set";
+import { hasColumn } from "./columns";
 import { loadJobFamily } from "./job-family";
 
 /**
@@ -24,13 +25,16 @@ export type ReportVersion = {
   reason: string | null;
 };
 
-/** Whether the versions table has been migrated in yet. */
-async function versioningAvailable(admin: SupabaseClient): Promise<boolean> {
-  const { error } = await admin.from("snagging_report_versions").select("id").limit(1);
-  // PostgREST reports an unknown relation rather than throwing; treating
-  // that as "not yet migrated" keeps every caller working on an
-  // environment where the migration has not been applied.
-  return !error;
+/**
+ * Whether the versions table has been migrated in yet.
+ *
+ * Asked once per process and remembered (hasColumn), rather than with a
+ * probe query on every call -- that probe was one more round trip in a row
+ * in front of every visits and report request. A missing table is not
+ * remembered, so it is picked up as soon as the migration runs.
+ */
+function versioningAvailable(admin: SupabaseClient): Promise<boolean> {
+  return hasColumn(admin, "snagging_report_versions", "id");
 }
 
 export async function listReportVersions(

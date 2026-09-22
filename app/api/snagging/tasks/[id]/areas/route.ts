@@ -4,6 +4,7 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
+import { hasAreaInspector } from "@/lib/server/snagging/columns";
 import { createAreaSchema, updateAreaSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType } from "@/types/types";
 
@@ -19,6 +20,9 @@ import { ActionType, ResourceType } from "@/types/types";
 // What the Areas tab and the job wizard read. The catalogue code, status and
 // sort order are written here but read by neither, so they stay in the table.
 const AREA_COLUMNS = "id, name, floor_plan_id, pin_x, pin_y, zone";
+/* With the room's own inspector, once 20260922100000_area_inspector has run. */
+const areaColumns = async (admin: Awaited<ReturnType<typeof createAdminServerClient>>) =>
+  (await hasAreaInspector(admin)) ? `${AREA_COLUMNS}, inspector_id` : AREA_COLUMNS;
 
 const pinFieldsFrom = (
   input: {
@@ -59,7 +63,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const admin = await createAdminServerClient();
     const { data, error } = await admin
       .from("snagging_areas")
-      .select(AREA_COLUMNS)
+      .select<string, Record<string, unknown>>(await areaColumns(admin))
       .eq("job_id", id)
       // Creation first, sort_order to break the tie within a batch.
       .order("created_at", { ascending: true })
@@ -132,6 +136,12 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     const updates: Record<string, unknown> = { ...pinFieldsFrom(input) };
     if (input.name !== undefined) updates.name = input.name;
     if (input.catalogue_area_code !== undefined) updates.catalogue_area_code = input.catalogue_area_code;
+    // A room handed to another inspector (point 6). Stamped so both phones
+    // pick up the change on their next pull.
+    if (input.inspector_id !== undefined) {
+      updates.inspector_id = input.inspector_id;
+      updates.updated_at = new Date().toISOString();
+    }
     // The inspector's own words, corrected from the portal. Stamped so the
     // phone picks the new wording up on its next pull.
     const texts = (["note", "access_reason"] as const).filter((field) => input[field] !== undefined);
@@ -142,6 +152,12 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     }
 
     const admin = await createAdminServerClient();
+    if (input.inspector_id !== undefined && !(await hasAreaInspector(admin))) {
+      return NextResponse.json(
+        { error: "Rooms can be given to other inspectors once the database is updated." },
+        { status: 409 },
+      );
+    }
 
     // The wording before, for the History entry an edit leaves.
     const before =
@@ -160,7 +176,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       .update(updates)
       .eq("id", input.id)
       .eq("job_id", id)
-      .select(AREA_COLUMNS)
+      .select<string, Record<string, unknown>>(await areaColumns(admin))
       .maybeSingle();
     if (error) {
       if (error.code === "23505") {

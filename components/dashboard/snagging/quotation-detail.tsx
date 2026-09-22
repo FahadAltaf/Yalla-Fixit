@@ -1,5 +1,6 @@
 "use client";
 
+import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -7,6 +8,7 @@ import {
   ChevronDown,
   Copy,
   Download,
+  FileType2,
   FileText,
   Mail,
   MessageCircle,
@@ -38,7 +40,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { generateQuotationPDFBlob } from "@/components/dashboard/extensions/quotation-templates/pdf-utils";
+import {
+  generateQuotationDocxBlob,
+  generateQuotationPDFBlob,
+} from "@/components/dashboard/extensions/quotation-templates/pdf-utils";
 import { YallaClassicTemplate } from "@/components/dashboard/extensions/quotation-templates/templates/YallaClassicTemplate";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
@@ -85,6 +90,8 @@ export default function QuotationDetail({ id }: { id: string }) {
 
   const [quote, setQuote] = useState<SnaggingQuotation | null>(null);
   const [loading, setLoading] = useState(true);
+  // The breadcrumb names the page by its number, not its id.
+  useBreadcrumbLabel(quote?.id ?? undefined, quote?.quote_number ?? undefined);
   const [error, setError] = useState<string | null>(null);
   const [sendOpen, setSendOpen] = useState(false);
   const [recipient, setRecipient] = useState("");
@@ -98,7 +105,7 @@ export default function QuotationDetail({ id }: { id: string }) {
     several seconds of work — looked like a button that did nothing at all.
   */
   const [pending, setPending] = useState<
-    null | "download" | "share_link" | "regenerate" | "send" | "approve_rate"
+    null | "download" | "download_word" | "share_link" | "regenerate" | "send" | "approve_rate"
   >(null);
   const busy = pending !== null;
 
@@ -155,6 +162,23 @@ export default function QuotationDetail({ id }: { id: string }) {
       toast.success("PDF downloaded");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not generate the PDF");
+    } finally {
+      setPending(null);
+    }
+  }
+
+  /* The same quotation as an editable Word file. */
+  async function downloadWord() {
+    if (!doc || !quote) return;
+    setPending("download_word");
+    try {
+      saveAs(
+        await generateQuotationDocxBlob(snaggingQuoteToTemplateData(doc), "without"),
+        `Quotation-${quote.quote_number}.docx`,
+      );
+      toast.success("Word file downloaded");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not generate the Word file");
     } finally {
       setPending(null);
     }
@@ -263,17 +287,32 @@ export default function QuotationDetail({ id }: { id: string }) {
 
               {canEdit ? (
                 <div className="flex flex-wrap items-center gap-2">
-                  <SubmitButton
-                    variant="outline"
-                    size="sm"
-                    onClick={() => void download()}
-                    pending={pending === "download"}
-                    pendingLabel="Preparing…"
-                    disabled={busy}
-                    icon={<Download className="size-4" />}
-                  >
-                    Download PDF
-                  </SubmitButton>
+                  {/* One Download button with the two formats, as on AMC proposals. */}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <SubmitButton
+                        variant="outline"
+                        size="sm"
+                        pending={pending === "download" || pending === "download_word"}
+                        pendingLabel="Preparing…"
+                        disabled={busy}
+                        icon={<Download className="size-4" />}
+                      >
+                        Download
+                        <ChevronDown className="size-3.5" />
+                      </SubmitButton>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => void download()}>
+                        <FileText className="size-4" />
+                        PDF
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => void downloadWord()}>
+                        <FileType2 className="size-4" />
+                        Word (.docx)
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
 
                   {/* A de-snag is priced at the amount chosen for it, not
                       from the property, so it is never regenerated. */}

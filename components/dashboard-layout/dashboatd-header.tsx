@@ -39,22 +39,23 @@ const DashboardHeader = () => {
           <SidebarTrigger className="[&_svg]:!size-5" />
           <Separator orientation="vertical" className="hidden !h-8 sm:block" />
           <Breadcrumb>
-            <BreadcrumbList>
+            {/* Sized to sit level with the sidebar toggle: the default
+                14px text and 15px icon read small in a 56px bar. */}
+            <BreadcrumbList className="gap-2 text-[15px] sm:gap-2.5">
               <BreadcrumbItem>
-                <BreadcrumbLink href="/">
-                  <HomeIcon
-                    aria-hidden="true"
-                    size={15}
-                    className="relative "
-                  />
+                <BreadcrumbLink
+                  href="/"
+                  className="hover:bg-muted flex size-8 items-center justify-center rounded-md"
+                >
+                  <HomeIcon aria-hidden="true" className="size-[18px]" />
                   <span className="sr-only">Home</span>
                 </BreadcrumbLink>
               </BreadcrumbItem>
               {segments.length === 0 && (
                 <>
-                  <BreadcrumbSeparator> / </BreadcrumbSeparator>
+                  <BreadcrumbSeparator className="text-muted-foreground/50"> / </BreadcrumbSeparator>
                   <BreadcrumbItem>
-                    <BreadcrumbPage>Dashboard</BreadcrumbPage>
+                    <BreadcrumbPage className="font-semibold">Dashboard</BreadcrumbPage>
                   </BreadcrumbItem>
                 </>
               )}
@@ -65,18 +66,26 @@ const DashboardHeader = () => {
                 // the segment is title-cased. Without this a record page
                 // showed its raw id as the page title.
                 const registered = labelForSegment(segment);
+                // An id the page has not named (yet, or at all) reads as
+                // "Details" -- never as a title-cased UUID.
+                const isId =
+                  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+                    segment,
+                  );
                 const label =
                   registered ??
-                  decodeURIComponent(segment)
-                    .replace(/-/g, " ")
-                    .replace(/\b\w/g, (char) => char.toUpperCase());
+                  (isId
+                    ? "Details"
+                    : decodeURIComponent(segment)
+                        .replace(/-/g, " ")
+                        .replace(/\b\w/g, (char) => char.toUpperCase()));
 
                 return (
                   <React.Fragment key={href}>
-                    <BreadcrumbSeparator> / </BreadcrumbSeparator>
+                    <BreadcrumbSeparator className="text-muted-foreground/50"> / </BreadcrumbSeparator>
                     <BreadcrumbItem>
                       {isLast ? (
-                        <BreadcrumbPage>{label}</BreadcrumbPage>
+                        <BreadcrumbPage className="font-semibold">{label}</BreadcrumbPage>
                       ) : (
                         <BreadcrumbLink href={href}>{label}</BreadcrumbLink>
                       )}

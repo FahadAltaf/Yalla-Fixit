@@ -460,6 +460,8 @@ export interface SnaggingArea {
    * two coexist for the life of those jobs.
    */
   zone?: { x: number; y: number }[] | null;
+  /** Who inspects this room when the job is split; null is the job's lead inspector. */
+  inspector_id?: string | null;
   note?: string | null;
   confirmed_at?: string | null;
   confirmed_by?: string | null;
@@ -530,6 +532,10 @@ export interface SnaggingSnag {
   note?: string | null;
   /** The inspector's comment on this round's de-snag verdict. */
   verdict_note?: string | null;
+  /** The reviewer or approver's note to the inspector; shown on the phone. */
+  review_note?: string | null;
+  review_note_at?: string | null;
+  review_note_author?: { full_name?: string | null; email?: string | null } | null;
   floor_plan_id?: string | null;
   /** 0..1 fractions of the plan, so a pin survives any zoom level. */
   pin_x?: number | null;

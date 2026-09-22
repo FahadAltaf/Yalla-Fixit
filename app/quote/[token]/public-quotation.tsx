@@ -1,13 +1,23 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { AlertCircle, CheckCircle2, Download, Loader2, XCircle } from "lucide-react";
+import { AlertCircle, CheckCircle2, Loader2, XCircle } from "lucide-react";
 import { saveAs } from "file-saver";
 
-import { generateQuotationPDFBlob } from "@/components/dashboard/extensions/quotation-templates/pdf-utils";
+import {
+  generateQuotationDocxBlob,
+  generateQuotationPDFBlob,
+} from "@/components/dashboard/extensions/quotation-templates/pdf-utils";
 import { YallaClassicTemplate } from "@/components/dashboard/extensions/quotation-templates/templates/YallaClassicTemplate";
 import { snaggingQuoteToTemplateData, type SnaggingQuoteDoc } from "@/lib/snagging/quotation-template-data";
 import { StatusMessageCard } from "@/components/quotations/status-message-card";
+import {
+  ClientDocumentShell,
+  ClientDownloadMenu,
+  FitToWidth,
+  type ClientFileFormat,
+} from "@/components/client-document/client-document-shell";
+import { formatCurrencyAED } from "@/utils/format-currency";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -48,7 +58,6 @@ export function PublicQuotation({ token }: { token: string }) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [downloading, setDownloading] = useState(false);
   /**
    * Which decision the client is making, and how far through it they are.
    * Null means no dialog is open.
@@ -153,22 +162,16 @@ export function PublicQuotation({ token }: { token: string }) {
     }
   }
 
-  async function download() {
-    if (!quote || downloading) return;
-    setDownloading(true);
-    try {
-      const blob = await generateQuotationPDFBlob(
-        "yalla-classic",
-        snaggingQuoteToTemplateData(quote),
-        { scale: 2 },
-        "without",
-      );
-      saveAs(blob, `Quotation-${quote.quote_number}.pdf`);
-    } catch {
-      /* on-screen view still works */
-    } finally {
-      setDownloading(false);
-    }
+  /* PDF or Word — the same document model, so the two always match. A
+     failure is reported by the menu (ClientDownloadMenu). */
+  async function download(format: ClientFileFormat) {
+    if (!quote) return;
+    const data = snaggingQuoteToTemplateData(quote);
+    const blob =
+      format === "pdf"
+        ? await generateQuotationPDFBlob("yalla-classic", data, { scale: 2 }, "without")
+        : await generateQuotationDocxBlob(data, "without");
+    saveAs(blob, `Quotation-${quote.quote_number}.${format}`);
   }
 
   if (loading) {
@@ -225,50 +228,30 @@ export function PublicQuotation({ token }: { token: string }) {
     );
   }
 
+  const doc = snaggingQuoteToTemplateData(quote);
+  const property = [quote.property?.unit_label, quote.property?.building_name, quote.property?.community]
+    .filter(Boolean)
+    .join(", ");
+
   return (
-    <main className="flex min-h-screen items-center justify-center bg-slate-100 px-4 py-10">
-      <div className="flex flex-col items-center gap-4">
-        {/* Actions sit above the document, as on the estimate review page --
-            the client should not have to scroll a full A4 page to find them. */}
-        <div className="flex w-full justify-center">
-          <div className="w-full max-w-[794px]">
-            <section className="space-y-4 rounded-lg border bg-white px-4 py-3">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-sm font-medium text-slate-900">
-                    Approve or reject this quotation
-                  </p>
-                  <p className="text-xs text-slate-600">
-                    Your choice will be saved in our system
-                  </p>
-                </div>
-                <Button size="sm" variant="outline" onClick={() => void download()} disabled={downloading}>
-                  {downloading ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <Download className="size-4" />
-                  )}
-                  {downloading ? "Preparing…" : "Download PDF"}
-                </Button>
-              </div>
-
-              <div className="flex gap-2">
-                <Button className="flex-1" disabled={busy} onClick={() => startDecision("approve")}>
-                  <CheckCircle2 className="size-4" /> Approve quotation
-                </Button>
-                <Button
-                  className="flex-1"
-                  variant="outline"
-                  disabled={busy}
-                  onClick={() => startDecision("reject")}
-                >
-                  <XCircle className="size-4" /> Reject
-                </Button>
-              </div>
-            </section>
-          </div>
-        </div>
-
+    <ClientDocumentShell
+      actions={
+        <>
+          <ClientDownloadMenu onDownload={download} />
+          <Button className="flex-1 sm:flex-none" variant="outline" disabled={busy} onClick={() => startDecision("reject")}>
+            <XCircle className="size-4" /> Reject
+          </Button>
+          <Button className="flex-1 sm:flex-none" disabled={busy} onClick={() => startDecision("approve")}>
+            <CheckCircle2 className="size-4" /> Approve quotation
+          </Button>
+        </>
+      }
+      facts={[
+        { label: "Prepared for", value: doc.customerCompanyName || "—", hint: property || undefined },
+        { label: "Total", value: formatCurrencyAED(quote.total), hint: "incl. VAT" },
+        { label: "Quotation", value: quote.quote_number, hint: doc.quotationDate },
+      ]}
+    >
         <Dialog
           open={decision !== null}
           onOpenChange={(open) => {
@@ -369,14 +352,9 @@ export function PublicQuotation({ token }: { token: string }) {
           </DialogContent>
         </Dialog>
 
-        <div className="overflow-x-auto">
-          <YallaClassicTemplate
-            data={snaggingQuoteToTemplateData(quote)}
-            discountMode="without"
-            hideDiscount
-          />
-        </div>
-      </div>
-    </main>
+      <FitToWidth>
+        <YallaClassicTemplate data={doc} discountMode="without" hideDiscount />
+      </FitToWidth>
+    </ClientDocumentShell>
   );
 }

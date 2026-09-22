@@ -76,8 +76,8 @@ const VISIT_TONE: Record<string, string> = {
 };
 
 const CHECK_LABEL: Record<string, string> = {
-  passed: "Pass",
-  failed: "Fail",
+  passed: "Checked",
+  failed: "Checked, issue found",
   not_checked: "Not checked",
   pending: "Not answered",
 };

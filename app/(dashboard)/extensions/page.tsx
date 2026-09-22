@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { cookies } from "next/headers";
 import { EXTENSIONS_NAV_COOKIE } from "@/lib/extensions/nav-preference";
 
@@ -40,6 +41,11 @@ export default async function ExtensionsPage() {
   const store = await cookies();
   const navOpen = store.get(EXTENSIONS_NAV_COOKIE)?.value === "open";
 
-  return <Extensions defaultNavOpen={navOpen} />;
+  // The section is read from the address on the client.
+  return (
+    <Suspense fallback={null}>
+      <Extensions defaultNavOpen={navOpen} />
+    </Suspense>
+  );
 }
 

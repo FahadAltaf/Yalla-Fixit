@@ -139,7 +139,7 @@ export function ChecklistPanel({
               a reason to invent a fourth way of drawing a number.
             */}
             <div className="border-b p-5">
-              <StatCardGrid columns={4}>
+              <StatCardGrid columns={3}>
                 <StatCard
                   label="Answered"
                   value={`${answered} / ${items.length}`}
@@ -152,20 +152,17 @@ export function ChecklistPanel({
                   tone={answered === items.length ? "good" : "progress"}
                 />
                 <StatCard
-                  label="Passed"
-                  value={passed}
+                  label="Checked"
+                  value={passed + failed}
                   headline={
-                    passed === 0 ? "Nothing passed yet" : "Checked and clear"
+                    passed + failed === 0 ? "Nothing checked yet" : "Checked on site"
                   }
-                  caption="Items the inspector marked as passing"
-                  tone={passed === 0 ? "neutral" : "good"}
-                />
-                <StatCard
-                  label="Failed"
-                  value={failed}
-                  headline={failed === 0 ? "Nothing failed" : "Raised as defects"}
-                  caption="Items the inspector marked as failing"
-                  tone={failed > 0 ? "bad" : "good"}
+                  caption={
+                    failed > 0
+                      ? `${failed} with an issue found, recorded as snags`
+                      : "Items the inspector marked as checked"
+                  }
+                  tone={passed + failed === 0 ? "neutral" : "good"}
                 />
                 <StatCard
                   label="Not checked"
@@ -185,7 +182,7 @@ export function ChecklistPanel({
                   Carried in to re-check
                 </SubHeading>
                 <p className="text-muted-foreground mb-3 text-xs">
-                  Failed or not checked on the previous visit. Each has to be
+                  Not checked, or with an issue, on the previous visit. Each has to be
                   answered again on this round before it can be signed off.
                 </p>
                 <ul className="divide-y">
@@ -278,11 +275,12 @@ export function ChecklistPanel({
 
 const STATUS = {
   passed: {
-    label: "Passed",
+    label: "Checked",
     icon: CheckCircle2,
     cls: "bg-success/10 text-success",
   },
-  failed: { label: "Failed", icon: XCircle, cls: "bg-danger/10 text-danger" },
+  // Answered before "Fail" was retired; the defect itself is a snag.
+  failed: { label: "Checked, issue found", icon: XCircle, cls: "bg-danger/10 text-danger" },
   not_checked: {
     label: "Not checked",
     icon: MinusCircle,

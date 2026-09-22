@@ -73,6 +73,7 @@ import {
   SubmitButton,
   useConfirm,
 } from "./shared";
+import { RoomInspectors } from "./room-inspectors";
 
 const UNASSIGNED = "none";
 
@@ -1101,7 +1102,7 @@ export function JobSetupPanel({
               }
             >
               <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Inspector" htmlFor="assign-inspector">
+                <Field label="Lead inspector" htmlFor="assign-inspector">
                   {/*
                   A disabled Select renders its value in placeholder grey,
                   so an inspector who *is* assigned looked exactly like
@@ -1234,6 +1235,15 @@ export function JobSetupPanel({
                   )}
                 </Field>
               </div>
+              {/* Point 6: other inspectors, room by room. */}
+              {task.inspector_id ? (
+                <RoomInspectors
+                  taskId={task.id}
+                  leadId={task.inspector_id}
+                  users={users}
+                  canEdit={canAssign}
+                />
+              ) : null}
               {canAssign ? (
                 <div className="flex justify-end">
                   <SubmitButton

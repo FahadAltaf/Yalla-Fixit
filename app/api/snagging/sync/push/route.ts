@@ -5,7 +5,8 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAuditBatch, type AuditEntry } from "@/lib/server/snagging/audit";
-import { hasVerdictNote } from "@/lib/server/snagging/columns";
+import { hasAreaInspector, hasVerdictNote } from "@/lib/server/snagging/columns";
+import { isZone } from "@/lib/snagging/zone-geometry";
 import { inParallel, planWaves } from "@/lib/server/snagging/push-plan";
 import {
   approvalDueAt,
@@ -31,6 +32,8 @@ type JobRef = {
   id: string;
   status: string;
   code: string;
+  /** The lead inspector: the one who submits when rooms are split (point 6). */
+  inspector_id?: string | null;
   /**
    * The additional visit being run on this job right now, if any.
    *
@@ -70,18 +73,54 @@ export async function POST(req: NextRequest) {
     const ids = input.mutations.map((m) => m.mutation_id);
     const { data: seenRows, error: seenError } = await admin
       .from("snagging_sync_mutations")
-      .select("mutation_id")
+      .select("mutation_id, status")
       .in("mutation_id", ids);
     if (seenError) throw new Error(seenError.message);
-    const seen = new Set((seenRows ?? []).map((r) => r.mutation_id));
+    /*
+      Only a change that was APPLIED is a duplicate. One the server
+      rejected used to sit in this ledger too, so when the phone retried it
+      (same mutation id) it came back "duplicate", the phone took that as
+      done, and the inspector's change was lost while the app said it was
+      saved. A rejected change is now tried again, and its ledger row is
+      updated with the new outcome.
+    */
+    const seen = new Set(
+      (seenRows ?? [])
+        .filter((r) => (r.status ?? "applied") === "applied")
+        .map((r) => r.mutation_id),
+    );
 
     // The jobs this inspector may write to (single inspector per job now).
     // An admin is never restricted in snagging, so they may write to any job.
-    let jobsQuery = admin.from("snagging_jobs").select("id, status, code");
+    let jobsQuery = admin.from("snagging_jobs").select("id, status, code, inspector_id");
     if (!isAdminUser(accessUser)) jobsQuery = jobsQuery.eq("inspector_id", profile.id);
     const { data: myJobs, error: jobsError } = await jobsQuery;
     if (jobsError) throw new Error(jobsError.message);
     const jobById = new Map<string, JobRef>((myJobs ?? []).map((j) => [j.id, j as JobRef]));
+
+    /*
+      Several inspectors on one job (point 6): an inspector given some of
+      the rooms may write to the job too. What they may not do is submit
+      it -- that stays with the lead, once every room is done.
+    */
+    if (!isAdminUser(accessUser) && (await hasAreaInspector(admin))) {
+      const { data: roomRows, error: roomError } = await admin
+        .from("snagging_areas")
+        .select("job_id")
+        .eq("inspector_id", profile.id);
+      if (roomError) throw new Error(roomError.message);
+      const extra = [...new Set((roomRows ?? []).map((r) => r.job_id as string))].filter(
+        (jobId) => !jobById.has(jobId),
+      );
+      if (extra.length > 0) {
+        const { data: roomJobs, error: roomJobsError } = await admin
+          .from("snagging_jobs")
+          .select("id, status, code, inspector_id")
+          .in("id", extra);
+        if (roomJobsError) throw new Error(roomJobsError.message);
+        for (const j of roomJobs ?? []) jobById.set(j.id, j as JobRef);
+      }
+    }
 
     /*
       Live visits, and the jobs an inspector reaches only through one.
@@ -110,7 +149,7 @@ export async function POST(req: NextRequest) {
     if (missingJobIds.length > 0) {
       const { data: visitJobs, error: visitJobsError } = await admin
         .from("snagging_jobs")
-        .select("id, status, code")
+        .select("id, status, code, inspector_id")
         .in("id", missingJobIds);
       if (visitJobsError) throw new Error(visitJobsError.message);
       for (const j of visitJobs ?? []) jobById.set(j.id, j as JobRef);
@@ -196,6 +235,7 @@ export async function POST(req: NextRequest) {
           mutation,
           userId: actor.id,
           actorLabel: actor.full_name ?? actor.email ?? null,
+          isAdmin: isAdminUser(accessUser),
           jobById,
           audit,
         });
@@ -238,7 +278,9 @@ export async function POST(req: NextRequest) {
     if (ledger.length > 0) {
       const { error: ledgerError } = await admin
         .from("snagging_sync_mutations")
-        .upsert(ledger, { onConflict: "mutation_id", ignoreDuplicates: true });
+        // Not ignoreDuplicates: a retried change that failed before and
+        // applies now has to overwrite its "rejected" row.
+        .upsert(ledger, { onConflict: "mutation_id" });
       if (ledgerError) throw new Error(ledgerError.message);
     }
 
@@ -266,6 +308,8 @@ type Ctx = {
   mutation: Mutation;
   userId: string;
   actorLabel: string | null;
+  /** An admin may submit a job whoever leads it. */
+  isAdmin: boolean;
   jobById: Map<string, JobRef>;
   /**
    * FR-6.04 — audit rows collected across the whole push and inserted
@@ -421,6 +465,29 @@ async function applyArea(admin: Admin, ctx: Ctx, payload: Record<string, unknown
   // A floor-plan pin is all-or-nothing so the DB check (pin_x null == pin_y
   // null) always holds, and floor_plan_id follows the pin.
   const pinFields = (): Record<string, unknown> => {
+    /*
+      A room's outline, drawn on the phone (point 4). Checked with the
+      same rule the web and the database use; a malformed one is refused
+      rather than stored, so it can never reach another handset.
+    */
+    if ("zone" in payload) {
+      const zone = payload.zone;
+      if (zone !== null && !isZone(zone)) {
+        throw new Error("That room outline is not valid. Draw it again with at least three corners.");
+      }
+      const out: Record<string, unknown> = { zone: zone ?? null };
+      // An outline sits on a plan; clearing one leaves the pin's plan alone.
+      if (zone !== null && "floor_plan_id" in payload) {
+        out.floor_plan_id = (payload.floor_plan_id as string | null) ?? null;
+      }
+      if ("pin_x" in payload || "pin_y" in payload) {
+        const x = (payload.pin_x as number | null | undefined) ?? null;
+        const y = (payload.pin_y as number | null | undefined) ?? null;
+        out.pin_x = x !== null && y !== null ? x : null;
+        out.pin_y = x !== null && y !== null ? y : null;
+      }
+      return out;
+    }
     if (!("pin_x" in payload) && !("pin_y" in payload) && !("floor_plan_id" in payload)) return {};
     const x = (payload.pin_x as number | null | undefined) ?? null;
     const y = (payload.pin_y as number | null | undefined) ?? null;
@@ -668,6 +735,13 @@ async function applySubmission(admin: Admin, ctx: Ctx, payload: Record<string, u
   const job = writableJob(ctx, payload.task_id);
   if (job.visit) return submitVisit(admin, ctx, job, payload);
 
+  // With rooms split between inspectors, the lead submits for everyone.
+  if (!ctx.isAdmin && job.inspector_id && job.inspector_id !== ctx.userId) {
+    throw new Error(
+      "Only the lead inspector can submit this inspection. Your rooms are saved; the lead submits once every room is done.",
+    );
+  }
+
   // Every snag must carry at least one photo, and every mandatory checklist
   // item must be answered, before the visit can close (BR-5, BR-12). A
   // de-snag round asks for more than that -- see the after-photo rule below.
@@ -761,20 +835,41 @@ async function applySubmission(admin: Admin, ctx: Ctx, payload: Record<string, u
         .filter((r) => ((r.round_number as number | null) ?? 1) === round)
         .map((r) => r.snag_id),
     );
-    const ruled = new Set([
-      "verified_closed",
-      "verified_poor_quality",
-      "verified_not_done",
-      "pending_verification",
-    ]);
-    const unevidenced = (snagRows.data ?? []).filter(
-      (s) => ruled.has(s.status as string) && !shotThisRound.has(s.id),
-    );
-    if (unevidenced.length > 0) {
-      const sample = unevidenced.slice(0, 3).map((s) => s.snag_code).join(", ");
+    /*
+      Points 10 and 11: every carried defect needs a result, and only a
+      Poor quality result needs its evidence -- an after photo or video
+      from this round AND a comment. Fixed and Not done stand on their own.
+    */
+    const list = (codes: Array<{ snag_code?: unknown }>) =>
+      `${codes.slice(0, 3).map((s) => s.snag_code).join(", ")}${codes.length > 3 ? ", …" : ""}`;
+    const unanswered = (snagRows.data ?? []).filter((s) => s.status === "pending_verification");
+    if (unanswered.length > 0) {
       throw new Error(
-        `${unevidenced.length} carried defect(s) still need an after photo or video from this round (${sample}${unevidenced.length > 3 ? ", …" : ""})`,
+        `${unanswered.length} carried defect(s) still need a result: Fixed, Not done or Poor quality (${list(unanswered)})`,
       );
+    }
+    const poor = (snagRows.data ?? []).filter((s) => s.status === "verified_poor_quality");
+    if (poor.length > 0) {
+      const withNotes = await hasVerdictNote(admin);
+      const notes = new Map<string, string | null>();
+      if (withNotes) {
+        const { data: noteRows, error: noteError } = await admin
+          .from("snagging_snags")
+          .select("id, verdict_note")
+          .in("id", poor.map((s) => s.id as string));
+        if (noteError) throw new Error(noteError.message);
+        for (const row of noteRows ?? []) notes.set(row.id as string, (row.verdict_note as string | null) ?? null);
+      }
+      const short = poor.filter(
+        (s) =>
+          !shotThisRound.has(s.id) ||
+          (withNotes && !(notes.get(s.id as string) ?? "").trim()),
+      );
+      if (short.length > 0) {
+        throw new Error(
+          `${short.length} Poor quality result(s) still need an after photo and a comment (${list(short)})`,
+        );
+      }
     }
   }
 

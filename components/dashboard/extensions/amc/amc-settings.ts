@@ -2,6 +2,13 @@ import { z } from "zod";
 
 import { AMC_PROVIDER, AMC_SERVICES } from "./amc-constants";
 import {
+  BANK_DETAILS,
+  CLAUSE_2_INTRO,
+  CLAUSE_6_2_INTRO,
+  CLAUSE_6_3_HANDYMAN,
+  CLAUSE_7_TERMS,
+  PROPOSAL_IMPORTANT_NOTES,
+  CLAUSE_1_OPERATION,
   CLAUSE_3_EMERGENCY,
   CLAUSE_4_MATERIALS,
   CLAUSE_5_EXCLUDED,
@@ -41,6 +48,15 @@ export const amcSettingsSchema = z.object({
   provider: z.object({
     contactNo: z.string(),
     coordinationEmails: z.array(z.string()),
+    /* The company as it prints in the contract's provider details. */
+    poBox: z.string(),
+    email: z.string(),
+    address: z.string(),
+    contractType: z.string(),
+    /* Printed in the proposal's commercial offer. */
+    standardResponseTime: z.string(),
+    emergencyResponseTime: z.string(),
+    proposalValidity: z.string(),
   }),
   /*
     FR6.2 — standard text, keyed by clause. Only the clauses the FRD names
@@ -49,14 +65,46 @@ export const amcSettingsSchema = z.object({
     nobody can safely use.
   */
   clauses: z.object({
+    helpdeskScheduling: z.string(),
+    maintenanceTeam: z.string(),
+    workingHours: z.string(),
+    /* 2: the paragraph above the scope of each service. */
+    scopeIntro: z.string(),
     emergencyCallOut: z.string(),
     nonEmergencyCallOut: z.string(),
     materials: z.string(),
     servicesExcluded: z.string(),
+    /* 5: the other services offered. First block introduces the list, the
+       last is the closing note, everything between is a point. */
+    excludedOffer: z.string(),
+    /* 6.2: the title line, then the paragraphs above the price list. */
+    priceListIntro: z.string(),
+    /* 6.3: the title line, then one line per rate ("A. First hour ..."). */
+    handymanRates: z.string(),
+    /* 7: one block per term, numbered "7.1 ...". */
+    generalTerms: z.string(),
+    /* 7.16: one "Label: value" line per row of the bank table. */
+    bankDetails: z.string(),
+    /* After the bank table. The first block follows the annual contract
+       value on the same line. */
+    invoiceTerms: z.string(),
     termination: z.string(),
+    /* The line above the contract signatures. */
+    contractConfirmation: z.string(),
+    /* The proposal's closing notes, one per block. */
+    proposalNotes: z.string(),
+    /* The line above the proposal signatures. */
+    proposalAcceptance: z.string(),
   }),
   /* FR6.2 — "the scope of work for each service", keyed by service id. */
   serviceScopes: z.record(z.string(), z.string()),
+  /*
+    FR5.3: who may approve or send back a submitted proposal, by email.
+    Empty means the role permission (AMC approve) decides, as before.
+  */
+  approval: z.object({
+    approvers: z.array(z.string()),
+  }),
 });
 
 export type AmcSettings = z.infer<typeof amcSettingsSchema>;
@@ -68,6 +116,7 @@ export const amcSettingsOverridesSchema = z
     provider: amcSettingsSchema.shape.provider.partial().optional(),
     clauses: amcSettingsSchema.shape.clauses.partial().optional(),
     serviceScopes: z.record(z.string(), z.string()).optional(),
+    approval: amcSettingsSchema.shape.approval.partial().optional(),
   })
   .default({});
 
@@ -84,6 +133,13 @@ function joinLines(...parts: (string | string[] | undefined)[]): string {
     .join("\n\n");
 }
 
+function clause1Section(title: string, key: "paragraphs" | "bullets"): string {
+  const section = CLAUSE_1_OPERATION.sections.find(
+    (item) => item.title === title,
+  ) as { paragraphs?: string[]; bullets?: string[] } | undefined;
+  return section ? joinLines(section[key]) : "";
+}
+
 function clause3Section(prefix: string): string {
   const section = CLAUSE_3_EMERGENCY.sections.find((item) =>
     item.title.startsWith(prefix),
@@ -96,6 +152,21 @@ function clause3Section(prefix: string): string {
  * existing constants rather than restated, so a release that corrects a
  * clause also corrects the default here.
  */
+/*
+  The services with no scope section in the contract (the hotline and the
+  two call-out services) are described by their own clauses (1.1, 3.1,
+  3.2). Their entry here is the short description the proposal's Services
+  table prints, editable like every other scope.
+*/
+const SERVICE_SUMMARY: Record<string, string> = {
+  helpdesk:
+    "Round-the-clock technical support hotline for maintenance inquiries and coordination.",
+  emergency:
+    "Priority response for critical failures outside standard working hours and on holidays.",
+  "non-emergency":
+    "Scheduled inspection and minor rectification visits within agreed working hours.",
+};
+
 export function getAmcSettingsDefaults(): AmcSettings {
   /* A service with a scope section in the contract uses that section's
      text; the rest (emergency, non-emergency, helpdesk) have only the one
@@ -107,15 +178,26 @@ export function getAmcSettingsDefaults(): AmcSettings {
     );
     serviceScopes[service.id] = section
       ? joinLines(section.intro, section.bullets)
-      : service.scope;
+      : (SERVICE_SUMMARY[service.id] ?? service.scope);
   }
 
   return {
     provider: {
       contactNo: AMC_PROVIDER.contactNo,
       coordinationEmails: [...AMC_PROVIDER.coordinationEmails],
+      poBox: AMC_PROVIDER.poBox,
+      email: AMC_PROVIDER.email,
+      address: AMC_PROVIDER.address,
+      contractType: AMC_PROVIDER.contractType,
+      standardResponseTime: "Within 48 hours",
+      emergencyResponseTime: "Within 120 minutes",
+      proposalValidity: "1 Year",
     },
     clauses: {
+      helpdeskScheduling: clause1Section("1.1 Helpdesk and Scheduling", "paragraphs"),
+      maintenanceTeam: clause1Section("1.2 Maintenance team", "bullets"),
+      workingHours: clause1Section("1.3 Working hours", "paragraphs"),
+      scopeIntro: `${CLAUSE_2_INTRO[1]} ${CLAUSE_2_INTRO[2]}`,
       emergencyCallOut: clause3Section("3.1"),
       nonEmergencyCallOut: clause3Section("3.2"),
       materials: joinLines(CLAUSE_4_MATERIALS.paragraphs),
@@ -123,9 +205,28 @@ export function getAmcSettingsDefaults(): AmcSettings {
         CLAUSE_5_EXCLUDED.intro,
         CLAUSE_5_EXCLUDED.bullets,
       ),
+      excludedOffer: joinLines(CLAUSE_5_EXCLUDED.footerParagraphs),
+      priceListIntro: joinLines(
+        CLAUSE_6_2_INTRO[0].replace(/^6\.2\s*/, "").replace(/\.$/, ""),
+        CLAUSE_6_2_INTRO.slice(1),
+      ),
+      handymanRates: joinLines(
+        CLAUSE_6_3_HANDYMAN.title.replace(/^6\.3\s*/, ""),
+        CLAUSE_6_3_HANDYMAN.rates.map((rate) => `${rate.label} ${rate.text}`),
+      ),
+      generalTerms: joinLines(CLAUSE_7_TERMS),
+      bankDetails: joinLines(BANK_DETAILS.map((row) => `${row.label}: ${row.value}`)),
+      invoiceTerms: joinLines(
+        "All invoices should be settled within 7 working days from the date of submittal, via email or hardcopy. Failure of payments will be notified and may be grounds for temporary suspension of services or termination of contract.",
+        "The term of this contract shall commence for 1 year as stated in the contract details.",
+      ),
       termination: joinLines(CLAUSE_8_TERMINATION.paragraphs),
+      contractConfirmation: CLAUSE_8_TERMINATION.confirmation.replace(/\.?$/, "."),
+      proposalNotes: joinLines([...PROPOSAL_IMPORTANT_NOTES]),
+      proposalAcceptance: "I hereby accept this proposal on the terms set out above.",
     },
     serviceScopes,
+    approval: { approvers: [] },
   };
 }
 
@@ -147,12 +248,15 @@ export function mergeAmcSettings(
   if (!overrides) return defaults;
 
   return {
+    /* Every value falls back on its own, so a snapshot or override saved
+       before a value existed still gets the standard one. */
     provider: {
-      contactNo:
-        overrides.provider?.contactNo ?? defaults.provider.contactNo,
-      coordinationEmails:
-        overrides.provider?.coordinationEmails ??
-        defaults.provider.coordinationEmails,
+      ...defaults.provider,
+      ...Object.fromEntries(
+        Object.entries(overrides.provider ?? {}).filter(
+          ([, value]) => value !== undefined,
+        ),
+      ),
     },
     clauses: {
       ...defaults.clauses,
@@ -166,7 +270,27 @@ export function mergeAmcSettings(
       ...defaults.serviceScopes,
       ...(overrides.serviceScopes ?? {}),
     },
+    approval: {
+      approvers: overrides.approval?.approvers ?? defaults.approval.approvers,
+    },
   };
+}
+
+/**
+ * FR5.3: may this person approve or send back a submitted proposal?
+ *
+ * When AMC Settings names approvers, only they can. When it names nobody,
+ * the role permission (AMC approve) decides, which is how it worked before
+ * approvers could be chosen.
+ */
+export function canApproveAmc(
+  settings: Pick<AmcSettings, "approval">,
+  email: string | null | undefined,
+  hasRolePermission: boolean,
+): boolean {
+  const approvers = (settings.approval?.approvers ?? []).map((item) => item.trim().toLowerCase());
+  if (approvers.length === 0) return hasRolePermission;
+  return Boolean(email) && approvers.includes(email!.trim().toLowerCase());
 }
 
 /**
@@ -181,5 +305,9 @@ export function resolveAmcSettings(
   live: AmcSettings,
   snapshot: AmcSettings | null | undefined,
 ): AmcSettings {
-  return snapshot ?? live;
+  /* Merged over the defaults, not returned as-is: a proposal sent before a
+     clause became editable has no copy of it in its snapshot. At send time
+     that clause could only have been the shipped text, which is what the
+     default still is — so the document prints exactly as it was sent. */
+  return snapshot ? mergeAmcSettings(getAmcSettingsDefaults(), snapshot) : live;
 }

@@ -28,16 +28,37 @@ export async function elementToPdfBlob(
     allowTaint: true,
     background: "#ffffff",
     logging: false,
-    ...({ scale, onclone: (doc: Document) => sanitizeUnsupportedColors(doc) } as object),
+    ...({
+      scale,
+      onclone: (doc: Document) => sanitizeUnsupportedColors(doc),
+      /*
+        html2canvas clones the whole page before drawing the node. The
+        dashboard behind it is a large DOM, so everything outside the node
+        is skipped (keeping <head> and style tags, for the styles), which
+        makes the capture several times faster.
+      */
+      ignoreElements: (element: Element) =>
+        element !== node &&
+        !element.contains(node) &&
+        !node.contains(element) &&
+        !document.head.contains(element) &&
+        element.tagName !== "STYLE" &&
+        element.tagName !== "LINK" &&
+        element.parentElement !== null,
+    } as object),
   });
 
   const { footerLabel, header } = options;
 
   return canvasToPdfBlob(canvas, {
     blocks: collectPdfBlocks(node, canvas),
+    /* JPEG at 0.82: no visible loss, a much smaller file. */
+    imageQuality: 0.82,
     header,
     footer: (page, pageCount) =>
-      [footerLabel, `Page ${page} of ${pageCount}`].filter(Boolean).join("  \u00b7  "),
+      [footerLabel, `Page ${page} of ${pageCount}`]
+        .filter(Boolean)
+        .join("  \u00b7  "),
   });
 }
 
@@ -48,7 +69,10 @@ export async function elementToPdfBlob(
  * photo, and rasterising before they arrive puts empty grey boxes in the
  * PDF. Errors resolve too -- one broken photo must not cost the download.
  */
-async function waitForImages(root: HTMLElement, timeoutMs = 10_000): Promise<void> {
+async function waitForImages(
+  root: HTMLElement,
+  timeoutMs = 10_000,
+): Promise<void> {
   const pending = Array.from(root.querySelectorAll("img")).filter(
     (img) => !img.complete || img.naturalWidth === 0,
   );

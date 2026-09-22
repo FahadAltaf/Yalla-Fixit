@@ -7,14 +7,10 @@ import { toast } from "sonner";
 import { Attachment, ServiceAppointment } from "@/types/types";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import {
-  Card, CardContent, CardDescription, CardHeader, CardTitle,
-} from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -25,6 +21,9 @@ import {
 import { useAuth } from "@/context/AuthContext";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dialog";
+import {
+  DataRow, PageHeading, PillTabs, SectionCard, SubHeading,
+} from "@/components/dashboard/shared/kaizen";
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 
@@ -107,6 +106,9 @@ export function ExtensionsPageClient() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [confirmContext, setConfirmContext] = useState<"appointment" | "workorder" | null>(null);
+
+  // ── Which search is showing (was the uncontrolled Tabs default) ──
+  const [mode, setMode] = useState<"appointment" | "workorder">("appointment");
 
   const { settings } = useAuth();
 
@@ -450,44 +452,34 @@ export function ExtensionsPageClient() {
         </DialogContent>
       </Dialog>
 
-      {/* ── Main Card ── */}
-      <Card className="w-full flex-1 relative top-px right-px gap-4">
-        {/* <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div className="flex gap-1 flex-col">
-            <CardTitle className="text-xl flex items-center gap-2">
-              <Download className="size-5 text-primary" />
-              Bulk Download
-            </CardTitle>
-            <CardDescription>
-              Download all attachments for a service appointment or an entire work order.
-            </CardDescription>
-          </div>
-        </CardHeader> */}
-        <div className="print:hidden px-4">
-          <p className="eyebrow">Extension</p>
-          <h1 className="mt-1.5 text-3xl">Bulk Download</h1>
-          <p className="text-muted-foreground mt-1 text-[0.9375rem]">
-            Download all attachments for a service appointment or an entire work order.
-          </p>
-        </div>
+      {/* ── Page ── */}
+      <div className="flex w-full flex-1 flex-col gap-6">
+        <PageHeading
+          eyebrow="Extensions"
+          title="Bulk download"
+          description="Download all attachments for a service appointment or an entire work order."
+        />
 
-        <CardContent>
-          <Tabs defaultValue="appointment" className="w-full gap-0">
-            <TabsList className="mb-4 w-full sm:w-auto">
-              <TabsTrigger value="appointment" className="flex items-center gap-2">
-                <Paperclip className="size-4" />
-                By Appointment
-              </TabsTrigger>
-              <TabsTrigger value="workorder" className="flex items-center gap-2">
-                <FolderArchive className="size-4" />
-                By Work Order
-              </TabsTrigger>
-            </TabsList>
+        <PillTabs<"appointment" | "workorder">
+          value={mode}
+          onChange={setMode}
+          tabs={[
+            { value: "appointment", label: "By appointment" },
+            { value: "workorder", label: "By work order" },
+          ]}
+        />
 
-            {/* ══════════════════════════════════════════════
-                TAB 1 — By Appointment (existing logic)
-            ══════════════════════════════════════════════ */}
-            <TabsContent value="appointment" className="space-y-5 mt-0">
+        {/* ══════════════════════════════════════════════
+            TAB 1 — By Appointment (existing logic)
+        ══════════════════════════════════════════════ */}
+        {mode === "appointment" ? (
+          <div className="flex flex-col gap-6">
+            <SectionCard
+              icon={<Paperclip />}
+              title="Find an appointment"
+              description="Search by the service appointment name, for example AP-856."
+              bodyClassName="px-5 pb-5"
+            >
               <form
                 onSubmit={(e) => { e.preventDefault(); void handleApptSearch(); }}
                 className="flex flex-col gap-3 sm:flex-row sm:items-end"
@@ -497,6 +489,7 @@ export function ExtensionsPageClient() {
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
                     <Input
                       placeholder="e.g. AP-856"
+                      aria-label="Service appointment name"
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
                       disabled={isSearching}
@@ -505,111 +498,98 @@ export function ExtensionsPageClient() {
                   </div>
                 </div>
                 <Button type="submit" className="w-full sm:w-auto min-w-[110px]" disabled={isSearching}>
-                  {isSearching
-                    ? <span className="flex items-center gap-2"><Loader2 className="size-4 animate-spin" />Searching…</span>
-                    : <span className="flex items-center gap-2"><Search className="size-4" />Search</span>}
+                  {isSearching ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
+                  {isSearching ? "Searching..." : "Search"}
                 </Button>
               </form>
+            </SectionCard>
 
-              {searchError && (
-                <EmptyState
-                  title="Appointment not found"
-                  description="The appointment you are looking for does not exist. Please check the name and try again."
-                  icon={<AlertCircle />}
-                />
-              )}
+            {searchError && (
+              <EmptyState
+                title="Appointment not found"
+                description="The appointment you are looking for does not exist. Please check the name and try again."
+                icon={<AlertCircle className="size-5" />}
+              />
+            )}
 
-              {isSearching && (
-                <Card className="border-dashed">
-                  <CardHeader><Skeleton className="h-5 w-48" /></CardHeader>
-                  <CardContent className="space-y-4">
-                    {[0, 1, 2].map((i) => (
-                      <div key={i} className="space-y-2">
-                        <Skeleton className="h-3 w-24" />
-                        <Skeleton className="h-4 w-full max-w-sm" />
-                      </div>
-                    ))}
-                  </CardContent>
-                </Card>
-              )}
+            {isSearching && <DetailsSkeleton />}
 
-              {!appointment && !searchError && !isSearching && (
-                <EmptyState
-                  title="Search for an appointment"
-                  description="Enter the name of the appointment you are looking for and click search."
-                  icon={<Search />}
-                />
-              )}
+            {!appointment && !searchError && !isSearching && (
+              <EmptyState
+                title="Search for an appointment"
+                description="Enter the name of the appointment you are looking for and click search."
+                icon={<Search className="size-5" />}
+              />
+            )}
 
-              {appointment && !isSearching && (
-                <Card className="border-border/60 shadow-sm">
-                  <CardHeader className="pb-2">
-                    <div className="flex items-center justify-between">
-                      <CardTitle className="text-base flex items-center gap-2">
-                        <Briefcase className="size-4 text-primary" />
-                        Appointment Details
-                      </CardTitle>                      <Badge
-                        variant={statusVariant === "success" ? "default" : statusVariant === "warning" ? "outline" : "destructive"}
-                        className="capitalize"
-                      >
-                        {appointment.status}
-                      </Badge>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="space-y-5">
-                    <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-                      <FieldRow label="ID" value={appointment.id} />
-                      <FieldRow label="Name" value={appointment.name} />
-                      <FieldRow label="Contact Name" value={appointment.contact_name} />
-                      <FieldRow label="Type" value={appointment.type} />
-                      <FieldRow label="Address" value={appointment.address} />
-                      <FieldRow label="Summary" value={appointment.summary} />
-                    </div>
-                    <Separator />
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <Paperclip className="size-4 text-muted-foreground" />
-                          <span className="text-sm font-medium">Attachments</span>
-                        </div>
-                        {appointment.attachments?.length ? (
-                          <Badge variant="secondary">
-                            {appointment.attachments.length} file{appointment.attachments.length === 1 ? "" : "s"}
-                          </Badge>
-                        ) : null}
-                      </div>
-                      {!appointment.attachments?.length ? (
-                        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed py-8 text-center gap-2">
-                          <Paperclip className="size-8 text-muted-foreground/50" />
-                          <p className="text-sm text-muted-foreground">No attachments available.</p>
-                        </div>
-                      ) : (
-                        <Button
-                          onClick={() => {
-                            if (appointment.status?.toLowerCase() === "in progress") {
-                              setConfirmContext("appointment");
-                              setIsConfirmOpen(true);
-                            } else {
-                              void handleApptDownload();
-                            }
-                          }}
-                          disabled={isDownloading}
-                          className="w-full sm:w-auto gap-2"
-                        >
-                          <Download className="size-4" />
-                          Download All ({appointment.attachments.length} files)
-                        </Button>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-            </TabsContent>
+            {appointment && !isSearching && (
+              <SectionCard
+                icon={<Briefcase />}
+                title="Appointment details"
+                description={appointment.name}
+                action={
+                  <Badge
+                    variant={statusVariant === "success" ? "default" : statusVariant === "warning" ? "outline" : "destructive"}
+                    className="capitalize"
+                  >
+                    {appointment.status}
+                  </Badge>
+                }
+                bodyClassName="border-t"
+              >
+                <div className="grid gap-x-6 gap-y-4 p-5 sm:grid-cols-2">
+                  <FieldRow label="ID" value={appointment.id} />
+                  <FieldRow label="Name" value={appointment.name} />
+                  <FieldRow label="Contact name" value={appointment.contact_name} />
+                  <FieldRow label="Type" value={appointment.type} />
+                  <FieldRow label="Address" value={appointment.address} />
+                  <FieldRow label="Summary" value={appointment.summary} />
+                </div>
 
-            {/* ══════════════════════════════════════════════
-                TAB 2 — By Work Order
-            ══════════════════════════════════════════════ */}
-            <TabsContent value="workorder" className="space-y-5 mt-0">
+                <div className="space-y-3 border-t p-5">
+                  <SubHeading count={appointment.attachments?.length ?? 0}>
+                    Attachments
+                  </SubHeading>
+                  {!appointment.attachments?.length ? (
+                    <EmptyState
+                      title="No attachments"
+                      description="This appointment has no files to download."
+                      icon={<Paperclip className="size-5" />}
+                    />
+                  ) : (
+                    <Button
+                      onClick={() => {
+                        if (appointment.status?.toLowerCase() === "in progress") {
+                          setConfirmContext("appointment");
+                          setIsConfirmOpen(true);
+                        } else {
+                          void handleApptDownload();
+                        }
+                      }}
+                      disabled={isDownloading}
+                      className="w-full sm:w-auto"
+                    >
+                      <Download className="size-4" />
+                      Download all ({appointment.attachments.length} file{appointment.attachments.length === 1 ? "" : "s"})
+                    </Button>
+                  )}
+                </div>
+              </SectionCard>
+            )}
+          </div>
+        ) : null}
+
+        {/* ══════════════════════════════════════════════
+            TAB 2 — By Work Order
+        ══════════════════════════════════════════════ */}
+        {mode === "workorder" ? (
+          <div className="flex flex-col gap-6">
+            <SectionCard
+              icon={<FolderArchive />}
+              title="Find a work order"
+              description="Search by the work order name, for example WO731. Files are grouped into one folder per appointment."
+              bodyClassName="px-5 pb-5"
+            >
               <form
                 onSubmit={(e) => { e.preventDefault(); void handleWoSearch(); }}
                 className="flex flex-col gap-3 sm:flex-row sm:items-end"
@@ -619,6 +599,7 @@ export function ExtensionsPageClient() {
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
                     <Input
                       placeholder="e.g. WO731"
+                      aria-label="Work order name"
                       value={woQuery}
                       onChange={(e) => setWoQuery(e.target.value)}
                       disabled={isWoSearching}
@@ -627,146 +608,126 @@ export function ExtensionsPageClient() {
                   </div>
                 </div>
                 <Button type="submit" className="w-full sm:w-auto min-w-[110px]" disabled={isWoSearching}>
-                  {isWoSearching
-                    ? <span className="flex items-center gap-2"><Loader2 className="size-4 animate-spin" />Searching…</span>
-                    : <span className="flex items-center gap-2"><Search className="size-4" />Search</span>}
+                  {isWoSearching ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
+                  {isWoSearching ? "Searching..." : "Search"}
                 </Button>
               </form>
+            </SectionCard>
 
-              {woSearchError && (
-                <EmptyState
-                  title="Work order not found"
-                  description={woSearchError}
-                  icon={<AlertCircle />}
-                />
-              )}
+            {woSearchError && (
+              <EmptyState
+                title="Work order not found"
+                description={woSearchError}
+                icon={<AlertCircle className="size-5" />}
+              />
+            )}
 
-              {isWoSearching && (
-                <Card className="border-dashed">
-                  <CardHeader><Skeleton className="h-5 w-48" /></CardHeader>
-                  <CardContent className="space-y-4">
-                    {[0, 1, 2].map((i) => (
-                      <div key={i} className="space-y-2">
-                        <Skeleton className="h-3 w-24" />
-                        <Skeleton className="h-4 w-full max-w-sm" />
-                      </div>
-                    ))}
-                  </CardContent>
-                </Card>
-              )}
+            {isWoSearching && <DetailsSkeleton />}
 
-              {!workOrderInfo && !woSearchError && !isWoSearching && (
-                <EmptyState
-                  title="Search for a work order"
-                  description="Enter the work order name above and click Search to load its appointments and attachments."
-                  icon={<FolderArchive />}
-                />
-              )}
+            {!workOrderInfo && !woSearchError && !isWoSearching && (
+              <EmptyState
+                title="Search for a work order"
+                description="Enter the work order name above and click Search to load its appointments and attachments."
+                icon={<FolderArchive className="size-5" />}
+              />
+            )}
 
-              {/* ── Work Order Info Card (shown after search) ── */}
-              {workOrderInfo && !isWoSearching && (
-                <Card className="border-border/60 shadow-sm">
-                  <CardHeader className="pb-2">
-                    <div className="flex items-center justify-between">
-                      <CardTitle className="text-base flex items-center gap-2">
-                        <Briefcase className="size-4 text-primary" />
-                        Work Order Details
-                      </CardTitle>
-                      <Badge variant={woStatusVariant} className="capitalize">
-                        {workOrderInfo.status}
+            {/* ── Work Order Info Card (shown after search) ── */}
+            {workOrderInfo && !isWoSearching && (
+              <SectionCard
+                icon={<Briefcase />}
+                title="Work order details"
+                description={workOrderInfo.name}
+                action={
+                  <Badge variant={woStatusVariant} className="capitalize">
+                    {workOrderInfo.status}
+                  </Badge>
+                }
+                bodyClassName="border-t"
+              >
+                <div className="grid gap-x-6 gap-y-4 p-5 sm:grid-cols-2">
+                  <FieldRow label="ID" value={workOrderInfo.id} />
+                  <FieldRow label="Name" value={workOrderInfo.name} />
+                  <FieldRow label="Contact name" value={workOrderInfo.contact_name} />
+                  <FieldRow label="Type" value={workOrderInfo.type} />
+                  <FieldRow label="Address" value={workOrderInfo.address} />
+                  <FieldRow label="Summary" value={workOrderInfo.summary} />
+                </div>
+
+                {/* Appointments breakdown */}
+                <div className="border-t">
+                  <SubHeading
+                    count={workOrderInfo.total_appointments}
+                    className="px-5 pt-5 pb-2"
+                    action={
+                      <Badge variant="secondary" className="border-0 tabular-nums">
+                        {workOrderInfo.total_attachments} file{workOrderInfo.total_attachments === 1 ? "" : "s"}
                       </Badge>
+                    }
+                  >
+                    Appointments
+                  </SubHeading>
+
+                  {/* Per-appointment rows */}
+                  {workOrderInfo.appointments.length > 0 ? (
+                    <div className="divide-y">
+                      {workOrderInfo.appointments.map((appt) => (
+                        <DataRow
+                          key={appt.id}
+                          icon={<Paperclip />}
+                          title={appt.name}
+                          trailing={
+                            <Badge
+                              variant="secondary"
+                              className={appt.attachments.length > 0 ? "border-0 tabular-nums" : "text-muted-foreground border-0 bg-transparent"}
+                            >
+                              {appt.attachments.length > 0
+                                ? `${appt.attachments.length} file${appt.attachments.length === 1 ? "" : "s"}`
+                                : "No files"}
+                            </Badge>
+                          }
+                        />
+                      ))}
                     </div>
-                  </CardHeader>
-
-                  <CardContent className="space-y-5">
-                    {/* WO fields */}
-                    {/* <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-                      <FieldRow label="ID"      value={workOrderInfo.id} />
-                      <FieldRow label="Name"    value={workOrderInfo.name} />
-                      <FieldRow label="Status"  value={workOrderInfo.status} />
-                      <FieldRow label="Summary" value={workOrderInfo.summary} />
-                    </div> */}
-                    <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-                      <FieldRow label="ID" value={workOrderInfo.id} />
-                      <FieldRow label="Name" value={workOrderInfo.name} />
-                      <FieldRow label="Contact Name" value={workOrderInfo.contact_name} />
-                      <FieldRow label="Type" value={workOrderInfo.type} />
-                      <FieldRow label="Address" value={workOrderInfo.address} />
-                      <FieldRow label="Summary" value={workOrderInfo.summary} />
+                  ) : (
+                    <div className="px-5 pb-5">
+                      <EmptyState
+                        title="No appointments"
+                        description="This work order has no service appointments yet."
+                        icon={<FolderArchive className="size-5" />}
+                      />
                     </div>
+                  )}
+                </div>
 
-                    <Separator />
-
-                    {/* Appointments breakdown */}
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <FolderArchive className="size-4 text-muted-foreground" />
-                          <span className="text-sm font-medium">Appointments</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Badge variant="secondary">
-                            {workOrderInfo.total_appointments} appointment{workOrderInfo.total_appointments === 1 ? "" : "s"}
-                          </Badge>
-                          <Badge variant="outline">
-                            {workOrderInfo.total_attachments} file{workOrderInfo.total_attachments === 1 ? "" : "s"}
-                          </Badge>
-                        </div>
-                      </div>
-
-                      {/* Per-appointment rows */}
-                      {workOrderInfo.appointments.length > 0 ? (
-                        <div className="rounded-md border divide-y">
-                          {workOrderInfo.appointments.map((appt) => (
-                            <div key={appt.id} className="flex items-center justify-between px-3 py-2.5">
-                              <div className="flex items-center gap-2">
-                                <Paperclip className="size-3.5 text-muted-foreground shrink-0" />
-                                <span className="text-sm font-medium">{appt.name}</span>
-                              </div>
-                              <Badge variant={appt.attachments.length > 0 ? "secondary" : "outline"} className="text-xs">
-                                {appt.attachments.length > 0
-                                  ? `${appt.attachments.length} file${appt.attachments.length === 1 ? "" : "s"}`
-                                  : "no files"}
-                              </Badge>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed py-8 gap-2">
-                          <FolderArchive className="size-8 text-muted-foreground/50" />
-                          <p className="text-sm text-muted-foreground">No appointments found.</p>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Download button — only shown if there are files */}
-                    {workOrderInfo.total_attachments > 0 && (
-                      <>
-                        {/* <Separator /> */}
-                        <Button
-                          onClick={() => {
-                            if (workOrderInfo.status?.toLowerCase() === "in progress") {
-                              setConfirmContext("workorder");
-                              setIsConfirmOpen(true);
-                            } else {
-                              void handleWoBulkDownload();
-                            }
-                          }}
-                          disabled={isDownloading}
-                          className="w-full sm:w-auto gap-2"
-                        >
-                          <Download className="size-4" />
-                          Download All ({workOrderInfo.total_attachments} files across {workOrderInfo.total_appointments} appointments)
-                        </Button>
-                      </>
-                    )}
-                  </CardContent>
-                </Card>
-              )}
-            </TabsContent>
-          </Tabs>
-        </CardContent>
-      </Card>
+                {/* Download button, only shown if there are files */}
+                {workOrderInfo.total_attachments > 0 && (
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-t px-5 py-4">
+                    <p className="text-muted-foreground text-sm">
+                      One ZIP file with a folder for each appointment.
+                    </p>
+                    <Button
+                      onClick={() => {
+                        if (workOrderInfo.status?.toLowerCase() === "in progress") {
+                          setConfirmContext("workorder");
+                          setIsConfirmOpen(true);
+                        } else {
+                          void handleWoBulkDownload();
+                        }
+                      }}
+                      disabled={isDownloading}
+                      className="w-full sm:w-auto"
+                    >
+                      <Download className="size-4" />
+                      Download all ({workOrderInfo.total_attachments} files across {workOrderInfo.total_appointments} appointments)
+                    </Button>
+                  </div>
+                )}
+              </SectionCard>
+            )}
+          </div>
+        ) : null}
+      </div>
     </>
   );
 }
@@ -779,5 +740,23 @@ function FieldRow({ label, value }: { label: string; value?: string }) {
       <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{label}</span>
       <span className="text-sm break-words">{value || "—"}</span>
     </div>
+  );
+}
+
+// ─── Details Skeleton ─────────────────────────────────────────────────────────
+
+function DetailsSkeleton() {
+  return (
+    <Card className="space-y-4 p-5">
+      <Skeleton className="h-5 w-52" />
+      <div className="grid gap-4 sm:grid-cols-2">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} className="space-y-2">
+            <Skeleton className="h-3 w-24" />
+            <Skeleton className="h-4 w-full max-w-sm" />
+          </div>
+        ))}
+      </div>
+    </Card>
   );
 }

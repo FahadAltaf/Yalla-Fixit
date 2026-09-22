@@ -9,6 +9,7 @@ import {
   ImageOff,
   ListChecks,
   MapPin,
+  MessageSquare,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -149,6 +150,9 @@ export function SnagWalkList({
   // The snag whose verdict comment is being edited.
   const [editingVerdict, setEditingVerdict] = useState<Snag | null>(null);
   const [savedVerdicts, setSavedVerdicts] = useState<Record<string, string | null>>({});
+  // The snag whose note to the inspector is being written.
+  const [editingReview, setEditingReview] = useState<Snag | null>(null);
+  const [savedReviews, setSavedReviews] = useState<Record<string, string | null>>({});
   // The completed room whose snags are open in a popup.
   const [openAreaId, setOpenAreaId] = useState<string | null>(null);
   /*
@@ -176,8 +180,9 @@ export function SnagWalkList({
         ...snag,
         ...(snag.id in savedNotes ? { note: savedNotes[snag.id] } : {}),
         ...(snag.id in savedVerdicts ? { verdict_note: savedVerdicts[snag.id] } : {}),
+        ...(snag.id in savedReviews ? { review_note: savedReviews[snag.id] } : {}),
       })),
-    [task, savedNotes, savedVerdicts],
+    [task, savedNotes, savedVerdicts, savedReviews],
   );
 
   function noteSaved(snag: Snag, note: string | null) {
@@ -588,6 +593,10 @@ export function SnagWalkList({
                             ) : null}
                           </div>
                         ) : null}
+                        <ReviewNoteLine
+                          snag={snag}
+                          onEdit={canEdit ? () => setEditingReview(snag) : undefined}
+                        />
 
                         {/*
                     One thumbnail, not all of them. Rendering every photo
@@ -790,6 +799,28 @@ export function SnagWalkList({
         onOpenPhoto={(photo) => setPreview(photo)}
         onEditNote={canEdit ? (snag) => setEditingNote(snag) : undefined}
         onEditVerdict={canEdit ? (snag) => setEditingVerdict(snag) : undefined}
+        onEditReview={canEdit ? (snag) => setEditingReview(snag) : undefined}
+      />
+
+      <NoteEditDialog
+        open={editingReview !== null}
+        title={editingReview?.review_note ? "Edit note to inspector" : "Add a note to the inspector"}
+        context={`${
+          [editingReview?.area?.name ?? editingReview?.area_label, editingReview?.defect_label]
+            .filter(Boolean)
+            .join(" · ") || "Snag"
+        }. Shown to the inspector on the app with this snag. It is not printed on the client's report.`}
+        initial={editingReview?.review_note ?? ""}
+        seedKey={editingReview?.id ?? null}
+        onClose={() => setEditingReview(null)}
+        onSave={async (text) => {
+          const snag = editingReview;
+          if (!snag) return;
+          await snaggingService.updateSnagReviewNote(snag.id, text);
+          setSavedReviews((current) => ({ ...current, [snag.id]: text }));
+          setDetail((current) => (current?.id === snag.id ? { ...current, review_note: text } : current));
+          onSnagsChanged?.();
+        }}
       />
 
       <NoteEditDialog
@@ -865,6 +896,31 @@ export function SnagWalkList({
 }
 
 /** Everything captured for one snag: classification, note, pin, and evidence. */
+/**
+ * The reviewer or approver's note to the inspector: shown on the phone
+ * with the snag, never on the client's report.
+ */
+function ReviewNoteLine({ snag, onEdit }: { snag: Snag; onEdit?: () => void }) {
+  if (!snag.review_note && !onEdit) return null;
+  const author = snag.review_note_author?.full_name ?? snag.review_note_author?.email ?? null;
+  return snag.review_note ? (
+    <div className="bg-muted/60 mt-1.5 flex items-start gap-2 rounded-md px-2.5 py-1.5 text-sm">
+      <MessageSquare className="text-muted-foreground mt-0.5 size-3.5 shrink-0" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <p className="text-muted-foreground text-xs">
+          Note to inspector{author ? ` · ${author}` : ""}
+        </p>
+        <p className="whitespace-pre-line">{snag.review_note}</p>
+      </div>
+      {onEdit ? <NoteEditButton hasNote noun="note to inspector" onClick={onEdit} /> : null}
+    </div>
+  ) : (
+    <div className="mt-1">
+      <NoteEditButton hasNote={false} noun="note to inspector" onClick={onEdit!} />
+    </div>
+  );
+}
+
 function SnagDetailDialog({
   snag,
   plans,
@@ -874,7 +930,10 @@ function SnagDetailDialog({
   onOpenPhoto,
   onEditNote,
   onEditVerdict,
+  onEditReview,
 }: {
+  /** Given when the reader may leave the inspector a note. */
+  onEditReview?: (snag: Snag) => void;
   /** Given when the reader may correct the note. */
   onEditNote?: (snag: Snag) => void;
   /** Given when the reader may correct the verdict comment. */
@@ -981,6 +1040,13 @@ function SnagDetailDialog({
                   <p className="mt-0.5 whitespace-pre-line">{snag.verdict_note}</p>
                 ) : null}
               </div>
+            ) : null}
+
+            {snag ? (
+              <ReviewNoteLine
+                snag={snag}
+                onEdit={onEditReview ? () => onEditReview(snag) : undefined}
+              />
             ) : null}
 
             {/*

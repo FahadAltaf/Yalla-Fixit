@@ -1,9 +1,9 @@
 import { calculateAmcTotals, computeServiceRowPrice } from "./amc-pricing";
 import { emptyPriceListRow, getDefaultEndDate } from "./amc-constants";
 import type {
+  AmcDocumentSource,
   AmcDocumentType,
   AmcFormData,
-  AmcSubmission,
   AmcSubmissionCustomer,
   AmcSubmissionProperty,
   AmcSubmissionServiceRow,
@@ -66,7 +66,7 @@ export function formDataToSubmissionPayload(
   };
 }
 
-export function submissionToFormData(submission: AmcSubmission): AmcFormData {
+export function submissionToFormData(submission: AmcDocumentSource): AmcFormData {
   return {
     propertyCategory: submission.property.propertyCategory,
     unitType: submission.property.unitType,
@@ -112,6 +112,6 @@ export function submissionToFormData(submission: AmcSubmission): AmcFormData {
       getDefaultEndDate(submission.customer.startDate),
     paymentTerms: submission.customer.paymentTerms,
     proposalNumber: submission.customer.proposalNumber,
-    submissionId: submission.id,
+    submissionId: submission.id ?? "",
   };
 }

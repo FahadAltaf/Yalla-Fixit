@@ -5,6 +5,7 @@ import {
   Crosshair,
   Eraser,
   ImageOff,
+  Lock,
   Map,
   MapPin,
   MoreHorizontal,
@@ -46,6 +47,7 @@ import {
   type SnaggingArea,
   type SnaggingFloorPlan,
   type SnaggingPropertyType,
+  type SnaggingSnag as Snag,
 } from "@/types/types";
 
 import { EmptyState } from "@/components/ui/empty-state";
@@ -59,6 +61,7 @@ import { zoneLabelPoint, type ZonePoint } from "@/lib/snagging/zone-geometry";
 import {
   DataState,
   ListSkeleton,
+  SNAG_STATUS_LABELS,
   SectionCard,
   SubHeading,
   SubmitButton,
@@ -122,12 +125,42 @@ async function toPinnablePlan(
   throw new Error("Floor plans must be an image (PNG/JPG) or a PDF");
 }
 
+/* A job is past its inspection from submission on (point 7). */
+const INSPECTED_STATUSES = new Set(["submitted", "in_review", "approved", "delivered"]);
+
+/* A snag pin's colour on the plan, by its latest result (point 7). */
+const MARKER_TONE: Record<string, string> = {
+  open: "bg-brand text-white",
+  pending_verification: "bg-warning text-white",
+  verified_closed: "bg-success text-white",
+  verified_not_done: "bg-danger text-white",
+  verified_poor_quality: "bg-orange-500 text-white",
+};
+
+const MARKER_LEGEND: { status: string; label: string }[] = [
+  { status: "open", label: "Open" },
+  { status: "verified_closed", label: "Fixed" },
+  { status: "verified_not_done", label: "Not done" },
+  { status: "verified_poor_quality", label: "Poor quality" },
+  { status: "pending_verification", label: "To re-check" },
+];
+
 export function FloorPlansAreasPanel({
   taskId,
   propertyType,
   bedrooms,
   onChanged,
+  snags = [],
+  jobStatus,
 }: {
+  /**
+   * The job's snags, drawn as pins on the plan once the inspection is in
+   * (point 7). Every one stays, coloured by its latest de-snag result;
+   * the snag's own history holds each round's result.
+   */
+  snags?: Snag[];
+  /** Past submission the plan and rooms lock until Edit is pressed. */
+  jobStatus?: string | null;
   taskId: string;
   /**
    * Called after anything here changes the job's rooms or plans. The page
@@ -141,11 +174,19 @@ export function FloorPlansAreasPanel({
   bedrooms?: number | null;
 }) {
   const { userProfile } = useAuth();
-  const canEdit = hasResourceAction(
+  const mayEdit = hasResourceAction(
     userProfile,
     ResourceType.SNAGGING,
     ActionType.EDIT,
   );
+  /*
+    Once the inspection is in, the plan and rooms are the record the
+    report and the snags point at, so they lock. Changing them is a
+    deliberate step through Edit, not a stray drag.
+  */
+  const inspected = INSPECTED_STATUSES.has(jobStatus ?? "");
+  const [unlocked, setUnlocked] = useState(false);
+  const canEdit = mayEdit && (!inspected || unlocked);
   const { confirm, dialog } = useConfirm();
 
   const [plans, setPlans] = useState<SnaggingFloorPlan[]>([]);
@@ -619,8 +660,40 @@ export function FloorPlansAreasPanel({
     <SectionCard
       title="Floor plans & areas"
       icon={<Map />}
-      description="One plan per floor (ordered), with each area pinned to its place"
+      description={
+        inspected
+          ? "The plan as inspected, with every snag pinned where it was found."
+          : "One plan per floor (ordered), with each area pinned to its place"
+      }
       bodyClassName="border-t p-5"
+      action={
+        inspected && mayEdit ? (
+          unlocked ? (
+            <Button type="button" size="sm" onClick={() => setUnlocked(false)}>
+              <Lock className="size-4" />
+              Done editing
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={async () => {
+                const ok = await confirm({
+                  title: "Edit the plan and areas?",
+                  description:
+                    "The inspection is in, so the report and the snags point at these rooms and this plan. Change them only to correct a mistake.",
+                  confirmText: "Edit",
+                });
+                if (ok) setUnlocked(true);
+              }}
+            >
+              <Pencil className="size-4" />
+              Edit plan and areas
+            </Button>
+          )
+        ) : undefined
+      }
     >
       <DataState
         loading={loading}
@@ -954,6 +1027,26 @@ export function FloorPlansAreasPanel({
                       pinY: a.pin_y ?? null,
                       zone: a.zone ?? null,
                     }))}
+                  markers={
+                    inspected
+                      ? snags
+                          .filter(
+                            (snag) =>
+                              snag.floor_plan_id === activePlan.id &&
+                              snag.pin_x != null &&
+                              snag.pin_y != null &&
+                              snag.status !== "withdrawn",
+                          )
+                          .map((snag, index) => ({
+                            key: snag.id,
+                            x: snag.pin_x as number,
+                            y: snag.pin_y as number,
+                            label: String(index + 1),
+                            tone: MARKER_TONE[snag.status] ?? MARKER_TONE.open,
+                            title: `${snag.snag_code} · ${snag.defect_label ?? "Snag"} · ${SNAG_STATUS_LABELS[snag.status] ?? snag.status}${snag.area?.name ? ` · ${snag.area.name}` : ""}`,
+                          }))
+                      : []
+                  }
                   onPlacePin={placePin}
                   onPlaceZone={placeZone}
                   onPickArea={(key) => {
@@ -961,6 +1054,26 @@ export function FloorPlansAreasPanel({
                     if (hit) setActiveAreaId(hit.id);
                   }}
                 />
+                {inspected ? (
+                  <div className="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                    {MARKER_LEGEND.map((item) => {
+                      const count = snags.filter(
+                        (snag) =>
+                          snag.status === item.status &&
+                          snag.floor_plan_id === activePlan.id &&
+                          snag.pin_x != null,
+                      ).length;
+                      if (count === 0 && item.status !== "open") return null;
+                      return (
+                        <span key={item.status} className="inline-flex items-center gap-1.5">
+                          <span className={cn("size-2.5 rounded-full", MARKER_TONE[item.status])} />
+                          {item.label} ({count})
+                        </span>
+                      );
+                    })}
+                    <span>Hover a pin for the snag. Each round&apos;s result is in the snag&apos;s history.</span>
+                  </div>
+                ) : null}
               </div>
             ) : activePlan ? (
               <EmptyState

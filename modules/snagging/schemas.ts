@@ -353,6 +353,8 @@ export const updateAreaSchema = z.object({
   note: z.string().trim().max(2000).nullable().optional(),
   /** Why a room could not be fully inspected, corrected from the portal. */
   access_reason: z.string().trim().max(500).nullable().optional(),
+  /** Who inspects this room; null hands it back to the job's lead inspector. */
+  inspector_id: z.string().uuid().nullable().optional(),
 });
 
 export type CreateAreaInput = z.infer<typeof createAreaSchema>;

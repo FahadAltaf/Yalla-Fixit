@@ -2,12 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { amcSettingsOverridesSchema } from "@/components/dashboard/extensions/amc/amc-settings";
 import { isAdminUser } from "@/lib/role-permissions";
-import { diffSettingsKeys, recordAmcAudit } from "@/lib/server/amc/audit";
+import {
+  diffSettingsKeys,
+  listAmcSettingsHistory,
+  recordAmcAudit,
+} from "@/lib/server/amc/audit";
 import {
   readAmcSettings,
   readAmcSettingsOverrides,
   writeAmcSettingsOverrides,
 } from "@/lib/server/amc/settings";
+import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
 
@@ -15,8 +20,9 @@ import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
  * AMC Settings (FR6.1–FR6.5).
  *
  * FR6.1 makes this admin-only, which is a stricter gate than the rest of
- * the module: the AMC allowlist decides who can write a proposal, but only
- * an admin can change the text every proposal is written from.
+ * the module: anyone whose role has AMC access can write a proposal, but
+ * only an admin can change the text every proposal is written from, or
+ * choose the approvers.
  */
 
 async function requireAdmin() {
@@ -35,8 +41,65 @@ async function requireAdmin() {
   return { profile: access.profile };
 }
 
+async function requireAmcReader() {
+  const access = await getAuthenticatedUserAccess();
+  if (!access.profile || !access.accessUser) {
+    return { error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
+  }
+  if (!canUseAmc(access.accessUser)) {
+    return { error: NextResponse.json({ error: "Forbidden" }, { status: 403 }) };
+  }
+  return { isAdmin: isAdminUser(access.accessUser) };
+}
+
+/*
+  The people an admin can choose as approvers: admins, and everyone whose
+  role has the AMC Proposals permission (view or approve). Someone without
+  AMC access could not open the approval queue, so they are not offered.
+*/
+async function listAmcUsers(
+  admin: Awaited<ReturnType<typeof createAdminServerClient>>,
+): Promise<{ email: string; name: string; isAdmin: boolean }[]> {
+  const { data, error } = await admin
+    .from("user_profile")
+    .select("email, full_name, is_active, roles(name, role_access(resource, action, enabled))")
+    .not("email", "is", null)
+    .order("full_name", { ascending: true })
+    .limit(2000);
+  if (error) {
+    console.error("AMC settings: could not list users:", error.message);
+    return [];
+  }
+  return (data ?? [])
+    .filter((row) => row.is_active !== false)
+    .map((row) => {
+      const email = String(row.email).trim().toLowerCase();
+      type RoleRow = {
+        name?: string | null;
+        role_access?: { resource: string; action: string; enabled?: boolean | null }[] | null;
+      };
+      const joined = row.roles as RoleRow | RoleRow[] | null;
+      const role = Array.isArray(joined) ? joined[0] : joined;
+      const isAdmin = role?.name === "admin";
+      const hasAmcRole = (role?.role_access ?? []).some(
+        (entry) =>
+          entry.resource === "amc" &&
+          (entry.action === "view" || entry.action === "approve") &&
+          entry.enabled !== false,
+      );
+      return {
+        email,
+        name: ((row.full_name as string | null) ?? "").trim() || email,
+        isAdmin,
+        eligible: isAdmin || hasAmcRole,
+      };
+    })
+    .filter((user) => user.eligible)
+    .map(({ email, name, isAdmin }) => ({ email, name, isAdmin }));
+}
+
 export async function GET() {
-  const gate = await requireAdmin();
+  const gate = await requireAmcReader();
   if (gate.error) return gate.error;
 
   try {
@@ -47,11 +110,21 @@ export async function GET() {
       actually been edited, which is how the page marks a field as
       customised versus still on the shipped default.
     */
-    const [settings, overrides] = await Promise.all([
+    const [settings, overrides, history, amcUsers] = await Promise.all([
       readAmcSettings(admin),
       readAmcSettingsOverrides(admin),
+      /* FR6.5 — who changed what, and when. Admins only, like the page. */
+      gate.isAdmin ? listAmcSettingsHistory(admin) : Promise.resolve([]),
+      /* FR5.3 — the people an admin can choose as approvers. */
+      gate.isAdmin ? listAmcUsers(admin) : Promise.resolve([]),
     ]);
-    return NextResponse.json({ settings, overrides });
+    /* The override document is an admin's working view -- which fields
+       have been customised. The team only needs the resolved text. */
+    return NextResponse.json(
+      gate.isAdmin
+        ? { settings, overrides, history, amcUsers }
+        : { settings, overrides: {}, history: [], amcUsers: [] },
+    );
   } catch (error) {
     console.error("AMC settings GET error:", error);
     return NextResponse.json(
@@ -92,8 +165,11 @@ export async function PUT(req: NextRequest) {
       });
     }
 
-    const settings = await readAmcSettings(admin);
-    return NextResponse.json({ settings, overrides: saved, changedKeys });
+    const [settings, history] = await Promise.all([
+      readAmcSettings(admin),
+      listAmcSettingsHistory(admin),
+    ]);
+    return NextResponse.json({ settings, overrides: saved, changedKeys, history });
   } catch (error) {
     console.error("AMC settings PUT error:", error);
     return NextResponse.json(

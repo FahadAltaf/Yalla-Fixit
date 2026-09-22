@@ -5,6 +5,13 @@ import type {
   AmcSettingsOverrides,
 } from "@/components/dashboard/extensions/amc/amc-settings";
 
+export interface AmcSettingsHistoryItem {
+  id: number;
+  actorLabel: string | null;
+  changedKeys: string[];
+  createdAt: string;
+}
+
 export interface AmcSettingsResponse {
   /** What documents will render with: defaults plus edits. */
   settings: AmcSettings;
@@ -12,6 +19,10 @@ export interface AmcSettingsResponse {
    *  customised rather than still on the shipped default. */
   overrides: AmcSettingsOverrides;
   changedKeys?: string[];
+  /** FR6.5 — latest settings changes, newest first. Empty for non-admins. */
+  history?: AmcSettingsHistoryItem[];
+  /** FR5.3 — everyone with AMC access, for choosing approvers. Admins only. */
+  amcUsers?: { email: string; name: string; isAdmin: boolean }[];
 }
 
 export const amcSettingsService = {

@@ -99,7 +99,9 @@ function buildFrequencyRows(data: AmcFormData): FrequencyRow[] {
       if (!service) return null;
       return {
         scope: service.scope,
+        units: row.units,
         frequency: formatFrequencyForPdf(service, row.frequency),
+        price: computeServiceRowPrice(row),
         reference: service.reference,
       };
     })
@@ -112,6 +114,9 @@ export function computeAmcData(
   /* FR6.4: a sent proposal passes its snapshot; a draft passes live
      settings; a caller that has neither gets the shipped defaults. */
   settings: AmcSettings = getAmcSettingsDefaults(),
+  /* The date the document was sent, once it has been. A draft prints
+     today's date, since that is the day it would go out. */
+  documentDate?: string | null,
 ): AmcComputedData {
   const categoryLabel =
     data.propertyCategory === "residential" ? "RESIDENTIAL" : "COMMERCIAL";
@@ -124,7 +129,10 @@ export function computeAmcData(
        packages gone it names the document and the property category. */
     documentTitle: `AMC ${documentType === "contract" ? "CONTRACT" : "PROPOSAL"} (${categoryLabel})`,
     propertyTypeLabel: formatPropertyTypeLabel(data),
-    proposalDate: format(new Date(), "dd/MM/yyyy"),
+    proposalDate: format(
+      documentDate ? new Date(documentDate) : new Date(),
+      "dd/MM/yyyy",
+    ),
     endDate,
     totals: calculateAmcTotals(data),
     frequencyRows: buildFrequencyRows(data),

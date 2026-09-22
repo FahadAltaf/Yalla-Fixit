@@ -1,0 +1,483 @@
+<title>AMC Proposals v2 Delivery</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zilla+Slab:wght@500;600;700&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --paper: #F7F5F1; --card: #FFFDFA; --ink: #17120E; --muted: #6E655B;
+    --rule: #E3DDD4; --rule-soft: #EFEAE3; --accent: #0E7C70; --banner: #AA272C;
+    --crit: #B42318; --crit-wash: #FBEFEE; --warn: #B54708; --warn-wash: #FBF3EA;
+    --ok: #067647; --ok-wash: #ECF6F0; --info: #0E7C70; --info-wash: #E8F3F1;
+    --display: "Zilla Slab", Georgia, "Times New Roman", serif;
+    --body: "Source Sans 3", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #141210; --card: #1B1815; --ink: #F2EDE6; --muted: #9E958A;
+      --rule: #2F2923; --rule-soft: #251F1A; --accent: #2FB9A8; --banner: #E0656A;
+      --crit: #F97066; --crit-wash: #2A1714; --warn: #F79009; --warn-wash: #291B0C;
+      --ok: #47CD89; --ok-wash: #11241A; --info: #2FB9A8; --info-wash: #10211F;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #141210; --card: #1B1815; --ink: #F2EDE6; --muted: #9E958A;
+    --rule: #2F2923; --rule-soft: #251F1A; --accent: #2FB9A8; --banner: #E0656A;
+    --crit: #F97066; --crit-wash: #2A1714; --warn: #F79009; --warn-wash: #291B0C;
+    --ok: #47CD89; --ok-wash: #11241A; --info: #2FB9A8; --info-wash: #10211F;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--paper); color: var(--ink); font-family: var(--body);
+    font-size: 17px; line-height: 1.6; margin: 0; -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; padding-inline: 20px; padding-block: 0 72px; }
+  .banner-rule { height: 6px; background: var(--banner); }
+
+  header.mast { padding-block: 34px 26px; border-bottom: 1px solid var(--rule); }
+  .eyebrow {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--banner); margin: 0 0 14px;
+  }
+  h1 {
+    font-family: var(--display); font-weight: 700; font-size: clamp(30px, 6vw, 44px);
+    line-height: 1.1; letter-spacing: -0.015em; margin: 0 0 12px; text-wrap: balance;
+  }
+  .standfirst { font-size: clamp(17px, 2.4vw, 19px); color: var(--muted); margin: 0; max-width: 64ch; }
+  dl.meta {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 14px 24px; margin: 26px 0 0; padding-top: 20px; border-top: 1px solid var(--rule-soft);
+  }
+  dl.meta dt {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--muted); margin: 0 0 3px;
+  }
+  dl.meta dd { margin: 0; font-size: 14px; font-family: var(--mono); word-break: break-word; }
+
+  section { padding-block: 42px 0; }
+  .sec-label {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--muted); margin: 0 0 10px;
+  }
+  h2 {
+    font-family: var(--display); font-weight: 600; font-size: clamp(22px, 3.4vw, 27px);
+    letter-spacing: -0.01em; line-height: 1.2; margin: 0 0 14px; text-wrap: balance;
+  }
+  p { margin: 0 0 16px; max-width: 72ch; }
+  p:last-child { margin-bottom: 0; }
+  code {
+    font-family: var(--mono); font-size: 0.84em; background: var(--rule-soft);
+    padding: 1px 5px; border-radius: 3px; word-break: break-word;
+  }
+
+  .verdict {
+    background: var(--warn-wash); border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+    border-left: 4px solid var(--warn); border-radius: 3px; padding: 20px 22px;
+  }
+  .verdict .v-head {
+    font-family: var(--display); font-weight: 600; font-size: 20px;
+    color: var(--warn); margin: 0 0 8px;
+  }
+
+  .figures {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 1px; background: var(--rule); border: 1px solid var(--rule);
+    border-radius: 3px; margin-top: 20px; overflow: hidden;
+  }
+  .fig { background: var(--card); padding: 16px 18px; }
+  .fig .n {
+    font-family: var(--display); font-weight: 700; font-size: 30px; line-height: 1.05;
+    font-variant-numeric: tabular-nums; display: block;
+  }
+  .fig .l { font-size: 13px; color: var(--muted); margin-top: 5px; display: block; line-height: 1.35; }
+  .fig.good .n { color: var(--ok); }
+  .fig.warn .n { color: var(--warn); }
+
+  .table-scroll { overflow-x: auto; margin-top: 4px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; min-width: 560px; }
+  th, td {
+    text-align: left; padding: 11px 14px 11px 0; border-bottom: 1px solid var(--rule-soft);
+    vertical-align: top;
+  }
+  th {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--muted); border-bottom: 1px solid var(--rule); font-weight: 500;
+  }
+  td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.ref { font-family: var(--mono); font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+
+  .pill {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 999px; white-space: nowrap; display: inline-block;
+  }
+  .pill.ok { background: var(--ok-wash); color: var(--ok); }
+  .pill.warn { background: var(--warn-wash); color: var(--warn); }
+  .pill.crit { background: var(--crit-wash); color: var(--crit); }
+  .pill.muted { background: var(--rule-soft); color: var(--muted); }
+  .pill.info { background: var(--info-wash); color: var(--info); }
+
+  .note {
+    font-size: 14.5px; color: var(--muted); border-left: 2px solid var(--rule);
+    padding-left: 14px; margin-top: 16px; max-width: 70ch;
+  }
+
+  /* The go-live list is a real sequence: each step depends on the one before. */
+  ol.steps { list-style: none; counter-reset: s; padding: 0; margin: 0; max-width: 74ch; }
+  ol.steps li {
+    counter-increment: s; position: relative; padding: 12px 0 12px 44px;
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  ol.steps li::before {
+    content: counter(s); position: absolute; left: 0; top: 11px;
+    width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--rule);
+    display: grid; place-items: center; font-family: var(--mono); font-size: 12px;
+    color: var(--accent); background: var(--card);
+  }
+  ol.steps li strong { display: block; }
+  ol.steps li span { color: var(--muted); font-size: 15px; }
+
+  .two-col { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  .panel {
+    background: var(--card); border: 1px solid var(--rule); border-radius: 3px; padding: 18px 20px;
+  }
+  .panel h3 {
+    font-family: var(--display); font-weight: 600; font-size: 17px; margin: 0 0 8px;
+  }
+  .panel ul { margin: 0; padding-left: 18px; font-size: 15px; }
+  .panel li { margin-bottom: 6px; }
+
+  footer {
+    margin-top: 56px; padding-top: 22px; border-top: 1px solid var(--rule);
+    font-size: 13.5px; color: var(--muted);
+  }
+  a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<div class="banner-rule"></div>
+<div class="wrap">
+
+  <header class="mast">
+    <p class="eyebrow">Delivery Report &middot; Extensions</p>
+    <h1>AMC Proposals v2</h1>
+    <p class="standfirst">
+      What was built against the v2 functional requirements, what was found and
+      fixed along the way, and what stands between this code and production.
+    </p>
+    <dl class="meta">
+      <div><dt>Specification</dt><dd>FRD v2 Draft, 11 Sep 2026</dd></div>
+      <div><dt>Repository</dt><dd>Yalla&nbsp;Fixit</dd></div>
+      <div><dt>Baseline</dt><dd>9dd4d5a</dd></div>
+      <div><dt>Report date</dt><dd>21 Sep 2026</dd></div>
+      <div><dt>Change size</dt><dd>36 files &middot; +5,019 / −1,500</dd></div>
+    </dl>
+  </header>
+
+  <section>
+    <p class="sec-label">Status</p>
+    <h2>Built, not yet live</h2>
+    <div class="verdict">
+      <p class="v-head">Everything the FRD allows to be built is built. It is part-migrated on production and not yet tested end to end.</p>
+      <p>
+        Thirteen of the fourteen acceptance criteria in §13 are met in code; the
+        fourteenth needs data rather than code. But passing the compiler and the build
+        is not the same as working: every review pass since has found a defect a green
+        build had hidden, and first real use of the Preview buttons found two more
+        (see <a href="#fixes">Found and fixed</a>). Production has four of the five
+        migrations; the client-links migration is still missing, so sending a document
+        to a client will fail until it is applied.
+      </p>
+    </div>
+    <div class="figures">
+      <div class="fig good"><span class="n">6 / 7</span><span class="l">phases built — the seventh waits on a layout sign-off</span></div>
+      <div class="fig good"><span class="n">13 / 14</span><span class="l">acceptance criteria met in code</span></div>
+      <div class="fig warn"><span class="n">1</span><span class="l">migration still to apply on production — client links</span></div>
+      <div class="fig warn"><span class="n">0</span><span class="l">criteria verified against a live database</span></div>
+    </div>
+  </section>
+
+  <section>
+    <p class="sec-label">Scope</p>
+    <h2>What was delivered</h2>
+    <p>
+      The FRD replaces v1's pricing model, adds a four-party workflow and moves the
+      standard wording out of the code. It asks, in §9, that the new work follow the
+      snagging quotation — so the approval links, document numbering, audit trail and
+      email all reuse that pattern rather than inventing parallel versions.
+    </p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Phase</th><th>What changed</th><th>FRD</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="num">0</td>
+            <td>Closed the rule that let anyone with the public key read or change every submission, including customer names, phones and emails</td>
+            <td class="ref">§7 note</td>
+            <td><span class="pill ok">Built</span></td>
+          </tr>
+          <tr>
+            <td class="num">1</td>
+            <td>Removed the four packages. Each service now takes a base price, and price is base price × units × frequency, live as you type. Proposal numbers are issued by the database, so no two can match</td>
+            <td class="ref">FR1.1–1.6<br>FR2.1–2.12</td>
+            <td><span class="pill ok">Built</span></td>
+          </tr>
+          <tr>
+            <td class="num">2</td>
+            <td>Documents list only the services ticked, each with its units, frequency and price. Clauses state the handyman hours and free non-emergency visits entered, not "the selected package". Optional sections can be switched off; account managers and the price list are filled in per proposal; nothing is sent to a client while an XXX placeholder remains</td>
+            <td class="ref">FR4.1–4.7</td>
+            <td><span class="pill ok">Built</span></td>
+          </tr>
+          <tr>
+            <td class="num">3</td>
+            <td>An admin-only AMC Settings page for the standard wording and contact values. A proposal keeps the wording it was sent with, even after Settings change</td>
+            <td class="ref">FR6.1–6.5</td>
+            <td><span class="pill ok">Built</span></td>
+          </tr>
+          <tr>
+            <td class="num">4</td>
+            <td>Internal approval: the nine statuses of §9.2, submit, approve or send back with a reason, an approver queue, and locking while under review</td>
+            <td class="ref">FR5.1–5.3<br>FR5.8–5.9</td>
+            <td><span class="pill ok">Built</span></td>
+          </tr>
+          <tr>
+            <td class="num">5</td>
+            <td>Client links that need no account: the client approves or rejects the proposal, then signs the contract. Sent by email or by a link to paste into WhatsApp</td>
+            <td class="ref">FR5.4–5.7<br>NFR4</td>
+            <td><span class="pill ok">Built</span></td>
+          </tr>
+          <tr>
+            <td class="num">6</td>
+            <td>New layout for both documents</td>
+            <td class="ref">FR4.8</td>
+            <td><span class="pill muted">Blocked</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">
+      Phase 6 is blocked twice over. FR4.8 says the layout must be agreed with Sharon
+      before it is built, and it points at open issue OI-8 — which is in §12 of the
+      FRD, and §12 is missing from the PDF.
+    </p>
+  </section>
+
+  <section>
+    <p class="sec-label">Sign-off</p>
+    <h2>The fourteen acceptance criteria</h2>
+    <p>
+      Every criterion from §13, in the FRD's order. Each maps to a numbered test in
+      the testing guide; ticking those tests is what turns "met in code" into met.
+    </p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>#</th><th>Criterion</th><th>State</th><th>Test</th></tr></thead>
+        <tbody>
+          <tr><td class="num">1</td><td>Creating a proposal takes exactly three steps</td><td><span class="pill ok">In code</span></td><td class="ref">A1</td></tr>
+          <tr><td class="num">2</td><td>No package selection anywhere in the wizard</td><td><span class="pill ok">In code</span></td><td class="ref">A2</td></tr>
+          <tr><td class="num">3</td><td>Price = Base Price × Units × Frequency, updating immediately</td><td><span class="pill ok">In code</span></td><td class="ref">B1</td></tr>
+          <tr><td class="num">4</td><td>No price shows zero unless the base price entered is zero</td><td><span class="pill ok">In code</span></td><td class="ref">B2–B4</td></tr>
+          <tr><td class="num">5</td><td>Documents list exactly the services checked, with the frequencies entered</td><td><span class="pill ok">In code</span></td><td class="ref">C1–C2</td></tr>
+          <tr><td class="num">6</td><td>No document prints XXX</td><td><span class="pill warn">Needs data</span></td><td class="ref">C8–C9</td></tr>
+          <tr><td class="num">7</td><td>A section switched off does not appear</td><td><span class="pill ok">In code</span></td><td class="ref">C5–C6</td></tr>
+          <tr><td class="num">8</td><td>Submitting goes to the approver; nothing reaches the client first</td><td><span class="pill ok">In code</span></td><td class="ref">D1, D8</td></tr>
+          <tr><td class="num">9</td><td>The approver can approve, or send back with a reason</td><td><span class="pill ok">In code</span></td><td class="ref">D4–D7</td></tr>
+          <tr><td class="num">10</td><td>The client approves and signs through a link, without an account</td><td><span class="pill ok">In code</span></td><td class="ref">E2–E7</td></tr>
+          <tr><td class="num">11</td><td>The status matches §9.2 at every stage</td><td><span class="pill ok">In code</span></td><td class="ref">F1–F2</td></tr>
+          <tr><td class="num">12</td><td>An admin changes the wording and the next proposal uses it</td><td><span class="pill ok">In code</span></td><td class="ref">G1–G6</td></tr>
+          <tr><td class="num">13</td><td>A saved submission reopens intact, and edits update the same record</td><td><span class="pill ok">In code</span></td><td class="ref">H1–H2</td></tr>
+          <tr><td class="num">14</td><td>Users cannot see each other's submissions, except the approver</td><td><span class="pill ok">In code</span></td><td class="ref">D3, 4.5</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">
+      Criterion 6 is a data task, not a code task. The contact numbers and
+      coordination emails are editable in AMC Settings but still hold the
+      <code>XXX</code> they shipped with. Until someone types in the real values,
+      previews show <code>XXX</code> and sending to a client is refused — so no
+      document carrying it can reach a customer.
+    </p>
+  </section>
+
+  <section id="fixes">
+    <p class="sec-label">Quality</p>
+    <h2>Found and fixed along the way</h2>
+    <p>
+      The honest record. Three defects were in the module before this work began.
+      The rest were introduced during it and caught before release — the last four
+      only because of deliberate checking after the build had passed. That is the
+      case for running the testing guide rather than relying on a green build.
+    </p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Defect</th><th>Consequence</th><th>Origin</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Every service had a unit rate of zero</td>
+            <td>All 10 production proposals priced at AED 0.00, including one sent as a contract</td>
+            <td><span class="pill muted">Pre-existing</span></td>
+          </tr>
+          <tr>
+            <td>Submissions table open to the public key</td>
+            <td>Customer names, phones and emails readable and editable without signing in</td>
+            <td><span class="pill muted">Pre-existing</span></td>
+          </tr>
+          <tr>
+            <td>The package kept resetting frequencies</td>
+            <td>A frequency edited to 5 printed as 1 per year — the bug FR4.2 reports</td>
+            <td><span class="pill muted">Pre-existing</span></td>
+          </tr>
+          <tr>
+            <td>Base price dropped when a draft was reopened</td>
+            <td>Every price the team had entered would have vanished on reopening</td>
+            <td><span class="pill info">Phase 1 · caught</span></td>
+          </tr>
+          <tr>
+            <td>Status could be set by editing the submission</td>
+            <td>A writer could mark their own proposal approved and skip the approver entirely</td>
+            <td><span class="pill info">Phase 4 · caught</span></td>
+          </tr>
+          <tr>
+            <td>Proposal-number column never created</td>
+            <td>Sending any document, and opening any client link, would have failed</td>
+            <td><span class="pill info">Phase 5 · caught 21 Sep</span></td>
+          </tr>
+          <tr>
+            <td>Draft previews ignored AMC Settings</td>
+            <td>The team would preview the old wording while the client was sent the new</td>
+            <td><span class="pill info">Phase 3 · caught 21 Sep</span></td>
+          </tr>
+          <tr>
+            <td>A migration check could not detect the fault it was for</td>
+            <td>The test would have passed even with the old status rule still blocking every submission</td>
+            <td><span class="pill info">Test plan · caught 21 Sep</span></td>
+          </tr>
+          <tr>
+            <td>First proposal number would have been 0002</td>
+            <td>Cosmetic, but on every new install</td>
+            <td><span class="pill info">Phase 1 · caught 21 Sep</span></td>
+          </tr>
+          <tr>
+            <td>PDF export crashed on modern colour syntax</td>
+            <td>Preview and View failed with "unsupported color function". The same crash sat in the Quotation Templates path that emails PDFs to customers</td>
+            <td><span class="pill muted">Pre-existing · since 17 Aug</span></td>
+          </tr>
+          <tr>
+            <td>FR4.1 and FR4.3 were only half built</td>
+            <td>No units or price per service in either document, and the clauses said "the number stated in this contract" instead of stating the number. Reported as done when it was not</td>
+            <td><span class="pill info">Phase 2 · caught 21 Sep</span></td>
+          </tr>
+          <tr>
+            <td>Clause 8 and all 12 service scopes never reached the contract</td>
+            <td>Editing them in AMC Settings changed nothing. The testing guide's own Settings test used clause 8, so it would have failed</td>
+            <td><span class="pill info">Phase 3 · caught 21 Sep</span></td>
+          </tr>
+          <tr>
+            <td>Clause 5 printed its intro twice</td>
+            <td>Once as a paragraph and again as the first bullet, on every contract</td>
+            <td><span class="pill info">Phase 3 · caught 21 Sep</span></td>
+          </tr>
+          <tr>
+            <td>Preview silently blocked by the browser</td>
+            <td>Clicking Preview did nothing — no tab, no error. The tab was opened after the PDF rendered, too late for the browser to allow it</td>
+            <td><span class="pill info">Phase 4 · caught 21 Sep</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <p class="sec-label">Open</p>
+    <h2>Not fixed, and why</h2>
+    <div class="two-col">
+      <div class="panel">
+        <h3><span class="pill crit">Decide</span> Self-approval is allowed</h3>
+        <p style="font-size:15px">
+          Anyone with approval rights — and every admin — can approve a proposal
+          they wrote themselves. §9.1 clearly intends a second person, Behrouz, to
+          review the team's work. Blocking it is one line, but it is a policy call:
+          it would also stop Behrouz approving a proposal he wrote himself. Say which
+          you want.
+        </p>
+      </div>
+      <div class="panel">
+        <h3><span class="pill warn">Missing</span> FRD §12</h3>
+        <p style="font-size:15px">
+          The PDF jumps from §11 to §13. Two requirements cite open issues from the
+          missing section: FR4.8 depends on OI-8, and the "additional fixed price
+          services" section depends on OI-5, which I mapped to clause 6.3 as the FRD
+          suggests but could not confirm.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <p class="sec-label">Decisions</p>
+    <h2>Calls made that someone should confirm</h2>
+    <p>Where the FRD was silent, I chose the cautious option. Each is small to change.</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Question</th><th>What was built</th><th>Why</th></tr></thead>
+        <tbody>
+          <tr><td>Does 5% VAT stay?</td><td>Kept</td><td>§6.3 stops at Final Price, but dropping a tax line from a UAE contract on the strength of an omission is the wrong default</td></tr>
+          <tr><td>How does the client sign?</td><td>Typed full name, with date and time</td><td>Matches how snagging records its approvals</td></tr>
+          <tr><td>Non-emergency call-outs: counted or unlimited?</td><td>Counted — the team enters the number of free visits</td><td>FR4.3 requires the clause to state the frequency entered, which an "unlimited" service cannot have. Emergency call-outs stay unlimited</td></tr>
+          <tr><td>Default PPM and handyman frequency</td><td>1 per year</td><td>The package used to supply these; no standing figure was given to replace it</td></tr>
+          <tr><td>How long a client link lasts</td><td>30 days, renewed by sending again</td><td>The FRD requires the link be unguessable but sets no lifetime</td></tr>
+          <tr><td>Is the contract sent automatically?</td><td>No — a person sends it</td><td>The reading of FR5.6's "the system builds the contract, and the team sends it"</td></tr>
+          <tr><td>Which clauses are editable?</td><td>3.1, 3.2, 4, 5 and 8, plus every service's scope</td><td>Clause 1.1 is now generated per proposal from its account managers, so a free-text override would fight it</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <p class="sec-label">Next</p>
+    <h2>Getting it live</h2>
+    <p>In order — each step depends on the one before it.</p>
+    <ol class="steps">
+      <li><strong>Commit the fixes of 21 September.</strong><span>Proposal numbers, live settings in previews, the PDF colour crash and the blocked Preview. None are on main yet.</span></li>
+      <li><strong>Apply the client-links migration to production.</strong><span>20260916110000_amc_client_links.sql — the only one of the five still missing. Until it is in, emailing or copying a client link fails.</span></li>
+      <li><strong>Run the testing guide.</strong><span>docs/amc-proposals-v2-testing.md — about 90 minutes. Preferably locally: testing on production leaves test proposals in the live data.</span></li>
+      <li><strong>Grant approval rights.</strong><span>Permissions → AMC Proposals → Approve, for the approver's role.</span></li>
+      <li><strong>Fill in AMC Settings.</strong><span>The real TPH contact numbers and coordination emails. Until then every contract prints XXX.</span></li>
+      <li><strong>Set the public app address.</strong><span>NEXT_PUBLIC_APP_URL is still localhost:3032, so every client link would fail on the customer's phone.</span></li>
+      <li><strong>Run one proposal through to Signed in production.</strong><span>Using Copy link, with yourself as the customer.</span></li>
+    </ol>
+  </section>
+
+  <section>
+    <p class="sec-label">Reference</p>
+    <h2>Migrations and documents</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Apply order</th><th>Migration</th><th>Phase</th></tr></thead>
+        <tbody>
+          <tr><td class="num">1</td><td><code>20260915120000_amc_harden_submissions.sql</code></td><td>0 · access rules</td></tr>
+          <tr><td class="num">2</td><td><code>20260915130000_amc_settings_and_audit.sql</code></td><td>3 · settings, audit trail</td></tr>
+          <tr><td class="num">3</td><td><code>20260916100000_amc_approval_flow.sql</code></td><td>4 · statuses, approver</td></tr>
+          <tr><td class="num">4</td><td><code>20260916105000_amc_proposal_numbers.sql</code></td><td>1 · proposal numbers</td></tr>
+          <tr><td class="num">5</td><td><code>20260916110000_amc_client_links.sql</code></td><td>5 · client links, signature</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">
+      Companion documents in <code>docs/</code>: the testing guide
+      (<code>amc-proposals-v2-testing.md</code>), the phased plan
+      (<code>amc-proposals-v2-implementation-plan.md</code>), and the audit of the
+      module as it stood on 15 September (<code>amc-proposal-module-audit.html</code>).
+    </p>
+  </section>
+
+  <footer>
+    Status reflects the code at the time of writing. "In code" means implemented,
+    type-checked and building cleanly — not tested against a live database, which no
+    part of this release has been yet.
+  </footer>
+</div>

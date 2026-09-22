@@ -28,27 +28,80 @@ export type JobFamily = {
   roundOf: Map<string, number>;
 };
 
-export async function loadJobFamily(
+/*
+  Lookups already on their way, by job id.
+
+  The job page asks for its sections in parallel, and five of those
+  routes each needed this same family at the same moment -- five copies of
+  the same two queries. A request that arrives while one is in flight now
+  waits on that one. Nothing is kept once it settles, so a round or visit
+  created a moment later is always seen.
+*/
+const inFlight = new Map<string, Promise<JobFamily>>();
+
+export function loadJobFamily(admin: SupabaseClient, jobId: string): Promise<JobFamily> {
+  const pending = inFlight.get(jobId);
+  if (pending) return pending;
+  const work = fetchJobFamily(admin, jobId).finally(() => inFlight.delete(jobId));
+  inFlight.set(jobId, work);
+  return work;
+}
+
+/**
+ * Runs `read` against the family's root without waiting for the family
+ * first.
+ *
+ * Most jobs ARE their own root, so the read starts at once on the job's id
+ * alongside the family lookup, and is only repeated on the real root when
+ * the job turns out to be a round or a visit. The common case costs one
+ * round trip instead of two in a row.
+ */
+export async function readOnRoot<T>(
   admin: SupabaseClient,
   jobId: string,
-): Promise<JobFamily> {
+  read: (rootId: string) => Promise<T>,
+): Promise<{ family: JobFamily; result: T }> {
+  const [family, guess] = await Promise.all([loadJobFamily(admin, jobId), read(jobId)]);
+  return { family, result: family.rootId === jobId ? guess : await read(family.rootId) };
+}
+
+type FamilyRow = {
+  id: string;
+  parent_job_id: string | null;
+  visit_type: string | null;
+  round_number: number | null;
+};
+
+type SelfRow = FamilyRow & {
+  children: FamilyRow[] | null;
+  parent: { id: string; children: FamilyRow[] | null } | null;
+};
+
+const MEMBER = "id, parent_job_id, visit_type, round_number";
+
+async function fetchJobFamily(admin: SupabaseClient, jobId: string): Promise<JobFamily> {
+  /*
+    One round trip whatever is being viewed: the job, what was opened
+    against it, and -- for a round or a visit -- its parent and the
+    parent's other children. This was two queries in a row, and the
+    second one waited on the answer to the first.
+  */
   const { data: self, error: selfError } = await admin
     .from("snagging_jobs")
-    .select("id, parent_job_id, round_number")
+    .select<string, SelfRow>(
+      `${MEMBER}, children:snagging_jobs!parent_job_id(${MEMBER}),
+       parent:parent_job_id(id, children:snagging_jobs!parent_job_id(${MEMBER}))`,
+    )
     .eq("id", jobId)
     .maybeSingle();
   if (selfError) throw new Error(selfError.message);
 
   // Viewing a round or a visit still means the family of its parent.
-  const rootId = (self?.parent_job_id as string | null) ?? jobId;
+  const rootId = self?.parent_job_id ?? jobId;
+  const children: FamilyRow[] =
+    (rootId === jobId ? self?.children : self?.parent?.children) ?? [];
 
-  const { data: children, error: childError } = await admin
-    .from("snagging_jobs")
-    .select("id, visit_type, round_number")
-    .eq("parent_job_id", rootId);
-  if (childError) throw new Error(childError.message);
-
-  const rows = children ?? [];
+  const rows = children;
   const roundOf = new Map<string, number>([[rootId, 1]]);
   // The root's own number when we are looking at it; a child viewed
   // directly does not tell us the root's, which is 1 by definition anyway.

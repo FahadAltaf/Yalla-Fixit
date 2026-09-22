@@ -6,11 +6,7 @@ import type { AmcSettings } from "./amc-settings";
 export const propertyCategorySchema = z.enum(["residential", "commercial"]);
 export const unitTypeSchema = z.enum(["villa", "apartment", "office"]);
 export const paymentTermsSchema = z.enum(["monthly", "quarterly", "annual"]);
-export const designationSchema = z.enum([
-  "owner",
-  "tenant",
-  "representative",
-]);
+export const designationSchema = z.enum(["owner", "tenant", "representative"]);
 
 export const coordinationContactSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -61,7 +57,10 @@ export const amcServiceRowSchema = z.object({
     asked for a price. Zero is valid and meaningful -- FR2.12 calls out
     the free handyman service.
   */
-  basePrice: z.coerce.number().min(0, "Base price cannot be negative").optional(),
+  basePrice: z.coerce
+    .number()
+    .min(0, "Base price cannot be negative")
+    .optional(),
   price: z.coerce.number().min(0).optional(),
 });
 
@@ -75,7 +74,10 @@ export const amcFormSchema = z
     discountPercent: z.coerce.number().min(0).max(100).default(0),
     optionalSections: amcOptionalSectionsSchema,
     priceListRows: z.array(amcPriceListRowSchema),
-    accountManagers: z.tuple([amcAccountManagerSchema, amcAccountManagerSchema]),
+    accountManagers: z.tuple([
+      amcAccountManagerSchema,
+      amcAccountManagerSchema,
+    ]),
     customerName: z.string().min(1, "Customer name is required"),
     /* FR4.4 / §8.2: prints in the contract header, where it used to
        fall back to "XXX". Required now. */
@@ -89,7 +91,9 @@ export const amcFormSchema = z
     startDate: z.string().min(1, "Start date is required"),
     endDate: z.string().min(1, "End date is required"),
     paymentTerms: paymentTermsSchema,
-    proposalNumber: z.string().min(1, "Proposal number is required"),
+    /* Allocated by the server on first save (step 1.7), so the user is
+       never asked for it and cannot collide it. Empty until then. */
+    proposalNumber: z.string(),
     submissionId: z.string().uuid().optional(),
   })
   .superRefine((data, ctx) => {
@@ -177,11 +181,7 @@ export type AmcAccountManager = z.infer<typeof amcAccountManagerSchema>;
 export type AmcFormData = z.infer<typeof amcFormSchema>;
 
 export type AmcServiceFrequencyType =
-  | "covered"
-  | "unlimited"
-  | "ppm"
-  | "handyman"
-  | "fixed";
+  "covered" | "unlimited" | "ppm" | "handyman" | "fixed";
 
 export type AmcDocumentType = "proposal" | "contract";
 
@@ -202,7 +202,10 @@ export interface AmcService {
 
 export interface FrequencyRow {
   scope: string;
+  /* FR4.1 — "each with the units, frequency and price entered". */
+  units: number;
   frequency: string;
+  price: number;
   reference: string;
 }
 
@@ -272,8 +275,17 @@ export const AMC_STATUS_LABELS: Record<AmcSubmissionStatus, string> = {
   FR3.4 — "The owner can edit and resubmit while it is a draft or has been
   sent back. Once it is sent for review it is locked."
 */
+/*
+  Editable while it is with its owner: a draft, one the approver sent back,
+  or one the client asked to change. The last two go back through internal
+  approval before anything reaches the client again.
+*/
 export function isAmcSubmissionEditable(status: AmcSubmissionStatus): boolean {
-  return status === "draft" || status === "sent_back";
+  return (
+    status === "draft" ||
+    status === "sent_back" ||
+    status === "proposal_rejected"
+  );
 }
 
 export interface AmcSubmissionProperty {
@@ -304,7 +316,10 @@ export interface AmcSubmissionCustomer {
 /* Omit rather than extend: the form's basePrice is number | undefined
    (not yet typed), while the persisted one is number | null (not entered).
    Same idea, different absent-value convention -- JSON has no undefined. */
-export interface AmcSubmissionServiceRow extends Omit<AmcServiceRow, "basePrice"> {
+export interface AmcSubmissionServiceRow extends Omit<
+  AmcServiceRow,
+  "basePrice"
+> {
   /*
     FR3.1: the submission stores what was entered, so reopening it
     restores the figures exactly (FR3.3). Nullable on purpose: drafts
@@ -332,13 +347,63 @@ export interface AmcSubmission {
   generated_documents: AmcDocumentType[];
   /* FR6.4: frozen at send. Null while the submission is still a draft. */
   settings_snapshot?: AmcSettings | null;
+  /* FR6.4: the contract's own copy, taken when the contract is sent. */
+  contract_settings_snapshot?: AmcSettings | null;
   /* FR5.1–FR5.2, FR5.9 */
   submitted_at?: string | null;
   decided_at?: string | null;
   sent_back_reason?: string | null;
+  /* FR5.4 — when each document went to the client. The date printed on a
+     sent document is this one, not the day it happens to be viewed. */
+  proposal_sent_at?: string | null;
+  contract_sent_at?: string | null;
+  /* FR5.5 / FR5.7 — the client answer on the link, and the signature. */
+  client_decision?: "approved" | "rejected" | null;
+  client_decided_at?: string | null;
+  client_decided_by_name?: string | null;
+  client_rejected_reason?: string | null;
+  signed_by_name?: string | null;
+  signed_at?: string | null;
   created_at: string;
   updated_at: string;
+  /* Set on list rows. An approver also sees other people's submissions,
+     so the list has to say whose each one is. */
+  owner_name?: string | null;
+  is_own?: boolean;
 }
+
+/* One entry in a submission's history, from the audit trail (FR5.9). */
+export interface AmcHistoryEvent {
+  type: string;
+  at: string;
+  actor: string | null;
+  origin: "portal" | "client" | "system";
+  /* A send-back or client rejection reason. */
+  note: string | null;
+  payload: Record<string, unknown> | null;
+}
+
+/* One submission waiting for the caller's approval, for the header bell. */
+export interface AmcPendingApproval {
+  id: string;
+  customerName: string;
+  proposalNumber: string;
+  ownerName: string;
+  finalPrice: number;
+  submittedAt: string | null;
+}
+
+export interface AmcPendingApprovalsResponse {
+  canApprove: boolean;
+  items: AmcPendingApproval[];
+}
+
+/* What it takes to rebuild a document. The dashboard passes a whole
+   submission; the client page (FR5.5, FR5.7) has only these fields. */
+export type AmcDocumentSource = Pick<
+  AmcSubmission,
+  "property" | "customer" | "document_options" | "services" | "discount_percent"
+> & { id?: string };
 
 export interface AmcSubmissionListResponse {
   submissions: AmcSubmission[];

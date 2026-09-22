@@ -401,6 +401,9 @@ function InspectionDetailView() {
             propertyType={task.property?.property_type}
             bedrooms={task.property?.bedrooms}
             onChanged={areasChanged}
+            // Point 7: the snag pins, and the lock once the inspection is in.
+            snags={snags.data ?? []}
+            jobStatus={task.status}
           />,
         )}
         {panel(

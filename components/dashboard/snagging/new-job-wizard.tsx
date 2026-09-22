@@ -69,7 +69,7 @@ import {
   type SnaggingPricingConfig,
 } from "@/modules/snagging";
 import { usersService } from "@/modules/users/services/users-service";
-import { suggestedFor, templateFor } from "@/lib/snagging/area-templates";
+import { templateFor } from "@/lib/snagging/area-templates";
 import type { SnaggingProperty, SnaggingPropertyType, User } from "@/types/types";
 
 import {
@@ -328,7 +328,12 @@ export default function NewJobWizard({
     client_contact_name: "",
     client_contact_phone: "",
     notes: "",
-    areas: suggestedFor("apartment", 2),
+    /*
+      No area starts ticked (point 5). Ticking every room the template
+      suggests handed the inspector rooms that do not exist in the unit;
+      the coordinator now ticks the ones to include.
+    */
+    areas: [],
     technician_ids: [],
     approval_manager_id: "",
   });
@@ -415,7 +420,7 @@ export default function NewJobWizard({
           title_deed_path: text(prop.title_deed_path),
           noc_required: Boolean(prop.noc_required),
           noc_path: text(prop.noc_path),
-          areas: areasTouched.current ? current.areas : suggestedFor(type, beds),
+          areas: areasTouched.current ? current.areas : [],
         }));
         setQuotationLabel(quote.quote_number);
         // Past the property step; the team adds plans, areas and contacts.
@@ -510,7 +515,7 @@ export default function NewJobWizard({
           // alone saves the same figure rather than resuggesting one.
           rate_per_sqft: text(quote.rate_per_sqft),
           external_rate_per_sqft: text(quote.external_rate_per_sqft),
-          areas: areasTouched.current ? current.areas : suggestedFor(type, beds),
+          areas: areasTouched.current ? current.areas : [],
         }));
         setQuotationLabel(quote.quote_number);
       } catch (error) {
@@ -560,7 +565,7 @@ export default function NewJobWizard({
     setDraft((current) => ({
       ...current,
       property_type: value,
-      areas: areasTouched.current ? current.areas : suggestedFor(value, current.bedrooms),
+      areas: areasTouched.current ? current.areas : [],
       /*
         Each type has its own band, so a rate typed against the old one is
         no longer the number the coordinator meant. Same reasoning as the
@@ -574,7 +579,7 @@ export default function NewJobWizard({
     setDraft((current) => ({
       ...current,
       bedrooms: value,
-      areas: areasTouched.current ? current.areas : suggestedFor(current.property_type, value),
+      areas: areasTouched.current ? current.areas : [],
     }));
   }
 
@@ -606,7 +611,7 @@ export default function NewJobWizard({
       title_deed_path: prop?.title_deed_path ?? (prop ? "" : current.title_deed_path),
       noc_required: prop ? Boolean(prop.noc_required) : current.noc_required,
       noc_path: prop?.noc_path ?? (prop ? "" : current.noc_path),
-      areas: areasTouched.current ? current.areas : suggestedFor(type, prop?.bedrooms ?? current.bedrooms),
+      areas: areasTouched.current ? current.areas : [],
     }));
   }
 
@@ -2441,17 +2446,46 @@ function PlanAreasStep({
                   {plans.length > 0 ? `, ${placedCount} placed` : ""}
                 </span>
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                className="size-7 shrink-0"
-                onClick={() => setAddOpen(true)}
-                aria-label="Add an area"
-                title="Add an area"
-              >
-                <Plus className="size-4" />
-              </Button>
+              <div className="flex items-center gap-1.5">
+                {/* Nothing starts ticked; these save ticking twenty rooms one by one. */}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => {
+                    const have = new Set(areas.map((a) => a.name.toLowerCase()));
+                    setAreas([...areas, ...options.filter((o) => !have.has(o.name.toLowerCase()))]);
+                  }}
+                  disabled={options.every((o) => selected.has(o.name.toLowerCase()))}
+                >
+                  Tick all
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => {
+                    setAreas([]);
+                    setActiveArea(null);
+                  }}
+                  disabled={areas.length === 0}
+                >
+                  Clear
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="size-7 shrink-0"
+                  onClick={() => setAddOpen(true)}
+                  aria-label="Add an area"
+                  title="Add an area"
+                >
+                  <Plus className="size-4" />
+                </Button>
+              </div>
             </div>
 
             {/*

@@ -53,6 +53,8 @@ export type ReportSnag = {
   note: string | null;
   roundCreated: number;
   originJobId: string;
+  /** Where it was found on a plan, as 0..1 fractions (point 8). */
+  pin: { planId: string; x: number; y: number } | null;
   photos: Array<{
     id: string;
     url: string | null;
@@ -67,6 +69,15 @@ export type ReportSnag = {
     exif: Record<string, unknown> | null;
     gps: { lat: number; lng: number } | null;
   }>;
+};
+
+/** A floor plan, for the report's plan page (point 8). */
+export type ReportPlan = {
+  id: string;
+  label: string;
+  url: string | null;
+  width: number | null;
+  height: number | null;
 };
 
 export type ReportArea = {
@@ -109,6 +120,11 @@ export type ReportData = {
   generatedAt: string;
   cover: ReportCover;
   areas: ReportArea[];
+  /**
+   * The unit's floor plans, for the page that shows every pin (point 8).
+   * Absent on report snapshots stored before it existed.
+   */
+  plans?: ReportPlan[];
   /** Snags whose area was deleted or never set; never silently dropped. */
   unassignedSnags: ReportSnag[];
   coverage: CoverageGaps;
@@ -215,6 +231,12 @@ function toReportSnag(
     note: typeof snag.note === "string" && snag.note.trim() ? snag.note.trim() : null,
     roundCreated: Number(snag.round_created ?? 1),
     originJobId: String(snag.job_id),
+    pin:
+      typeof snag.floor_plan_id === "string" &&
+      typeof snag.pin_x === "number" &&
+      typeof snag.pin_y === "number"
+        ? { planId: snag.floor_plan_id, x: snag.pin_x, y: snag.pin_y }
+        : null,
     photos: (photos as Array<Record<string, unknown>>).map((photo) => {
       const x = photo.marker_x;
       const y = photo.marker_y;
@@ -322,7 +344,7 @@ export async function buildReportData(
         .from("snagging_snags")
         .select(
           `id, job_id, area_id, snag_code, catalogue_code, category_label, element_label, defect_label,
-           severity, note, status, round_created, visit_id,
+           severity, note, status, round_created, visit_id, floor_plan_id, pin_x, pin_y,
            photos:snagging_snag_photos(id, snag_id, storage_path, media_type, taken_at,
              width, height, gps_lat, gps_lng, exif, marker_x, marker_y, round_number)`,
         )
@@ -365,7 +387,18 @@ export async function buildReportData(
     if (entry.code && entry.guidance?.trim()) guidance.set(entry.code, entry.guidance.trim());
   }
 
-  const snags = signed.map((snag) => toReportSnag(snag, guidance));
+  const allSnags = signed.map((snag) => toReportSnag(snag, guidance));
+  /*
+    Point 13 — a de-snagging round's report lists only what is still
+    outstanding: Not done, Poor quality, and anything newly found. A
+    defect fixed on this round drops out, and so do its pin and its count,
+    so each round's report is shorter than the one before. The job page
+    keeps every snag and every round's result; this is the report only.
+  */
+  const isRoundReport = job.visit_type === "desnag" && scope !== "cumulative";
+  const snags = isRoundReport
+    ? allSnags.filter((snag) => snag.status !== "verified_closed")
+    : allSnags;
 
   // FR-7.03 — the inspection's configured order, never alphabetical.
   const areaRows = ((job.areas ?? []) as Array<Record<string, unknown>>)
@@ -429,6 +462,29 @@ export async function buildReportData(
       ) ?? null
     : null;
 
+  /*
+    The floor plans, for the page with every pin (point 8). They belong to
+    the original job; a round shows the same plans.
+  */
+  const { data: planRows, error: planError } = await admin
+    .from("snagging_floor_plans")
+    .select("id, label, storage_path, width, height, sort_order")
+    .in("job_id", [...new Set([jobId, family.rootId])])
+    .order("sort_order", { ascending: true });
+  if (planError) throw new Error(planError.message);
+  const signedPlans = (await signMediaPaths(
+    admin,
+    (planRows ?? []) as Array<Record<string, unknown> & { storage_path: string }>,
+    PHOTO_TTL_SECONDS,
+  )) as Array<Record<string, unknown>>;
+  const plans: ReportPlan[] = signedPlans.map((plan) => ({
+    id: String(plan.id),
+    label: String(plan.label ?? "Floor plan"),
+    url: typeof plan.signed_url === "string" ? plan.signed_url : null,
+    width: typeof plan.width === "number" ? plan.width : null,
+    height: typeof plan.height === "number" ? plan.height : null,
+  }));
+
   // The document only: this lands in the stored snapshot, so never the
   // approval token hash or the other server-side columns.
   const { data: quotationRow } = await admin
@@ -472,14 +528,17 @@ export async function buildReportData(
       mostAffectedSubCategories,
     },
     areas,
+    plans,
     unassignedSnags,
     tally: {
       // A room added on a return visit was walked on that visit; rooms
       // have no finish tick there, so it never carries a sign-off.
       areasWalked: areaRows.filter((area) => area.confirmed_at || area.visit_id).length,
       areasTotal: areaRows.length,
-      defectsCarried: snags.filter((snag) => snag.roundCreated < (job.round_number ?? 1)).length,
-      defectsChecked: snags.filter(
+      // Counted over every carried defect, fixed or not, so "10 of 10
+      // checked" still reads right when the fixed ones are left out.
+      defectsCarried: allSnags.filter((snag) => snag.roundCreated < (job.round_number ?? 1)).length,
+      defectsChecked: allSnags.filter(
         (snag) =>
           snag.roundCreated < (job.round_number ?? 1) && snag.status !== "pending_verification",
       ).length,

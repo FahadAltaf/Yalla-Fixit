@@ -162,22 +162,27 @@ function beforeAfter(snag: ReportSnag, round: number): string {
   </div>`;
 }
 
-function snagBlock(snag: ReportSnag, round: number | null = null): string {
+/** Each snag's number, straight through the document, as its pin shows it. */
+type Numbering = Map<string, number>;
+
+function snagBlock(snag: ReportSnag, round: number | null = null, numbering?: Numbering): string {
   // Only a defect carried INTO the round has a before; one found on it is new.
   if (round !== null && snag.roundCreated < round) {
-    return snagShell(snag, beforeAfter(snag, round));
+    return snagShell(snag, beforeAfter(snag, round), numbering?.get(snag.id));
   }
   const photos = snag.photos.filter((photo) => photo.url).map(photoFigure).join("");
   return snagShell(
     snag,
     photos ? `<div class="photos">${photos}</div>` : `<p class="snag__none">No photo evidence recorded.</p>`,
+    numbering?.get(snag.id),
   );
 }
 
-function snagShell(snag: ReportSnag, evidence: string): string {
+function snagShell(snag: ReportSnag, evidence: string, number?: number): string {
   return `<article class="snag">
     <header class="snag__head">
       <div class="snag__title">
+        ${number ? `<span class="snag__num">${number}</span>` : ""}
         <span class="snag__defect">${esc(snag.defect ?? "Defect")}</span>
         ${snag.subCategory ? `<span class="snag__sub">${esc(snag.subCategory)}</span>` : ""}
       </div>
@@ -195,7 +200,7 @@ function snagShell(snag: ReportSnag, evidence: string): string {
   </article>`;
 }
 
-function areaSection(area: ReportArea, round: number | null = null): string {
+function areaSection(area: ReportArea, round: number | null = null, numbering?: Numbering): string {
   const access =
     area.accessState && area.accessState !== "accessible"
       ? `<div class="area__access">
@@ -206,7 +211,7 @@ function areaSection(area: ReportArea, round: number | null = null): string {
 
   const body =
     area.snags.length > 0
-      ? area.snags.map((snag) => snagBlock(snag, round)).join("")
+      ? area.snags.map((snag) => snagBlock(snag, round, numbering)).join("")
       : `<p class="area__clear">No defects recorded in this area.</p>`;
 
   return `<section class="area">
@@ -216,6 +221,44 @@ function areaSection(area: ReportArea, round: number | null = null): string {
     </h3>
     ${access}
     ${body}
+  </section>`;
+}
+
+/*
+  Point 8 — every snag on its floor plan, after the summary pages and
+  before the snag list. Pins carry the same numbers as the list, so a
+  client can go from a dot to its photos.
+*/
+function planSection(data: ReportData, numbering: Numbering): string {
+  const plans = (data.plans ?? []).filter((plan) => plan.url);
+  if (plans.length === 0) return "";
+  const pinned = [...data.areas.flatMap((area) => area.snags), ...data.unassignedSnags].filter(
+    (snag) => snag.pin,
+  );
+  const pages = plans
+    .map((plan) => {
+      const pins = pinned.filter((snag) => snag.pin?.planId === plan.id);
+      if (pins.length === 0 && plans.length > 1) return "";
+      const dots = pins
+        .map((snag) => {
+          const tone = SEVERITY_TONE[snag.severity] ?? SEVERITY_TONE.low;
+          return `<span class="plan__pin" style="left:${(snag.pin!.x * 100).toFixed(2)}%;top:${(snag.pin!.y * 100).toFixed(2)}%;background:${tone.fg}">${numbering.get(snag.id) ?? ""}</span>`;
+        })
+        .join("");
+      return `<figure class="plan">
+        ${plans.length > 1 ? `<figcaption class="plan__label">${esc(plan.label)}</figcaption>` : ""}
+        <div class="plan__frame">
+          <img src="${esc(plan.url)}" alt="${esc(plan.label)}" />
+          ${dots}
+        </div>
+      </figure>`;
+    })
+    .join("");
+  if (!pages.trim()) return "";
+  return `<section class="block plan-page">
+    <h2>Floor plan</h2>
+    <p class="block__lead">Every defect where it was found. The numbers match the list that follows.</p>
+    ${pages}
   </section>`;
 }
 
@@ -391,7 +434,12 @@ export function renderReportHtml(
 
   // A de-snag shows its carried defects as before-and-after pairs.
   const round = data.visitType === "desnag" ? data.roundNumber : null;
-  const areas = data.areas.map((area) => areaSection(area, round)).join("");
+  // One number per snag, straight through the list, shared with the plan page.
+  const numbering: Numbering = new Map();
+  for (const snag of [...data.areas.flatMap((area) => area.snags), ...data.unassignedSnags]) {
+    numbering.set(snag.id, numbering.size + 1);
+  }
+  const areas = data.areas.map((area) => areaSection(area, round, numbering)).join("");
   const unassigned =
     data.unassignedSnags.length > 0
       ? areaSection({
@@ -403,7 +451,7 @@ export function renderReportHtml(
           elementsNotChecked: null,
           confirmedAt: null,
           snags: data.unassignedSnags,
-        }, round)
+        }, round, numbering)
       : "";
 
   const roundBanner =
@@ -518,6 +566,14 @@ export function renderReportHtml(
   .snag:first-of-type { border-top: none; }
   .snag__head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
   .snag__defect { font-weight: 700; font-size: ${print ? "10.5px" : "15px"}; }
+  .snag__num { display: inline-flex; align-items: center; justify-content: center; min-width: ${print ? "16px" : "22px"}; height: ${print ? "16px" : "22px"}; margin-right: 6px; padding: 0 4px; border-radius: 999px; background: var(--brand); color: #fff; font-size: ${print ? "8px" : "11px"}; font-weight: 700; vertical-align: middle; }
+
+  .plan-page { ${print ? "break-before: page; page-break-before: always;" : ""} }
+  .plan { margin: 0 0 ${print ? "10px" : "16px"}; }
+  .plan__label { font-weight: 700; font-size: ${print ? "10px" : "14px"}; margin-bottom: 6px; }
+  .plan__frame { position: relative; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #fff; }
+  .plan__frame img { display: block; width: 100%; height: auto; }
+  .plan__pin { position: absolute; transform: translate(-50%, -50%); min-width: ${print ? "14px" : "20px"}; height: ${print ? "14px" : "20px"}; padding: 0 3px; border-radius: 999px; border: 2px solid #fff; color: #fff; font-size: ${print ? "7px" : "10px"}; font-weight: 700; display: flex; align-items: center; justify-content: center; box-shadow: 0 1px 2px rgba(0,0,0,.35); }
   .snag__sub { color: var(--sub); font-size: ${print ? "9.5px" : "13px"}; margin-left: 6px; }
   .snag__meta { display: flex; align-items: center; gap: 8px; font-size: ${print ? "8.5px" : "12px"}; color: var(--faint); }
   .snag__desc { margin: 4px 0 0; color: var(--sub); font-size: ${print ? "9.5px" : "14px"}; }
@@ -577,6 +633,7 @@ export function renderReportHtml(
   ${coverBlock(data, version)}
   ${roundBanner}
   ${coverageSection(data)}
+  ${planSection(data, numbering)}
 
   <section class="block">
     <h2>Defects by area</h2>

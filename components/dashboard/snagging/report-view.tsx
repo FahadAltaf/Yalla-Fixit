@@ -22,13 +22,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
-import { renderReactToPdfBlob } from "@/lib/snagging/report-pdf";
 import { snaggingService, type SnaggingQuotation } from "@/modules/snagging";
 import { ActionType, ResourceType, type SnaggingTask } from "@/types/types";
 
-import YallaFixit from "@/public/yalla-fixit.png";
-
 import { InspectionReport } from "./inspection-report";
+import { buildInspectionReportPdf } from "./report-pdf-download";
 import { ErrorState, SubmitButton } from "./shared";
 
 const CHANNELS = [
@@ -107,47 +105,6 @@ export function ReportView({ taskId }: { taskId: string }) {
         userProfile?.id === task.approval_manager_id,
       ));
 
-  /**
-   * The mark as a data URI, at the size the page master draws it.
-   *
-   * jsPDF cannot take a URL, and the header is drawn outside the rasterised
-   * canvas, so the mark has to be handed over separately.
-   *
-   * Painted onto a white canvas first rather than passed through as the
-   * file's own bytes. Two reasons, both of which printed a black rectangle
-   * where the logo should be: jsPDF has no WebP decoder, and a PNG's
-   * transparent pixels come through as black once it re-encodes them. A
-   * flattened square-cropped canvas has neither problem.
-   *
-   * A failure loses the mark, never the PDF.
-   */
-  async function loadHeaderLogo() {
-    try {
-      const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-        const el = new Image();
-        el.crossOrigin = "anonymous";
-        el.onload = () => resolve(el);
-        el.onerror = reject;
-        el.src = YallaFixit.src;
-      });
-
-      const canvas = document.createElement("canvas");
-      canvas.width = image.naturalWidth || 85;
-      canvas.height = image.naturalHeight || 87;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return undefined;
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-
-      // The mark is square, so the printed box is too — a wider box would
-      // letterbox it and reintroduce the bands this is meant to remove.
-      return { dataUrl: canvas.toDataURL("image/png"), widthMm: 9, heightMm: 9 };
-    } catch {
-      return undefined;
-    }
-  }
-
   async function downloadPdf() {
     if (!task) return;
     setBusy(true);
@@ -159,33 +116,11 @@ export function ReportView({ taskId }: { taskId: string }) {
       // screen: the two need different vertical padding (html2canvas puts a
       // box's background where the browser does not), which is the same
       // split the quotation template makes.
-      const blob = await renderReactToPdfBlob(
-        <InspectionReport task={task} quotation={quotation} forPDF />,
-        2,
-        {
-          footerLabel: `${task.property?.unit_label ?? "Inspection"} · Snagging inspection report`,
-          /*
-            The running head, drawn per page rather than placed in the
-            content — see paginate's `header`. The cover carries its own
-            masthead, so page one is skipped.
-          */
-          header: {
-            text: `PROPERTY HANDOVER SNAGGING REPORT — ${[
-              task.property?.building_name,
-              task.property?.unit_label,
-            ]
-              .filter(Boolean)
-              .join(", ")
-              .toUpperCase()}`,
-            logo: await loadHeaderLogo(),
-            skipFirstPage: true,
-          },
-        },
+      const { blob, filename } = await buildInspectionReportPdf(
+        task,
+        quotation,
       );
-      saveAs(
-        blob,
-        `${(task.property?.unit_label ?? "inspection").replace(/\s+/g, "-")}-snagging-report.pdf`,
-      );
+      saveAs(blob, filename);
       toast.success("PDF downloaded", { id: t });
     } catch (error) {
       toast.error(
@@ -388,8 +323,8 @@ export function ReportView({ taskId }: { taskId: string }) {
 
       {notReady ? (
         <div className="snag-report-noprint border-warning/30 bg-warning/5 rounded-md border px-4 py-2 text-sm">
-          This inspection is not finished yet. The report reflects only what
-          has been captured so far.
+          This inspection is not finished yet. The report reflects only what has
+          been captured so far.
         </div>
       ) : null}
       {task.status === "delivered" ? (
@@ -441,9 +376,9 @@ export function ReportView({ taskId }: { taskId: string }) {
             <DialogTitle>Deliver report to client</DialogTitle>
             <DialogDescription>
               Generates a private client link and moves the job to delivered. On
-              the email channel the client is emailed the moment you confirm, and
-              that cannot be taken back. On the other channels, copy the link
-              and send it yourself.
+              the email channel the client is emailed the moment you confirm,
+              and that cannot be taken back. On the other channels, copy the
+              link and send it yourself.
             </DialogDescription>
           </DialogHeader>
 
@@ -514,7 +449,8 @@ export function ReportView({ taskId }: { taskId: string }) {
 function approvedOnly(task: SnaggingTask): SnaggingTask {
   const pending = new Set(task.unapproved_visit_ids ?? []);
   if (pending.size === 0) return task;
-  const unapproved = (visitId?: string | null) => Boolean(visitId && pending.has(visitId));
+  const unapproved = (visitId?: string | null) =>
+    Boolean(visitId && pending.has(visitId));
   return {
     ...task,
     snags: (task.snags ?? []).filter((snag) => !unapproved(snag.visit_id)),
@@ -522,7 +458,9 @@ function approvedOnly(task: SnaggingTask): SnaggingTask {
     // A visit answers an item the walk could not; until it is approved the
     // report says what the walk did -- not checked.
     checklist: (task.checklist ?? []).map((item) =>
-      unapproved(item.visit_id) ? { ...item, status: "not_checked", reason: null } : item,
+      unapproved(item.visit_id)
+        ? { ...item, status: "not_checked", reason: null }
+        : item,
     ),
   };
 }

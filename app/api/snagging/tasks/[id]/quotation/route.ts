@@ -4,7 +4,7 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { sendEmail } from "@/lib/server/send-email";
-import { emailMasthead } from "@/lib/email-brand";
+import { clientEmailHtml, escapeEmailHtml } from "@/lib/email-brand";
 import { recordAudit } from "@/lib/server/snagging/audit";
 import {
   computeQuotation,
@@ -118,7 +118,7 @@ export async function POST(
 }
 
 async function latestQuote(admin: Admin, jobId: string) {
-    /*
+  /*
       The inspection's own quotation, not a visit's.
 
       An additional visit's quotation is raised from this job and carries
@@ -197,7 +197,9 @@ async function generate(
   }
   const cfg = config as PricingConfig & { currency: string };
   const furnished =
-    declaredFurnished != null ? declaredFurnished : property.furnished ?? false;
+    declaredFurnished != null
+      ? declaredFurnished
+      : (property.furnished ?? false);
   const priced = computeQuotation(
     { ...(property as QuoteJob), furnished },
     cfg,
@@ -519,7 +521,10 @@ async function send(
       .update({ email_message_id: messageId })
       .eq("id", quote.id);
     if (idError) {
-      console.error("Quotation sent but message id not stored:", idError.message);
+      console.error(
+        "Quotation sent but message id not stored:",
+        idError.message,
+      );
     }
   }
 
@@ -598,14 +603,6 @@ async function reject(
   }
 }
 
-function escapeHtml(v: string): string {
-  return v
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
 function quotationEmailHtml(o: {
   clientName: string;
   quoteNumber: string;
@@ -613,21 +610,24 @@ function quotationEmailHtml(o: {
   total: string;
   approvalUrl: string;
 }): string {
-  return `
-  <div style="font-family:Arial,Helvetica,sans-serif;color:#1f2937;max-width:560px;margin:0 auto">
-    ${emailMasthead()}
-    <p>Dear ${escapeHtml(o.clientName)},</p>
-    <p>Please find attached your snagging inspection quotation <strong>#${escapeHtml(o.quoteNumber)}</strong>
-       for <strong>${escapeHtml(o.unit)}</strong>. The total is <strong>${escapeHtml(o.total)}</strong>.</p>
-    <p>Review the quotation and approve or reject it here:</p>
-    <p>
-      <a href="${escapeHtml(o.approvalUrl)}"
-         style="display:inline-block;background:#9f2b23;color:#fff;text-decoration:none;padding:11px 20px;border-radius:8px;font-weight:700">
-        Review &amp; respond to your quotation
-      </a>
-    </p>
-    <p style="font-size:12px;color:#6b7280">This private link is valid for 30 days. Please do not share it.</p>
-  </div>`;
+  /* The same note the quotation-by-id send writes, so both inboxes match. */
+  return clientEmailHtml({
+    eyebrow: "Snagging quotation",
+    heading: "Your snagging quotation",
+    greeting: `Dear ${o.clientName},`,
+    paragraphs: [
+      `Thank you for choosing Yalla Fix It. Please find attached your snagging inspection quotation <strong>#${escapeEmailHtml(o.quoteNumber)}</strong> for <strong>${escapeEmailHtml(o.unit)}</strong>.`,
+      "Review the quotation and approve it, or tell us what you would like changed.",
+    ],
+    details: [
+      { label: "Quotation", value: `#${o.quoteNumber}` },
+      { label: "Property", value: o.unit },
+      { label: "Total", value: o.total },
+    ],
+    cta: { label: "Review and approve", url: o.approvalUrl },
+    footnote:
+      "This private link is valid for 30 days. Please don't share it. The quotation is also attached as a PDF.",
+  });
 }
 
 /**

@@ -4,7 +4,7 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
-import { loadJobFamily } from "@/lib/server/snagging/job-family";
+import { readOnRoot } from "@/lib/server/snagging/job-family";
 import { listReportVersions } from "@/lib/server/snagging/report-versions";
 import { createVisitSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType } from "@/types/types";
@@ -46,7 +46,9 @@ import { ActionType, ResourceType } from "@/types/types";
 const VISIT_COLUMNS =
   "id, visit_number, status, scheduled_date, appointment_at, inspector_id, charge, " +
   "charge_method, payment_reference, quotation_id, started_at, submitted_at, review_note, " +
-  "notes, created_at, inspector:inspector_id(id, full_name, email)";
+  "notes, created_at, inspector:inspector_id(id, full_name, email), " +
+  // The visit's quotation, embedded rather than fetched in a second round trip.
+  "quotation_ref:quotation_id(id, quote_number, status)";
 
 function firstOf<T>(v: T | T[] | null | undefined): T | null {
   return Array.isArray(v) ? (v[0] ?? null) : (v ?? null);
@@ -72,43 +74,33 @@ export async function GET(
       Visits belong to the ORIGINAL inspection, so opening this tab on a
       de-snag job shows the same list rather than an empty one. A de-snag
       is still its own job (change 31); a visit is not.
+
+      Everything below needs only the root, so it goes in one parallel
+      round trip -- started on this job's id alongside the family lookup,
+      since most jobs are their own root (readOnRoot). The quotation used
+      to be a further query after the visits; it is embedded now.
     */
-    const family = await loadJobFamily(admin, id);
-
-    const { data: visits, error } = await admin
-      .from("snagging_job_visits")
-      .select(VISIT_COLUMNS)
-      .eq("job_id", family.rootId)
-      .order("visit_number", { ascending: true });
-    if (error) throw new Error(error.message);
-
-    const rows = (visits ?? []) as unknown as Array<Record<string, unknown>>;
-    const quoteIds = rows
-      .map((v) => v.quotation_id as string | null)
-      .filter((v): v is string => Boolean(v));
-
-    const [{ data: quotes }, { data: visitSnags }, versions] =
-      await Promise.all([
-        quoteIds.length > 0
-          ? admin
-              .from("snagging_quotations")
-              .select("id, quote_number, status")
-              .in("id", quoteIds)
-          : Promise.resolve({ data: [] as Array<Record<string, unknown>> }),
+    const {
+      result: [{ data: visits, error }, { data: visitSnags }, versions],
+    } = await readOnRoot(admin, id, (rootId) =>
+      Promise.all([
+        admin
+          .from("snagging_job_visits")
+          .select(VISIT_COLUMNS)
+          .eq("job_id", rootId)
+          .order("visit_number", { ascending: true }),
         // What each visit actually found, counted on the job it was written to.
         admin
           .from("snagging_snags")
           .select("id, visit_id")
-          .eq("job_id", family.rootId)
+          .eq("job_id", rootId)
           .not("visit_id", "is", null),
-        listReportVersions(admin, family.rootId),
-      ]);
-
-    const quoteById = new Map(
-      ((quotes ?? []) as Array<Record<string, unknown>>).map(
-        (q) => [q.id as string, q] as const,
-      ),
+        listReportVersions(admin, rootId),
+      ]),
     );
+    if (error) throw new Error(error.message);
+
+    const rows = (visits ?? []) as unknown as Array<Record<string, unknown>>;
     const snagCount = new Map<string, number>();
     for (const snag of visitSnags ?? []) {
       const key = snag.visit_id as string;
@@ -118,11 +110,13 @@ export async function GET(
     return NextResponse.json({
       data: {
         visits: rows.map((visit) => {
-          const quote = visit.quotation_id
-            ? (quoteById.get(visit.quotation_id as string) ?? null)
-            : null;
+          const quote = firstOf(
+            visit.quotation_ref as { id: string; quote_number: string | null; status: string } | null,
+          );
+          const { quotation_ref: _embedded, ...rest } = visit;
+          void _embedded;
           return {
-            ...visit,
+            ...rest,
             inspector: firstOf(
               visit.inspector as Record<string, unknown> | null,
             ),

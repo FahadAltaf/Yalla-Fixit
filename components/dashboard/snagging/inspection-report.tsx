@@ -8,11 +8,7 @@ import { Inter } from "next/font/google";
 
 import YallaFixit from "@/public/yalla-fixit.png";
 import type { SnaggingQuotation } from "@/modules/snagging";
-import type {
-  SnaggingPhoto,
-  SnaggingSnag,
-  SnaggingTask,
-} from "@/types/types";
+import type { SnaggingPhoto, SnaggingSnag, SnaggingTask } from "@/types/types";
 import { isVideo } from "./evidence-media";
 import CompanyLogo from "@/public/site-logo.webp";
 
@@ -49,11 +45,11 @@ function pad(
 ): CSSProperties {
   return forPDF
     ? {
-      paddingTop: 0,
-      paddingBottom: vertical * 2,
-      paddingLeft: horizontal,
-      paddingRight: horizontal,
-    }
+        paddingTop: 0,
+        paddingBottom: vertical * 2,
+        paddingLeft: horizontal,
+        paddingRight: horizontal,
+      }
     : { padding: `${vertical}px ${horizontal}px` };
 }
 
@@ -130,8 +126,17 @@ function unitNumber(label?: string | null): string {
 
 /** "three" rather than "3", which is how the sentence above reads. */
 const NUMBER_WORDS = [
-  "zero", "one", "two", "three", "four", "five",
-  "six", "seven", "eight", "nine", "ten",
+  "zero",
+  "one",
+  "two",
+  "three",
+  "four",
+  "five",
+  "six",
+  "seven",
+  "eight",
+  "nine",
+  "ten",
 ];
 function numberWord(n: number): string {
   return NUMBER_WORDS[n] ?? String(n);
@@ -146,6 +151,12 @@ function numberWord(n: number): string {
  * the full width of half the card, and this tall (BA v2, change 17).
  */
 const PHOTO_H = 200;
+
+/*
+  The tallest a floor plan is printed, in page pixels: a full page's
+  content height less its heading, so a plan always fits on one sheet.
+*/
+const PLAN_MAX_H = 860;
 
 /** Worst first, wherever defects are listed as an action list. */
 const SEVERITY_RANK = ["high", "medium", "low"];
@@ -200,18 +211,34 @@ function BarChart({
         >
           <div
             style={{
-              width: "32%",
+              width: "34%",
               fontSize: 8.5,
+              lineHeight: "12px",
               color: C.body,
-              overflow: "hidden",
               whiteSpace: "nowrap",
-              textOverflow: "ellipsis",
+              /*
+                Clipped with an ellipsis on screen. In the PDF the capture
+                draws text a few pixels lower than the page lays it out, and
+                a clipping box cut the bottom off every label, so there it
+                is left unclipped (the column is wide enough).
+              */
+              ...(forPDF
+                ? {}
+                : { overflow: "hidden", textOverflow: "ellipsis" }),
             }}
           >
             {row.label}
           </div>
           {/* The track, so a short bar still reads against a known span. */}
-          <div style={{ flex: 1, height: 9, background: C.line }}>
+          <div
+            style={{
+              flex: 1,
+              height: 9,
+              background: C.line,
+              /* Level with the label, which the PDF draws lower. */
+              marginTop: forPDF ? 5 : 0,
+            }}
+          >
             <div
               style={{
                 width: `${Math.max(2, Math.round((row.value / denominator) * 100))}%`,
@@ -239,6 +266,21 @@ function BarChart({
       ))}
     </div>
   );
+}
+
+/*
+  A floor plan's name as a reader should see it. Plans are often named after
+  the uploaded file ("what-is-a-floor-plan-with-dimensions.png"), which read
+  as a file name shouting in capitals on every defect card.
+*/
+function planName(label: string): string {
+  const text = label
+    .replace(/\.(png|jpe?g|webp|gif|pdf|svg)$/i, "")
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return label;
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 /** A, B, C … for the area sections, as the issued reports letter them. */
@@ -369,7 +411,6 @@ function Stat({
           lineHeight: 1.1,
           color: t ? t.fg : C.ink,
           paddingBottom: forPDF ? "10px" : "",
-
         }}
       >
         {value}
@@ -470,9 +511,13 @@ function Fact({
 }) {
   return (
     <tr>
-      <Cell label colSpan={2}>{label}:</Cell>
+      <Cell label colSpan={2}>
+        {label}:
+      </Cell>
       <Cell colSpan={2}>{value}</Cell>
-      <Cell label colSpan={2}>{label2}:</Cell>
+      <Cell label colSpan={2}>
+        {label2}:
+      </Cell>
       <Cell colSpan={2}>{value2}</Cell>
     </tr>
   );
@@ -504,11 +549,9 @@ function Wordmark({ small = false }: { small?: boolean }) {
         alt="Yalla Fix It"
         style={{ width: mark, height: mark, objectFit: "contain" }}
       />
-
     </div>
   );
 }
-
 
 /**
  * The company logo, centred.
@@ -619,109 +662,201 @@ function Para({ children }: { children: React.ReactNode }) {
   );
 }
 
+/*
+  One photograph, cropped to fill its tile.
 
-/**
- * One itemised defect, whether or not it has a photograph.
- *
- * Manually captured snags and failed checklist items are the same thing to
- * a client — something found wrong, graded, needing action — and were being
- * presented as two unrelated formats: snags as evidence cards, checklist
- * failures as pass/fail rows buried at the back. A reader had to reconcile
- * two lists to know what the inspection actually found.
- *
- * So there is one card with two render states. `noPhoto` swaps the evidence
- * panel for the check's own category glyph on a tinted ground: deliberately
- * a different KIND of thing, not a photo that failed to load. A grey box
- * with a broken-image mark would read as an error in the document rather
- * than as a check that never had a picture to take.
- */
-/**
- * The pair a de-snag exists to produce, side by side and labelled: the
- * defect as it was reported, and as the round found it.
- */
-function BeforeAfterPhotos({
-  before,
-  after,
+  Drawn as a background image rather than an <img> with object-fit: the
+  PDF capture ignores object-fit and stretched every photo to the tile's
+  shape. A background with background-size: cover is drawn the same on
+  screen and in the PDF.
+*/
+function PhotoTile({
+  photo,
+  label,
+  accent,
+  empty,
 }: {
-  before: SnaggingPhoto | null;
-  after: SnaggingPhoto | null;
+  photo: SnaggingPhoto | null;
+  label?: string;
+  accent?: string;
+  empty: string;
 }) {
-  const tile = (label: string, photo: SnaggingPhoto | null, accent: string) => (
-    <div style={{ flex: 1, position: "relative", minWidth: 0 }}>
-      {photo && !isVideo(photo) ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={photo.signed_url ?? ""}
-          alt=""
-          crossOrigin="anonymous"
-          style={{ width: "100%", height: PHOTO_H, objectFit: "cover", display: "block" }}
+  const forPDF = useContext(PdfMode);
+  const url = photo && !isVideo(photo) ? photo.signed_url : null;
+  return (
+    <div style={{ flex: 1, minWidth: 0 }}>
+      {url ? (
+        <div
+          role="img"
+          aria-label={label ?? "Photo"}
+          style={{
+            height: PHOTO_H,
+            backgroundColor: C.card,
+            backgroundImage: `url("${url}")`,
+            backgroundSize: "cover",
+            backgroundPosition: "center",
+            backgroundRepeat: "no-repeat",
+            border: `1px solid ${C.grid}`,
+            borderRadius: 4,
+          }}
         />
       ) : (
         <div
           style={{
-            width: "100%",
             height: PHOTO_H,
-            border: `1px solid ${C.grid}`,
+            border: `1px dashed ${C.grid}`,
+            borderRadius: 4,
             background: C.card,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            fontSize: 8,
+            fontSize: 8.5,
             fontWeight: 600,
             color: C.sub,
             textAlign: "center",
           }}
         >
-          {photo ? "Video evidence" : label === "After" ? "No after photo" : "No earlier photo"}
+          {photo ? "Video evidence" : empty}
         </div>
       )}
-      <span
-        style={{
-          position: "absolute",
-          top: 4,
-          left: 4,
-          background: accent,
-          color: "#ffffff",
-          fontSize: 6.5,
-          fontWeight: 700,
-          textTransform: "uppercase",
-          letterSpacing: 0.4,
-          padding: "1px 5px",
-          borderRadius: 3,
-        }}
-      >
-        {label}
-      </span>
-    </div>
-  );
-  return (
-    <div style={{ display: "flex", gap: 4 }}>
-      {tile("Before", before, C.ink)}
-      {tile("After", after, C.brand)}
+      {label ? (
+        /* Captioned under the photo, not laid over it: a label on top of
+           a picture had its text clipped in the PDF. */
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 5,
+            fontSize: 7.5,
+            fontWeight: 700,
+            letterSpacing: 0.5,
+            textTransform: "uppercase",
+            color: accent ?? C.ink,
+            paddingTop: forPDF ? 4 : 5,
+            paddingBottom: forPDF ? 3 : 0,
+          }}
+        >
+          <span
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: 2,
+              background: accent ?? C.ink,
+              marginTop: forPDF ? 5 : 0,
+              flexShrink: 0,
+            }}
+          />
+          {label}
+        </div>
+      ) : null}
     </div>
   );
 }
 
+/* A small filled tag: the severity, or what the re-inspection found. */
+function Tag({
+  fg,
+  bg,
+  children,
+}: {
+  fg: string;
+  bg: string;
+  children: React.ReactNode;
+}) {
+  const forPDF = useContext(PdfMode);
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        background: bg,
+        color: fg,
+        fontSize: 7.5,
+        fontWeight: 700,
+        letterSpacing: 0.4,
+        textTransform: "uppercase",
+        whiteSpace: "nowrap",
+        borderRadius: 3,
+        ...(forPDF
+          ? {
+              lineHeight: "9px",
+              paddingTop: 1,
+              paddingBottom: 7,
+              paddingLeft: 6,
+              paddingRight: 6,
+            }
+          : { lineHeight: "11px", padding: "2px 6px" }),
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+/* A label over its value, in the information column of a defect card. */
+function DefectFact({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  const forPDF = useContext(PdfMode);
+  return (
+    <div style={{ paddingBottom: forPDF ? 10 : 8 }}>
+      <div
+        style={{
+          fontSize: 7,
+          fontWeight: 700,
+          letterSpacing: 0.5,
+          textTransform: "uppercase",
+          color: C.faint,
+          paddingBottom: forPDF ? 3 : 2,
+        }}
+      >
+        {label}
+      </div>
+      <div style={{ fontSize: 9.5, lineHeight: 1.5, color: C.body }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One itemised defect.
+ *
+ * A header with the number, the defect and where it is, tagged with its
+ * severity (and, on a de-snag, what the re-inspection found); then the
+ * evidence beside the details. The severity is carried by the stripe down
+ * the left edge and the tag, rather than washing the whole half of the
+ * card in colour, which made a page of defects hard to read.
+ *
+ * On a de-snag round a carried defect shows its before and after photos
+ * side by side, each captioned. A defect with no photograph keeps the same
+ * shape, with the check's category in place of the picture.
+ */
 function DefectCard({
   reference,
   number,
   title,
+  path,
   severity,
   note,
   status,
   photo,
   glyph,
   category,
-  tag,
   area,
   floor,
-  first,
   afterPhoto,
   beforeAfter = false,
 }: {
   reference: string;
   number: number;
+  /** The defect itself, e.g. "Ceiling plaster damaged". */
   title: string;
+  /** The catalogue path above it, e.g. "Ceiling plaster · Plaster". */
+  path?: string | null;
   severity: string;
   note?: string | null;
   status?: string | null;
@@ -731,13 +866,10 @@ function DefectCard({
   glyph?: string;
   /** The check's group, named under the glyph. */
   category?: string;
-  /** Small corner label naming where the entry came from. */
-  tag?: string;
   /** The room, named on the card rather than only in the heading above it. */
   area?: string | null;
   /** The floor plan this area sits on, where the job has more than one. */
   floor?: string | null;
-  first: boolean;
   /** On a de-snag: the photo taken on this round, beside `photo` (the before). */
   afterPhoto?: SnaggingPhoto | null;
   /** Show `photo` and `afterPhoto` as a labelled before-and-after pair. */
@@ -745,211 +877,178 @@ function DefectCard({
 }) {
   const forPDF = useContext(PdfMode);
   const grade = SEVERITY[severity] ?? SEVERITY.low;
+  const tone = TONE[grade.tone];
+  const reinspected =
+    status === "verified_poor_quality"
+      ? "Poor quality fix"
+      : status === "verified_not_done"
+        ? "Not done"
+        : null;
+  const where = [floor, area].filter(Boolean).join(" · ");
 
   return (
     <div
+      /* Kept whole: a page break is moved above the card, never through it. */
+      data-pdf-block
       style={{
-        display: "flex",
-        alignItems: "stretch",
         border: `1px solid ${C.grid}`,
-        borderTop: first ? `1px solid ${C.grid}` : "none",
-        /*
-          A defect with no photo keeps a row's height, so a column of them
-          stays a table rather than a ladder of different-sized boxes. Sized
-          to the evidence panel now rather than to the text: the photograph
-          is the point of the card (BA v2, change 17).
-        */
-        minHeight: PHOTO_H + 26,
+        borderLeft: `4px solid ${tone.fg}`,
+        borderRadius: 4,
+        background: "#ffffff",
+        marginBottom: 10,
         breakInside: "avoid",
       }}
     >
+      {/* Header: number, defect, where; tags on the right. */}
       <div
         style={{
-          width: "50%",
-          borderRight: `1px solid ${C.grid}`,
-          ...pad(forPDF, 4, 6),
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: 12,
+          background: "#fafafb",
+          borderBottom: `1px solid ${C.line}`,
+          ...pad(forPDF, 7, 12),
         }}
       >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            fontSize: 7,
-            fontWeight: 700,
-            color: C.ink,
-            letterSpacing: 0.3,
-            paddingBottom: "4px",
-          }}
-        >
-          <span>{reference}</span>
-          {tag ? (
-            <span style={{ fontWeight: 400, color: C.sub }}>{tag}</span>
+        <div style={{ minWidth: 0 }}>
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              color: C.ink,
+              lineHeight: 1.35,
+            }}
+          >
+            <span style={{ color: tone.fg }}>{number}.</span> {title}
+          </div>
+          <div
+            style={{
+              fontSize: 8,
+              color: C.sub,
+              paddingTop: 2,
+              lineHeight: 1.4,
+            }}
+          >
+            {[reference, where].filter(Boolean).join("  ·  ")}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 5, flexShrink: 0, paddingTop: 1 }}>
+          <Tag fg={tone.fg} bg={FILL[grade.tone] ?? tone.bg}>
+            {grade.label}
+          </Tag>
+          {reinspected ? (
+            <Tag fg="#ffffff" bg={C.deep}>
+              {reinspected}
+            </Tag>
           ) : null}
         </div>
-
-        {beforeAfter ? (
-          <BeforeAfterPhotos before={photo ?? null} after={afterPhoto ?? null} />
-        ) : photo ? (
-          isVideo(photo) ? (
-            <div
-              style={{
-                width: "100%",
-                height: PHOTO_H,
-                margin: "0 auto",
-                border: `1px solid ${C.grid}`,
-                background: C.card,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: 8,
-                fontWeight: 600,
-                color: C.sub,
-              }}
-            >
-              Video evidence
-            </div>
-          ) : (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={photo.signed_url ?? ""}
-              alt=""
-              crossOrigin="anonymous"
-              style={{
-                width: "100%",
-                height: PHOTO_H,
-                objectFit: "cover",
-                margin: "0 auto",
-                display: "block",
-              }}
-            />
-          )
-        ) : (
-          /*
-            The category, not an absence. A checklist failure never had a
-            photograph to take, so this panel says what KIND of check it
-            was rather than apologising for a missing image.
-          */
-          <div
-            style={{
-              width: "100%",
-              height: PHOTO_H,
-              margin: "0 auto",
-              background: C.card,
-              border: `1px solid ${C.grid}`,
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <span aria-hidden style={{ fontSize: 26, lineHeight: 1 }}>
-              {glyph ?? "📋"}
-            </span>
-            {/*
-              Named as well as drawn. If the glyph does not rasterise on
-              some machine, the panel still says what kind of check this
-              was rather than showing an empty square.
-            */}
-            {category ? (
-              <span
-                style={{
-                  fontSize: 6.5,
-                  color: C.sub,
-                  textTransform: "uppercase",
-                  letterSpacing: 0.4,
-                  textAlign: "center",
-                  paddingTop: 0,
-                  paddingBottom: "2px",
-                  marginTop: 6,
-                }}
-              >
-                {category}
-              </span>
-            ) : null}
-          </div>
-        )}
       </div>
 
-      {/*
-        The description, washed in its own severity.
-
-        `paddingBottom` alone, never a symmetric vertical pad: html2canvas
-        puts a filled box's background where the padding is not, so an
-        evenly padded cell prints with its tint riding above the text.
-      */}
+      {/* Body: evidence beside the details. */}
       <div
         style={{
-          width: "50%",
-          background: FILL[grade.tone] ?? FILL.low,
-          fontSize: 9.5,
-          color: C.body,
-          lineHeight: 1.45,
-          ...pad(forPDF, 5, 8),
+          display: "flex",
+          gap: 12,
+          alignItems: "flex-start",
+          ...pad(forPDF, 10, 12),
         }}
       >
-        {/*
-          Where it is, before what it is (BA v2, change 18).
-
-          The area was named only in the heading above the run of cards, so
-          a reader looking at one defect — or at a card that broke onto the
-          next page — could not tell which room it was in. Floor is printed
-          only where the job has more than one plan; on a flat it would be
-          a line saying nothing.
-        */}
-        {area || floor ? (
-          <div
-            style={{
-              fontSize: 7.5,
-              fontWeight: 700,
-              letterSpacing: 0.3,
-              textTransform: "uppercase",
-              color: C.sub,
-              paddingBottom: "3px",
-            }}
-          >
-            {[floor, area].filter(Boolean).join(" · ")}
-          </div>
-        ) : null}
-
-        <span style={{ fontWeight: 600 }}>{number}-</span> {title}
-
-        {/*
-          The grade, said as well as washed. The tint behind this column is
-          the fast read; a client printing in greyscale, or quoting the
-          defect in an email, needs the word.
-        */}
         <div
           style={{
-            fontSize: 8,
-            fontWeight: 700,
-            color: grade.tone === "pass" ? TONE.pass.fg : TONE[grade.tone].fg,
-            paddingTop: 0,
-            paddingBottom: "2px",
-            marginTop: 4,
+            width: beforeAfter ? "64%" : "48%",
+            display: "flex",
+            gap: 8,
+            flexShrink: 0,
           }}
         >
-          {grade.label}
+          {beforeAfter ? (
+            <>
+              <PhotoTile
+                photo={photo ?? null}
+                label="Before"
+                accent={C.ink}
+                empty="No earlier photo"
+              />
+              <PhotoTile
+                photo={afterPhoto ?? null}
+                label="After"
+                accent={C.brand}
+                empty="No after photo"
+              />
+            </>
+          ) : photo ? (
+            <PhotoTile photo={photo} empty="No photo" />
+          ) : (
+            /*
+              The category, not an absence. A checklist failure never had a
+              photograph to take, so this panel says what KIND of check it
+              was rather than apologising for a missing image.
+            */
+            <div
+              style={{
+                flex: 1,
+                height: PHOTO_H,
+                background: C.card,
+                border: `1px solid ${C.grid}`,
+                borderRadius: 4,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <span aria-hidden style={{ fontSize: 26, lineHeight: 1 }}>
+                {glyph ?? "📋"}
+              </span>
+              {category ? (
+                <span
+                  style={{
+                    fontSize: 6.5,
+                    color: C.sub,
+                    textTransform: "uppercase",
+                    letterSpacing: 0.4,
+                    textAlign: "center",
+                    paddingBottom: 2,
+                    marginTop: 6,
+                  }}
+                >
+                  {category}
+                </span>
+              ) : null}
+            </div>
+          )}
         </div>
-        {note ? (
-          <div style={{ marginTop: 4, color: C.body, paddingBottom: "2px" }}>
-            <span style={{ fontWeight: 600 }}>Comment: </span>
-            {note}
-          </div>
-        ) : null}
-        {status === "verified_poor_quality" || status === "verified_not_done" ? (
-          <div
-            style={{
-              marginTop: 3,
-              fontWeight: 600,
-              color: C.deep,
-              paddingBottom: "2px",
-            }}
-          >
-            {status === "verified_not_done"
-              ? "Re-inspected: not done"
-              : "Re-inspected: poor quality fix"}
-          </div>
-        ) : null}
+
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {path ? <DefectFact label="Category">{path}</DefectFact> : null}
+          {where ? <DefectFact label="Location">{where}</DefectFact> : null}
+          <DefectFact label="Severity">
+            <span style={{ color: tone.fg, fontWeight: 700 }}>
+              {grade.label}
+            </span>
+          </DefectFact>
+          {note ? <DefectFact label="Comment">{note}</DefectFact> : null}
+          {reinspected ? (
+            <div
+              style={{
+                background: "#fdf2f2",
+                border: "1px solid #f3c7c7",
+                borderRadius: 4,
+                color: C.deep,
+                fontSize: 9,
+                fontWeight: 600,
+                lineHeight: 1.45,
+                ...pad(forPDF, 5, 8),
+              }}
+            >
+              Re-inspected:{" "}
+              {reinspected === "Not done"
+                ? "the fix has not been done."
+                : "the fix is not to standard."}
+            </div>
+          ) : null}
+        </div>
       </div>
     </div>
   );
@@ -1011,7 +1110,14 @@ export const InspectionReport = forwardRef<
     (a) => a.role === "technician",
   )?.user_profile;
   const areas = task.areas ?? [];
-  const snags = task.snags ?? [];
+  /*
+    Point 13 — a de-snagging round's report shows only what is still
+    outstanding: fixed defects drop out, with their pins, so each round's
+    report is shorter than the last. The job page keeps them all.
+  */
+  const snags = (task.snags ?? []).filter(
+    (snag) => task.visit_type !== "desnag" || snag.status !== "verified_closed",
+  );
   const submission = task.submissions?.[0];
 
   const byArea = new Map<string, SnaggingSnag[]>();
@@ -1022,12 +1128,39 @@ export const InspectionReport = forwardRef<
     byArea.set(key, list);
   }
 
+  /*
+    Each defect's number, as the list below counts them (areas in order,
+    then each area's snags), so a pin on the plan page and its card say
+    the same number (point 8).
+  */
+  const defectNumber = new Map<string, number>();
+  for (const area of areas) {
+    for (const snag of byArea.get(area.id) ?? []) {
+      defectNumber.set(snag.id, defectNumber.size + 1);
+    }
+  }
+  const plansWithPins = (task.floor_plans ?? [])
+    .filter((plan) => plan.signed_url)
+    .map((plan) => ({
+      plan,
+      pins: snags.filter(
+        (snag) =>
+          snag.floor_plan_id === plan.id &&
+          snag.pin_x != null &&
+          snag.pin_y != null &&
+          defectNumber.has(snag.id),
+      ),
+    }))
+    .filter((entry) => entry.pins.length > 0);
+
   const high = snags.filter((s) => s.severity === "high").length;
   const medium = snags.filter((s) => s.severity === "medium").length;
   const low = snags.filter((s) => s.severity === "low").length;
   // A room added on a return visit was walked on that visit, though it
   // carries no sign-off (rooms have no finish tick on a visit).
-  const confirmedAreas = areas.filter((a) => a.confirmed_at || a.visit_id).length;
+  const confirmedAreas = areas.filter(
+    (a) => a.confirmed_at || a.visit_id,
+  ).length;
 
   /*
     Defects by catalogue category, worst first (BA v2, change 20).
@@ -1044,8 +1177,7 @@ export const InspectionReport = forwardRef<
   const CATEGORY_LIMIT = 8;
   const categoryCounts = new Map<string, number>();
   for (const snag of snags) {
-    const key =
-      snag.category_label || snag.element_label || "Uncategorised";
+    const key = snag.category_label || snag.element_label || "Uncategorised";
     categoryCounts.set(key, (categoryCounts.get(key) ?? 0) + 1);
   }
   const rankedCategories = [...categoryCounts.entries()].sort(
@@ -1099,14 +1231,15 @@ export const InspectionReport = forwardRef<
       if (!label) continue;
       counts.set(label, (counts.get(label) ?? 0) + 1);
     }
-    return [...counts.entries()]
-      .map(([label, count]) => ({ label, count }))
-      // Ties broken by label so one inspection always renders the same
-      // order: a report that reshuffles between renders is not reproducible.
-      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
-      .slice(0, 5);
+    return (
+      [...counts.entries()]
+        .map(([label, count]) => ({ label, count }))
+        // Ties broken by label so one inspection always renders the same
+        // order: a report that reshuffles between renders is not reproducible.
+        .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
+        .slice(0, 5)
+    );
   })();
-
 
   /**
    * The floor a pinned defect sits on, for the line above its description.
@@ -1118,13 +1251,15 @@ export const InspectionReport = forwardRef<
   const plans = task.floor_plans ?? [];
   const floorOf = (planId?: string | null): string | null => {
     if (!planId || plans.length < 2) return null;
-    return plans.find((plan) => plan.id === planId)?.label ?? null;
+    const label = plans.find((plan) => plan.id === planId)?.label;
+    return label ? planName(label) : null;
   };
 
   /* What the running head names on every page after the cover. */
-  const subject = [property?.building_name, property?.unit_label]
-    .filter(Boolean)
-    .join(", ") || "Inspection";
+  const subject =
+    [property?.building_name, property?.unit_label]
+      .filter(Boolean)
+      .join(", ") || "Inspection";
 
   /*
     The unit in one sentence, the way the issued reports open.
@@ -1152,9 +1287,9 @@ export const InspectionReport = forwardRef<
   /* Cover facts, derived once so the table stays readable. */
   const apptTime = task.appointment_at
     ? new Date(task.appointment_at).toLocaleTimeString("en-GB", {
-      hour: "2-digit",
-      minute: "2-digit",
-    })
+        hour: "2-digit",
+        minute: "2-digit",
+      })
     : "—";
   const visitTypeLabel =
     task.visit_type === "additional"
@@ -1189,11 +1324,23 @@ export const InspectionReport = forwardRef<
           fontFamily: FONT,
           fontSize: "10.5px",
           lineHeight: 1.45,
+          /*
+            The app shell sets tabular figures, and Inter shapes some
+            letters by context. The PDF capture draws text with neither, so
+            the gap between what the page laid out and what it drew showed
+            as "18 :30" and "De- snag". Both off, so the two agree.
+          */
+          fontVariantNumeric: "normal",
+          fontFeatureSettings: '"calt" 0',
           padding: forPDF ? "0px 24px" : "24px 32px",
           boxSizing: "border-box",
           position: "relative",
         }}
+        data-inspection-report=""
       >
+        {/* The app's global stylesheet gives every table tabular figures;
+            the report's tables need the same plain figures as its text. */}
+        <style>{`[data-inspection-report] table, [data-inspection-report] td, [data-inspection-report] th { font-variant-numeric: normal; font-feature-settings: "calt" 0; }`}</style>
         {/*
           ── Page 1: the project information ──
 
@@ -1249,23 +1396,52 @@ export const InspectionReport = forwardRef<
             }}
           >
             <tbody>
-              <Fact label="Date of inspection" value={fmtDate(task.scheduled_date)} label2="Client name" value2={property?.client_name ?? "—"} />
+              <Fact
+                label="Date of inspection"
+                value={fmtDate(task.scheduled_date)}
+                label2="Client name"
+                value2={property?.client_name ?? "—"}
+              />
               <tr>
                 {/* Two columns for the label, like every other row, so the
                     value lines up with the values above and below it. */}
-                <Cell label colSpan={2}>Location:</Cell>
+                <Cell label colSpan={2}>
+                  Location:
+                </Cell>
                 <Cell strong colSpan={6}>
                   {[property?.building_name, property?.unit_label]
                     .filter(Boolean)
                     .join(" — ") || "—"}
                 </Cell>
               </tr>
-              <Fact label="Time of inspection" value={apptTime} label2="Client contact number" value2={property?.client_phone ?? "—"} />
-              <Fact label="Type of inspection" value={visitTypeLabel} label2="Client email address" value2={property?.client_email ?? "—"} />
-              <Fact label="Recorded by/date" value={recordedBy} label2="Package" value2="Handover snagging" />
-              <Fact label="Report prepared by/date" value={fmtDate(generatedAt ?? new Date().toISOString())} label2="Property type" value2={property?.property_type ?? "—"} />
+              <Fact
+                label="Time of inspection"
+                value={apptTime}
+                label2="Client contact number"
+                value2={property?.client_phone ?? "—"}
+              />
+              <Fact
+                label="Type of inspection"
+                value={visitTypeLabel}
+                label2="Client email address"
+                value2={property?.client_email ?? "—"}
+              />
+              <Fact
+                label="Recorded by/date"
+                value={recordedBy}
+                label2="Package"
+                value2="Handover snagging"
+              />
+              <Fact
+                label="Report prepared by/date"
+                value={fmtDate(generatedAt ?? new Date().toISOString())}
+                label2="Property type"
+                value2={property?.property_type ?? "—"}
+              />
               <tr>
-                <Cell label colSpan={8}>Legends: (severity grade)</Cell>
+                <Cell label colSpan={8}>
+                  Legends: (severity grade)
+                </Cell>
               </tr>
               {/* All four grades on one row, the way the cover legend reads. */}
               <tr>
@@ -1280,7 +1456,6 @@ export const InspectionReport = forwardRef<
               </tr>
             </tbody>
           </table>
-
         </div>
 
         {/*
@@ -1312,7 +1487,9 @@ export const InspectionReport = forwardRef<
           <Para>{propertyDescription}</Para>
 
           {/* The rooms walked, lettered as the defect sections letter them. */}
-          <div style={{ paddingTop: 0, paddingBottom: forPDF ? "18px" : "10px" }}>
+          <div
+            style={{ paddingTop: 0, paddingBottom: forPDF ? "18px" : "10px" }}
+          >
             {areas.map((area, index) => (
               <div
                 key={area.id}
@@ -1332,21 +1509,21 @@ export const InspectionReport = forwardRef<
           <Heading>Definition:</Heading>
           <Para>
             Snagging is identifying internal and external defects before the
-            developer hands over the property to you. The purpose of a
-            snagging is to report any defects of your property to the
-            developer prior to formal handover, to record the handover
-            condition and/or fix the defects as reported.
+            developer hands over the property to you. The purpose of a snagging
+            is to report any defects of your property to the developer prior to
+            formal handover, to record the handover condition and/or fix the
+            defects as reported.
           </Para>
           <Para>
-            The YFI trained team inspected the property and prepared this
-            report with reference pictures, to gauge the overall workmanship
-            and the quality of the material used against standard
-            construction norms. Where the approved design and technical
-            parameters of MEP services are shared prior to inspection, the
-            current specification is compared against them. Otherwise the
-            visual inspection is based on construction industry standards,
-            with no comment on design perspective, assuming the contractor
-            follows the design given by the consultant of the project.
+            The YFI trained team inspected the property and prepared this report
+            with reference pictures, to gauge the overall workmanship and the
+            quality of the material used against standard construction norms.
+            Where the approved design and technical parameters of MEP services
+            are shared prior to inspection, the current specification is
+            compared against them. Otherwise the visual inspection is based on
+            construction industry standards, with no comment on design
+            perspective, assuming the contractor follows the design given by the
+            consultant of the project.
           </Para>
         </div>
 
@@ -1375,9 +1552,9 @@ export const InspectionReport = forwardRef<
             The inspection is limited to the parts of the building which are
             visible and/or accessible. YALLA FIX IT have not removed any
             panelling, furniture or floor coverings. External features are
-            viewed and inspected from available areas at ground level;
-            therefore we are not able to report on any unexposed or
-            inaccessible areas of the property to confirm their condition.
+            viewed and inspected from available areas at ground level; therefore
+            we are not able to report on any unexposed or inaccessible areas of
+            the property to confirm their condition.
           </Para>
 
           <Heading>Overview:</Heading>
@@ -1405,7 +1582,9 @@ export const InspectionReport = forwardRef<
             The issued reports write this by hand; the same summary read off
             the record cannot disagree with the defect pages that follow.
           */}
-          <div style={{ paddingTop: 0, paddingBottom: forPDF ? "18px" : "10px" }}>
+          <div
+            style={{ paddingTop: 0, paddingBottom: forPDF ? "18px" : "10px" }}
+          >
             {(["high", "medium", "low"] as const)
               .map((grade) => ({
                 grade,
@@ -1425,8 +1604,9 @@ export const InspectionReport = forwardRef<
                 >
                   {index + 1}-&nbsp;&nbsp;
                   <strong>
-                    {SEVERITY[group.grade].label} severity — {group.items.length}{" "}
-                    defect{group.items.length === 1 ? "" : "s"}
+                    {SEVERITY[group.grade].label} severity —{" "}
+                    {group.items.length} defect
+                    {group.items.length === 1 ? "" : "s"}
                   </strong>
                   <div style={{ paddingLeft: 18, paddingBottom: "2px" }}>
                     {[
@@ -1461,21 +1641,9 @@ export const InspectionReport = forwardRef<
         <Heading>Summary</Heading>
         <div style={{ display: "flex", gap: 8 }}>
           <Stat label="Total snags" value={String(snags.length)} />
-          <Stat
-            label="High"
-            value={String(high)}
-            tone={undefined}
-          />
-          <Stat
-            label="Medium"
-            value={String(medium)}
-            tone={undefined}
-          />
-          <Stat
-            label="Low"
-            value={String(low)}
-            tone={undefined}
-          />
+          <Stat label="High" value={String(high)} tone={undefined} />
+          <Stat label="Medium" value={String(medium)} tone={undefined} />
+          <Stat label="Low" value={String(low)} tone={undefined} />
           {/*
             A de-snag round is measured on its carried defects, not on rooms:
             the inspector never ticks a room off on a round, so this read
@@ -1554,7 +1722,7 @@ export const InspectionReport = forwardRef<
 
         {/* ── FR-7.02: what this unit keeps failing on ── */}
         {subCategoryTally.length > 0 ? (
-          <div style={{ marginTop: '15px' }}>
+          <div style={{ marginTop: "15px" }}>
             <Heading>Most affected sub-categories</Heading>
             <Card style={pad(forPDF, 6, 14)}>
               {subCategoryTally.map((row, index) => {
@@ -1578,7 +1746,12 @@ export const InspectionReport = forwardRef<
                       {index + 1}
                     </span>
                     <span
-                      style={{ flex: 1, fontWeight: 600, fontSize: 10, color: C.ink }}
+                      style={{
+                        flex: 1,
+                        fontWeight: 600,
+                        fontSize: 10,
+                        color: C.ink,
+                      }}
                     >
                       {row.label}
                     </span>
@@ -1589,6 +1762,8 @@ export const InspectionReport = forwardRef<
                         background: C.line,
                         borderRadius: 3,
                         overflow: "hidden",
+                        /* Level with the text, which the PDF draws lower. */
+                        marginTop: forPDF ? 6 : 0,
                       }}
                     >
                       <span
@@ -1620,7 +1795,7 @@ export const InspectionReport = forwardRef<
 
         {/* ── Areas the inspector could not fully reach ── */}
         {accessIssues.length > 0 ? (
-          <div style={{ marginTop: '15px' }}>
+          <div style={{ marginTop: "15px" }}>
             <Heading>Areas not fully inspected</Heading>
             <Card style={pad(forPDF, 6, 14)}>
               {accessIssues.map((area, index) => (
@@ -1635,9 +1810,12 @@ export const InspectionReport = forwardRef<
                     justifyContent: "space-between",
                   }}
                 >
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-
-                    <span style={{ fontWeight: 600, fontSize: 10, color: C.ink }}>
+                  <div
+                    style={{ display: "flex", alignItems: "center", gap: 8 }}
+                  >
+                    <span
+                      style={{ fontWeight: 600, fontSize: 10, color: C.ink }}
+                    >
                       {area.name}
                     </span>
                     {area.access_reason ? (
@@ -1658,6 +1836,122 @@ export const InspectionReport = forwardRef<
           </div>
         ) : null}
 
+        {/* ── Floor plan: every defect where it was found (point 8) ── */}
+        {plansWithPins.length > 0 ? (
+          <div style={forPDF ? { breakBefore: "page" } : undefined}>
+            {plansWithPins.map(({ plan, pins }, planIndex) => (
+              /*
+                One plan, kept on one page: a page break is moved above it
+                (data-pdf-block), and it is capped at a page's height so
+                that is always possible. The frame wraps the image exactly,
+                so the pins, placed in percentages, stay on their spots.
+              */
+              <div
+                key={plan.id}
+                data-pdf-block
+                style={{ marginBottom: 14, breakInside: "avoid" }}
+              >
+                {/* The heading sits inside the first plan's block, so the
+                    two always share a page. */}
+                {planIndex === 0 ? (
+                  <>
+                    <Heading>Floor plan</Heading>
+                    <div
+                      style={{
+                        fontSize: 9.5,
+                        color: C.sub,
+                        paddingBottom: forPDF ? 12 : 8,
+                      }}
+                    >
+                      Every defect where it was found. The numbers match the
+                      list that follows.
+                    </div>
+                  </>
+                ) : null}
+                {plansWithPins.length > 1 ||
+                (task.floor_plans ?? []).length > 1 ? (
+                  <div
+                    style={{
+                      fontSize: 10.5,
+                      fontWeight: 600,
+                      color: C.ink,
+                      paddingBottom: forPDF ? 8 : 4,
+                    }}
+                  >
+                    {planName(plan.label)}
+                  </div>
+                ) : null}
+                <div style={{ textAlign: "center" }}>
+                  <div
+                    style={{
+                      position: "relative",
+                      display: "inline-block",
+                      maxWidth: "100%",
+                      verticalAlign: "top",
+                      border: `1px solid ${C.grid}`,
+                      borderRadius: 6,
+                      overflow: "hidden",
+                      background: "#fff",
+                    }}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={plan.signed_url ?? ""}
+                      alt={plan.label}
+                      crossOrigin="anonymous"
+                      style={{
+                        display: "block",
+                        maxWidth: "100%",
+                        maxHeight: PLAN_MAX_H,
+                        width: "auto",
+                        height: "auto",
+                      }}
+                    />
+                    {pins.map((snag) => (
+                      <span
+                        key={snag.id}
+                        style={{
+                          position: "absolute",
+                          left: `${(snag.pin_x ?? 0) * 100}%`,
+                          top: `${(snag.pin_y ?? 0) * 100}%`,
+                          transform: "translate(-50%, -50%)",
+                          minWidth: 12,
+                          height: 16,
+                          padding: "0 2px",
+                          borderRadius: 999,
+                          border: "2px solid #fff",
+                          background:
+                            snag.severity === "high"
+                              ? "#a81d1d"
+                              : snag.severity === "medium"
+                                ? "#b45309"
+                                : "#475569",
+                          color: "#fff",
+                          fontSize: 8,
+                          fontWeight: 700,
+                          boxSizing: "content-box",
+                          textAlign: "center",
+                          /*
+                          The number is centred by its line box rather than
+                          by flex. The PDF capture draws text lower than the
+                          page lays it out, which pushed a flex-centred
+                          number out through the bottom of its dot, so the
+                          line box is shortened there to lift it back.
+                        */
+                          lineHeight: forPDF ? "11px" : "16px",
+                          boxShadow: "0 1px 2px rgba(0,0,0,.35)",
+                        }}
+                      >
+                        {defectNumber.get(snag.id)}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
         {/* ── Defects, grouped by area, one card per area ── */}
         {/*
           The defect pages open the way the issued reports open theirs:
@@ -1668,7 +1962,7 @@ export const InspectionReport = forwardRef<
           style={{
             fontSize: 12,
             color: C.ink,
-            paddingTop: '20px',
+            paddingTop: "20px",
             paddingBottom: forPDF ? "18px" : "10px",
           }}
         >
@@ -1697,79 +1991,104 @@ export const InspectionReport = forwardRef<
                 {areas.map((area, areaIndex) => {
                   const areaSnags = byArea.get(area.id) ?? [];
                   const letter = areaLetter(areaIndex);
-                  return (
-                    <div key={area.id} style={{ marginBottom: 8 }}>
-                      <div
-                        style={{
-                          fontSize: 10.5,
-                          fontWeight: 600,
-                          color: C.ink,
-                          ...pad(forPDF, 4, 0),
-                        }}
-                      >
-                        {letter}. {area.name}
-                        {areaSnags.length === 0 ? (
-                          <span style={{ color: C.sub, fontWeight: 400 }}>
-                            {" "}
-                            —{" "}
-                            {area.access_state === "not_accessible"
-                              ? "not inspected"
-                              : "no defects found"}
-                          </span>
-                        ) : null}
-                      </div>
+                  const heading = (
+                    <div
+                      style={{
+                        fontSize: 10.5,
+                        fontWeight: 600,
+                        color: C.ink,
+                        ...pad(forPDF, 4, 0),
+                      }}
+                    >
+                      {letter}. {area.name}
+                      {areaSnags.length === 0 ? (
+                        <span style={{ color: C.sub, fontWeight: 400 }}>
+                          {" "}
+                          —{" "}
+                          {area.access_state === "not_accessible"
+                            ? "not inspected"
+                            : "no defects found"}
+                        </span>
+                      ) : null}
+                    </div>
+                  );
 
-                      {areaSnags.map((snag, index) => {
-                        running += 1;
-                        const photos = (snag.photos ?? []).filter(
-                          (photo) => photo.signed_url,
-                        );
-                        /*
+                  const cards = areaSnags.map((snag, index) => {
+                    running += 1;
+                    const photos = (snag.photos ?? []).filter(
+                      (photo) => photo.signed_url,
+                    );
+                    /*
                           A defect carried into a de-snag round is shown as
                           before and after: the photo it was reported with,
                           and the one taken on this round.
                         */
-                        const round = task.round_number ?? 1;
-                        const carried =
-                          task.visit_type === "desnag" && (snag.round_created ?? 1) < round;
-                        const before = photos.filter((p) => (p.round_number ?? 1) < round);
-                        const after = photos.filter((p) => (p.round_number ?? 1) >= round);
-                        return (
-                          <DefectCard
-                            key={snag.id}
-                            first={index === 0}
-                            reference={`${String(running).padStart(3, "0")}-${letter}-${String(
-                              index + 1,
-                            ).padStart(2, "0")}`}
-                            number={running}
-                            title={
-                              /* Category · sub-category · defect, the
-                                 catalogue's three levels (P1). A snag
-                                 captured before the restructure has no
-                                 category and simply reads as two. */
-                              [
-                                snag.category_label,
-                                snag.element_label,
-                                snag.defect_label,
-                              ]
-                                .filter(Boolean)
-                                .join(" · ") || "Defect"
-                            }
-                            severity={snag.severity}
-                            note={snag.note}
-                            status={snag.status}
-                            photo={carried ? (before[0] ?? null) : (photos[0] ?? null)}
-                            afterPhoto={carried ? (after[after.length - 1] ?? null) : undefined}
-                            beforeAfter={carried}
-                            area={area.name}
-                            floor={floorOf(snag.floor_plan_id)}
-                          />
-                        );
-                      })}
+                    const round = task.round_number ?? 1;
+                    const carried =
+                      task.visit_type === "desnag" &&
+                      (snag.round_created ?? 1) < round;
+                    const before = photos.filter(
+                      (p) => (p.round_number ?? 1) < round,
+                    );
+                    const after = photos.filter(
+                      (p) => (p.round_number ?? 1) >= round,
+                    );
+                    return (
+                      <DefectCard
+                        key={snag.id}
+                        reference={`${String(running).padStart(3, "0")}-${letter}-${String(
+                          index + 1,
+                        ).padStart(2, "0")}`}
+                        number={running}
+                        /* The defect as the heading, and the catalogue
+                               category and sub-category as its path (P1). A
+                               snag captured before the restructure has fewer
+                               levels, and a repeated level is shown once. */
+                        title={
+                          snag.defect_label ||
+                          snag.element_label ||
+                          snag.category_label ||
+                          "Defect"
+                        }
+                        path={
+                          [
+                            ...new Set(
+                              [snag.category_label, snag.element_label].filter(
+                                (part): part is string => Boolean(part?.trim()),
+                              ),
+                            ),
+                          ].join(" · ") || null
+                        }
+                        severity={snag.severity}
+                        note={snag.note}
+                        status={snag.status}
+                        photo={
+                          carried ? (before[0] ?? null) : (photos[0] ?? null)
+                        }
+                        afterPhoto={
+                          carried
+                            ? (after[after.length - 1] ?? null)
+                            : undefined
+                        }
+                        beforeAfter={carried}
+                        area={area.name}
+                        floor={floorOf(snag.floor_plan_id)}
+                      />
+                    );
+                  });
+
+                  return (
+                    <div key={area.id} style={{ marginBottom: 8 }}>
+                      {/* The heading and the first card as one block, so a
+                          heading is never left alone at the foot of a page. */}
+                      <div data-pdf-block={cards.length > 0 ? "" : undefined}>
+                        {heading}
+                        {cards[0]}
+                      </div>
+                      {cards.slice(1)}
                     </div>
                   );
                 })}
-
               </>
             );
           })()
@@ -1894,8 +2213,8 @@ export const InspectionReport = forwardRef<
           <Para>
             {snags.length === 0 ? (
               <>
-                The property was found in acceptable condition, with no
-                defects recorded at this inspection.
+                The property was found in acceptable condition, with no defects
+                recorded at this inspection.
               </>
             ) : (
               <>
@@ -1914,7 +2233,9 @@ export const InspectionReport = forwardRef<
             Read off the record rather than typed, so it cannot drift from
             the pages above it.
           */}
-          <div style={{ paddingTop: 0, paddingBottom: forPDF ? "18px" : "10px" }}>
+          <div
+            style={{ paddingTop: 0, paddingBottom: forPDF ? "18px" : "10px" }}
+          >
             {[...snags]
               .sort(
                 (a, b) =>
@@ -2016,11 +2337,10 @@ export const InspectionReport = forwardRef<
             paddingBottom: forPDF ? "12px" : "6px",
           }}
         >
-          YALLA FIX IT, PO BOX 550312 | TEL 800 - PERFECT |
-          INFO@YALLAFIXIT.AE | WWW.YALLAFIXIT.AE
+          YALLA FIX IT, PO BOX 550312 | TEL 800 - PERFECT | INFO@YALLAFIXIT.AE |
+          WWW.YALLAFIXIT.AE
         </div>
       </div>
     </PdfMode.Provider>
   );
 });
-

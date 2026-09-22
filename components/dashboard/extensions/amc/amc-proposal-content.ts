@@ -1,55 +1,23 @@
 import { AMC_SERVICES } from "./amc-constants";
-import { SCOPE_SECTIONS } from "./amc-contract-content";
 import {
+  computeServiceRowPrice,
   formatDisplayDate,
   formatPaymentTermsLabel,
 } from "./amc-pricing";
 import type { AmcComputedData, AmcFormData } from "./amc-types";
 
 export interface ProposalServiceRow {
+  serviceId: string;
   service: string;
-  coverage: string;
+  /* FR4.1 — "each with the units, frequency and price entered". */
+  units: number;
   frequency: string;
+  price: number;
 }
 
 export interface ProposalCommercialTerm {
   label: string;
   value: string;
-}
-
-const SERVICE_COVERAGE_FALLBACK: Record<string, string> = {
-  helpdesk:
-    "Round-the-clock technical support hotline for maintenance inquiries and coordination.",
-  "ac-ppm":
-    "Filter cleaning, coil inspection, drain line flush, outdoor unit check, and airflow verification.",
-  "electrical-ppm":
-    "Inspection of DB boards, switches, sockets, lighting, and safety devices.",
-  "plumbing-ppm":
-    "Leak checks, faucet & flush inspection, floor traps, and water heater connections.",
-  "water-pump":
-    "Pump operation check, pressure kit inspection, seals, and tank float switch review.",
-  "roof-drain":
-    "Roof and balcony drain cleaning, debris removal, and free-flow verification.",
-  "water-tank":
-    "Tank cleaning and disinfection with visual inspection of valves and pipework.",
-  "duct-cleaning":
-    "Air duct vacuum cleaning, diffuser wash, filter cleaning, and sanitization.",
-  "coil-cleaning":
-    "Deep evaporator coil cleaning, filter and drain pan cleaning, and performance check.",
-  handyman:
-    "Minor carpentry, adjustments, furniture assembly support, and light touch-up works within the handyman hours covered.",
-  emergency:
-    "Priority response for critical failures outside standard working hours and holidays.",
-  "non-emergency":
-    "Scheduled inspection and minor rectification visits within agreed working hours.",
-};
-
-function buildCoverage(serviceId: string, scope: string): string {
-  const section = SCOPE_SECTIONS.find((item) => item.serviceId === serviceId);
-  if (section?.bullets?.length) {
-    return section.bullets.slice(0, 3).join(" ");
-  }
-  return SERVICE_COVERAGE_FALLBACK[serviceId] ?? scope;
 }
 
 export function buildProposalServiceRows(
@@ -67,11 +35,13 @@ export function buildProposalServiceRows(
       if (!service) return null;
 
       return {
+        serviceId: service.id,
         service: service.label.replace(/\s*\(.*?\)\s*/g, " ").trim(),
-        coverage: buildCoverage(service.id, service.scope),
+        units: row.units,
         frequency:
           frequencyByScope.get(service.scope) ??
           `${row.frequency} per year`,
+        price: computeServiceRowPrice(row),
       };
     })
     .filter((row): row is ProposalServiceRow => Boolean(row));
@@ -111,6 +81,8 @@ export function getProposalPropertyLabel(data: AmcFormData): string {
 
 export function buildProposalCommercialTerms(
   data: AmcFormData,
+  /* From AMC Settings (standard values). */
+  commitments: { standardResponseTime: string; emergencyResponseTime: string },
 ): ProposalCommercialTerm[] {
   const emergencyIncluded = data.serviceRows.some(
     (row) => row.included && row.serviceId === "emergency",
@@ -145,22 +117,16 @@ export function buildProposalCommercialTerms(
     },
     {
       label: "Standard Response Time",
-      value: "Within 48 hours",
+      value: commitments.standardResponseTime,
     },
     {
       label: "Emergency Response Time",
-      value: "Within 120 minutes",
+      value: commitments.emergencyResponseTime,
     },
   ];
 }
 
-export const PROPOSAL_IMPORTANT_NOTES = [
-  "Spare parts, materials & major repairs are not included unless specified in writing.",
-  "Any work outside the defined scope will be quoted separately for client approval.",
-  "Access to the property must be provided as scheduled for PPM and call-out visits.",
-  "Response times are subject to traffic conditions and site / community access.",
-  "This proposal is valid for 30 days from the date of issue.",
-] as const;
+export { PROPOSAL_IMPORTANT_NOTES } from "./amc-contract-content";
 
 export function formatProposalFee(amount: number): string {
   return new Intl.NumberFormat("en-AE", {
@@ -169,9 +135,6 @@ export function formatProposalFee(amount: number): string {
   }).format(amount);
 }
 
-export function getProposalValidityLabel(): string {
-  return "1 Year";
-}
 
 export function getProposalStartLabel(data: AmcFormData): string {
   return formatDisplayDate(data.startDate) || "—";
