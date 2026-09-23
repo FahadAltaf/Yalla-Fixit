@@ -370,6 +370,12 @@ export interface AmcSubmission {
      so the list has to say whose each one is. */
   owner_name?: string | null;
   is_own?: boolean;
+  /*
+    Sent with a single submission (GET ?id=): whether the person reading it
+    may approve or send it back. The detail page needs it, and it used to
+    come only with the whole list.
+  */
+  viewer_can_approve?: boolean;
 }
 
 /* One entry in a submission's history, from the audit trail (FR5.9). */

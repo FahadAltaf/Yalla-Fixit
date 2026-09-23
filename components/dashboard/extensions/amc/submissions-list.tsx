@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { format } from "date-fns";
 import type { ColumnDef } from "@tanstack/react-table";
@@ -20,11 +21,9 @@ import {
   Undo2,
   UserRound,
 } from "lucide-react";
-import { saveAs } from "file-saver";
 import { toast } from "sonner";
 
 import { DataTable } from "@/components/data-table";
-import { useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { IconText } from "@/components/data-table/columns/icon-text";
 import { RecordsToolbar } from "@/components/data-table/toolbars/records-toolbar";
 import { Button } from "@/components/ui/button";
@@ -40,63 +39,26 @@ import {
 import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
-import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  amcSettingsService,
-  amcSubmissionsService,
-} from "@/modules/amc-submissions";
-import type { AmcSettings } from "./amc-settings";
+import { amcSubmissionsService } from "@/modules/amc-submissions";
 
-import {
-  buildAmcPdfFromSubmission,
-  savedSettingsFor,
-} from "./amc-document-utils";
-import { useAmcPdfViewer } from "./amc-pdf-viewer";
 import { AMC_APPROVALS_CHANGED } from "./amc-approval-notice";
 import { amcStatusTone } from "./amc-status";
-import { SubmissionDetailsDialog } from "./submission-details-dialog";
-import { AmcSendDialog, type AmcSendRequest } from "./amc-send-dialog";
+import { useAmcActions } from "./use-amc-actions";
 import {
+  AMC_STATUSES,
   AMC_STATUS_LABELS,
   isAmcSubmissionEditable,
-  type AmcDocumentType,
   type AmcSubmission,
+  type AmcSubmissionStatus,
 } from "./amc-types";
 
-interface SubmissionsListProps {
-  refreshKey: number;
-  onEdit: (submissionId: string) => void;
-  onCreateNew: () => void;
-}
-
-/* The PDF as base64, for the email attachment. */
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = String(reader.result ?? "");
-      resolve(result.slice(result.indexOf(",") + 1));
-    };
-    reader.onerror = () =>
-      reject(reader.error ?? new Error("Couldn't read the PDF."));
-    reader.readAsDataURL(blob);
-  });
-}
+type Scope = "all" | "mine";
 
 function getErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error && error.message) {
@@ -105,46 +67,49 @@ function getErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
-export function SubmissionsList({
-  refreshKey,
-  onEdit,
-  onCreateNew,
-}: SubmissionsListProps) {
-  const [submissions, setSubmissions] = useState<AmcSubmission[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [loadError, setLoadError] = useState(false);
-  const [viewingKey, setViewingKey] = useState<string | null>(null);
-  const [canApprove, setCanApprove] = useState(false);
-  const [sendBackFor, setSendBackFor] = useState<AmcSubmission | null>(null);
-  const [sendBackReason, setSendBackReason] = useState("");
-  const [deciding, setDeciding] = useState(false);
-  const [sendingId, setSendingId] = useState<string | null>(null);
-  const [downloadingId, setDownloadingId] = useState<string | null>(null);
-  /* Email always asks first (check the address); Copy link asks only when
-     a link already exists, since a new one stops the old one working. */
-  const [sendRequest, setSendRequest] = useState<AmcSendRequest | null>(null);
-  const { confirm, dialog: confirmDialog } = useConfirm();
-  const viewer = useAmcPdfViewer();
-  const [detailsFor, setDetailsFor] = useState<AmcSubmission | null>(null);
-  const [search, setSearch] = useState("");
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(10);
-  /* Approvers see everyone's submitted proposals as well as their own. */
-  const [scope, setScope] = useState<"all" | "mine" | "waiting">("all");
+/**
+ * Every AMC proposal the viewer can see (FR3.2): their own, and -- for an
+ * approver -- everyone's past draft.
+ *
+ * Opening one goes to its own page (/extensions/amc/<id>); editing a draft
+ * goes to the wizard (/extensions/amc/<id>/edit); Create New starts one at
+ * /extensions/amc/new. The filters live in the address (?status=,
+ * ?scope=), so a filtered list can be reloaded or shared.
+ */
+export function SubmissionsList() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const reviewId = searchParams.get("review");
-  /* "Show all" on the approval notice lands here filtered (?scope=waiting). */
+  const [submissions, setSubmissions] = useState<AmcSubmission[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [canApprove, setCanApprove] = useState(false);
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
+
+  const statusParam = searchParams.get("status");
+  const status: AmcSubmissionStatus | "all" = (AMC_STATUSES as readonly string[]).includes(
+    statusParam ?? "",
+  )
+    ? (statusParam as AmcSubmissionStatus)
+    : "all";
   const scopeParam = searchParams.get("scope");
-  useEffect(() => {
-    if (scopeParam !== "waiting") return;
-    setScope("waiting");
-    setPage(0);
-    const next = new URLSearchParams(searchParams.toString());
-    next.delete("scope");
-    router.replace(`${pathname}?${next.toString()}`, { scroll: false });
-  }, [scopeParam, searchParams, router, pathname]);
+  /* Approvers see everyone's submitted proposals as well as their own. */
+  const scope: Scope = scopeParam === "mine" ? "mine" : "all";
+
+  /* A filter is a change of address, so Back and a reload keep it. */
+  const setFilter = useCallback(
+    (key: "status" | "scope", value: string) => {
+      const next = new URLSearchParams(searchParams.toString());
+      if (value === "all") next.delete(key);
+      else next.set(key, value);
+      const query = next.toString();
+      router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+      setPage(0);
+    },
+    [pathname, router, searchParams],
+  );
 
   const loadSubmissions = useCallback(async () => {
     setIsLoading(true);
@@ -159,9 +124,7 @@ export function SubmissionsList({
       console.error(error);
       setSubmissions([]);
       setLoadError(true);
-      toast.error(
-        getErrorMessage(error, "Couldn't load submissions. Try again."),
-      );
+      toast.error(getErrorMessage(error, "Couldn't load submissions. Try again."));
     } finally {
       setIsLoading(false);
     }
@@ -169,7 +132,7 @@ export function SubmissionsList({
 
   useEffect(() => {
     void loadSubmissions();
-  }, [loadSubmissions, refreshKey]);
+  }, [loadSubmissions]);
 
   /* The header bell found a new request: show it without a manual refresh. */
   useEffect(() => {
@@ -178,34 +141,31 @@ export function SubmissionsList({
     return () => window.removeEventListener(AMC_APPROVALS_CHANGED, reload);
   }, [loadSubmissions]);
 
-  /* Opened from the bell (?review=<id>): show that proposal's details,
-     then drop the id from the address so a reload does not reopen it. */
-  useEffect(() => {
-    if (!reviewId || isLoading) return;
-    const match = submissions.find((sub) => sub.id === reviewId);
-    if (match) setDetailsFor(match);
-    else toast.info("That proposal is no longer waiting for your approval.");
-    const next = new URLSearchParams(searchParams.toString());
-    next.delete("review");
-    router.replace(`${pathname}?${next.toString()}`, { scroll: false });
-  }, [reviewId, isLoading, submissions, searchParams, router, pathname]);
+  const actions = useAmcActions({ onChanged: loadSubmissions });
+
+  /* How many proposals sit in each status, for the filter's counts. */
+  const statusCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const sub of submissions) counts.set(sub.status, (counts.get(sub.status) ?? 0) + 1);
+    return counts;
+  }, [submissions]);
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
     return submissions.filter((sub) => {
       if (scope === "mine" && sub.is_own === false) return false;
-      if (scope === "waiting" && sub.status !== "awaiting_approval")
-        return false;
+      if (status !== "all" && sub.status !== status) return false;
       if (!q) return true;
       return [
         sub.customer.customerName,
+        sub.customer.proposalNumber,
         sub.property.propertyAddress,
         sub.owner_name,
       ]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(q));
     });
-  }, [submissions, search, scope]);
+  }, [submissions, search, scope, status]);
 
   const total = visible.length;
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
@@ -215,235 +175,11 @@ export function SubmissionsList({
   const pageStart = currentPage * pageSize;
   const pageRows = visible.slice(pageStart, pageStart + pageSize);
 
-  /*
-    FR5.2 — approve, or send back with a reason. The list reloads rather
-    than patching the row in place: a decision changes which rows the
-    caller can see at all (FR3.2), so a local edit would leave the queue
-    showing a row the next reload drops.
-  */
-  const handleDecision = async (
-    submission: AmcSubmission,
-    action: "approve" | "send_back",
-    reason?: string,
-  ) => {
-    /* Send back already asks, in its own dialog with the reason. */
-    if (
-      action === "approve" &&
-      !(await confirm({
-        title: "Approve this proposal?",
-        description: `${submission.customer.customerName || "This proposal"}${submission.customer.proposalNumber ? ` (${submission.customer.proposalNumber})` : ""} will be approved and can then be sent to the client. It can't be edited after this.`,
-        confirmText: "Approve",
-      }))
-    ) {
-      return;
-    }
-    setDeciding(true);
-    try {
-      await amcSubmissionsService.decide(
-        action === "approve"
-          ? { action: "approve", id: submission.id }
-          : { action: "send_back", id: submission.id, reason: reason ?? "" },
-      );
-      toast.success(
-        action === "approve"
-          ? "Approved. You can now send it to the client."
-          : "Sent back to the owner with your note.",
-      );
-      setSendBackFor(null);
-      setSendBackReason("");
-      setDetailsFor(null);
-      window.dispatchEvent(new Event(AMC_APPROVALS_CHANGED));
-      await loadSubmissions();
-    } catch (error) {
-      console.error(error);
-      toast.error(
-        getErrorMessage(
-          error,
-          action === "approve"
-            ? "Couldn't approve this proposal."
-            : "Couldn't send this proposal back.",
-        ),
-      );
-    } finally {
-      setDeciding(false);
-    }
-  };
-
-  /*
-    FR5.4 / FR5.6 — send the document, or take the link to send over
-    WhatsApp. Both mint a token and advance the status; only the delivery
-    differs, so they are one call with a `deliver` flag rather than two
-    code paths that could drift.
-  */
-  const requestSend = (
-    submission: AmcSubmission,
-    document: "proposal" | "contract",
-    deliver: "email" | "link",
-  ) => {
-    setSendRequest({ submission, document, deliver });
-  };
-
-  const handleSend = async (
-    submission: AmcSubmission,
-    document: "proposal" | "contract",
-    deliver: "email" | "link",
-    to?: string,
-  ) => {
-    setSendingId(submission.id);
-    const label = document === "proposal" ? "proposal" : "contract";
-    /* One toast from start to finish: building the link or sending the
-       email takes a moment, and a click with no feedback gets repeated. */
-    const toastId = toast.loading(
-      deliver === "link"
-        ? `Creating the ${label} link…`
-        : `Emailing the ${label} to the client…`,
-    );
-    try {
-      /* Email carries the PDF, like the snagging quotation. It is built
-         with the text it will be sent with (FR6.4). */
-      let pdf: { pdf_base64: string; pdf_filename: string } | undefined;
-      if (deliver === "email") {
-        toast.loading(`Preparing the ${label} PDF…`, { id: toastId });
-        const settings = savedSettingsFor(submission, document)
-          ? undefined
-          : (await amcSettingsService.getSettings().catch(() => null))
-              ?.settings;
-        const built = await buildAmcPdfFromSubmission(
-          submission,
-          document,
-          settings,
-        );
-        pdf = {
-          pdf_base64: await blobToBase64(built.blob),
-          pdf_filename: built.filename,
-        };
-        toast.loading(`Emailing the ${label} to the client…`, {
-          id: toastId,
-        });
-      }
-      const result = await amcSubmissionsService.send({
-        id: submission.id,
-        document,
-        deliver,
-        to,
-        ...pdf,
-      });
-      setSendRequest(null);
-
-      if (deliver === "link") {
-        await navigator.clipboard.writeText(result.link).catch(() => {
-          /* Clipboard access can be refused; the link still has to reach
-             the person, so it is shown rather than silently lost. */
-          window.prompt(
-            "Copy this link and send it to the client:",
-            result.link,
-          );
-        });
-        toast.success(
-          "Link copied. Paste it into WhatsApp or an email to send it.",
-          { id: toastId },
-        );
-      } else if (result.warning) {
-        toast.warning(result.warning, { id: toastId });
-      } else {
-        toast.success(
-          document === "proposal"
-            ? "Proposal emailed to the client."
-            : "Contract emailed to the client.",
-          { id: toastId },
-        );
-      }
-      await loadSubmissions();
-    } catch (error) {
-      console.error(error);
-      toast.error(getErrorMessage(error, "Couldn't send this document."), {
-        id: toastId,
-      });
-    } finally {
-      setSendingId(null);
-    }
-  };
-
-  /* Download a proposal or contract as PDF or Word, with a toast while it
-     builds (a contract can take a few seconds). */
-  const handleDownload = async (
-    submission: AmcSubmission,
-    documentType: AmcDocumentType,
-    fileFormat: "pdf" | "docx",
-  ) => {
-    const label = documentType === "proposal" ? "proposal" : "contract";
-    setDownloadingId(submission.id);
-    const toastId = toast.loading(
-      `Preparing the ${label} (${fileFormat === "pdf" ? "PDF" : "Word"})…`,
-    );
-    try {
-      const settings = savedSettingsFor(submission, documentType)
-        ? undefined
-        : (await amcSettingsService.getSettings().catch(() => null))?.settings;
-      const { blob, filename } = await buildAmcPdfFromSubmission(
-        submission,
-        documentType,
-        settings,
-        fileFormat,
-      );
-      saveAs(blob, filename);
-      toast.success(`Downloaded ${filename}`, { id: toastId });
-    } catch (error) {
-      console.error(error);
-      toast.error(getErrorMessage(error, `Couldn't download the ${label}.`), {
-        id: toastId,
-      });
-    } finally {
-      setDownloadingId(null);
-    }
-  };
-
-  /*
-    View a submission's proposal or contract in the in-page viewer (see
-    amc-pdf-viewer.tsx). The title names the proposal and the customer, so
-    an approver working through the queue always knows which one is open.
-  */
-  const handleView = async (
-    submission: AmcSubmission,
-    documentType: AmcDocumentType,
-  ) => {
-    const viewKey = `${submission.id}:${documentType}`;
-    const label = documentType === "proposal" ? "Proposal" : "Contract";
-    const who = submission.customer.customerName || "Customer";
-    const number = submission.customer.proposalNumber;
-
-    setViewingKey(viewKey);
-    try {
-      /* A document not sent yet renders with the current settings; a sent
-         one uses the text it was sent with (FR6.4). Loaded on demand,
-         since most views are of sent documents that do not need it. */
-      const liveSettings = async (): Promise<AmcSettings | undefined> =>
-        savedSettingsFor(submission, documentType)
-          ? undefined
-          : (await amcSettingsService.getSettings().catch(() => null))
-              ?.settings;
-
-      await viewer.open(
-        [label, number, who].filter(Boolean).join(" · "),
-        async () =>
-          buildAmcPdfFromSubmission(
-            submission,
-            documentType,
-            await liveSettings(),
-          ),
-        {
-          buildWord: async () =>
-            buildAmcPdfFromSubmission(
-              submission,
-              documentType,
-              await liveSettings(),
-              "docx",
-            ),
-        },
-      );
-    } finally {
-      setViewingKey(null);
-    }
+  const filtered = status !== "all" || scope !== "all" || Boolean(search);
+  const clearFilters = () => {
+    setSearch("");
+    router.replace(pathname, { scroll: false });
+    setPage(0);
   };
 
   /*
@@ -455,11 +191,17 @@ export function SubmissionsList({
       id: "customer",
       header: "Customer / Property",
       cell: ({ row }) => (
-        <IdentityCell
-          title={row.original.customer.customerName || "Unnamed customer"}
-          subtitle={row.original.property.propertyAddress || "No address"}
-          icon={UserRound}
-        />
+        // The customer is the way into the proposal's own page.
+        <Link
+          href={`/extensions/amc/${row.original.id}`}
+          className="focus-visible:ring-ring block rounded-md hover:opacity-80 focus-visible:ring-2 focus-visible:outline-none"
+        >
+          <IdentityCell
+            title={row.original.customer.customerName || "Unnamed customer"}
+            subtitle={row.original.property.propertyAddress || "No address"}
+            icon={UserRound}
+          />
+        </Link>
       ),
       enableSorting: false,
     },
@@ -539,7 +281,8 @@ export function SubmissionsList({
       enableSorting: false,
       cell: ({ row }) => {
         const submission = row.original;
-        const isViewing = viewingKey?.startsWith(`${submission.id}:`);
+        const isViewing = actions.viewingKey?.startsWith(`${submission.id}:`);
+        const sending = actions.sendingId === submission.id;
         const customer = submission.customer.customerName || "Unnamed customer";
         return (
           <DropdownMenu>
@@ -549,9 +292,9 @@ export function SubmissionsList({
                 size="icon"
                 className="size-8"
                 aria-label={`Actions for ${customer}`}
-                disabled={isViewing || sendingId === submission.id}
+                disabled={isViewing || sending}
               >
-                {isViewing || sendingId === submission.id ? (
+                {isViewing || sending ? (
                   <Loader2 className="size-4 animate-spin" />
                 ) : (
                   <EllipsisVerticalIcon className="size-4" />
@@ -563,20 +306,23 @@ export function SubmissionsList({
                   than shown-and-refused: opening a locked submission in
                   the wizard would let the team type into a form whose
                   every autosave the server rejects. */}
-              {isAmcSubmissionEditable(submission.status) &&
-              submission.is_own !== false ? (
-                <DropdownMenuItem onClick={() => onEdit(submission.id)}>
-                  <PencilIcon className="size-4" />
-                  Edit
-                </DropdownMenuItem>
-              ) : (
-                /* Locked submissions still need to be readable: the
-                   customer, services, prices and what has happened. */
-                <DropdownMenuItem onClick={() => setDetailsFor(submission)}>
+              {/* Every proposal has its own page: the customer,
+                  services, prices and everything that has happened. */}
+              <DropdownMenuItem asChild>
+                <Link href={`/extensions/amc/${submission.id}`}>
                   <Info className="size-4" />
                   View details
+                </Link>
+              </DropdownMenuItem>
+              {isAmcSubmissionEditable(submission.status) &&
+              submission.is_own !== false ? (
+                <DropdownMenuItem asChild>
+                  <Link href={`/extensions/amc/${submission.id}/edit`}>
+                    <PencilIcon className="size-4" />
+                    Edit
+                  </Link>
                 </DropdownMenuItem>
-              )}
+              ) : null}
 
               {/* FR5.4 — a proposal may only be sent once it has been
                   approved internally. FR5.6 — a contract only once the
@@ -585,7 +331,7 @@ export function SubmissionsList({
                 submission.status === "proposal_sent") && (
                 <>
                   <DropdownMenuItem
-                    onClick={() => requestSend(submission, "proposal", "email")}
+                    onClick={() => actions.requestSend(submission, "proposal", "email")}
                   >
                     <Mail className="size-4" />
                     {submission.status === "proposal_sent"
@@ -593,7 +339,7 @@ export function SubmissionsList({
                       : "Email proposal to client"}
                   </DropdownMenuItem>
                   <DropdownMenuItem
-                    onClick={() => requestSend(submission, "proposal", "link")}
+                    onClick={() => actions.requestSend(submission, "proposal", "link")}
                   >
                     <LinkIcon className="size-4" />
                     Copy proposal link
@@ -604,7 +350,7 @@ export function SubmissionsList({
                 submission.status === "contract_sent") && (
                 <>
                   <DropdownMenuItem
-                    onClick={() => requestSend(submission, "contract", "email")}
+                    onClick={() => actions.requestSend(submission, "contract", "email")}
                   >
                     <Mail className="size-4" />
                     {submission.status === "contract_sent"
@@ -612,7 +358,7 @@ export function SubmissionsList({
                       : "Email contract to client"}
                   </DropdownMenuItem>
                   <DropdownMenuItem
-                    onClick={() => requestSend(submission, "contract", "link")}
+                    onClick={() => actions.requestSend(submission, "contract", "link")}
                   >
                     <LinkIcon className="size-4" />
                     Copy contract link
@@ -625,25 +371,25 @@ export function SubmissionsList({
               {canApprove && submission.status === "awaiting_approval" && (
                 <>
                   <DropdownMenuItem
-                    onClick={() => void handleDecision(submission, "approve")}
+                    onClick={() => actions.approve(submission)}
                   >
                     <CheckCircle2 className="size-4" />
                     Approve
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setSendBackFor(submission)}>
+                  <DropdownMenuItem onClick={() => actions.sendBack(submission)}>
                     <Undo2 className="size-4" />
                     Send back…
                   </DropdownMenuItem>
                 </>
               )}
               <DropdownMenuItem
-                onClick={() => void handleView(submission, "proposal")}
+                onClick={() => actions.view(submission, "proposal")}
               >
                 <FileText className="size-4" />
                 View proposal
               </DropdownMenuItem>
               <DropdownMenuItem
-                onClick={() => void handleView(submission, "contract")}
+                onClick={() => actions.view(submission, "contract")}
               >
                 <EyeIcon className="size-4" />
                 View contract
@@ -655,118 +401,9 @@ export function SubmissionsList({
     },
   ];
 
-  const sendBackDialog = (
-    <Dialog
-      open={Boolean(sendBackFor)}
-      onOpenChange={(open) => {
-        if (open) return;
-        setSendBackFor(null);
-        setSendBackReason("");
-      }}
-    >
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Send back for changes</DialogTitle>
-          <DialogDescription>
-            The owner sees your note on their submission, makes the changes and
-            resubmits. Nothing goes to the client.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-2">
-          <Label htmlFor="amc-send-back-reason">What needs changing?</Label>
-          <Textarea
-            id="amc-send-back-reason"
-            rows={4}
-            value={sendBackReason}
-            onChange={(event) => setSendBackReason(event.target.value)}
-            placeholder="e.g. The AC PPM frequency should be 4 visits, not 2."
-          />
-        </div>
-        <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={() => {
-              setSendBackFor(null);
-              setSendBackReason("");
-            }}
-            disabled={deciding}
-          >
-            Cancel
-          </Button>
-          {/* FR5.2 requires a reason, so the action stays disabled until
-              there is one rather than failing on the server. */}
-          <Button
-            onClick={() =>
-              sendBackFor &&
-              void handleDecision(
-                sendBackFor,
-                "send_back",
-                sendBackReason.trim(),
-              )
-            }
-            disabled={deciding || sendBackReason.trim().length === 0}
-          >
-            {deciding ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <Undo2 className="size-4" />
-            )}
-            Send back
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-
   return (
     <div className="flex flex-col gap-4">
-      {sendBackDialog}
-      {confirmDialog}
-      <AmcSendDialog
-        key={
-          sendRequest
-            ? `${sendRequest.submission.id}:${sendRequest.document}:${sendRequest.deliver}`
-            : "closed"
-        }
-        request={sendRequest}
-        pending={
-          Boolean(sendRequest) && sendingId === sendRequest?.submission.id
-        }
-        onCancel={() => setSendRequest(null)}
-        onConfirm={(request, to) =>
-          void handleSend(
-            request.submission,
-            request.document,
-            request.deliver,
-            to,
-          )
-        }
-      />
-      {viewer.viewer}
-      <SubmissionDetailsDialog
-        submission={detailsFor}
-        onOpenChange={(open) => !open && setDetailsFor(null)}
-        onView={(submission, documentType) => {
-          setDetailsFor(null);
-          void handleView(submission, documentType);
-        }}
-        onEdit={(id) => {
-          setDetailsFor(null);
-          onEdit(id);
-        }}
-        canApprove={canApprove}
-        deciding={deciding}
-        onApprove={(submission) => void handleDecision(submission, "approve")}
-        onSendBack={(submission) => setSendBackFor(submission)}
-        onDownload={(submission, documentType, fileFormat) =>
-          void handleDownload(submission, documentType, fileFormat)
-        }
-        downloading={downloadingId === detailsFor?.id}
-        sending={sendingId === detailsFor?.id}
-        onSend={(submission, document, deliver) =>
-          requestSend(submission, document, deliver)
-        }
-      />
+      {actions.dialogs}
       <Card className="py-0">
         {loadError ? (
           <EmptyState
@@ -804,29 +441,34 @@ export function SubmissionsList({
                 }}
                 isSearchLoading={isLoading}
                 filters={
-                  canApprove ? (
-                    <Select
-                      value={scope}
-                      onValueChange={(value) => {
-                        setScope(value as typeof scope);
-                        setPage(0);
-                      }}
-                    >
-                      <SelectTrigger
-                        className="w-[200px]"
-                        aria-label="Show submissions"
-                      >
+                  <>
+                    {/* Whose proposals: an approver sees everyone's. */}
+                    {canApprove ? (
+                      <Select value={scope} onValueChange={(value) => setFilter("scope", value)}>
+                        <SelectTrigger className="w-[200px]" aria-label="Show submissions">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All submissions</SelectItem>
+                          <SelectItem value="mine">Mine only</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    ) : null}
+                    {/* Where they stand, with how many are in each. */}
+                    <Select value={status} onValueChange={(value) => setFilter("status", value)}>
+                      <SelectTrigger className="w-[200px]" aria-label="Filter by status">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="all">All submissions</SelectItem>
-                        <SelectItem value="waiting">
-                          Waiting for approval
-                        </SelectItem>
-                        <SelectItem value="mine">Mine only</SelectItem>
+                        <SelectItem value="all">All statuses ({submissions.length})</SelectItem>
+                        {AMC_STATUSES.map((value) => (
+                          <SelectItem key={value} value={value}>
+                            {AMC_STATUS_LABELS[value]} ({statusCounts.get(value) ?? 0})
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
-                  ) : null
+                  </>
                 }
                 pageSize={pageSize}
                 onPageSizeChange={(size) => {
@@ -834,9 +476,11 @@ export function SubmissionsList({
                   setPage(0);
                 }}
                 primaryAction={
-                  <Button onClick={onCreateNew}>
-                    <Plus className="size-4" />
-                    Create New
+                  <Button asChild>
+                    <Link href="/extensions/amc/new">
+                      <Plus className="size-4" />
+                      Create New
+                    </Link>
                   </Button>
                 }
               />
@@ -845,22 +489,18 @@ export function SubmissionsList({
               <EmptyState
                 className="border-0"
                 icon={<ScrollText className="size-5" />}
-                title={
-                  search ? "No matching submissions" : "No AMC submissions yet"
-                }
+                title={filtered ? "No matching submissions" : "No AMC submissions yet"}
                 description={
-                  search
-                    ? `Nothing matches "${search}". Try another customer name or address.`
+                  filtered
+                    ? search
+                      ? `Nothing matches "${search}" with these filters. Try another customer, number or address.`
+                      : "No proposals match these filters."
                     : "Start a new proposal and it will show up here."
                 }
                 action={
-                  search
-                    ? {
-                        label: "Clear search",
-                        onClick: () => setSearch(""),
-                        variant: "outline",
-                      }
-                    : { label: "Create New", onClick: onCreateNew }
+                  filtered
+                    ? { label: "Clear filters", onClick: clearFilters, variant: "outline" }
+                    : { label: "Create New", onClick: () => router.push("/extensions/amc/new") }
                 }
               />
             }

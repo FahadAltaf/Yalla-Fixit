@@ -51,17 +51,19 @@ export async function GET(
 
     const { id, visitId } = await ctx.params;
     const admin = await createAdminServerClient();
-    const family = await loadJobFamily(admin, id);
-
-    const { data: visit, error: visitError } = await admin
-      .from("snagging_job_visits")
-      .select(
-        `id, job_id, visit_number, status, scheduled_date, appointment_at, inspector_id,
-         charge, charge_method, payment_reference, quotation_id, started_at, submitted_at,
-         review_note, notes, created_at, inspector:inspector_id(id, full_name, email)`,
-      )
-      .eq("id", visitId)
-      .maybeSingle();
+    // The family and the visit do not depend on each other: read together.
+    const [family, { data: visit, error: visitError }] = await Promise.all([
+      loadJobFamily(admin, id),
+      admin
+        .from("snagging_job_visits")
+        .select(
+          `id, job_id, visit_number, status, scheduled_date, appointment_at, inspector_id,
+           charge, charge_method, payment_reference, quotation_id, started_at, submitted_at,
+           review_note, notes, created_at, inspector:inspector_id(id, full_name, email)`,
+        )
+        .eq("id", visitId)
+        .maybeSingle(),
+    ]);
     if (visitError) throw new Error(visitError.message);
     if (!visit || visit.job_id !== family.rootId) {
       return NextResponse.json(

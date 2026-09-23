@@ -1,4 +1,3 @@
-import * as XLSX from "xlsx";
 
 /**
  * Saving a table of figures as CSV or Excel (FR-10.06).
@@ -55,7 +54,14 @@ function toCsv(matrix: Array<Array<string | number>>): string {
     .join("\r\n");
 }
 
-export function exportTable({
+/**
+ * Downloads a table as CSV or Excel.
+ *
+ * The Excel library (xlsx, several hundred KB) loads the first time an
+ * Excel file is asked for, not with the page: every page that offers an
+ * export was downloading it up front, whether anyone exported or not.
+ */
+export async function exportTable({
   columns,
   rows,
   filename,
@@ -79,6 +85,7 @@ export function exportTable({
     return;
   }
 
+  const XLSX = await import("xlsx");
   const sheet = XLSX.utils.aoa_to_sheet(matrix);
   // Column widths from the content, so nothing opens as a row of ####.
   sheet["!cols"] = columns.map((column, index) => ({

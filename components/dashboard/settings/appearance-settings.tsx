@@ -1,21 +1,15 @@
 "use client";
 
 import React, { useId } from "react";
-import { Label } from "@/components/ui/label";
-import { CheckIcon, MinusIcon } from "lucide-react";
+
+import { CheckIcon, Loader2, MinusIcon, Monitor, Palette, Save } from "lucide-react";
 import { type Theme, useTheme } from "@/context/ThemeContext";
 import Image from "next/image";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { type Settings, settingsService } from "@/modules/settings";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { PageHeading, SectionCard } from "@/components/dashboard/shared/kaizen";
 import { useAuth } from "@/context/AuthContext";
 
 export function AppearanceSettings({ settings }: { settings?: Settings }) {
@@ -160,31 +154,29 @@ export function AppearanceSettings({ settings }: { settings?: Settings }) {
   };
 
   return (
-    <Card className="w-full flex-1 relative top-px right-px gap-6">
-      {/* <CardHeader>
-        <CardTitle className="text-2xl">Appearance Settings</CardTitle>
-        <CardDescription>
-          Customize the look and feel of your application
-        </CardDescription>
+    /*
+      The house page: the heading with its one action, then a section card
+      per choice -- the same shape as every other settings page.
+    */
+    <div className="flex w-full flex-1 flex-col gap-6">
+      <PageHeading
+        eyebrow="Settings"
+        title="Appearance"
+        description="The portal's theme and brand colour, for everyone who signs in."
+        actions={
+          <Button disabled={loading} onClick={submitSettings}>
+            {loading ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+            {loading ? "Saving…" : "Save changes"}
+          </Button>
+        }
+      />
 
-     
-      </CardHeader> */}
-      <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div className="flex gap-1 flex-col">
-          <CardTitle className=" ">Appearance Settings</CardTitle>
-          <CardDescription>
-            Customize the look and feel of your application
-          </CardDescription>
-        </div>
-        <Button
-          disabled={loading}
-          onClick={submitSettings}
-          className="w-full sm:w-auto hidden sm:block"
-        >
-          {loading ? "Saving..." : "Save Changes"}
-        </Button>
-      </CardHeader>
-      <CardContent className="space-y-6">
+      <SectionCard
+        icon={<Monitor />}
+        title="Theme"
+        description="Light, dark, or whatever each person's device is set to."
+        bodyClassName="px-5 pb-5"
+      >
         {/* Theme Toggle */}
         <div className="rounded-lg space-y-4">
           <fieldset>
@@ -231,14 +223,14 @@ export function AppearanceSettings({ settings }: { settings?: Settings }) {
           </fieldset>
         </div>
 
-        {/* Primary Color */}
-        <div className="space-y-4">
-          <div className="space-y-1">
-            <Label className="text-base font-medium">Brand Color</Label>
-            <p className="text-sm text-muted-foreground">
-              Select your brand&apos;s primary color
-            </p>
-          </div>
+      </SectionCard>
+
+      <SectionCard
+        icon={<Palette />}
+        title="Brand colour"
+        description="Used for buttons, links and highlights across the portal."
+        bodyClassName="px-5 pb-5"
+      >
           <fieldset>
             <RadioGroup
               className="flex gap-2 flex-wrap"
@@ -260,15 +252,7 @@ export function AppearanceSettings({ settings }: { settings?: Settings }) {
               ))}
             </RadioGroup>
           </fieldset>
-        </div>
-        <Button
-          disabled={loading}
-          onClick={submitSettings}
-          className="w-full sm:w-auto block sm:hidden"
-        >
-          {loading ? "Saving..." : "Save Changes"}
-        </Button>
-      </CardContent>
-    </Card>
+      </SectionCard>
+    </div>
   );
 }

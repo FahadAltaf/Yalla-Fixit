@@ -10,7 +10,7 @@ import YallaFixit from "@/public/yalla-fixit.png";
 import type { SnaggingQuotation } from "@/modules/snagging";
 import type { SnaggingPhoto, SnaggingSnag, SnaggingTask } from "@/types/types";
 import { isVideo } from "./evidence-media";
-import CompanyLogo from "@/public/site-logo.webp";
+import CompanyLogo from "@/public/amc/brand/logo-trimmed.png";
 
 /**
  * Whether this tree is being rasterised for the PDF.
@@ -86,10 +86,12 @@ const C = {
   brand: "#c13d3c",
   deep: "#aa272b",
   orange: "#ff7800",
-  ink: "#1a1a2e",
-  body: "#1f3864",
-  sub: "#6b7280",
-  faint: "#9ca3af",
+  ink: "#17181c",
+  /* Was navy (#1f3864). A page of navy body text beside red headings read
+     as two brands; this is the same near-black the AMC documents set. */
+  body: "#33373f",
+  sub: "#666d78",
+  faint: "#8b919b",
   line: "#ececf0",
   rule: "#111111",
   card: "#f8f8fa",
@@ -150,7 +152,7 @@ function numberWord(n: number): string {
  * too small to see the defect being described beside it. The panel is now
  * the full width of half the card, and this tall (BA v2, change 17).
  */
-const PHOTO_H = 200;
+const PHOTO_H = 170;
 
 /*
   The tallest a floor plan is printed, in page pixels: a full page's
@@ -469,12 +471,14 @@ function Cell({
   strong = false,
   fill,
   colSpan,
+  align,
 }: {
   children: React.ReactNode;
   label?: boolean;
   strong?: boolean;
   fill?: string;
   colSpan?: number;
+  align?: "left" | "center" | "right";
 }) {
   const forPDF = useContext(PdfMode);
   return (
@@ -485,6 +489,7 @@ function Cell({
         background: fill ?? (label ? "#f2f2f2" : "#ffffff"),
         fontWeight: strong ? 700 : 400,
         color: C.ink,
+        textAlign: align ?? "left",
         verticalAlign: "middle",
         paddingTop: 0,
         paddingBottom: forPDF ? "10px" : "5px",
@@ -572,10 +577,15 @@ function YallaCompanyLogo({ small = false }: { small?: boolean }) {
       <img
         src={CompanyLogo.src}
         alt="Yalla Fix It"
+        /*
+          Sized to the file's own proportions rather than fitted into a box:
+          the PDF capture ignores object-fit, which printed the mark
+          stretched on the cover.
+        */
         style={{
-          width: small ? 92 : 200,
-          height: small ? 40 : 100,
-          objectFit: "contain",
+          width: small ? 92 : 190,
+          height: small ? 39 : 80,
+          display: "block",
         }}
       />
     </div>
@@ -649,7 +659,7 @@ function Para({ children }: { children: React.ReactNode }) {
   return (
     <p
       style={{
-        fontSize: 10,
+        fontSize: 10.5,
         lineHeight: 1.7,
         color: C.body,
         margin: 0,
@@ -742,7 +752,7 @@ function PhotoTile({
               height: 7,
               borderRadius: 2,
               background: accent ?? C.ink,
-              marginTop: forPDF ? 5 : 0,
+              marginTop: forPDF ? 9 : 1,
               flexShrink: 0,
             }}
           />
@@ -778,13 +788,16 @@ function Tag({
         borderRadius: 3,
         ...(forPDF
           ? {
-              lineHeight: "9px",
-              paddingTop: 1,
-              paddingBottom: 7,
-              paddingLeft: 6,
-              paddingRight: 6,
+              /* The capture draws text about four pixels lower than the
+                 page lays it out, so the box carries that below the line
+                 instead of clipping it. */
+              lineHeight: "10px",
+              paddingTop: 0,
+              paddingBottom: 8,
+              paddingLeft: 7,
+              paddingRight: 7,
             }
-          : { lineHeight: "11px", padding: "2px 6px" }),
+          : { lineHeight: "12px", padding: "3px 7px" }),
       }}
     >
       {children}
@@ -805,7 +818,7 @@ function DefectFact({
     <div style={{ paddingBottom: forPDF ? 10 : 8 }}>
       <div
         style={{
-          fontSize: 7,
+          fontSize: 7.5,
           fontWeight: 700,
           letterSpacing: 0.5,
           textTransform: "uppercase",
@@ -815,7 +828,7 @@ function DefectFact({
       >
         {label}
       </div>
-      <div style={{ fontSize: 9.5, lineHeight: 1.5, color: C.body }}>
+      <div style={{ fontSize: 10, lineHeight: 1.5, color: C.body }}>
         {children}
       </div>
     </div>
@@ -884,6 +897,16 @@ function DefectCard({
       : status === "verified_not_done"
         ? "Not done"
         : null;
+  /* What this defect's state is now, said on the card (FR-5.08): open,
+     fixed and re-checked, or fixed and waiting for the next visit. */
+  const state =
+    status === "verified_closed"
+      ? { label: "Closed", fg: TONE.pass.fg, bg: FILL.pass }
+      : status === "fixed"
+        ? { label: "Fixed, to re-check", fg: TONE.low.fg, bg: TONE.low.bg }
+        : reinspected
+          ? null
+          : { label: "Open", fg: C.sub, bg: "#f1f1f4" };
   const where = [floor, area].filter(Boolean).join(" · ");
 
   return (
@@ -914,7 +937,7 @@ function DefectCard({
         <div style={{ minWidth: 0 }}>
           <div
             style={{
-              fontSize: 11,
+              fontSize: 11.5,
               fontWeight: 700,
               color: C.ink,
               lineHeight: 1.35,
@@ -924,10 +947,10 @@ function DefectCard({
           </div>
           <div
             style={{
-              fontSize: 8,
+              fontSize: 8.5,
               color: C.sub,
               paddingTop: 2,
-              lineHeight: 1.4,
+              lineHeight: 1.45,
             }}
           >
             {[reference, where].filter(Boolean).join("  ·  ")}
@@ -940,6 +963,11 @@ function DefectCard({
           {reinspected ? (
             <Tag fg="#ffffff" bg={C.deep}>
               {reinspected}
+            </Tag>
+          ) : null}
+          {state ? (
+            <Tag fg={state.fg} bg={state.bg}>
+              {state.label}
             </Tag>
           ) : null}
         </div>
@@ -1021,14 +1049,16 @@ function DefectCard({
         </div>
 
         <div style={{ flex: 1, minWidth: 0 }}>
+          {/* The severity and the state are tagged in the header, and
+              where it is runs under the title, so neither is repeated. */}
           {path ? <DefectFact label="Category">{path}</DefectFact> : null}
-          {where ? <DefectFact label="Location">{where}</DefectFact> : null}
-          <DefectFact label="Severity">
-            <span style={{ color: tone.fg, fontWeight: 700 }}>
-              {grade.label}
-            </span>
-          </DefectFact>
-          {note ? <DefectFact label="Comment">{note}</DefectFact> : null}
+          {note ? (
+            <DefectFact label="Comment">{note}</DefectFact>
+          ) : (
+            <DefectFact label="Comment">
+              <span style={{ color: C.faint }}>No comment recorded.</span>
+            </DefectFact>
+          )}
           {reinspected ? (
             <div
               style={{
@@ -1322,8 +1352,8 @@ export const InspectionReport = forwardRef<
           background: "#ffffff",
           color: C.body,
           fontFamily: FONT,
-          fontSize: "10.5px",
-          lineHeight: 1.45,
+          fontSize: "11px",
+          lineHeight: 1.55,
           /*
             The app shell sets tabular figures, and Inter shapes some
             letters by context. The PDF capture draws text with neither, so
@@ -1359,7 +1389,9 @@ export const InspectionReport = forwardRef<
             paddingBottom: forPDF ? "24px" : "12px",
           }}
         >
-          <div style={{ paddingTop: 0, paddingBottom: "16px" }}>
+          <div
+            style={{ paddingTop: 0, paddingBottom: forPDF ? "18px" : "14px" }}
+          >
             <YallaCompanyLogo />
           </div>
 
@@ -1444,15 +1476,65 @@ export const InspectionReport = forwardRef<
                 </Cell>
               </tr>
               {/* All four grades on one row, the way the cover legend reads. */}
+              {/* Each grade shown the way the defect cards tag it: the word
+                  in its own colour on its own tint. */}
               <tr>
-                <Cell label>High:</Cell>
-                <Cell fill={FILL.high}>&nbsp;</Cell>
-                <Cell label>Medium:</Cell>
-                <Cell fill={FILL.medium}>&nbsp;</Cell>
-                <Cell label>Low:</Cell>
-                <Cell fill={FILL.low}>&nbsp;</Cell>
-                <Cell label>Conformity:</Cell>
-                <Cell fill={FILL.ok}>&nbsp;</Cell>
+                <Cell fill={FILL.high} colSpan={2} align="center">
+                  <span
+                    style={{
+                      color: TONE.high.fg,
+                      fontWeight: 700,
+                      fontSize: 8,
+                      letterSpacing: 0.3,
+                      textTransform: "uppercase",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    High
+                  </span>
+                </Cell>
+                <Cell fill={FILL.medium} colSpan={2} align="center">
+                  <span
+                    style={{
+                      color: TONE.medium.fg,
+                      fontWeight: 700,
+                      fontSize: 8,
+                      letterSpacing: 0.3,
+                      textTransform: "uppercase",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    Medium
+                  </span>
+                </Cell>
+                <Cell fill={FILL.low} colSpan={2} align="center">
+                  <span
+                    style={{
+                      color: TONE.low.fg,
+                      fontWeight: 700,
+                      fontSize: 8,
+                      letterSpacing: 0.3,
+                      textTransform: "uppercase",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    Low
+                  </span>
+                </Cell>
+                <Cell fill={FILL.ok} colSpan={2} align="center">
+                  <span
+                    style={{
+                      color: TONE.pass.fg,
+                      fontWeight: 700,
+                      fontSize: 8,
+                      letterSpacing: 0.3,
+                      textTransform: "uppercase",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    Conformity
+                  </span>
+                </Cell>
               </tr>
             </tbody>
           </table>
@@ -1722,7 +1804,7 @@ export const InspectionReport = forwardRef<
 
         {/* ── FR-7.02: what this unit keeps failing on ── */}
         {subCategoryTally.length > 0 ? (
-          <div style={{ marginTop: "15px" }}>
+          <div data-pdf-block style={{ marginTop: "15px" }}>
             <Heading>Most affected sub-categories</Heading>
             <Card style={pad(forPDF, 6, 14)}>
               {subCategoryTally.map((row, index) => {
@@ -1795,7 +1877,7 @@ export const InspectionReport = forwardRef<
 
         {/* ── Areas the inspector could not fully reach ── */}
         {accessIssues.length > 0 ? (
-          <div style={{ marginTop: "15px" }}>
+          <div data-pdf-block style={{ marginTop: "15px" }}>
             <Heading>Areas not fully inspected</Heading>
             <Card style={pad(forPDF, 6, 14)}>
               {accessIssues.map((area, index) => (
@@ -1855,6 +1937,8 @@ export const InspectionReport = forwardRef<
                     two always share a page. */}
                 {planIndex === 0 ? (
                   <>
+                    {/* Air above the section, which follows a card. */}
+                    <div style={{ height: forPDF ? 18 : 14 }} />
                     <Heading>Floor plan</Heading>
                     <div
                       style={{
@@ -1915,9 +1999,11 @@ export const InspectionReport = forwardRef<
                           left: `${(snag.pin_x ?? 0) * 100}%`,
                           top: `${(snag.pin_y ?? 0) * 100}%`,
                           transform: "translate(-50%, -50%)",
-                          minWidth: 12,
-                          height: 16,
+                          display: "block",
+                          minWidth: 17,
+                          height: 17,
                           padding: "0 2px",
+                          boxSizing: "content-box",
                           borderRadius: 999,
                           border: "2px solid #fff",
                           background:
@@ -1926,23 +2012,28 @@ export const InspectionReport = forwardRef<
                               : snag.severity === "medium"
                                 ? "#b45309"
                                 : "#475569",
-                          color: "#fff",
-                          fontSize: 8,
-                          fontWeight: 700,
-                          boxSizing: "content-box",
-                          textAlign: "center",
-                          /*
-                          The number is centred by its line box rather than
-                          by flex. The PDF capture draws text lower than the
-                          page lays it out, which pushed a flex-centred
-                          number out through the bottom of its dot, so the
-                          line box is shortened there to lift it back.
-                        */
-                          lineHeight: forPDF ? "11px" : "16px",
                           boxShadow: "0 1px 2px rgba(0,0,0,.35)",
                         }}
                       >
-                        {defectNumber.get(snag.id)}
+                        {/*
+                          The number sits on its own line box, the height of
+                          the dot. The PDF capture draws text about four
+                          pixels lower than the page lays it out, so there it
+                          is lifted by that much and lands in the middle.
+                        */}
+                        <span
+                          style={{
+                            display: "block",
+                            fontSize: 8,
+                            fontWeight: 700,
+                            color: "#fff",
+                            textAlign: "center",
+                            lineHeight: "17px",
+                            marginTop: forPDF ? -4 : 0,
+                          }}
+                        >
+                          {defectNumber.get(snag.id)}
+                        </span>
                       </span>
                     ))}
                   </div>
@@ -2096,7 +2187,7 @@ export const InspectionReport = forwardRef<
 
         {/* ── Commercial summary ── */}
         {quotation ? (
-          <>
+          <div data-pdf-block>
             <Heading>Commercial summary</Heading>
             <Card style={{ ...pad(forPDF, 8, 14), breakInside: "avoid" }}>
               <table
@@ -2189,7 +2280,7 @@ export const InspectionReport = forwardRef<
                 </tbody>
               </table>
             </Card>
-          </>
+          </div>
         ) : null}
 
         {/*

@@ -3,7 +3,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { signMediaPaths, signPaths } from "./media";
 import { dedupeDefects } from "./defect-set";
 import { loadJobFamily } from "./job-family";
+import { readAllRows } from "./read-all";
 import { QUOTATION_DOCUMENT_COLUMNS } from "./quotation";
+import { hasAreaInspector } from "./columns";
 
 /**
  * The one description of a client report (FR-7.02 → FR-7.04).
@@ -32,7 +34,16 @@ export type ReportCover = {
   address: string | null;
   propertyType: string | null;
   client: { name: string | null; email: string | null; phone: string | null };
+  /** The job's lead inspector. */
   inspector: string | null;
+  /**
+   * Everyone who walked any part of this job, lead first (point 6).
+   *
+   * A job split between a civil and an MEP inspector used to print only
+   * the lead's name, so the report credited one person for findings two
+   * people made. One name long whenever the job was not split.
+   */
+  inspectors: string[];
   totalSnags: number;
   severity: { high: number; medium: number; low: number };
   /** FR-7.02 — worst first, ties broken by label so the order is stable. */
@@ -90,6 +101,12 @@ export type ReportArea = {
   /** FR-7.06 — what limited access stopped the inspector reaching. */
   elementsNotChecked: string | null;
   confirmedAt: string | null;
+  /**
+   * Who walked this room, when it was not the job's lead inspector
+   * (point 6). Null means the lead, which is every room on every job
+   * created before rooms could be split between people.
+   */
+  inspector: string | null;
   snags: ReportSnag[];
 };
 
@@ -275,7 +292,25 @@ export async function buildReportData(
   jobId: string,
   scope: ReportScope = "inspection",
 ): Promise<ReportData | null> {
-  const { data: job, error } = await admin
+  /*
+    Read in three stages rather than nine reads one after another (this runs
+    on every approval, delivery and preview):
+      1. everything that needs only the job id -- the job, its family, its
+         checklist, the catalogue guidance and its quotation;
+      2. everything that needs the family -- visit states, the defects and
+         the floor plans;
+      3. every signed URL -- photos, signature and plans -- at once.
+  */
+  /*
+    Asked before the query is built, not after: naming a column the
+    migration has not added yet fails the whole select, and that would
+    take the entire report down rather than one line on the cover. The
+    answer is remembered per process, so this is one round trip on the
+    first report and none after it.
+  */
+  const areaInspector = await hasAreaInspector(admin);
+
+  const jobQuery = admin
     .from("snagging_jobs")
     .select(
       `id, code, status, round_number, visit_type, scheduled_date, submitted_at,
@@ -284,15 +319,41 @@ export async function buildReportData(
        client:client_id(name, email, phone),
        inspector:inspector_id(id, full_name, email),
        areas:snagging_areas(id, name, sort_order, access_state, access_reason,
-         elements_not_checked, confirmed_at, visit_id)`,
+         elements_not_checked, confirmed_at, visit_id${
+           areaInspector ? ", inspector_id" : ""
+         })`,
     )
     .eq("id", jobId)
     .maybeSingle();
 
+  const [
+    { data: job, error },
+    family,
+    { data: checklistRows },
+    { data: catalogue },
+    { data: quotationRow },
+  ] = await Promise.all([
+    jobQuery,
+    loadJobFamily(admin, jobId),
+    admin
+      .from("snagging_job_checklist")
+      .select("id, code, group_name, label, mandatory, status, reason, sort_order, visit_id")
+      .eq("job_id", jobId)
+      .order("sort_order", { ascending: true }),
+    admin.from("snagging_catalogue_entries").select("code, guidance"),
+    // The document only: this lands in the stored snapshot, so never the
+    // approval token hash or the other server-side columns.
+    admin
+      .from("snagging_quotations")
+      .select(QUOTATION_DOCUMENT_COLUMNS)
+      .eq("job_id", jobId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+
   if (error) throw new Error(error.message);
   if (!job) return null;
-
-  const family = await loadJobFamily(admin, jobId);
   /*
     An inspection's report reads the whole family, not just the original.
 
@@ -320,11 +381,43 @@ export async function buildReportData(
     report until approval reissues it; a submitted visit is not yet
     anything YFI stands behind.
   */
-  const { data: visitStates, error: visitStateError } = await admin
-    .from("snagging_job_visits")
-    .select("id, status")
-    .eq("job_id", family.rootId);
+  const [{ data: visitStates, error: visitStateError }, allSnagRows, { data: planRows, error: planError }] =
+    await Promise.all([
+      admin.from("snagging_job_visits").select("id, status").eq("job_id", family.rootId),
+      /*
+        Every defect, a page at a time: the API stops at 1,000 rows without
+        saying so, and a report must never quietly leave defects out. One
+        request for any ordinary job.
+      */
+      readAllRows(
+        (from, to) =>
+          admin
+            .from("snagging_snags")
+            .select(
+              `id, job_id, area_id, snag_code, catalogue_code, category_label, element_label, defect_label,
+               severity, note, status, round_created, visit_id, floor_plan_id, pin_x, pin_y,
+               photos:snagging_snag_photos(id, snag_id, storage_path, media_type, taken_at,
+                 width, height, gps_lat, gps_lng, exif, marker_x, marker_y, round_number)`,
+            )
+            .in("job_id", snagJobIds)
+            .neq("status", "withdrawn")
+            .order("snag_code", { ascending: true })
+            .order("id", { ascending: true })
+            .range(from, to),
+        "report snags",
+      ),
+      /*
+        The floor plans, for the page with every pin (point 8). They belong
+        to the original job; a round shows the same plans.
+      */
+      admin
+        .from("snagging_floor_plans")
+        .select("id, label, storage_path, width, height, sort_order")
+        .in("job_id", [...new Set([jobId, family.rootId])])
+        .order("sort_order", { ascending: true }),
+    ]);
   if (visitStateError) throw new Error(visitStateError.message);
+  if (planError) throw new Error(planError.message);
   const unapprovedVisits = new Set(
     (visitStates ?? [])
       .filter((visit) => visit.status !== "completed")
@@ -332,27 +425,6 @@ export async function buildReportData(
   );
   const unapproved = (row: Record<string, unknown>) =>
     typeof row.visit_id === "string" && unapprovedVisits.has(row.visit_id);
-
-  const [{ data: checklistRows }, { data: allSnagRows }, { data: catalogue }] =
-    await Promise.all([
-      admin
-        .from("snagging_job_checklist")
-        .select("id, code, group_name, label, mandatory, status, reason, sort_order, visit_id")
-        .eq("job_id", jobId)
-        .order("sort_order", { ascending: true }),
-      admin
-        .from("snagging_snags")
-        .select(
-          `id, job_id, area_id, snag_code, catalogue_code, category_label, element_label, defect_label,
-           severity, note, status, round_created, visit_id, floor_plan_id, pin_x, pin_y,
-           photos:snagging_snag_photos(id, snag_id, storage_path, media_type, taken_at,
-             width, height, gps_lat, gps_lng, exif, marker_x, marker_y, round_number)`,
-        )
-        .in("job_id", snagJobIds)
-        .neq("status", "withdrawn")
-        .order("snag_code", { ascending: true }),
-      admin.from("snagging_catalogue_entries").select("code, guidance"),
-    ]);
 
   const snagRows = (allSnagRows ?? []).filter(
     (row) => !unapproved(row as Record<string, unknown>),
@@ -373,13 +445,20 @@ export async function buildReportData(
     roundOf: family.roundOf,
   });
 
-  // Signed once, in one pass: a report with two hundred snags would
-  // otherwise mint a URL per photo in series.
-  const signed = (await signMediaPaths(
-    admin,
-    defects,
-    PHOTO_TTL_SECONDS,
-  )) as Array<Record<string, unknown>>;
+  // Every signed URL at once: the photos (one pass, not one per photo), the
+  // sign-off signature and the floor plans.
+  const [signedDefects, signatureUrls, signedPlanRows] = await Promise.all([
+    signMediaPaths(admin, defects, PHOTO_TTL_SECONDS),
+    job.signature_path
+      ? signPaths(admin, [job.signature_path], PHOTO_TTL_SECONDS)
+      : Promise.resolve(new Map<string, string>()),
+    signMediaPaths(
+      admin,
+      (planRows ?? []) as Array<Record<string, unknown> & { storage_path: string }>,
+      PHOTO_TTL_SECONDS,
+    ),
+  ]);
+  const signed = signedDefects as Array<Record<string, unknown>>;
 
   const guidance = new Map<string, string>();
   for (const row of catalogue ?? []) {
@@ -414,16 +493,65 @@ export async function buildReportData(
     byArea.set(snag.areaId, list);
   }
 
-  const areas: ReportArea[] = areaRows.map((area) => ({
-    id: String(area.id),
-    name: String(area.name ?? "Unnamed area"),
-    sortOrder: Number(area.sort_order ?? 0),
-    accessState: (area.access_state as string | null) ?? null,
-    accessReason: (area.access_reason as string | null) ?? null,
-    elementsNotChecked: (area.elements_not_checked as string | null) ?? null,
-    confirmedAt: (area.confirmed_at as string | null) ?? null,
-    snags: byArea.get(String(area.id)) ?? [],
-  }));
+  /*
+    The names behind the rooms' inspector ids (point 6).
+
+    One read for the whole job rather than an embed on the areas select:
+    a job split between two people has two distinct ids across twenty
+    rooms, and embedding would fetch the same profile twenty times. Rooms
+    left on the lead carry no id and cost nothing here.
+  */
+  const roomInspectorIds = [
+    ...new Set(
+      areaRows
+        .map((area) => area.inspector_id)
+        .filter((id): id is string => typeof id === "string" && id.length > 0),
+    ),
+  ];
+
+  const roomInspectorNames = new Map<string, string>();
+  if (roomInspectorIds.length > 0) {
+    const { data: profiles } = await admin
+      .from("user_profile")
+      .select("id, full_name, email")
+      .in("id", roomInspectorIds);
+    for (const row of (profiles ?? []) as Array<Record<string, unknown>>) {
+      const name =
+        (row.full_name as string | null) ?? (row.email as string | null);
+      if (row.id && name) roomInspectorNames.set(String(row.id), name);
+    }
+  }
+
+  // Declared here rather than beside `client` below, because the rooms
+  // are attributed against it a few lines down.
+  const inspector = firstOf(job.inspector as ProfileRow | ProfileRow[] | null);
+  const leadInspectorId = inspector?.id ? String(inspector.id) : null;
+  const leadInspector = inspector?.full_name ?? inspector?.email ?? null;
+
+  const areas: ReportArea[] = areaRows.map((area) => {
+    const ownId =
+      typeof area.inspector_id === "string" ? area.inspector_id : null;
+    return {
+      id: String(area.id),
+      name: String(area.name ?? "Unnamed area"),
+      sortOrder: Number(area.sort_order ?? 0),
+      accessState: (area.access_state as string | null) ?? null,
+      accessReason: (area.access_reason as string | null) ?? null,
+      elementsNotChecked: (area.elements_not_checked as string | null) ?? null,
+      confirmedAt: (area.confirmed_at as string | null) ?? null,
+      /*
+        Only when it differs from the lead. A room explicitly assigned to
+        the person already leading the job is not a second inspector, and
+        printing their name against it would suggest a split that did not
+        happen.
+      */
+      inspector:
+        ownId && ownId !== leadInspectorId
+          ? roomInspectorNames.get(ownId) ?? null
+          : null,
+      snags: byArea.get(String(area.id)) ?? [],
+    };
+  });
 
   const knownAreaIds = new Set(areas.map((area) => area.id));
   const unassignedSnags = snags.filter(
@@ -454,29 +582,12 @@ export async function buildReportData(
     .slice(0, 5);
 
   const client = firstOf(job.client as ClientRow | ClientRow[] | null);
-  const inspector = firstOf(job.inspector as ProfileRow | ProfileRow[] | null);
 
   const signatureUrl = job.signature_path
-    ? (await signPaths(admin, [job.signature_path], PHOTO_TTL_SECONDS)).get(
-        job.signature_path,
-      ) ?? null
+    ? (signatureUrls.get(job.signature_path) ?? null)
     : null;
 
-  /*
-    The floor plans, for the page with every pin (point 8). They belong to
-    the original job; a round shows the same plans.
-  */
-  const { data: planRows, error: planError } = await admin
-    .from("snagging_floor_plans")
-    .select("id, label, storage_path, width, height, sort_order")
-    .in("job_id", [...new Set([jobId, family.rootId])])
-    .order("sort_order", { ascending: true });
-  if (planError) throw new Error(planError.message);
-  const signedPlans = (await signMediaPaths(
-    admin,
-    (planRows ?? []) as Array<Record<string, unknown> & { storage_path: string }>,
-    PHOTO_TTL_SECONDS,
-  )) as Array<Record<string, unknown>>;
+  const signedPlans = signedPlanRows as Array<Record<string, unknown>>;
   const plans: ReportPlan[] = signedPlans.map((plan) => ({
     id: String(plan.id),
     label: String(plan.label ?? "Floor plan"),
@@ -484,16 +595,6 @@ export async function buildReportData(
     width: typeof plan.width === "number" ? plan.width : null,
     height: typeof plan.height === "number" ? plan.height : null,
   }));
-
-  // The document only: this lands in the stored snapshot, so never the
-  // approval token hash or the other server-side columns.
-  const { data: quotationRow } = await admin
-    .from("snagging_quotations")
-    .select(QUOTATION_DOCUMENT_COLUMNS)
-    .eq("job_id", jobId)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
 
   return {
     jobId: job.id,
@@ -522,7 +623,17 @@ export async function buildReportData(
         email: client?.email ?? null,
         phone: client?.phone ?? null,
       },
-      inspector: inspector?.full_name ?? inspector?.email ?? null,
+      inspector: leadInspector,
+      inspectors: [
+        ...(leadInspector ? [leadInspector] : []),
+        ...[
+          ...new Set(
+            areas
+              .map((area) => area.inspector)
+              .filter((name): name is string => Boolean(name)),
+          ),
+        ].sort((a, b) => a.localeCompare(b)),
+      ],
       totalSnags: snags.length,
       severity,
       mostAffectedSubCategories,

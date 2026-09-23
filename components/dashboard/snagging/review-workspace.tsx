@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, ClipboardCheck } from "lucide-react";
 
 import { Card } from "@/components/ui/card";
@@ -52,7 +52,14 @@ export default function ReviewWorkspace() {
   const [queuePage, setQueuePage] = useState(0);
   const [queueTotal, setQueueTotal] = useState(0);
 
-  const loadQueue = useCallback(async () => {
+  // The selection as of the latest render, for code that runs after an await.
+  const selectedRef = useRef<string | null>(null);
+  useEffect(() => {
+    selectedRef.current = selectedId;
+  }, [selectedId]);
+
+  /** Reads the queue page; returns the selection it settles on. */
+  const loadQueue = useCallback(async (): Promise<string | null | undefined> => {
     setQueueError(null);
     try {
       const response = await snaggingService.listTasks(
@@ -65,14 +72,16 @@ export default function ReviewWorkspace() {
       // A decision can empty the last page; step back rather than show nothing.
       if (rows.length === 0 && queuePage > 0) {
         setQueuePage((page) => page - 1);
-        return;
+        return undefined;
       }
       setQueue(rows);
       setQueueTotal(total);
-      setSelectedId((current) => {
-        if (current && rows.some((row) => row.id === current)) return current;
-        return rows[0]?.id ?? null;
-      });
+      const current = selectedRef.current;
+      const next =
+        current && rows.some((row) => row.id === current) ? current : (rows[0]?.id ?? null);
+      selectedRef.current = next;
+      setSelectedId(next);
+      return next;
     } catch (error) {
       // Held on screen rather than toasted away: an empty-looking queue
       // must never be mistaken for "nothing is waiting for review".
@@ -84,12 +93,22 @@ export default function ReviewWorkspace() {
     }
   }, [queuePage]);
 
+  /*
+    Only the latest request may land. Clicking down the queue fires one
+    load per row, and a slow reply for a row already left used to replace
+    the one on screen -- the reviewer read one inspection under another's
+    name.
+  */
+  const taskTicket = useRef(0);
   const loadTask = useCallback(async (id: string) => {
+    const ticket = ++taskTicket.current;
     setLoadingTask(true);
     setTaskError(null);
     try {
-      setTask(await snaggingService.getTask(id));
+      const next = await snaggingService.getTask(id);
+      if (ticket === taskTicket.current) setTask(next);
     } catch (error) {
+      if (ticket !== taskTicket.current) return;
       setTask(null);
       setTaskError(
         error instanceof Error
@@ -97,7 +116,7 @@ export default function ReviewWorkspace() {
           : "Could not load the inspection",
       );
     } finally {
-      setLoadingTask(false);
+      if (ticket === taskTicket.current) setLoadingTask(false);
     }
   }, []);
 
@@ -112,10 +131,17 @@ export default function ReviewWorkspace() {
 
   // After a decision, the task leaves the queue; refresh both so the
   // next item slides into view.
+  /*
+    After a decision the queue is read again. If the selection moved to
+    the next item, the effect above loads it; the task is read again here
+    only when the same one is still selected. It used to be read again
+    either way -- six requests for an inspection that had just left.
+  */
   const onChanged = useCallback(async () => {
-    await loadQueue();
-    if (selectedId) await loadTask(selectedId);
-  }, [loadQueue, loadTask, selectedId]);
+    const before = selectedRef.current;
+    const after = await loadQueue();
+    if (before && after === before) await loadTask(before);
+  }, [loadQueue, loadTask]);
 
   return (
     <div className="flex flex-col gap-6">

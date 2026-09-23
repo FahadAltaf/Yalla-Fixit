@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
@@ -387,24 +388,30 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
        route, which is what makes them usable as identity. */
     const newPlanIdByPath = new Map<string, string>();
     const newAreaIdByName = new Map<string, string>();
-    for (const plan of parentPlans ?? []) {
-      const { data: newPlan, error: planInsertError } = await admin
-        .from("snagging_floor_plans")
-        .insert({
-          job_id: round.id,
-          label: plan.label,
-          // The same stored image; a round re-uses the unit's plans
-          // rather than asking anyone to upload them again.
-          storage_path: plan.storage_path,
-          width: plan.width,
-          height: plan.height,
-          sort_order: plan.sort_order,
-        })
-        .select("id")
-        .single();
+    /*
+      Every plan in one insert, each given its id here so the old-to-new
+      map is known without relying on the order rows come back in. It was
+      one insert per plan, one after another.
+    */
+    const planRows = (parentPlans ?? []).map((plan) => {
+      const id = randomUUID();
+      planIdMap.set(plan.id, id);
+      if (plan.storage_path) newPlanIdByPath.set(plan.storage_path as string, id);
+      return {
+        id,
+        job_id: round.id,
+        label: plan.label,
+        // The same stored image; a round re-uses the unit's plans
+        // rather than asking anyone to upload them again.
+        storage_path: plan.storage_path,
+        width: plan.width,
+        height: plan.height,
+        sort_order: plan.sort_order,
+      };
+    });
+    if (planRows.length > 0) {
+      const { error: planInsertError } = await admin.from("snagging_floor_plans").insert(planRows);
       if (planInsertError) throw new Error(planInsertError.message);
-      planIdMap.set(plan.id, newPlan.id);
-      if (plan.storage_path) newPlanIdByPath.set(plan.storage_path as string, newPlan.id);
     }
 
     /*
@@ -443,10 +450,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
 
     const areaIdMap = new Map<string, string>();
-    for (const area of parentAreas ?? []) {
-      const { data: newArea, error: areaInsertError } = await admin
-        .from("snagging_areas")
-        .insert({
+    /* Every room in one insert, ids assigned here (as for the plans). */
+    const areaRows = (parentAreas ?? []).map((area) => {
+      const id = randomUUID();
+      areaIdMap.set(area.id, id);
+      newAreaIdByName.set(area.name as string, id);
+      return {
+          id,
           job_id: round.id,
           name: area.name,
           catalogue_area_code: area.catalogue_area_code,
@@ -481,12 +491,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
             };
           })(),
           // Status stays at its default: the round walks the room again.
-        })
-        .select("id")
-        .single();
+      };
+    });
+    if (areaRows.length > 0) {
+      const { error: areaInsertError } = await admin.from("snagging_areas").insert(areaRows);
       if (areaInsertError) throw new Error(areaInsertError.message);
-      areaIdMap.set(area.id, newArea.id);
-      newAreaIdByName.set(area.name as string, newArea.id);
     }
 
 
@@ -626,6 +635,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         matter which round's row is holding it.
       */
       const seen = new Set<string>();
+      const toCopy: Array<{ photo: NonNullable<typeof parentPhotos>[number]; snagId: string; destination: string }> = [];
       for (const photo of parentPhotos ?? []) {
         const code = codeOf.get(photo.snag_id) ?? "";
         const leaf = photo.storage_path.split("/").pop() ?? photo.storage_path;
@@ -651,23 +661,39 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           ? photo.storage_path.replace(owner, round.id)
           : `tasks/${round.id}/carried/${leaf}`;
 
-        const { error: copyError } = await admin.storage
-          .from("snagging")
-          .copy(photo.storage_path, destination);
-        // A missing original should not cost the inspector the whole
-        // round; they lose one before-shot and the rest still opens.
-        if (copyError) {
-          console.warn("Round photo copy skipped:", photo.storage_path, copyError.message);
-          continue;
-        }
+        toCopy.push({ photo, snagId, destination });
+      }
 
-        const { snag_id: _origin, storage_path: _path, ...rest } = photo;
-        const { error: photoError } = await admin.from("snagging_snag_photos").insert({
-          ...rest,
-          snag_id: snagId,
-          job_id: round.id,
-          storage_path: destination,
-        });
+      /*
+        The copies run a few at a time rather than one after another, and
+        the photos they produce are recorded in one insert. A round with
+        forty before-shots was eighty round trips in a row.
+      */
+      const copied: Array<Record<string, unknown>> = [];
+      const COPY_CONCURRENCY = 6;
+      for (let start = 0; start < toCopy.length; start += COPY_CONCURRENCY) {
+        const batch = toCopy.slice(start, start + COPY_CONCURRENCY);
+        const outcomes = await Promise.all(
+          batch.map(async ({ photo, snagId, destination }) => {
+            const { error: copyError } = await admin.storage
+              .from("snagging")
+              .copy(photo.storage_path, destination);
+            // A missing original should not cost the inspector the whole
+            // round; they lose one before-shot and the rest still opens.
+            if (copyError) {
+              console.warn("Round photo copy skipped:", photo.storage_path, copyError.message);
+              return null;
+            }
+            const { snag_id: _origin, storage_path: _path, ...rest } = photo;
+            void _origin;
+            void _path;
+            return { ...rest, snag_id: snagId, job_id: round.id, storage_path: destination };
+          }),
+        );
+        for (const row of outcomes) if (row) copied.push(row);
+      }
+      if (copied.length > 0) {
+        const { error: photoError } = await admin.from("snagging_snag_photos").insert(copied);
         if (photoError) throw new Error(photoError.message);
       }
 

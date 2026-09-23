@@ -60,7 +60,8 @@ export default function DesnagBuilder({ taskId }: { taskId: string }) {
     setLoading(true);
     setError(null);
     try {
-      const loaded = await snaggingService.getTask(taskId);
+      // The job and its defects are all this builder reads.
+      const loaded = await snaggingService.getTask(taskId, {}, ["snags"]);
       setTask(loaded);
       // Default selection: everything outstanding except low severity.
       const preselect = new Set(

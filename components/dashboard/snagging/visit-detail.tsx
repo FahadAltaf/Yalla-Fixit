@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
@@ -53,9 +54,18 @@ import {
   SubmitButton,
   formatLocalDateTime,
 } from "./shared";
-import { QuotationPanel } from "./quotation-panel";
 import { SnagWalkList } from "./snag-walk-list";
 import { VisitEditDialog } from "./visit-edit-dialog";
+
+/*
+  Loaded when it is shown, as on the job page. It brings the PDF builder
+  (html2canvas, jsPDF and three templates) with it, which every visit
+  page was downloading up front.
+*/
+const QuotationPanel = dynamic(
+  () => import("./quotation-panel").then((m) => m.QuotationPanel),
+  { loading: () => <div className="bg-muted h-40 animate-pulse rounded-xl" /> },
+);
 
 const VISIT_LABEL: Record<string, string> = {
   requested: "Requested",
@@ -127,7 +137,8 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
     try {
       const [visitDetail, job] = await Promise.all([
         snaggingService.getVisit(taskId, visitId),
-        snaggingService.getTask(taskId),
+        // The snag list's sections; not visit status or the de-snag quotation.
+        snaggingService.getTask(taskId, {}, ["snags", "checklist", "floor_plans"]),
       ]);
       setDetail(visitDetail);
       setTask(job);

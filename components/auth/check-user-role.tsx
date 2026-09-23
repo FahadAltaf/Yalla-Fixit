@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import React from "react";
 
-import { checkRoutePermission } from "@/components/auth/check-route-access";
+import { checkRouteAccess } from "@/components/auth/check-route-access";
+import { getNavData } from "@/components/dashboard-layout/menu-items";
 import { User } from "@/types/types";
 import { useAuth } from "@/context/AuthContext";
 import Loader from "@/components/ui/loader";
@@ -29,7 +30,6 @@ const AUTH_ROUTES = [
 ];
 
 export default function CheckUserRole({ children }: CheckUserRoleProps) {
-  const [loading, setLoading] = useState(true);
   const pathname = usePathname();
   /*
     The signed-in user comes from AuthContext, which has already asked the
@@ -38,49 +38,37 @@ export default function CheckUserRole({ children }: CheckUserRoleProps) {
     signed out). This component used to call checkAuthentication() a
     second time on every load, in production too.
   */
-  const { signOut, user, userProfile } = useAuth();
+  const { user, userProfile } = useAuth();
 
-  const handleLogout = () => {
-    signOut();
-  };
+  /*
+    Decided while rendering, not after: the menu-based route check is plain
+    synchronous logic over the profile the page already has (the server
+    sends it with the page). It used to run in an effect, so every page
+    rendered a loader first and only showed itself after it had loaded in
+    the browser. The redirects are the same as before.
+  */
+  // Decided once, when the dashboard first mounts -- as it always was;
+  // moving between pages inside the app is not re-checked here.
+  const [verdict] = useState<"allowed" | "to-home" | "to-login">(() => {
+    const onAuthRoute = AUTH_ROUTES.some((route) => pathname.startsWith(route));
+    if (user?.id && onAuthRoute) return "to-home";
+    if (!user?.id) return "to-login";
+    try {
+      return checkRouteAccess(pathname, getNavData(userProfile ?? ({} as User)).navMain)
+        ? "allowed"
+        : "to-home";
+    } catch (error) {
+      console.error("Route permission check failed:", error);
+      return "to-home";
+    }
+  });
 
   useEffect(() => {
-    const checkAccess = async () => {
-      try {
-        if (
-          user?.id &&
-          AUTH_ROUTES.some((route) => pathname.startsWith(route))
-        ) {
-          window.location.href = "/";
-          return;
-        }
+    if (verdict === "to-login") window.location.href = "/auth/login";
+    else if (verdict === "to-home") window.location.href = "/";
+  }, [verdict]);
 
-        if (!user?.id) {
-          window.location.href = "/auth/login";
-          // setLoading(false);
-          return;
-        }
-
-        const isAuthorized = await checkRoutePermission(userProfile, pathname);
-
-        // Enforce route permissions
-        if (!isAuthorized) {
-          // Redirect to dashboard if not authorized for this route
-          window.location.href = "/";
-          return;
-        }
-
-        setLoading(false);
-      } catch (error) {
-        handleLogout();
-        console.error("Authentication check failed:", error);
-      }
-    };
-
-    checkAccess();
-  }, []);
-
-  if (loading) {
+  if (verdict !== "allowed") {
     return (
       <div className="min-h-screen justify-center items-center flex">
         <Loader />

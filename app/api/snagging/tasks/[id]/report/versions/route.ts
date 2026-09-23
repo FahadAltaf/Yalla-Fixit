@@ -3,11 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import { loadJobFamily } from "@/lib/server/snagging/job-family";
-import {
-  generateReportPdf,
-  signReportPdf,
-} from "@/lib/server/snagging/report-generate";
+import { readOnRoot } from "@/lib/server/snagging/job-family";
+import { signPaths } from "@/lib/server/snagging/media";
+import { generateReportPdf } from "@/lib/server/snagging/report-generate";
 import { issueReportVersion } from "@/lib/server/snagging/report-versions";
 import { ActionType, ResourceType } from "@/types/types";
 
@@ -56,21 +54,31 @@ export async function GET(
 
     // Versions belong to the original inspection, never to a visit or round,
     // so a coordinator opening a visit still sees the document history.
-    const family = await loadJobFamily(admin, id);
+    //
+    // Read on this job's id at the same time as the family lookup; only a
+    // round or a visit needs a second read on its root (readOnRoot).
+    const { result: rows } = await readOnRoot(admin, id, async (rootId) => {
+      const { data, error } = await admin
+        .from("snagging_report_versions")
+        .select(
+          "id, version, report_type, source_visit_id, source_round_id, snag_count, generation_status, generation_error, generated_ms, pdf_path, generated_at, reason",
+        )
+        .eq("job_id", rootId)
+        .order("version", { ascending: false });
+      if (error) throw new Error(error.message);
+      return (data ?? []) as VersionRow[];
+    });
 
-    const { data, error } = await admin
-      .from("snagging_report_versions")
-      .select(
-        "id, version, report_type, source_visit_id, source_round_id, snag_count, generation_status, generation_error, generated_ms, pdf_path, generated_at, reason",
-      )
-      .eq("job_id", family.rootId)
-      .order("version", { ascending: false });
-
-    if (error) throw new Error(error.message);
-
-    const rows = (data ?? []) as VersionRow[];
-    const withUrls = await Promise.all(
-      rows.map(async (row) => ({
+    /*
+      Every version's PDF link in one signing call, and reused while still
+      valid (signPaths). It was one storage request per version, every time
+      the page opened.
+    */
+    const signed = await signPaths(
+      admin,
+      rows.map((row) => row.pdf_path).filter((path): path is string => Boolean(path)),
+    );
+    const withUrls = rows.map((row) => ({
         id: row.id,
         version: row.version,
         report_type: row.report_type,
@@ -85,10 +93,9 @@ export async function GET(
         reason: row.reason,
         // Signed per request: the bucket is private and no storage path is
         // ever handed out.
-        pdf_url: row.pdf_path ? await signReportPdf(admin, row.pdf_path) : null,
+        pdf_url: row.pdf_path ? (signed.get(row.pdf_path) ?? null) : null,
         is_current: false,
-      })),
-    );
+    }));
 
     // The newest successfully generated version is the one in force.
     const current = withUrls.find(

@@ -139,17 +139,25 @@ function breakAboveBlocks(
   target: number,
   blocks: PdfBlock[],
   minOffset: number,
+  /*
+    How short a page may be left when a block is pushed to the next one.
+    Without this a tall card moving down could leave two thirds of a page
+    blank; past this the block is split at a white row instead, which costs
+    one cut through a card and saves a mostly empty sheet.
+  */
+  keepAtLeast = 0,
 ): number | null {
   let at = target;
   // Bounded rather than `while (true)`: each pass strictly decreases `at`,
   // but a malformed range should not be able to spin.
   for (let pass = 0; pass < 8; pass++) {
     const hit = blocks.find((block) => block.start < at && at < block.end);
-    if (!hit) return at === target ? null : at;
+    if (!hit) break;
     if (hit.start <= minOffset) return null;
     at = hit.start;
   }
-  return at > minOffset ? at : null;
+  if (at === target) return null;
+  return at > minOffset && at >= keepAtLeast ? at : null;
 }
 
 export function canvasToPdfBlob(
@@ -202,8 +210,13 @@ export function canvasToPdfBlob(
     if (remaining > minSlicePx) {
       const minEnd = sourceY + minSlicePx;
       end =
-        breakAboveBlocks(end, blocks, minEnd) ??
-        whiteRowNear(ctx, canvas.width, end, minEnd, backtrackPx);
+        breakAboveBlocks(
+          end,
+          blocks,
+          minEnd,
+          /* Keep at least two thirds of the page in use. */
+          sourceY + contentHpx * 0.66,
+        ) ?? whiteRowNear(ctx, canvas.width, end, minEnd, backtrackPx);
     }
 
     slices.push({ from: sourceY, height: end - sourceY });
@@ -240,11 +253,18 @@ export function canvasToPdfBlob(
       slice.height,
     );
 
+    /*
+      Every page reserves the header strip so the pagination does not
+      change when the header is switched on, but a page that does not draw
+      one starts at the top margin instead of under an empty band.
+    */
+    const skipsHeader = Boolean(header?.skipFirstPage) && index === 0;
+
     pdf.addImage(
       pageCanvas.toDataURL(`image/${imageFormat.toLowerCase()}`, imageQuality),
       imageFormat,
       0,
-      marginMm + headerMm,
+      marginMm + (skipsHeader ? 0 : headerMm),
       pageWidthMm,
       slice.height / pxPerMm,
     );

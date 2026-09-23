@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { dedupeDefects } from "./defect-set";
 import { hasColumn } from "./columns";
 import { loadJobFamily } from "./job-family";
+import { readAllRows } from "./read-all";
 
 /**
  * The client's report, and its history.
@@ -85,23 +86,6 @@ export async function issueReportVersion(
   const family = await loadJobFamily(admin, input.jobId);
   const rootId = family.rootId;
 
-  if (input.sourceVisitId) {
-    const { data: already } = await admin
-      .from("snagging_report_versions")
-      .select("id, version, snag_count")
-      .eq("job_id", rootId)
-      .eq("source_visit_id", input.sourceVisitId)
-      .maybeSingle();
-    if (already) {
-      return {
-        id: already.id as string,
-        version: already.version as number,
-        snagCount: already.snag_count as number,
-        created: false,
-      };
-    }
-  }
-
   /*
     What the client's report contains: the original inspection's snags, plus
     everything found on its additional visits, plus the defects first raised
@@ -114,26 +98,54 @@ export async function issueReportVersion(
     document entirely. Reading the family and collapsing by snag_code keeps
     the carried copies from doubling while letting the round-born ones
     through, which is what the exclusion was really trying to achieve.
-  */
-  const { data: snags, error: snagError } = await admin
-    .from("snagging_snags")
-    .select("id, job_id, snag_code")
-    .in("job_id", family.allIds)
-    .neq("status", "withdrawn");
-  if (snagError) throw new Error(snagError.message);
 
-  const snagIds = dedupeDefects(snags ?? [], {
+    The version already issued for this visit, the family's defects and the
+    latest version number are read together; they were three reads in a
+    row. The defects are read a page at a time, because the API stops at
+    1,000 rows without saying so and a version must record every defect.
+  */
+  const [{ data: already }, snags, { data: latest }] = await Promise.all([
+    input.sourceVisitId
+      ? admin
+          .from("snagging_report_versions")
+          .select("id, version, snag_count")
+          .eq("job_id", rootId)
+          .eq("source_visit_id", input.sourceVisitId)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+    readAllRows<{ id: string; job_id: string; snag_code: string }>(
+      (from, to) =>
+        admin
+          .from("snagging_snags")
+          .select("id, job_id, snag_code")
+          .in("job_id", family.allIds)
+          .neq("status", "withdrawn")
+          .order("id")
+          .range(from, to),
+      "report version snags",
+    ),
+    admin
+      .from("snagging_report_versions")
+      .select("version")
+      .eq("job_id", rootId)
+      .order("version", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+
+  if (already) {
+    return {
+      id: already.id as string,
+      version: already.version as number,
+      snagCount: already.snag_count as number,
+      created: false,
+    };
+  }
+
+  const snagIds = dedupeDefects(snags, {
     preferredJobIds: [rootId, ...family.additionalVisitIds],
     roundOf: family.roundOf,
   }).map((s) => s.id as string);
-
-  const { data: latest } = await admin
-    .from("snagging_report_versions")
-    .select("version")
-    .eq("job_id", rootId)
-    .order("version", { ascending: false })
-    .limit(1)
-    .maybeSingle();
 
   const nextVersion = ((latest?.version as number | undefined) ?? 0) + 1;
 

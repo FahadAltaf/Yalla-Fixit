@@ -26,6 +26,40 @@ import { ActionType, ResourceType } from "@/types/types";
  * halves are counted as one figure. That legacy half is temporary and
  * documented where the map lives.
  */
+/*
+  The active categories, remembered for five minutes per server process.
+  They change when someone edits the catalogue, which is rare; the counts
+  below are what move, and those are still read on every request. This was
+  one more read in front of the counts on every overview load.
+*/
+type Category = { code: string; label: string };
+let categoriesCache: { at: number; value: Promise<Category[]> } | null = null;
+const CATEGORIES_TTL_MS = 5 * 60 * 1000;
+
+function activeCategories(
+  admin: Awaited<ReturnType<typeof createAdminServerClient>>,
+): Promise<Category[]> {
+  if (categoriesCache && Date.now() - categoriesCache.at < CATEGORIES_TTL_MS) {
+    return categoriesCache.value;
+  }
+  const value = Promise.resolve(
+    admin
+      .from("snagging_catalogue_categories")
+      .select("code, label")
+      .eq("active", true)
+      .order("sort_order", { ascending: true }),
+  ).then(({ data, error }) => {
+    if (error) throw new Error(error.message);
+    return (data ?? []) as Category[];
+  });
+  categoriesCache = { at: Date.now(), value };
+  // A failed read is not remembered, so the next request tries again.
+  value.catch(() => {
+    categoriesCache = null;
+  });
+  return value;
+}
+
 export async function GET(req: NextRequest) {
   try {
     // const { profile, accessUser } = await getRequestUserAccess(req);
@@ -38,14 +72,7 @@ export async function GET(req: NextRequest) {
 
     const admin = await createAdminServerClient();
 
-    const { data: rows, error } = await admin
-      .from("snagging_catalogue_categories")
-      .select("code, label")
-      .eq("active", true)
-      .order("sort_order", { ascending: true });
-    if (error) throw new Error(error.message);
-
-    const catalogue = (rows ?? []) as Array<{ code: string; label: string }>;
+    const catalogue = await activeCategories(admin);
 
     const counts = await Promise.all(
       catalogue.map(({ code }) => {

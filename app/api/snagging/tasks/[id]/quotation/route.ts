@@ -150,7 +150,16 @@ async function generate(
   */
   declaredFurnished: boolean | null = null,
 ) {
-  const [{ data: job, error: jobError }, { data: config, error: configError }] =
+  /*
+    The job, the price list, the live quote and how many quotes the job has
+    had, all at once: the last two used to wait behind the first two.
+  */
+  const [
+    { data: job, error: jobError },
+    { data: config, error: configError },
+    existing,
+    previousQuotes,
+  ] =
     await Promise.all([
       admin
         .from("snagging_jobs")
@@ -166,6 +175,8 @@ async function generate(
         .select(PRICING_CONFIG_COLUMNS)
         .eq("id", true)
         .maybeSingle(),
+      latestQuote(admin, jobId),
+      quoteCount(admin, jobId),
     ]);
   if (jobError) throw new Error(jobError.message);
   if (!job)
@@ -237,11 +248,10 @@ async function generate(
   };
 
   // One live quote per job: refresh a draft in place, otherwise open a new one.
-  const existing = await latestQuote(admin, jobId);
   const reuseDraft = existing && existing.status === "draft";
   const quoteNumber = reuseDraft
     ? existing!.quote_number
-    : `${(job as { code: string }).code}-Q${(await quoteCount(admin, jobId)) + 1}`;
+    : `${(job as { code: string }).code}-Q${previousQuotes + 1}`;
 
   const row = {
     ...(reuseDraft ? { id: existing!.id } : {}),

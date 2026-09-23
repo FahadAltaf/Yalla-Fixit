@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 import {
   Briefcase,
@@ -86,7 +86,11 @@ export default function ClientsAdmin() {
   // Searched on the server, a moment after typing stops.
   const debouncedSearch = useDebounce(search.trim(), 300);
 
+  /* Only the latest request may fill the table: a slower reply for an
+     earlier filter or page used to land last and show the wrong rows. */
+  const ticket = useRef(0);
   const load = useCallback(async () => {
+    const mine = ++ticket.current;
     setLoading(true);
     setError(null);
     try {
@@ -97,12 +101,14 @@ export default function ClientsAdmin() {
         sortBy: sort.sortBy,
         sortDirection: sort.sortOrder,
       });
+      if (mine !== ticket.current) return;
       setClients(result.data);
       setTotal(result.totalCount);
     } catch (err) {
+      if (mine !== ticket.current) return;
       setError(err instanceof Error ? err.message : "Could not load clients");
     } finally {
-      setLoading(false);
+      if (mine === ticket.current) setLoading(false);
     }
   }, [debouncedSearch, page, pageSize, sort]);
 

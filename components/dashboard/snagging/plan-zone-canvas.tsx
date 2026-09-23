@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { MapPin } from "lucide-react";
+import { Loader2, MapPin } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import {
@@ -80,6 +80,8 @@ export function PlanZoneCanvas({
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [draft, setDraft] = useState<ZonePoint[]>([]);
+  /* Which image has finished downloading; a new plan starts unloaded. */
+  const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
   const [hover, setHover] = useState<ZonePoint | null>(null);
 
   const drawing = mode === "zone" && !readOnly && Boolean(activeKey);
@@ -194,8 +196,28 @@ export function PlanZoneCanvas({
         !readOnly && activeKey && "cursor-crosshair",
       )}
     >
+      {/*
+        The plan is a full-size image from storage and takes a moment on a
+        slow line; until it is in, a placeholder holds the space and says
+        so, instead of an empty strip with the pins floating over nothing.
+      */}
+      {loadedSrc !== src ? (
+        <div className="flex h-72 items-center justify-center" role="status">
+          <span className="text-muted-foreground inline-flex items-center gap-2 text-xs">
+            <Loader2 className="size-4 animate-spin" />
+            Loading the plan…
+          </span>
+        </div>
+      ) : null}
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={src} alt={alt} className="block w-full" draggable={false} />
+      <img
+        src={src}
+        alt={alt}
+        className={cn("block w-full", loadedSrc !== src && "absolute inset-x-0 top-0 opacity-0")}
+        draggable={false}
+        onLoad={() => setLoadedSrc(src)}
+        onError={() => setLoadedSrc(src)}
+      />
 
       {/*
         One SVG over the whole plan in a 0..100 viewBox, so every outline

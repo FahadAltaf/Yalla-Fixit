@@ -441,7 +441,7 @@ export function AmcSettingsPage() {
 
   const heading = (
     <PageHeading
-      eyebrow="Extensions"
+      eyebrow="Settings"
       title="AMC settings"
       description="Standard wording for proposals and contracts. Changes apply to new proposals only."
       actions={

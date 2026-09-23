@@ -499,6 +499,45 @@ export const syncPullSchema = z.object({
     without it, such a pull carries the whole catalogue as before.
   */
   catalogue_since: isoDateTime.optional(),
+  /*
+    The first-paint pull: the inspector's jobs and their rooms only, with
+    no defects, photos, plans or catalogue. A handset with nothing on it
+    asks for this first so the day's list is on screen in one round trip,
+    then takes the full pull behind it.
+  */
+  slim: z
+    .enum(["true", "false"])
+    .transform((value) => value === "true")
+    .optional(),
+  /*
+    On a pull without `since`: whose contents to send. "active" sends the
+    defects, photos, checklist and plans only for jobs still being worked
+    (and the originals a live visit shows as already on record); finished
+    jobs arrive as list entries with their rooms, and the app fetches one
+    when it is opened. The response names the jobs it carried in full
+    (`children_scope`), so the app reconciles only those. Omitted, every
+    job is sent in full, which is what older app builds expect.
+  */
+  scope: z.enum(["all", "active"]).optional(),
+  /*
+    What the screen asking needs, and nothing else.
+      list      -- job cards only: the job row with its room counts, no
+                   rooms, defects, photos, checklist, plans or catalogue.
+                   A job's contents come from /sync/job/[id] when it is
+                   opened.
+      catalogue -- the defect catalogue only, for the capture sheet.
+    Omitted, the pull sends what it always has, for older app builds.
+  */
+  view: z.enum(["list", "catalogue"]).optional(),
+  /*
+    With view=list and no `since`: which tab. "active" is Today and
+    Upcoming (jobs still being worked, or with a visit live); "done" is the
+    finished jobs, newest first, a page at a time (`limit`, and `before` --
+    the created_at of the last card already shown).
+  */
+  list: z.enum(["active", "done"]).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  before: isoDateTime.optional(),
 });
 
 export const mediaSignSchema = z.object({

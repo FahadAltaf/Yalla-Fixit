@@ -85,9 +85,12 @@ export async function GET(req: NextRequest) {
     const admin = await createAdminServerClient();
     let query = admin
       .from("snagging_clients")
-      .select("id, name, email, phone, company, notes, created_at", {
-        count: paged ? "exact" : undefined,
-      })
+      .select<string, ClientRow & { job_count?: { count: number }[] | null }>(
+        // Each client's job count, counted by the database in the same
+        // query when the page shows it.
+        `id, name, email, phone, company, notes, created_at${withCounts ? ", job_count:snagging_jobs(count)" : ""}`,
+        { count: paged ? "exact" : undefined },
+      )
       .order(sortColumn, { ascending, nullsFirst: false })
       .order("id");
     query = paged ? query.range(from, to) : query.limit(limit);
@@ -115,24 +118,12 @@ export async function GET(req: NextRequest) {
     }
 
     /*
-      One query for every client's job count rather than one per row.
-
-      Only the ids on this page are asked for, so a long client list does
-      not turn into a table scan; `head: true` means the rows never come
-      back, only the count.
+      The job counts came back with the clients (job_count, counted by the
+      database). This was one extra count query per client on the page.
     */
-    // One head-only count per client on the page: exact however many
-    // jobs a client has, where reading their job rows stopped at 1,000.
     const counts = new Map<string, number>(
-      await Promise.all(
-        (data ?? []).map(async (row) => {
-          const { count: jobs, error: jobError } = await admin
-            .from("snagging_jobs")
-            .select("id", { count: "exact", head: true })
-            .eq("client_id", row.id);
-          if (jobError) throw new Error(jobError.message);
-          return [row.id as string, jobs ?? 0] as const;
-        }),
+      (data ?? []).map(
+        (row) => [row.id, row.job_count?.[0]?.count ?? 0] as const,
       ),
     );
 

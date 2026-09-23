@@ -95,18 +95,37 @@ export async function GET(
 
     const { id } = await ctx.params;
     const admin = await createAdminServerClient();
-    const quote = await load(admin, id);
-    if (!quote)
+    /*
+      One read: the quotation, its job's approval manager, and the live
+      client and property, embedded. It was three reads one after another
+      -- the quotation, then the manager, then the client and property.
+    */
+    const { data: row, error: loadError } = await admin
+      .from("snagging_quotations")
+      .select<string, Record<string, unknown>>(
+        `${LOAD_COLUMNS},
+         job_ref:job_id(approval_manager_id),
+         property_rec:property_id(${PROPERTY_COLUMNS}),
+         client_rec:client_id(id, name, email, phone)`,
+      )
+      .eq("id", id)
+      .maybeSingle();
+    if (loadError) throw new Error(loadError.message);
+    if (!row)
       return NextResponse.json(
         { error: "Quotation not found" },
         { status: 404 },
       );
 
+    const one = <T,>(value: unknown): T | null =>
+      (Array.isArray(value) ? value[0] : value) as T | null;
+    const { job_ref, property_rec, client_rec, ...quote } = row;
+    const managerId = one<{ approval_manager_id: string | null }>(job_ref)?.approval_manager_id;
+
     /*
       Computed here rather than left to the client to work out: the
       approval manager lives on the JOB, so a page holding only the
-      quotation cannot answer it, and a second round trip to find out
-      whether to draw a button is a poor trade.
+      quotation cannot answer it.
     */
     const sent = { ...quote };
     delete sent.rate_chosen_by;
@@ -114,12 +133,8 @@ export async function GET(
     return NextResponse.json({
       data: {
         ...sent,
-        can_approve_rate: await mayApproveRate(
-          admin,
-          accessUser,
-          profile.id,
-          quote,
-        ),
+        can_approve_rate:
+          isAdminUser(accessUser) || (Boolean(quote.job_id) && managerId === profile.id),
         /*
           The LIVE client and property, beside the snapshot the document
           was built from.
@@ -130,7 +145,8 @@ export async function GET(
           reports the unit as it was rather than as it is. An edit form
           filled from it would quietly revert whatever it could not see.
         */
-        ...(await records(admin, quote)),
+        property: one(property_rec),
+        client: one(client_rec),
       },
     });
   } catch (error) {

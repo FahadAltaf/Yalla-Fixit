@@ -214,11 +214,20 @@ function areaSection(area: ReportArea, round: number | null = null, numbering?: 
       ? area.snags.map((snag) => snagBlock(snag, round, numbering)).join("")
       : `<p class="area__clear">No defects recorded in this area.</p>`;
 
+  /*
+    Named only on a room someone other than the lead walked (point 6), so
+    an unsplit job reads exactly as it did before.
+  */
+  const by = area.inspector
+    ? `<p class="area__by">Inspected by ${esc(area.inspector)}</p>`
+    : "";
+
   return `<section class="area">
     <h3 class="area__name">
       ${esc(area.name)}
       <span class="area__count">${area.snags.length} ${area.snags.length === 1 ? "defect" : "defects"}</span>
     </h3>
+    ${by}
     ${access}
     ${body}
   </section>`;
@@ -372,7 +381,11 @@ function coverBlock(data: ReportData, version: number | null): string {
   <section class="visitbar">
     <span>Visit: <b>${esc(visitLabel(data))}</b></span>
     <span>Inspected: <b>${fmtDate(cover.inspectionDate)}</b></span>
-    <span>Inspector: <b>${esc(cover.inspector ?? "—")}</b></span>
+    <span>${
+      cover.inspectors.length > 1 ? "Inspectors" : "Inspector"
+    }: <b>${esc(
+      cover.inspectors.length > 0 ? cover.inspectors.join(", ") : "—",
+    )}</b></span>
   </section>
 
   <h2 class="section">Summary</h2>
@@ -446,6 +459,8 @@ export function renderReportHtml(
           id: "unassigned",
           name: "Not assigned to an area",
           sortOrder: Number.MAX_SAFE_INTEGER,
+          // A bucket, not a room: nobody was assigned it.
+          inspector: null,
           accessState: null,
           accessReason: null,
           elementsNotChecked: null,

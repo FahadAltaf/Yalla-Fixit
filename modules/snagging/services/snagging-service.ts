@@ -303,6 +303,21 @@ function toParams(
   return params;
 }
 
+/** The parts of a job record that are fetched separately (see getTask). */
+export type TaskSection =
+  | "checklist"
+  | "snags"
+  | "floor_plans"
+  | "visit_status"
+  | "desnag_quotation";
+const ALL_TASK_SECTIONS: ReadonlyArray<TaskSection> = [
+  "checklist",
+  "snags",
+  "floor_plans",
+  "visit_status",
+  "desnag_quotation",
+];
+
 export const snaggingService = {
   listTasks: async (
     filters: SnaggingTaskFilters = {},
@@ -324,22 +339,35 @@ export const snaggingService = {
    * The job page itself reads the sections one by one, through
    * JobDetailContext, so each renders the moment it arrives.
    */
-  getTask: async (id: string, init: { signal?: AbortSignal } = {}): Promise<SnaggingTask> => {
+  getTask: async (
+    id: string,
+    init: { signal?: AbortSignal } = {},
+    /*
+      Only the sections the page uses. Each is its own request, and the
+      de-snag builder, say, reads two of the six -- asking for all of them
+      put four wasted requests in front of every page that called this.
+      Leaving it out asks for everything, as before.
+    */
+    sections: ReadonlyArray<TaskSection> = ALL_TASK_SECTIONS,
+  ): Promise<SnaggingTask> => {
+    const want = new Set(sections);
     const [core, checklist, snags, floorPlans, visitStatus, desnag] = await Promise.all([
       snaggingService.getTaskCore(id, init),
-      snaggingService.getTaskChecklist(id, init),
-      snaggingService.getTaskSnags(id, init),
-      snaggingService.listFloorPlans(id, init),
-      snaggingService.getTaskVisitStatus(id, init),
-      snaggingService.getTaskDesnagQuotation(id, init),
+      want.has("checklist") ? snaggingService.getTaskChecklist(id, init) : undefined,
+      want.has("snags") ? snaggingService.getTaskSnags(id, init) : undefined,
+      want.has("floor_plans") ? snaggingService.listFloorPlans(id, init) : undefined,
+      want.has("visit_status") ? snaggingService.getTaskVisitStatus(id, init) : undefined,
+      want.has("desnag_quotation") ? snaggingService.getTaskDesnagQuotation(id, init) : undefined,
     ]);
     return {
       ...core,
-      floor_plans: floorPlans,
-      snags,
-      checklist,
-      unapproved_visit_ids: visitStatus.unapproved_visit_ids,
-      desnag_quotation: desnag,
+      ...(floorPlans !== undefined ? { floor_plans: floorPlans } : {}),
+      ...(snags !== undefined ? { snags } : {}),
+      ...(checklist !== undefined ? { checklist } : {}),
+      ...(visitStatus !== undefined
+        ? { unapproved_visit_ids: visitStatus.unapproved_visit_ids }
+        : {}),
+      ...(desnag !== undefined ? { desnag_quotation: desnag } : {}),
     };
   },
 

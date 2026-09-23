@@ -2,7 +2,17 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Copy, Download, Printer, Send } from "lucide-react";
+import {
+  ArrowLeft,
+  ChevronDown,
+  Copy,
+  Download,
+  FileText,
+  FileType,
+  Loader2,
+  Printer,
+  Send,
+} from "lucide-react";
 import { saveAs } from "file-saver";
 import { toast } from "sonner";
 
@@ -16,6 +26,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -26,7 +42,6 @@ import { snaggingService, type SnaggingQuotation } from "@/modules/snagging";
 import { ActionType, ResourceType, type SnaggingTask } from "@/types/types";
 
 import { InspectionReport } from "./inspection-report";
-import { buildInspectionReportPdf } from "./report-pdf-download";
 import { ErrorState, SubmitButton } from "./shared";
 
 const CHANNELS = [
@@ -70,7 +85,8 @@ export function ReportView({ taskId }: { taskId: string }) {
     setError(null);
     try {
       const [t, q] = await Promise.all([
-        snaggingService.getTask(taskId),
+        // Everything the report prints; not the de-snag quotation.
+        snaggingService.getTask(taskId, {}, ["snags", "checklist", "floor_plans", "visit_status"]),
         snaggingService.getQuotation(taskId).catch(() => null),
       ]);
       setTask(approvedOnly(t));
@@ -105,26 +121,35 @@ export function ReportView({ taskId }: { taskId: string }) {
         userProfile?.id === task.approval_manager_id,
       ));
 
-  async function downloadPdf() {
+  async function download(format: "pdf" | "docx") {
     if (!task) return;
     setBusy(true);
     // Rasterising a multi-page report takes seconds; the toast holds the
     // place so the download does not land with no explanation.
-    const t = toast.loading("Preparing the PDF…");
+    const t = toast.loading(
+      format === "pdf" ? "Preparing the PDF…" : "Preparing the Word file…",
+    );
     try {
-      // Rendered fresh with forPDF rather than rasterising the node on
-      // screen: the two need different vertical padding (html2canvas puts a
-      // box's background where the browser does not), which is the same
-      // split the quotation template makes.
-      const { blob, filename } = await buildInspectionReportPdf(
-        task,
-        quotation,
-      );
+      /*
+        The PDF is the report rendered fresh with forPDF and rasterised;
+        the Word file is the same content built as a document, so its text
+        stays text.
+      */
+      // The PDF and Word builders (html2canvas, jsPDF, docx) load on the
+      // first download, not with the page.
+      const builders = await import("./report-pdf-download");
+      const { blob, filename } =
+        format === "pdf"
+          ? await builders.buildInspectionReportPdf(task, quotation)
+          : await builders.buildInspectionReportDocx(task, quotation);
       saveAs(blob, filename);
-      toast.success("PDF downloaded", { id: t });
+      toast.success(
+        format === "pdf" ? "PDF downloaded" : "Word file downloaded",
+        { id: t },
+      );
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Could not generate the PDF",
+        error instanceof Error ? error.message : "Could not build the document",
         { id: t },
       );
     } finally {
@@ -303,14 +328,29 @@ export function ReportView({ taskId }: { taskId: string }) {
             <Printer className="size-4" />
             Print
           </Button>
-          <SubmitButton
-            variant="outline"
-            onClick={() => void downloadPdf()}
-            pending={busy}
-            icon={<Download className="size-4" />}
-          >
-            Download PDF
-          </SubmitButton>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" disabled={busy}>
+                {busy ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Download className="size-4" />
+                )}
+                Download
+                <ChevronDown className="size-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => void download("pdf")}>
+                <FileText className="size-4" />
+                PDF
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => void download("docx")}>
+                <FileType className="size-4" />
+                Word (.docx)
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           {canDeliver &&
           (task.status === "approved" || task.status === "delivered") ? (
             <Button onClick={() => setDeliverOpen(true)} disabled={busy}>

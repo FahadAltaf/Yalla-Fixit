@@ -18,6 +18,8 @@ import {
   UserCog,
 } from "lucide-react";
 
+import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
+
 // hasViewPermission and filter functions unchanged
 const hasViewPermission = (
   userProfile: User,
@@ -40,6 +42,7 @@ const hasViewPermission = (
 };
 
 const isItemVisible = (item: MenuItem, userProfile: User): boolean => {
+  if (item.canSee) return item.canSee(userProfile);
   if (
     !item.resource ||
     item?.resource === ResourceType.DASHBOARD ||
@@ -91,12 +94,35 @@ export const baseSectionsItems: MenuItem[] = [
     isActive: false,
     resource: ResourceType.TODOS,
   },
+  /*
+    Each extension has its own page and its own address now, listed here
+    like Snagging's, rather than a second menu inside one page switched by
+    ?section=. A link or a reload lands on the extension it names.
+  */
   {
     title: "Extensions",
     url: "/extensions",
     icon: <Puzzle className="size-4 text-primary" />,
     isActive: false,
     resource: ResourceType.EXTENSIONS,
+    items: [
+      {
+        title: "Bulk download",
+        url: "/extensions/bulk-download",
+        resource: ResourceType.EXTENSIONS,
+      },
+      {
+        title: "Quotation templates",
+        url: "/extensions/quotation-templates",
+        resource: ResourceType.EXTENSIONS,
+      },
+      {
+        title: "AMC proposals",
+        url: "/extensions/amc",
+        // AMC view or approve, which the resource filter cannot say.
+        canSee: canUseAmc,
+      },
+    ],
   },
   {
     title: "Scheduling",
@@ -211,12 +237,22 @@ export const getNavData = (user: User) => {
   const adminItems: MenuItem[] = [...baseAdminItems];
 
   if (isAdminOrAgent) {
+    /*
+      Settings is a group like Snagging: each page has its own address,
+      and AMC Settings lives here with the rest of the admin
+      configuration instead of beside the proposals it governs.
+    */
     adminItems.unshift({
       title: "Settings",
       url: "/settings",
       icon: <Settings className="size-4 text-primary" />,
       isActive: false,
       resource: ResourceType.SETTINGS,
+      items: [
+        { title: "Profile", url: "/settings/profile", resource: ResourceType.SETTINGS },
+        { title: "Appearance", url: "/settings/appearance", resource: ResourceType.SETTINGS },
+        { title: "AMC settings", url: "/settings/amc", canSee: canUseAmc },
+      ],
     });
   }
 

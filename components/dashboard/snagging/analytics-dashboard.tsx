@@ -269,7 +269,7 @@ export default function SnaggingAnalyticsDashboard() {
   }, [inspectorRows, inspectorPage, inspectorPageSize]);
 
   function exportDevelopers(format: ExportFormat) {
-    exportTable({
+    void exportTable({
       columns: [
         { key: "developer_name", label: "Developer" },
         { key: "unit_count", label: "Units inspected" },
@@ -291,7 +291,7 @@ export default function SnaggingAnalyticsDashboard() {
   }
 
   function exportInspectors(format: ExportFormat) {
-    exportTable({
+    void exportTable({
       columns: [
         { key: "name", label: "Inspector" },
         { key: "inspection_count", label: "Inspections" },

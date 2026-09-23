@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ClipboardCheck, Plus } from "lucide-react";
 
@@ -18,6 +18,11 @@ import { snaggingService, type SnaggingTaskFilters } from "@/modules/snagging";
 import { ActionType, ResourceType, type SnaggingTaskSummary } from "@/types/types";
 
 import { ErrorState, PageHeading } from "./shared";
+import {
+  JOB_FILTERS,
+  JOBS_FIRST_PAGE_SIZE,
+  type JobFilterValue,
+} from "@/lib/snagging/job-filters";
 
 /**
  * The jobs table: every inspection task, its round, and what the field
@@ -30,22 +35,21 @@ import { ErrorState, PageHeading } from "./shared";
  * because status is the axis ops actually work along.
  */
 
-const FILTERS = [
-  { value: "all", label: "All", statuses: "all" },
-  { value: "assigned", label: "Assigned", statuses: "assigned" },
-  { value: "in_progress", label: "In progress", statuses: "in_progress" },
-  // Submitted and In review are separate stops on the approval chain
-  // (FR-6.01): submitted is waiting to be picked up, in_review has been.
-  // They used to share one pill, which hid whether anyone had started.
-  { value: "submitted", label: "Submitted", statuses: "submitted" },
-  { value: "in_review", label: "In review", statuses: "in_review" },
-  { value: "approved", label: "Approved", statuses: "approved,delivered" },
-  { value: "rejected", label: "Needs correction", statuses: "rejected" },
-] as const;
+// Shared with the Jobs page, which reads the first page on the server.
+const FILTERS = JOB_FILTERS;
+type FilterValue = JobFilterValue;
 
-type FilterValue = (typeof FILTERS)[number]["value"];
-
-export default function JobsTable() {
+export default function JobsTable({
+  initial,
+}: {
+  /*
+    The first page, read on the server before the page was sent (see
+    app/(dashboard)/snagging/jobs/page.tsx). The table shows it at once
+    instead of asking for it after it has loaded; every later page, filter
+    and search is asked for as before.
+  */
+  initial?: { data: SnaggingTaskSummary[]; totalCount: number } | null;
+} = {}) {
   const router = useRouter();
   const params = useSearchParams();
   const { userProfile } = useAuth();
@@ -68,11 +72,11 @@ export default function JobsTable() {
   const [searchQuery, setSearchQuery] = useState("");
   const debouncedSearchTerm = useDebounce(searchQuery, 500);
 
-  const [tasks, setTasks] = useState<SnaggingTaskSummary[]>([]);
-  const [recordCount, setRecordCount] = useState(0);
+  const [tasks, setTasks] = useState<SnaggingTaskSummary[]>(initial?.data ?? []);
+  const [recordCount, setRecordCount] = useState(initial?.totalCount ?? 0);
   const [currentPage, setCurrentPage] = useState(0);
-  const [pageSize, setPageSize] = useState(10);
-  const [isRefetching, setIsRefetching] = useState(true);
+  const [pageSize, setPageSize] = useState(JOBS_FIRST_PAGE_SIZE);
+  const [isRefetching, setIsRefetching] = useState(!initial);
   const [error, setError] = useState<string | null>(null);
   const [sorting, setSorting] = useState<{
     sortBy?: string;
@@ -104,14 +108,20 @@ export default function JobsTable() {
     };
   }, [filter, debouncedSearchTerm, sorting, assigneeId, createdFrom, createdTo]);
 
+  /* Only the latest request may fill the table: a slower reply for an
+     earlier filter or page used to land last and show the wrong rows. */
+  const ticket = useRef(0);
   const fetchJobs = useCallback(async () => {
+    const mine = ++ticket.current;
     setIsRefetching(true);
     setError(null);
     try {
       const response = await snaggingService.listTasks(filters, currentPage, pageSize);
+      if (mine !== ticket.current) return;
       setTasks(response.data ?? []);
       setRecordCount(response.totalCount ?? 0);
     } catch (err) {
+      if (mine !== ticket.current) return;
       // A failed fetch used to clear the table and toast once, so a
       // coordinator read "no jobs here" and went looking for work that
       // was actually there.
@@ -119,11 +129,17 @@ export default function JobsTable() {
       setTasks([]);
       setRecordCount(0);
     } finally {
-      setIsRefetching(false);
+      if (mine === ticket.current) setIsRefetching(false);
     }
   }, [filters, currentPage, pageSize]);
 
+  // The first fetch is skipped when the server already sent the first page.
+  const skipFirstFetch = useRef(Boolean(initial));
   useEffect(() => {
+    if (skipFirstFetch.current) {
+      skipFirstFetch.current = false;
+      return;
+    }
     void fetchJobs();
   }, [fetchJobs]);
 

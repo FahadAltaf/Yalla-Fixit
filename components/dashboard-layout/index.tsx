@@ -106,7 +106,12 @@ const SidebarGroupedMenuItems = ({ section }: { section: MenuSection }) => {
                 .sort((a, b) => b.depth - a.depth)[0]?.url ?? null;
 
             return item.items && item.items.length > 0 ? (
-              <Collapsible className="group/collapsible" key={item.title}>
+              <Collapsible
+                className="group/collapsible"
+                key={item.title}
+                // Open on arrival when one of its pages is the one on screen.
+                defaultOpen={activeSubUrl !== null}
+              >
                 <SidebarMenuItem>
                   <CollapsibleTrigger asChild>
                     <SidebarMenuButton

@@ -5,19 +5,18 @@ import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import {
   cacheHeaders,
-  countJobs,
   myJobs,
   resolvePeriod,
 } from "@/lib/server/snagging/overview-queries";
+import { readAllRows } from "@/lib/server/snagging/read-all";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
  * Assigned / in progress / completed, per inspector, one page at a time.
  *
- * The counts are COUNT(*) in Postgres and only for the inspectors on the
- * page, so the work done is bounded by page size rather than by how many
- * inspectors the business has. `rowCount` comes back so the table can
- * page the same way every other table in the app does.
+ * Counted from the period's jobs in one read, then sorted across every
+ * inspector and paged. `rowCount` comes back so the table can page the
+ * same way every other table in the app does.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -39,94 +38,72 @@ export async function GET(req: NextRequest) {
 
     const admin = await createAdminServerClient();
 
-    // Who has ever been assigned work. One narrow column, then reduced to
-    // the distinct set — PostgREST has no DISTINCT, and the alternative
-    // (a view or an RPC) is a migration.
-    const { data: assignedRows, error: assignedError } = await admin
-      .from("snagging_jobs")
-      .select("inspector_id")
-      .not("inspector_id", "is", null);
-    if (assignedError) throw new Error(assignedError.message);
+    /*
+      Two reads, together, instead of a distinct-inspector read followed by
+      three counts per inspector on the page:
+        - everyone who has ever been assigned work, with their name, and
+        - the period's jobs the reader can see, with their inspector and
+          status, counted per inspector here.
+      Both are read a page at a time: the API stops at 1,000 rows without
+      saying so, and the inspector list used to come back short.
+    */
+    type Named = { full_name: string | null; email: string | null };
+    const [assignedRows, periodJobs] = await Promise.all([
+      readAllRows<{ inspector_id: string; inspector: Named | Named[] | null }>(
+        (from, to) =>
+          admin
+            .from("snagging_jobs")
+            .select("inspector_id, inspector:inspector_id(full_name, email)")
+            .not("inspector_id", "is", null)
+            .order("id")
+            .range(from, to) as never,
+        "inspectors",
+      ),
+      readAllRows<{ inspector_id: string | null; status: string }>(
+        (from, to) =>
+          myJobs(
+            admin
+              .from("snagging_jobs")
+              .select("inspector_id, status")
+              .not("inspector_id", "is", null)
+              .gte("created_at", period.fromTs),
+            profile.id,
+          )
+            .order("id")
+            .range(from, to) as never,
+        "inspector jobs",
+      ),
+    ]);
 
-    const inspectorIds = [
-      ...new Set((assignedRows ?? []).map((row) => row.inspector_id as string)),
-    ];
-    const rowCount = inspectorIds.length;
-    const pageIds = inspectorIds.slice(
-      page * pageSize,
-      page * pageSize + pageSize,
-    );
-
-    if (pageIds.length === 0) {
-      return NextResponse.json(
-        { data: { rows: [], rowCount } },
-        { headers: cacheHeaders(600) },
-      );
+    const nameById = new Map<string, string>();
+    for (const row of assignedRows) {
+      if (nameById.has(row.inspector_id)) continue;
+      const person = Array.isArray(row.inspector) ? row.inspector[0] : row.inspector;
+      nameById.set(row.inspector_id, person?.full_name ?? person?.email ?? "Unknown");
     }
 
-    const { data: profiles, error: profileError } = await admin
-      .from("user_profile")
-      .select("id, full_name, email")
-      .in("id", pageIds);
-    if (profileError) throw new Error(profileError.message);
+    /*
+      Each figure over the window the page is read through, so "completed"
+      is work done in the period rather than a career total that only ever
+      goes up.
+    */
+    const tally = new Map<string, { assigned: number; inProgress: number; completed: number }>();
+    for (const id of nameById.keys()) tally.set(id, { assigned: 0, inProgress: 0, completed: 0 });
+    for (const job of periodJobs) {
+      const counts = job.inspector_id ? tally.get(job.inspector_id) : undefined;
+      if (!counts) continue;
+      if (job.status === "assigned") counts.assigned += 1;
+      else if (job.status === "in_progress") counts.inProgress += 1;
+      else if (job.status === "approved" || job.status === "delivered") counts.completed += 1;
+    }
 
-    const nameById = new Map(
-      (
-        (profiles ?? []) as Array<{
-          id: string;
-          full_name: string | null;
-          email: string | null;
-        }>
-      ).map(
-        (row) => [row.id, row.full_name ?? row.email ?? "Unknown"] as const,
-      ),
-    );
-
-    const rows = await Promise.all(
-      pageIds.map(async (id) => {
-        /*
-          Each figure over the window the page is read through, so
-          "completed" is work done in the period rather than a career
-          total that only ever goes up.
-
-          The chain is written out three times rather than hoisted into a
-          helper: countJobs hands its refiner a builder type that is
-          awkward to name, and a local alias for it costs more than the
-          repetition saves.
-        */
-        const [assigned, inProgress, completed] = await Promise.all([
-          countJobs(admin, (q) =>
-            myJobs(q, profile.id)
-              .eq("inspector_id", id)
-              .gte("created_at", period.fromTs)
-              .eq("status", "assigned"),
-          ),
-          countJobs(admin, (q) =>
-            myJobs(q, profile.id)
-              .eq("inspector_id", id)
-              .gte("created_at", period.fromTs)
-              .eq("status", "in_progress"),
-          ),
-          countJobs(admin, (q) =>
-            myJobs(q, profile.id)
-              .eq("inspector_id", id)
-              .gte("created_at", period.fromTs)
-              .in("status", ["approved", "delivered"]),
-          ),
-        ]);
-        return {
-          id,
-          name: nameById.get(id) ?? "Unknown",
-          assigned,
-          inProgress,
-          completed,
-        };
-      }),
-    );
-
-    rows.sort(
-      (a, b) => b.completed - a.completed || a.name.localeCompare(b.name),
-    );
+    // Sorted across everyone BEFORE paging, so page two really does carry
+    // on from page one. It used to page first and sort each page.
+    const everyone = [...tally.entries()]
+      .map(([id, counts]) => ({ id, name: nameById.get(id) ?? "Unknown", ...counts }))
+      .sort((a, b) => b.completed - a.completed || a.name.localeCompare(b.name));
+    const rowCount = everyone.length;
+    const rows = everyone.slice(page * pageSize, page * pageSize + pageSize);
 
     return NextResponse.json(
       { data: { rows, rowCount, periodDays: period.days } },

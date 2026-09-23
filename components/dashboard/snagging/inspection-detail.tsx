@@ -22,7 +22,7 @@ import { ErrorState } from "./shared";
 
 import { InspectorAssignmentAlert } from "./inspector-alert";
 import { InspectionHeaderCard } from "./inspection-header-card";
-import { JobDetailProvider, useJobDetail } from "./job-detail-context";
+import { JobDetailProvider, useJobDetail, type JobDetailInitial } from "./job-detail-context";
 import { SnagWalkList } from "./snag-walk-list";
 import { VisitActivityAlerts } from "./visit-activity-alerts";
 
@@ -78,9 +78,16 @@ function defaultTabFor(status: string | undefined): string {
  * reads and what a change refreshes. Keyed by the job, so another job
  * starts clean.
  */
-export default function InspectionDetail({ taskId }: { taskId: string }) {
+export default function InspectionDetail({
+  taskId,
+  initial,
+}: {
+  taskId: string;
+  /** Sections read on the server with the page; the rest are fetched here. */
+  initial?: JobDetailInitial;
+}) {
   return (
-    <JobDetailProvider key={taskId} taskId={taskId}>
+    <JobDetailProvider key={taskId} taskId={taskId} initial={initial}>
       <InspectionDetailView />
     </JobDetailProvider>
   );
@@ -404,6 +411,9 @@ function InspectionDetailView() {
             // Point 7: the snag pins, and the lock once the inspection is in.
             snags={snags.data ?? []}
             jobStatus={task.status}
+            // What the page already read, so the tab opens without reading it again.
+            initialPlans={floorPlans.data}
+            initialAreas={task.areas ?? null}
           />,
         )}
         {panel(

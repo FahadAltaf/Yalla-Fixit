@@ -5,20 +5,14 @@ import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
 import { resolveClient } from "@/lib/server/snagging/client";
-import {
-  APPROVAL_SLA_HOURS,
-  generateTaskCode,
-} from "@/lib/server/snagging/workflow";
+import { generateTaskCode } from "@/lib/server/snagging/workflow";
+import { listJobs } from "@/lib/server/snagging/job-list";
 import {
   propertySnapshot,
   resolveProperty,
 } from "@/lib/server/snagging/property";
 import { createTaskSchema } from "@/modules/snagging/schemas";
-import {
-  ActionType,
-  ResourceType,
-  type SnaggingVisitType,
-} from "@/types/types";
+import { ActionType, ResourceType } from "@/types/types";
 
 type Admin = Awaited<ReturnType<typeof createAdminServerClient>>;
 
@@ -41,116 +35,8 @@ export async function GET(req: NextRequest) {
     // }
 
     const params = req.nextUrl.searchParams;
-    const page = Math.max(0, Number(params.get("page") ?? 0));
-    const pageSize = Math.min(
-      200,
-      Math.max(1, Number(params.get("pageSize") ?? 25)),
-    );
-
     const admin = await createAdminServerClient();
-    let query = admin.from("snagging_jobs").select(
-      `id, code, status, round_number, visit_type, parent_job_id, scheduled_date, locked,
-         rejection_reason, rejection_category, rejection_count, remediation_due_at,
-         submitted_at, approved_at, created_at, updated_at,
-         approval_manager_id, reviewer_id, review_started_at, reviewed_at,
-         approval_due_at, escalated_at,
-         client_id, unit_label, building_name, community,
-         property_type, developer_name,
-         client:client_id(name),
-         inspector:inspector_id(full_name, email),
-         reviewer:reviewer_id(id, full_name, email),
-         manager:approval_manager_id(id, full_name, email)`,
-      { count: "exact" },
-    );
-
-    const status = params.get("status");
-    if (status && status !== "all")
-      query = query.in("status", status.split(","));
-
-    const search = params.get("search")?.trim();
-    if (search) {
-      const term = `%${search}%`;
-      query = query.or(
-        [
-          `code.ilike.${term}`,
-          `unit_label.ilike.${term}`,
-          `building_name.ilike.${term}`,
-          `community.ilike.${term}`,
-        ].join(","),
-      );
-    }
-
-    const developer = params.get("developer");
-    if (developer && developer !== "all")
-      query = query.eq("developer_name", developer);
-
-    const from = params.get("from");
-    if (from) query = query.gte("scheduled_date", from);
-    const to = params.get("to");
-    if (to) query = query.lte("scheduled_date", to);
-
-    /*
-      When the job was RAISED, which is a different question from when it
-      is booked in. The Overview's activity chart plots intake by
-      created_at, so a click on one of its days has to narrow by the same
-      column — reusing from/to above would have opened the jobs SCHEDULED
-      that day, a different set with the same size and no way to tell.
-    */
-    const createdFrom = params.get("createdFrom");
-    if (createdFrom) query = query.gte("created_at", createdFrom);
-    const createdTo = params.get("createdTo");
-    // Inclusive of the whole day, since the column is a timestamp.
-    if (createdTo) query = query.lt("created_at", `${createdTo}T23:59:59.999Z`);
-
-    if (params.get("queue") === "approval") {
-      query = query
-        .in("status", ["submitted", "in_review"])
-        .order("submitted_at", { ascending: true, nullsFirst: false });
-    } else {
-      /*
-        Newest first, by when the job was raised.
-
-        The default was scheduled_date ascending, which put the oldest
-        appointment at the top and buried a job created this morning
-        somewhere in the middle of the list. Creation order is the one
-        thing every record has, never changes, and matches what someone
-        means by "the job I just made". A column the caller asks for
-        still wins; this is only the default.
-      */
-      const sortByRaw = params.get("sortBy") ?? "created_at";
-      const allowed = new Set([
-        "scheduled_date",
-        "code",
-        "status",
-        "created_at",
-        "updated_at",
-      ]);
-      const sortBy = allowed.has(sortByRaw) ? sortByRaw : "created_at";
-      // Newest first for a date, A-Z for a label.
-      const dateLike = sortBy === "created_at" || sortBy === "updated_at";
-      const direction = params.get("sortDirection");
-      const ascending = direction ? direction !== "desc" : !dateLike;
-      query = query.order(sortBy, { ascending, nullsFirst: false });
-    }
-
-    // One client's jobs, for the Clients page.
-    const clientId = params.get("clientId");
-    if (clientId) query = query.eq("client_id", clientId);
-
-    // An inspector without All Records access only ever sees their own jobs.
-    const assigneeId = params.get("assigneeId");
-    if (assigneeId) query = query.eq("inspector_id", assigneeId);
-
-    const { data, error, count } = await query.range(
-      page * pageSize,
-      page * pageSize + pageSize - 1,
-    );
-    if (error) throw new Error(error.message);
-
-    const rows = (data ?? []) as JobRow[];
-    const enriched = await enrichRows(admin, rows);
-
-    return NextResponse.json({ data: enriched, totalCount: count ?? 0 });
+    return NextResponse.json(await listJobs(admin, params));
   } catch (error) {
     console.error("Snagging tasks GET error:", error);
     return NextResponse.json(
@@ -158,160 +44,6 @@ export async function GET(req: NextRequest) {
       { status: 500 },
     );
   }
-}
-
-type Joined =
-  | { full_name: string | null; email: string | null }
-  | { full_name: string | null; email: string | null }[]
-  | null;
-type JobRow = {
-  id: string;
-  code: string;
-  status: string;
-  round_number: number;
-  visit_type: string | null;
-  parent_job_id: string | null;
-  scheduled_date: string | null;
-  locked: boolean;
-  rejection_reason: string | null;
-  rejection_category: string | null;
-  rejection_count: number | null;
-  remediation_due_at: string | null;
-  submitted_at: string | null;
-  approved_at: string | null;
-  created_at: string;
-  updated_at: string;
-  approval_manager_id: string | null;
-  // FR-6.01 / FR-6.07 — the review chain and its clock.
-  reviewer_id: string | null;
-  review_started_at: string | null;
-  reviewed_at: string | null;
-  approval_due_at: string | null;
-  escalated_at: string | null;
-  reviewer: Joined;
-  manager: Joined;
-  client_id: string | null;
-  unit_label: string;
-  building_name: string | null;
-  community: string | null;
-  property_type: string | null;
-  developer_name: string | null;
-  client: { name: string | null } | { name: string | null }[] | null;
-  inspector: Joined;
-};
-
-function firstOf<T>(value: T | T[] | null): T | null {
-  return Array.isArray(value) ? (value[0] ?? null) : value;
-}
-
-/** Adds the per-row counters and joined names the summary shape carries. */
-async function enrichRows(admin: Admin, rows: JobRow[]) {
-  if (rows.length === 0) return [];
-  const jobIds = rows.map((r) => r.id);
-
-  /*
-    Severity counts only: they are what the list, the review queue and the
-    de-snag picker show. Area, photo and open-snag totals were counted here
-    too, at the cost of reading every area and photo row of the page's
-    jobs, and nothing displayed them; the job page counts its own.
-  */
-  const snags = await admin
-    .from("snagging_snags")
-    .select("job_id, severity")
-    .in("job_id", jobIds)
-    .neq("status", "withdrawn");
-  if (snags.error) throw new Error(snags.error.message);
-
-  const zero = () => ({ high: 0, medium: 0, low: 0 });
-  const snagAgg = new Map<string, ReturnType<typeof zero>>();
-  for (const s of (snags.data ?? []) as Array<{
-    job_id: string;
-    severity: string;
-  }>) {
-    const a = snagAgg.get(s.job_id) ?? zero();
-    if (s.severity === "high") a.high += 1;
-    else if (s.severity === "medium") a.medium += 1;
-    else if (s.severity === "low") a.low += 1;
-    snagAgg.set(s.job_id, a);
-  }
-
-  const now = Date.now();
-  return rows.map((row) => {
-    const s = snagAgg.get(row.id) ?? zero();
-    const client = firstOf(row.client);
-    const insp = firstOf(row.inspector);
-    /*
-      FR-6.07 — the 48h approval SLA.
-
-      The deadline is now stored on the row when the job is submitted, so
-      the escalation sweep can index it and a job keeps the deadline it was
-      actually given. It is still derived here for rows written before the
-      column existed, so a historical job does not read as having no
-      deadline at all.
-    */
-    const submittedMs = row.submitted_at ? Date.parse(row.submitted_at) : NaN;
-    const approvalDueAt =
-      row.approval_due_at ??
-      (Number.isNaN(submittedMs)
-        ? null
-        : new Date(
-            submittedMs + APPROVAL_SLA_HOURS * 60 * 60 * 1000,
-          ).toISOString());
-    const awaitingDecision =
-      row.status === "submitted" || row.status === "in_review";
-    // Stamped by the sweep, or past the deadline and not yet swept. Either
-    // way the queue shows it as late rather than waiting on the scheduler.
-    const escalated =
-      Boolean(row.escalated_at) ||
-      (awaitingDecision &&
-        approvalDueAt !== null &&
-        Date.parse(approvalDueAt) < now);
-    return {
-      id: row.id,
-      code: row.code,
-      status: row.status,
-      task_type: "single_unit",
-      round_number: row.round_number,
-      visit_type: (row.visit_type ?? "initial") as SnaggingVisitType,
-      parent_task_id: row.parent_job_id,
-      scheduled_date: row.scheduled_date,
-      scheduled_start_at: null,
-      scheduled_end_at: null,
-      package_name: null,
-      service_tier: null,
-      locked: row.locked,
-      rejection_category: row.rejection_category ?? null,
-      rejection_reason: row.rejection_reason,
-      rejection_count: row.rejection_count ?? 0,
-      remediation_due_at: row.remediation_due_at ?? null,
-      approval_due_at: approvalDueAt,
-      escalated,
-      submitted_at: row.submitted_at,
-      approved_at: row.approved_at,
-      delivered_at: null,
-      created_at: row.created_at,
-      updated_at: row.updated_at,
-      supervisor_id: null,
-      approval_manager_id: row.approval_manager_id,
-      reviewer_id: row.reviewer_id ?? null,
-      reviewer: firstOf(row.reviewer) ?? null,
-      manager: firstOf(row.manager) ?? null,
-      review_started_at: row.review_started_at ?? null,
-      reviewed_at: row.reviewed_at ?? null,
-      escalated_at: row.escalated_at ?? null,
-      property_id: row.client_id ?? row.id,
-      unit_label: row.unit_label,
-      building_name: row.building_name,
-      community: row.community,
-      property_type: row.property_type,
-      client_name: client?.name ?? "",
-      developer_name: row.developer_name,
-      high_severity_count: s.high,
-      inspector_name: insp?.full_name ?? insp?.email ?? null,
-      medium_severity_count: s.medium,
-      low_severity_count: s.low,
-    };
-  });
 }
 
 export async function POST(req: NextRequest) {

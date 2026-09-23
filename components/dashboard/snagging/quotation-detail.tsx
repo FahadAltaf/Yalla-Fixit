@@ -3,7 +3,9 @@
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
+  ArrowLeft,
   Check,
   ChevronDown,
   Copy,
@@ -40,10 +42,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  generateQuotationDocxBlob,
-  generateQuotationPDFBlob,
-} from "@/components/dashboard/extensions/quotation-templates/pdf-utils";
 import { YallaClassicTemplate } from "@/components/dashboard/extensions/quotation-templates/templates/YallaClassicTemplate";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
@@ -56,14 +54,19 @@ import { ActionType, ResourceType } from "@/types/types";
 
 import {
   DataState,
-  PageHeading,
   QuotationStatusBadge,
   StatCard,
   StatCardGrid,
   SubmitButton,
-  formatLocalDateTime,
   useConfirm,
 } from "./shared";
+
+/*
+  The PDF and Word builders (html2canvas, jsPDF, docx) load on the first
+  download or send, not with the page.
+*/
+const loadPdfUtils = () =>
+  import("@/components/dashboard/extensions/quotation-templates/pdf-utils");
 
 /**
  * One quotation, on its own page rather than inside a job (BA v2, changes
@@ -105,7 +108,13 @@ export default function QuotationDetail({ id }: { id: string }) {
     several seconds of work — looked like a button that did nothing at all.
   */
   const [pending, setPending] = useState<
-    null | "download" | "download_word" | "share_link" | "regenerate" | "send" | "approve_rate"
+    | null
+    | "download"
+    | "download_word"
+    | "share_link"
+    | "regenerate"
+    | "send"
+    | "approve_rate"
   >(null);
   const busy = pending !== null;
 
@@ -115,7 +124,9 @@ export default function QuotationDetail({ id }: { id: string }) {
     try {
       setQuote(await snaggingService.getQuotationById(id));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load the quotation");
+      setError(
+        err instanceof Error ? err.message : "Could not load the quotation",
+      );
     } finally {
       setLoading(false);
     }
@@ -124,6 +135,32 @@ export default function QuotationDetail({ id }: { id: string }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  /**
+   * Fold an action's response into the page instead of reloading it.
+   *
+   * Send and Share both return the updated quotation row, so the reload
+   * that used to follow them re-read fields the server had just handed
+   * back — and because it went through `load`, it blanked the document,
+   * the client link and the whole toolbar behind a spinner to do it. The
+   * only thing the coordinator was waiting to see was the status going
+   * from Draft to Awaiting client.
+   *
+   * Merged rather than assigned: the POST returns the quotation's own
+   * columns, while the GET that filled this page also carried the live
+   * client, the live property and can_approve_rate. Assigning the
+   * response would drop all three, and take the rendered document and the
+   * approve-rate button down with them.
+   */
+  const applyResult = useCallback((result: SnaggingQuotation) => {
+    setQuote((prev) => {
+      if (!prev) return result;
+      const next: SnaggingQuotation = { ...prev, ...result };
+      // Kept in its own state, and never part of the loaded shape.
+      delete next.approval_url;
+      return next;
+    });
+  }, []);
 
   const doc: SnaggingQuoteDoc | null = quote
     ? {
@@ -139,14 +176,15 @@ export default function QuotationDetail({ id }: { id: string }) {
         lines: quote.lines,
         scope_of_work: quote.scope_of_work,
         terms: quote.terms,
-        property: (quote.property_snapshot ?? {}) as SnaggingQuoteDoc["property"],
+        property: (quote.property_snapshot ??
+          {}) as SnaggingQuoteDoc["property"],
       }
     : null;
 
   /** The PDF bytes, from the same template the page renders below. */
   async function buildPdf() {
     if (!doc) throw new Error("The quotation has not loaded yet");
-    return generateQuotationPDFBlob(
+    return (await loadPdfUtils()).generateQuotationPDFBlob(
       "yalla-classic",
       snaggingQuoteToTemplateData(doc),
       { scale: 2 },
@@ -161,7 +199,9 @@ export default function QuotationDetail({ id }: { id: string }) {
       saveAs(await buildPdf(), `Quotation-${quote.quote_number}.pdf`);
       toast.success("PDF downloaded");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not generate the PDF");
+      toast.error(
+        e instanceof Error ? e.message : "Could not generate the PDF",
+      );
     } finally {
       setPending(null);
     }
@@ -173,12 +213,17 @@ export default function QuotationDetail({ id }: { id: string }) {
     setPending("download_word");
     try {
       saveAs(
-        await generateQuotationDocxBlob(snaggingQuoteToTemplateData(doc), "without"),
+        await (await loadPdfUtils()).generateQuotationDocxBlob(
+          snaggingQuoteToTemplateData(doc),
+          "without",
+        ),
         `Quotation-${quote.quote_number}.docx`,
       );
       toast.success("Word file downloaded");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not generate the Word file");
+      toast.error(
+        e instanceof Error ? e.message : "Could not generate the Word file",
+      );
     } finally {
       setPending(null);
     }
@@ -191,10 +236,14 @@ export default function QuotationDetail({ id }: { id: string }) {
   ) {
     setPending(action);
     try {
-      const result = await snaggingService.quotationActionById(id, action, extra);
+      const result = await snaggingService.quotationActionById(
+        id,
+        action,
+        extra,
+      );
       if (result.approval_url) setApprovalUrl(result.approval_url);
       toast.success(success ?? "Done");
-      await load();
+      applyResult(result);
       return result;
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "That did not work");
@@ -225,16 +274,22 @@ export default function QuotationDetail({ id }: { id: string }) {
 
     setPending("share_link");
     try {
-      const result = await snaggingService.quotationActionById(id, "share_link");
+      const result = await snaggingService.quotationActionById(
+        id,
+        "share_link",
+      );
       if (result.approval_url) {
         setApprovalUrl(result.approval_url);
-        await navigator.clipboard.writeText(result.approval_url).catch(() => {});
+        await navigator.clipboard
+          .writeText(result.approval_url)
+          .catch(() => {});
       }
       saveAs(await buildPdf(), `Quotation-${quote.quote_number}.pdf`);
       toast.success("Ready for WhatsApp", {
-        description: "The approval link is on your clipboard and the PDF has downloaded.",
+        description:
+          "The approval link is on your clipboard and the PDF has downloaded.",
       });
-      await load();
+      applyResult(result);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "That did not work");
     } finally {
@@ -248,7 +303,8 @@ export default function QuotationDetail({ id }: { id: string }) {
     and the server refuses both send and share — so the page has to say
     so, and offer the way out to whoever can take it.
   */
-  const rateWaiting = quote?.rate_outside_band === true && !quote?.rate_approved_at;
+  const rateWaiting =
+    quote?.rate_outside_band === true && !quote?.rate_approved_at;
   // Admin or this job's approval manager — decided by the server, which
   // is the only side that can see who manages the job.
   const canApproveRate = quote?.can_approve_rate === true;
@@ -259,124 +315,144 @@ export default function QuotationDetail({ id }: { id: string }) {
       setQuote(await snaggingService.approveQuotationRate(id));
       toast.success("Rate approved");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not approve the rate");
+      toast.error(
+        err instanceof Error ? err.message : "Could not approve the rate",
+      );
     } finally {
       setPending(null);
     }
   }
 
-  const isDecided = quote?.status === "approved" || quote?.status === "rejected";
+  const isDecided =
+    quote?.status === "approved" || quote?.status === "rejected";
   const isDesnag = quote?.quote_kind === "desnag";
   const needsJob = quote?.status === "approved" && !quote?.job_id;
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHeading
-        eyebrow="Sales"
-        title={quote ? `Quotation ${quote.quote_number}` : "Quotation"}
-        description={
-          quote
-            ? `${isDesnag ? "De-snagging visit" : "Inspection"} · raised ${formatLocalDateTime(quote.created_at)}.`
-            : "Loading the document…"
-        }
-        actions={
-          quote && doc ? (
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              {/* Once the job exists, its card below carries the status. */}
-              {quote.job_id ? null : <QuotationStatusBadge status={quote.status} />}
+      {/* Back to the list on the left, everything this quotation can do
+          on the right -- the toolbar every other detail page carries. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Button asChild variant="ghost" size="sm" className="-ml-2">
+          <Link href="/snagging/quotations">
+            <ArrowLeft className="size-4" />
+            Back to quotations
+          </Link>
+        </Button>
 
-              {canEdit ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  {/* One Download button with the two formats, as on AMC proposals. */}
+        {quote && doc ? (
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <QuotationStatusBadge status={quote.status} />
+
+            {/* The job this quotation turned into, one click away. */}
+            {quote.job_id ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => router.push(`/snagging/${quote.job_id}`)}
+              >
+                <FileText className="size-4" />
+                Open the job
+              </Button>
+            ) : null}
+
+            {canEdit ? (
+              <div className="flex flex-wrap items-center gap-2">
+                {/* One Download button with the two formats, as on AMC proposals. */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <SubmitButton
+                      variant="outline"
+                      size="sm"
+                      pending={
+                        pending === "download" || pending === "download_word"
+                      }
+                      pendingLabel="Preparing…"
+                      disabled={busy}
+                      icon={<Download className="size-4" />}
+                    >
+                      Download
+                      <ChevronDown className="size-3.5" />
+                    </SubmitButton>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => void download()}>
+                      <FileText className="size-4" />
+                      PDF
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => void downloadWord()}>
+                      <FileType2 className="size-4" />
+                      Word (.docx)
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                {/* A de-snag is priced at the amount chosen for it, not
+                    from the property, so it is never regenerated. */}
+                {quote.status === "draft" && !isDesnag ? (
+                  <SubmitButton
+                    variant="outline"
+                    size="sm"
+                    disabled={busy}
+                    pending={pending === "regenerate"}
+                    pendingLabel="Repricing…"
+                    icon={<FileText className="size-4" />}
+                    onClick={() =>
+                      void run("regenerate", undefined, "Repriced")
+                    }
+                  >
+                    Regenerate
+                  </SubmitButton>
+                ) : null}
+
+                {!isDecided ? (
+                  /*
+                    One "Share" button with the two ways to send it, not
+                    two buttons side by side.
+                  */
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <SubmitButton
-                        variant="outline"
                         size="sm"
-                        pending={pending === "download" || pending === "download_word"}
-                        pendingLabel="Preparing…"
                         disabled={busy}
-                        icon={<Download className="size-4" />}
+                        pending={pending === "share_link"}
+                        pendingLabel="Preparing…"
+                        icon={<Send className="size-4" />}
                       >
-                        Download
+                        {quote.status === "sent" ? "Share again" : "Share"}
                         <ChevronDown className="size-3.5" />
                       </SubmitButton>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => void download()}>
-                        <FileText className="size-4" />
-                        PDF
+                      <DropdownMenuItem onClick={() => void shareByHand()}>
+                        <MessageCircle className="size-4" />
+                        Share on WhatsApp
                       </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => void downloadWord()}>
-                        <FileType2 className="size-4" />
-                        Word (.docx)
+                      <DropdownMenuItem
+                        onClick={() => {
+                          const snap = (quote.property_snapshot ??
+                            {}) as Record<string, unknown>;
+                          setRecipient(
+                            (snap.client_email as string) ??
+                              quote.sent_to ??
+                              "",
+                          );
+                          setSendOpen(true);
+                        }}
+                      >
+                        <Mail className="size-4" />
+                        {quote.status === "sent"
+                          ? "Resend by email"
+                          : "Send by email"}
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
-
-                  {/* A de-snag is priced at the amount chosen for it, not
-                      from the property, so it is never regenerated. */}
-                  {quote.status === "draft" && !isDesnag ? (
-                    <SubmitButton
-                      variant="outline"
-                      size="sm"
-                      disabled={busy}
-                      pending={pending === "regenerate"}
-                      pendingLabel="Repricing…"
-                      icon={<FileText className="size-4" />}
-                      onClick={() => void run("regenerate", undefined, "Repriced")}
-                    >
-                      Regenerate
-                    </SubmitButton>
-                  ) : null}
-
-                  {!isDecided ? (
-                    /*
-                      One "Share" button with the two ways to send it, not
-                      two buttons side by side.
-                    */
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <SubmitButton
-                          size="sm"
-                          disabled={busy}
-                          pending={pending === "share_link"}
-                          pendingLabel="Preparing…"
-                          icon={<Send className="size-4" />}
-                        >
-                          {quote.status === "sent" ? "Share again" : "Share"}
-                          <ChevronDown className="size-3.5" />
-                        </SubmitButton>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => void shareByHand()}>
-                          <MessageCircle className="size-4" />
-                          Share on WhatsApp
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => {
-                            const snap = (quote.property_snapshot ?? {}) as Record<
-                              string,
-                              unknown
-                            >;
-                            setRecipient(
-                              (snap.client_email as string) ?? quote.sent_to ?? "",
-                            );
-                            setSendOpen(true);
-                          }}
-                        >
-                          <Mail className="size-4" />
-                          {quote.status === "sent" ? "Resend by email" : "Send by email"}
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-          ) : null
-        }
-      />
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
 
       <DataState
         loading={loading}
@@ -414,7 +490,9 @@ export default function QuotationDetail({ id }: { id: string }) {
                   // older ones; either reads as a percentage here.
                   caption={`At ${(() => {
                     const rate = Number(quote.tax_rate ?? 0);
-                    return Math.round((rate <= 1 ? rate * 100 : rate) * 100) / 100;
+                    return (
+                      Math.round((rate <= 1 ? rate * 100 : rate) * 100) / 100
+                    );
                   })()}%`}
                 />
                 <StatCard
@@ -465,25 +543,6 @@ export default function QuotationDetail({ id }: { id: string }) {
                       {isDesnag ? "Open de-snag round" : "Create job"}
                     </Button>
                   ) : null}
-                </AlertDescription>
-              </Alert>
-            ) : null}
-
-            {quote.job_id ? (
-              <Alert>
-                <FileText />
-                <AlertTitle className="flex flex-wrap items-center gap-2">
-                  This quotation has its job
-                  <QuotationStatusBadge status={quote.status} />
-                </AlertTitle>
-                <AlertDescription>
-                  <Button
-                    variant="link"
-                    className="h-auto p-0"
-                    onClick={() => router.push(`/snagging/${quote.job_id}`)}
-                  >
-                    Open the job
-                  </Button>
                 </AlertDescription>
               </Alert>
             ) : null}
@@ -602,7 +661,11 @@ export default function QuotationDetail({ id }: { id: string }) {
             />
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setSendOpen(false)} disabled={busy}>
+            <Button
+              variant="outline"
+              onClick={() => setSendOpen(false)}
+              disabled={busy}
+            >
               Cancel
             </Button>
             <SubmitButton

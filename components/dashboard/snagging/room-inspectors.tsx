@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Building2, Loader2, Users } from "lucide-react";
 import { toast } from "sonner";
 
@@ -33,13 +33,16 @@ export function RoomInspectors({
   leadId,
   users,
   canEdit,
+  initialRooms,
 }: {
+  /** The job's rooms as the page already has them; read again only after a change. */
+  initialRooms?: SnaggingArea[] | null;
   taskId: string;
   leadId: string | null;
   users: User[];
   canEdit: boolean;
 }) {
-  const [rooms, setRooms] = useState<SnaggingArea[] | null>(null);
+  const [rooms, setRooms] = useState<SnaggingArea[] | null>(initialRooms ?? null);
   const [error, setError] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
 
@@ -52,7 +55,13 @@ export function RoomInspectors({
     }
   }, [taskId]);
 
+  // Skipped when the page handed over the rooms it already had.
+  const skipFirstLoad = useRef(Boolean(initialRooms));
   useEffect(() => {
+    if (skipFirstLoad.current) {
+      skipFirstLoad.current = false;
+      return;
+    }
     void load();
   }, [load]);
 

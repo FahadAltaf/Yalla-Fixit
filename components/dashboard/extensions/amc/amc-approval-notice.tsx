@@ -31,8 +31,9 @@ const POLL_MS = 60_000;
 /* Rows shown before "Show all"; the rest are one click away on the list. */
 const SHOWN = 3;
 
+/* The proposal's own page, where the approver reads it and decides. */
 export function reviewLink(id: string) {
-  return `/extensions?section=amc-proposals&view=submissions&review=${encodeURIComponent(id)}`;
+  return `/extensions/amc/${encodeURIComponent(id)}`;
 }
 
 export function AmcApprovalNotice({

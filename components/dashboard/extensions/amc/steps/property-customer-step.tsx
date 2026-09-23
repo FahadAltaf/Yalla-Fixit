@@ -94,18 +94,16 @@ export function PropertyCustomerStep({ form }: StepProps) {
               )}
             />
 
+            {/* Category, unit type and the short detail side by side;
+                the full address gets the whole row under them. */}
             <FormField
               control={form.control}
-              name="propertyAddress"
+              name="propertyDetail"
               render={({ field }) => (
-                <FormItem className="sm:col-span-2">
-                  <FormLabel>Property address</FormLabel>
+                <FormItem className="sm:col-span-2 xl:col-span-1">
+                  <FormLabel>Property detail</FormLabel>
                   <FormControl>
-                    <Textarea
-                      rows={2}
-                      placeholder="Full property address"
-                      {...field}
-                    />
+                    <Input placeholder="e.g. Villa 12, Al Barsha, Dubai" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -114,12 +112,16 @@ export function PropertyCustomerStep({ form }: StepProps) {
 
             <FormField
               control={form.control}
-              name="propertyDetail"
+              name="propertyAddress"
               render={({ field }) => (
-                <FormItem className="sm:col-span-2">
-                  <FormLabel>Property detail</FormLabel>
+                <FormItem className="sm:col-span-2 xl:col-span-3">
+                  <FormLabel>Property address</FormLabel>
                   <FormControl>
-                    <Input placeholder="e.g. Villa 12, Al Barsha, Dubai" {...field} />
+                    <Textarea
+                      rows={2}
+                      placeholder="Full property address"
+                      {...field}
+                    />
                   </FormControl>
                   <FormMessage />
                 </FormItem>

@@ -1,16 +1,16 @@
 "use client";
 import { createContext, useContext, useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import { Session } from "@supabase/supabase-js";
 import {
   signOut as signOutAction,
 } from "@/modules/auth/services/auth-service";
 
-import { usersService } from "@/modules/users";
 import { User, UserRoles } from "@/types/types";
 import { Settings, settingsService } from "@/modules/settings";
 import { LogOut, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { checkAuthentication } from "@/utils/check-authentication";
+import { loadSignedInUser } from "@/utils/load-signed-in-user";
 import Loader from "@/components/ui/loader";
 
 type AuthContextType = {
@@ -28,11 +28,43 @@ type AuthContextType = {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [userProfile, setUserProfile] = useState<User | null>(null);
+export const AuthProvider = ({
+  children,
+  initialAuth,
+}: {
+  children: React.ReactNode;
+  /*
+    Who is signed in, as the server read it with the page (app/layout.tsx).
+    Signed in with a profile: the page renders straight away, with no
+    loader. Signed out: the redirect to login happens at once. Undefined
+    (the server could not tell) or a user with no profile: checked here in
+    the browser, exactly as before.
+  */
+  initialAuth?: { user: { id: string; email?: string } | null; profile: User | null };
+}) => {
+  const known =
+    initialAuth !== undefined && (initialAuth.user === null || initialAuth.profile !== null);
+  const [user, setUser] = useState<User | null>(
+    known && initialAuth?.user ? (initialAuth.user as unknown as User) : null,
+  );
+  const [userProfile, setUserProfile] = useState<User | null>(
+    known ? (initialAuth?.profile ?? null) : null,
+  );
   const [session, setSession] = useState<Session | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!known);
+  const pathname = usePathname();
+  /*
+    The app itself renders in the browser only. Much of it reads browser
+    storage while rendering (it was always hidden behind this provider's
+    loader on the server), so rendering it on the server fails. With the
+    user already known from the server, it renders the moment the page
+    loads -- no loader waiting on the network -- it just is not part of the
+    server's HTML.
+  */
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
   const [settings, setSettings] = useState<Settings | null>(null);
 
   // Define public routes that don't require authentication
@@ -73,27 +105,29 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   // Function to get user data from Supabase and user_profile table
   const fetchUserData = async () => {
     try {
-      const { user: userData } = await checkAuthentication();
+      /*
+        The session and the profile in ONE call (loadSignedInUser). They
+        were two calls one after the other -- ask Supabase Auth who this
+        is, then fetch their profile -- a second or more before any page
+        could start loading its own data.
+      */
+      const { user: userData, profile: userProfileData } = await loadSignedInUser();
 
       if (userData) {
         const isAccess = checkRouteAccess(
           window.location.pathname,
-          userData as User
+          userData as unknown as User
         );
         if (!isAccess) {
           // setLoading(false);
           return;
         }
+        // Signed in but with no profile: the same as before, when the
+        // profile request failed -- sign out rather than show a half page.
+        if (!userProfileData) throw new Error("No profile for the signed-in user");
         setUser(userData as unknown as User);
-
-        // Fetch user profile_image data from user_profile table
-        const userProfileData = await usersService.getUserById(
-          userData?.id as string
-        );
-        if (userProfileData) {
-          setUserProfile(userProfileData);
-          setLoading(false);
-        }
+        setUserProfile(userProfileData);
+        setLoading(false);
       } else {
         setUser(null);
         setUserProfile(null);
@@ -132,10 +166,19 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     const init = async () => {
       try {
         if (!isMounted) return;
-        await fetchUserData();
-
-        if (!isMounted) return;
-        await fetchSettings();
+        if (known) {
+          /*
+            The server already said who this is. As before, a signed-in
+            user is sent away from the login pages here; a signed-out one
+            is left to the dashboard's own guard (CheckUserRole), so the
+            public proposal and quotation links keep working for clients.
+          */
+          if (user) checkRouteAccess(window.location.pathname, user);
+          await fetchSettings().catch(() => undefined);
+          return;
+        }
+        // Independent of each other, so they load together.
+        await Promise.all([fetchUserData(), fetchSettings().catch(() => undefined)]);
       } finally {
         // fetchUserData already handles setLoading(false),
         // so we don't touch loading state here to avoid double updates.
@@ -169,8 +212,13 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     }
   };
 
+  // A signed-in user on a login page is on their way out of it: the
+  // loader, not a flash of the login form, until the redirect lands.
+  const leavingAuthPage =
+    Boolean(user) && AUTH_ROUTES.some((route) => pathname?.startsWith(route));
+
   // Show loading state or nothing while checking auth
-  if (loading) {
+  if (!mounted || loading || leavingAuthPage) {
     return (
       <div className="flex items-center justify-center h-screen">
         <Loader />

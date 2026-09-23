@@ -168,7 +168,16 @@ export default function CatalogueTreeAdmin() {
     try {
       await snaggingService.setCatalogueNodeActive(level, id, active);
       toast.success(active ? `${label} is back in use` : `${label} retired`);
-      await load();
+      /*
+        Only that one row changed on the server (a toggle does not cascade
+        to the rows under it), so it changes here too. This used to download
+        the whole catalogue -- over a thousand defects -- after every click.
+      */
+      const flip = <T extends { id: string; active: boolean }>(list: T[]) =>
+        list.map((item) => (item.id === id ? { ...item, active } : item));
+      if (level === "category") setCategories(flip);
+      else if (level === "subcategory") setSubcategories(flip);
+      else setDefects(flip);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not save that");
     } finally {

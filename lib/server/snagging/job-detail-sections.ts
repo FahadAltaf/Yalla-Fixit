@@ -1,8 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { byCreation } from "@/lib/snagging/creation-order";
-import { hasReviewNote, hasVerdictNote } from "@/lib/server/snagging/columns";
+import { hasAreaInspector, hasReviewNote, hasVerdictNote } from "@/lib/server/snagging/columns";
 import { loadJobFamily, readOnRoot } from "@/lib/server/snagging/job-family";
+import { listReportVersions } from "@/lib/server/snagging/report-versions";
 import { signMediaPaths } from "@/lib/server/snagging/media";
 
 /*
@@ -69,8 +70,14 @@ const PROPERTY_COLUMNS =
 /* The Areas tab reads its own endpoint; the job only needs what the header,
    snag list and report show, plus creation order. */
 /* note: the inspector's closing note, shown on "Completed areas". */
+/*
+  The pin, the outline and (below) the room's own inspector come with the
+  job's areas, so the Areas tab and the room-inspector picker start from
+  the job the page already has instead of each reading the rooms again.
+*/
 const JOB_AREA_COLUMNS =
-  "id, name, access_state, access_reason, confirmed_at, note, visit_id, created_at, sort_order";
+  "id, name, access_state, access_reason, confirmed_at, note, visit_id, created_at, sort_order, " +
+  "floor_plan_id, pin_x, pin_y, zone";
 const CHECKLIST_COLUMNS =
   "id, status, label, group_name, mandatory, reason, visit_id, created_at, sort_order";
 /* job_id stays: it decides from_earlier_visit. locked has no reader today
@@ -87,13 +94,13 @@ const SNAG_PHOTO_COLUMNS =
 // Composed select strings are beyond the client's select-string type
 // parser, so these queries name their row type (Row) instead of inferring it.
 type Row = Record<string, any>;
-const CORE_SELECT = `${JOB_COLUMNS},
+const coreSelect = (withRoomInspector: boolean) => `${JOB_COLUMNS},
   client:client_id(name, email, phone),
   inspector:inspector_id(id, full_name, email),
   manager:approval_manager_id(full_name, email),
   reviewer:reviewer_id(full_name, email),
   property_record:property_id(${PROPERTY_COLUMNS}),
-  areas:snagging_areas(${JOB_AREA_COLUMNS})`;
+  areas:snagging_areas(${JOB_AREA_COLUMNS}${withRoomInspector ? ", inspector_id" : ""})`;
 /*
   The snags, with the de-snag verdict comment and the reviewer's note to
   the inspector once their migrations have run.
@@ -120,7 +127,7 @@ function firstOf<T>(v: T | T[] | null | undefined): T | null {
 export async function loadJobCore(admin: Admin, id: string) {
   const { data: job, error } = await admin
     .from("snagging_jobs")
-    .select<string, Row>(CORE_SELECT)
+    .select<string, Row>(coreSelect(await hasAreaInspector(admin)))
     .eq("id", id)
     .maybeSingle();
 
@@ -422,4 +429,98 @@ export async function loadJobDesnagQuotation(admin: Admin, id: string) {
         job_id: (desnagRow.job_id as string | null) ?? null,
       }
     : null;
+}
+
+/*
+  What the visits tab, the visit alerts and the edit dialog read, plus
+  quotation_id to join the visit's quotation. The review fields
+  (submitted_at, review_note) came with 20260918100000_visit_review, which
+  every environment now has; the audit columns (created_by, updated_at,
+  reviewed_by, ...) have no reader here.
+*/
+const VISIT_COLUMNS =
+  "id, visit_number, status, scheduled_date, appointment_at, inspector_id, charge, " +
+  "charge_method, payment_reference, quotation_id, started_at, submitted_at, review_note, " +
+  "notes, created_at, inspector:inspector_id(id, full_name, email), " +
+  // The visit's quotation, embedded rather than fetched in a second round trip.
+  "quotation_ref:quotation_id(id, quote_number, status)";
+
+function firstOfVisit<T>(v: T | T[] | null | undefined): T | null {
+  return Array.isArray(v) ? (v[0] ?? null) : (v ?? null);
+}
+
+/** The additional visits and report versions of the job's family. */
+export async function loadJobVisits(admin: Admin, id: string) {
+  /*
+    Visits belong to the ORIGINAL inspection, so opening this tab on a
+    de-snag job shows the same list rather than an empty one. A de-snag
+    is still its own job (change 31); a visit is not.
+
+    Everything below needs only the root, so it goes in one parallel
+    round trip -- started on this job's id alongside the family lookup,
+    since most jobs are their own root (readOnRoot). The quotation used
+    to be a further query after the visits; it is embedded now.
+  */
+  const {
+    result: [{ data: visits, error }, { data: visitSnags }, versions],
+  } = await readOnRoot(admin, id, (rootId) =>
+    Promise.all([
+      admin
+        .from("snagging_job_visits")
+        .select(VISIT_COLUMNS)
+        .eq("job_id", rootId)
+        .order("visit_number", { ascending: true }),
+      // What each visit actually found, counted on the job it was written to.
+      admin
+        .from("snagging_snags")
+        .select("id, visit_id")
+        .eq("job_id", rootId)
+        .not("visit_id", "is", null),
+      listReportVersions(admin, rootId),
+    ]),
+  );
+  if (error) throw new Error(error.message);
+
+  const rows = (visits ?? []) as unknown as Array<Record<string, unknown>>;
+  const snagCount = new Map<string, number>();
+  for (const snag of visitSnags ?? []) {
+    const key = snag.visit_id as string;
+    snagCount.set(key, (snagCount.get(key) ?? 0) + 1);
+  }
+
+  return {
+    visits: rows.map((visit) => {
+      const quote = firstOfVisit(
+        visit.quotation_ref as { id: string; quote_number: string | null; status: string } | null,
+      );
+      const { quotation_ref: _embedded, ...rest } = visit;
+      void _embedded;
+      return {
+        ...rest,
+        inspector: firstOfVisit(
+          visit.inspector as Record<string, unknown> | null,
+        ),
+        quotation: quote
+          ? {
+              id: quote.id,
+              quote_number: quote.quote_number,
+              status: quote.status,
+            }
+          : null,
+        snag_count: snagCount.get(visit.id as string) ?? 0,
+      };
+    }),
+    versions,
+  };
+}
+
+/** The job's own floor plans, each with a signed URL. */
+export async function loadJobFloorPlans(admin: Admin, taskId: string) {
+  const { data, error } = await admin
+    .from("snagging_floor_plans")
+    .select("id, label, storage_path, width, height, sort_order")
+    .eq("job_id", taskId)
+    .order("sort_order", { ascending: true });
+  if (error) throw new Error(error.message);
+  return signMediaPaths(admin, data ?? []);
 }

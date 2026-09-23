@@ -1,5 +1,6 @@
 "use client";
 
+import { generateInspectionReportDocx } from "@/lib/snagging/report-docx";
 import { renderReactToPdfBlob } from "@/lib/snagging/report-pdf";
 import type { SnaggingQuotation } from "@/modules/snagging";
 import type { SnaggingTask } from "@/types/types";
@@ -87,5 +88,22 @@ export async function buildInspectionReportPdf(
   return {
     blob,
     filename: `${(task.property?.unit_label ?? "inspection").replace(/\s+/g, "-")}-snagging-report.pdf`,
+  };
+}
+
+/**
+ * The same report as an editable Word file.
+ *
+ * Drawn to match the PDF page for page, but as a real document: the text
+ * stays text, and the photographs and floor plans come through as images.
+ */
+export async function buildInspectionReportDocx(
+  task: SnaggingTask,
+  quotation: SnaggingQuotation | null | undefined,
+): Promise<{ blob: Blob; filename: string }> {
+  const blob = await generateInspectionReportDocx(task, quotation);
+  return {
+    blob,
+    filename: `${(task.property?.unit_label ?? "inspection").replace(/s+/g, "-")}-snagging-report.docx`,
   };
 }

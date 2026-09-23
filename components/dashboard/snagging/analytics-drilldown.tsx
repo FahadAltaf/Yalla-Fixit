@@ -139,7 +139,7 @@ export function AnalyticsDrilldown({
     } finally {
       setExporting(false);
     }
-    exportTable({
+    void exportTable({
       columns: everything.columns.map(({ key, label }) => ({ key, label })),
       rows: everything.rows,
       filename: exportFilename([

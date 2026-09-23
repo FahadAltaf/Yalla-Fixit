@@ -1242,6 +1242,7 @@ export function JobSetupPanel({
                   leadId={task.inspector_id}
                   users={users}
                   canEdit={canAssign}
+                  initialRooms={task.areas ?? null}
                 />
               ) : null}
               {canAssign ? (

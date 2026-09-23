@@ -1,51 +1,53 @@
-import type { Metadata } from "next";
-import { Suspense } from "react";
-import { cookies } from "next/headers";
-import { EXTENSIONS_NAV_COOKIE } from "@/lib/extensions/nav-preference";
+import { redirect } from "next/navigation";
 
-import { siteConfig } from "@/lib/site-config";
-import Extensions from "@/components/dashboard/extensions";
+/**
+ * /extensions has no page of its own any more: each extension has its own
+ * address, listed under Extensions in the sidebar.
+ *
+ * The old addresses kept everything in the query string
+ * (?section=amc-proposals&view=submissions&review=<id>), and those links
+ * are still out there -- in the approval bell, in bookmarks, in messages
+ * people sent each other. They land on the page they meant rather than on
+ * a 404.
+ */
+export default async function ExtensionsIndex({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const params = await searchParams;
+  const one = (key: string) => {
+    const value = params[key];
+    return Array.isArray(value) ? value[0] : value;
+  };
 
-const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
-const title = "Extensions | Service Appointment Lookup";
-const description =
-  "Search and manage service appointments by name, view details, and download related attachments in bulk.";
-
-export const metadata: Metadata = {
-  title,
-  description,
-  robots: {
-    index: true,
-    follow: true,
-  },
-  alternates: {
-    canonical: `${baseUrl}/extensions`,
-  },
-  openGraph: {
-    title,
-    description,
-    url: `${baseUrl}/extensions`,
-    siteName: siteConfig.name,
-  },
-  twitter: {
-    card: "summary_large_image",
-    title,
-    description,
-  },
-};
-
-// The section-nav collapsed state is read here, on the server, so the nav
-// renders at its correct width on the first paint instead of correcting
-// itself after mount.
-export default async function ExtensionsPage() {
-  const store = await cookies();
-  const navOpen = store.get(EXTENSIONS_NAV_COOKIE)?.value === "open";
-
-  // The section is read from the address on the client.
-  return (
-    <Suspense fallback={null}>
-      <Extensions defaultNavOpen={navOpen} />
-    </Suspense>
-  );
+  switch (one("section")) {
+    case "quotation-templates":
+      redirect("/extensions/quotation-templates");
+    case "amc-settings":
+      redirect("/settings/amc");
+    case "amc-proposals": {
+      const review = one("review");
+      if (review) redirect(`/extensions/amc/${encodeURIComponent(review)}`);
+      const submission = one("submission");
+      if (submission) {
+        const step = one("step");
+        redirect(
+          `/extensions/amc/${encodeURIComponent(submission)}/edit${step ? `?step=${encodeURIComponent(step)}` : ""}`,
+        );
+      }
+      if (one("view") === "create") redirect("/extensions/amc/new");
+      // "Waiting for approval" is the Awaiting approval status filter now.
+      const scope = one("scope");
+      redirect(
+        scope === "waiting"
+          ? "/extensions/amc?status=awaiting_approval"
+          : scope === "mine"
+            ? "/extensions/amc?scope=mine"
+            : "/extensions/amc",
+      );
+    }
+    default:
+      redirect("/extensions/bulk-download");
+  }
 }
-

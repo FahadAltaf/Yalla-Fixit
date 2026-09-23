@@ -87,17 +87,16 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const { data, error, count } = await query;
+    // The page and the group list are read together. Groups come from the
+    // whole library, not the filtered page, so the group filter does not
+    // shrink its own list of options as it is used.
+    const [{ data, error, count }, { data: allGroups }] = await Promise.all([
+      query,
+      admin.from(TABLE).select("group_name").order("sort_order", { ascending: true }),
+    ]);
     if (error) throw new Error(error.message);
 
     const items = data ?? [];
-
-    // Groups come from the whole library, not the filtered page, so the
-    // group filter does not shrink its own list of options as it is used.
-    const { data: allGroups } = await admin
-      .from(TABLE)
-      .select("group_name")
-      .order("sort_order", { ascending: true });
     const groups = [
       ...new Set((allGroups ?? []).map((row) => row.group_name as string)),
     ];

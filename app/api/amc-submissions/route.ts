@@ -199,12 +199,19 @@ export async function GET(req: NextRequest) {
   const id = req.nextUrl.searchParams.get("id");
 
   if (id) {
-    const { data, error } = await admin
-      .from("amc_submissions")
-      .select("*")
-      .eq("id", id)
-      .eq("owner_id", profile.id)
-      .maybeSingle();
+    /*
+      One submission, for its detail page or the wizard.
+
+      The same visibility as the list (FR3.2): the owner, or an approver
+      for anything past draft. It used to be owner-only, so an approver
+      opening a proposal from the queue would have been told it did not
+      exist. The row and the settings that decide approval rights are read
+      together rather than one after the other.
+    */
+    const [{ data, error }, settings] = await Promise.all([
+      admin.from("amc_submissions").select("*").eq("id", id).maybeSingle(),
+      readAmcSettings(admin),
+    ]);
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
@@ -213,7 +220,38 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    return NextResponse.json(mapRow(data as AmcSubmissionRow));
+    const row = data as AmcSubmissionRow;
+    const canApprove = canApproveAmc(
+      settings,
+      profile.email,
+      hasResourceAction(gate.accessUser, ResourceType.AMC, ActionType.APPROVE),
+    );
+    const isOwn = row.owner_id === profile.id;
+    // Someone else's draft stays private, even to an approver.
+    if (!isOwn && (!canApprove || row.status === "draft")) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    const names = new Map<string, string>();
+    if (!isOwn) {
+      const { data: owner } = await admin
+        .from("user_profile")
+        .select("id, full_name, email")
+        .eq("id", row.owner_id)
+        .maybeSingle();
+      if (owner) {
+        names.set(
+          String(owner.id),
+          ((owner.full_name as string | null) ?? "").trim() ||
+            String(owner.email ?? ""),
+        );
+      }
+    }
+
+    return NextResponse.json({
+      ...mapRow(row, { viewerId: profile.id, names }),
+      viewer_can_approve: canApprove,
+    });
   }
 
   /*
@@ -230,32 +268,41 @@ export async function GET(req: NextRequest) {
   */
   /* FR5.3: the approvers chosen in AMC Settings, or the role permission
      when none are chosen. */
-  const canApprove = canApproveAmc(
-    await readAmcSettings(admin),
-    profile.email,
-    hasResourceAction(gate.accessUser, ResourceType.AMC, ActionType.APPROVE),
-  );
-
-  const { data: own, error } = await admin
-    .from("amc_submissions")
-    .select("*")
-    .eq("owner_id", profile.id)
-    .order("updated_at", { ascending: false });
+  /*
+    The settings, the caller's own submissions and the approval queue are
+    read together: they were three round trips one after another. The queue
+    is only USED when the caller turns out to be an approver -- it is never
+    sent to anyone else.
+  */
+  const [settings, { data: own, error }, { data: queue, error: queueError }] =
+    await Promise.all([
+      readAmcSettings(admin),
+      admin
+        .from("amc_submissions")
+        .select("*")
+        .eq("owner_id", profile.id)
+        .order("updated_at", { ascending: false }),
+      admin
+        .from("amc_submissions")
+        .select("*")
+        .neq("owner_id", profile.id)
+        .neq("status", "draft")
+        .order("updated_at", { ascending: false }),
+    ]);
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
+  const canApprove = canApproveAmc(
+    settings,
+    profile.email,
+    hasResourceAction(gate.accessUser, ResourceType.AMC, ActionType.APPROVE),
+  );
+
   const rows = [...((own ?? []) as AmcSubmissionRow[])];
 
   if (canApprove) {
-    const { data: queue, error: queueError } = await admin
-      .from("amc_submissions")
-      .select("*")
-      .neq("owner_id", profile.id)
-      .neq("status", "draft")
-      .order("updated_at", { ascending: false });
-
     if (queueError) {
       return NextResponse.json({ error: queueError.message }, { status: 500 });
     }

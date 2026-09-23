@@ -5,7 +5,7 @@ import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import {
   inRange,
-  loadInspectorNames,
+  inspectorNamesFromJobs,
   loadJobsTouchingRange,
   loadReviewQueue,
   minutesBetween,
@@ -145,13 +145,8 @@ export async function GET(req: NextRequest) {
       ? matching.slice(0, MAX_EXPORT_ROWS)
       : matching.slice(page * pageSize, page * pageSize + pageSize);
 
-    const names = await loadInspectorNames(admin, [
-      ...new Set(
-        pageJobs
-          .map((job) => job.inspector_id)
-          .filter((id): id is string => !!id),
-      ),
-    ]);
+    // The jobs carry their inspector, so naming them needs no second read.
+    const names = inspectorNamesFromJobs(pageJobs);
 
     const drilldown: SnaggingAnalyticsDrilldown = {
       metric,

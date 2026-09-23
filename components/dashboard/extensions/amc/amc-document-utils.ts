@@ -67,9 +67,9 @@ async function renderAmcFile(
 }
 
 /*
-  Building a document, separate from showing it: the in-page viewer
-  (amc-pdf-viewer.tsx) does the showing; these only build the file and say
-  what to call it.
+  Building a document, separate from showing it: the preview popup
+  (amc-preview-dialog.tsx) shows it on screen; these only build the PDF or
+  Word file and say what to call it.
 */
 export async function buildAmcPdf(
   formData: AmcFormData,

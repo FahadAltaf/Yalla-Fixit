@@ -6,7 +6,7 @@ import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import {
   average,
   inRange,
-  loadInspectorNames,
+  inspectorNamesFromJobs,
   loadJobsTouchingRange,
   loadReviewQueue,
   loadSnagsForJobs,
@@ -77,20 +77,21 @@ export async function GET(req: NextRequest) {
     const range = resolveRange(params.get("from"), params.get("to"));
 
     const admin = await createAdminServerClient();
-    const [jobs, queue] = await Promise.all([
+    // The equivalent window before this one, for the period-on-period
+    // trends. Fetched rather than derived, because a job raised before the
+    // range is not in `jobs` at all -- and fetched WITH this period's jobs
+    // and the queue, not after them.
+    const previous = previousRange(range);
+    const [jobs, queue, previousJobs] = await Promise.all([
       loadJobsTouchingRange(admin, range),
       loadReviewQueue(admin),
+      loadJobsTouchingRange(admin, previous),
     ]);
 
     // Intake — the jobs raised in the period — is what the status split,
     // the developer view and the inspector view are counted over.
     const raised = jobs.filter((job) => inRange(job.created_at, range));
 
-    // The equivalent window before this one, for the period-on-period
-    // trends. Fetched rather than derived, because a job raised before
-    // the range is not in `jobs` at all.
-    const previous = previousRange(range);
-    const previousJobs = await loadJobsTouchingRange(admin, previous);
     const raisedBefore = previousJobs.filter((job) =>
       inRange(job.created_at, previous),
     );
@@ -99,6 +100,8 @@ export async function GET(req: NextRequest) {
       admin,
       raised.map((job) => job.id),
     );
+    // Counted from the jobs themselves, which carry their inspector.
+    const byInspector = computeByInspector(raised);
 
     const snagsByJob = new Map<
       string,
@@ -127,7 +130,7 @@ export async function GET(req: NextRequest) {
         snagsByJob,
         defectsByJob,
       ),
-      byInspector: await computeByInspector(admin, raised),
+      byInspector,
     };
 
     return NextResponse.json({ data });
@@ -366,10 +369,9 @@ function computeByDeveloper(
  * FR-10.04 — inspector view: how many inspections, and how long each
  * took. Snag count is absent by requirement, not by oversight.
  */
-async function computeByInspector(
-  admin: Awaited<ReturnType<typeof createAdminServerClient>>,
+function computeByInspector(
   raised: AnalyticsJob[],
-): Promise<SnaggingAnalytics["byInspector"]> {
+): SnaggingAnalytics["byInspector"] {
   const inspectors = new Map<
     string,
     {
@@ -409,7 +411,8 @@ async function computeByInspector(
   }
 
   if (inspectors.size === 0) return [];
-  const names = await loadInspectorNames(admin, [...inspectors.keys()]);
+  // The jobs carry their inspector, so naming them needs no second read.
+  const names = inspectorNamesFromJobs(raised);
 
   return [...inspectors.entries()]
     .map(([user_id, value]) => ({

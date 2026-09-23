@@ -63,32 +63,26 @@ export async function GET(
         .from("snagging_jobs")
         .select("id, code, round_number, visit_type")
         .in("id", family.allIds),
+      // Each leg's photo count comes with it, counted by the database.
       admin
         .from("snagging_snags")
-        .select("id, job_id, status")
+        .select("id, job_id, status, photos:snagging_snag_photos(count)")
         .in("job_id", family.allIds)
         .eq("snag_code", snag.snag_code as string),
     ]);
 
     const jobById = new Map((jobs ?? []).map((job) => [job.id as string, job]));
-    const snagIds = (rows ?? []).map((row) => row.id as string);
-
     /*
-      Each leg shows how many photos back it, so only the photos' snag ids
-      are read. The legs are the whole response: both the portal and the
-      phone read nothing else, so the defect itself, the photo rows and its
-      audit events are not sent (the events were a scan of the audit table
-      on every open).
+      Each leg shows how many photos back it. The count arrives with the
+      legs (embedded above); it was a separate read of every photo's snag
+      id, after the legs had come back. The legs are the whole response:
+      both the portal and the phone read nothing else.
     */
-    const { data: photos } = snagIds.length
-      ? await admin.from("snagging_snag_photos").select("snag_id").in("snag_id", snagIds)
-      : { data: [] as Array<{ snag_id: string }> };
-
-    const photoCount = new Map<string, number>();
-    for (const photo of photos ?? []) {
-      const key = photo.snag_id as string;
-      photoCount.set(key, (photoCount.get(key) ?? 0) + 1);
-    }
+    const photoCount = new Map<string, number>(
+      ((rows ?? []) as Array<{ id: string; photos?: { count: number }[] | null }>).map(
+        (row) => [row.id, row.photos?.[0]?.count ?? 0] as const,
+      ),
+    );
 
     /*
       Ordered by the round the leg belongs to, not by when the row was

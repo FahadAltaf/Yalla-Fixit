@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
 import {
@@ -89,7 +89,11 @@ export default function QuotationsAdmin() {
     A page at a time from the server, searched there too. The list used
     to arrive whole and stop silently at the newest 400 quotations.
   */
+  /* Only the latest request may fill the table: a slower reply for an
+     earlier filter or page used to land last and show the wrong rows. */
+  const ticket = useRef(0);
   const load = useCallback(async () => {
+    const mine = ++ticket.current;
     setLoading(true);
     setError(null);
     try {
@@ -99,13 +103,15 @@ export default function QuotationsAdmin() {
         page,
         pageSize,
       });
+      if (mine !== ticket.current) return;
       setRows(result.data);
       setTotal(result.totalCount);
       setCounts(result.counts ?? {});
     } catch (err) {
+      if (mine !== ticket.current) return;
       setError(err instanceof Error ? err.message : "Could not load quotations");
     } finally {
-      setLoading(false);
+      if (mine === ticket.current) setLoading(false);
     }
   }, [status, debouncedSearch, page, pageSize]);
 

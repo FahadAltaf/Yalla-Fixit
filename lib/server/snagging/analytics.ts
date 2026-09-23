@@ -30,12 +30,31 @@ export type AnalyticsJob = {
   approved_at: string | null;
   delivered_at: string | null;
   rejection_count: number | null;
+  /** Embedded with the job, so naming inspectors needs no second read. */
+  inspector?:
+    | { full_name: string | null; email: string | null }
+    | { full_name: string | null; email: string | null }[]
+    | null;
 };
 
 const JOB_COLUMNS =
   "id, code, status, unit_label, building_name, developer_name, inspector_id, " +
   "parent_job_id, visit_type, round_number, created_at, started_at, submitted_at, " +
-  "approved_at, delivered_at, rejection_count";
+  "approved_at, delivered_at, rejection_count, inspector:inspector_id(full_name, email)";
+
+/**
+ * Inspector names from the jobs themselves (they carry their inspector,
+ * embedded). Naming them used to be a second read after the jobs.
+ */
+export function inspectorNamesFromJobs(jobs: AnalyticsJob[]): Map<string, string> {
+  const names = new Map<string, string>();
+  for (const job of jobs) {
+    if (!job.inspector_id || names.has(job.inspector_id)) continue;
+    const person = Array.isArray(job.inspector) ? job.inspector[0] : job.inspector;
+    names.set(job.inspector_id, person?.full_name ?? person?.email ?? "Unknown");
+  }
+  return names;
+}
 
 /** Statuses that mean a job is sitting in the approval queue. */
 export const REVIEW_QUEUE_STATUSES = ["submitted", "in_review"];

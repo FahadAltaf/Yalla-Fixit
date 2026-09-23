@@ -1,9 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import type { LucideIcon } from "lucide-react";
 import {
   AlertTriangle,
+  ArrowLeft,
+  Building2,
   CalendarIcon,
   ChevronDown,
   Crosshair,
@@ -11,14 +15,18 @@ import {
   FileText,
   ImageIcon,
   LayoutGrid,
+  ListChecks,
   Loader2,
   MapPin,
   Pencil,
   Plus,
+  Receipt,
   Search,
   Shapes,
+  StickyNote,
   Upload,
   UserPlus,
+  UserRound,
   Users,
   X,
 } from "lucide-react";
@@ -550,9 +558,18 @@ export default function NewJobWizard({
     }
   }, []);
 
+  /*
+    The staff list is only used on the Assign step. It used to load the
+    moment the wizard opened -- a hundred people per request, one request
+    after another -- in quote mode too, which never shows it. It now starts
+    once the coordinator is past the first step, so it is ready by Assign.
+  */
+  const usersRequested = useRef(false);
   useEffect(() => {
+    if (quoteOnly || step < 1 || usersRequested.current) return;
+    usersRequested.current = true;
     void loadUsers();
-  }, [loadUsers]);
+  }, [quoteOnly, step, loadUsers]);
 
 
   function set<K extends keyof Draft>(key: K, value: Draft[K]) {
@@ -675,6 +692,23 @@ export default function NewJobWizard({
 
   async function submit() {
     setSubmitting(true);
+    /*
+      One toast for the whole save, worded for the step it is on. Creating a
+      job is several requests in a row -- the job, each floor plan, the room
+      pins, the deed and the NOC -- and the button alone said "Creating…"
+      for all of it, with no sign of how far along it was. The same toast
+      becomes the success or the error at the end.
+    */
+    const progress = toast.loading(
+      quoteOnly
+        ? editQuotationId
+          ? "Saving the quotation…"
+          : "Creating the quotation…"
+        : "Creating the job…",
+      { description: "This can take a few seconds." },
+    );
+    const stage = (message: string, description?: string) =>
+      toast.loading(message, { id: progress, description });
     try {
       /*
         Quote-only: write the quotation and stop (BA v2, changes 1-2).
@@ -721,13 +755,19 @@ export default function NewJobWizard({
         */
         if (editQuotationId) {
           await snaggingService.updateQuotation(editQuotationId, payload);
-          toast.success(`Quotation ${quotationLabel ?? ""} saved`.replace("  ", " "));
+          toast.success(`Quotation ${quotationLabel ?? ""} saved`.replace("  ", " "), {
+            id: progress,
+            description: undefined,
+          });
           router.push(`/snagging/quotations/${editQuotationId}`);
           return;
         }
 
         const quote = await snaggingService.createQuotation(payload);
-        toast.success(`Quotation ${quote.quote_number} created`);
+        toast.success(`Quotation ${quote.quote_number} created`, {
+          id: progress,
+          description: "Opening it now.",
+        });
         router.push(`/snagging/quotations/${quote.id}`);
         return;
       }
@@ -785,7 +825,11 @@ export default function NewJobWizard({
       // still opens, where the plan can be re-added.
       let planFailures = 0;
       const planIdByLocal = new Map<string, string>();
-      for (const plan of plans) {
+      for (const [index, plan] of plans.entries()) {
+        stage(
+          "Uploading floor plans…",
+          plans.length > 1 ? `Plan ${index + 1} of ${plans.length}` : plan.label || undefined,
+        );
         try {
           const uploaded = await snaggingService.uploadFloorPlan(created.id, plan.file, {
             label: plan.label,
@@ -821,6 +865,7 @@ export default function NewJobWizard({
       );
 
       if (pinned.length > 0) {
+        stage("Placing the rooms on the plans…", `${pinned.length} room(s)`);
         try {
           const saved = await snaggingService.listAreas(created.id);
           const idByName = new Map(
@@ -853,6 +898,7 @@ export default function NewJobWizard({
       // Title deed (E8) and NOC (E10) upload after the job exists, and never
       // block it — a failure is reported and the job still opens.
       if (titleDeedFile) {
+        stage("Uploading the title deed…");
         try {
           const { file: deed } = await compressImage(titleDeedFile);
           await snaggingService.uploadDocument(created.id, deed, "title_deed");
@@ -861,6 +907,7 @@ export default function NewJobWizard({
         }
       }
       if (nocFile) {
+        stage("Uploading the NOC…");
         try {
           const { file: noc } = await compressImage(nocFile);
           await snaggingService.uploadDocument(created.id, noc, "noc");
@@ -869,10 +916,20 @@ export default function NewJobWizard({
         }
       }
 
-      toast.success("Job created");
+      toast.success("Job created", { id: progress, description: "Opening the job now." });
       router.push(`/snagging/${created.id}`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not create the job");
+      toast.error(
+        quoteOnly
+          ? editQuotationId
+            ? "Could not save the quotation"
+            : "Could not create the quotation"
+          : "Could not create the job",
+        {
+          id: progress,
+          description: error instanceof Error ? error.message : "Please try again.",
+        },
+      );
       setSubmitting(false);
     }
   }
@@ -882,11 +939,12 @@ export default function NewJobWizard({
   return (
     <div className="flex flex-col gap-6">
       {/*
-        No page heading on New quotation: the form's own "Quotation
-        details" heading already says what the page is. Editing a
-        quotation and raising a job keep theirs.
+        Every "new" page in the product opens the same way: eyebrow, title,
+        then what the page is for. New quotation used to be the exception,
+        on the grounds that the form's own "Quotation details" heading said
+        enough — but that put it out of step with New job, New AMC proposal
+        and the rest, and left the page with no h1 at all.
       */}
-      {quoteOnly && !isEdit ? null : (
       <PageHeading
         eyebrow={quoteOnly ? "Sales" : "Work"}
         title={
@@ -907,8 +965,23 @@ export default function NewJobWizard({
                 ? "The client and property come from the approved quotation. Add the plans, areas and contacts."
                 : "Three steps to a reference pack an inspector can pull before losing signal."
         }
+        /*
+          The way out, in the same place the AMC proposal wizard puts it.
+          Only on the quotation form: the job wizard is reached from a
+          quotation as often as from the job list, so a single "back"
+          there would be wrong half the time.
+        */
+        actions={
+          quoteOnly ? (
+            <Button variant="outline" asChild>
+              <Link href="/snagging/quotations">
+                <ArrowLeft className="size-4" />
+                Back to quotations
+              </Link>
+            </Button>
+          ) : undefined
+        }
       />
-      )}
 
       {/*
         Only the two states worth interrupting for: still fetching, and
@@ -1499,10 +1572,13 @@ function DocumentField({
 function FormSection({
   title,
   description,
+  icon: Icon,
   children,
 }: {
   title: string;
   description?: string;
+  /** Lucide icon for the section, matching the AMC proposal steps. */
+  icon?: LucideIcon;
   children: React.ReactNode;
 }) {
   return (
@@ -1510,7 +1586,10 @@ function FormSection({
     // full width of the card.
     <section className="flex flex-col gap-4">
       <div>
-        <h3 className="text-base font-semibold">{title}</h3>
+        <h3 className="flex items-center gap-2 text-base font-semibold">
+          {Icon ? <Icon className="text-brand size-4" /> : null}
+          {title}
+        </h3>
         {description ? (
           <p className="text-muted-foreground mt-0.5 text-sm">{description}</p>
         ) : null}
@@ -1672,16 +1751,27 @@ function PropertyStep({
 
   return (
     <div className="space-y-8">
-      <div>
-        <h2 className="text-xl">{quoteOnly ? "Quotation details" : "Property and client"}</h2>
-        <p className="text-muted-foreground mt-1 text-sm">
-          {quoteOnly
-            ? "Choose the client, describe the property and set the price. The job is raised once the client approves the quotation."
-            : "Who the job is for and the property being inspected. The inspector sees all of this on site, even without signal."}
-        </p>
-      </div>
+      {/*
+        A quotation is one screen with no step bar, so the page heading is
+        the only heading it needs and this one only repeated it. The job
+        wizard keeps it: there it names which of the three steps you are
+        on, which the page heading cannot say.
+      */}
+      {quoteOnly ? null : (
+        <div>
+          <h2 className="flex items-center gap-2 text-xl">
+            <UserRound className="text-brand size-5" />
+            Property and client
+          </h2>
+          <p className="text-muted-foreground mt-1 text-sm">
+            Who the job is for and the property being inspected. The inspector
+            sees all of this on site, even without signal.
+          </p>
+        </div>
+      )}
 
       <FormSection
+        icon={UserRound}
         title="Client"
         description="Who the quotation is for. Pick someone on file, or add them with +."
       >
@@ -1758,6 +1848,7 @@ function PropertyStep({
       </FormSection>
 
       <FormSection
+        icon={Building2}
         title="Property details"
         description="The unit being inspected. Built up area sets the price."
       >
@@ -1884,6 +1975,7 @@ function PropertyStep({
       */}
       {quoteOnly ? (
         <FormSection
+          icon={Receipt}
           title="Pricing"
           description="What the client declared, when the visit happens, and the rate this quotation charges."
         >
@@ -1898,6 +1990,7 @@ function PropertyStep({
         type one to say where a building is.
       */}
       <FormSection
+        icon={MapPin}
         title="Location"
         description="Optional. Search or click the map to drop a pin, or paste a coordinate."
       >
@@ -1935,6 +2028,7 @@ function PropertyStep({
       </FormSection>
 
       <FormSection
+        icon={FileText}
         title="Documents"
         description="Optional paperwork. Nothing here blocks the quotation or the job."
       >
@@ -1963,6 +2057,7 @@ function PropertyStep({
       </FormSection>
 
       <FormSection
+        icon={StickyNote}
         title="Office notes"
         description="Optional. Anything the inspector should know on site."
       >
@@ -2223,7 +2318,10 @@ function PlanAreasStep({
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-xl">Floor plan and areas</h2>
+        <h2 className="flex items-center gap-2 text-xl">
+          <LayoutGrid className="text-brand size-5" />
+          Floor plan and areas
+        </h2>
         <p className="text-muted-foreground mt-1 text-sm">
           Tick the rooms this job needs. To mark where a room sits, pick it in the
           list and click the plan. The plan and the pins are both optional, and can
@@ -2243,7 +2341,7 @@ function PlanAreasStep({
         }}
       />
 
-      <div className="grid gap-5 lg:min-h-[32rem] lg:grid-cols-[minmax(0,1fr)_19rem]">
+      <div className="grid gap-5 lg:min-h-[32rem] lg:grid-cols-[minmax(0,1fr)_23rem]">
         <div className="flex flex-col gap-3">
           {plans.length === 0 ? (
             <button
@@ -2438,42 +2536,21 @@ function PlanAreasStep({
         */}
         <div className="relative">
           <div className="flex flex-col gap-3 lg:absolute lg:inset-0">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-baseline gap-2">
-                <h3 className="font-medium">Areas to inspect</h3>
-                <span className="text-muted-foreground text-xs">
-                  {areas.length} ticked
-                  {plans.length > 0 ? `, ${placedCount} placed` : ""}
-                </span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                {/* Nothing starts ticked; these save ticking twenty rooms one by one. */}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 px-2 text-xs"
-                  onClick={() => {
-                    const have = new Set(areas.map((a) => a.name.toLowerCase()));
-                    setAreas([...areas, ...options.filter((o) => !have.has(o.name.toLowerCase()))]);
-                  }}
-                  disabled={options.every((o) => selected.has(o.name.toLowerCase()))}
-                >
-                  Tick all
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 px-2 text-xs"
-                  onClick={() => {
-                    setAreas([]);
-                    setActiveArea(null);
-                  }}
-                  disabled={areas.length === 0}
-                >
-                  Clear
-                </Button>
+            {/*
+              Two rows, not one.
+
+              The title, the running count and three controls competing for
+              one line wrapped "Areas to inspect" onto two lines and left
+              the count stranded mid-air. The name of the list and the way
+              to add to it sit on top; what the list currently holds and
+              the two bulk actions sit under it.
+            */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="flex items-center gap-2 font-medium">
+                  <ListChecks className="text-brand size-4" />
+                  Areas to inspect
+                </h3>
                 <Button
                   type="button"
                   variant="outline"
@@ -2485,6 +2562,42 @@ function PlanAreasStep({
                 >
                   <Plus className="size-4" />
                 </Button>
+              </div>
+
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-muted-foreground text-xs">
+                  {areas.length} ticked
+                  {plans.length > 0 ? `, ${placedCount} placed` : ""}
+                </span>
+                <div className="flex items-center gap-1">
+                  {/* Nothing starts ticked; these save ticking twenty rooms one by one. */}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => {
+                      const have = new Set(areas.map((a) => a.name.toLowerCase()));
+                      setAreas([...areas, ...options.filter((o) => !have.has(o.name.toLowerCase()))]);
+                    }}
+                    disabled={options.every((o) => selected.has(o.name.toLowerCase()))}
+                  >
+                    Tick all
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => {
+                      setAreas([]);
+                      setActiveArea(null);
+                    }}
+                    disabled={areas.length === 0}
+                  >
+                    Clear
+                  </Button>
+                </div>
               </div>
             </div>
 
@@ -3011,7 +3124,10 @@ function AssignStep({
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-xl">Schedule and site contacts</h2>
+        <h2 className="flex items-center gap-2 text-xl">
+          <CalendarIcon className="text-brand size-5" />
+          Schedule and site contacts
+        </h2>
         <p className="text-muted-foreground mt-1 text-sm">
           When the inspection happens and who gives access. The inspector is assigned from the job
           once the client approves the quotation; you can pre-select the approval manager here.

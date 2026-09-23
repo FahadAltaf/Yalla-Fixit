@@ -8,6 +8,7 @@ import { recordAuditBatch, type AuditEntry } from "@/lib/server/snagging/audit";
 import { hasAreaInspector, hasVerdictNote } from "@/lib/server/snagging/columns";
 import { isZone } from "@/lib/snagging/zone-geometry";
 import { inParallel, planWaves } from "@/lib/server/snagging/push-plan";
+import { readAllRows } from "@/lib/server/snagging/read-all";
 import {
   approvalDueAt,
   assertTransition,
@@ -69,13 +70,62 @@ export async function POST(req: NextRequest) {
 
     const admin = await createAdminServerClient();
 
-    // Which ids has this server already seen?
+    /*
+      The jobs this push touches. Every applier resolves its job from the
+      mutation itself -- task_id, round_task_id, or a task's own id -- so
+      these are the only jobs whose access has to be known. Reading just
+      them replaced reading every job the inspector has (for an admin,
+      every job in the table, a page at a time) on every push.
+    */
+    const touched = new Set<string>();
+    for (const m of input.mutations) {
+      const p = (m.payload ?? {}) as Record<string, unknown>;
+      const taskId =
+        m.entity === "task" ? m.entity_id : ((p.task_id ?? p.round_task_id) as string | undefined);
+      if (typeof taskId === "string" && taskId) touched.add(taskId);
+    }
+    const touchedIds = [...touched];
+    const isAdmin = isAdminUser(accessUser);
+    const checkRooms = !isAdmin && (await hasAreaInspector(admin));
+    const none = Promise.resolve({ data: [] as never[], error: null });
+
+    /*
+      Everything access depends on, read together rather than one after
+      another: which mutations were already applied, the touched jobs, the
+      rooms this inspector holds on them, and their live visits.
+    */
     const ids = input.mutations.map((m) => m.mutation_id);
-    const { data: seenRows, error: seenError } = await admin
-      .from("snagging_sync_mutations")
-      .select("mutation_id, status")
-      .in("mutation_id", ids);
+    const [
+      { data: seenRows, error: seenError },
+      { data: jobRows, error: jobsError },
+      { data: roomRows, error: roomError },
+      { data: liveVisits, error: liveError },
+    ] = await Promise.all([
+      admin.from("snagging_sync_mutations").select("mutation_id, status").in("mutation_id", ids),
+      touchedIds.length
+        ? admin.from("snagging_jobs").select("id, status, code, inspector_id").in("id", touchedIds)
+        : none,
+      checkRooms && touchedIds.length
+        ? admin
+            .from("snagging_areas")
+            .select("job_id")
+            .eq("inspector_id", profile.id)
+            .in("job_id", touchedIds)
+        : none,
+      touchedIds.length
+        ? admin
+            .from("snagging_job_visits")
+            .select("id, job_id, visit_number, status, inspector_id")
+            .in("job_id", touchedIds)
+            .in("status", ["scheduled", "in_progress"])
+            .order("visit_number", { ascending: false })
+        : none,
+    ]);
     if (seenError) throw new Error(seenError.message);
+    if (jobsError) throw new Error(jobsError.message);
+    if (roomError) throw new Error(roomError.message);
+    if (liveError) throw new Error(liveError.message);
+
     /*
       Only a change that was APPLIED is a duplicate. One the server
       rejected used to sit in this ledger too, so when the phone retried it
@@ -90,72 +140,30 @@ export async function POST(req: NextRequest) {
         .map((r) => r.mutation_id),
     );
 
-    // The jobs this inspector may write to (single inspector per job now).
-    // An admin is never restricted in snagging, so they may write to any job.
-    let jobsQuery = admin.from("snagging_jobs").select("id, status, code, inspector_id");
-    if (!isAdminUser(accessUser)) jobsQuery = jobsQuery.eq("inspector_id", profile.id);
-    const { data: myJobs, error: jobsError } = await jobsQuery;
-    if (jobsError) throw new Error(jobsError.message);
-    const jobById = new Map<string, JobRef>((myJobs ?? []).map((j) => [j.id, j as JobRef]));
-
     /*
-      Several inspectors on one job (point 6): an inspector given some of
-      the rooms may write to the job too. What they may not do is submit
-      it -- that stays with the lead, once every room is done.
+      Who may write to a job -- the same rules as before:
+        - its lead inspector (an admin is never restricted in snagging);
+        - an inspector holding one of its rooms (point 6), who may not
+          submit it -- that stays with the lead;
+        - an inspector booked onto one of its live visits (BA v2, change
+          25): the visit may not be the job's own inspector's, and the job
+          is approved and locked by then.
     */
-    if (!isAdminUser(accessUser) && (await hasAreaInspector(admin))) {
-      const { data: roomRows, error: roomError } = await admin
-        .from("snagging_areas")
-        .select("job_id")
-        .eq("inspector_id", profile.id);
-      if (roomError) throw new Error(roomError.message);
-      const extra = [...new Set((roomRows ?? []).map((r) => r.job_id as string))].filter(
-        (jobId) => !jobById.has(jobId),
-      );
-      if (extra.length > 0) {
-        const { data: roomJobs, error: roomJobsError } = await admin
-          .from("snagging_jobs")
-          .select("id, status, code, inspector_id")
-          .in("id", extra);
-        if (roomJobsError) throw new Error(roomJobsError.message);
-        for (const j of roomJobs ?? []) jobById.set(j.id, j as JobRef);
+    const roomJobs = new Set((roomRows ?? []).map((r) => r.job_id as string));
+    const visitJobs = new Set(
+      (liveVisits ?? [])
+        .filter((v) => v.inspector_id === profile.id)
+        .map((v) => v.job_id as string),
+    );
+    const jobById = new Map<string, JobRef>();
+    for (const j of (jobRows ?? []) as JobRef[]) {
+      if (isAdmin || j.inspector_id === profile.id || roomJobs.has(j.id) || visitJobs.has(j.id)) {
+        jobById.set(j.id, j);
       }
     }
 
-    /*
-      Live visits, and the jobs an inspector reaches only through one.
-
-      An inspector booked onto a visit may not be the job's own inspector,
-      and the job is approved and locked by then. Without this the push
-      refused every snag a return trip captured — the job was not theirs,
-      and even if it had been, it was not in a status they could edit.
-    */
-    const { data: liveVisits, error: liveError } = await admin
-      .from("snagging_job_visits")
-      .select("id, job_id, visit_number, status, inspector_id")
-      .in("status", ["scheduled", "in_progress"])
-      .order("visit_number", { ascending: false });
-    if (liveError) throw new Error(liveError.message);
-
-    const mine = (liveVisits ?? []).filter(
-      (v) =>
-        isAdminUser(accessUser) ||
-        v.inspector_id === profile.id ||
-        jobById.has(v.job_id as string),
-    );
-    const missingJobIds = [
-      ...new Set(mine.map((v) => v.job_id as string).filter((id) => !jobById.has(id))),
-    ];
-    if (missingJobIds.length > 0) {
-      const { data: visitJobs, error: visitJobsError } = await admin
-        .from("snagging_jobs")
-        .select("id, status, code, inspector_id")
-        .in("id", missingJobIds);
-      if (visitJobsError) throw new Error(visitJobsError.message);
-      for (const j of visitJobs ?? []) jobById.set(j.id, j as JobRef);
-    }
     // Highest visit first, so the first one seen per job is the live pass.
-    for (const v of mine) {
+    for (const v of liveVisits ?? []) {
       const job = jobById.get(v.job_id as string);
       if (job && !job.visit) {
         job.visit = {
@@ -170,31 +178,30 @@ export async function POST(req: NextRequest) {
       The first thing a device sends for a booked visit means the
       inspector is on site. Flipped once, here, rather than in each
       applier, so a batch of forty snags does not race to do it forty
-      times.
+      times -- and every visit starting in this push is flipped at once.
     */
-    const touched = new Set<string>();
-    for (const m of input.mutations) {
-      const p = (m.payload ?? {}) as Record<string, unknown>;
-      const taskId =
-        m.entity === "task" ? m.entity_id : ((p.task_id ?? p.round_task_id) as string | undefined);
-      if (taskId) touched.add(taskId);
-    }
-    for (const taskId of touched) {
-      const job = jobById.get(taskId);
-      if (job?.visit?.status !== "scheduled") continue;
-      const { error: startError } = await admin
-        .from("snagging_job_visits")
-        .update({
-          status: "in_progress",
-          started_at: new Date().toISOString(),
-          // The pull finds changed visits by this; see its delta.
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", job.visit.id)
-        .eq("status", "scheduled");
-      if (startError) throw new Error(startError.message);
-      job.visit.status = "in_progress";
-    }
+    const starting = touchedIds
+      .map((taskId) => jobById.get(taskId))
+      .filter((job): job is JobRef & { visit: NonNullable<JobRef["visit"]> } =>
+        job?.visit?.status === "scheduled",
+      );
+    await Promise.all(
+      starting.map(async (job) => {
+        const now = new Date().toISOString();
+        const { error: startError } = await admin
+          .from("snagging_job_visits")
+          .update({
+            status: "in_progress",
+            started_at: now,
+            // The pull finds changed visits by this; see its delta.
+            updated_at: now,
+          })
+          .eq("id", job.visit.id)
+          .eq("status", "scheduled");
+        if (startError) throw new Error(startError.message);
+        job.visit.status = "in_progress";
+      }),
+    );
 
     const results: MutationResult[] = [];
     const ledger: Array<Record<string, unknown>> = [];
@@ -752,7 +759,20 @@ async function applySubmission(admin: Admin, ctx: Ctx, payload: Record<string, u
       .eq("id", job.id)
       .maybeSingle(),
     admin.from("snagging_snags").select("id, snag_code, status").eq("job_id", job.id).neq("status", "withdrawn"),
-    admin.from("snagging_snag_photos").select("snag_id, round_number").eq("job_id", job.id),
+    // Paged, so a big job is never reported as having photo-less snags.
+    readAllRows<{ snag_id: string; round_number: number | null }>(
+      (from, to) =>
+        admin
+          .from("snagging_snag_photos")
+          .select("id, snag_id, round_number")
+          .eq("job_id", job.id)
+          .order("id", { ascending: true })
+          .range(from, to),
+      "submission photos",
+    ).then(
+      (data) => ({ data, error: null as { message: string } | null }),
+      (error: Error) => ({ data: null, error: { message: error.message } }),
+    ),
     admin
       .from("snagging_job_checklist")
       .select("code, status, reason, updated_at")

@@ -10,6 +10,25 @@ import { AuthProvider } from "@/context/AuthContext";
 import { Toaster } from "sonner";
 import { ThemeProviderWrapper } from "@/context/theme-provider-wrapper";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { loadSignedInUser } from "@/utils/load-signed-in-user";
+
+/**
+ * Who is signed in, read on the server with the page.
+ *
+ * The browser used to learn this only after the page had loaded, behind a
+ * full-screen loader, and only then could any page start on its own data.
+ * Now every page arrives already knowing, so there is no loader to sit
+ * through. `undefined` means "could not tell" (a transient failure), and
+ * the browser then asks for itself exactly as it always did.
+ */
+async function initialAuth() {
+  try {
+    return await loadSignedInUser();
+  } catch (error) {
+    console.error("Signed-in user (server) failed; the browser will check:", error);
+    return undefined;
+  }
+}
 
 /**
  * Kaizen type pairing: Lexend carries every heading, Source Sans 3
@@ -101,11 +120,12 @@ export const metadata: Metadata = {
   manifest: "/site.webmanifest",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const auth = await initialAuth();
   return (
     <html lang="en" className={`${sourceSans.variable} ${lexend.variable}`}>
       <head>
@@ -116,7 +136,7 @@ export default function RootLayout({
         className={`${geistMono.variable} antialiased`}
         suppressHydrationWarning
       >
-        <AuthProvider>
+        <AuthProvider initialAuth={auth}>
           <ThemeProviderWrapper>
             <TooltipProvider>
               {children}

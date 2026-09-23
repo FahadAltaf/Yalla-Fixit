@@ -2,13 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { PageHeading, SectionCard } from "@/components/dashboard/shared/kaizen";
 import { getUserProfile } from "@/lib/utils";
 import { usersService } from "@/modules/users/services/users-service";
 import { Button } from "@/components/ui/button";
@@ -16,8 +10,7 @@ import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 import { saveFile } from "@/lib/supabase/actions/save-file";
 import { AvatarCropper } from "@/components/ui/avatar-cropper";
-import { User } from "lucide-react";
-import { DialogTitle } from "@/components/ui/dialog";
+import { Camera, Loader2, Save, User } from "lucide-react";
 
 export type UserProfile = {
   first_name: string;
@@ -102,104 +95,91 @@ export function ProfileSettings() {
     }
   };
 
+  const saveButton = (
+    <Button onClick={handleUpdateUserProfile} disabled={isLoading || isUploading}>
+      {isLoading ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+      {isLoading ? "Saving…" : "Save changes"}
+    </Button>
+  );
+
+  /*
+    The house page: the heading with its one action, then a section card
+    per group -- the same shape as every other settings and admin page,
+    instead of a bespoke card whose header carried the Save button.
+  */
   return (
-    <Card className="w-full flex-1  relative top-px right-px gap-6">
-      <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div className="flex  gap-1 flex-col">
-        <CardTitle className="flex items-center gap-2">
-        <User className="size-5 text-primary" />     Profile Settings</CardTitle>     <CardDescription>
-            Update your personal details and profile picture
-          </CardDescription>
-        </div>
-        <Button
-          onClick={handleUpdateUserProfile}
-          disabled={isLoading}
-          className="w-full sm:w-auto hidden sm:block"
-        >
-          {isLoading ? "Saving..." : "Save Changes"}
-        </Button>
-      </CardHeader>
-      <CardContent className="space-y-6">
-        {/* Profile Picture with Avatar Cropper */}
-        <div className="space-y-4">
-          <div className="flex items-center space-x-4">
-            <AvatarCropper
-              profileImage={userProfile?.profile_image}
-              onImageChange={handleProfileImageChange}
-              isUploading={isUploading}
-              size="md"
-              shape="circle"
-            />
-            <span className="text-sm text-muted-foreground">
-              {isUploading
-                ? "Uploading..."
-                : "Click or drag to upload profile picture"}
-            </span>
-          </div>
-        </div>
+    <div className="flex w-full flex-1 flex-col gap-6">
+      <PageHeading
+        eyebrow="Settings"
+        title="Profile"
+        description="Your name and photo, as the rest of the team sees them."
+        actions={saveButton}
+      />
 
-        {/* Name Fields in Responsive Row */}
-        <div className="space-y-4">
-         
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="first-name">First Name</Label>
-              <Input
-                id="first-name"
-                placeholder="Enter first name"
-                value={userProfile?.first_name}
-                onChange={(e) =>
-                  setUserProfile((prev) => ({
-                    ...prev,
-                    first_name: e.target.value,
-                  }))
-                }
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="last-name">Last Name</Label>
-              <Input
-                id="last-name"
-                placeholder="Enter last name"
-                value={userProfile?.last_name}
-                onChange={(e) =>
-                  setUserProfile((prev) => ({
-                    ...prev,
-                    last_name: e.target.value,
-                  }))
-                }
-              />
-            </div>
-          </div>
+      <SectionCard
+        icon={<Camera />}
+        title="Profile photo"
+        description="Shown beside your name across the portal. A square photo works best."
+        bodyClassName="px-5 pb-5"
+      >
+        <div className="flex items-center gap-4">
+          <AvatarCropper
+            profileImage={userProfile?.profile_image}
+            onImageChange={handleProfileImageChange}
+            isUploading={isUploading}
+            size="md"
+            shape="circle"
+          />
+          <p className="text-muted-foreground text-sm">
+            {isUploading ? "Uploading…" : "Click or drag an image onto the circle to change it."}
+          </p>
         </div>
+      </SectionCard>
 
-        {/* Email Field */}
-        <div className="space-y-4">
-      
+      <SectionCard
+        icon={<User />}
+        title="Personal details"
+        description="Your name appears on the jobs, quotations and proposals you work on."
+        bodyClassName="space-y-4 px-5 pb-5"
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
+            <Label htmlFor="first-name">First name</Label>
             <Input
-              id="email"
-              type="email"
-              placeholder="Enter email address"
-              value={userProfile?.email}
-              disabled
-              className="bg-muted/50"
+              id="first-name"
+              placeholder="First name"
+              value={userProfile?.first_name ?? ""}
+              onChange={(e) =>
+                setUserProfile((prev) => ({ ...prev, first_name: e.target.value }))
+              }
             />
-            <p className="text-xs text-muted-foreground">
-              Email cannot be changed. Contact an administrator for assistance.
-            </p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="last-name">Last name</Label>
+            <Input
+              id="last-name"
+              placeholder="Last name"
+              value={userProfile?.last_name ?? ""}
+              onChange={(e) =>
+                setUserProfile((prev) => ({ ...prev, last_name: e.target.value }))
+              }
+            />
           </div>
         </div>
-
-        <Button
-          onClick={handleUpdateUserProfile}
-          disabled={isLoading}
-          className="w-full sm:w-auto block sm:hidden"
-        >
-          {isLoading ? "Saving..." : "Save Changes"}
-        </Button>
-      </CardContent>
-    </Card>
+        <div className="space-y-2">
+          <Label htmlFor="email">Email</Label>
+          <Input
+            id="email"
+            type="email"
+            value={userProfile?.email ?? ""}
+            disabled
+            className="bg-muted/50"
+          />
+          <p className="text-muted-foreground text-xs">
+            Your email is your sign-in, so only an admin can change it.
+          </p>
+        </div>
+      </SectionCard>
+    </div>
   );
 }

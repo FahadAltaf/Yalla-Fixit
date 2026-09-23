@@ -60,6 +60,12 @@ export interface MenuItem {
    * the record.
    */
   match?: string[];
+  /**
+   * A visibility rule the resource check cannot express. AMC is one: it
+   * is open to anyone with AMC view OR approve, and an approver holding
+   * only approve has no view entry for the resource filter to find.
+   */
+  canSee?: (user: User) => boolean;
   items?: MenuItem[];
 }
 

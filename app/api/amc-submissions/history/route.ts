@@ -32,11 +32,33 @@ export async function GET(req: NextRequest) {
   }
 
   const admin = await createAdminServerClient();
-  const { data: submission, error: fetchError } = await admin
-    .from("amc_submissions")
-    .select("id, owner_id, status")
-    .eq("id", id)
-    .maybeSingle();
+  /*
+    The submission, the approval settings and the events are read together
+    -- they were up to three round trips one after another. Access is still
+    decided before anything is returned: the events are simply not sent
+    when the caller may not see the submission.
+  */
+  const [
+    { data: submission, error: fetchError },
+    settings,
+    { data, error },
+  ] = await Promise.all([
+    admin
+      .from("amc_submissions")
+      .select("id, owner_id, status")
+      .eq("id", id)
+      .maybeSingle(),
+    readAmcSettings(admin),
+    admin
+      .from("amc_audit_events")
+      .select(
+        "event_type, actor_label, origin, justification, payload, created_at",
+      )
+      .eq("entity_type", "submission")
+      .eq("entity_id", id)
+      .order("created_at", { ascending: true })
+      .limit(200),
+  ]);
   if (fetchError) {
     return NextResponse.json({ error: fetchError.message }, { status: 500 });
   }
@@ -46,7 +68,7 @@ export async function GET(req: NextRequest) {
 
   if (submission.owner_id !== access.profile.id) {
     const canApprove = canApproveAmc(
-      await readAmcSettings(admin),
+      settings,
       access.profile.email,
       hasResourceAction(
         access.accessUser,
@@ -59,15 +81,6 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const { data, error } = await admin
-    .from("amc_audit_events")
-    .select(
-      "event_type, actor_label, origin, justification, payload, created_at",
-    )
-    .eq("entity_type", "submission")
-    .eq("entity_id", id)
-    .order("created_at", { ascending: true })
-    .limit(200);
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

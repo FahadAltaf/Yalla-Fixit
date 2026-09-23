@@ -4,8 +4,7 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
-import { readOnRoot } from "@/lib/server/snagging/job-family";
-import { listReportVersions } from "@/lib/server/snagging/report-versions";
+import { loadJobVisits } from "@/lib/server/snagging/job-detail-sections";
 import { createVisitSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType } from "@/types/types";
 
@@ -36,23 +35,6 @@ import { ActionType, ResourceType } from "@/types/types";
  * approval.
  */
 
-/*
-  What the visits tab, the visit alerts and the edit dialog read, plus
-  quotation_id to join the visit's quotation. The review fields
-  (submitted_at, review_note) came with 20260918100000_visit_review, which
-  every environment now has; the audit columns (created_by, updated_at,
-  reviewed_by, ...) have no reader here.
-*/
-const VISIT_COLUMNS =
-  "id, visit_number, status, scheduled_date, appointment_at, inspector_id, charge, " +
-  "charge_method, payment_reference, quotation_id, started_at, submitted_at, review_note, " +
-  "notes, created_at, inspector:inspector_id(id, full_name, email), " +
-  // The visit's quotation, embedded rather than fetched in a second round trip.
-  "quotation_ref:quotation_id(id, quote_number, status)";
-
-function firstOf<T>(v: T | T[] | null | undefined): T | null {
-  return Array.isArray(v) ? (v[0] ?? null) : (v ?? null);
-}
 
 export async function GET(
   req: NextRequest,
@@ -70,69 +52,7 @@ export async function GET(
     const { id } = await ctx.params;
     const admin = await createAdminServerClient();
 
-    /*
-      Visits belong to the ORIGINAL inspection, so opening this tab on a
-      de-snag job shows the same list rather than an empty one. A de-snag
-      is still its own job (change 31); a visit is not.
-
-      Everything below needs only the root, so it goes in one parallel
-      round trip -- started on this job's id alongside the family lookup,
-      since most jobs are their own root (readOnRoot). The quotation used
-      to be a further query after the visits; it is embedded now.
-    */
-    const {
-      result: [{ data: visits, error }, { data: visitSnags }, versions],
-    } = await readOnRoot(admin, id, (rootId) =>
-      Promise.all([
-        admin
-          .from("snagging_job_visits")
-          .select(VISIT_COLUMNS)
-          .eq("job_id", rootId)
-          .order("visit_number", { ascending: true }),
-        // What each visit actually found, counted on the job it was written to.
-        admin
-          .from("snagging_snags")
-          .select("id, visit_id")
-          .eq("job_id", rootId)
-          .not("visit_id", "is", null),
-        listReportVersions(admin, rootId),
-      ]),
-    );
-    if (error) throw new Error(error.message);
-
-    const rows = (visits ?? []) as unknown as Array<Record<string, unknown>>;
-    const snagCount = new Map<string, number>();
-    for (const snag of visitSnags ?? []) {
-      const key = snag.visit_id as string;
-      snagCount.set(key, (snagCount.get(key) ?? 0) + 1);
-    }
-
-    return NextResponse.json({
-      data: {
-        visits: rows.map((visit) => {
-          const quote = firstOf(
-            visit.quotation_ref as { id: string; quote_number: string | null; status: string } | null,
-          );
-          const { quotation_ref: _embedded, ...rest } = visit;
-          void _embedded;
-          return {
-            ...rest,
-            inspector: firstOf(
-              visit.inspector as Record<string, unknown> | null,
-            ),
-            quotation: quote
-              ? {
-                  id: quote.id,
-                  quote_number: quote.quote_number,
-                  status: quote.status,
-                }
-              : null,
-            snag_count: snagCount.get(visit.id as string) ?? 0,
-          };
-        }),
-        versions,
-      },
-    });
+    return NextResponse.json({ data: await loadJobVisits(admin, id) });
   } catch (error) {
     console.error("Snagging visits GET error:", error);
     return NextResponse.json(

@@ -2,13 +2,13 @@ import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
+import { loadJobFloorPlans } from "@/lib/server/snagging/job-detail-sections";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
 import {
   SNAGGING_BUCKET,
   mediaObjectKey,
-  signMediaPaths,
 } from "@/lib/server/snagging/media";
 import { ActionType, ResourceType } from "@/types/types";
 
@@ -46,16 +46,8 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Missing task_id" }, { status: 400 });
 
     const admin = await createAdminServerClient();
-    const { data, error } = await admin
-      .from("snagging_floor_plans")
-      .select("id, label, storage_path, width, height, sort_order")
-      .eq("job_id", taskId)
-      .order("sort_order", { ascending: true });
-    if (error) throw new Error(error.message);
-
     // The caller asked by job, so the job id is not repeated on each plan.
-    const signed = await signMediaPaths(admin, data ?? []);
-    return NextResponse.json({ data: signed });
+    return NextResponse.json({ data: await loadJobFloorPlans(admin, taskId) });
   } catch (error) {
     console.error("Snagging floor-plan GET error:", error);
     return NextResponse.json(

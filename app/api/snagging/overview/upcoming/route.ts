@@ -3,11 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import {
-  cacheHeaders,
-  countJobs,
-  myJobs,
-} from "@/lib/server/snagging/overview-queries";
+import { cacheHeaders, myJobs } from "@/lib/server/snagging/overview-queries";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
@@ -95,13 +91,14 @@ export async function GET(req: NextRequest) {
         .gte("scheduled_date", today)
         .in("status", ["assigned", "in_progress"]);
 
-    const total = await countJobs(admin, booked);
-
-    const { data, error } = await booked(
+    // The count comes back with the page (count: "exact"), from the same
+    // predicate -- one read where it was a count and then the list.
+    const { data, error, count } = await booked(
       admin
         .from("snagging_jobs")
         .select(
           "id, code, scheduled_date, appointment_at, property_type, unit_label, building_name, inspector:inspector_id(full_name, email)",
+          { count: "exact" },
         ),
     )
       .order("scheduled_date", { ascending: true })
@@ -109,6 +106,7 @@ export async function GET(req: NextRequest) {
       .order("id")
       .range(page * size, page * size + size - 1);
     if (error) throw new Error(error.message);
+    const total = count ?? 0;
 
     type Joined = { full_name: string | null; email: string | null };
     type Row = {

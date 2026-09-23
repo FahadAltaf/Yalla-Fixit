@@ -5,6 +5,7 @@ import {
   Crosshair,
   Eraser,
   ImageOff,
+  Loader2,
   Lock,
   Map,
   MapPin,
@@ -145,6 +146,27 @@ const MARKER_LEGEND: { status: string; label: string }[] = [
   { status: "pending_verification", label: "To re-check" },
 ];
 
+/**
+ * A saving change, over what it changes: the plan while a pin or a plan
+ * saves, the room list while rooms are added or renamed. The toast says the
+ * same, but it sits in a corner; this is where the eye already is.
+ */
+function BusyOverlay({ show, label }: { show: boolean; label: string }) {
+  if (!show) return null;
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="bg-background/60 absolute inset-0 z-10 flex items-center justify-center rounded-lg backdrop-blur-[1px]"
+    >
+      <span className="bg-background text-foreground inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium shadow-sm">
+        <Loader2 className="text-brand size-3.5 animate-spin" />
+        {label}
+      </span>
+    </div>
+  );
+}
+
 export function FloorPlansAreasPanel({
   taskId,
   propertyType,
@@ -152,7 +174,16 @@ export function FloorPlansAreasPanel({
   onChanged,
   snags = [],
   jobStatus,
+  initialPlans,
+  initialAreas,
 }: {
+  /*
+    The plans and rooms the job page already holds. Given both, the panel
+    starts from them instead of reading the same rows again when the tab
+    opens; it still reads them fresh after any change it makes.
+  */
+  initialPlans?: SnaggingFloorPlan[] | null;
+  initialAreas?: SnaggingArea[] | null;
   /**
    * The job's snags, drawn as pins on the plan once the inspection is in
    * (point 7). Every one stays, coloured by its latest de-snag result;
@@ -189,9 +220,10 @@ export function FloorPlansAreasPanel({
   const canEdit = mayEdit && (!inspected || unlocked);
   const { confirm, dialog } = useConfirm();
 
-  const [plans, setPlans] = useState<SnaggingFloorPlan[]>([]);
-  const [areas, setAreas] = useState<SnaggingArea[]>([]);
-  const [loading, setLoading] = useState(true);
+  const seeded = Boolean(initialPlans && initialAreas);
+  const [plans, setPlans] = useState<SnaggingFloorPlan[]>(initialPlans ?? []);
+  const [areas, setAreas] = useState<SnaggingArea[]>(initialAreas ?? []);
+  const [loading, setLoading] = useState(!seeded);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // `busy` disables every control; `running` names the one mutation in
@@ -199,7 +231,7 @@ export function FloorPlansAreasPanel({
   type Running = null | "upload" | "pin" | "area" | "rename" | "plan" | "order";
   const [running, setRunning] = useState<Running>(null);
   const [addOpen, setAddOpen] = useState(false);
-  /* Renaming happens on the chip itself, so only its id and its text. */
+  /* The plan being renamed in the rename dialog: its id and the new text. */
   const [renamingPlan, setRenamingPlan] = useState<{
     id: string;
     label: string;
@@ -208,7 +240,9 @@ export function FloorPlansAreasPanel({
   const [dropping, setDropping] = useState(false);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [overIndex, setOverIndex] = useState<number | null>(null);
-  const [activePlanId, setActivePlanId] = useState<string | null>(null);
+  const [activePlanId, setActivePlanId] = useState<string | null>(
+    initialPlans?.[0]?.id ?? null,
+  );
 
   /*
     Placement works the way it does when the job is created: pick the room
@@ -257,7 +291,13 @@ export function FloorPlansAreasPanel({
     }
   }, [taskId]);
 
+  // The first read is skipped when the page handed over its plans and rooms.
+  const skipFirstLoad = useRef(seeded);
   useEffect(() => {
+    if (skipFirstLoad.current) {
+      skipFirstLoad.current = false;
+      return;
+    }
     void load();
   }, [load]);
 
@@ -286,11 +326,16 @@ export function FloorPlansAreasPanel({
     const id = toast.loading(labels.loading);
     try {
       const result = await work();
+      /*
+        Still loading until the panel shows the change: the success used to
+        land first, and the plan or room appeared a second or two later, so
+        the toast said "added" over a panel that had not changed yet.
+      */
+      await load();
       toast.success(
         typeof labels.done === "function" ? labels.done(result) : labels.done,
         { id },
       );
-      await load();
       onChanged?.();
       return result;
     } catch (error) {
@@ -343,21 +388,30 @@ export function FloorPlansAreasPanel({
     await upload(named || `Floor ${plans.length + 1}`, file);
   }
 
-  async function renamePlan(id: string, label: string) {
-    const next = label.trim();
-    const current = plans.find((p) => p.id === id);
-    setRenamingPlan(null);
-    if (!next || !current || next === current.label) return;
+  /** Saves the rename dialog; it stays open (with the text) if the save fails. */
+  async function renamePlan() {
+    if (!renamingPlan) return;
+    const next = renamingPlan.label.trim();
+    const current = plans.find((p) => p.id === renamingPlan.id);
+    if (!next || !current) return;
+    if (next === current.label) {
+      setRenamingPlan(null);
+      return;
+    }
 
-    await act(
+    const result = await act(
       "plan",
       {
-        loading: "Renaming the plan…",
+        loading: `Renaming to ${next}…`,
         done: "Floor plan renamed",
         failed: "Could not rename the plan",
       },
-      () => snaggingService.renameFloorPlan(id, next),
+      async () => {
+        await snaggingService.renameFloorPlan(renamingPlan.id, next);
+        return true;
+      },
     );
+    if (result) setRenamingPlan(null);
   }
 
   async function removePlan(plan: SnaggingFloorPlan) {
@@ -578,6 +632,11 @@ export function FloorPlansAreasPanel({
       }
 
       const added = rooms.length - failed;
+      // The list shows the new rooms before the toast says they are added.
+      if (added > 0) {
+        toast.loading("Updating the area list…", { id });
+        await load();
+      }
       if (failed === 0) {
         toast.success(added === 1 ? "Area added" : `${added} areas added`, { id });
       } else if (added === 0) {
@@ -592,7 +651,6 @@ export function FloorPlansAreasPanel({
 
       setChosen([]);
       setAddAreaOpen(false);
-      await load();
       onChanged?.();
 
       /*
@@ -795,32 +853,6 @@ export function FloorPlansAreasPanel({
                     ).length;
                     const active = plan.id === activePlanId;
 
-                    if (renamingPlan?.id === plan.id) {
-                      return (
-                        <Input
-                          key={plan.id}
-                          autoFocus
-                          value={renamingPlan.label}
-                          className="h-8 w-44 rounded-full text-xs"
-                          aria-label={`Rename ${plan.label}`}
-                          onChange={(event) =>
-                            setRenamingPlan({
-                              id: plan.id,
-                              label: event.target.value,
-                            })
-                          }
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                              event.preventDefault();
-                              void renamePlan(plan.id, renamingPlan.label);
-                            }
-                            if (event.key === "Escape") setRenamingPlan(null);
-                          }}
-                          onBlur={() => void renamePlan(plan.id, renamingPlan.label)}
-                        />
-                      );
-                    }
-
                     return (
                       <span
                         key={plan.id}
@@ -881,11 +913,7 @@ export function FloorPlansAreasPanel({
                               setRenamingPlan({ id: plan.id, label: plan.label });
                             }
                           }}
-                          title={
-                            canEdit
-                              ? "Double-click to rename · drag to reorder"
-                              : plan.label
-                          }
+                          title={canEdit ? "Drag to reorder" : plan.label}
                         >
                           {plan.label.trim() || "Untitled plan"}
                           {pins > 0 ? (
@@ -900,6 +928,25 @@ export function FloorPlansAreasPanel({
                           and only on the one you are looking at — a row
                           of crosses invites the wrong one to be clicked.
                         */}
+                        {/*
+                          Rename, as on the job wizard's chips. Double-click
+                          and F2 still work; nobody found them.
+                        */}
+                        {canEdit ? (
+                          <button
+                            type="button"
+                            className={cn(
+                              "rounded-full p-1 opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100",
+                              !active && "mr-1.5",
+                            )}
+                            disabled={busy}
+                            aria-label={`Rename ${plan.label}`}
+                            title="Rename"
+                            onClick={() => setRenamingPlan({ id: plan.id, label: plan.label })}
+                          >
+                            <Pencil className="size-3" />
+                          </button>
+                        ) : null}
                         {canEdit && active ? (
                           <button
                             type="button"
@@ -910,7 +957,7 @@ export function FloorPlansAreasPanel({
                           >
                             <X className="size-3.5" />
                           </button>
-                        ) : (
+                        ) : canEdit ? null : (
                           <span className="pr-1.5" />
                         )}
                       </span>
@@ -1012,6 +1059,19 @@ export function FloorPlansAreasPanel({
                   </p>
                 )}
 
+                <div className="relative">
+                <BusyOverlay
+                  show={running === "upload" || running === "pin" || running === "plan" || running === "order"}
+                  label={
+                    running === "upload"
+                      ? "Adding the plan…"
+                      : running === "pin"
+                        ? "Saving the placement…"
+                        : running === "order"
+                          ? "Saving the order…"
+                          : "Updating the plan…"
+                  }
+                />
                 <PlanZoneCanvas
                   src={activePlan.signed_url}
                   alt={activePlan.label}
@@ -1054,6 +1114,7 @@ export function FloorPlansAreasPanel({
                     if (hit) setActiveAreaId(hit.id);
                   }}
                 />
+                </div>
                 {inspected ? (
                   <div className="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
                     {MARKER_LEGEND.map((item) => {
@@ -1115,6 +1176,11 @@ export function FloorPlansAreasPanel({
                 Areas
               </SubHeading>
 
+              <div className="relative flex min-h-0 flex-1 flex-col">
+              <BusyOverlay
+                show={running === "area" || running === "rename"}
+                label={running === "rename" ? "Renaming…" : "Updating the areas…"}
+              />
               <div
                 ref={areaListRef}
                 className="max-h-[26rem] min-h-0 flex-1 space-y-1 overflow-y-auto pr-1 lg:max-h-none"
@@ -1255,6 +1321,7 @@ export function FloorPlansAreasPanel({
                   );
                 })}
               </div>
+              </div>
             </div>
           </div>
         </div>
@@ -1342,6 +1409,54 @@ export function FloorPlansAreasPanel({
               icon={<Plus className="size-4" />}
             >
               {chosen.length > 1 ? `Add ${chosen.length} areas` : "Add area"}
+            </SubmitButton>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Rename plan */}
+      <Dialog
+        open={renamingPlan !== null}
+        onOpenChange={(o) => !o && !busy && setRenamingPlan(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Rename floor plan</DialogTitle>
+            <DialogDescription>
+              The name shown on the plan&apos;s tab, on the inspector&apos;s phone and
+              in the report.
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            autoFocus
+            value={renamingPlan?.label ?? ""}
+            aria-label="Floor plan name"
+            placeholder="e.g. Ground floor"
+            onChange={(e) =>
+              setRenamingPlan((r) => (r ? { ...r, label: e.target.value } : r))
+            }
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void renamePlan();
+              }
+            }}
+          />
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setRenamingPlan(null)}
+              disabled={busy}
+            >
+              Cancel
+            </Button>
+            <SubmitButton
+              onClick={() => void renamePlan()}
+              disabled={busy || !renamingPlan?.label.trim()}
+              pending={running === "plan"}
+              pendingLabel="Saving…"
+            >
+              Save
             </SubmitButton>
           </DialogFooter>
         </DialogContent>
