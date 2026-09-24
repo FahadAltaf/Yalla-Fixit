@@ -1139,6 +1139,15 @@ export const InspectionReport = forwardRef<
   const inspector = task.assignees?.find(
     (a) => a.role === "technician",
   )?.user_profile;
+  /*
+    Everyone who worked the job, for the line that says who inspected it.
+    `inspector` above is still the first of them, which the parts of this
+    view that need a single profile (not just a name) continue to read.
+  */
+  const inspectorNames = (task.assignees ?? [])
+    .filter((a) => a.role === "technician")
+    .map((a) => a.user_profile?.full_name ?? a.user_profile?.email)
+    .filter((name): name is string => Boolean(name));
   const areas = task.areas ?? [];
   /*
     Point 13 — a de-snagging round's report shows only what is still
@@ -1328,7 +1337,7 @@ export const InspectionReport = forwardRef<
         ? `De-snag round ${task.round_number}`
         : "Snagging";
   const recordedBy = [
-    inspector?.full_name ?? inspector?.email,
+    inspectorNames.length > 0 ? inspectorNames.join(", ") : null,
     submission?.signed_at ? fmtDate(submission.signed_at) : null,
   ]
     .filter(Boolean)

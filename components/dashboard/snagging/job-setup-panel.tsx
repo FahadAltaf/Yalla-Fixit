@@ -49,6 +49,7 @@ import {
 } from "@/components/ui/select";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
+import MultipleSelector from "@/components/ui/multiselect";
 import { snaggingService } from "@/modules/snagging";
 import { usersService } from "@/modules/users/services/users-service";
 
@@ -73,7 +74,6 @@ import {
   SubmitButton,
   useConfirm,
 } from "./shared";
-import { RoomInspectors } from "./room-inspectors";
 
 const UNASSIGNED = "none";
 
@@ -168,9 +168,20 @@ export function JobSetupPanel({
   const [cliName, setCliName] = useState(task.client_contact_name ?? "");
   const [cliPhone, setCliPhone] = useState(task.client_contact_phone ?? "");
 
-  const [inspectorId, setInspectorId] = useState(
-    task.inspector_id ?? UNASSIGNED,
-  );
+  /*
+    Every inspector on the job, not one of them (point 6).
+
+    Seeded from `assignees`, which the detail endpoint builds from
+    snagging_job_inspectors and falls back to the job's own inspector_id,
+    so a job saved before the change opens with its one inspector ticked.
+  */
+  const [inspectorIds, setInspectorIds] = useState<string[]>(() => {
+    const fromRoster = (task.assignees ?? [])
+      .map((a) => a.user_id)
+      .filter((id): id is string => Boolean(id));
+    if (fromRoster.length > 0) return [...new Set(fromRoster)];
+    return task.inspector_id ? [task.inspector_id] : [];
+  });
   const [managerId, setManagerId] = useState(
     task.approval_manager_id ?? UNASSIGNED,
   );
@@ -270,27 +281,44 @@ export function JobSetupPanel({
   }
 
   async function saveAssignment() {
-    if (inspectorId !== UNASSIGNED && managerId === UNASSIGNED) {
+    if (inspectorIds.length > 0 && managerId === UNASSIGNED) {
       toast.error("Select an approval manager before assigning an inspector");
       return;
     }
 
-    // Saving clears technician_ids, so a change here quietly takes the
-    // person currently on the job off it. Say whose job is being moved.
-    const current = task.inspector_id ?? null;
-    if (current && inspectorId !== current) {
-      const previous = users.find((u) => u.id === current);
-      const who =
-        (previous?.full_name || previous?.email) ?? "The assigned inspector";
-      const unassigning = inspectorId === UNASSIGNED;
+    /*
+      Only ever warn about people being REMOVED.
+
+      Adding a second inspector is the ordinary case now and needs no
+      confirming; taking someone off a job they may already be walking
+      does. Named, because "the assignment changed" does not tell the
+      coordinator whose work just moved.
+    */
+    const before = new Set(
+      (task.assignees ?? [])
+        .map((a) => a.user_id)
+        .filter((id): id is string => Boolean(id)),
+    );
+    if (task.inspector_id) before.add(task.inspector_id);
+
+    const removed = [...before].filter((id) => !inspectorIds.includes(id));
+    if (removed.length > 0) {
+      const names = removed
+        .map((id) => {
+          const person = users.find((u) => u.id === id);
+          return (person?.full_name || person?.email) ?? "An inspector";
+        })
+        .join(", ");
       const ok = await confirm({
-        title: unassigning
-          ? "Unassign the inspector?"
-          : "Change the assigned inspector?",
-        description: unassigning
-          ? `${who} will be taken off this job and it will have no inspector until someone else is assigned.`
-          : `${who} will be taken off this job and replaced by the inspector you selected.`,
-        confirmText: unassigning ? "Unassign" : "Change inspector",
+        title:
+          removed.length === 1
+            ? "Take this inspector off the job?"
+            : `Take ${removed.length} inspectors off the job?`,
+        description:
+          inspectorIds.length === 0
+            ? `${names} will be taken off this job, and it will have no inspector until someone is assigned.`
+            : `${names} will be taken off this job. Anything they already recorded stays on it.`,
+        confirmText: removed.length === 1 ? "Take off" : "Take them off",
         variant: "destructive",
       });
       if (!ok) return;
@@ -299,14 +327,16 @@ export function JobSetupPanel({
     setSaving("assign");
     try {
       await snaggingService.updateTask(task.id, {
-        technician_ids: inspectorId === UNASSIGNED ? [] : [inspectorId],
+        technician_ids: inspectorIds,
         approval_manager_id: managerId === UNASSIGNED ? null : managerId,
         reviewer_id: reviewerId === UNASSIGNED ? null : reviewerId,
       });
       toast.success(
-        inspectorId === UNASSIGNED
-          ? "Inspector unassigned"
-          : "Inspector assigned",
+        inspectorIds.length === 0
+          ? "Inspectors cleared"
+          : inspectorIds.length === 1
+            ? "Inspector assigned"
+            : `${inspectorIds.length} inspectors assigned`,
       );
       onChanged();
     } catch (e) {
@@ -1074,6 +1104,13 @@ export function JobSetupPanel({
       <div id="inspector-assignment" className="scroll-mt-24">
         <SetupSection
           icon={UserCog}
+          /*
+            SectionCard clips by default, which is right for a card whose
+            content ends at its edge. The inspector picker opens a list
+            below the field, and near the bottom of the card that list was
+            being cut off at the border.
+          */
+          className="overflow-visible"
           title="Inspector assignment"
           description="Who walks the unit, and who signs the report off."
         >
@@ -1102,46 +1139,67 @@ export function JobSetupPanel({
               }
             >
               <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Lead inspector" htmlFor="assign-inspector">
+                <Field label="Inspectors" htmlFor="assign-inspector">
                   {/*
-                  A disabled Select renders its value in placeholder grey,
-                  so an inspector who *is* assigned looked exactly like
-                  nobody assigned. When the assignment cannot be changed
-                  the answer is not a greyed-out dropdown at all — it is
-                  the name, stated plainly.
+                  A disabled control renders its value in placeholder grey,
+                  so inspectors who ARE assigned looked exactly like nobody
+                  assigned. When the assignment cannot be changed the answer
+                  is not a greyed-out input at all — it is the names, stated
+                  plainly.
                 */}
                   {canAssign ? (
-                    <Select
-                      value={inspectorId}
-                      onValueChange={setInspectorId}
-                      disabled={!canAssign}
-                    >
-                      <SelectTrigger id="assign-inspector" className="w-full">
-                        <SelectValue placeholder="Assign an inspector" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value={UNASSIGNED}>Unassigned</SelectItem>
-                        {users.map((u) => {
-                          const busyCode = busyMap[u.id];
-                          const isBusy =
-                            Boolean(busyCode) && u.id !== task.inspector_id;
-                          return (
-                            <SelectItem
-                              key={u.id}
-                              value={u.id}
-                              disabled={isBusy}
-                            >
-                              {(u.full_name || u.email) ?? u.id}
-                              {isBusy ? ` · busy (${busyCode})` : ""}
-                            </SelectItem>
-                          );
-                        })}
-                      </SelectContent>
-                    </Select>
+                    <MultipleSelector
+                      value={inspectorIds.map((id) => ({
+                        value: id,
+                        label: nameFor(users, id) || id,
+                      }))}
+                      onChange={(picked) =>
+                        setInspectorIds(picked.map((option) => option.value))
+                      }
+                      options={users.map((u) => {
+                        const busyCode = busyMap[u.id];
+                        /*
+                          Booked elsewhere that day. Someone already on this
+                          job is never greyed out: they are booked BY this
+                          job, and disabling them would make removing them
+                          impossible.
+                        */
+                        const isBusy =
+                          Boolean(busyCode) && !inspectorIds.includes(u.id);
+                        return {
+                          value: u.id,
+                          label:
+                            ((u.full_name || u.email) ?? u.id) +
+                            (isBusy ? ` · busy (${busyCode})` : ""),
+                          disable: isBusy,
+                        };
+                      })}
+                      placeholder="Assign inspectors"
+                      hidePlaceholderWhenSelected
+                      /*
+                        The shared Command root ships `size-full`, which is
+                        right in a popover and wrong here: as a grid item's
+                        child, height:100% resolves against a row height
+                        that is still being measured, so the control stops
+                        contributing its own height and the availability
+                        line underneath lands on top of the next field.
+                      */
+                      commandProps={{ className: "h-auto" }}
+                      emptyIndicator={
+                        <p className="text-muted-foreground py-2 text-center text-sm">
+                          No one else to assign.
+                        </p>
+                      }
+                    />
                   ) : (
                     <ReadOnlyValue
                       id="assign-inspector"
-                      value={nameFor(users, task.inspector_id)}
+                      value={
+                        inspectorIds
+                          .map((id) => nameFor(users, id))
+                          .filter(Boolean)
+                          .join(", ") || ""
+                      }
                       empty="No inspector assigned"
                     />
                   )}
@@ -1235,16 +1293,6 @@ export function JobSetupPanel({
                   )}
                 </Field>
               </div>
-              {/* Point 6: other inspectors, room by room. */}
-              {task.inspector_id ? (
-                <RoomInspectors
-                  taskId={task.id}
-                  leadId={task.inspector_id}
-                  users={users}
-                  canEdit={canAssign}
-                  initialRooms={task.areas ?? null}
-                />
-              ) : null}
               {canAssign ? (
                 <div className="flex justify-end">
                   <SubmitButton
@@ -1528,6 +1576,7 @@ function SetupSection({
   description,
   action,
   footer,
+  className,
   children,
 }: {
   icon: React.ComponentType<{ className?: string }>;
@@ -1535,6 +1584,8 @@ function SetupSection({
   description?: string;
   action?: React.ReactNode;
   footer?: React.ReactNode;
+  /** For a section holding a control that opens beyond the card's edge. */
+  className?: string;
   children: React.ReactNode;
 }) {
   return (
@@ -1543,6 +1594,7 @@ function SetupSection({
       description={description}
       icon={<Icon />}
       action={action}
+      className={className}
       bodyClassName="px-5 pb-5"
     >
       {children}

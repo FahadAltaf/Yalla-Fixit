@@ -112,6 +112,7 @@ function snagsSelect(verdict: boolean, review: boolean) {
       : ""
   },
   area:snagging_areas(id, name),
+  recorded_by:created_by(id, full_name, email),
   photos:snagging_snag_photos(${SNAG_PHOTO_COLUMNS})`;
 }
 
@@ -213,15 +214,45 @@ export async function loadJobCore(admin: Admin, id: string) {
     title_deed_url: (deedSigned[0] as { signed_url?: string } | undefined)?.signed_url ?? null,
   };
 
-  const assignees = inspector
-    ? [{
-        id: inspector.id,
-        task_id: job.id,
-        user_id: inspector.id,
-        role: "technician" as const,
-        user_profile: inspector,
-      }]
-    : [];
+  /*
+    Everyone on the job, not just the one the job row names.
+
+    Several inspectors work a job now and none is senior to another, so
+    the set lives in snagging_job_inspectors. jobs.inspector_id is the
+    first of them and stays readable for submission and the report; this
+    reads the table and falls back to that column where the table is not
+    there yet (20260923100000) or has nothing for the job.
+  */
+  const { data: inspectorRows, error: inspectorRowsError } = await admin
+    .from("snagging_job_inspectors")
+    .select("inspector_id, user_profile:inspector_id(id, full_name, email)")
+    .eq("job_id", job.id);
+
+  // 42P01 is "undefined table": the migration has not run here.
+  const roster =
+    inspectorRowsError || !inspectorRows?.length
+      ? []
+      : (inspectorRows as Array<Record<string, unknown>>)
+          .map((row) => {
+            const found = row.user_profile;
+            return (Array.isArray(found) ? found[0] : found) as
+              | { id: string; full_name: string | null; email: string | null }
+              | null;
+          })
+          .filter(
+            (profile): profile is { id: string; full_name: string | null; email: string | null } =>
+              Boolean(profile),
+          );
+
+  const people = roster.length > 0 ? roster : inspector ? [inspector] : [];
+
+  const assignees = people.map((person) => ({
+    id: person.id,
+    task_id: job.id,
+    user_id: person.id,
+    role: "technician" as const,
+    user_profile: person,
+  }));
 
   const signatureRow = job.signature_path ? (signatureSigned[0] ?? null) : null;
   const submissions = job.signed_at

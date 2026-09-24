@@ -127,7 +127,13 @@ export function getSnaggingInspectorColumns(): ColumnDef<SnaggingInspectorRow>[]
     },
     {
       id: "inspection_count",
-      header: "Inspections",
+      /*
+        "Jobs worked", not "Inspections": a job split between two people
+        counts for both of them, so this column sums to more than the
+        number of jobs. Naming it for the person rather than the job is
+        what stops it reading as a job count.
+      */
+      header: "Jobs worked",
       accessorKey: "inspection_count",
       cell: ({ row }) => (
         <div className="tabular-nums">{row.original.inspection_count}</div>

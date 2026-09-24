@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { hasJobInspectors } from "@/lib/server/snagging/columns";
 import { readAllRows } from "@/lib/server/snagging/read-all";
 
 /**
@@ -26,7 +27,8 @@ const DETAIL_COLUMNS = `id, parent_job_id, notes, locked,
   property_record:property_id(unit_label, building_name, community, property_type,
     developer_name, bedrooms, built_up_area_sqft, plot_area_sqft, floors,
     external_areas_in_scope, location_lat, location_lng, noc_required, noc_path),
-  client:client_id(name, email, phone)`;
+  client:client_id(name, email, phone),
+  lead:inspector_id(full_name, email)`;
 
 function firstOf<T>(value: T | T[] | null | undefined): T | null {
   return Array.isArray(value) ? (value[0] ?? null) : (value ?? null);
@@ -34,7 +36,7 @@ function firstOf<T>(value: T | T[] | null | undefined): T | null {
 
 export async function loadTaskDetail(admin: SupabaseClient, jobId: string) {
   // The job, its visits and what each finished visit found, read together.
-  const [{ data, error }, visits, visitSnags] = await Promise.all([
+  const [{ data, error }, visits, visitSnags, roster] = await Promise.all([
     admin.from("snagging_jobs").select<string, Row>(DETAIL_COLUMNS).eq("id", jobId).maybeSingle(),
     admin
       .from("snagging_job_visits")
@@ -54,6 +56,17 @@ export async function loadTaskDetail(admin: SupabaseClient, jobId: string) {
           .range(from, to),
       "visit snag counts",
     ),
+    // Everyone on the job, so each inspector can see who they share it with.
+    (async () =>
+      (await hasJobInspectors(admin))
+        ? ((
+            await admin
+              .from("snagging_job_inspectors")
+              .select("inspector_id, inspector:inspector_id(full_name, email)")
+              .eq("job_id", jobId)
+              .order("created_at", { ascending: true })
+          ).data ?? [])
+        : [])(),
   ]);
   if (error) throw new Error(error.message);
   if (visits.error) throw new Error(visits.error.message);
@@ -64,6 +77,22 @@ export async function loadTaskDetail(admin: SupabaseClient, jobId: string) {
     if (snag.visit_id) snagsOnVisit[snag.visit_id] = (snagsOnVisit[snag.visit_id] ?? 0) + 1;
   }
   const allVisits = (visits.data ?? []) as Row[];
+
+  /*
+    The job's inspectors by name, the one who submits (inspector_id) first.
+    Only names: the phone shows who shares the job, and says who submits.
+  */
+  const nameOf = (person: Row | null) =>
+    ((person?.full_name as string | null) || (person?.email as string | null) || null);
+  const lead = firstOf(data?.lead as Row | Row[] | null);
+  const inspectors: string[] = [];
+  const leadName = nameOf(lead);
+  if (leadName) inspectors.push(leadName);
+  for (const row of roster as Row[]) {
+    if (row.inspector_id === data?.inspector_id) continue;
+    const name = nameOf(firstOf(row.inspector as Row | Row[] | null));
+    if (name && !inspectors.includes(name)) inspectors.push(name);
+  }
   // Highest number first, so the first live one is the current pass.
   const live = allVisits.find((v) => v.status === "scheduled" || v.status === "in_progress") ?? null;
   const gstDay = (value: unknown) => {
@@ -102,6 +131,7 @@ export async function loadTaskDetail(admin: SupabaseClient, jobId: string) {
     remediation_due_at: job.remediation_due_at ?? null,
     appointment_at: job.appointment_at ?? null,
     lead_inspector_id: job.inspector_id ?? null,
+    inspectors,
     property: {
       client_name: (client?.name as string | null) ?? "",
       client_email: client?.email ?? null,

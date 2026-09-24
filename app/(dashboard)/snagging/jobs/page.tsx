@@ -3,12 +3,11 @@ import { Suspense } from "react";
 
 import JobsTable from "@/components/dashboard/snagging/jobs-table";
 import { HeadingSkeleton } from "@/components/dashboard/shared/kaizen-states";
-import { hasResourceAction } from "@/lib/role-permissions";
 import { listJobs } from "@/lib/server/snagging/job-list";
-import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
+import { canViewSnagging } from "@/lib/server/snagging/page-access";
 import { firstJobsPageParams } from "@/lib/snagging/job-filters";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
-import { ActionType, ResourceType, type SnaggingTaskSummary } from "@/types/types";
+import type { SnaggingTaskSummary } from "@/types/types";
 
 const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
 const title = "Jobs | Property Care Snagging";
@@ -40,10 +39,7 @@ async function firstPage(address: Record<string, string | string[] | undefined>)
     return Array.isArray(value) ? value[0] : value;
   };
   try {
-    const { accessUser } = await getAuthenticatedUserAccess();
-    if (!accessUser || !hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.VIEW)) {
-      return null;
-    }
+    if (!(await canViewSnagging())) return null;
     const admin = await createAdminServerClient();
     // The same rows the API sends, which the table reads as summaries.
     return (await listJobs(

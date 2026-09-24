@@ -395,10 +395,21 @@ export function InspectionHeaderCard({
               {[
                 task.property?.building_name,
                 task.property?.client_name,
-                task.assignees?.find((a) => a.role === "technician")
-                  ?.user_profile?.full_name
-                  ? `inspected by ${task.assignees.find((a) => a.role === "technician")?.user_profile?.full_name}`
-                  : null,
+                /*
+                  Every inspector on the job, not whichever one the list
+                  happened to return first. None of them is senior to
+                  another, so naming one and dropping the rest credited
+                  the wrong person as readily as the right one.
+                */
+                (() => {
+                  const names = (task.assignees ?? [])
+                    .filter((a) => a.role === "technician")
+                    .map((a) => a.user_profile?.full_name ?? a.user_profile?.email)
+                    .filter((name): name is string => Boolean(name));
+                  return names.length > 0
+                    ? `inspected by ${names.join(", ")}`
+                    : null;
+                })(),
               ]
                 .filter(Boolean)
                 .join(" · ")}

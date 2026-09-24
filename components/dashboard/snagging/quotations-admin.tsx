@@ -57,7 +57,20 @@ const KIND_LABEL: Record<string, string> = {
  * approved quotation with no job yet is the team's actual to-do list, and
  * it says so with a button rather than a status word.
  */
-export default function QuotationsAdmin() {
+export default function QuotationsAdmin({
+  initial,
+}: {
+  /*
+    The first page, read on the server with the page (see
+    app/(dashboard)/snagging/quotations/page.tsx). The table shows it at
+    once; every later page, filter and search is asked for as before.
+  */
+  initial?: {
+    data: SnaggingQuotationSummary[];
+    totalCount: number;
+    counts: Record<string, number>;
+  } | null;
+} = {}) {
   const router = useRouter();
   const { userProfile } = useAuth();
   const canCreate = hasResourceAction(
@@ -66,8 +79,8 @@ export default function QuotationsAdmin() {
     ActionType.CREATE,
   );
 
-  const [rows, setRows] = useState<SnaggingQuotationSummary[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [rows, setRows] = useState<SnaggingQuotationSummary[]>(initial?.data ?? []);
+  const [loading, setLoading] = useState(!initial);
   const [error, setError] = useState<string | null>(null);
   /*
     Seeded from ?status=, so the Overview's quotation funnel can open this
@@ -80,8 +93,8 @@ export default function QuotationsAdmin() {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
   const [desnagOpen, setDesnagOpen] = useState(false);
-  const [total, setTotal] = useState(0);
-  const [counts, setCounts] = useState<Record<string, number>>({});
+  const [total, setTotal] = useState(initial?.totalCount ?? 0);
+  const [counts, setCounts] = useState<Record<string, number>>(initial?.counts ?? {});
   // Searched on the server, a moment after typing stops.
   const debouncedSearch = useDebounce(search.trim(), 300);
 
@@ -115,7 +128,13 @@ export default function QuotationsAdmin() {
     }
   }, [status, debouncedSearch, page, pageSize]);
 
+  // The first request is skipped when the server already sent the first page.
+  const skipFirstLoad = useRef(Boolean(initial));
   useEffect(() => {
+    if (skipFirstLoad.current) {
+      skipFirstLoad.current = false;
+      return;
+    }
     void load();
   }, [load]);
 

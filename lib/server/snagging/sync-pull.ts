@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import { hasAreaInspector } from "@/lib/server/snagging/columns";
+import { hasAreaInspector, hasJobInspectors } from "@/lib/server/snagging/columns";
 import { loadSyncChildren } from "@/lib/server/snagging/sync-children";
 import { readAllRows } from "@/lib/server/snagging/read-all";
 import { syncPullSchema } from "@/modules/snagging/schemas";
@@ -234,15 +234,37 @@ export async function handleSyncPull(
           error: null,
         });
 
-    // None depends on the others, so all three go together.
+    /*
+      Several inspectors on one job, none senior (2026-09-23): the job's
+      roster in snagging_job_inspectors. Only the first of them is on
+      snagging_jobs.inspector_id, so without this every other inspector on
+      a shared job got nothing on their phone. Same shape and statuses as
+      the room query, so the two are read as one list below.
+    */
+    const rosterJobsQuery = (await hasJobInspectors(admin))
+      ? admin
+          .from("snagging_job_inspectors")
+          .select("job_id, job:job_id!inner(id, status)")
+          .eq("inspector_id", profile.id)
+          .in("job.status", WORKABLE_JOB_STATUSES)
+      : Promise.resolve({
+          data: [] as Array<{ job_id: string; job: unknown }>,
+          error: null,
+        });
+
+    // None depends on the others, so all four go together.
     const [
       { data: assigned, error: assignedError },
       { data: visitJobs, error: visitJobsError },
-      { data: roomRows, error: roomError },
-    ] = await Promise.all([assignedQuery, visitJobsQuery, roomJobsQuery]);
+      { data: heldRooms, error: roomError },
+      { data: rosterRows, error: rosterError },
+    ] = await Promise.all([assignedQuery, visitJobsQuery, roomJobsQuery, rosterJobsQuery]);
     if (assignedError) throw new Error(assignedError.message);
     if (visitJobsError) throw new Error(visitJobsError.message);
     if (roomError) throw new Error(roomError.message);
+    if (rosterError) throw new Error(rosterError.message);
+    // A job reached through the roster is read exactly like one reached through a room.
+    const roomRows = [...(heldRooms ?? []), ...(rosterRows ?? [])];
     const roomJobIds = [...new Set((roomRows ?? []).map((r) => r.job_id as string))];
 
     const assignedIds = Array.from(
@@ -407,6 +429,8 @@ export async function handleSyncPull(
         : loadSyncChildren(admin, jobIds, {
         since,
         rooms_only: slim,
+        // One inspector's findings are not another's to see.
+        viewer_id: profile.id,
         ...(activeIds ? { full_job_ids: activeIds } : {}),
       }),
     );

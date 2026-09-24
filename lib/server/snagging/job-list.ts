@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { hasJobInspectors } from "./columns";
 
 import { APPROVAL_SLA_HOURS } from "@/lib/server/snagging/workflow";
 import type { SnaggingVisitType } from "@/types/types";
@@ -24,7 +25,18 @@ export async function listJobs(
     Math.max(1, Number(params.get("pageSize") ?? 25)),
   );
 
-  let query = admin.from("snagging_jobs").select(
+  /*
+    The job's inspectors, embedded rather than fetched per row. Asked once
+    per process and left out entirely where 20260923100000 has not run, so
+    a missing table costs the column rather than the page.
+  */
+  const roster = (await hasJobInspectors(admin))
+    ? "\n       roster:snagging_job_inspectors(user_profile:inspector_id(full_name, email)),"
+    : "";
+
+  // Generic given explicitly: the select is assembled at runtime, which
+  // the client's literal-type parser cannot follow.
+  let query = admin.from("snagging_jobs").select<string, JobRow>(
     `id, code, status, round_number, visit_type, parent_job_id, scheduled_date, locked,
        rejection_reason, rejection_category, rejection_count, remediation_due_at,
        submitted_at, approved_at, created_at, updated_at,
@@ -33,7 +45,7 @@ export async function listJobs(
        client_id, unit_label, building_name, community,
        property_type, developer_name,
        client:client_id(name),
-       inspector:inspector_id(full_name, email),
+       inspector:inspector_id(full_name, email),${roster}
        reviewer:reviewer_id(id, full_name, email),
        manager:approval_manager_id(id, full_name, email),
        high_snags:snagging_snags(count),
@@ -183,6 +195,7 @@ type JobRow = {
   developer_name: string | null;
   client: { name: string | null } | { name: string | null }[] | null;
   inspector: Joined;
+  roster?: Array<{ user_profile: Joined }> | null;
   // Counted by the database (see the list query).
   high_snags?: { count: number }[] | null;
   medium_snags?: { count: number }[] | null;
@@ -208,6 +221,24 @@ function enrichRows(rows: JobRow[]) {
     };
     const client = firstOf(row.client);
     const insp = firstOf(row.inspector);
+    /*
+      Everyone on the job, not just the one the job row names.
+
+      Several inspectors work a job now with no lead among them, so a
+      column headed "Inspector" showing one name was picking an arbitrary
+      winner. Falls back to that name where the roster table is not there
+      or has nothing for the job.
+    */
+    const roster = (row.roster ?? [])
+      .map((entry) => firstOf(entry?.user_profile))
+      .map((profile) => profile?.full_name ?? profile?.email ?? null)
+      .filter((name): name is string => Boolean(name));
+    const inspectorNames =
+      roster.length > 0
+        ? roster
+        : insp?.full_name || insp?.email
+          ? [(insp.full_name ?? insp.email) as string]
+          : [];
     /*
       FR-6.07 — the 48h approval SLA.
 
@@ -275,7 +306,8 @@ function enrichRows(rows: JobRow[]) {
       client_name: client?.name ?? "",
       developer_name: row.developer_name,
       high_severity_count: s.high,
-      inspector_name: insp?.full_name ?? insp?.email ?? null,
+      inspector_name: inspectorNames[0] ?? null,
+      inspector_names: inspectorNames,
       medium_severity_count: s.medium,
       low_severity_count: s.low,
     };

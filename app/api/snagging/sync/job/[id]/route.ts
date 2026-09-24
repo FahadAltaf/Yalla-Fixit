@@ -6,6 +6,7 @@ import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { hasAreaInspector } from "@/lib/server/snagging/columns";
 import { loadSyncChildren } from "@/lib/server/snagging/sync-children";
 import { loadTaskDetail } from "@/lib/server/snagging/sync-task-detail";
+import { isOnJobRoster } from "@/lib/server/snagging/job-roster";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
@@ -42,7 +43,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       its visits, or an inspector holding a room on it. The same three ways
       a job reaches the handset through the pull.
     */
-    const [{ data: job, error: jobError }, visitBooked, roomHeld, childHeld] = await Promise.all([
+    const [{ data: job, error: jobError }, visitBooked, roomHeld, childHeld, onRoster] = await Promise.all([
       admin.from("snagging_jobs").select("id, inspector_id").eq("id", id).maybeSingle(),
       admin
         .from("snagging_job_visits")
@@ -68,6 +69,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         .select("id", { count: "exact", head: true })
         .eq("parent_job_id", id)
         .eq("inspector_id", profile.id),
+      // One of the job's inspectors (the roster), not only the first.
+      isOnJobRoster(admin, id, profile.id),
     ]);
     if (jobError) throw new Error(jobError.message);
     if (!job) return NextResponse.json({ error: "Job not found" }, { status: 404 });
@@ -77,6 +80,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       (visitBooked.count ?? 0) > 0 ||
       (roomHeld.count ?? 0) > 0 ||
       (childHeld.count ?? 0) > 0 ||
+      onRoster ||
       isAdminUser(accessUser);
     if (!mine) {
       return NextResponse.json({ error: "Not assigned to this inspection" }, { status: 403 });
@@ -90,7 +94,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     */
     const [task, children] = await Promise.all([
       loadTaskDetail(admin, id),
-      loadSyncChildren(admin, [id], { since }),
+      // Scoped to the caller: one inspector's findings are not another's.
+      loadSyncChildren(admin, [id], { since, viewer_id: profile.id }),
     ]);
 
     return NextResponse.json({

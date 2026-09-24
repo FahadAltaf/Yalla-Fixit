@@ -57,7 +57,16 @@ import { ErrorState, PageHeading, SubmitButton } from "./shared";
  * row. Job count earns its column by being the one thing that says which
  * of two similarly-named records is the real one.
  */
-export default function ClientsAdmin() {
+export default function ClientsAdmin({
+  initial,
+}: {
+  /*
+    The first page, read on the server with the page (see
+    app/(dashboard)/snagging/clients/page.tsx). The table shows it at once;
+    every later page, sort and search is asked for as before.
+  */
+  initial?: { data: SnaggingClientOption[]; totalCount: number } | null;
+} = {}) {
   const { userProfile } = useAuth();
   const canEdit = hasResourceAction(
     userProfile,
@@ -70,13 +79,13 @@ export default function ClientsAdmin() {
     ActionType.CREATE,
   );
 
-  const [clients, setClients] = useState<SnaggingClientOption[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [clients, setClients] = useState<SnaggingClientOption[]>(initial?.data ?? []);
+  const [loading, setLoading] = useState(!initial);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
-  const [total, setTotal] = useState(0);
+  const [total, setTotal] = useState(initial?.totalCount ?? 0);
   const [sort, setSort] = useState<{ sortBy?: string; sortOrder?: "asc" | "desc" }>({});
   // The client whose jobs are open in a popup.
   const [jobsFor, setJobsFor] = useState<SnaggingClientOption | null>(null);
@@ -112,7 +121,13 @@ export default function ClientsAdmin() {
     }
   }, [debouncedSearch, page, pageSize, sort]);
 
+  // The first request is skipped when the server already sent the first page.
+  const skipFirstLoad = useRef(Boolean(initial));
   useEffect(() => {
+    if (skipFirstLoad.current) {
+      skipFirstLoad.current = false;
+      return;
+    }
     void load();
   }, [load]);
 

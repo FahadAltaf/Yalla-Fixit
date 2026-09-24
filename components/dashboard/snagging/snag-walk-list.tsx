@@ -541,6 +541,15 @@ export function SnagWalkList({
                             <span>{formatLocalDateTime(snag.created_at)}</span>
                           ) : null}
                           {/*
+                            Whose finding this is (point 6). Several
+                            inspectors work one job with no lead among
+                            them, so "who recorded this" stopped being
+                            answerable from the job alone.
+                          */}
+                          {recordedBy(snag) ? (
+                            <span>{recordedBy(snag)}</span>
+                          ) : null}
+                          {/*
                         FR-6.03 — a round mixes two kinds of defect: the
                         ones it was opened to re-check, and anything the
                         inspector found while they were there. Reading a
@@ -895,6 +904,17 @@ export function SnagWalkList({
   );
 }
 
+/**
+ * Who recorded the snag, or null where nobody was recorded.
+ *
+ * Null is ordinary rather than an error: the app only began writing
+ * created_by part way through, so older defects genuinely have no author
+ * and are shown without one rather than as "Unknown".
+ */
+function recordedBy(snag: Snag): string | null {
+  return snag.recorded_by?.full_name ?? snag.recorded_by?.email ?? null;
+}
+
 /** Everything captured for one snag: classification, note, pin, and evidence. */
 /**
  * The reviewer or approver's note to the inspector: shown on the phone
@@ -992,6 +1012,9 @@ function SnagDetailDialog({
                 label="Captured"
                 value={formatLocalDateTime(snag.created_at)}
               />
+              {recordedBy(snag) ? (
+                <Detail label="Recorded by" value={recordedBy(snag)!} />
+              ) : null}
             </dl>
 
             {/* Where the defect actually is, rather than a pair of

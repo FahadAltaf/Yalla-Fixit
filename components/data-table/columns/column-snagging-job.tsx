@@ -1,6 +1,11 @@
 "use client";
 
 import { ColumnDef } from "@tanstack/react-table";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Clock, UserRound } from "lucide-react";
 
 import { IconText } from "@/components/data-table/columns/icon-text";
@@ -63,11 +68,47 @@ export function getSnaggingJobColumns(): ColumnDef<SnaggingTaskSummary>[] {
       id: "inspector_name",
       header: "Inspector",
       accessorKey: "inspector_name",
-      cell: ({ row }) => (
-        <IconText icon={UserRound} muted={!row.original.inspector_name}>
-          {row.original.inspector_name ?? "Unassigned"}
-        </IconText>
-      ),
+      cell: ({ row }) => {
+        /*
+          One name and a count, with the rest on hover.
+
+          The column is narrow and a job rarely has more than two or three
+          people on it, so the first name plus "+2" keeps every row the
+          same height and still says that there are others. The tooltip is
+          the real answer: all of them, one per line.
+        */
+        const names = row.original.inspector_names ?? [];
+        if (names.length === 0) {
+          return (
+            <IconText icon={UserRound} muted>
+              Unassigned
+            </IconText>
+          );
+        }
+        const extra = names.length - 1;
+        const cell = (
+          <IconText icon={UserRound}>
+            <span className="truncate">{names[0]}</span>
+            {extra > 0 ? (
+              <span className="text-muted-foreground shrink-0"> +{extra}</span>
+            ) : null}
+          </IconText>
+        );
+        // No tooltip when there is nothing it could add.
+        if (extra === 0) return cell;
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="block min-w-0 cursor-default">{cell}</span>
+            </TooltipTrigger>
+            <TooltipContent>
+              {names.map((name) => (
+                <p key={name}>{name}</p>
+              ))}
+            </TooltipContent>
+          </Tooltip>
+        );
+      },
       enableSorting: false,
     },
     {

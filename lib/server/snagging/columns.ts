@@ -40,3 +40,30 @@ export const hasVerdictNote = (admin: SupabaseClient) =>
 /** The reviewer's note to the inspector (20260922110000_snag_review_note). */
 export const hasReviewNote = (admin: SupabaseClient) =>
   hasColumn(admin, "snagging_snags", "review_note");
+
+/*
+  Whether a table a newer migration adds exists yet, asked the same way and
+  for the same reason as hasColumn: naming a missing relation fails the
+  whole query, and on the job list that is the page rather than one column.
+*/
+const knownTables = new Map<string, Promise<boolean>>();
+
+export function hasTable(admin: SupabaseClient, table: string): Promise<boolean> {
+  let answer = knownTables.get(table);
+  if (!answer) {
+    answer = Promise.resolve(admin.from(table).select("*").limit(1)).then(({ error }) => {
+      // 42P01 is "undefined table"; anything else is not an answer.
+      if (error && error.code !== "42P01") {
+        knownTables.delete(table);
+        return false;
+      }
+      return !error;
+    });
+    knownTables.set(table, answer);
+  }
+  return answer;
+}
+
+/** Several inspectors on one job (20260923100000_multiple_inspectors). */
+export const hasJobInspectors = (admin: SupabaseClient) =>
+  hasTable(admin, "snagging_job_inspectors");

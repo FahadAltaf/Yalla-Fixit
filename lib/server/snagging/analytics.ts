@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { hasJobInspectors } from "./columns";
 
 import { APPROVAL_SLA_HOURS } from "@/lib/server/snagging/workflow";
 import type { SnaggingAnalyticsGranularity } from "@/types/types";
@@ -35,12 +36,49 @@ export type AnalyticsJob = {
     | { full_name: string | null; email: string | null }
     | { full_name: string | null; email: string | null }[]
     | null;
+  /** Everyone on the job (point 6), embedded the same way. */
+  roster?: Array<{
+    inspector_id: string;
+    user_profile?:
+      | { full_name: string | null; email: string | null }
+      | { full_name: string | null; email: string | null }[]
+      | null;
+  }> | null;
 };
 
-const JOB_COLUMNS =
+const JOB_COLUMNS_BASE =
   "id, code, status, unit_label, building_name, developer_name, inspector_id, " +
   "parent_job_id, visit_type, round_number, created_at, started_at, submitted_at, " +
   "approved_at, delivered_at, rejection_count, inspector:inspector_id(full_name, email)";
+
+const ROSTER_COLUMN =
+  ", roster:snagging_job_inspectors(inspector_id, user_profile:inspector_id(full_name, email))";
+
+/*
+  The roster is left out where 20260923100000 has not run: naming a table
+  that is not there fails the whole analytics query, which is the page.
+*/
+async function jobColumns(admin: SupabaseClient) {
+  return (await hasJobInspectors(admin))
+    ? JOB_COLUMNS_BASE + ROSTER_COLUMN
+    : JOB_COLUMNS_BASE;
+}
+
+/**
+ * Everyone the job's work belongs to.
+ *
+ * Several inspectors work one job with no lead among them, so crediting
+ * jobs.inspector_id alone gave the whole job to whichever of them was
+ * saved first. Falls back to that column for jobs raised before the
+ * roster existed, and for any job with an empty one.
+ */
+export function inspectorIdsOf(job: AnalyticsJob): string[] {
+  const roster = (job.roster ?? [])
+    .map((entry) => entry?.inspector_id)
+    .filter((id): id is string => Boolean(id));
+  if (roster.length > 0) return [...new Set(roster)];
+  return job.inspector_id ? [job.inspector_id] : [];
+}
 
 /**
  * Inspector names from the jobs themselves (they carry their inspector,
@@ -48,9 +86,21 @@ const JOB_COLUMNS =
  */
 export function inspectorNamesFromJobs(jobs: AnalyticsJob[]): Map<string, string> {
   const names = new Map<string, string>();
+  const one = <T,>(value: T | T[] | null | undefined): T | null =>
+    (Array.isArray(value) ? value[0] : value) ?? null;
+
   for (const job of jobs) {
+    // Everyone on the roster, then the job's own column for the rest.
+    for (const entry of job.roster ?? []) {
+      if (!entry?.inspector_id || names.has(entry.inspector_id)) continue;
+      const person = one(entry.user_profile);
+      names.set(
+        entry.inspector_id,
+        person?.full_name ?? person?.email ?? "Unknown",
+      );
+    }
     if (!job.inspector_id || names.has(job.inspector_id)) continue;
-    const person = Array.isArray(job.inspector) ? job.inspector[0] : job.inspector;
+    const person = one(job.inspector);
     names.set(job.inspector_id, person?.full_name ?? person?.email ?? "Unknown");
   }
   return names;
@@ -148,11 +198,13 @@ export async function loadJobsTouchingRange(
     .map((column) => `and(${column}.gte.${range.fromTs},${column}.lte.${range.toTs})`)
     .join(",");
 
+  const columns = await jobColumns(admin);
+
   // Ordered on a unique tiebreak too, so pages never overlap or skip.
   return readAll<AnalyticsJob>((from, to) =>
     admin
       .from("snagging_jobs")
-      .select(JOB_COLUMNS)
+      .select(columns)
       .or(anchors)
       .order("created_at", { ascending: false })
       .order("id")
@@ -168,10 +220,11 @@ export async function loadJobsTouchingRange(
  * should not be told there is less waiting than there is.
  */
 export async function loadReviewQueue(admin: SupabaseClient): Promise<AnalyticsJob[]> {
+  const columns = await jobColumns(admin);
   return readAll<AnalyticsJob>((from, to) =>
     admin
       .from("snagging_jobs")
-      .select(JOB_COLUMNS)
+      .select(columns)
       .in("status", REVIEW_QUEUE_STATUSES)
       .order("submitted_at", { ascending: true, nullsFirst: false })
       .order("id")

@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 
 import InspectionDetail from "@/components/dashboard/snagging/inspection-detail";
 import type { JobDetailInitial } from "@/components/dashboard/snagging/job-detail-context";
-import { hasResourceAction } from "@/lib/role-permissions";
 import {
   loadJobChecklist,
   loadJobCore,
@@ -12,9 +11,8 @@ import {
   loadJobVisitStatus,
   loadJobVisits,
 } from "@/lib/server/snagging/job-detail-sections";
-import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
+import { canViewSnagging } from "@/lib/server/snagging/page-access";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
-import { ActionType, ResourceType } from "@/types/types";
 
 const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
 
@@ -65,10 +63,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 async function readSections(id: string): Promise<JobDetailInitial | undefined> {
   if (!UUID.test(id)) return undefined;
   try {
-    const { accessUser } = await getAuthenticatedUserAccess();
-    if (!accessUser || !hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.VIEW)) {
-      return undefined;
-    }
+    if (!(await canViewSnagging())) return undefined;
     const admin = await createAdminServerClient();
     // A failed section becomes `undefined`, which the page fetches itself.
     const settle = <T,>(work: Promise<T>) =>

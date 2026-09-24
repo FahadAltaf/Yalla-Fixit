@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { hasAreaInspector, hasReviewNote, hasVerdictNote } from "@/lib/server/snagging/columns";
 import { signMediaPaths } from "@/lib/server/snagging/media";
+import { loadJobRosters } from "@/lib/server/snagging/job-roster";
 import { readAllRows } from "@/lib/server/snagging/read-all";
 
 /**
@@ -80,9 +81,26 @@ export async function loadSyncChildren(
       on every reconcile. Omitted, every job is sent in full.
     */
     full_job_ids?: string[];
+    /*
+      Whose phone this is. A defect recorded by ANOTHER inspector on the
+      same job is left out: several inspectors work one job, none senior,
+      and one's findings are not another's to see. The portal and the
+      report still read every snag; this narrows the phone only.
+
+      Everything else still reaches them. Keeping to "only what I
+      recorded" hid what a job needs its inspector to see:
+        - a de-snag round's carried defects, which the office copies onto
+          the round with no author -- every one of them, so the inspector
+          of a round had nothing left to verify;
+        - the original inspection a visit or round shows as already on
+          record, recorded by whoever did that pass;
+        - defects raised before the app recorded an author.
+      None of those is a co-inspector's, so none is private.
+    */
+    viewer_id?: string;
   } = {},
 ): Promise<SyncChildren> {
-  const { since, full_job_ids: fullJobIds } = options;
+  const { since, full_job_ids: fullJobIds, viewer_id: viewerId } = options;
   if (jobIds.length === 0) {
     return { areas: [], snags: [], photos: [], checklist: [], floor_plans: [] };
   }
@@ -102,7 +120,7 @@ export async function loadSyncChildren(
   const none = Promise.resolve([] as ChildRow[]);
   const roomInspector = areaInspector ? ", inspector_id" : "";
 
-  const [areaRows, snagRows, photoRows, checklistRows, planRows] = await Promise.all([
+  const [areaRows, snagRows, photoRows, checklistRows, planRows, rosters] = await Promise.all([
     loadChanged(
       admin,
       "snagging_areas",
@@ -120,7 +138,7 @@ export async function loadSyncChildren(
       "snagging_snags",
       `id, job_id, area_id, snag_code, catalogue_entry_id, catalogue_code, element_label,
        defect_label, severity, note, floor_plan_id, pin_x, pin_y, status, round_created,
-       created_at, locked${verdict}${review}`,
+       created_at, created_by, locked${verdict}${review}`,
       heavyIds,
       since,
       "updated_at",
@@ -149,13 +167,63 @@ export async function loadSyncChildren(
       "updated_at",
     ),
     roomsOnly ? none : loadPlans(admin, heavyIds, since),
+    // Who is on each job, to tell a co-inspector's defect from anyone else's.
+    viewerId && !roomsOnly ? loadJobRosters(admin, heavyIds) : Promise.resolve(null),
   ]);
 
+  /** Recorded by someone else who is on the same job. */
+  const coInspectors = (jobId: unknown, authorId: unknown) =>
+    Boolean(
+      viewerId &&
+        rosters &&
+        typeof authorId === "string" &&
+        authorId !== viewerId &&
+        rosters.get(String(jobId))?.has(authorId),
+    );
+
   const areas = areaRows.map(shapeArea);
-  const snags = snagRows.map(shapeSnag);
+  const snags = snagRows
+    .filter((row) => !coInspectors(row.job_id, row.created_by))
+    .map(shapeSnag);
   const checklist = checklistRows.map(shapeChecklistItem);
-  const photos = photoRows.map(shapePhoto);
   const plans = planRows.map(shapePlan);
+
+  /*
+    A photo is only as private as the snag it belongs to.
+
+    It cannot be filtered against the snags in THIS pull: a delta carries
+    the photos added since the cursor, and the snag they hang off may not
+    have changed since, so it is not in `snagRows`. Filtering on that would
+    drop the inspector's own photos. So the question asked is the one that
+    actually matters -- which snags on these jobs are mine -- over every
+    snag on the job, not just the changed ones.
+
+    One small read (id, job, author), and only when a phone is asking.
+  */
+  let visiblePhotoRows = photoRows;
+  if (viewerId && rosters && !roomsOnly && photoRows.length > 0) {
+    const authored = await readAllRows<{ id: string; job_id: string; created_by: string | null }>(
+      (from, to) =>
+        admin
+          .from("snagging_snags")
+          .select<string, { id: string; job_id: string; created_by: string | null }>(
+            "id, job_id, created_by",
+          )
+          .in("job_id", heavyIds)
+          .not("created_by", "is", null)
+          .neq("created_by", viewerId)
+          .order("id", { ascending: true })
+          .range(from, to),
+      "co-inspector snag ids",
+    );
+    const hidden = new Set(
+      authored.filter((row) => coInspectors(row.job_id, row.created_by)).map((row) => row.id),
+    );
+    visiblePhotoRows = photoRows.filter(
+      (row) => !hidden.has(String((row as Record<string, unknown>).snag_id)),
+    );
+  }
+  const photos = visiblePhotoRows.map(shapePhoto);
 
   // Signed together: neither waits on the other.
   const [signedPlans, signedPhotos] = await Promise.all([

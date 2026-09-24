@@ -6,6 +6,7 @@ import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import {
   average,
   inRange,
+  inspectorIdsOf,
   inspectorNamesFromJobs,
   loadJobsTouchingRange,
   loadReviewQueue,
@@ -384,8 +385,16 @@ function computeByInspector(
   >();
 
   for (const job of raised) {
-    if (!job.inspector_id) continue;
-    const entry = inspectors.get(job.inspector_id) ?? {
+    /*
+      Counted once for EACH inspector on the job.
+
+      A job split between two people is work both of them did, so both
+      carry it. The column totals therefore exceed the job count on a
+      split job, which is correct for a per-person workload and is the
+      only honest answer once a job can have more than one owner.
+    */
+    for (const inspectorId of inspectorIdsOf(job)) {
+    const entry = inspectors.get(inspectorId) ?? {
       inspection_count: 0,
       minutes: [],
       approvalMinutes: [],
@@ -407,7 +416,8 @@ function computeByInspector(
       if (turnaround !== null) entry.approvalMinutes.push(turnaround);
     }
 
-    inspectors.set(job.inspector_id, entry);
+    inspectors.set(inspectorId, entry);
+    }
   }
 
   if (inspectors.size === 0) return [];

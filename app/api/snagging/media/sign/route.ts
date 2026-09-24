@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
+import { mayWriteJob } from "@/lib/server/snagging/job-roster";
 import { SNAGGING_BUCKET, mediaObjectKey } from "@/lib/server/snagging/media";
 import { mediaSignSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType } from "@/types/types";
@@ -52,7 +53,17 @@ export async function POST(req: NextRequest) {
     }
     // An inspector may only add evidence to their own job; an admin is
     // never restricted in the snagging module.
-    if (job.inspector_id && job.inspector_id !== profile.id && !isAdminUser(accessUser)) {
+    /*
+      Any inspector on the job, not only its first: several share one now,
+      and each uploads their own photos. Also whoever is booked on its live
+      visit -- the same people the push accepts the photo record from.
+    */
+    if (
+      job.inspector_id &&
+      job.inspector_id !== profile.id &&
+      !isAdminUser(accessUser) &&
+      !(await mayWriteJob(admin, job.id, profile.id))
+    ) {
       return NextResponse.json({ error: "Not assigned to this inspection" }, { status: 403 });
     }
 

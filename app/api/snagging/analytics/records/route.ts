@@ -5,6 +5,7 @@ import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import {
   inRange,
+  inspectorIdsOf,
   inspectorNamesFromJobs,
   loadJobsTouchingRange,
   loadReviewQueue,
@@ -412,7 +413,11 @@ function build(
           { key: "onSite", label: "On site", align: "right" },
         ],
         jobs: source.filter(
-          (job) => inRange(job.created_at, range) && job.inspector_id === value,
+          (job) =>
+            inRange(job.created_at, range) &&
+            // Any inspector on the job, not only the one it names.
+            value !== null &&
+            inspectorIdsOf(job).includes(value),
         ),
         extra: (job, names) => ({
           inspector:

@@ -542,6 +542,14 @@ export interface SnaggingSnag {
   review_note?: string | null;
   review_note_at?: string | null;
   review_note_author?: { full_name?: string | null; email?: string | null } | null;
+  /**
+   * Who recorded the defect (point 6).
+   *
+   * Several inspectors work one job and none is senior to another, so the
+   * portal has to be able to say whose finding this is. Null on the snags
+   * that predate the app writing created_by.
+   */
+  recorded_by?: { full_name?: string | null; email?: string | null } | null;
   floor_plan_id?: string | null;
   /** 0..1 fractions of the plan, so a pin survives any zoom level. */
   pin_x?: number | null;
@@ -834,6 +842,8 @@ export interface SnaggingTaskSummary {
   high_severity_count: number;
   /** Attached by the list route from the assignee and snag tables. */
   inspector_name?: string | null;
+  /** Everyone on the job (point 6); inspector_name is the first of them. */
+  inspector_names?: string[];
   medium_severity_count?: number;
   low_severity_count?: number;
   /** FR-6.07 — submitted more than 48h ago and still awaiting a decision. */

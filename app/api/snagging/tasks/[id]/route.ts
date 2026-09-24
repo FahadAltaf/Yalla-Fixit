@@ -158,10 +158,20 @@ export async function PATCH(
       updates.status = input.status;
     }
 
-    // Inspector assignment (FR-3.08). Single inspector per job: first wins.
+    /*
+      Inspector assignment (FR-3.08), now a set rather than a person.
+
+      Several inspectors work one job and none is senior to another, so
+      the whole selection is kept in snagging_job_inspectors. The job's own
+      inspector_id stays as the first of them: submission, the report cover
+      and the app's existing sync all still read it, and it is a compat
+      anchor now rather than a rank above the others.
+    */
     let assignedInspectorId: string | null | undefined;
+    let assignedInspectorIds: string[] | undefined;
     if (input.technician_ids !== undefined) {
-      assignedInspectorId = input.technician_ids[0] ?? null;
+      assignedInspectorIds = [...new Set(input.technician_ids)];
+      assignedInspectorId = assignedInspectorIds[0] ?? null;
       updates.inspector_id = assignedInspectorId;
     }
 
@@ -245,6 +255,38 @@ export async function PATCH(
         .update(updates)
         .eq("id", id);
       if (updateError) throw new Error(updateError.message);
+    }
+
+    /*
+      The job's inspectors, replaced wholesale.
+
+      Delete-then-insert rather than a diff: the set is small, the UI sends
+      the complete selection every time, and a diff would have to reason
+      about a row somebody removed in another tab. Guarded on the table
+      existing so this route still works where 20260923100000 has not run.
+    */
+    if (assignedInspectorIds !== undefined) {
+      const { error: clearError } = await admin
+        .from("snagging_job_inspectors")
+        .delete()
+        .eq("job_id", id);
+
+      // 42P01 is "undefined table": the migration has not run here yet.
+      if (clearError && clearError.code !== "42P01") {
+        throw new Error(clearError.message);
+      }
+
+      if (!clearError && assignedInspectorIds.length > 0) {
+        const { error: insertError } = await admin
+          .from("snagging_job_inspectors")
+          .insert(
+            assignedInspectorIds.map((inspectorId) => ({
+              job_id: id,
+              inspector_id: inspectorId,
+            })),
+          );
+        if (insertError) throw new Error(insertError.message);
+      }
     }
 
     if (assigningInspector) {
