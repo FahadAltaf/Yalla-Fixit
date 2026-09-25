@@ -290,6 +290,9 @@ export function SubmissionsList() {
         const sending = actions.sendingId === submission.id;
         const customer = submission.customer.customerName || "Unnamed customer";
         return (
+          /* The row opens the proposal; the menu is its own thing, so a
+             click in here never counts as a click on the row. */
+          <div onClick={(event) => event.stopPropagation()}>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -334,8 +337,12 @@ export function SubmissionsList() {
               {/* FR5.4 — a proposal may only be sent once it has been
                   approved internally. FR5.6 — a contract only once the
                   client has approved the proposal. */}
-              {(submission.status === "approved" ||
-                submission.status === "proposal_sent") && (
+              {/* Sending is the owner's, as it is on the server: an
+                  approver decides whether it may go out, and the document
+                  goes to the client in the owner's name. */}
+              {submission.is_own !== false &&
+                (submission.status === "approved" ||
+                  submission.status === "proposal_sent") && (
                 <>
                   <DropdownMenuItem
                     onClick={() => actions.requestSend(submission, "proposal", "email")}
@@ -353,8 +360,9 @@ export function SubmissionsList() {
                   </DropdownMenuItem>
                 </>
               )}
-              {(submission.status === "proposal_approved" ||
-                submission.status === "contract_sent") && (
+              {submission.is_own !== false &&
+                (submission.status === "proposal_approved" ||
+                  submission.status === "contract_sent") && (
                 <>
                   <DropdownMenuItem
                     onClick={() => actions.requestSend(submission, "contract", "email")}
@@ -403,6 +411,7 @@ export function SubmissionsList() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          </div>
         );
       },
     },
@@ -438,6 +447,10 @@ export function SubmissionsList() {
               setSearch(value);
               setPage(0);
             }}
+            /* The row opens the proposal, as a row does on Jobs and
+               Quotations. The Actions menu stops the click itself, so the
+               two do not fight over it. */
+            handleRowClick={(row) => router.push(`/extensions/amc/${row.id}`)}
             toolbar={
               <RecordsToolbar
                 fetchRecords={() => void loadSubmissions()}

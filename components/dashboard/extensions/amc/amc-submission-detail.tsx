@@ -1,13 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, ScrollText } from "lucide-react";
+import { ScrollText } from "lucide-react";
 
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
 import { HeadingSkeleton, SectionSkeleton } from "@/components/dashboard/shared/kaizen-states";
-import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { amcSubmissionsService } from "@/modules/amc-submissions";
 
@@ -62,18 +60,6 @@ export function AmcSubmissionDetail({ id }: { id: string }) {
   useBreadcrumbLabel("amc", "AMC proposals");
   useBreadcrumbLabel(id, submission?.customer.customerName || undefined);
 
-  /* Back to the list, where the proposal was opened from. */
-  const backButton = (
-    <div>
-      <Button variant="outline" asChild>
-        <Link href="/extensions/amc">
-          <ArrowLeft className="size-4" />
-          Back to all proposals
-        </Link>
-      </Button>
-    </div>
-  );
-
   if (state === "loading") {
     return (
       <div className="flex flex-col gap-4">
@@ -117,8 +103,6 @@ export function AmcSubmissionDetail({ id }: { id: string }) {
         onDownload={actions.download}
         onSend={actions.requestSend}
       />
-      {/* Back to the list, once the proposal has been read. */}
-      {backButton}
     </div>
   );
 }

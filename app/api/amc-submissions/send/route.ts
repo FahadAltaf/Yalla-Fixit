@@ -4,9 +4,6 @@ import { z } from "zod";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { readAmcSettings } from "@/lib/server/amc/settings";
 import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
-import { canApproveAmc } from "@/components/dashboard/extensions/amc/amc-settings";
-import { hasResourceAction } from "@/lib/role-permissions";
-import { ActionType, ResourceType } from "@/types/types";
 import { linkTokenExpiry, mintLinkToken } from "@/lib/server/link-token";
 import { sendEmail } from "@/lib/server/send-email";
 import { clientEmailHtml, escapeEmailHtml } from "@/lib/email-brand";
@@ -167,22 +164,21 @@ export async function POST(req: NextRequest) {
   if (!existing) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-  /* The owner sends it, or an approver, who can see every submitted
-     proposal in their list (FR3.2). */
-  if (
-    existing.owner_id !== profile.id &&
-    !canApproveAmc(
-      await readAmcSettings(admin),
-      profile.email,
-      hasResourceAction(
-        access.accessUser,
-        ResourceType.AMC,
-        ActionType.APPROVE,
-      ),
-    )
-  ) {
+  /*
+    Sending is the owner's, and only the owner's.
+
+    An approver decides whether a proposal MAY go out; they do not send
+    it. It used to allow either, so an approver who opened somebody
+    else's approved proposal was shown Send and could email a client
+    about work that is not theirs -- under the owner's name, since the
+    document carries the owner's account manager and contacts.
+  */
+  if (existing.owner_id !== profile.id) {
     return NextResponse.json(
-      { error: "Only the owner or an approver can send this document" },
+      {
+        error:
+          "Only the person who raised this proposal can send it to the client.",
+      },
       { status: 403 },
     );
   }

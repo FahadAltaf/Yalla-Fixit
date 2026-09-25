@@ -415,7 +415,16 @@ export function SubmissionDetails({
   const title = submission.customer.customerName || "Unnamed customer";
   const awaiting = submission.status === "awaiting_approval";
   const canEdit = isAmcSubmissionEditable(submission.status) && submission.is_own !== false;
-  const sendable = onSend ? sendableDocument(submission) : null;
+  /*
+    Sending is the owner's, as it is on the server.
+
+    An approver decides whether a proposal may go out; they do not send
+    it. Offering the button to somebody the server will refuse reads as a
+    fault rather than a rule -- and the document carries the owner's
+    account manager and contacts, so it goes out in their name.
+  */
+  const sendable =
+    onSend && submission.is_own !== false ? sendableDocument(submission) : null;
   const resend = sendable ? lastSentAt(submission, sendable) : null;
   const stage = STAGE[submission.status] ?? { next: "", tone: "neutral" as const };
   const months = termMonths(form.startDate, form.endDate);
