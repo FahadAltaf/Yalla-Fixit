@@ -1033,13 +1033,13 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {/* FR-6: "Driver" groups each crew under its driver (the
+                  {/* FR-6: "Supervisor" groups each team under its supervisor (the
                       default); "Site" groups technicians by appointment address. */}
                   {/* The team's own row order, arranged by dragging rows. */}
                   <SelectItem value="custom" disabled={!hasCustomOrder}>
                     {hasCustomOrder ? "Custom" : "Custom (drag rows to arrange)"}
                   </SelectItem>
-                  <SelectItem value="default">Driver</SelectItem>
+                  <SelectItem value="default">Supervisor</SelectItem>
                   <SelectItem value="site">Site</SelectItem>
                   <SelectItem value="name">Name</SelectItem>
                   <SelectItem value="role">Role</SelectItem>

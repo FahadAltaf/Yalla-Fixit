@@ -183,12 +183,12 @@ export default function SchedulingDashboard({ technicians }: Props) {
     () => [{ value: "", label: "— Service —" }, ...services.map((s) => ({ value: s.id, label: s.name }))],
     [services],
   );
-  // Drivers only: you assign each technician to the driver who drives them.
-  const driverOptions = useMemo(
+  // Supervisors only: each technician is assigned to the supervisor they report to.
+  const supervisorOptions = useMemo(
     () => [
-      { value: "", label: "— Driver —" },
+      { value: "", label: "— Supervisor —" },
       ...[...techs]
-        .filter((t) => t.is_active && (t.role_name ?? "").toLowerCase() === "driver")
+        .filter((t) => t.is_active && (t.role_name ?? "").toLowerCase() === "supervisor")
         .sort((a, b) => a.display_name.localeCompare(b.display_name))
         .map((t) => ({ value: t.fsm_resource_id, label: t.display_name })),
     ],
@@ -246,6 +246,45 @@ export default function SchedulingDashboard({ technicians }: Props) {
 
   // Applies an attribute change to one or many technicians and updates local
   // state immediately (optimistic) with a background revert on error.
+  // Bulk edit bar: who is selected, and what they currently have in common. A
+  // dropdown shows the value every selected technician shares (or a "Mixed"
+  // placeholder), so after "set for all" it reads back what was set instead of
+  // snapping to its label.
+  const [showAllSelected, setShowAllSelected] = useState(false);
+  const selectedTechs = useMemo(() => techs.filter((t) => selected.has(t.fsm_resource_id)), [techs, selected]);
+  const commonValue = (pick: (t: TechnicianReference) => string | null | undefined) => {
+    const values = new Set(selectedTechs.map((t) => pick(t) ?? ""));
+    return values.size === 1 ? [...values][0] : null; // null = mixed
+  };
+  const bulk = {
+    role: commonValue((t) => t.role_id),
+    service: commonValue((t) => t.service_type_id),
+    shift: commonValue((t) => t.shift),
+    supervisor: commonValue((t) => t.team_leader_fsm_id),
+  };
+  // Mixed: swap the placeholder so the dropdown says so. Picking it again is a
+  // no-op (the value doesn't change), so nothing gets cleared by accident.
+  const bulkOptions = (options: { value: string; label: string }[], common: string | null) =>
+    common === null ? [{ value: "", label: "Mixed — pick one to set all" }, ...options.slice(1)] : options;
+  const deselect = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  const clearSelection = () => {
+    setSelected(new Set());
+    setShowAllSelected(false);
+  };
+  const applyBulk = async (attrs: TechnicianAttributeUpdate, what: string, valueLabel?: string) => {
+    const ids = [...selected];
+    if (!(await applyAttributes(ids, attrs))) return;
+    const who = `${ids.length} technician${ids.length === 1 ? "" : "s"}`;
+    toast.success(valueLabel ? `${what} set to ${valueLabel} for ${who}` : `${what} cleared for ${who}`, {
+      action: { label: "Clear selection", onClick: clearSelection },
+    });
+  };
+
   const applyAttributes = async (ids: string[], attrs: TechnicianAttributeUpdate) => {
     const before = new Map(techs.map((t) => [t.fsm_resource_id, t]));
     setTechs((prev) =>
@@ -270,9 +309,11 @@ export default function SchedulingDashboard({ technicians }: Props) {
     );
     try {
       await techniciansService.updateAttributes(ids, attrs);
+      return true;
     } catch (error) {
       setTechs((prev) => prev.map((t) => before.get(t.fsm_resource_id) ?? t));
       toast.error(error instanceof Error ? error.message : "Failed to update technician");
+      return false;
     }
   };
 
@@ -296,7 +337,7 @@ export default function SchedulingDashboard({ technicians }: Props) {
         <PageHeading
           eyebrow="Scheduling"
           title="Technicians & leave"
-          description={`${techs.length} technicians synced from Zoho FSM. Set role, service, shift, driver, tags, and leave.`}
+          description={`${techs.length} technicians synced from Zoho FSM. Set role, service, shift, supervisor, tags, and leave.`}
           actions={
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -349,39 +390,79 @@ export default function SchedulingDashboard({ technicians }: Props) {
         </div>
 
         {/* Bulk edit bar (#15) — appears when technicians are selected. */}
-        {selectedIds.length > 0 && (
-          <div className="bg-muted/40 flex flex-wrap items-center gap-2 rounded-md border p-2.5">
-            <span className="text-sm font-medium">{selectedIds.length} selected</span>
-            <span className="text-muted-foreground text-xs">Set for all:</span>
-            <Select
-              ariaLabel="Set role"
-              value=""
-              options={roleOptions}
-              onChange={(v) => applyAttributes(selectedIds, { roleId: v || null })}
-            />
-            <Select
-              ariaLabel="Set service"
-              value=""
-              options={serviceOptions}
-              onChange={(v) => applyAttributes(selectedIds, { serviceTypeId: v || null })}
-            />
-            <Select
-              ariaLabel="Set shift"
-              value=""
-              options={SHIFT_OPTIONS}
-              onChange={(v) => applyAttributes(selectedIds, { shift: (v || null) as "morning" | "night" | null })}
-            />
-            <Select
-              ariaLabel="Set driver"
-              value=""
-              options={driverOptions.filter((o) => !selected.has(o.value))}
-              onChange={(v) => applyAttributes(selectedIds, { teamLeaderFsmId: v || null })}
-            />
-            <div className="ml-auto flex items-center gap-1.5">
-              <BulkTagMenu tags={tags} selectedIds={selectedIds} onChanged={loadAll} />
-              <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
-                Clear
+        {selectedTechs.length > 0 && (
+          <div className="border-primary/40 bg-primary/5 flex flex-col gap-2 rounded-md border p-2.5">
+            {/* Who is selected, each removable; Clear is a real button. */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-sm font-medium">{selectedTechs.length} selected</span>
+              {(showAllSelected ? selectedTechs : selectedTechs.slice(0, 6)).map((t) => (
+                <span
+                  key={t.fsm_resource_id}
+                  className="bg-background inline-flex items-center gap-1 rounded-full border py-0.5 pr-1 pl-2 text-xs"
+                >
+                  {t.display_name}
+                  <button
+                    type="button"
+                    onClick={() => deselect(t.fsm_resource_id)}
+                    className="text-muted-foreground hover:bg-muted hover:text-foreground rounded-full p-0.5"
+                    aria-label={`Deselect ${t.display_name}`}
+                  >
+                    <X className="size-3" />
+                  </button>
+                </span>
+              ))}
+              {selectedTechs.length > 6 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllSelected((v) => !v)}
+                  className="text-primary text-xs hover:underline"
+                >
+                  {showAllSelected ? "Show fewer" : `+${selectedTechs.length - 6} more`}
+                </button>
+              )}
+              <Button size="sm" variant="outline" className="ml-auto h-8" onClick={clearSelection}>
+                <X className="size-3.5" />
+                Clear selection
               </Button>
+            </div>
+            {/* Set for all. Each dropdown shows what the selection currently shares. */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-muted-foreground text-xs">Set for all:</span>
+              <Select
+                ariaLabel="Set role"
+                value={bulk.role ?? ""}
+                options={bulkOptions(roleOptions, bulk.role)}
+                onChange={(v) => applyBulk({ roleId: v || null }, "Role", roleOptions.find((o) => o.value === v)?.label)}
+              />
+              <Select
+                ariaLabel="Set service"
+                value={bulk.service ?? ""}
+                options={bulkOptions(serviceOptions, bulk.service)}
+                onChange={(v) =>
+                  applyBulk({ serviceTypeId: v || null }, "Service", serviceOptions.find((o) => o.value === v)?.label)
+                }
+              />
+              <Select
+                ariaLabel="Set shift"
+                value={bulk.shift ?? ""}
+                options={bulkOptions(SHIFT_OPTIONS, bulk.shift)}
+                onChange={(v) =>
+                  applyBulk(
+                    { shift: (v || null) as "morning" | "night" | null },
+                    "Shift",
+                    SHIFT_OPTIONS.find((o) => o.value === v)?.label,
+                  )
+                }
+              />
+              <Select
+                ariaLabel="Set supervisor"
+                value={bulk.supervisor ?? ""}
+                options={bulkOptions(supervisorOptions.filter((o) => !selected.has(o.value)), bulk.supervisor)}
+                onChange={(v) =>
+                  applyBulk({ teamLeaderFsmId: v || null }, "Supervisor", supervisorOptions.find((o) => o.value === v)?.label)
+                }
+              />
+              <BulkTagMenu tags={tags} selectedIds={selectedIds} onChanged={loadAll} />
             </div>
           </div>
         )}
@@ -401,7 +482,7 @@ export default function SchedulingDashboard({ technicians }: Props) {
                 <TableHead>Role</TableHead>
                 <TableHead>Service</TableHead>
                 <TableHead>Shift</TableHead>
-                <TableHead>Driver</TableHead>
+                <TableHead>Supervisor</TableHead>
                 <TableHead>Tags</TableHead>
                 <TableHead>Availability</TableHead>
                 <TableHead className="w-[1%] text-right">Actions</TableHead>
@@ -598,7 +679,7 @@ export default function SchedulingDashboard({ technicians }: Props) {
             tags={tags}
             roleOptions={roleOptions}
             serviceOptions={serviceOptions}
-            driverOptions={driverOptions.filter((o) => o.value !== activeTechnician.fsm_resource_id)}
+            supervisorOptions={supervisorOptions.filter((o) => o.value !== activeTechnician.fsm_resource_id)}
             assignedTags={assignments[activeTechnician.fsm_resource_id] ?? []}
             leaveRecords={leaveRecords.filter((r) => r.technician_fsm_id === activeTechnician.fsm_resource_id)}
             onApplyAttributes={(attrs) => applyAttributes([activeTechnician.fsm_resource_id], attrs)}
@@ -1036,7 +1117,7 @@ function ManageTechnicianDialog({
   tags,
   roleOptions,
   serviceOptions,
-  driverOptions,
+  supervisorOptions,
   assignedTags,
   leaveRecords,
   onApplyAttributes,
@@ -1047,7 +1128,7 @@ function ManageTechnicianDialog({
   tags: TechnicianTag[];
   roleOptions: { value: string; label: string }[];
   serviceOptions: { value: string; label: string }[];
-  driverOptions: { value: string; label: string }[];
+  supervisorOptions: { value: string; label: string }[];
   assignedTags: TechnicianTag[];
   leaveRecords: LeaveRecord[];
   onApplyAttributes: (attrs: TechnicianAttributeUpdate) => void;
@@ -1143,7 +1224,7 @@ function ManageTechnicianDialog({
         <DialogHeader>
           <DialogTitle>{technician.display_name}</DialogTitle>
           <DialogDescription>
-            Role, service type, shift and driver are portal-only settings — they are never written back to
+            Role, service type, shift and supervisor are portal-only settings — they are never written back to
             Zoho FSM. Tags and leave are managed here too.
           </DialogDescription>
         </DialogHeader>
@@ -1162,8 +1243,8 @@ function ManageTechnicianDialog({
             <Select value={technician.shift ?? ""} options={SHIFT_OPTIONS} onChange={(v) => onApplyAttributes({ shift: (v || null) as "morning" | "night" | null })} className="h-9" />
           </label>
           <label className="flex flex-col gap-1 text-xs font-medium">
-            Driver
-            <Select value={technician.team_leader_fsm_id ?? ""} options={driverOptions} onChange={(v) => onApplyAttributes({ teamLeaderFsmId: v || null })} className="h-9" />
+            Supervisor
+            <Select value={technician.team_leader_fsm_id ?? ""} options={supervisorOptions} onChange={(v) => onApplyAttributes({ teamLeaderFsmId: v || null })} className="h-9" />
           </label>
         </div>
 
