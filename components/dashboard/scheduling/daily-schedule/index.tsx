@@ -31,7 +31,7 @@ import {
 } from "@/modules/scheduling";
 import type { LeaveRecord, TechnicianTag, TechnicianRole, TechnicianServiceType } from "@/types/types";
 import { orderTechnicians, type SortMode } from "./technician-order";
-import { exportSchedulePdf, type PdfSection } from "@/lib/scheduling/export-pdf";
+import { exportSchedulePdf, type PdfBar, type PdfRow, type PdfSection } from "@/lib/scheduling/export-pdf";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import StatusBadge from "@/components/ui/status-badge";
@@ -72,6 +72,7 @@ import {
 import {
   addDaysToDateString,
   formatZonedDate,
+  formatZonedDateTime,
   isoAtZonedMinutes,
   setOrgTimeZone,
   todayInZone,
@@ -834,48 +835,73 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
   // E4: build a real, sheet-style PDF (not a webpage screenshot) from the
   // currently visible technicians and their appointments, honouring the
   // filters, field choices, and hidden technicians, then download it.
+  // E4: build a PDF that mirrors the board -- technician rows tinted by role,
+  // hour columns, bars at their times coloured by FSM status, lanes for
+  // overlaps, leave, and the legend -- honouring the filters, field choices
+  // and visible technicians, then download it.
   const handleExport = (which: ExportShift) => {
     if (!shiftBounds) return;
     const buildSection = (
       entryShift: ShiftType,
       techShiftKey: "night" | "morning",
       title: string,
+      bounds: Bounds,
     ): PdfSection => {
+      const span = bounds.end - bounds.start || 1;
       const techs = visibleTechnicians.filter((t) => t.shift === techShiftKey || !t.shift);
-      const rows = techs.map((t) => {
-        const appointments = (entriesByTechnician.get(t.fsm_resource_id) ?? [])
-          .filter((e) => e.shift === entryShift)
-          .sort((a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime())
-          .map((e) => ({
-            time:
-              e.fsm_schedule_type === "All Day"
-                ? "All Day"
-                : formatRange(timeOfDayMinutes(e.start_at), timeOfDayMinutes(e.end_at)),
-            label: entryLabel(e),
-            address: e.address || e.client_name || "",
-            freeText: e.entry_type === "free_text",
-          }));
+      const rows: PdfRow[] = techs.map((t) => {
+        const rowEntries = (entriesByTechnician.get(t.fsm_resource_id) ?? []).filter((e) => e.shift === entryShift);
+        const leave = leaveByTechnician.get(t.fsm_resource_id);
+        const { laneOf, laneCount } = laneLayout(rowEntries);
+        const bars: PdfBar[] = rowEntries.map((e) => {
+          const placed = placeEntry(e, bounds, span);
+          const isFreeText = e.entry_type === "free_text";
+          const { primaryText, secondaryText } = entryText(e, fieldVis, placed.allDay);
+          return {
+            leftPct: placed.leftPct,
+            widthPct: placed.widthPct,
+            lane: laneOf.get(e.id) ?? 0,
+            allDay: placed.allDay,
+            outside: placed.outside,
+            primary: primaryText,
+            secondary: secondaryText,
+            timeLabel: placed.allDay ? "All Day" : formatRange(placed.startMin, placed.endMin),
+            state: isFreeText ? "note" : e.fsm_appointment_id ? resolveAppointmentState(e.fsm_status) : "scheduled",
+            syncFailed: e.sync_status === "failed",
+            conflictsWithLeave: leave ? entryOverlapsLeave(e, leave) : false,
+          };
+        });
         return {
           technician: t.display_name,
-          sub: [t.role_name, t.service_type_name].filter(Boolean).join(" · "),
-          tags: (assignments[t.fsm_resource_id] ?? []).map((x) => x.name).join(", "),
-          appointments,
+          role: t.role_name ?? null,
+          roleColor: t.role_id ? (roleColorById.get(t.role_id) ?? null) : null,
+          service: t.service_type_name ?? null,
+          tags: (assignments[t.fsm_resource_id] ?? []).map((x) => x.name),
+          leave: leave ? leave.leave_type : null,
+          laneCount,
+          bars,
         };
       });
-      return { title, rows };
+      return { title, window: formatRange(bounds.start, bounds.end), bounds, rows };
     };
 
     const sections: PdfSection[] = [];
-    if (which === "both" || which === "night")
-      sections.push(
-        buildSection("night", "night", `Night Shift · ${formatRange(shiftBounds.night.start, shiftBounds.night.end)}`),
-      );
-    if (which === "both" || which === "day")
-      sections.push(
-        buildSection("day", "morning", `Morning Shift · ${formatRange(shiftBounds.day.start, shiftBounds.day.end)}`),
-      );
+    if (which === "both" || which === "night") sections.push(buildSection("night", "night", "Night Shift", shiftBounds.night));
+    if (which === "both" || which === "day") sections.push(buildSection("day", "morning", "Morning Shift", shiftBounds.day));
 
-    exportSchedulePdf({ date, sections, fieldVis });
+    exportSchedulePdf({
+      date,
+      dateLabel: formatZonedDate(zonedTimeToUtc(date, "12:00"), {
+        weekday: "long",
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      }),
+      generatedAt: formatZonedDateTime(Date.now()),
+      sections,
+      fieldVis,
+      legendStates: APPOINTMENT_STATE_ORDER.filter((state) => presentStates.has(state) || HEADLINE_STATES.has(state)),
+    });
     setExportOpen(false);
   };
 

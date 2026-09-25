@@ -100,6 +100,19 @@ export const APPOINTMENT_STATE_STYLES: Record<AppointmentState, { bar: string; d
   },
 };
 
+// The same colours as hex, for the PDF export (jsPDF draws with RGB, not
+// classes). Keep in step with APPOINTMENT_STATE_STYLES.
+export const APPOINTMENT_STATE_HEX: Record<AppointmentState, string> = {
+  new: "#64748b",
+  scheduled: "#2563eb",
+  dispatched: "#7c3aed",
+  in_progress: "#f97316",
+  completed: "#059669",
+  cannot_complete: "#dc2626",
+  cancelled: "#94a3b8",
+  unknown: "#a1a1aa",
+};
+
 // The order legends and counters read in: the one that needs attention
 // first, then the work in flight, then the rest.
 export const APPOINTMENT_STATE_ORDER: AppointmentState[] = [
