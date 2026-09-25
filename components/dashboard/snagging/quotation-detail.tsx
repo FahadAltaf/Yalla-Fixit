@@ -634,7 +634,7 @@ export default function QuotationDetail({ id }: { id: string }) {
       </DataState>
 
       <Dialog open={sendOpen} onOpenChange={setSendOpen}>
-        <ActionDialogContent busy={busy}>
+        <ActionDialogContent busy={busy} className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Send quotation to the client</DialogTitle>
             <DialogDescription>

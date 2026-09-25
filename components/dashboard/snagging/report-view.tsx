@@ -348,7 +348,7 @@ export function ReportView({ taskId }: { taskId: string }) {
       </div>
 
       <Dialog open={deliverOpen} onOpenChange={setDeliverOpen}>
-        <ActionDialogContent busy={busy}>
+        <ActionDialogContent busy={busy} className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Deliver report to client</DialogTitle>
             <DialogDescription>

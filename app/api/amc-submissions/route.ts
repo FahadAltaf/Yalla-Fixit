@@ -87,6 +87,23 @@ const submissionUpdateSchema = submissionPayloadSchema.partial().extend({
   id: z.string().uuid(),
 });
 
+/*
+  What the LIST needs: everything the table draws and every row action
+  decides from.
+
+  Deliberately without `services`, `document_options` and the two settings
+  snapshots -- four JSON blobs per proposal, the whole of a contract's
+  wording among them -- because the list draws none of them. They are read
+  by the preview, the download and the email, which now fetch the one
+  proposal they are working on (use-amc-actions.tsx).
+*/
+const LIST_COLUMNS =
+  "id, owner_id, proposal_number, status, property, customer, " +
+  "discount_percent, discount_amount, final_price, generated_documents, " +
+  "submitted_at, decided_at, sent_back_reason, proposal_sent_at, contract_sent_at, " +
+  "client_decision, client_decided_at, client_decided_by_name, client_rejected_reason, " +
+  "signed_by_name, signed_at, created_at, updated_at";
+
 type AmcSubmissionRow = {
   id: string;
   owner_id: string;
@@ -95,13 +112,14 @@ type AmcSubmissionRow = {
   status: AmcSubmissionStatus;
   property: AmcSubmission["property"];
   customer: AmcSubmission["customer"];
-  document_options: AmcSubmission["document_options"];
-  services: AmcSubmission["services"];
+  /* The four below are absent on a list row; see LIST_COLUMNS. */
+  document_options?: AmcSubmission["document_options"];
+  services?: AmcSubmission["services"];
   discount_percent: number;
   discount_amount: number;
   final_price: number;
   generated_documents: AmcDocumentType[];
-  settings_snapshot: AmcSubmission["settings_snapshot"];
+  settings_snapshot?: AmcSubmission["settings_snapshot"];
   contract_settings_snapshot?: AmcSubmission["contract_settings_snapshot"];
   submitted_at: string | null;
   decided_at: string | null;
@@ -136,7 +154,7 @@ function mapRow(
     property: row.property,
     customer: { ...row.customer, proposalNumber: row.proposal_number },
     document_options: row.document_options,
-    services: row.services,
+    services: row.services ?? [],
     discount_percent: Number(row.discount_percent),
     discount_amount: Number(row.discount_amount),
     final_price: Number(row.final_price),
@@ -279,12 +297,12 @@ export async function GET(req: NextRequest) {
       readAmcSettings(admin),
       admin
         .from("amc_submissions")
-        .select("*")
+        .select(LIST_COLUMNS)
         .eq("owner_id", profile.id)
         .order("created_at", { ascending: false }),
       admin
         .from("amc_submissions")
-        .select("*")
+        .select(LIST_COLUMNS)
         .neq("owner_id", profile.id)
         .neq("status", "draft")
         .order("created_at", { ascending: false }),
@@ -300,7 +318,7 @@ export async function GET(req: NextRequest) {
     hasResourceAction(gate.accessUser, ResourceType.AMC, ActionType.APPROVE),
   );
 
-  const rows = [...((own ?? []) as AmcSubmissionRow[])];
+  const rows = [...((own ?? []) as unknown as AmcSubmissionRow[])];
 
   if (canApprove) {
     if (queueError) {
@@ -308,7 +326,7 @@ export async function GET(req: NextRequest) {
     }
 
     const seen = new Set(rows.map((row) => row.id));
-    for (const row of (queue ?? []) as AmcSubmissionRow[]) {
+    for (const row of (queue ?? []) as unknown as AmcSubmissionRow[]) {
       if (!seen.has(row.id)) rows.push(row);
     }
   }

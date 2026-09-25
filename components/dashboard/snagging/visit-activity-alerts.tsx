@@ -98,6 +98,8 @@ function describe(taskId: string, visit: SnaggingJobVisit): VisitNotice | null {
   const quotationTab = `${page}?tab=quotation`;
   const name = visit.inspector?.full_name || visit.inspector?.email || null;
   const who = name ?? "The inspector";
+  /* Whether anybody is on this visit yet. */
+  const assigned = Boolean(visit.inspectors?.length || visit.inspector_id);
   const found = visit.snag_count ?? 0;
   const foundLine = `${found} new ${found === 1 ? "snag" : "snags"}`;
 
@@ -170,9 +172,11 @@ function describe(taskId: string, visit: SnaggingJobVisit): VisitNotice | null {
           rank: 1,
           tone: "action",
           icon: CalendarClock,
-          title: `Visit ${n} needs an inspector`,
-          body: "It is charged by payment link, so it needs no quotation. Assign an inspector and a date to book it.",
-          cta: { label: "Assign an inspector", href: page },
+          title: assigned ? `Visit ${n} is ready to book` : `Visit ${n} needs an inspector`,
+          body: assigned
+            ? `It is charged by payment link, so it needs no quotation. ${who} is on it; book it and it appears in their Jobs list on the phone.`
+            : "It is charged by payment link, so it needs no quotation. Assign an inspector and a date to book it.",
+          cta: { label: assigned ? "Book the visit" : "Assign an inspector", href: page },
         };
       }
       const quote = visit.quotation;
@@ -215,8 +219,16 @@ function describe(taskId: string, visit: SnaggingJobVisit): VisitNotice | null {
         tone: "action",
         icon: CalendarClock,
         title: `The client approved visit ${n}'s quotation`,
-        body: "Assign an inspector and a date to book it. It appears in their Jobs list on the phone straight away.",
-        cta: { label: "Assign an inspector", href: page },
+        /*
+          Named for what is actually left. A visit raised with somebody on
+          it already read "Assign an inspector", which sent the
+          coordinator looking for a field that was filled in -- the step
+          outstanding there is the booking.
+        */
+        body: assigned
+          ? `${who} is on it. Book it and it appears in their Jobs list on the phone straight away.`
+          : "Assign an inspector and a date to book it. It appears in their Jobs list on the phone straight away.",
+        cta: { label: assigned ? "Book the visit" : "Assign an inspector", href: page },
       };
     }
 

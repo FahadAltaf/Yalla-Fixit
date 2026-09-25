@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   CheckCircle2,
+  ChevronDown,
   Clock,
   Copy,
+  Mail,
   MessageCircle,
   Download,
   FileType2,
@@ -19,8 +21,13 @@ import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   Dialog,
-  DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
@@ -45,7 +52,6 @@ import { YallaClassicTemplate } from "@/components/dashboard/extensions/quotatio
 import {
   DataState,
   SectionCard,
-  SubHeading,
   SubmitButton,
   formatLocalDateTime,
   useConfirm,
@@ -469,72 +475,82 @@ export function QuotationPanel({
       action={
         quote && !isPreview ? (
           <div className="flex flex-wrap items-center justify-end gap-2">
-            {canEdit && !isDecided ? (
-              <>
-                {quote.status !== "draft" || quotationId ? null : (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setRegenOpen(true)}
-                    disabled={busy}
-                  >
-                    <FileText className="size-4" /> Regenerate
-                  </Button>
-                )}
-                {/*
-                  Two ways out, because the team uses two (BA v2, change
-                  24). Email is driven end to end here; WhatsApp is sent by
-                  hand, so that button hands over the two things they
-                  paste -- the PDF and a live approval link.
-                */}
+            {canEdit && !isDecided && quote.status === "draft" && !quotationId ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setRegenOpen(true)}
+                disabled={busy}
+              >
+                <FileText className="size-4" /> Regenerate
+              </Button>
+            ) : null}
+
+            {/* One Download button with the two formats, as on the
+                quotation page and on AMC proposals. */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
                 <SubmitButton
                   variant="outline"
                   size="sm"
-                  onClick={() => void shareByHand()}
                   disabled={busy}
-                  pending={working}
+                  pending={downloading || downloadingWord}
                   pendingLabel="Preparing…"
-                  icon={<MessageCircle className="size-4" />}
+                  icon={<Download className="size-4" />}
                 >
-                  Share on WhatsApp
+                  Download
+                  <ChevronDown className="size-3.5" />
                 </SubmitButton>
-              </>
-            ) : null}
-            <SubmitButton
-              variant="outline"
-              size="sm"
-              onClick={() => void download()}
-              disabled={busy}
-              pending={downloading}
-              pendingLabel="Preparing…"
-              icon={<Download className="size-4" />}
-            >
-              Download PDF
-            </SubmitButton>
-            <SubmitButton
-              variant="outline"
-              size="sm"
-              onClick={() => void downloadWord()}
-              disabled={busy}
-              pending={downloadingWord}
-              pendingLabel="Preparing…"
-              icon={<FileType2 className="size-4" />}
-            >
-              Download Word
-            </SubmitButton>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => void download()}>
+                  <FileText className="size-4" />
+                  PDF
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => void downloadWord()}>
+                  <FileType2 className="size-4" />
+                  Word (.docx)
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {/*
+              One Share button with the two ways out, because the team uses
+              both (BA v2, change 24). Email is driven end to end here;
+              WhatsApp is sent by hand, so that item hands over the two
+              things they paste -- the PDF and a live approval link.
+            */}
             {canEdit && !isDecided ? (
-              <Button
-                size="sm"
-                onClick={() => {
-                  const snap = (quote.property_snapshot ?? {}) as Record<string, unknown>;
-                  setRecipient((snap.client_email as string) ?? quote.sent_to ?? "");
-                  setSendOpen(true);
-                }}
-                disabled={busy}
-              >
-                <Send className="size-4" />{" "}
-                {quote.status === "sent" ? "Resend by email" : "Send by email"}
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <SubmitButton
+                    size="sm"
+                    disabled={busy}
+                    pending={working}
+                    pendingLabel="Preparing…"
+                    icon={<Send className="size-4" />}
+                  >
+                    {quote.status === "sent" ? "Share again" : "Share"}
+                    <ChevronDown className="size-3.5" />
+                  </SubmitButton>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => void shareByHand()}>
+                    <MessageCircle className="size-4" />
+                    Share on WhatsApp
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => {
+                      const snap = (quote.property_snapshot ?? {}) as Record<string, unknown>;
+                      setRecipient((snap.client_email as string) ?? quote.sent_to ?? "");
+                      setSendOpen(true);
+                    }}
+                  >
+                    <Mail className="size-4" />
+                    {quote.status === "sent" ? "Resend by email" : "Send by email"}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             ) : null}
           </div>
         ) : null
@@ -735,7 +751,7 @@ export function QuotationPanel({
 
       {confirmDialog}
       <Dialog open={regenOpen} onOpenChange={setRegenOpen}>
-        <ActionDialogContent busy={working}>
+        <ActionDialogContent busy={working} className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Regenerate this quotation?</DialogTitle>
             <DialogDescription>
@@ -768,7 +784,7 @@ export function QuotationPanel({
       </Dialog>
 
       <Dialog open={sendOpen} onOpenChange={setSendOpen}>
-        <ActionDialogContent busy={working}>
+        <ActionDialogContent busy={working} className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Send quotation to the client</DialogTitle>
             <DialogDescription>

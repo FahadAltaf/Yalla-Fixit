@@ -1,4 +1,4 @@
-import { after, NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
@@ -46,6 +46,94 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
 
     const admin = await createAdminServerClient();
+    const now = new Date().toISOString();
+    const advance = {
+      status: "in_review",
+      review_started_at: now,
+      // Completed as well, when asked for (see completeToo).
+      ...(completeToo ? { reviewed_at: now } : {}),
+    };
+
+    /** Both entries this hop writes, from whichever path advanced the job. */
+    const trail = (row: {
+      code: string | null;
+      reviewer_id: string | null;
+      approval_manager_id: string | null;
+      from: string;
+    }) => {
+      const started = {
+        entityType: "task" as const,
+        entityId: id,
+        taskId: id,
+        eventType: "task_in_review",
+        actorId: profile.id,
+        actorLabel: profile.full_name ?? profile.email,
+        justification: parsed.data.comment?.trim() || null,
+        // FR-6.04 — the transition, not just its name.
+        payload: {
+          code: row.code,
+          from_status: row.from,
+          to_status: "in_review",
+          reviewer_id: row.reviewer_id,
+        },
+      };
+      return completeToo
+        ? [
+            started,
+            {
+              ...started,
+              eventType: "review_completed",
+              payload: {
+                code: row.code,
+                reviewer_id: row.reviewer_id,
+                approval_manager_id: row.approval_manager_id,
+              },
+            },
+          ]
+        : [started];
+    };
+
+    /*
+      The ordinary path, in ONE round trip.
+
+      Reading the job to check who may review it and then updating it was
+      two trips one after another, and on a link where a trip costs the
+      better part of a second the manager felt both. The rule is written
+      as a filter instead -- the named reviewer, or the approval manager
+      where nobody is named (FR-6.01, the same test isDesignatedReviewer
+      applies) -- together with the status guard that stops two managers
+      advancing the same job at once.
+
+      Setting `reviewer_id` to the actor is exactly what the filter
+      already guarantees: either they are the named reviewer, or there is
+      none and picking it up claims it.
+
+      Nothing updated means the job is missing, not theirs, or no longer
+      submitted -- and an admin, who is allowed regardless of either
+      name, still has to be let through. All of those fall to the read
+      below, which is the only path that pays for a second trip.
+    */
+    const { data: claimedRows, error: claimError } = await admin
+      .from("snagging_jobs")
+      .update({ ...advance, reviewer_id: profile.id })
+      .eq("id", id)
+      .eq("status", "submitted")
+      .or(
+        `reviewer_id.eq.${profile.id},and(reviewer_id.is.null,approval_manager_id.eq.${profile.id})`,
+      )
+      .select("id, code, reviewer_id, approval_manager_id");
+    if (claimError) throw new Error(claimError.message);
+
+    const claimed = claimedRows?.[0] as
+      | { code: string | null; reviewer_id: string | null; approval_manager_id: string | null }
+      | undefined;
+    if (claimed) {
+      await recordAuditBatch(admin, trail({ ...claimed, from: "submitted" }));
+      return NextResponse.json({
+        data: { id, status: "in_review", ...(completeToo ? { reviewed_at: now } : {}) },
+      });
+    }
+
     const { data: job, error: loadError } = await admin
       .from("snagging_jobs")
       .select("id, code, status, approval_manager_id, reviewer_id")
@@ -76,14 +164,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       return NextResponse.json({ error: (transitionError as Error).message }, { status: 409 });
     }
 
-    const now = new Date().toISOString();
     const { error: updateError } = await admin
       .from("snagging_jobs")
       .update({
-        status: "in_review",
-        review_started_at: now,
-        // Completed as well, when asked for (see completeToo).
-        ...(completeToo ? { reviewed_at: now } : {}),
+        ...advance,
         // Picking a job up claims it, so an unassigned queue does not stay
         // unassigned once somebody has actually started on it.
         reviewer_id: job.reviewer_id ?? profile.id,
@@ -94,50 +178,15 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       .eq("status", "submitted");
     if (updateError) throw new Error(updateError.message);
 
-    /*
-      The audit is written after the reply (after()).
-
-      Starting a review is three round trips to the database -- read the
-      job, advance it, write the trail -- one after another, and the
-      manager waited through all three before the buttons changed. The
-      trail is not in the reply and nothing on the page reads it before
-      History is opened, so it no longer holds the click up.
-    */
-    const started = {
-      entityType: "task" as const,
-      entityId: id,
-      taskId: id,
-      eventType: "task_in_review",
-      actorId: profile.id,
-      actorLabel: profile.full_name ?? profile.email,
-      justification: parsed.data.comment?.trim() || null,
-      // FR-6.04 — the transition, not just its name.
-      payload: {
+    /* recordAuditBatch writes this after the reply; see audit.ts. */
+    await recordAuditBatch(
+      admin,
+      trail({
         code: job.code,
-        from_status: job.status,
-        to_status: "in_review",
         reviewer_id: job.reviewer_id ?? profile.id,
-      },
-    };
-    // Both entries in one write when the review was completed too.
-    after(() =>
-      recordAuditBatch(
-        admin,
-        completeToo
-          ? [
-              started,
-              {
-                ...started,
-                eventType: "review_completed",
-                payload: {
-                  code: job.code,
-                  reviewer_id: job.reviewer_id ?? profile.id,
-                  approval_manager_id: job.approval_manager_id,
-                },
-              },
-            ]
-          : [started],
-      ),
+        approval_manager_id: job.approval_manager_id,
+        from: job.status,
+      }),
     );
 
     return NextResponse.json({

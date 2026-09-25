@@ -1420,7 +1420,7 @@ export function FloorPlansAreasPanel({
         open={renamingPlan !== null}
         onOpenChange={(o) => !o && !busy && setRenamingPlan(null)}
       >
-        <ActionDialogContent busy={busy}>
+        <ActionDialogContent busy={busy} className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Rename floor plan</DialogTitle>
             <DialogDescription>
@@ -1468,7 +1468,7 @@ export function FloorPlansAreasPanel({
         open={renaming !== null}
         onOpenChange={(o) => !o && setRenaming(null)}
       >
-        <ActionDialogContent busy={busy}>
+        <ActionDialogContent busy={busy} className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Rename area</DialogTitle>
             <DialogDescription>

@@ -107,7 +107,7 @@ export function OpenRoundDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <ActionDialogContent busy={Boolean(busy)}>
+      <ActionDialogContent busy={Boolean(busy)} className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Open round {roundNumber}</DialogTitle>
           <DialogDescription>

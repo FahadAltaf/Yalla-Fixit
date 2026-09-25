@@ -6,6 +6,7 @@ import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
+  CalendarCheck,
   Check,
   ClipboardList,
   CreditCard,
@@ -269,6 +270,8 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
   */
   function nextStep() {
     if (!visit || !canEdit) return null;
+    /* Whether anybody is on this visit yet. */
+    const assignedToVisit = Boolean(visit.inspectors?.length || visit.inspector_id);
     // The review decision lives in the review card under the header,
     // beside the explanation of what each choice does.
     if (visit.status === "submitted") return null;
@@ -311,7 +314,14 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
         </Button>
       );
     }
-    // Paid for: assigning the inspector and date books it.
+    /*
+      Paid for: the date and who goes turn it into a booking.
+
+      Named for what is actually left. A visit raised with an inspector on
+      it already still read "Assign inspector", which sent the coordinator
+      looking for a field that was filled in -- the outstanding step there
+      is the booking itself.
+    */
     return (
       <Button
         onClick={() => {
@@ -319,8 +329,12 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
           setEditOpen(true);
         }}
       >
-        <UserRound className="size-4" />
-        Assign inspector
+        {assignedToVisit ? (
+          <CalendarCheck className="size-4" />
+        ) : (
+          <UserRound className="size-4" />
+        )}
+        {assignedToVisit ? "Book visit" : "Assign inspector"}
       </Button>
     );
   }
@@ -351,7 +365,10 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
   return (
     <div className="flex flex-col gap-4">
       <Link
-        href={`/snagging/${taskId}?tab=visits`}
+        /* Visits live on the original inspection, which is where this
+           goes back to -- opening the round it was reached from would
+           land on a job that has no visits tab. */
+        href={`/snagging/${detail?.job?.id ?? taskId}?tab=visits`}
         className="text-muted-foreground hover:text-foreground inline-flex w-fit items-center gap-1.5 text-sm"
       >
         <ArrowLeft className="size-4" />

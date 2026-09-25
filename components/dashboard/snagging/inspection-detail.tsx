@@ -165,7 +165,22 @@ function InspectionDetailView() {
     query.set("tab", next);
     window.history.replaceState(null, "", `?${query.toString()}`);
   }, []);
-  const activeTab = tab ?? defaultTabFor(task?.status);
+  /*
+    The tab asked for, if this job actually has it.
+
+    Additional visits belong to the original inspection, so a round has no
+    such tab -- and coming back from a visit on a round asked for one
+    anyway. Nothing matched, so nothing was selected and the page below
+    the tab bar was empty. The same guard covers a stale or mistyped
+    ?tab= in any link.
+  */
+  const requestedTab = tab ?? defaultTabFor(task?.status);
+  const hasVisitsTab = task ? !task.parent_task_id : true;
+  const knownTab =
+    ["snags", "areas", "checklist", "setup", "quotation", "visits", "history"].includes(
+      requestedTab,
+    ) && (requestedTab !== "visits" || hasVisitsTab);
+  const activeTab = knownTab ? requestedTab : defaultTabFor(task?.status);
   const mounted = useMemo(() => new Set([...opened, activeTab]), [opened, activeTab]);
 
   /*

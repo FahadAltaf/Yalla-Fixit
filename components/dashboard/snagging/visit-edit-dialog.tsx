@@ -6,7 +6,6 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
-  DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
@@ -129,7 +128,10 @@ export function VisitEditDialog({
       <ActionDialogContent busy={saving} className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>
-            {book ? "Assign inspector" : "Visit"} {book ? `· Visit ${visit?.visit_number ?? ""}` : visit?.visit_number ?? ""}
+            {/* What the dialog is for, which on a visit that already names
+                somebody is the booking rather than the assignment. */}
+            {book ? (inspectorIds.length > 0 ? "Book visit" : "Assign inspector") : "Visit"}{" "}
+            {book ? `· Visit ${visit?.visit_number ?? ""}` : visit?.visit_number ?? ""}
           </DialogTitle>
           <DialogDescription>
             {book
@@ -199,7 +201,7 @@ export function VisitEditDialog({
             disabled={book && (inspectorIds.length === 0 || !date)}
             onClick={() => void save()}
           >
-            {book ? "Assign and book" : "Save"}
+            {book ? "Book visit" : "Save"}
           </SubmitButton>
         </DialogFooter>
       </ActionDialogContent>

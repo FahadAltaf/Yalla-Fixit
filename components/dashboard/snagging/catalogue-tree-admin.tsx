@@ -462,7 +462,7 @@ function NodeDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <ActionDialogContent busy={busy}>
+      <ActionDialogContent busy={busy} className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>

@@ -75,6 +75,7 @@ import {
   PageHeading,
   SectionCard,
   SectionSkeleton,
+  ActionDialogContent,
   SubmitButton,
   formatLocalDateTime,
   useConfirm,
@@ -728,7 +729,7 @@ function TypeDialog({
 
   return (
     <Dialog open={Boolean(row)} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent>
+      <ActionDialogContent busy={saving} className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{draft ? `${draft.label} rates` : "Rates"}</DialogTitle>
           <DialogDescription>
@@ -861,7 +862,7 @@ function TypeDialog({
             Save changes
           </SubmitButton>
         </DialogFooter>
-      </DialogContent>
+      </ActionDialogContent>
     </Dialog>
   );
 }
@@ -906,7 +907,7 @@ function ChargesDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent>
+      <ActionDialogContent busy={saving} className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Other charges</DialogTitle>
           <DialogDescription>
@@ -1002,7 +1003,7 @@ function ChargesDialog({
             Save changes
           </SubmitButton>
         </DialogFooter>
-      </DialogContent>
+      </ActionDialogContent>
     </Dialog>
   );
 }

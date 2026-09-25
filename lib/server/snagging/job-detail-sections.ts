@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { byCreation } from "@/lib/snagging/creation-order";
 import {
   hasAreaInspector,
+  hasJobInspectors,
   hasReviewNote,
   hasVerdictNote,
   hasVisitInspectors,
@@ -99,13 +100,20 @@ const SNAG_PHOTO_COLUMNS =
 // Composed select strings are beyond the client's select-string type
 // parser, so these queries name their row type (Row) instead of inferring it.
 type Row = Record<string, any>;
-const coreSelect = (withRoomInspector: boolean) => `${JOB_COLUMNS},
+const coreSelect = (withRoomInspector: boolean, withRoster: boolean) => `${JOB_COLUMNS},
   client:client_id(name, email, phone),
   inspector:inspector_id(id, full_name, email),
   manager:approval_manager_id(full_name, email),
   reviewer:reviewer_id(full_name, email),
   property_record:property_id(${PROPERTY_COLUMNS}),
-  areas:snagging_areas(${JOB_AREA_COLUMNS}${withRoomInspector ? ", inspector_id" : ""})`;
+  areas:snagging_areas(${JOB_AREA_COLUMNS}${withRoomInspector ? ", inspector_id" : ""})${
+    /*
+      Everyone on the job, embedded rather than read in a second trip.
+      Left out entirely where 20260923100000 has not run, and the job's
+      own inspector_id is then the whole answer (see `roster` below).
+    */
+    withRoster ? ",\n  roster:snagging_job_inspectors(user_profile:inspector_id(id, full_name, email))" : ""
+  }`;
 /*
   The snags, with the de-snag verdict comment and the reviewer's note to
   the inspector once their migrations have run.
@@ -131,9 +139,17 @@ function firstOf<T>(v: T | T[] | null | undefined): T | null {
  * Null when there is no such job.
  */
 export async function loadJobCore(admin: Admin, id: string) {
+  /*
+    Which optional columns this database has, asked once per process and
+    remembered (columns.ts), so they cost nothing per request.
+  */
+  const [withRoomInspector, withRoster] = await Promise.all([
+    hasAreaInspector(admin),
+    hasJobInspectors(admin),
+  ]);
   const { data: job, error } = await admin
     .from("snagging_jobs")
-    .select<string, Row>(coreSelect(await hasAreaInspector(admin)))
+    .select<string, Row>(coreSelect(withRoomInspector, withRoster))
     .eq("id", id)
     .maybeSingle();
 
@@ -228,14 +244,10 @@ export async function loadJobCore(admin: Admin, id: string) {
     reads the table and falls back to that column where the table is not
     there yet (20260923100000) or has nothing for the job.
   */
-  const { data: inspectorRows, error: inspectorRowsError } = await admin
-    .from("snagging_job_inspectors")
-    .select("inspector_id, user_profile:inspector_id(id, full_name, email)")
-    .eq("job_id", job.id);
+  const inspectorRows = job.roster as Array<Record<string, unknown>> | null;
 
-  // 42P01 is "undefined table": the migration has not run here.
   const roster =
-    inspectorRowsError || !inspectorRows?.length
+    !inspectorRows?.length
       ? []
       : (inspectorRows as Array<Record<string, unknown>>)
           .map((row) => {
@@ -278,7 +290,14 @@ export async function loadJobCore(admin: Admin, id: string) {
     them in the response, so they are not sent twice.
   */
   const sent: Record<string, unknown> = { ...job };
-  for (const key of ["client", "inspector", "property_record", ...JOB_DENORMALISED_PROPERTY]) {
+  for (const key of [
+    "client",
+    "inspector",
+    "property_record",
+    // The embedded roster, already lifted into `assignees`.
+    "roster",
+    ...JOB_DENORMALISED_PROPERTY,
+  ]) {
     delete sent[key];
   }
 

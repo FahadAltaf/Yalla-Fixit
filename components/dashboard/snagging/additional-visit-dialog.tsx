@@ -126,7 +126,7 @@ export function AdditionalVisitDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <ActionDialogContent busy={working}>
+      <ActionDialogContent busy={working} className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Add an additional visit</DialogTitle>
           <DialogDescription>

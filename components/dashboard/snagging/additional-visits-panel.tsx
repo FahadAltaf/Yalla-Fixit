@@ -1,11 +1,12 @@
 "use client";
 
 import { Money } from "@/components/ui/money";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeftRight,
   Ban,
+  CalendarCheck,
   ClipboardCheck,
   CalendarClock,
   CreditCard,
@@ -13,10 +14,8 @@ import {
   FilePlus2,
   FileText,
   MoreHorizontal,
-  Loader2,
   Pencil,
   Plus,
-  RotateCw,
   UserRound,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -34,7 +33,6 @@ import {
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
-  DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
@@ -51,16 +49,9 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SectionCard } from "@/components/dashboard/shared/kaizen";
-import { useAuth } from "@/context/AuthContext";
-import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { cn } from "@/lib/utils";
 import { snaggingService } from "@/modules/snagging";
-import {
-  ActionType,
-  ResourceType,
-  type SnaggingJobVisit,
-  type SnaggingTask,
-} from "@/types/types";
+import type { SnaggingJobVisit, SnaggingTask } from "@/types/types";
 
 import {
   ErrorState,
@@ -89,40 +80,6 @@ import { VisitEditDialog } from "./visit-edit-dialog";
  * makes people treat a chargeable return trip as a free re-inspection.
  */
 type VisitRow = SnaggingJobVisit;
-
-type VersionRow = {
-  id: string;
-  version: number;
-  source_visit_id: string | null;
-  snag_count: number;
-  generated_at: string;
-  reason: string | null;
-  generation_status?: string | null;
-  generation_error?: string | null;
-};
-
-/*
-  A render takes seconds. A version still unfinished after this long was
-  cut off (a restart, or background work after an approval that never
-  ran), so it is offered for retry. The server applies the same limit.
-*/
-const STUCK_AFTER_MS = 10 * 60 * 1000;
-
-/** Where a version's PDF stands. A row from before the column is ready. */
-function pdfState(version: VersionRow): "ready" | "working" | "stuck" | "failed" {
-  const status = version.generation_status ?? "generated";
-  if (status === "generated") return "ready";
-  if (status === "failed") return "failed";
-  const age = Date.now() - new Date(version.generated_at).getTime();
-  return age > STUCK_AFTER_MS ? "stuck" : "working";
-}
-
-const PDF_STATE: Record<ReturnType<typeof pdfState>, { label: string; tone: string }> = {
-  ready: { label: "Ready", tone: "bg-success/10 text-success" },
-  working: { label: "Generating", tone: "bg-brand/10 text-brand" },
-  stuck: { label: "Did not finish", tone: "bg-warning/10 text-warning" },
-  failed: { label: "Failed", tone: "bg-destructive/10 text-destructive" },
-};
 
 /*
   Requested is amber because it is waiting on somebody; scheduled and
@@ -175,7 +132,6 @@ export function AdditionalVisitsPanel({ task }: { task: SnaggingTask }) {
   */
   const { visits: visitsSlice, visitsChanged, refreshVisits } = useJobDetail();
   const visits = (visitsSlice.data?.visits ?? []) as VisitRow[];
-  const versions = (visitsSlice.data?.versions ?? []) as VersionRow[];
   /* Who is on the job now: what a new visit opens on. */
   const jobRosterIds = useMemo(
     () =>
@@ -195,32 +151,12 @@ export function AdditionalVisitsPanel({ task }: { task: SnaggingTask }) {
     return names;
   }, [task.assignees]);
 
-  const rendering = versions.some((v) => pdfState(v) === "working");
-
-  /*
-    An approval renders the PDF in the background, so a version can arrive
-    here still generating. Checked again every few seconds (each refresh
-    re-arms this) until it is done, failed, or has run long enough to count
-    as stuck.
-  */
-  useEffect(() => {
-    if (!rendering) return;
-    const timer = window.setTimeout(() => void refreshVisits(), 5000);
-    return () => window.clearTimeout(timer);
-  }, [rendering, visitsSlice.data, refreshVisits]);
   const loading = visitsSlice.loading;
   // A failed refresh keeps the list on screen; only a first load fails here.
   const error = visitsSlice.data ? null : visitsSlice.error;
   const [createOpen, setCreateOpen] = useState(false);
 
   const [busy, setBusy] = useState<string | null>(null);
-  /* The report version whose PDF is being rendered again. */
-  const [retrying, setRetrying] = useState<string | null>(null);
-  const { userProfile } = useAuth();
-  // The server's gate on report versions: approve permission, or an admin.
-  const canRetryReport =
-    hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.APPROVE) ||
-    isAdminUser(userProfile);
   const router = useRouter();
   const { confirm, dialog } = useConfirm();
 
@@ -422,6 +358,9 @@ export function AdditionalVisitsPanel({ task }: { task: SnaggingTask }) {
                   is left is who goes and when, and assigning them books
                   it; the server still checks the quotation (FR-9.04).
                 */
+                // Named for what is left: a visit that already names
+                // somebody is waiting on the booking, not the assignment.
+                const assigned = Boolean(visit.inspectors?.length || visit.inspector_id);
                 return (
                   <Button
                     size="sm"
@@ -430,8 +369,12 @@ export function AdditionalVisitsPanel({ task }: { task: SnaggingTask }) {
                       setEditing(visit);
                     }}
                   >
-                    <UserRound className="size-4" />
-                    Assign inspector
+                    {assigned ? (
+                      <CalendarCheck className="size-4" />
+                    ) : (
+                      <UserRound className="size-4" />
+                    )}
+                    {assigned ? "Book visit" : "Assign inspector"}
                   </Button>
                 );
               })()
@@ -519,28 +462,6 @@ export function AdditionalVisitsPanel({ task }: { task: SnaggingTask }) {
 
   // Newest first: the visit being worked is the one looked for.
   const newestFirst = [...visits].sort((a, b) => b.visit_number - a.visit_number);
-  const versionsNewestFirst = [...versions].sort((a, b) => b.version - a.version);
-  // The one in force is the newest whose PDF exists, not simply the newest.
-  const currentVersionId = versionsNewestFirst.find((v) => pdfState(v) === "ready")?.id;
-
-  async function retryVersion(version: VersionRow) {
-    setRetrying(version.id);
-    const id = toast.loading(`Generating the V${version.version} PDF…`);
-    try {
-      await snaggingService.retryReportVersion(task.id, version.id);
-      await refreshVisits();
-      toast.success(`V${version.version} PDF generated`, { id });
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "The PDF could not be generated",
-        { id },
-      );
-      await refreshVisits();
-    } finally {
-      setRetrying(null);
-    }
-  }
-
   return (
     <div className="flex flex-col gap-6">
       <SectionCard
@@ -725,94 +646,6 @@ export function AdditionalVisitsPanel({ task }: { task: SnaggingTask }) {
           </div>
         )}
       </SectionCard>
-
-      {/*
-        The report's history, so it is visible that a visit reissues the
-        client's ONE report rather than producing a second one. Hidden
-        until versions exist, which is also the honest state on an
-        environment where the versions migration has not been applied.
-      */}
-      {versions.length > 0 ? (
-        <SectionCard
-          title="Report versions"
-          icon={<FileText />}
-          description="The client holds one report. Each additional visit reissues it; earlier versions stay available."
-          bodyClassName="border-t"
-        >
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader className="bg-muted/50">
-                <TableRow className="hover:bg-transparent">
-                  <TableHead className="h-10 ps-5">Version</TableHead>
-                  <TableHead className="h-10">Issued for</TableHead>
-                  <TableHead className="h-10 text-right">Snags</TableHead>
-                  <TableHead className="h-10">PDF</TableHead>
-                  <TableHead className="h-10 pe-5 text-right">Issued</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {versionsNewestFirst.map((version) => {
-                  const state = pdfState(version);
-                  return (
-                  <TableRow key={version.id}>
-                    <TableCell className="ps-5">
-                      <span className="flex items-center gap-2 font-medium">
-                        V{version.version}
-                        {version.id === currentVersionId ? (
-                          <Badge
-                            variant="secondary"
-                            className="bg-success/10 text-success rounded-sm border-none font-medium"
-                          >
-                            Current
-                          </Badge>
-                        ) : null}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {version.reason ?? "—"}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">{version.snag_count}</TableCell>
-                    <TableCell>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge
-                          variant="secondary"
-                          className={cn("gap-1 rounded-sm border-none font-medium", PDF_STATE[state].tone)}
-                        >
-                          {state === "working" ? <Loader2 className="size-3 animate-spin" /> : null}
-                          {PDF_STATE[state].label}
-                        </Badge>
-                        {(state === "failed" || state === "stuck") && canRetryReport ? (
-                          <SubmitButton
-                            size="sm"
-                            variant="outline"
-                            className="h-7"
-                            pending={retrying === version.id}
-                            pendingLabel="Retrying…"
-                            disabled={retrying !== null}
-                            icon={<RotateCw className="size-3.5" />}
-                            onClick={() => void retryVersion(version)}
-                          >
-                            Retry
-                          </SubmitButton>
-                        ) : null}
-                      </div>
-                      {state === "failed" && version.generation_error ? (
-                        <p className="text-muted-foreground mt-1 max-w-xs text-xs">
-                          {version.generation_error}
-                        </p>
-                      ) : null}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground pe-5 text-right whitespace-nowrap">
-                      {fmtDate(version.generated_at)}
-                    </TableCell>
-                  </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </div>
-        </SectionCard>
-      ) : null}
 
       <Dialog
         open={Boolean(switching)}

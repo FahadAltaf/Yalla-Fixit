@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Loader2, Undo2 } from "lucide-react";
 import { saveAs } from "file-saver";
 import { toast } from "sonner";
@@ -9,7 +9,6 @@ import { useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
-  DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
@@ -156,13 +155,33 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
     WhatsApp. Both mint a token and advance the status; only the delivery
     differs.
   */
+  /*
+    The proposal with its document content.
+
+    The list carries what the table draws, not the services, the price
+    list or the settings each document was worded with -- four JSON blobs
+    per row, for a screen that shows a name and a price. The three things
+    that need them fetch the one proposal they are working on, and it is
+    remembered for the rest of the session so opening the preview and then
+    downloading it does not ask twice.
+  */
+  const fullCache = useRef(new Map<string, AmcSubmission>());
+  const withDocument = async (submission: AmcSubmission): Promise<AmcSubmission> => {
+    if (submission.services.length > 0 || submission.document_options) return submission;
+    const cached = fullCache.current.get(submission.id);
+    if (cached) return cached;
+    const full = await amcSubmissionsService.getSubmission(submission.id);
+    fullCache.current.set(submission.id, full);
+    return full;
+  };
+
   const send = async (
-    submission: AmcSubmission,
+    listRow: AmcSubmission,
     document: "proposal" | "contract",
     deliver: "email" | "link",
     to?: string,
   ) => {
-    setSendingId(submission.id);
+    setSendingId(listRow.id);
     const label = document === "proposal" ? "proposal" : "contract";
     /* One toast from start to finish: building the link or sending the
        email takes a moment, and a click with no feedback gets repeated. */
@@ -170,6 +189,8 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
       deliver === "link" ? `Creating the ${label} link…` : `Emailing the ${label} to the client…`,
     );
     try {
+      // The document's own content, which the list row does not carry.
+      const submission = await withDocument(listRow);
       /* Email carries the PDF, built with the text it will be sent with. */
       let pdf: { pdf_base64: string; pdf_filename: string } | undefined;
       if (deliver === "email") {
@@ -225,16 +246,18 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
 
   /* A proposal or contract as PDF or Word, with a toast while it builds. */
   const download = async (
-    submission: AmcSubmission,
+    listRow: AmcSubmission,
     documentType: AmcDocumentType,
     fileFormat: "pdf" | "docx",
   ) => {
     const label = documentType === "proposal" ? "proposal" : "contract";
-    setDownloadingId(submission.id);
+    setDownloadingId(listRow.id);
     const toastId = toast.loading(
       `Preparing the ${label} (${fileFormat === "pdf" ? "PDF" : "Word"})…`,
     );
     try {
+      // The document's own content, which the list row does not carry.
+      const submission = await withDocument(listRow);
       const { blob, filename } = await buildAmcPdfFromSubmission(
         submission,
         documentType,
@@ -256,9 +279,10 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
     once; the PDF and Word files are in its Download menu. A document not
     sent yet needs today's AMC Settings for its wording, loaded first.
   */
-  const view = async (submission: AmcSubmission, documentType: AmcDocumentType) => {
-    setViewingKey(`${submission.id}:${documentType}`);
+  const view = async (listRow: AmcSubmission, documentType: AmcDocumentType) => {
+    setViewingKey(`${listRow.id}:${documentType}`);
     try {
+      const submission = await withDocument(listRow);
       const needsLive =
         !savedSettingsFor(submission, "proposal") || !savedSettingsFor(submission, "contract");
       const settings = needsLive

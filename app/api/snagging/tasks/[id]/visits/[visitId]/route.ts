@@ -4,6 +4,7 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
+import { hasVisitInspectors } from "@/lib/server/snagging/columns";
 import { setVisitRoster } from "@/lib/server/snagging/job-roster";
 import { loadJobFamily } from "@/lib/server/snagging/job-family";
 import { updateVisitSchema } from "@/modules/snagging/schemas";
@@ -53,14 +54,28 @@ export async function GET(
     const { id, visitId } = await ctx.params;
     const admin = await createAdminServerClient();
     // The family and the visit do not depend on each other: read together.
+    /*
+      Everyone attending, embedded with the visit rather than read
+      separately -- and the page needs the whole set, not just the first:
+      its Edit dialog sends back what it was given, so a visit opened here
+      with only its lead inspector would lose the rest on save.
+
+      Left out where 20260924140000 has not run, and `inspector` below is
+      then the whole answer.
+    */
+    const rosterSelect = (await hasVisitInspectors(admin))
+      ? ", roster:snagging_visit_inspectors(user_profile:inspector_id(id, full_name, email))"
+      : "";
     const [family, { data: visit, error: visitError }] = await Promise.all([
       loadJobFamily(admin, id),
       admin
         .from("snagging_job_visits")
-        .select(
+        /* Composed at runtime, so the row type is named rather than
+           inferred from the select string. */
+        .select<string, Record<string, unknown>>(
           `id, job_id, visit_number, status, scheduled_date, appointment_at, inspector_id,
            charge, charge_method, payment_reference, quotation_id, started_at, submitted_at,
-           review_note, notes, created_at, inspector:inspector_id(id, full_name, email)`,
+           review_note, notes, created_at, inspector:inspector_id(id, full_name, email)${rosterSelect}`,
         )
         .eq("id", visitId)
         .maybeSingle(),
@@ -121,9 +136,23 @@ export async function GET(
     const first = (v: unknown) =>
       Array.isArray(v) ? (v[0] ?? null) : (v ?? null);
 
+    /* The lead first, then the rest, as the visits tab lists them. */
+    const lead = first(visit.inspector) as { id?: string } | null;
+    const crew = ((visit.roster ?? []) as Array<Record<string, unknown>>)
+      .map((row) => first(row.user_profile) as { id?: string } | null)
+      .filter((person): person is { id?: string } => Boolean(person));
+    const { roster: _roster, ...visitRow } = visit as Record<string, unknown>;
+    void _roster;
+
     return NextResponse.json({
       data: {
-        visit: { ...visit, inspector: first(visit.inspector) },
+        visit: {
+          ...visitRow,
+          inspector: lead,
+          inspectors: lead
+            ? [lead, ...crew.filter((person) => person.id !== lead.id)]
+            : crew,
+        },
         job: job.data,
         quotation: quote.data,
         snags: (snags.data ?? []).map((snag) => ({ ...snag, photos: snag.photos ?? [] })),

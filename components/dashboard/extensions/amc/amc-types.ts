@@ -339,7 +339,12 @@ export interface AmcSubmission {
   customer: AmcSubmissionCustomer;
   /* FR3.1: optional sections and placeholder values are part of the
      submission, so reopening one restores the document exactly. */
-  document_options: AmcSubmissionDocumentOptions;
+  /*
+    Absent on a row that came from the LIST, which does not carry the
+    document's own content. The preview, the download and the email fetch
+    the proposal itself before they read this.
+  */
+  document_options?: AmcSubmissionDocumentOptions;
   services: AmcSubmissionServiceRow[];
   discount_percent: number;
   discount_amount: number;

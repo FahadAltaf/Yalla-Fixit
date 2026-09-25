@@ -975,7 +975,7 @@ export function JobSetupPanel({
         and the person who opens the door are often not the same.
       */}
       <Dialog open={clientOpen} onOpenChange={setClientOpen}>
-        <ActionDialogContent busy={saving !== null}>
+        <ActionDialogContent busy={saving !== null} className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Client details</DialogTitle>
             <DialogDescription>
