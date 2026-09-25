@@ -98,6 +98,35 @@ query CountUsers($filter: user_profileFilter) {
 }
 `;
 
+/*
+  Just enough of a person to offer them in a picker: who they are, and
+  the name to show.
+
+  The pickers used to fill from GET_USERS, which returns every column of
+  every profile AND each one's role with its whole permission matrix --
+  tens of kilobytes, re-read on screens that only ever draw a name in a
+  dropdown. Nothing is hidden by asking for less: a screen that needs a
+  role still reads the full profile.
+*/
+export const GET_ASSIGNABLE_USERS = `
+    query GetAssignableUsers($first: Int, $after: Cursor) {
+     user_profileCollection(first: $first, after: $after, orderBy: [{ full_name: AscNullsLast }]) {
+       pageInfo {
+         hasNextPage
+         endCursor
+       }
+       edges {
+         node {
+           id
+           full_name
+           email
+           is_active
+         }
+       }
+     }
+   }
+`;
+
 // Read a page at a time (see usersService.getUsers): with no `first`,
 // pg_graphql returns only its default page, so lists and pickers built
 // from this quietly missed everyone after it.

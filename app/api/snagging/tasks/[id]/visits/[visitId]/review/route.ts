@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
@@ -146,13 +146,14 @@ export async function POST(
     /*
       The client's report, reissued with the visit's findings in it.
 
-      Awaited, like the inspection's own approval, so the manager is told
-      whether the document actually exists. A failure never undoes the
-      approval, which is already committed; it is reported and can be
-      regenerated from the versions list.
+      The version is issued here (it is quick), so the manager is told
+      which version this is. Rendering its PDF -- several seconds on a big
+      job -- happens after the response (after()), so the manager is not
+      kept waiting on it. A failed render is recorded on the version and
+      can be generated again; it never undoes the approval.
     */
     let generation:
-      | { status: "generated" | "failed"; version: number; error?: string }
+      | { status: "pending" | "failed"; version: number; error?: string }
       | null = null;
     try {
       const version = await issueReportVersion(admin, {
@@ -162,13 +163,18 @@ export async function POST(
         reason: `Additional visit ${visit.visit_number} approved`,
       });
       if (version) {
-        const generated = await generateReportPdf(admin, version.id, {
-          actorId: profile.id,
-          actorLabel: profile.full_name ?? profile.email,
+        generation = { status: "pending", version: version.version };
+        after(async () => {
+          try {
+            const generated = await generateReportPdf(admin, version.id, {
+              actorId: profile.id,
+              actorLabel: profile.full_name ?? profile.email,
+            });
+            if (!generated.ok) console.error("Visit report PDF failed:", generated.error);
+          } catch (generateError) {
+            console.error("Visit report PDF failed:", generateError);
+          }
         });
-        generation = generated.ok
-          ? { status: "generated", version: version.version }
-          : { status: "failed", version: version.version, error: generated.error };
       }
     } catch (versionError) {
       console.error("Visit report version could not be issued:", versionError);

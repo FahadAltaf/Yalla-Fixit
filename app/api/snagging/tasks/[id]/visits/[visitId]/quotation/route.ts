@@ -142,7 +142,6 @@ export async function POST(
       client as { name?: string | null } | null,
       config,
       {
-        jobCode: job.code as string,
         visitNumber: visit.visit_number as number,
         charge,
       },

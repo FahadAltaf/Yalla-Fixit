@@ -292,7 +292,12 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
     (generatedDocument?: AmcDocumentType) => {
       activeSavesRef.current += 1;
       setIsSaving(true);
-      saveQueueRef.current = saveQueueRef.current
+      /*
+        Resolves to whether THIS save landed, so Submit can stop on a failed
+        one instead of submitting the previous version. The queue itself
+        always resolves, so one failed save does not block the next.
+      */
+      const save: Promise<boolean> = saveQueueRef.current
         .then(async () => {
           const values = form.getValues();
           const payload = formDataToSubmissionPayload(
@@ -306,7 +311,7 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
               ...payload,
             });
             form.setValue("submissionId", updated.id, { shouldDirty: false });
-            return;
+            return true;
           }
 
           const created = await amcSubmissionsService.createSubmission(payload);
@@ -317,6 +322,7 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
           form.setValue("proposalNumber", created.customer.proposalNumber, {
             shouldDirty: false,
           });
+          return true;
         })
         .catch((error) => {
           console.error(error);
@@ -326,6 +332,7 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
               "Couldn't save your draft. Check your connection and try again.",
             ),
           );
+          return false;
         })
         .finally(() => {
           activeSavesRef.current -= 1;
@@ -333,6 +340,8 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
             setIsSaving(false);
           }
         });
+      saveQueueRef.current = save.then(() => undefined);
+      return save;
     },
     [form],
   );
@@ -430,9 +439,11 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
     }
 
     setIsSubmitting(true);
+    let leaving = false;
     try {
-      persistDraft();
-      await saveQueueRef.current;
+      // A failed save has already said so; submitting now would send the
+      // approver the previous version.
+      if (!(await persistDraft())) return;
 
       const submissionId = form.getValues("submissionId");
       if (!submissionId) throw new Error("The draft hasn't been saved yet.");
@@ -455,7 +466,9 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
       toast.success(
         "Sent for approval. Nothing goes to the client until the approver has reviewed it.",
       );
-      // Its own page: what was sent, and where it stands now.
+      // Its own page: what was sent, and where it stands now. The button
+      // stays busy until that page replaces this one.
+      leaving = true;
       router.push(`/extensions/amc/${submissionId}`);
     } catch (error) {
       console.error(error);
@@ -463,7 +476,7 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
         getErrorMessage(error, "Couldn't submit this proposal for approval."),
       );
     } finally {
-      setIsSubmitting(false);
+      if (!leaving) setIsSubmitting(false);
     }
   };
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import DateSelect from "@/components/ui/date-select";
 import { Label } from "@/components/ui/label";
+import { InspectorPicker } from "./inspector-picker";
 import TimeSelect from "@/components/ui/time-select";
 import {
   isPastSlot,
@@ -40,6 +41,8 @@ export function OpenRoundDialog({
   roundNumber,
   from,
   carrying,
+  defaultInspectorIds,
+  inspectorNames,
   busy,
   onConfirm,
 }: {
@@ -50,14 +53,20 @@ export function OpenRoundDialog({
   from: string;
   /** How many defects carry into the round, stated before committing. */
   carrying: number;
+  /** Who is on the original inspection: the round opens on these. */
+  defaultInspectorIds?: string[];
+  /** Their names, so the picker reads properly before the staff list lands. */
+  inspectorNames?: Record<string, string>;
   busy?: boolean;
   onConfirm: (input: {
     scheduled_date: string;
     appointment_at: string | null;
+    technician_ids: string[];
   }) => void | Promise<void>;
 }) {
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
+  const [inspectorIds, setInspectorIds] = useState<string[]>([]);
 
   /*
     Opened on the next plausible slot rather than empty.
@@ -67,13 +76,26 @@ export function OpenRoundDialog({
     not already passed — was the coordinator's problem to satisfy. It starts
     an hour out and is re-derived on each open, so a dialog left sitting and
     reopened later never offers a stale time.
+
+    Seeded during render rather than from an effect, the way the visit's
+    dialog seeds from its visit: an effect would paint the previous
+    round's values for a frame first.
   */
-  useEffect(() => {
-    if (!open) return;
-    const slot = nextBookableSlot();
-    setDate(slot.date);
-    setTime(slot.time);
-  }, [open]);
+  const [seededOpen, setSeededOpen] = useState(false);
+  if (open !== seededOpen) {
+    setSeededOpen(open);
+    if (open) {
+      const slot = nextBookableSlot();
+      setDate(slot.date);
+      setTime(slot.time);
+      /*
+        Opened on the people already on the inspection, because they are
+        usually the ones who go back. Re-seeded on each open, so a list
+        edited and then cancelled does not survive into the next round.
+      */
+      setInspectorIds(defaultInspectorIds ?? []);
+    }
+  }
 
   // A time on today's date has to be later than now; the date alone only
   // has to be today or after. Mirrors the server's two-part rule.
@@ -116,6 +138,21 @@ export function OpenRoundDialog({
           </div>
         </div>
 
+        <div className="grid gap-2">
+          <Label htmlFor="round-inspectors">Inspectors</Label>
+          <InspectorPicker
+            value={inspectorIds}
+            onChange={setInspectorIds}
+            names={inspectorNames}
+            disabled={busy}
+          />
+          <p className="text-muted-foreground text-xs">
+            {inspectorIds.length === 0
+              ? "Nobody is assigned yet, so the round will not reach an inspector's phone until somebody is."
+              : "They get the round on their phone as soon as it is opened."}
+          </p>
+        </div>
+
         {inPast ? (
           <p className="text-destructive text-sm">
             {appointment
@@ -138,6 +175,7 @@ export function OpenRoundDialog({
               void onConfirm({
                 scheduled_date: date,
                 appointment_at: appointment ? appointment.toISOString() : null,
+                technician_ids: inspectorIds,
               })
             }
           >

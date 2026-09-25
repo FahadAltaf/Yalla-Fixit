@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import { recordAudit } from "@/lib/server/snagging/audit";
+import { recordAuditBatch } from "@/lib/server/snagging/audit";
 import { assertTransition, isDesignatedReviewer } from "@/lib/server/snagging/workflow";
 import { approveTaskSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType, SnaggingTaskStatus } from "@/types/types";
@@ -32,7 +32,15 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
 
     const { id } = await ctx.params;
-    const parsed = approveTaskSchema.safeParse(await req.json().catch(() => ({})));
+    const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+    const parsed = approveTaskSchema.safeParse(body);
+    /*
+      Start AND complete in one step, for someone reviewing a job they will
+      also decide (the approval manager, with no separate reviewer). That
+      used to be two requests one after another -- start, then complete --
+      before the Approve button could appear.
+    */
+    const completeToo = body?.complete_review === true;
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
     }
@@ -68,11 +76,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       return NextResponse.json({ error: (transitionError as Error).message }, { status: 409 });
     }
 
+    const now = new Date().toISOString();
     const { error: updateError } = await admin
       .from("snagging_jobs")
       .update({
         status: "in_review",
-        review_started_at: new Date().toISOString(),
+        review_started_at: now,
+        // Completed as well, when asked for (see completeToo).
+        ...(completeToo ? { reviewed_at: now } : {}),
         // Picking a job up claims it, so an unassigned queue does not stay
         // unassigned once somebody has actually started on it.
         reviewer_id: job.reviewer_id ?? profile.id,
@@ -83,8 +94,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       .eq("status", "submitted");
     if (updateError) throw new Error(updateError.message);
 
-    await recordAudit(admin, {
-      entityType: "task",
+    const started = {
+      entityType: "task" as const,
       entityId: id,
       taskId: id,
       eventType: "task_in_review",
@@ -98,9 +109,29 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         to_status: "in_review",
         reviewer_id: job.reviewer_id ?? profile.id,
       },
-    });
+    };
+    // Both entries in one write when the review was completed too.
+    await recordAuditBatch(
+      admin,
+      completeToo
+        ? [
+            started,
+            {
+              ...started,
+              eventType: "review_completed",
+              payload: {
+                code: job.code,
+                reviewer_id: job.reviewer_id ?? profile.id,
+                approval_manager_id: job.approval_manager_id,
+              },
+            },
+          ]
+        : [started],
+    );
 
-    return NextResponse.json({ data: { id, status: "in_review" } });
+    return NextResponse.json({
+      data: { id, status: "in_review", ...(completeToo ? { reviewed_at: now } : {}) },
+    });
   } catch (error) {
     console.error("Snagging review error:", error);
     return NextResponse.json({ error: "Failed to start review" }, { status: 500 });

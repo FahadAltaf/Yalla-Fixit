@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
@@ -140,60 +140,71 @@ export async function PUT(req: NextRequest) {
       .single();
     if (error) throw new Error(error.message);
 
-    await admin
-      .from("snagging_pricing_config_log")
-      .insert({ changed_by: profile.id, changes: updates });
+    /*
+      The change log and audit entries are written after the admin has
+      their answer (after()): the saved configuration is what the page
+      needs, and these were several more round trips in front of it.
+    */
+    after(async () => {
+      try {
+        await admin
+          .from("snagging_pricing_config_log")
+          .insert({ changed_by: profile.id, changes: updates });
 
-    // One audit event per kind of change (pricing / scope / terms), with the
-    // previous and new value where practical.
-    const changed = (keys: string[]) =>
-      keys.some(
-        (k) =>
-          JSON.stringify(prev[k]) !==
-          JSON.stringify((updates as Record<string, unknown>)[k]),
-      );
-    const events: Array<{ eventType: string; keys: string[] }> = [
-      /*
-        `rate_card` and `out_of_hours_percent` head this list because they
-        are what an admin actually edits now, and they were both missing
-        from it — so every change to a published rate, a minimum charge or
-        the out-of-hours surcharge went unlogged, while the dead
-        multiplier columns beside them were watched closely. FR-2.16 asks
-        for every pricing change to be recorded; this is what records it.
-      */
-      {
-        eventType: "pricing_updated",
-        keys: [
-          "rate_card",
-          "out_of_hours_percent",
-          "tax_rate",
-          "currency",
-          "rate_per_sqft",
-          "external_rate_per_sqft",
-          "multipliers",
-          "desnag_price",
-          "additional_visit_price",
-        ],
-      },
-      { eventType: "scope_updated", keys: ["scope_of_work"] },
-      { eventType: "terms_updated", keys: ["terms"] },
-    ];
-    for (const ev of events) {
-      if (!changed(ev.keys)) continue;
-      const old: Record<string, unknown> = {};
-      const next: Record<string, unknown> = {};
-      for (const k of ev.keys) {
-        old[k] = prev[k];
-        next[k] = (updates as Record<string, unknown>)[k];
+        // One audit event per kind of change (pricing / scope / terms), with the
+        // previous and new value where practical.
+        const changed = (keys: string[]) =>
+          keys.some(
+            (k) =>
+              JSON.stringify(prev[k]) !==
+              JSON.stringify((updates as Record<string, unknown>)[k]),
+          );
+        const events: Array<{ eventType: string; keys: string[] }> = [
+          /*
+            `rate_card` and `out_of_hours_percent` head this list because they
+            are what an admin actually edits now, and they were both missing
+            from it — so every change to a published rate, a minimum charge or
+            the out-of-hours surcharge went unlogged, while the dead
+            multiplier columns beside them were watched closely. FR-2.16 asks
+            for every pricing change to be recorded; this is what records it.
+          */
+          {
+            eventType: "pricing_updated",
+            keys: [
+              "rate_card",
+              "out_of_hours_percent",
+              "tax_rate",
+              "currency",
+              "rate_per_sqft",
+              "external_rate_per_sqft",
+              "multipliers",
+              "desnag_price",
+              "additional_visit_price",
+            ],
+          },
+          { eventType: "scope_updated", keys: ["scope_of_work"] },
+          { eventType: "terms_updated", keys: ["terms"] },
+        ];
+        for (const ev of events) {
+          if (!changed(ev.keys)) continue;
+          const old: Record<string, unknown> = {};
+          const next: Record<string, unknown> = {};
+          for (const k of ev.keys) {
+            old[k] = prev[k];
+            next[k] = (updates as Record<string, unknown>)[k];
+          }
+          await recordAudit(admin, {
+            entityType: "catalogue",
+            eventType: ev.eventType,
+            actorId: profile.id,
+            actorLabel: profile.full_name ?? profile.email,
+            payload: { old, new: next },
+          });
+        }
+      } catch (logError) {
+        console.error("Snagging pricing log/audit failed:", logError);
       }
-      await recordAudit(admin, {
-        entityType: "catalogue",
-        eventType: ev.eventType,
-        actorId: profile.id,
-        actorLabel: profile.full_name ?? profile.email,
-        payload: { old, new: next },
-      });
-    }
+    });
 
     return NextResponse.json({ data });
   } catch (error) {

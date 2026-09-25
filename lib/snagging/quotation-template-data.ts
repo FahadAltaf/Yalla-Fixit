@@ -96,7 +96,7 @@ export function snaggingQuoteToTemplateData(q: SnaggingQuoteDoc): QuotationData 
     customerCompanyName: p.client_name ?? "Client",
     customerPhone: p.client_phone ?? undefined,
     customerEmail: p.client_email ?? undefined,
-    customerId: p.client_ref ?? undefined,
+    customerId: clientReference(p.client_ref),
     serviceAddress: serviceAddress || undefined,
 
     // Quotation meta.
@@ -121,4 +121,22 @@ export function snaggingQuoteToTemplateData(q: SnaggingQuoteDoc): QuotationData 
     termsAndConditions: notes || undefined,
     scopeOfWork: scope || undefined,
   };
+}
+
+/**
+ * The client reference a quotation may print, or nothing.
+ *
+ * client_ref holds the client's row id, which is a UUID on every snagging
+ * quotation. A UUID is not a reference anybody can quote back to us, and a
+ * client-facing document is the last place it should appear, so it is
+ * dropped here rather than at each of the three templates that render it.
+ * A human-issued reference (the Zoho customer id, say) passes through.
+ */
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function clientReference(value: string | null | undefined): string | undefined {
+  const ref = value?.trim();
+  if (!ref || UUID.test(ref)) return undefined;
+  return ref;
 }

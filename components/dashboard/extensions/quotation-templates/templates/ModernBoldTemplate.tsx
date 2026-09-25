@@ -87,6 +87,9 @@ export function ModernBoldTemplate({ data }: Props) {
             {data.customerContact && <div style={{ color: "#475569", marginTop: "4px" }}>{data.customerContact}</div>}
             {data.customerPhone && <div style={{ color: "#475569" }}>{data.customerPhone}</div>}
             {data.customerEmail && <div style={{ color: "#475569" }}>{data.customerEmail}</div>}
+            {data.customerId && (
+              <div style={{ color: "#475569" }}>{data.customerId}</div>
+            )}
           </div>
           {data.serviceAddress && (
             <div style={{ background: "#f8fafc", borderLeft: "3px solid #cbd5e1", borderRadius: "0 8px 8px 0", padding: "16px" }}>

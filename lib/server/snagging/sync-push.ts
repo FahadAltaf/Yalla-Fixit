@@ -5,10 +5,17 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAuditBatch, type AuditEntry } from "@/lib/server/snagging/audit";
-import { hasAreaInspector, hasVerdictNote, hasJobInspectors } from "@/lib/server/snagging/columns";
+import {
+  hasAreaInspector,
+  hasChecklistAnsweredBy,
+  hasJobInspectors,
+  hasVerdictNote,
+} from "@/lib/server/snagging/columns";
 import { isZone } from "@/lib/snagging/zone-geometry";
 import { inParallel, planWaves } from "@/lib/server/snagging/push-plan";
 import { readAllRows } from "@/lib/server/snagging/read-all";
+import { loadJobRosters } from "@/lib/server/snagging/job-roster";
+import { assertEveryoneSigned, recordSignoff } from "@/lib/server/snagging/signoffs";
 import { SNAGGING_BUCKET, mediaObjectKey } from "@/lib/server/snagging/media";
 import {
   approvalDueAt,
@@ -51,6 +58,8 @@ type MutationResult = {
   mutation_id: string;
   status: "applied" | "duplicate" | "rejected";
   error?: string;
+  /** The code a new snag was given, when the one the device sent was taken. */
+  snag_code?: string;
 };
 
 /**
@@ -258,6 +267,7 @@ export async function handleSyncPush(req: NextRequest, body?: unknown) {
 
     async function runOne(mutation: Mutation): Promise<void> {
       try {
+        const outcome: { snag_code?: string } = {};
         await applyMutation(admin, {
           mutation,
           userId: actor.id,
@@ -265,8 +275,9 @@ export async function handleSyncPush(req: NextRequest, body?: unknown) {
           isAdmin: isAdminUser(accessUser),
           jobById,
           audit,
+          outcome,
         });
-        results.push({ mutation_id: mutation.mutation_id, status: "applied" });
+        results.push({ mutation_id: mutation.mutation_id, status: "applied", ...outcome });
         ledger.push({
           mutation_id: mutation.mutation_id,
           user_id: actor.id,
@@ -345,6 +356,11 @@ type Ctx = {
    * that is already the slowest thing the app does.
    */
   audit: AuditEntry[];
+  /**
+   * What the server settled differently from what the device sent, told
+   * back in this mutation's result -- today, a snag code that was taken.
+   */
+  outcome?: { snag_code?: string };
 };
 
 /** Shorthand for the fields every sync-side audit row shares. */
@@ -370,6 +386,7 @@ async function applyMutation(admin: Admin, ctx: Ctx): Promise<void> {
     case "checklist": return applyChecklist(admin, ctx, payload);
     case "verification": return applyVerification(admin, ctx, payload);
     case "submission": return applySubmission(admin, ctx, payload);
+    case "signoff": return applySignoff(admin, ctx, payload);
     case "task": return applyTaskProgress(admin, ctx, payload);
     default: throw new Error(`Unsupported entity ${ctx.mutation.entity}`);
   }
@@ -390,8 +407,98 @@ function writableJob(ctx: Ctx, taskId: unknown): JobRef {
   return job;
 }
 
+/**
+ * The code a snag is stored under: its existing one if it is already on
+ * the server, the device's if that is free on the job, else the job's next
+ * free number with the device's prefix (JOB-S007 -> JOB-S012).
+ */
+async function settleSnagCode(
+  admin: Admin,
+  jobId: string,
+  snagId: string,
+  requested: unknown,
+): Promise<string> {
+  const wanted = typeof requested === "string" ? requested.trim() : "";
+  const [{ data: existing, error: existingError }, codes] = await Promise.all([
+    admin.from("snagging_snags").select("snag_code").eq("id", snagId).maybeSingle(),
+    readAllRows<{ id: string; snag_code: string }>(
+      (from, to) =>
+        admin
+          .from("snagging_snags")
+          .select("id, snag_code")
+          .eq("job_id", jobId)
+          .order("id", { ascending: true })
+          .range(from, to),
+      "snag codes",
+    ),
+  ]);
+  if (existingError) throw new Error(existingError.message);
+  if (existing?.snag_code) return existing.snag_code as string;
+
+  const taken = new Set(codes.filter((c) => c.id !== snagId).map((c) => c.snag_code));
+  if (wanted && !taken.has(wanted)) return wanted;
+
+  // The device's prefix (everything before the -S number), or the job's own.
+  const codePattern = /^(.*)-S(\d+)$/;
+  const prefix =
+    codePattern.exec(wanted)?.[1] ??
+    codes.map((c) => codePattern.exec(c.snag_code)?.[1]).find(Boolean) ??
+    "SNAG";
+  let highest = 0;
+  for (const code of taken) {
+    const match = /-S(\d+)$/.exec(code);
+    if (match) highest = Math.max(highest, Number(match[1]));
+  }
+  for (let next = highest + 1; ; next += 1) {
+    const candidate = `${prefix}-S${String(next).padStart(3, "0")}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
+/**
+ * An update for a row the server does not have yet: its insert is still on
+ * the phone. Refused with this, so the phone keeps it and sends it again
+ * (the app shows it as waiting for the item, not as a failure).
+ */
+const NOT_ON_SERVER_YET = "Waiting for the item it belongs to to reach the office";
+
+/**
+ * Several inspectors share a job and see every snag on it, but a snag is
+ * changed only by the inspector who recorded it: an edit, a delete, a
+ * photo added or removed, a marker or a verdict from anyone else on the
+ * job is refused. A snag nobody recorded (carried onto a round by the
+ * office, or older than the app recording it) stays open to the job, and
+ * an admin is never restricted.
+ */
+async function assertMayChangeSnag(
+  admin: Admin,
+  ctx: Ctx,
+  jobId: string,
+  snagId: string | null | undefined,
+): Promise<void> {
+  if (ctx.isAdmin || !snagId) return;
+  const { data, error } = await admin
+    .from("snagging_snags")
+    .select("created_by, recorded_by:created_by(full_name, email)")
+    .eq("id", snagId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  const author = (data?.created_by as string | null | undefined) ?? null;
+  if (!author || author === ctx.userId) return;
+  const rosters = await loadJobRosters(admin, [jobId]);
+  if (!rosters.get(jobId)?.has(author)) return;
+  const who = (Array.isArray(data?.recorded_by) ? data?.recorded_by[0] : data?.recorded_by) as
+    | { full_name?: string | null; email?: string | null }
+    | null
+    | undefined;
+  const name = who?.full_name || who?.email || "Another inspector";
+  throw new Error(`${name} recorded this snag, so only they can change it.`);
+}
+
 async function applySnag(admin: Admin, ctx: Ctx, payload: Record<string, unknown>): Promise<void> {
   const job = writableJob(ctx, payload.task_id);
+  // A co-inspector's snag is theirs to change (edits and deletes alike).
+  await assertMayChangeSnag(admin, ctx, job.id, ctx.mutation.entity_id);
 
   if (ctx.mutation.op === "delete") {
     const { error } = await admin
@@ -436,11 +543,27 @@ async function applySnag(admin: Admin, ctx: Ctx, payload: Record<string, unknown
   }
   if (!payload.catalogue_code) throw new Error("Every snag must carry a classification code");
 
+  /*
+    The code: settled here, not trusted from the device.
+
+    The phone numbers a new snag from the snags it holds, so it can capture
+    with no signal -- and it does not hold everyone's. Several inspectors on
+    one job each see only their own findings, and a deleted snag frees its
+    number on the phone but not here, so two snags could arrive with the
+    same code and the second failed on snag_snags_code_unique with nothing
+    the inspector could do. An existing snag keeps the code it has (an edit
+    carries the device's copy, which may be stale); a new one keeps the
+    device's code when it is free, else gets the job's next free number,
+    and the result tells the device which.
+  */
+  const snagCode = await settleSnagCode(admin, job.id, ctx.mutation.entity_id, payload.snag_code);
+  if (snagCode !== payload.snag_code && ctx.outcome) ctx.outcome.snag_code = snagCode;
+
   const row = {
     id: ctx.mutation.entity_id,
     job_id: job.id,
     area_id: payload.area_id as string,
-    snag_code: payload.snag_code as string,
+    snag_code: snagCode,
     catalogue_entry_id: (payload.catalogue_entry_id as string) ?? null,
     catalogue_code: payload.catalogue_code as string,
     /*
@@ -467,8 +590,18 @@ async function applySnag(admin: Admin, ctx: Ctx, payload: Record<string, unknown
     created_by: ctx.userId,
     created_at: (payload.captured_at as string) ?? new Date().toISOString(),
   };
-  const { error } = await admin.from("snagging_snags").upsert(row, { onConflict: "id" });
+  let { error } = await admin.from("snagging_snags").upsert(row, { onConflict: "id" });
+  /*
+    Two new snags in one push run side by side and can both settle on the
+    same free number; the one that lands second takes the next.
+  */
+  for (let attempt = 0; error && error.code === "23505" && /snag_snags_code_unique/.test(error.message) && attempt < 3; attempt += 1) {
+    row.snag_code = await settleSnagCode(admin, job.id, ctx.mutation.entity_id, row.snag_code);
+    if (ctx.outcome) ctx.outcome.snag_code = row.snag_code;
+    ({ error } = await admin.from("snagging_snags").upsert(row, { onConflict: "id" }));
+  }
   if (error) throw new Error(error.message);
+  if (ctx.outcome && row.snag_code === payload.snag_code) delete ctx.outcome.snag_code;
 
   auditFrom(ctx, {
     entityType: "snag",
@@ -584,6 +717,13 @@ async function applyArea(admin: Admin, ctx: Ctx, payload: Record<string, unknown
     .select("name")
     .maybeSingle();
   if (error) throw new Error(error.message);
+  /*
+    No row matched: the area's own insert has not arrived (it is parked or
+    still queued on the phone). Reported as applied, the confirm, access or
+    pin was retired on the phone and lost; refused, it waits beside its
+    area and goes again with it.
+  */
+  if (!area) throw new Error(NOT_ON_SERVER_YET);
 
   // Access state carries a written reason (a locked door, a room only
   // partly reachable), and confirming an area is a status change on the
@@ -610,9 +750,33 @@ async function applyArea(admin: Admin, ctx: Ctx, payload: Record<string, unknown
 
 async function applyPhoto(admin: Admin, ctx: Ctx, payload: Record<string, unknown>): Promise<void> {
   const job = writableJob(ctx, payload.task_id);
+  // A photo on a co-inspector's snag is theirs to add, move or remove.
+  let photoSnagId = (payload.snag_id as string | undefined) ?? null;
+  if (!photoSnagId) {
+    const { data: photoRow } = await admin
+      .from("snagging_snag_photos")
+      .select("snag_id")
+      .eq("id", ctx.mutation.entity_id)
+      .maybeSingle();
+    photoSnagId = (photoRow?.snag_id as string | null | undefined) ?? null;
+  }
+  await assertMayChangeSnag(admin, ctx, job.id, photoSnagId);
 
   if (ctx.mutation.op === "delete") {
-    const storagePath = payload.storage_path as string | undefined;
+    /*
+      The file to remove, from the row itself. The phone keeps a signed
+      address where the storage key used to be, so the key it sent was
+      often a URL: the record went and the file stayed in storage.
+    */
+    const { data: stored } = await admin
+      .from("snagging_snag_photos")
+      .select("storage_path")
+      .eq("id", ctx.mutation.entity_id)
+      .maybeSingle();
+    const sent = payload.storage_path as string | undefined;
+    const storagePath =
+      (stored?.storage_path as string | null | undefined) ??
+      (sent && !/^https?:\/\//.test(sent) ? sent : undefined);
     if (storagePath) await admin.storage.from("snagging").remove([storagePath]);
     const { error } = await admin.from("snagging_snag_photos").delete().eq("id", ctx.mutation.entity_id);
     if (error) throw new Error(error.message);
@@ -626,11 +790,14 @@ async function applyPhoto(admin: Admin, ctx: Ctx, payload: Record<string, unknow
     const x = (payload.marker_x as number | null | undefined) ?? null;
     const y = (payload.marker_y as number | null | undefined) ?? null;
     const placed = x !== null && y !== null;
-    const { error } = await admin
+    const { data: marked, error } = await admin
       .from("snagging_snag_photos")
       .update({ marker_x: placed ? x : null, marker_y: placed ? y : null })
-      .eq("id", ctx.mutation.entity_id);
+      .eq("id", ctx.mutation.entity_id)
+      .select("id");
     if (error) throw new Error(error.message);
+    // The photo itself has not arrived yet: the spot waits for it.
+    if (!marked || marked.length === 0) throw new Error(NOT_ON_SERVER_YET);
     return;
   }
 
@@ -679,12 +846,21 @@ async function applyChecklist(admin: Admin, ctx: Ctx, payload: Record<string, un
       */
       visit_id: job.visit?.id ?? (payload.visit_id as string) ?? null,
       updated_at: new Date().toISOString(),
+      /*
+        Whose answer this is: several inspectors share one checklist, and
+        the phone shows "Checked by …" for each item. Once the column exists.
+      */
+      ...((await hasChecklistAnsweredBy(admin))
+        ? { answered_by: status === "pending" ? null : ctx.userId, answered_at: status === "pending" ? null : new Date().toISOString() }
+        : {}),
     })
     .eq("id", ctx.mutation.entity_id)
     .eq("job_id", job.id)
     .select("code, label, group_name")
     .maybeSingle();
   if (error) throw new Error(error.message);
+  // An answer to an item the server does not have is not an answer given.
+  if (!item) throw new Error(NOT_ON_SERVER_YET);
 
   // Only answers that skip an item are trailed. A plain pass/fail is
   // already the checklist row's own state; "not checked, because …" is
@@ -709,6 +885,7 @@ async function applyChecklist(admin: Admin, ctx: Ctx, payload: Record<string, un
 /** A de-snag verdict now just moves the snag's status (no history table). */
 async function applyVerification(admin: Admin, ctx: Ctx, payload: Record<string, unknown>): Promise<void> {
   const job = writableJob(ctx, payload.round_task_id);
+  await assertMayChangeSnag(admin, ctx, job.id, payload.snag_id as string | undefined);
   const verdict = payload.verdict as SnaggingVerdict;
   const allowed: SnaggingVerdict[] = ["verified_closed", "verified_poor_quality", "verified_not_done", "withdrawn"];
   if (!allowed.includes(verdict)) throw new Error(`Unknown verdict ${verdict}`);
@@ -727,11 +904,14 @@ async function applyVerification(admin: Admin, ctx: Ctx, payload: Record<string,
     update.verdict_note = typeof payload.note === "string" ? payload.note.trim() || null : null;
   }
 
-  const { error } = await admin
+  const { data: verified, error } = await admin
     .from("snagging_snags")
     .update(update)
-    .eq("id", snagId);
+    .eq("id", snagId)
+    .select("id");
   if (error) throw new Error(error.message);
+  // A verdict on a snag the server does not have yet waits for it.
+  if (!verified || verified.length === 0) throw new Error(NOT_ON_SERVER_YET);
 
   /*
     BRD 5.2 — the defect is one lasting record, and the round's row is a
@@ -793,16 +973,48 @@ async function storeSignature(
   return path;
 }
 
+/**
+ * One inspector signing off their part of a job (or of a return visit).
+ *
+ * With two or more inspectors on a job, each signs from their own phone
+ * before it can be submitted (signoffs.ts). The signature image travels in
+ * the mutation, as a submission's does, and is stored beside it.
+ */
+async function applySignoff(admin: Admin, ctx: Ctx, payload: Record<string, unknown>): Promise<void> {
+  const job = writableJob(ctx, payload.task_id);
+  const signaturePath = await storeSignature(admin, job.id, ctx.mutation.entity_id, payload.signature_png);
+  if (!signaturePath) throw new Error("A sign-off needs a signature");
+  await recordSignoff(admin, {
+    jobId: job.id,
+    visitId: job.visit?.id ?? null,
+    inspectorId: ctx.userId,
+    signerName: (payload.signer_name as string) ?? null,
+    signaturePath,
+    signedAt: (payload.signed_at as string) ?? new Date().toISOString(),
+  });
+  auditFrom(ctx, {
+    entityType: "submission",
+    entityId: job.visit?.id ?? job.id,
+    taskId: job.id,
+    eventType: "inspector_signed_off",
+    payload: {
+      code: job.code,
+      signer_name: (payload.signer_name as string) ?? null,
+      visit_number: job.visit?.number ?? null,
+    },
+  });
+}
+
 async function applySubmission(admin: Admin, ctx: Ctx, payload: Record<string, unknown>): Promise<void> {
   const job = writableJob(ctx, payload.task_id);
   if (job.visit) return submitVisit(admin, ctx, job, payload);
 
-  // With rooms split between inspectors, the lead submits for everyone.
-  if (!ctx.isAdmin && job.inspector_id && job.inspector_id !== ctx.userId) {
-    throw new Error(
-      "Only the lead inspector can submit this inspection. Your rooms are saved; the lead submits once every room is done.",
-    );
-  }
+  /*
+    Any inspector on the job may submit it, once every one of them has
+    signed (decided 2026-09-24). It was the lead's alone, so a job waited
+    on one person being back in signal even when everyone else was done.
+    The signature check below is what holds it until the team is.
+  */
 
   // Every snag must carry at least one photo, and every mandatory checklist
   // item must be answered, before the visit can close (BR-5, BR-12). A
@@ -954,10 +1166,24 @@ async function applySubmission(admin: Admin, ctx: Ctx, payload: Record<string, u
   // straight from assigned to submitted, skipping in_progress entirely.
   assertTransition(job.status as SnaggingTaskStatus, "submitted");
 
+  // Everyone on the job has signed (the submitter may be signing with this).
+  const submitterSigning = Boolean(payload.signature_png || payload.signature_path);
+  await assertEveryoneSigned(admin, job.id, null, ctx.userId, submitterSigning);
+
   // The drawn signature, when it came with the submission rather than ahead of it.
   const signaturePath =
     (payload.signature_path as string | null | undefined) ||
     (await storeSignature(admin, job.id, ctx.mutation.entity_id, payload.signature_png));
+  if (signaturePath) {
+    await recordSignoff(admin, {
+      jobId: job.id,
+      visitId: null,
+      inspectorId: ctx.userId,
+      signerName: (payload.signer_name as string) ?? null,
+      signaturePath,
+      signedAt: (payload.signed_at as string) ?? new Date().toISOString(),
+    });
+  }
 
   const submittedAt = new Date().toISOString();
   const { error } = await admin
@@ -1049,6 +1275,26 @@ async function submitVisit(
     throw new Error(
       `${missing.length} snag(s) from this visit still have no photo uploaded (${sample}${missing.length > 3 ? ", …" : ""})`,
     );
+  }
+
+  // Everyone on the visit has signed (the submitter may be signing with this).
+  const submitterSigning = Boolean(payload.signature_png || payload.signature_path);
+  await assertEveryoneSigned(admin, job.id, visit.id, ctx.userId, submitterSigning);
+  const visitSignature = await storeSignature(
+    admin,
+    job.id,
+    ctx.mutation.entity_id,
+    payload.signature_png,
+  );
+  if (visitSignature) {
+    await recordSignoff(admin, {
+      jobId: job.id,
+      visitId: visit.id,
+      inspectorId: ctx.userId,
+      signerName: (payload.signer_name as string) ?? null,
+      signaturePath: visitSignature,
+      signedAt: (payload.signed_at as string) ?? new Date().toISOString(),
+    });
   }
 
   const submittedAt = new Date().toISOString();

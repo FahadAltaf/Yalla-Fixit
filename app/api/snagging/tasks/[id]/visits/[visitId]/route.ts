@@ -4,6 +4,7 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
+import { setVisitRoster } from "@/lib/server/snagging/job-roster";
 import { loadJobFamily } from "@/lib/server/snagging/job-family";
 import { updateVisitSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType } from "@/types/types";
@@ -246,8 +247,20 @@ export async function PATCH(
       patch.scheduled_date = input.scheduled_date;
     if (input.appointment_at !== undefined)
       patch.appointment_at = input.appointment_at;
-    if (input.inspector_id !== undefined)
-      patch.inspector_id = input.inspector_id;
+    /*
+      Who attends. `technician_ids` is the whole set and wins where it is
+      sent; `inspector_id` is still accepted on its own, which is what the
+      app and any older caller send, and then means a set of one.
+    */
+    const visitRoster =
+      input.technician_ids !== undefined
+        ? [...new Set(input.technician_ids)]
+        : input.inspector_id !== undefined
+          ? input.inspector_id
+            ? [input.inspector_id]
+            : []
+          : null;
+    if (visitRoster !== null) patch.inspector_id = visitRoster[0] ?? null;
     if (input.notes !== undefined) patch.notes = input.notes;
     if (input.status !== undefined) patch.status = input.status;
 
@@ -285,6 +298,8 @@ export async function PATCH(
       )
       .single();
     if (updateError) throw new Error(updateError.message);
+
+    if (visitRoster !== null) await setVisitRoster(admin, visitId, visitRoster);
     /*
       Asserted rather than inferred: snagging_job_visits arrives with the
       visits migration, so the generated Database types do not carry it

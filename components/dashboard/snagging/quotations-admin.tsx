@@ -44,6 +44,13 @@ const KIND_LABEL: Record<string, string> = {
   desnag: "De-snagging",
 };
 
+/** The job a de-snag or visit quotation belongs to, by its code. */
+function relatedJob(q: SnaggingQuotationSummary): string | null {
+  if (q.quote_kind === "desnag") return q.source_job_code ?? null;
+  if (q.quote_kind === "visit") return q.job_code ?? null;
+  return null;
+}
+
 /**
  * Quotations, as their own section (BA v2, changes 1-3; BRD §6.2).
  *
@@ -172,7 +179,10 @@ export default function QuotationsAdmin({
               {row.original.quote_number}
             </IconText>
             <span className="text-muted-foreground text-xs">
-              {KIND_LABEL[row.original.quote_kind] ?? row.original.quote_kind} ·{" "}
+              {KIND_LABEL[row.original.quote_kind] ?? row.original.quote_kind}
+              {/* What it is for: a de-snag returns to an earlier job, a
+                  visit is charged on one. */}
+              {relatedJob(row.original) ? ` of ${relatedJob(row.original)}` : ""} ·{" "}
               {formatLocalDate(row.original.created_at)}
             </span>
           </div>
@@ -262,16 +272,28 @@ export default function QuotationsAdmin({
             than a status. This is where the team's day starts.
           */
           if (q.status === "approved") {
+            /*
+              A de-snag needs no new job built from scratch: its round is
+              opened on the original inspection, where the outstanding
+              defects, areas and plans already are -- the same place the
+              quotation page sends it.
+            */
+            const desnag = q.quote_kind === "desnag";
             return canCreate ? (
               <Button
                 size="sm"
+                disabled={desnag && !q.source_job_id}
                 onClick={(event) => {
                   event.stopPropagation();
-                  router.push(`/snagging/jobs/new?quotation=${q.id}`);
+                  router.push(
+                    desnag
+                      ? `/snagging/${q.source_job_id}/desnag?quotation=${q.id}`
+                      : `/snagging/jobs/new?quotation=${q.id}`,
+                  );
                 }}
               >
                 <Plus className="size-4" />
-                Create job
+                {desnag ? "Open de-snag round" : "Create job"}
               </Button>
             ) : (
               <Badge className="bg-primary/10 text-primary rounded-sm border-none">

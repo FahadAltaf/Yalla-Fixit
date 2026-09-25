@@ -10,6 +10,11 @@ import {
   ListChecks,
   MapPin,
   MessageSquare,
+  Camera,
+  CalendarClock,
+  History,
+  Layers,
+  UserRound,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -46,6 +51,7 @@ import {
   AccessIndex,
   AccessStateBadge,
   CompletedIndex,
+  DataRow,
   ListPager,
   PillTabs,
   POPUP_PAGE_SIZES,
@@ -57,6 +63,14 @@ import {
 } from "./shared";
 
 type Snag = NonNullable<SnaggingTask["snags"]>[number];
+
+/** A round's result, as the office reads it. */
+const VERDICT_LABEL: Record<string, string> = {
+  verified_closed: "Fixed",
+  verified_poor_quality: "Poor quality",
+  verified_not_done: "Not done",
+  withdrawn: "Withdrawn",
+};
 
 /**
  * The snags an inspector captured, and the evidence behind each one.
@@ -495,6 +509,7 @@ export function SnagWalkList({
                   const evidence = splitEvidence(
                     snag.photos,
                     task.round_number ?? 1,
+                    snag.round_created ?? 1,
                   );
                   // On a round this is the newest AFTER shot: the current state
                   // of the defect is what a reviewer scanning the list wants.
@@ -795,7 +810,6 @@ export function SnagWalkList({
               available
             </div>
           )}
-          {preview ? <PhotoExif photo={preview} /> : null}
         </DialogContent>
       </Dialog>
 
@@ -966,167 +980,293 @@ function SnagDetailDialog({
   onClose: () => void;
   onOpenPhoto: (photo: SnaggingPhoto) => void;
 }) {
-  const evidence = splitEvidence(snag?.photos, visitRound);
-  const photos = [...evidence.before, ...evidence.after].filter(
-    (p) => p.signed_url,
-  );
+  // A defect raised on this very round has only its "as raised" photos.
+  const raisedOn = snag?.round_created ?? 1;
+  const raisedHere = raisedOn >= visitRound;
+  const evidence = splitEvidence(snag?.photos, visitRound, raisedOn);
+  // Every file, available or not (unavailable ones get their own tile).
+  const photos = [...evidence.before, ...evidence.after];
+  const foundOn =
+    snag?.visit_id && visitNumbers?.[snag.visit_id]
+      ? `Visit ${visitNumbers[snag.visit_id]}`
+      : `Round ${snag?.round_created ?? 1}`;
+  const where = [snag?.area?.name ?? snag?.area_label, snag?.category_label, snag?.element_label]
+    .filter(Boolean)
+    .join(" · ");
+
+  const recorder = snag ? recordedBy(snag) : null;
+  const reviewAuthor =
+    snag?.review_note_author?.full_name ?? snag?.review_note_author?.email ?? null;
+
+  /*
+    Built from the same parts as every other snagging screen: a plain
+    dialog header, then section cards (brand icon, title, description, a
+    rule under the header) on the page's muted ground, and DataRow rows
+    for the facts -- the same shapes the job page, the visit page and the
+    Clients dialog use, so the snag detail reads as part of the module
+    rather than as a one-off.
+  */
   return (
     <Dialog open={Boolean(snag)} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-h-[88vh] overflow-x-hidden overflow-y-auto sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>{snag?.defect_label ?? "Snag"}</DialogTitle>
+      <DialogContent
+        className="flex max-h-[90vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(68rem,calc(100vw-3rem))]"
+        showCloseButton
+      >
+        <DialogHeader className="gap-2 px-6 pt-6 pb-4 text-left">
+          <div className="flex flex-wrap items-center gap-2 pr-10">
+            <DialogTitle className="text-lg">{snag?.defect_label ?? "Snag"}</DialogTitle>
+            {snag ? (
+              <>
+                <SeverityBadge severity={snag.severity} />
+                {/* The §5.2 label, not the database value. */}
+                <SnagStatusBadge status={snag.status} />
+              </>
+            ) : null}
+          </div>
           <DialogDescription>
-            {[snag?.area?.name ?? snag?.area_label, snag?.element_label]
+            {[where, `${foundOn} · ${snag ? formatLocalDateTime(snag.created_at) : ""}`]
               .filter(Boolean)
-              .join(" · ") || "Snag detail"}
+              .join("  ·  ")}
           </DialogDescription>
         </DialogHeader>
 
         {snag ? (
-          <div className="space-y-4 text-sm">
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
-              <Detail label="Area" value={snag.area?.name ?? snag.area_label} />
-              <Detail label="Category" value={snag.category_label ?? "—"} />
-              <Detail label="Sub-category" value={snag.element_label} />
-              <Detail label="Defect" value={snag.defect_label} />
-              <Detail
-                label="Severity"
-                value={<SeverityBadge severity={snag.severity} />}
-              />
-              {/* The §5.2 label, not the database value: a reviewer
-                  should read "Poor quality fix", not
-                  "verified_poor_quality". */}
-              <Detail
-                label="Status"
-                value={<SnagStatusBadge status={snag.status} />}
-              />
-              {snag.visit_id && visitNumbers?.[snag.visit_id] ? (
-                <Detail label="Found on" value={`Visit ${visitNumbers[snag.visit_id]}`} />
-              ) : (
-                <Detail
-                  label="Round"
-                  value={snag.round_created ? `Round ${snag.round_created}` : "1"}
-                />
-              )}
-              <Detail
-                label="Captured"
-                value={formatLocalDateTime(snag.created_at)}
-              />
-              {recordedBy(snag) ? (
-                <Detail label="Recorded by" value={recordedBy(snag)!} />
-              ) : null}
-            </dl>
-
-            {/* Where the defect actually is, rather than a pair of
-                percentages a reviewer has to imagine. */}
-            <div>
-              <p className="text-muted-foreground mb-1.5 text-xs">
-                Pin on plan
-              </p>
-              <SnagPlanPin snag={snag} plans={plans} />
-            </div>
-
-            {/* FR-8.05 — the whole journey, so a reviewer can see that
-                this is the third time the defect has come back. */}
-            <div>
-              <p className="text-muted-foreground mb-2 text-xs">
-                Status history
-              </p>
-              <SnagHistory snagId={snag.id} />
-            </div>
-
-            {snag.note || onEditNote ? (
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <p className="text-muted-foreground text-xs">Note</p>
-                  {onEditNote && snag ? (
-                    <NoteEditButton hasNote={Boolean(snag.note)} onClick={() => onEditNote(snag)} />
-                  ) : null}
-                </div>
-                {snag.note ? <p className="mt-0.5 whitespace-pre-line">{snag.note}</p> : null}
-              </div>
-            ) : null}
-
-            {snag && showsVerdictComment(snag, Boolean(onEditVerdict)) ? (
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <p className="text-muted-foreground text-xs">Verdict comment</p>
-                  {onEditVerdict ? (
-                    <NoteEditButton
-                      hasNote={Boolean(snag.verdict_note)}
-                      noun="verdict comment"
-                      onClick={() => onEditVerdict(snag)}
-                    />
-                  ) : null}
-                </div>
-                {snag.verdict_note ? (
-                  <p className="mt-0.5 whitespace-pre-line">{snag.verdict_note}</p>
-                ) : null}
-              </div>
-            ) : null}
-
-            {snag ? (
-              <ReviewNoteLine
-                snag={snag}
-                onEdit={onEditReview ? () => onEditReview(snag) : undefined}
-              />
-            ) : null}
-
-            {/*
-              Before and after, side by side and labelled.
-
-              On a round these two answer the only question the visit
-              exists to ask, and they were rendered as one undifferentiated
-              pile — a reviewer could not tell the shot of the broken
-              handle from the shot of the repaired one. On the original
-              inspection there is no "before", so it stays a plain list.
-            */}
-            {photos.length === 0 ? (
-              <div>
-                <p className="text-muted-foreground mb-1.5 text-xs">Evidence</p>
-                <p className="text-muted-foreground flex items-center gap-2 py-4">
-                  <ImageOff className="size-4" /> No photo uploaded yet.
-                </p>
-              </div>
-            ) : visitRound > 1 ? (
-              <div className="grid gap-4 sm:grid-cols-2">
-                <EvidenceGroup
-                  label="Before"
-                  /*
-                    Accurate once a defect has been through more than one
-                    round: by round 3 this column is the whole history, not
-                    just the day the defect was raised.
-                  */
-                  hint={
-                    new Set(evidence.before.map((p) => p.round_number ?? 1)).size > 1
-                      ? "Every earlier round"
-                      : "As the defect was raised"
+          <div className="bg-muted/40 min-h-0 min-w-0 flex-1 overflow-y-auto border-t">
+            <div className="grid gap-4 p-4 sm:p-5 lg:grid-cols-2">
+              {/* Left: what it looks like, and where it is. */}
+              <div className="min-w-0 space-y-4">
+                <SectionCard
+                  title="Evidence"
+                  description={
+                    photos.length === 0
+                      ? "Nothing uploaded yet."
+                      : `${photos.length} ${photos.length === 1 ? "file" : "files"} · open one to see it full size`
                   }
-                  photos={evidence.before}
-                  onOpenPhoto={onOpenPhoto}
-                  emptyHint="No photo carried from the earlier visit."
-                />
-                <EvidenceGroup
-                  label="After"
-                  hint={`Shot on round ${visitRound}`}
-                  photos={evidence.after}
-                  onOpenPhoto={onOpenPhoto}
-                  emptyHint="Nothing shot on this round yet."
-                />
+                  icon={<Camera />}
+                  bodyClassName="border-t p-5"
+                >
+                  {/*
+                    Before and after, side by side and labelled. On a round
+                    these two answer the only question the visit exists to
+                    ask; on the original inspection there is no "before".
+                  */}
+                  {photos.length === 0 ? (
+                    <p className="text-muted-foreground flex items-center gap-2 text-sm">
+                      <ImageOff className="size-4" /> No photo uploaded yet.
+                    </p>
+                  ) : visitRound > 1 && raisedHere ? (
+                    /*
+                      Raised on this round: a new defect, not a re-check.
+                      Its photos are how it looked when found, and there is
+                      nothing yet to be "after".
+                    */
+                    <EvidenceGroup
+                      label="As raised"
+                      hint={`New on round ${visitRound}`}
+                      photos={evidence.before}
+                      onOpenPhoto={onOpenPhoto}
+                      emptyHint="No photo uploaded yet."
+                    />
+                  ) : visitRound > 1 ? (
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <EvidenceGroup
+                        label="Before"
+                        /*
+                          Accurate once a defect has been through more than one
+                          round: by round 3 this column is the whole history.
+                        */
+                        hint={
+                          new Set(evidence.before.map((p) => p.round_number ?? 1)).size > 1
+                            ? "Every earlier round"
+                            : "As the defect was raised"
+                        }
+                        photos={evidence.before}
+                        onOpenPhoto={onOpenPhoto}
+                        emptyHint="No photo carried from the earlier visit."
+                      />
+                      <EvidenceGroup
+                        label="After"
+                        hint={`Shot on round ${visitRound}`}
+                        photos={evidence.after}
+                        onOpenPhoto={onOpenPhoto}
+                        emptyHint="Nothing shot on this round yet."
+                      />
+                    </div>
+                  ) : (
+                    <EvidenceGroup
+                      label=""
+                      photos={evidence.after}
+                      onOpenPhoto={onOpenPhoto}
+                      emptyHint="No photo uploaded yet."
+                      columns={4}
+                    />
+                  )}
+                </SectionCard>
+
+                {/* Where the defect actually is, rather than a pair of
+                    percentages a reviewer has to imagine. */}
+                <SectionCard
+                  title="Pin on plan"
+                  description={where || "Where the inspector marked it."}
+                  icon={<MapPin />}
+                  bodyClassName="border-t p-5"
+                >
+                  <SnagPlanPin snag={snag} plans={plans} />
+                </SectionCard>
               </div>
-            ) : (
-              <EvidenceGroup
-                label={`Evidence (${photos.length} ${photos.length === 1 ? "file" : "files"})`}
-                photos={evidence.after}
-                onOpenPhoto={onOpenPhoto}
-                emptyHint="No photo uploaded yet."
-                columns={4}
-              />
-            )}
+
+              {/* Right: what it is, what was said, what happened. */}
+              <div className="min-w-0 space-y-4">
+                <SectionCard
+                  title="Details"
+                  description="How the defect was classified on site."
+                  icon={<ListChecks />}
+                  bodyClassName="border-t"
+                >
+                  <div className="divide-y">
+                    <DataRow
+                      icon={<MapPin />}
+                      title={snag.area?.name ?? snag.area_label ?? "—"}
+                      subtitle="Area"
+                    />
+                    <DataRow
+                      icon={<Layers />}
+                      title={snag.category_label ?? "—"}
+                      subtitle={snag.element_label ? `Category · ${snag.element_label}` : "Category"}
+                    />
+                    <DataRow
+                      icon={<CalendarClock />}
+                      title={foundOn}
+                      subtitle={`Captured ${formatLocalDateTime(snag.created_at)}`}
+                    />
+                    <DataRow
+                      icon={<UserRound />}
+                      title={recorder ?? "—"}
+                      subtitle="Recorded by"
+                    />
+                    {/*
+                      Who did what on each round: recorded on one, verified
+                      on another -- often by different inspectors.
+                    */}
+                    {(snag.people ?? [])
+                      .filter((p) => p.action === "verified")
+                      .map((p) => (
+                        <DataRow
+                          key={`${p.round}-${p.action}-${p.at}`}
+                          icon={<UserRound />}
+                          title={p.name}
+                          subtitle={`Verified on round ${p.round}${
+                            p.verdict ? ` · ${VERDICT_LABEL[p.verdict] ?? p.verdict}` : ""
+                          }${p.at ? ` · ${formatLocalDateTime(p.at)}` : ""}`}
+                        />
+                      ))}
+                  </div>
+                </SectionCard>
+
+                <SectionCard
+                  title="Notes"
+                  description="The inspector's own words, and what the office has added."
+                  icon={<MessageSquare />}
+                  bodyClassName="border-t"
+                >
+                  <div className="divide-y">
+                    <NoteRow
+                      label="Inspector's note"
+                      text={snag.note}
+                      empty="No note from the inspector."
+                      action={
+                        onEditNote ? (
+                          <NoteEditButton
+                            hasNote={Boolean(snag.note)}
+                            onClick={() => onEditNote(snag)}
+                          />
+                        ) : null
+                      }
+                    />
+                    {showsVerdictComment(snag, Boolean(onEditVerdict)) ? (
+                      <NoteRow
+                        label="Verdict comment"
+                        text={snag.verdict_note}
+                        empty="No comment on this round's result."
+                        action={
+                          onEditVerdict ? (
+                            <NoteEditButton
+                              hasNote={Boolean(snag.verdict_note)}
+                              noun="verdict comment"
+                              onClick={() => onEditVerdict(snag)}
+                            />
+                          ) : null
+                        }
+                      />
+                    ) : null}
+                    {snag.review_note || onEditReview ? (
+                      <NoteRow
+                        label={`Note to inspector${reviewAuthor ? ` · ${reviewAuthor}` : ""}`}
+                        hint="Shown on the inspector's app, not on the client's report."
+                        text={snag.review_note}
+                        empty="Nothing sent to the inspector."
+                        action={
+                          onEditReview ? (
+                            <NoteEditButton
+                              hasNote={Boolean(snag.review_note)}
+                              noun="note to inspector"
+                              onClick={() => onEditReview(snag)}
+                            />
+                          ) : null
+                        }
+                      />
+                    ) : null}
+                  </div>
+                </SectionCard>
+
+                {/* FR-8.05 — the whole journey, so a reviewer can see that
+                    this is the third time the defect has come back. */}
+                <SectionCard
+                  title="Status history"
+                  description="Every round this defect has been through."
+                  icon={<History />}
+                  bodyClassName="border-t p-5"
+                >
+                  <SnagHistory snagId={snag.id} />
+                </SectionCard>
+              </div>
+            </div>
           </div>
         ) : null}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** One note in the Notes card: its label and edit control, then the text. */
+function NoteRow({
+  label,
+  hint,
+  text,
+  empty,
+  action,
+}: {
+  label: string;
+  hint?: string;
+  text?: string | null;
+  empty: string;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div className="px-5 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-medium">{label}</p>
+          {hint ? <p className="text-muted-foreground text-xs">{hint}</p> : null}
+        </div>
+        {action}
+      </div>
+      {text ? (
+        <p className="text-foreground/90 mt-1.5 text-sm whitespace-pre-line">{text}</p>
+      ) : (
+        <p className="text-muted-foreground mt-1.5 text-sm">{empty}</p>
+      )}
+    </div>
   );
 }
 
@@ -1474,15 +1614,6 @@ function SnagNoteDialog({
 }
 
 
-function Detail({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div>
-      <dt className="text-muted-foreground text-xs">{label}</dt>
-      <dd className="mt-0.5">{value || "—"}</dd>
-    </div>
-  );
-}
-
 /**
  * A captioned thumbnail in the before/after pair.
  *
@@ -1551,7 +1682,9 @@ function EvidenceGroup({
   emptyHint: string;
   columns?: 3 | 4;
 }) {
-  const usable = photos.filter((p) => p.signed_url);
+  // Every file, including one whose link could not be made: it shows as
+  // an "Unavailable" tile rather than silently dropping out of the count.
+  const usable = photos;
 
   /*
     Which round each shot came from, once there is more than one answer.
@@ -1566,12 +1699,14 @@ function EvidenceGroup({
 
   return (
     <div>
-      <p className="text-muted-foreground mb-1.5 text-xs">
-        {label}
-        {hint ? (
-          <span className="text-muted-foreground/70"> · {hint}</span>
-        ) : null}
-      </p>
+      {label || hint ? (
+        <p className="text-muted-foreground mb-1.5 text-xs">
+          {label}
+          {hint ? (
+            <span className="text-muted-foreground/70"> · {hint}</span>
+          ) : null}
+        </p>
+      ) : null}
       {usable.length > 0 ? (
         <div
           className={cn(
@@ -1636,102 +1771,6 @@ function MarkedEvidence({ photo }: { photo: SnaggingPhoto }) {
       <span className="bg-danger absolute top-2 left-2 rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white uppercase">
         Marked defect
       </span>
-    </div>
-  );
-}
-
-/**
- * FR-6.05 — the capture metadata behind a photo, so the approver can
- * judge the evidence, not just look at it: when and where it was taken,
- * the device that took it, and the raw dimensions. EXIF is read straight
- * off the stored `exif` blob; only the keys we recognise are surfaced,
- * and the block hides itself when a photo carries nothing.
- */
-function PhotoExif({ photo }: { photo: SnaggingPhoto }) {
-  const exif = (photo.exif ?? {}) as Record<string, unknown>;
-  const str = (...keys: string[]): string | null => {
-    for (const key of keys) {
-      const v = exif[key];
-      if (typeof v === "string" && v.trim()) return v.trim();
-      if (typeof v === "number" && Number.isFinite(v)) return String(v);
-    }
-    return null;
-  };
-
-  const make = str("Make", "make");
-  const model = str("Model", "model");
-  const camera = [make, model].filter(Boolean).join(" ") || null;
-  const lens = str("LensModel", "lensModel", "LensMake");
-  const software = str("Software", "software");
-  const exposure = str("ExposureTime", "exposureTime");
-  const fnumber = str("FNumber", "fNumber", "ApertureValue");
-  const iso = str("ISOSpeedRatings", "ISO", "iso");
-  const dims =
-    photo.width && photo.height ? `${photo.width} × ${photo.height}` : null;
-  const hasGps = photo.gps_lat != null && photo.gps_lng != null;
-
-  const rows: Array<{ label: string; value: React.ReactNode }> = [];
-  if (camera) rows.push({ label: "Camera", value: camera });
-  if (lens) rows.push({ label: "Lens", value: lens });
-  const shot = [
-    exposure ? `${exposure}s` : null,
-    fnumber ? `ƒ/${fnumber}` : null,
-    iso ? `ISO ${iso}` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  if (shot) rows.push({ label: "Exposure", value: shot });
-  if (dims) rows.push({ label: "Dimensions", value: dims });
-  if (software) rows.push({ label: "Software", value: software });
-  rows.push({
-    label: "Captured",
-    value: formatLocalDateTime(photo.taken_at) || "Unknown",
-  });
-  rows.push({
-    label: "Location",
-    value: hasGps ? (
-      <a
-        href={`https://www.google.com/maps?q=${photo.gps_lat},${photo.gps_lng}`}
-        target="_blank"
-        rel="noreferrer"
-        className="text-brand inline-flex items-center gap-1 hover:underline"
-      >
-        <MapPin className="size-3.5" />
-        {photo.gps_lat!.toFixed(5)}, {photo.gps_lng!.toFixed(5)}
-      </a>
-    ) : (
-      "No GPS recorded"
-    ),
-  });
-
-  /*
-    Did the camera give us anything, or only what the upload knew?
-
-    Dimensions, file size and the upload timestamp exist for every photo, so
-    a panel built from those alone looks like EXIF while carrying none. An
-    approver judging evidence needs to be able to tell the difference.
-  */
-  const hasCameraData = Boolean(
-    camera || lens || shot || software || hasGps || (photo.exif && Object.keys(photo.exif).length > 0),
-  );
-
-  return (
-    <div className="bg-muted/40 rounded-md border p-4">
-      <p className="text-muted-foreground mb-2 text-xs font-medium tracking-wide uppercase">
-        Capture data (EXIF)
-      </p>
-      {!hasCameraData ? (
-        <p className="text-muted-foreground mb-3 text-xs">
-          This photo carries no camera metadata. The device did not record
-          it, or it was stripped before upload. What follows is what the
-          upload itself knows.
-        </p>
-      ) : null}
-      <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-3">
-        {rows.map((row) => (
-          <Detail key={row.label} label={row.label} value={row.value} />
-        ))}
-      </dl>
     </div>
   );
 }

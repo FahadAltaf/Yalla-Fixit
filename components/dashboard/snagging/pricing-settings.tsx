@@ -1,13 +1,14 @@
 "use client";
 
 import { DirhamIcon } from "@/components/ui/dirham-icon";
-import { FormatToolbar, ScopeView, TermsView } from "./quote-text-view";
+import { ScopeView, TermsView } from "./quote-text-view";
 import { Money } from "@/components/ui/money";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 import {
   Building,
   Building2,
+  ChevronDown,
   FileText,
   Home,
   Info,
@@ -21,6 +22,19 @@ import { DataTable } from "@/components/data-table";
 import { SnaggingPricingToolbar } from "@/components/data-table/toolbars/snagging-pricing-toolbar";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { QuoteRichText } from "./quote-rich-text";
+import {
+  htmlToScope,
+  htmlToTerms,
+  scopeToHtml,
+  termsToHtml,
+} from "@/lib/snagging/quote-editor";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Card } from "@/components/ui/card";
 import {
   Dialog,
@@ -44,7 +58,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
 import {
   computeQuotation,
@@ -232,7 +245,14 @@ export default function PricingSettings() {
   /** Which dialog is open, and on what. */
   const [editingType, setEditingType] = useState<RateRow | null>(null);
   const [editingCharges, setEditingCharges] = useState(false);
-  const [editingTerms, setEditingTerms] = useState(false);
+  /*
+    Which half of the wording is open, rather than merely that something
+    is. Both blocks run to several hundred words, and opening the pair to
+    fix one clause put the other in front of the reader for no reason.
+  */
+  const [editingTerms, setEditingTerms] = useState<null | "scope" | "terms">(
+    null,
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -557,14 +577,23 @@ export default function PricingSettings() {
               description="Printed on every snagging quotation."
               action={
                 canEdit ? (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setEditingTerms(true)}
-                  >
-                    <Pencil className="size-3.5" />
-                    Edit
-                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button size="sm" variant="ghost">
+                        <Pencil className="size-3.5" />
+                        Edit
+                        <ChevronDown className="size-3.5" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => setEditingTerms("scope")}>
+                        Scope of work
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setEditingTerms("terms")}>
+                        Terms &amp; conditions
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 ) : null
               }
               bodyClassName="border-t"
@@ -639,17 +668,17 @@ export default function PricingSettings() {
       />
 
       <TermsDialog
-        open={editingTerms}
+        section={editingTerms}
         config={config}
         saving={saving}
-        onClose={() => setEditingTerms(false)}
+        onClose={() => setEditingTerms(null)}
         onSave={async (scope, terms) => {
           if (!config) return;
           const ok = await save(
             { ...config, scope_of_work: scope, terms },
             "the scope and terms",
           );
-          if (ok) setEditingTerms(false);
+          if (ok) setEditingTerms(null);
         }}
       />
 
@@ -977,22 +1006,22 @@ function ChargesDialog({
 
 /** Edits the two blocks of text printed on every quotation. */
 function TermsDialog({
-  open,
+  section,
   config,
   saving,
   onClose,
   onSave,
 }: {
-  open: boolean;
+  /** Which block to edit; null keeps the dialog shut. */
+  section: null | "scope" | "terms";
   config: SnaggingPricingConfig | null;
   saving: boolean;
   onClose: () => void;
   onSave: (scope: string, terms: string) => void | Promise<void>;
 }) {
+  const open = section !== null;
   const [scope, setScope] = useState(config?.scope_of_work ?? "");
   const [terms, setTerms] = useState(config?.terms ?? "");
-  const scopeRef = useRef<HTMLTextAreaElement>(null);
-  const termsRef = useRef<HTMLTextAreaElement>(null);
 
   /* Seeded on the way open, during render — see TypeDialog. */
   const [wasOpen, setWasOpen] = useState(open);
@@ -1004,6 +1033,27 @@ function TermsDialog({
     }
   }
 
+  /*
+    Built once when the dialog opens, not on every keystroke.
+
+    The editor emits HTML, which is converted straight to the dialect and
+    held in `scope`. Recomputing the HTML from that on every change would
+    hand the editor back a re-derived version of what it just produced and
+    move the caret. So this is the SEEDED value, keyed on the block being
+    edited, and the editor owns its own content after that.
+  */
+  const seed = `${section ?? ""}:${wasOpen}`;
+  const scopeHtml = useMemo(
+    () => scopeToHtml(config?.scope_of_work ?? ""),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [seed, config?.scope_of_work],
+  );
+  const termsHtml = useMemo(
+    () => termsToHtml(config?.terms ?? ""),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [seed, config?.terms],
+  );
+
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
       {/*
@@ -1013,58 +1063,44 @@ function TermsDialog({
       */}
       <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-4xl">
         <DialogHeader>
-          <DialogTitle>Scope of work & terms</DialogTitle>
+          <DialogTitle>
+            {section === "terms" ? "Terms & conditions" : "Scope of work"}
+          </DialogTitle>
           <DialogDescription>
-            Printed on every snagging quotation. The scope prints as its own
-            block above the numbered notes.
+            {section === "terms"
+              ? "Printed on every snagging quotation, numbered, below the scope."
+              : "Printed on every snagging quotation, as its own block above the numbered notes."}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-5 lg:grid-cols-2">
+        <div className="grid gap-5">
+          {section === "scope" ? (
           <Field
             label="Scope of work"
-            hint="Use the buttons, or type: # heading, ## sub-heading, - bullet, **bold**."
+            hint="Headings, sub-headings and bullets print as they look here."
           >
-            <FormatToolbar
-              target={scopeRef}
-              value={scope}
-              onChange={setScope}
-              kinds={["heading", "subheading", "bullet", "bold"]}
-            />
-            <Textarea
-              ref={scopeRef}
-              rows={8}
-              value={scope}
-              onChange={(event) => setScope(event.target.value)}
+            <QuoteRichText
+              ariaLabel="Scope of work"
+              value={scopeHtml}
+              onChange={(html) => setScope(htmlToScope(html))}
+              tools={["heading", "subheading", "bullet", "bold"]}
               placeholder="What the snagging inspection covers…"
-              className="mt-2 resize-none font-mono text-xs leading-relaxed [field-sizing:content]"
             />
-            <PreviewBox>
-              <ScopeView value={scope} />
-            </PreviewBox>
           </Field>
+          ) : (
           <Field
             label="Terms & conditions"
-            hint="One term per line; they are numbered for you. **bold** works here too."
+            hint="One term per item; they are numbered for you on the quotation."
           >
-            <FormatToolbar
-              target={termsRef}
-              value={terms}
-              onChange={setTerms}
-              kinds={["number", "bold"]}
-            />
-            <Textarea
-              ref={termsRef}
-              rows={8}
-              value={terms}
-              onChange={(event) => setTerms(event.target.value)}
+            <QuoteRichText
+              ariaLabel="Terms and conditions"
+              value={termsHtml}
+              onChange={(html) => setTerms(htmlToTerms(html))}
+              tools={["number", "bold"]}
               placeholder="This quotation is valid for 30 calendar days…"
-              className="mt-2 resize-none font-mono text-xs leading-relaxed [field-sizing:content]"
             />
-            <PreviewBox>
-              <TermsView value={terms} />
-            </PreviewBox>
           </Field>
+          )}
         </div>
 
         <DialogFooter>
@@ -1360,26 +1396,15 @@ function Figure({
 }
 
 /**
- * Stored prose, shown in full as it will print.
+ * Stored prose, shown on the card formatted as the quotation prints it
+ * (point 14).
  *
  * No scroll box. These two blocks are the quotation's small print, and the
- * point of showing them on the pricing page is that somebody can read them
- * end to end before a client does — which a 200px window with a scrollbar
- * actively discourages.
+ * point of showing them on the settings page is that somebody can read
+ * them end to end before a client does — which a 200px window with a
+ * scrollbar actively discourages. This is now the only place the wording
+ * is previewed: the editor shows its own formatting as you type.
  */
-/** How the text will print, under the box it is typed in. */
-function PreviewBox({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="bg-muted/40 mt-3 rounded-lg border p-3">
-      <p className="text-muted-foreground mb-2 text-[0.6875rem] font-medium tracking-wide uppercase">
-        Preview on the quotation
-      </p>
-      {children}
-    </div>
-  );
-}
-
-/** Shown formatted, as the quotation prints it (point 14). */
 function TextBlock({
   label,
   value,

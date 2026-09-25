@@ -181,11 +181,6 @@ export const baseSectionsItems: MenuItem[] = [
         resource: ResourceType.SNAGGING,
       },
       {
-        title: "Settings",
-        url: "/snagging/pricing",
-        resource: ResourceType.SNAGGING_CATALOGUE,
-      },
-      {
         title: "Analytics",
         url: "/snagging/analytics",
         resource: ResourceType.SNAGGING,
@@ -251,7 +246,23 @@ export const getNavData = (user: User) => {
       items: [
         { title: "Profile", url: "/settings/profile", resource: ResourceType.SETTINGS },
         { title: "Appearance", url: "/settings/appearance", resource: ResourceType.SETTINGS },
-        { title: "AMC settings", url: "/settings/amc", canSee: canUseAmc },
+        /*
+          Named for the thing configured, not the page. Under a group
+          already called Settings, "AMC settings" and "Snagging settings"
+          said the same word twice.
+        */
+        { title: "AMC", url: "/settings/amc", canSee: canUseAmc },
+        /*
+          The rate card and the quotation wording, which used to sit under
+          Snagging beside the work they price. They configure the module
+          rather than operate it, so they belong with the rest of the
+          admin configuration for the same reason AMC settings do.
+        */
+        {
+          title: "Snagging",
+          url: "/settings/snagging",
+          resource: ResourceType.SNAGGING_CATALOGUE,
+        },
       ],
     });
   }

@@ -72,6 +72,11 @@ export function MinimalCleanTemplate({ data }: Props) {
           {data.customerContact && <span style={{ color: "#71717a", fontSize: "12px" }}>👤 {data.customerContact}</span>}
           {data.customerPhone && <span style={{ color: "#71717a", fontSize: "12px" }}>📞 {data.customerPhone}</span>}
           {data.customerEmail && <span style={{ color: "#71717a", fontSize: "12px" }}>✉ {data.customerEmail}</span>}
+          {data.customerId && (
+            <span style={{ color: "#71717a", fontSize: "12px" }}>
+              {data.customerId}
+            </span>
+          )}
         </div>
         {data.serviceAddress && (
           <div style={{ marginTop: "6px", color: "#71717a", fontSize: "12px" }}>

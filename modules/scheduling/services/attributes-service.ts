@@ -5,10 +5,16 @@ import type { TechnicianRole, TechnicianServiceType } from "@/types/types";
 export const rolesService = {
   list: async (): Promise<TechnicianRole[]> =>
     executeRESTBackend<TechnicianRole[]>("/api/scheduling/roles", { method: "GET" }),
-  create: async (name: string): Promise<TechnicianRole> =>
-    executeRESTBackend<TechnicianRole>("/api/scheduling/roles", { method: "POST", body: { name } }),
-  update: async (id: string, name: string): Promise<TechnicianRole> =>
-    executeRESTBackend<TechnicianRole>("/api/scheduling/roles", { method: "PUT", body: { id, name } }),
+  create: async (name: string, color?: string | null): Promise<TechnicianRole> =>
+    executeRESTBackend<TechnicianRole>("/api/scheduling/roles", {
+      method: "POST",
+      body: color !== undefined ? { name, color } : { name },
+    }),
+  update: async (id: string, name: string, color?: string | null): Promise<TechnicianRole> =>
+    executeRESTBackend<TechnicianRole>("/api/scheduling/roles", {
+      method: "PUT",
+      body: color !== undefined ? { id, name, color } : { id, name },
+    }),
   remove: async (id: string): Promise<{ success: boolean }> =>
     executeRESTBackend<{ success: boolean }>("/api/scheduling/roles", { method: "DELETE", params: { id } }),
 };

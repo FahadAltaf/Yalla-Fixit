@@ -37,13 +37,18 @@ export async function listJobs(
   // Generic given explicitly: the select is assembled at runtime, which
   // the client's literal-type parser cannot follow.
   let query = admin.from("snagging_jobs").select<string, JobRow>(
-    `id, code, status, round_number, visit_type, parent_job_id, scheduled_date, locked,
-       rejection_reason, rejection_category, rejection_count, remediation_due_at,
-       submitted_at, approved_at, created_at, updated_at,
-       approval_manager_id, reviewer_id, review_started_at, reviewed_at,
-       approval_due_at, escalated_at,
-       client_id, unit_label, building_name, community,
-       property_type, developer_name,
+    /*
+      What the Jobs table and the approvals queue actually draw, plus the
+      two the row DERIVES (submitted_at and approval_due_at decide whether
+      a job is late). It used to read the whole row -- the rejection
+      fields, the remediation clock, the schedule window, the community
+      and the developer -- and hand back forty-four fields for a table
+      that draws ten.
+    */
+    `id, code, status, round_number, visit_type,
+       submitted_at, created_at, updated_at,
+       reviewed_at, approval_due_at, escalated_at,
+       unit_label, building_name, property_type,
        client:client_id(name),
        inspector:inspector_id(full_name, email),${roster}
        reviewer:reviewer_id(id, full_name, email),
@@ -167,32 +172,18 @@ type JobRow = {
   status: string;
   round_number: number;
   visit_type: string | null;
-  parent_job_id: string | null;
-  scheduled_date: string | null;
-  locked: boolean;
-  rejection_reason: string | null;
-  rejection_category: string | null;
-  rejection_count: number | null;
-  remediation_due_at: string | null;
   submitted_at: string | null;
-  approved_at: string | null;
   created_at: string;
   updated_at: string;
-  approval_manager_id: string | null;
-  // FR-6.01 / FR-6.07 — the review chain and its clock.
-  reviewer_id: string | null;
-  review_started_at: string | null;
+  // FR-6.01 / FR-6.07 — who holds it now, and whether it is late.
   reviewed_at: string | null;
   approval_due_at: string | null;
   escalated_at: string | null;
   reviewer: Joined;
   manager: Joined;
-  client_id: string | null;
   unit_label: string;
   building_name: string | null;
-  community: string | null;
   property_type: string | null;
-  developer_name: string | null;
   client: { name: string | null } | { name: string | null }[] | null;
   inspector: Joined;
   roster?: Array<{ user_profile: Joined }> | null;
@@ -265,46 +256,37 @@ function enrichRows(rows: JobRow[]) {
       (awaitingDecision &&
         approvalDueAt !== null &&
         Date.parse(approvalDueAt) < now);
+    /*
+      Only what a caller reads.
+
+      Seven of these used to be a constant on every row -- task_type
+      "single_unit", and six nulls (the schedule window, the package, the
+      tier, delivered_at, supervisor_id) -- fields that said the same
+      thing about every job ever returned. The rest went unread: the
+      rejection trio, the remediation and review clocks, the ids whose
+      names are already embedded beside them.
+    */
     return {
       id: row.id,
       code: row.code,
       status: row.status,
-      task_type: "single_unit",
       round_number: row.round_number,
       visit_type: (row.visit_type ?? "initial") as SnaggingVisitType,
-      parent_task_id: row.parent_job_id,
-      scheduled_date: row.scheduled_date,
-      scheduled_start_at: null,
-      scheduled_end_at: null,
-      package_name: null,
-      service_tier: null,
-      locked: row.locked,
-      rejection_category: row.rejection_category ?? null,
-      rejection_reason: row.rejection_reason,
-      rejection_count: row.rejection_count ?? 0,
-      remediation_due_at: row.remediation_due_at ?? null,
-      approval_due_at: approvalDueAt,
+      // Late, or waiting: what the approvals queue colours a row by.
       escalated,
       submitted_at: row.submitted_at,
-      approved_at: row.approved_at,
-      delivered_at: null,
       created_at: row.created_at,
       updated_at: row.updated_at,
-      supervisor_id: null,
-      approval_manager_id: row.approval_manager_id,
-      reviewer_id: row.reviewer_id ?? null,
+      // Who holds it now -- the reviewer until they pass it on, then the
+      // approval manager.
       reviewer: firstOf(row.reviewer) ?? null,
       manager: firstOf(row.manager) ?? null,
-      review_started_at: row.review_started_at ?? null,
       reviewed_at: row.reviewed_at ?? null,
-      escalated_at: row.escalated_at ?? null,
-      property_id: row.client_id ?? row.id,
       unit_label: row.unit_label,
       building_name: row.building_name,
-      community: row.community,
+      /* The de-snag quotation dialog prices from this. */
       property_type: row.property_type,
       client_name: client?.name ?? "",
-      developer_name: row.developer_name,
       high_severity_count: s.high,
       inspector_name: inspectorNames[0] ?? null,
       inspector_names: inspectorNames,

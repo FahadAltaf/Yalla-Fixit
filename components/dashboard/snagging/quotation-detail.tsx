@@ -55,11 +55,21 @@ import { ActionType, ResourceType } from "@/types/types";
 import {
   DataState,
   QuotationStatusBadge,
-  StatCard,
-  StatCardGrid,
   SubmitButton,
   useConfirm,
 } from "./shared";
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onloadend = () => {
+      const s = String(r.result);
+      resolve(s.slice(s.indexOf(",") + 1));
+    };
+    r.onerror = reject;
+    r.readAsDataURL(blob);
+  });
+}
 
 /*
   The PDF and Word builders (html2canvas, jsPDF, docx) load on the first
@@ -182,7 +192,7 @@ export default function QuotationDetail({ id }: { id: string }) {
     : null;
 
   /** The PDF bytes, from the same template the page renders below. */
-  async function buildPdf() {
+  async function buildPdf(): Promise<Blob> {
     if (!doc) throw new Error("The quotation has not loaded yet");
     return (await loadPdfUtils()).generateQuotationPDFBlob(
       "yalla-classic",
@@ -310,6 +320,17 @@ export default function QuotationDetail({ id }: { id: string }) {
   const canApproveRate = quote?.can_approve_rate === true;
 
   async function approveRate() {
+    if (!quote) return;
+    const ok = await confirm({
+      title: "Approve this pricing?",
+      description: `The quotation is priced at ${quote.rate_per_sqft} per sq ft${
+        quote.external_rate_per_sqft != null
+          ? ` (external areas ${quote.external_rate_per_sqft})`
+          : ""
+      }, outside the usual band. Once approved it can be sent to the client.`,
+      confirmText: "Approve pricing",
+    });
+    if (!ok) return;
     setPending("approve_rate");
     try {
       setQuote(await snaggingService.approveQuotationRate(id));
@@ -397,9 +418,15 @@ export default function QuotationDetail({ id }: { id: string }) {
                     pending={pending === "regenerate"}
                     pendingLabel="Repricing…"
                     icon={<FileText className="size-4" />}
-                    onClick={() =>
-                      void run("regenerate", undefined, "Repriced")
-                    }
+                    onClick={async () => {
+                      const ok = await confirm({
+                        title: "Regenerate this quotation?",
+                        description:
+                          "It is rebuilt from the current pricing, scope and terms, replacing the draft figures.",
+                        confirmText: "Regenerate",
+                      });
+                      if (ok) void run("regenerate", undefined, "Repriced");
+                    }}
                   >
                     Regenerate
                   </SubmitButton>
@@ -469,41 +496,6 @@ export default function QuotationDetail({ id }: { id: string }) {
       >
         {quote && doc ? (
           <div className="flex flex-col gap-4">
-            {/*
-              What the de-snag is charged, above the document. The amount
-              was chosen inside the rate card's range when it was raised,
-              and it is the one figure the coordinator and the client talk
-              about -- it should not have to be found in the line table.
-            */}
-            {isDesnag ? (
-              <StatCardGrid columns={3}>
-                <StatCard
-                  label="De-snagging amount"
-                  value={`${quote.currency} ${Number(quote.subtotal ?? 0).toLocaleString()}`}
-                  headline="Before VAT"
-                  caption="Chosen within the rate card range"
-                />
-                <StatCard
-                  label="VAT"
-                  value={`${quote.currency} ${Number(quote.tax_amount ?? 0).toLocaleString()}`}
-                  // Stored as a fraction (0.05) on some rows and a percentage (5) on
-                  // older ones; either reads as a percentage here.
-                  caption={`At ${(() => {
-                    const rate = Number(quote.tax_rate ?? 0);
-                    return (
-                      Math.round((rate <= 1 ? rate * 100 : rate) * 100) / 100
-                    );
-                  })()}%`}
-                />
-                <StatCard
-                  label="Total"
-                  value={`${quote.currency} ${Number(quote.total ?? 0).toLocaleString()}`}
-                  headline="What the client pays"
-                  tone="good"
-                />
-              </StatCardGrid>
-            ) : null}
-
             {/*
               Approved, and no job yet — the whole reason this section
               exists (change 3). The button opens the wizard with the client
@@ -582,6 +574,7 @@ export default function QuotationDetail({ id }: { id: string }) {
                       size="sm"
                       pending={pending === "approve_rate"}
                       pendingLabel="Approving…"
+                      disabled={busy}
                       icon={<Check className="size-4" />}
                       onClick={() => void approveRate()}
                     >
@@ -674,9 +667,22 @@ export default function QuotationDetail({ id }: { id: string }) {
               disabled={!recipient.trim()}
               onClick={() => {
                 void (async () => {
+                  /*
+                    The PDF goes with the email, as it does from the job's
+                    Quotation tab; it was sent from here with the link only.
+                    Built first, under the same "Sending…" state.
+                  */
+                  setPending("send");
+                  let pdf_base64: string | null = null;
+                  try {
+                    pdf_base64 = await blobToBase64(await buildPdf());
+                  } catch (err) {
+                    // The approval link in the email still works without it.
+                    console.error("Quotation PDF for email failed:", err);
+                  }
                   const ok = await run(
                     "send",
-                    { sent_to: recipient.trim() },
+                    { sent_to: recipient.trim(), pdf_base64 },
                     "Quotation emailed to the client",
                   );
                   if (ok) setSendOpen(false);

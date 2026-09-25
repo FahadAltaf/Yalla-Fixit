@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { assertDesnagQuotationApproved } from "@/lib/server/snagging/desnag-quotation";
+import { loadJobRosters } from "@/lib/server/snagging/job-roster";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
@@ -217,8 +218,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     let snagQuery = admin
       .from("snagging_snags")
       .select(
-        `id, job_id, area_id, snag_code, catalogue_entry_id, catalogue_code, element_label,
-         defect_label, severity, note, floor_plan_id, pin_x, pin_y, status, round_created`,
+        `id, job_id, area_id, snag_code, catalogue_entry_id, catalogue_code, category_label,
+         element_label, defect_label, severity, note, floor_plan_id, pin_x, pin_y, status,
+         round_created`,
       )
       .in("job_id", [parent.id, ...familyIds])
       .in("status", CARRY_FORWARD_STATUSES);
@@ -318,9 +320,19 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       );
     }
 
-    // 1) The round itself: a new job that inherits the parent's context.
-    const inspectorId =
-      input.technician_ids.length > 0 ? input.technician_ids[0] : parent.inspector_id;
+    /*
+      1) The round itself: a new job that inherits the parent's context.
+
+      Who attends is the coordinator's, chosen while booking the round. A
+      request that does not mention inspectors inherits the original's
+      whole roster rather than only its lead -- a job walked by three
+      people used to open its round with one of them on it.
+    */
+    const parentRoster = [
+      ...((await loadJobRosters(admin, [parent.id])).get(parent.id) ?? []),
+    ];
+    const roundRoster = [...new Set(input.technician_ids ?? parentRoster)];
+    const inspectorId = roundRoster[0] ?? null;
 
     const scheduledDate = input.scheduled_date.trim();
 
@@ -348,6 +360,28 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       .single();
 
     if (roundError) throw new Error(roundError.message);
+
+    /*
+      The rest of the round's inspectors. `inspector_id` above is the first
+      of them and stays the compat anchor the report cover and the app's
+      sync read; the set lives in snagging_job_inspectors, exactly as the
+      job's own assignment writes it.
+    */
+    if (roundRoster.length > 0) {
+      const { error: rosterError } = await admin
+        .from("snagging_job_inspectors")
+        .insert(
+          roundRoster.map((inspectorId) => ({
+            job_id: round.id,
+            inspector_id: inspectorId,
+          })),
+        );
+      // 42P01 is "undefined table": the roster migration has not run here,
+      // and inspector_id above is then the whole answer.
+      if (rosterError && rosterError.code !== "42P01") {
+        throw new Error(rosterError.message);
+      }
+    }
 
     /*
       Spend the quotation on this round.
@@ -427,7 +461,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const { data: parentAreas, error: areaLoadError } = await admin
       .from("snagging_areas")
       .select(
-        `id, name, catalogue_area_code, sort_order, floor_plan_id, pin_x, pin_y,
+        `id, name, catalogue_area_code, sort_order, floor_plan_id, pin_x, pin_y, zone,
          access_state, access_reason, elements_not_checked`,
       )
       .eq("job_id", parent.id)
@@ -462,21 +496,28 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           catalogue_area_code: area.catalogue_area_code,
           sort_order: area.sort_order,
           /*
-            The room's pin on the floor plan, carried with it.
+            The room's placement on the floor plan, carried with it.
 
             A round copied the name and dropped the pin, so every room on
             the round sat unplaced and the inspector had to re-pin a unit
             they had already mapped — and until they did, a carried snag
             re-pinned onto that room had nothing to point at.
 
-            The plan id is remapped onto the round's own copy of the plan,
-            which is why the plans are copied first.
+            The outline too (`zone`). Carrying only the pin turned every
+            room somebody had DRAWN on the original into a bare pin at the
+            centre of where it used to be — the fallback a zone keeps — so
+            round 2 of a mapped unit looked nothing like round 1.
+
+            Both are coordinates within the plan, and the plan id is
+            remapped onto the round's own copy of it, which is why the
+            plans are copied first.
           */
           floor_plan_id: area.floor_plan_id
             ? planIdMap.get(area.floor_plan_id) ?? null
             : null,
           pin_x: area.pin_x,
           pin_y: area.pin_y,
+          zone: area.zone ?? null,
           /*
             Why a room could not be checked last time. A round returns to
             exactly these rooms, so the reason it was locked, and what went
@@ -544,6 +585,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       snag_code: snag.snag_code,
       catalogue_entry_id: snag.catalogue_entry_id,
       catalogue_code: snag.catalogue_code,
+      // The category it was classified under travels with the copy.
+      category_label: snag.category_label ?? null,
       element_label: snag.element_label,
       defect_label: snag.defect_label,
       severity: snag.severity,

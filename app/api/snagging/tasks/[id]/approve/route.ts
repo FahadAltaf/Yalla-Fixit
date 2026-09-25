@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
@@ -115,118 +115,111 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     });
 
     /*
-      Module 9 — approving work reissues the client's report.
-
-      An additional visit does not get a report of its own; its snags join
-      the original inspection's, which goes out as a new version. So
-      approving a visit mints V2, V3 … against the ORIGINAL, and approving
-      the original inspection mints its V1.
-
-      A de-snag round mints nothing: its rows are working copies whose
-      verdicts write through to the originals, so it changes the defects'
-      status rather than the report's contents.
+      Everything after the approval itself runs once the manager has their
+      answer (after()): issuing the client's report version, rendering its
+      PDF and the audit entries that follow. Rendering is several seconds
+      on a large job, and the manager used to wait through all of it for a
+      button that had already done its job at the status change above.
+      Nothing here can undo the approval; a failed PDF is recorded on its
+      version and can be generated again.
     */
-    let reportVersion: {
-      id: string;
-      version: number;
-      snagCount: number;
-      created: boolean;
-    } | null = null;
-    // What the caller is told about the client document. Never implies a PDF
-    // exists when rendering failed.
-    let generation:
-      | { status: "generated" | "failed"; version: number; error?: string }
-      | null = null;
-    if (job.visit_type !== "desnag") {
-      const isVisit = job.visit_type === "additional";
+    after(async () => {
       try {
-        reportVersion = await issueReportVersion(admin, {
-          jobId: id,
-          sourceVisitId: isVisit ? id : null,
-          generatedBy: profile.id,
-          reason: isVisit
-            ? `Additional visit ${job.code} approved`
-            : "Original inspection approved",
-        });
-      } catch (versionError) {
-        // The approval is already committed and must not be undone by a
-        // bookkeeping failure; the version can be reissued on delivery.
-        console.error("Report version could not be issued:", versionError);
-      }
+        /*
+          Module 9 — approving work reissues the client's report.
 
-      /*
-        FR-7.01 — the PDF is produced here, on the server, not when somebody
-        next opens the portal.
+          An additional visit does not get a report of its own; its snags join
+          the original inspection's, which goes out as a new version. So
+          approving a visit mints V2, V3 … against the ORIGINAL, and approving
+          the original inspection mints its V1.
 
-        Deliberately awaited rather than fired and forgotten: the measured
-        cost is a few seconds even at 200 snags, and awaiting it means the
-        response tells the manager whether the client's document actually
-        exists. A failure is recorded on the version and surfaced as a
-        retryable state -- it never fails the approval, which is already
-        committed by this point.
-      */
-      if (reportVersion) {
-        try {
-          const generated = await generateReportPdf(admin, reportVersion.id, {
-            actorId: profile.id,
-            actorLabel: profile.full_name ?? profile.email,
-          });
-          generation = generated.ok
-            ? { status: "generated", version: reportVersion.version }
-            : { status: "failed", version: reportVersion.version, error: generated.error };
-        } catch (generateError) {
-          generation = {
-            status: "failed",
-            version: reportVersion.version,
-            error:
-              generateError instanceof Error
-                ? generateError.message
-                : "Report generation failed",
-          };
+          A de-snag round mints nothing: its rows are working copies whose
+          verdicts write through to the originals, so it changes the defects'
+          status rather than the report's contents.
+        */
+        let reportVersion: {
+          id: string;
+          version: number;
+          snagCount: number;
+          created: boolean;
+        } | null = null;
+        if (job.visit_type !== "desnag") {
+          const isVisit = job.visit_type === "additional";
+          try {
+            reportVersion = await issueReportVersion(admin, {
+              jobId: id,
+              sourceVisitId: isVisit ? id : null,
+              generatedBy: profile.id,
+              reason: isVisit
+                ? `Additional visit ${job.code} approved`
+                : "Original inspection approved",
+            });
+          } catch (versionError) {
+            // The approval is already committed and must not be undone by a
+            // bookkeeping failure; the version can be reissued on delivery.
+            console.error("Report version could not be issued:", versionError);
+          }
+
+          /*
+            FR-7.01 — the PDF is produced here, on the server, not when somebody
+            next opens the portal. A failure is recorded on the version as a
+            retryable state; it never undoes the approval.
+          */
+          if (reportVersion) {
+            try {
+              const generated = await generateReportPdf(admin, reportVersion.id, {
+                actorId: profile.id,
+                actorLabel: profile.full_name ?? profile.email,
+              });
+              if (!generated.ok) {
+                console.error("Report PDF generation failed:", generated.error);
+              }
+            } catch (generateError) {
+              console.error("Report PDF generation failed:", generateError);
+            }
+          }
+
+          if (reportVersion?.created) {
+            await recordAudit(admin, {
+              entityType: "task",
+              entityId: id,
+              taskId: id,
+              eventType: "report_version_created",
+              actorId: profile.id,
+              actorLabel: profile.full_name ?? profile.email,
+              payload: {
+                code: job.code,
+                version: reportVersion.version,
+                snag_count: reportVersion.snagCount,
+                source_visit_id: isVisit ? id : null,
+              },
+            });
+          }
+
+          if (isVisit) {
+            await recordAudit(admin, {
+              entityType: "task",
+              entityId: id,
+              taskId: id,
+              eventType: "additional_visit_merged",
+              actorId: profile.id,
+              actorLabel: profile.full_name ?? profile.email,
+              payload: { code: job.code, report_version: reportVersion?.version ?? null },
+            });
+          }
         }
+      } catch (backgroundError) {
+        console.error("Post-approval work failed:", backgroundError);
       }
+    });
 
-      if (reportVersion?.created) {
-        await recordAudit(admin, {
-          entityType: "task",
-          entityId: id,
-          taskId: id,
-          eventType: "report_version_created",
-          actorId: profile.id,
-          actorLabel: profile.full_name ?? profile.email,
-          payload: {
-            code: job.code,
-            version: reportVersion.version,
-            snag_count: reportVersion.snagCount,
-            source_visit_id: isVisit ? id : null,
-          },
-        });
-      }
-
-      if (isVisit) {
-        await recordAudit(admin, {
-          entityType: "task",
-          entityId: id,
-          taskId: id,
-          eventType: "additional_visit_merged",
-          actorId: profile.id,
-          actorLabel: profile.full_name ?? profile.email,
-          payload: { code: job.code, report_version: reportVersion?.version ?? null },
-        });
-      }
-    }
-
-    // The branded report queue lives outside the lean schema, so no
     return NextResponse.json({
       data: {
         id,
         status: "approved",
-        report_id: reportVersion?.id ?? null,
-        report_version: reportVersion?.version ?? null,
-        // FR-7.01 — say plainly whether the client's PDF exists. The error
-        // text is the recorded reason, not a stack trace.
-        report_generation: generation?.status ?? null,
-        report_generation_error: generation?.error ?? null,
+        // The report version and its PDF are being prepared in the
+        // background; the report page reads them when they are ready.
+        report_generation: "pending",
       },
     });
   } catch (error) {

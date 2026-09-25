@@ -155,12 +155,29 @@ export function priceQuotation(
  * caller refuses to raise the quotation and says why, rather than issuing
  * a document offering to do the work for nothing.
  */
+/**
+ * How a quotation line names the unit it is for.
+ *
+ * The job's internal code used to go here -- "De-snagging visit for
+ * RIVTOW3U-TE1B" -- which is a string the client has never seen and
+ * cannot check against anything. The unit is what both sides of the
+ * conversation actually call the property, so that is what the line says.
+ * Empty when the unit is unknown, which reads better than a placeholder.
+ */
+function unitReference(property: QuotedProperty): string {
+  const unit = property.unit_label?.trim();
+  const building = property.building_name?.trim();
+  if (unit && building) return ` for ${unit}, ${building}`;
+  if (unit) return ` for ${unit}`;
+  if (building) return ` for ${building}`;
+  return "";
+}
+
 export function priceDesnag(
   property: QuotedProperty,
   client: QuotedClient | null,
   config: PricingConfig & { currency: string },
   context: {
-    jobCode?: string | null;
     round?: number | null;
     /** Chosen by the coordinator inside the card's range; checked by the caller. */
     price?: number | null;
@@ -173,7 +190,7 @@ export function priceDesnag(
   const price = context.price ?? published;
 
   const label = TYPE_LABEL[type] ?? type;
-  const where = context.jobCode ? ` for ${context.jobCode}` : "";
+  const where = unitReference(property);
   const line = {
     description:
       `De-snagging visit${where}: re-inspection of open defects` +
@@ -219,12 +236,12 @@ export function priceVisit(
   property: QuotedProperty,
   client: QuotedClient | null,
   config: PricingConfig & { currency: string },
-  context: { jobCode?: string | null; visitNumber: number; charge: number | null },
+  context: { visitNumber: number; charge: number | null },
 ) {
   const price = Number(context.charge) || 0;
   if (!(price > 0)) return null;
 
-  const where = context.jobCode ? ` for ${context.jobCode}` : "";
+  const where = unitReference(property);
   const line = {
     description: `Additional visit ${context.visitNumber}${where}: return inspection (fixed charge per visit)`,
     qty: 1,

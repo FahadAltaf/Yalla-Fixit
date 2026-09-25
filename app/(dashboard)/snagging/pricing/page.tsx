@@ -1,12 +1,12 @@
-import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 
-import PricingSettings from "@/components/dashboard/snagging/pricing-settings";
-
-export const metadata: Metadata = {
-  title: "Snagging settings | Property Care Snagging",
-  robots: { index: false, follow: false },
-};
-
+/**
+ * Moved to /settings/snagging, with the rest of the admin configuration.
+ *
+ * Kept as a redirect rather than deleted: nothing in the app links here
+ * any more, but the address has been live for months and will be sitting
+ * in bookmarks and in anything the team has shared with each other.
+ */
 export default function SnaggingPricingPage() {
-  return <PricingSettings />;
+  redirect("/settings/snagging");
 }

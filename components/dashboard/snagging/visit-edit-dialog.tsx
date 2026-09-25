@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -14,23 +14,14 @@ import {
 } from "@/components/ui/dialog";
 import DateSelect from "@/components/ui/date-select";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import TimeSelect from "@/components/ui/time-select";
 import { splitInstant, toLocalInstant } from "@/lib/snagging/schedule-defaults";
 import { snaggingService } from "@/modules/snagging";
-import { usersService } from "@/modules/users/services/users-service";
-import type { SnaggingJobVisit, User } from "@/types/types";
+import type { SnaggingJobVisit } from "@/types/types";
 
+import { InspectorPicker } from "./inspector-picker";
 import { SubmitButton } from "./shared";
-
-const UNASSIGNED = "__none__";
 
 
 /**
@@ -57,7 +48,7 @@ export function VisitEditDialog({
   visit: SnaggingJobVisit | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSaved: () => void;
+  onSaved: () => void | Promise<unknown>;
   /**
    * Assigning books the visit. Once the client has approved the quotation
    * (or it is charged by link) there is nothing left to wait for but who
@@ -66,9 +57,7 @@ export function VisitEditDialog({
    */
   book?: boolean;
 }) {
-  const [users, setUsers] = useState<User[]>([]);
-  const [usersError, setUsersError] = useState<string | null>(null);
-  const [inspectorId, setInspectorId] = useState(UNASSIGNED);
+  const [inspectorIds, setInspectorIds] = useState<string[]>([]);
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
   const [notes, setNotes] = useState("");
@@ -85,30 +74,23 @@ export function VisitEditDialog({
     setSeededFor(key);
     if (visit) {
       const split = splitInstant(visit.appointment_at);
-      setInspectorId(visit.inspector_id ?? UNASSIGNED);
+      /*
+        Everyone on the visit, not just its first inspector: the whole set
+        is what this dialog edits, and sending one back would quietly drop
+        the others.
+      */
+      setInspectorIds(
+        visit.inspectors?.length
+          ? visit.inspectors.map((person) => person.id)
+          : visit.inspector_id
+            ? [visit.inspector_id]
+            : [],
+      );
       setDate(split.date || visit.scheduled_date || "");
       setTime(split.time || "09:00");
       setNotes(visit.notes ?? "");
     }
   }
-
-  useEffect(() => {
-    if (!open || users.length > 0) return;
-    let live = true;
-    usersService
-      .getUsers()
-      .then((rows: User[]) => {
-        if (live) setUsers(rows.filter((row) => row.is_active !== false));
-      })
-      .catch((error: unknown) => {
-        if (live) {
-          setUsersError(error instanceof Error ? error.message : "Could not load the staff list");
-        }
-      });
-    return () => {
-      live = false;
-    };
-  }, [open, users.length]);
 
   async function save() {
     if (!visit) return;
@@ -116,22 +98,25 @@ export function VisitEditDialog({
     try {
       const appointment = date ? toLocalInstant(date, time || "09:00") : null;
       await snaggingService.updateVisit(taskId, visit.id, {
-        inspector_id: inspectorId === UNASSIGNED ? null : inspectorId,
+        technician_ids: inspectorIds,
         scheduled_date: date || null,
         appointment_at: appointment ? appointment.toISOString() : null,
         notes: notes.trim() || null,
         ...(book ? { status: "scheduled" as const } : {}),
       });
       if (book) {
-        const who = users.find((user) => user.id === inspectorId);
         toast.success(`Visit ${visit.visit_number} booked`, {
-          description: `${who?.full_name || who?.email || "The inspector"} has it on their phone.`,
+          description:
+            inspectorIds.length === 1
+              ? "The inspector has it on their phone."
+              : `${inspectorIds.length} inspectors have it on their phones.`,
         });
       } else {
         toast.success(`Visit ${visit.visit_number} updated`);
       }
+      // The page shows the change before the dialog closes.
+      await onSaved();
       onOpenChange(false);
-      onSaved();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not update the visit");
     } finally {
@@ -148,28 +133,25 @@ export function VisitEditDialog({
           </DialogTitle>
           <DialogDescription>
             {book
-              ? "Choose who goes back and when. Saving books the visit, and it appears in the inspector's Jobs list on their phone."
-              : "Who goes back, and when. The inspector gets the job on their phone as soon as the visit is booked."}
+              ? "Choose who goes back and when. Saving books the visit, and it appears in their Jobs list on their phones."
+              : "Who goes back, and when. They get the job on their phones as soon as the visit is booked."}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <Label>Inspector</Label>
-            <Select value={inspectorId} onValueChange={setInspectorId}>
-              <SelectTrigger className="w-full" aria-label="Inspector">
-                <SelectValue placeholder="Choose an inspector" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={UNASSIGNED}>Not assigned yet</SelectItem>
-                {users.map((user) => (
-                  <SelectItem key={user.id} value={user.id}>
-                    {user.full_name || user.email}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {usersError ? <p className="text-destructive text-xs">{usersError}</p> : null}
+            <Label htmlFor="edit-visit-inspectors">Inspectors</Label>
+            <InspectorPicker
+              value={inspectorIds}
+              onChange={setInspectorIds}
+              names={Object.fromEntries(
+                (visit?.inspectors ?? []).map((person) => [
+                  person.id,
+                  (person.full_name || person.email) ?? person.id,
+                ]),
+              )}
+              disabled={saving}
+            />
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
@@ -214,7 +196,7 @@ export function VisitEditDialog({
             pending={saving}
             pendingLabel={book ? "Booking…" : "Saving…"}
             // A booking needs somebody to go and a day to go on.
-            disabled={book && (inspectorId === UNASSIGNED || !date)}
+            disabled={book && (inspectorIds.length === 0 || !date)}
             onClick={() => void save()}
           >
             {book ? "Assign and book" : "Save"}

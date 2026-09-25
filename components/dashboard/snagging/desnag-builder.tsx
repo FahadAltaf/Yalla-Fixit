@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { CheckCircle2, PlayCircle, SearchX } from "lucide-react";
 import { toast } from "sonner";
 
@@ -49,6 +49,9 @@ const CARRY_FORWARD = new Set([
 
 export default function DesnagBuilder({ taskId }: { taskId: string }) {
   const router = useRouter();
+  // The quotation the round was opened from (Quotations > Open de-snag
+  // round), so the round spends that one rather than the newest approved.
+  const quotationId = useSearchParams().get("quotation");
   const [task, setTask] = useState<SnaggingTask | null>(null);
   const [roundOpen, setRoundOpen] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -110,6 +113,7 @@ export default function DesnagBuilder({ taskId }: { taskId: string }) {
   async function createRound(input: {
     scheduled_date: string;
     appointment_at: string | null;
+    technician_ids: string[];
   }) {
     if (!task) return;
     setSubmitting(true);
@@ -117,6 +121,7 @@ export default function DesnagBuilder({ taskId }: { taskId: string }) {
       const round = await snaggingService.openRound(task.id, {
         ...input,
         snag_ids: [...selected],
+        ...(quotationId ? { quotation_id: quotationId } : {}),
       });
       toast.success(`Round ${round.round_number} opened with ${round.carried_snags} snag(s)`);
       router.push(`/snagging/${round.id}`);
@@ -127,6 +132,28 @@ export default function DesnagBuilder({ taskId }: { taskId: string }) {
   }
 
   const nextRound = (task?.round_number ?? 0) + 1;
+
+  /*
+    Who is on the inspection now. The round's dialog opens on these, so
+    the usual case -- the same people go back -- needs no picking at all.
+  */
+  const rosterIds = useMemo(
+    () =>
+      (task?.assignees ?? [])
+        .map((assignee) => assignee.user_id)
+        .filter((id): id is string => Boolean(id)),
+    [task],
+  );
+  const rosterNames = useMemo(() => {
+    const names: Record<string, string> = {};
+    for (const assignee of task?.assignees ?? []) {
+      const who = assignee.user_profile;
+      if (assignee.user_id && who) {
+        names[assignee.user_id] = (who.full_name || who.email) ?? assignee.user_id;
+      }
+    }
+    return names;
+  }, [task]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -280,6 +307,8 @@ export default function DesnagBuilder({ taskId }: { taskId: string }) {
           roundNumber={task.round_number + 1}
           from={task.property?.unit_label ?? "this inspection"}
           carrying={selected.size}
+          defaultInspectorIds={rosterIds}
+          inspectorNames={rosterNames}
           busy={submitting}
           onConfirm={createRound}
         />

@@ -71,9 +71,29 @@ export interface ScheduleVersion {
   published_at: string | null;
 }
 
+// FR-4: what the pull from FSM did for a date, including why appointments
+// were left out.
+export interface FsmImportSummary {
+  imported: number;
+  skipped: number;
+  scanned: number;
+  reasons: {
+    alreadyOnBoard: number;
+    cancelled: number;
+    noWorkOrder: number;
+    noTimes: number;
+    noKnownTechnician: number;
+  };
+  unknownResourceIds?: string[];
+  error?: string;
+}
+
 export interface DayScheduleResponse {
   version: ScheduleVersion | null;
   entries: ScheduleEntry[];
+  // FR-4: how many appointments were just pulled in from FSM, if any.
+  imported?: number;
+  fsmImport?: FsmImportSummary | null;
 }
 
 export interface CreateEntryInput {
@@ -108,6 +128,8 @@ export interface UpdateEntryInput {
   technicianFsmIds?: string[];
   title?: string | null;
   notes?: string | null;
+  // new_appointment only: the lines the appointment will cover on approval.
+  serviceLineItemIds?: string[];
 }
 
 export interface SchedulingAccess {
@@ -154,8 +176,10 @@ export const scheduleService = {
     });
   },
 
-  removeEntry: async (id: string): Promise<{ success: boolean }> => {
-    return executeRESTBackend<{ success: boolean }>("/api/scheduling/schedule/entries", {
+  // On a draft this removes the entry; on an approved day it removes an entry
+  // FSM refused (approver-only) and returns the recalculated version.
+  removeEntry: async (id: string): Promise<{ success: boolean; version: ScheduleVersion | null }> => {
+    return executeRESTBackend<{ success: boolean; version: ScheduleVersion | null }>("/api/scheduling/schedule/entries", {
       method: "DELETE",
       params: { id },
     });
@@ -228,8 +252,8 @@ export const scheduleService = {
   // Adopt any direct Zoho FSM changes into the portal. Pass the operating
   // date to reconcile just that day (what the Refresh button does); omit it
   // to sweep every current version.
-  reconcile: async (date?: string): Promise<{ checked: number; changed: number }> => {
-    return executeRESTBackend<{ checked: number; changed: number }>("/api/scheduling/reconcile", {
+  reconcile: async (date?: string): Promise<{ checked: number; changed: number; imported?: number; fsmImport?: FsmImportSummary | null }> => {
+    return executeRESTBackend<{ checked: number; changed: number; imported?: number; fsmImport?: FsmImportSummary | null }>("/api/scheduling/reconcile", {
       method: "POST",
       body: date ? { date } : {},
     });

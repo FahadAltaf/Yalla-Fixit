@@ -53,6 +53,7 @@ import {
   StatCardGrid,
   SubmitButton,
   formatLocalDateTime,
+  useConfirm,
 } from "./shared";
 import { SnagWalkList } from "./snag-walk-list";
 import { VisitEditDialog } from "./visit-edit-dialog";
@@ -126,6 +127,7 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
   /* True when the edit dialog is booking the visit by assigning it. */
   const [bookMode, setBookMode] = useState(false);
   const [sendBackOpen, setSendBackOpen] = useState(false);
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [reason, setReason] = useState("");
   // The tab is linkable (?tab=quotation), so "Send quotation" anywhere in
   // the app lands on this visit's quotation rather than a separate page.
@@ -196,24 +198,32 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
 
   async function approve() {
     if (!visit) return;
+    const ok = await confirm({
+      title: `Approve visit ${visit.visit_number}?`,
+      description:
+        "Its findings are added to the client's report, which is issued as a new version. The earlier version is kept.",
+      confirmText: "Approve visit",
+    });
+    if (!ok) return;
     setPending("approve");
-    const id = toast.loading("Approving and reissuing the report…");
+    const id = toast.loading("Approving the visit…");
     try {
       const result = await snaggingService.reviewVisit(taskId, visit.id, { decision: "approve" });
+      // Refresh before the toast so the buttons have changed by the time it shows.
+      await load();
       if (result.generation?.status === "failed") {
         toast.warning(`Visit ${visit.visit_number} approved`, {
           id,
-          description: "The report could not be generated. Retry it from Report versions.",
+          description: "The new report version could not be issued.",
         });
       } else {
         toast.success(`Visit ${visit.visit_number} approved`, {
           id,
           description: result.generation
-            ? `The client's report is now version ${result.generation.version}.`
+            ? `Report version ${result.generation.version} is being generated.`
             : undefined,
         });
       }
-      await load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not approve the visit", { id });
     } finally {
@@ -388,9 +398,15 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
                       visit.appointment_at
                         ? formatLocalDateTime(visit.appointment_at)
                         : visit.scheduled_date ?? "no date yet",
-                      visit.inspector?.full_name
-                        ? `inspector ${visit.inspector.full_name}`
-                        : "no inspector yet",
+                      // Everyone attending, not just the first of them.
+                      visit.inspectors?.length
+                        ? `${visit.inspectors.length === 1 ? "inspector" : "inspectors"} ${visit.inspectors
+                            .map((person) => person.full_name ?? person.email)
+                            .filter(Boolean)
+                            .join(", ")}`
+                        : visit.inspector?.full_name
+                          ? `inspector ${visit.inspector.full_name}`
+                          : "no inspector yet",
                     ]
                       .filter(Boolean)
                       .join(" · ")}
@@ -611,7 +627,7 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
                     task={{ id: taskId, status: (detail.job?.status ?? "approved") as never }}
                     quotationId={quote.id}
                     visitNumber={visit.visit_number}
-                    onChanged={() => void load()}
+                    onChanged={load}
                   />
                 ) : (
                   <SectionCard
@@ -671,6 +687,7 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
         onSaved={() => void load()}
       />
 
+      {confirmDialog}
       <Dialog open={sendBackOpen} onOpenChange={setSendBackOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>

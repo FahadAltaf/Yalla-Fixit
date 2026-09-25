@@ -76,9 +76,12 @@ import {
   type SnaggingClientOption,
   type SnaggingPricingConfig,
 } from "@/modules/snagging";
-import { usersService } from "@/modules/users/services/users-service";
+import {
+  usersService,
+  type AssignableUser,
+} from "@/modules/users/services/users-service";
 import { templateFor } from "@/lib/snagging/area-templates";
-import type { SnaggingProperty, SnaggingPropertyType, User } from "@/types/types";
+import type { SnaggingProperty, SnaggingPropertyType } from "@/types/types";
 
 import {
   ErrorState,
@@ -297,7 +300,7 @@ export default function NewJobWizard({
   const [quotationLabel, setQuotationLabel] = useState<string | null>(null);
   const [step, setStep] = useState(0);
   const [submitting, setSubmitting] = useState(false);
-  const [users, setUsers] = useState<User[]>([]);
+  const [users, setUsers] = useState<AssignableUser[]>([]);
   const [usersLoading, setUsersLoading] = useState(true);
   const [usersError, setUsersError] = useState<string | null>(null);
   const [plans, setPlans] = useState<PendingPlan[]>([]);
@@ -380,6 +383,13 @@ export default function NewJobWizard({
           return;
         }
 
+        // A de-snag is not a new job: its round opens on the original
+        // inspection. Sent there, so an old link cannot raise a stray job.
+        if (quote.quote_kind === "desnag" && quote.source_job_id) {
+          router.replace(`/snagging/${quote.source_job_id}/desnag?quotation=${quote.id}`);
+          return;
+        }
+
         /*
           From the property RECORD, with the document's snapshot only as a
           fallback.
@@ -447,7 +457,7 @@ export default function NewJobWizard({
     return () => {
       cancelled = true;
     };
-  }, [quotationId]);
+  }, [quotationId, router]);
 
 
   /*
@@ -549,7 +559,9 @@ export default function NewJobWizard({
     setUsersLoading(true);
     setUsersError(null);
     try {
-      const rows: User[] = await usersService.getUsers();
+      // A name and an email, not every profile in full with its role's
+      // whole permission matrix.
+      const rows = await usersService.getAssignableUsers();
       setUsers(rows.filter((row) => row.is_active !== false));
     } catch (error) {
       setUsersError(error instanceof Error ? error.message : "Could not load the staff list");
@@ -739,6 +751,20 @@ export default function NewJobWizard({
             floors: num0(draft.floors),
             location_lat: num0(draft.location_lat),
             location_lng: num0(draft.location_lng),
+            /*
+              The paperwork, which a quotation used to drop.
+
+              The Documents section is shown while a quotation is being
+              written -- its own subtitle says so -- but these three never
+              reached the payload, so ticking "NOC required" here did
+              nothing and the job raised from the quotation later reported
+              "Not required". Worse on an edit: resolveProperty writes
+              Boolean(p.noc_required), so an absent field actively reset a
+              property that DID require one back to false.
+            */
+            title_deed_path: draft.title_deed_path || undefined,
+            noc_required: draft.noc_required,
+            noc_path: draft.noc_path || undefined,
           },
           furnished: draft.furnished,
           out_of_hours: draft.out_of_hours,
@@ -871,10 +897,12 @@ export default function NewJobWizard({
           const idByName = new Map(
             saved.map((area) => [area.name.toLowerCase(), area.id]),
           );
-          for (const area of pinned) {
+          // Each pin is its own row, so they are saved together rather than
+          // one round trip after another.
+          await Promise.all(pinned.map(async (area) => {
             const areaId = idByName.get(area.name.toLowerCase());
             const planId = area.planId ? planIdByLocal.get(area.planId) : undefined;
-            if (!areaId || !planId) continue;
+            if (!areaId || !planId) return;
             await snaggingService.updateArea(created.id, {
               id: areaId,
               floor_plan_id: planId,
@@ -887,7 +915,7 @@ export default function NewJobWizard({
               */
               ...(area.zone && area.zone.length >= 3 ? { zone: area.zone } : {}),
             });
-          }
+          }));
         } catch {
           toast.warning(
             "The rooms were created, but their pins did not save. Place them from the job.",
@@ -3111,7 +3139,7 @@ function AssignStep({
 }: {
   draft: Draft;
   set: <K extends keyof Draft>(key: K, value: Draft[K]) => void;
-  users: User[];
+  users: AssignableUser[];
   usersLoading: boolean;
   usersError: string | null;
   retryUsers: () => void;

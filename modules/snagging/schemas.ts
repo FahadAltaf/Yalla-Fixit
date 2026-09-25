@@ -385,7 +385,13 @@ export const createRoundSchema = z.object({
   scheduled_date: isoDate,
   /** Full appointment instant, when a time was given with the date. */
   appointment_at: z.string().datetime().optional().nullable(),
-  technician_ids: z.array(z.string().uuid()).default([]),
+  /*
+    Who attends the round. Omitted (not merely empty) means "whoever is on
+    the original", which is what a caller that does not ask expects; an
+    empty array is a coordinator who deliberately took everybody off, and
+    opens the round unassigned.
+  */
+  technician_ids: z.array(z.string().uuid()).optional(),
   approval_manager_id: z.string().uuid().optional().nullable(),
   notes: z.string().trim().max(4000).optional().or(z.literal("")),
   // Which outstanding snags to carry into the round. Omit to carry
@@ -439,6 +445,12 @@ export const updateVisitSchema = z.object({
   scheduled_date: isoDate.optional().nullable(),
   appointment_at: z.string().datetime().optional().nullable(),
   inspector_id: z.string().uuid().optional().nullable(),
+  /*
+    Everyone attending. Omitted leaves the set alone; sent, it replaces
+    it, and the first of them becomes the visit's inspector_id -- the
+    same shape the job's own assignment uses.
+  */
+  technician_ids: z.array(z.string().uuid()).optional(),
   status: z
     .enum(["requested", "scheduled", "in_progress", "completed", "cancelled"])
     .optional(),
@@ -462,7 +474,7 @@ export const deliverReportSchema = z.object({
  */
 export const syncMutationSchema = z.object({
   mutation_id: z.string().uuid(),
-  entity: z.enum(["snag", "area", "photo", "verification", "submission", "task", "checklist"]),
+  entity: z.enum(["snag", "area", "photo", "verification", "submission", "task", "checklist", "signoff"]),
   entity_id: z.string().uuid(),
   op: z.enum(["insert", "update", "delete"]),
   payload: z.record(z.string(), z.unknown()),

@@ -19,7 +19,7 @@ export function ReviewPanel({
   onChanged,
 }: {
   task: SnaggingTask;
-  onChanged: () => void;
+  onChanged: () => void | Promise<unknown>;
 }) {
   return (
     <div className="flex flex-col gap-6">

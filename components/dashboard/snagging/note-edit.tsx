@@ -34,15 +34,21 @@ export function NoteEditButton({
   /** What is being edited, for the label: "note", "reason", "comment". */
   noun?: string;
 }) {
+  /*
+    A 16px square holding a 12px glyph: exactly the line box of the small
+    text it sits beside, so it lines up with the first line rather than
+    hanging below it and does not read as larger than the words it edits.
+    It was a 14px glyph nudged down by a margin, which did both.
+  */
   return hasNote ? (
     <button
       type="button"
       onClick={onClick}
       aria-label={`Edit ${noun}`}
       title={`Edit ${noun}`}
-      className="text-muted-foreground hover:text-foreground focus-visible:ring-ring mt-0.5 shrink-0 rounded p-0.5 focus-visible:ring-2 focus-visible:outline-none"
+      className="text-muted-foreground hover:text-foreground hover:bg-muted focus-visible:ring-ring inline-flex size-4 shrink-0 items-center justify-center rounded-sm transition-colors focus-visible:ring-2 focus-visible:outline-none"
     >
-      <Pencil className="size-3.5" />
+      <Pencil className="size-3" strokeWidth={1.75} />
     </button>
   ) : (
     <button
@@ -50,7 +56,7 @@ export function NoteEditButton({
       onClick={onClick}
       className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-xs font-medium"
     >
-      <Plus className="size-3.5" />
+      <Plus className="size-3" strokeWidth={1.75} />
       Add {noun}
     </button>
   );

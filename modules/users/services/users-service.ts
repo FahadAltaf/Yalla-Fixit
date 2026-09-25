@@ -1,5 +1,6 @@
 import {
   DELETE_USER,
+  GET_ASSIGNABLE_USERS,
   GET_USERS,
   GET_USERS_BY_EMAIL,
   GET_USERS_BY_ID,
@@ -10,6 +11,24 @@ import {
 } from "./users-graphql";
 import { executeGraphQLBackend } from "@/lib/graphql-server";
 import { User } from "@/types/types";
+
+/** Enough of a person to put them in a picker. */
+export type AssignableUser = Pick<User, "id" | "full_name" | "email" | "is_active">;
+
+/*
+  The staff list is the same answer for every picker on a screen, so it is
+  fetched once and shared rather than once per component.
+
+  A job page could ask for it four times over -- the Setup tab, the round
+  dialog, the visit dialog, the wizard -- each pulling every profile in
+  full. `inFlight` collapses the calls a single page makes into one
+  request; the short cache covers a second dialog opened a moment later.
+  It is deliberately brief, so somebody added to the team appears in the
+  dropdowns without a reload.
+*/
+const STAFF_TTL_MS = 60_000;
+let staffCache: { at: number; users: AssignableUser[] } | null = null;
+let staffInFlight: Promise<AssignableUser[]> | null = null;
 
 export const usersService = {
   /**
@@ -145,6 +164,47 @@ export const usersService = {
     } catch (error) {
       console.error("Error deleting user:", error);
       throw error;
+    }
+  },
+  /**
+   * Everyone who can be assigned to a job, a round or a visit: id, name
+   * and email, nothing else. Shared and briefly cached (see above).
+   */
+  getAssignableUsers: async (): Promise<AssignableUser[]> => {
+    if (staffCache && Date.now() - staffCache.at < STAFF_TTL_MS) {
+      return staffCache.users;
+    }
+    if (staffInFlight) return staffInFlight;
+
+    staffInFlight = (async () => {
+      const users: AssignableUser[] = [];
+      let after: string | null = null;
+      // A hard stop, so a server that never reports the last page cannot loop.
+      for (let page = 0; page < 200; page += 1) {
+        const response = await executeGraphQLBackend(GET_ASSIGNABLE_USERS, {
+          first: 100,
+          after,
+        });
+        const collection = response.user_profileCollection;
+        users.push(
+          ...collection.edges.map((edge: { node: AssignableUser }) => edge.node),
+        );
+        if (!collection.pageInfo?.hasNextPage || !collection.pageInfo.endCursor) break;
+        after = collection.pageInfo.endCursor;
+      }
+      staffCache = { at: Date.now(), users };
+      return users;
+    })();
+
+    try {
+      return await staffInFlight;
+    } catch (error) {
+      // Never cached, so the next screen tries again rather than
+      // inheriting a failure.
+      staffCache = null;
+      throw error;
+    } finally {
+      staffInFlight = null;
     }
   },
   /**

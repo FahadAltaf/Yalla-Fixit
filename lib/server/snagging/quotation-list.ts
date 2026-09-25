@@ -14,7 +14,7 @@ import { likeTerm, pageParams } from "@/lib/server/snagging/search";
    sent on; the figures and dates behind the total live on the quotation
    page, which loads the quotation by id. */
 export const LIST_COLUMNS =
-  "id, quote_number, status, quote_kind, currency, total, created_at, job_id, property_snapshot";
+  "id, quote_number, status, quote_kind, currency, total, created_at, job_id, source_job_id, property_snapshot";
 
 /* The status pills on the Quotations table, each with its own count. */
 export const LIST_STATUSES = ["draft", "sent", "approved", "rejected"] as const;
@@ -53,7 +53,9 @@ export async function listQuotations(admin: SupabaseClient, params: URLSearchPar
 
   let query = admin
     .from("snagging_quotations")
-    .select(`${LIST_COLUMNS}, client:client_id(name), job:job_id(code)`, {
+    // source_job: the inspection a de-snag quotation returns to, so the
+    // row can say which job it is for and open that job's de-snag round.
+    .select(`${LIST_COLUMNS}, client:client_id(name), job:job_id(code), source_job:source_job_id(code)`, {
       count: "exact",
     })
     .order("created_at", { ascending: false })
@@ -103,6 +105,7 @@ export function toWire(row: Record<string, unknown>) {
 
   const client = first(row.client as Joined);
   const job = first(row.job as Joined);
+  const sourceJob = first(row.source_job as Joined);
   const snapshot = (row.property_snapshot ?? {}) as Record<string, unknown>;
 
   return {
@@ -117,6 +120,8 @@ export function toWire(row: Record<string, unknown>) {
     client_name:
       (client?.name as string) ?? (snapshot.client_name as string) ?? null,
     job_code: (job?.code as string) ?? null,
+    source_job_id: row.source_job_id ?? null,
+    source_job_code: (sourceJob?.code as string) ?? null,
     unit_label: (snapshot.unit_label as string) ?? null,
     building_name: (snapshot.building_name as string) ?? null,
   };

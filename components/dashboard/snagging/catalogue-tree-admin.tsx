@@ -41,7 +41,7 @@ import {
 
 import { RecordsToolbar } from "@/components/data-table/toolbars/records-toolbar";
 
-import { ErrorState, PageHeading } from "./shared";
+import { ErrorState, PageHeading, useConfirm } from "./shared";
 
 type Level = "category" | "subcategory" | "defect";
 
@@ -76,6 +76,7 @@ export default function CatalogueTreeAdmin() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const { confirm, dialog } = useConfirm();
 
   const [category, setCategory] = useState("all");
   const [subcategory, setSubcategory] = useState("all");
@@ -164,6 +165,24 @@ export default function CatalogueTreeAdmin() {
   );
 
   async function toggle(level: Level, id: string, active: boolean, label: string) {
+    if (togglingId) return;
+    // This changes what every inspector can choose on new inspections, so a
+    // stray click on a row must not carry it through.
+    const ok = await confirm(
+      active
+        ? {
+            title: `Put "${label}" back in use?`,
+            description: `Inspectors will be able to choose "${label}" again when capturing new snags.`,
+            confirmText: "Reinstate",
+          }
+        : {
+            title: `Retire "${label}"?`,
+            description: `Inspectors can no longer choose "${label}" on new inspections. Snags already recorded against it keep it, and issued reports still resolve.`,
+            confirmText: "Retire",
+            variant: "destructive",
+          },
+    );
+    if (!ok) return;
     setTogglingId(id);
     try {
       await snaggingService.setCatalogueNodeActive(level, id, active);
@@ -236,6 +255,7 @@ export default function CatalogueTreeAdmin() {
   return (
     <div className="flex flex-col gap-6">
       {heading}
+      {dialog}
 
       <Card className="py-0">
         <DataTable

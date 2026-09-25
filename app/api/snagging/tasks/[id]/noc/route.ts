@@ -3,8 +3,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import { hasAreaInspector } from "@/lib/server/snagging/columns";
-import { signPaths } from "@/lib/server/snagging/media";
+import { mayWriteJob } from "@/lib/server/snagging/job-roster";
+import { SNAGGING_BUCKET, signPaths } from "@/lib/server/snagging/media";
 import { ActionType, ResourceType } from "@/types/types";
 
 /** Long enough to download on a slow site connection. */
@@ -32,8 +32,8 @@ type JobRow = {
  * on demand here. The link is signed per request rather than synced,
  * because a synced link would have expired by the time it was needed.
  *
- * Only someone working the job: its lead inspector, an inspector with a
- * room on it, or an admin.
+ * Only someone working the job -- its inspectors (the roster, a return
+ * visit's crew, a room's inspector) -- or an admin.
  */
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
@@ -58,21 +58,19 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     if (error) throw new Error(error.message);
     if (!job) return NextResponse.json({ error: "Job not found" }, { status: 404 });
 
-    if (job.inspector_id !== profile.id && !isAdminUser(accessUser)) {
-      // Not the lead: allowed only with a room of their own on this job.
-      let hasRoom = false;
-      if (await hasAreaInspector(admin)) {
-        const { count, error: roomError } = await admin
-          .from("snagging_areas")
-          .select("id", { count: "exact", head: true })
-          .eq("job_id", id)
-          .eq("inspector_id", profile.id);
-        if (roomError) throw new Error(roomError.message);
-        hasRoom = (count ?? 0) > 0;
-      }
-      if (!hasRoom) {
-        return NextResponse.json({ error: "Not assigned to this inspection" }, { status: 403 });
-      }
+    /*
+      Anyone working the job. This only let the lead and inspectors with a
+      room of their own through, so the other inspectors on a shared job --
+      the roster, and a return visit's crew -- were refused the NOC at the
+      very door it exists for. The roster check is the one the rest of the
+      sync uses.
+    */
+    if (
+      job.inspector_id !== profile.id &&
+      !isAdminUser(accessUser) &&
+      !(await mayWriteJob(admin, id, profile.id))
+    ) {
+      return NextResponse.json({ error: "Not assigned to this inspection" }, { status: 403 });
     }
 
     // The property record wins, as it does on the job page.
@@ -93,11 +91,22 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       );
     }
 
+    /*
+      A second link that saves the file instead of showing it: storage sends
+      it as an attachment under this name, so the phone's browser downloads
+      it rather than opening a viewer. Signed per request like the other.
+    */
+    const fileName = path.split("/").pop() ?? "noc";
+    const { data: download } = await admin.storage
+      .from(SNAGGING_BUCKET)
+      .createSignedUrl(path, NOC_URL_TTL_SECONDS, { download: fileName });
+
     return NextResponse.json({
       data: {
         required,
         url,
-        file_name: path.split("/").pop() ?? "noc",
+        download_url: download?.signedUrl ?? url,
+        file_name: fileName,
         expires_in: NOC_URL_TTL_SECONDS,
       },
     });

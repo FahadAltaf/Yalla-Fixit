@@ -30,6 +30,12 @@ export type Evidence = {
 export function splitEvidence(
   photos: SnaggingPhoto[] | null | undefined,
   visitRound: number,
+  /**
+   * The round the defect was raised on. Its photos from that round are how
+   * it looked when raised -- "before" -- even on a de-snag round: a defect
+   * found on round 2 has nothing to be "after" yet.
+   */
+  raisedOnRound = 1,
 ): Evidence {
   const before: SnaggingPhoto[] = [];
   const after: SnaggingPhoto[] = [];
@@ -38,7 +44,7 @@ export function splitEvidence(
     // A photo with no round recorded predates the column; it belongs to
     // the visit that raised the defect, which is the earliest one there is.
     const shotOn = photo.round_number ?? 1;
-    if (shotOn < visitRound) before.push(photo);
+    if (shotOn < visitRound || shotOn <= raisedOnRound) before.push(photo);
     else after.push(photo);
   }
 

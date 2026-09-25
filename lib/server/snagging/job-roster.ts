@@ -1,6 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { hasAreaInspector, hasJobInspectors } from "@/lib/server/snagging/columns";
+import {
+  hasAreaInspector,
+  hasJobInspectors,
+  hasVisitInspectors,
+} from "@/lib/server/snagging/columns";
 import { readAllRows } from "@/lib/server/snagging/read-all";
 
 /**
@@ -76,7 +80,7 @@ export async function mayWriteJob(
   jobId: string,
   userId: string,
 ): Promise<boolean> {
-  const [onRoster, visit, room] = await Promise.all([
+  const [onRoster, visit, visitCrew, room] = await Promise.all([
     isOnJobRoster(admin, jobId, userId),
     admin
       .from("snagging_job_visits")
@@ -84,6 +88,26 @@ export async function mayWriteJob(
       .eq("job_id", jobId)
       .eq("inspector_id", userId)
       .in("status", ["scheduled", "in_progress"]),
+    /*
+      A visit is attended by a SET of inspectors now, and only the first
+      of them is its `inspector_id`. Without this, the second inspector on
+      a booked visit could open it and not write to it.
+    */
+    (async () => {
+      if (!(await hasVisitInspectors(admin))) return { count: 0 };
+      const { data: live } = await admin
+        .from("snagging_job_visits")
+        .select("id")
+        .eq("job_id", jobId)
+        .in("status", ["scheduled", "in_progress"]);
+      const ids = (live ?? []).map((row) => row.id as string);
+      if (ids.length === 0) return { count: 0 };
+      return admin
+        .from("snagging_visit_inspectors")
+        .select("visit_id", { count: "exact", head: true })
+        .in("visit_id", ids)
+        .eq("inspector_id", userId);
+    })(),
     (async () =>
       (await hasAreaInspector(admin))
         ? admin
@@ -93,5 +117,71 @@ export async function mayWriteJob(
             .eq("inspector_id", userId)
         : { count: 0 })(),
   ]);
-  return onRoster || (visit.count ?? 0) > 0 || (room.count ?? 0) > 0;
+  return (
+    onRoster ||
+    (visit.count ?? 0) > 0 ||
+    (visitCrew.count ?? 0) > 0 ||
+    (room.count ?? 0) > 0
+  );
+}
+
+/**
+ * Replaces who attends a visit.
+ *
+ * Delete-then-insert rather than a diff, exactly as the job's own
+ * assignment does it: the set is small and the caller always sends the
+ * whole selection. The visit's `inspector_id` is kept as the first of
+ * them, which the report and the app's sync still read.
+ *
+ * Does nothing where 20260924140000 has not run, so a visit still books
+ * against its single inspector on a database without the table.
+ */
+export async function setVisitRoster(
+  admin: SupabaseClient,
+  visitId: string,
+  inspectorIds: string[],
+): Promise<void> {
+  if (!(await hasVisitInspectors(admin))) return;
+
+  const { error: clearError } = await admin
+    .from("snagging_visit_inspectors")
+    .delete()
+    .eq("visit_id", visitId);
+  if (clearError) throw new Error(clearError.message);
+
+  if (inspectorIds.length === 0) return;
+  const { error: insertError } = await admin
+    .from("snagging_visit_inspectors")
+    .insert(
+      inspectorIds.map((inspectorId) => ({
+        visit_id: visitId,
+        inspector_id: inspectorId,
+      })),
+    );
+  if (insertError) throw new Error(insertError.message);
+}
+
+/** Who attends each of these visits, the first of them being inspector_id. */
+export async function loadVisitRosters(
+  admin: SupabaseClient,
+  visitIds: string[],
+): Promise<Map<string, string[]>> {
+  const rosters = new Map<string, string[]>();
+  if (visitIds.length === 0 || !(await hasVisitInspectors(admin))) return rosters;
+
+  const rows = await readAllRows<{ visit_id: string; inspector_id: string }>(
+    (from, to) =>
+      admin
+        .from("snagging_visit_inspectors")
+        .select("visit_id, inspector_id")
+        .in("visit_id", visitIds)
+        .order("visit_id", { ascending: true })
+        .order("created_at", { ascending: true })
+        .range(from, to),
+    "visit rosters",
+  );
+  for (const row of rows) {
+    rosters.set(row.visit_id, [...(rosters.get(row.visit_id) ?? []), row.inspector_id]);
+  }
+  return rosters;
 }

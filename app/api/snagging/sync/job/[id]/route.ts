@@ -7,6 +7,7 @@ import { hasAreaInspector } from "@/lib/server/snagging/columns";
 import { loadSyncChildren } from "@/lib/server/snagging/sync-children";
 import { loadTaskDetail } from "@/lib/server/snagging/sync-task-detail";
 import { isOnJobRoster } from "@/lib/server/snagging/job-roster";
+import { catalogueForDevice } from "@/lib/server/snagging/sync-pull";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
@@ -23,6 +24,24 @@ import { ActionType, ResourceType } from "@/types/types";
  * /api/snagging/sync/push.
  *
  * `since` makes it a delta, for a job already on the device.
+ *
+ * Everything the job screens need, in ONE request when a job is opened:
+ *   ?include_catalogue=true | ?catalogue_since=<mark>
+ *       the capture sheet's catalogue, sent only when the device has none
+ *       or it changed (null when current; absent when not asked);
+ *   ?parent=true [&parent_since=<cursor>]
+ *       the job it was raised against -- a round or visit shows those
+ *       findings as already on record -- under `parent`.
+ * These were separate requests (/sync/catalogue, and /sync/job for the
+ * parent), made one after another every time a job was opened.
+ *
+ *   ?view=detail
+ *       the job screen's own fields only -- who to call, the unit, the NOC,
+ *       the schedule and the team -- and none of its contents. What opening
+ *       a job asks for; the rooms, snags, photos, checklist and plans come
+ *       with "Download for offline" (or the inspection screens of a
+ *       finished job). Opening a job fetched all of it, signed URL per photo
+ *       included, to show a page that uses none of it.
  */
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
@@ -35,7 +54,14 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     }
 
     const { id } = await ctx.params;
-    const since = req.nextUrl.searchParams.get("since") ?? undefined;
+    const params = req.nextUrl.searchParams;
+    const since = params.get("since") ?? undefined;
+    const includeCatalogue = params.get("include_catalogue") === "true";
+    const catalogueSince = params.get("catalogue_since") ?? undefined;
+    const wantCatalogue = includeCatalogue || Boolean(catalogueSince);
+    const wantParent = params.get("parent") === "true";
+    const parentSince = params.get("parent_since") ?? undefined;
+    const detailOnly = params.get("view") === "detail";
     const admin = await createAdminServerClient();
 
     /*
@@ -44,7 +70,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       a job reaches the handset through the pull.
     */
     const [{ data: job, error: jobError }, visitBooked, roomHeld, childHeld, onRoster] = await Promise.all([
-      admin.from("snagging_jobs").select("id, inspector_id").eq("id", id).maybeSingle(),
+      admin.from("snagging_jobs").select("id, inspector_id, parent_job_id").eq("id", id).maybeSingle(),
       admin
         .from("snagging_job_visits")
         .select("id", { count: "exact", head: true })
@@ -92,10 +118,31 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       The job screen's fields the list card left out (contacts, the unit,
       the NOC, the team, notes), and what the job contains -- read together.
     */
-    const [task, children] = await Promise.all([
+    if (detailOnly) {
+      return NextResponse.json({
+        data: { server_time: serverTime, task_id: id, task: await loadTaskDetail(admin, id) },
+      });
+    }
+
+    // Its original, as context: whoever may open this job may read that.
+    const parentId = wantParent ? ((job.parent_job_id as string | null) ?? null) : null;
+    const [task, children, catalogue, parent] = await Promise.all([
       loadTaskDetail(admin, id),
       // Scoped to the caller: one inspector's findings are not another's.
       loadSyncChildren(admin, [id], { since, viewer_id: profile.id }),
+      wantCatalogue
+        ? catalogueForDevice(admin, { include: includeCatalogue, since: catalogueSince })
+        : Promise.resolve(undefined),
+      parentId
+        ? Promise.all([
+            loadTaskDetail(admin, parentId),
+            loadSyncChildren(admin, [parentId], { since: parentSince, viewer_id: profile.id }),
+          ]).then(([parentTask, parentChildren]) => ({
+            task_id: parentId,
+            task: parentTask,
+            ...parentChildren,
+          }))
+        : Promise.resolve(null),
     ]);
 
     return NextResponse.json({
@@ -104,6 +151,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         task_id: id,
         task,
         ...children,
+        ...(wantCatalogue ? { catalogue } : {}),
+        parent,
       },
     });
   } catch (error) {

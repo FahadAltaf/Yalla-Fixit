@@ -290,7 +290,7 @@ export default function ReviewWorkspace() {
                 retrying={loadingTask}
               />
             ) : task ? (
-              <ReviewPanel task={task} onChanged={() => void onChanged()} />
+              <ReviewPanel task={task} onChanged={onChanged} />
             ) : (
               <Card className="p-0">
                 <EmptyState

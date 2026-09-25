@@ -107,8 +107,20 @@ export function ChecklistPanel({
     (item) => item.status === "failed" || item.status === "not_checked",
   );
 
+  /*
+    On a round, a check that has to be answered again is listed once.
+
+    It was listed twice -- in "Carried in to re-check" at the top and then
+    again inside its own category below -- so the same "Not checked" line
+    was read as two outstanding checks, and the page disagreed with its
+    own count. The top block is the outstanding work; the categories
+    beneath it are what has already been answered on this round.
+  */
+  const carriedIds = new Set(isRound ? needsRecheck.map((item) => item.id) : []);
+
   const groups = new Map<string, SnaggingChecklistItem[]>();
   for (const item of items) {
+    if (carriedIds.has(item.id)) continue;
     const list = groups.get(item.group_name) ?? [];
     list.push(item);
     groups.set(item.group_name, list);

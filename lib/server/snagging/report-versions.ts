@@ -24,6 +24,10 @@ export type ReportVersion = {
   snag_count: number;
   generated_at: string;
   reason: string | null;
+  /** pending | generating | generated | failed. Absent before the column existed. */
+  generation_status?: string | null;
+  /** Why the last render failed, written for a person to read. */
+  generation_error?: string | null;
 };
 
 /**
@@ -42,15 +46,25 @@ export async function listReportVersions(
   admin: SupabaseClient,
   jobId: string,
 ): Promise<ReportVersion[]> {
-  if (!(await versioningAvailable(admin))) return [];
+  const [available, withStatus] = await Promise.all([
+    versioningAvailable(admin),
+    hasColumn(admin, "snagging_report_versions", "generation_status"),
+  ]);
+  if (!available) return [];
 
+  // The PDF's state too, so a failed or stuck render can be retried from
+  // the list.
   const { data, error } = await admin
     .from("snagging_report_versions")
-    .select("id, version, source_visit_id, snag_count, generated_at, reason")
+    .select(
+      withStatus
+        ? "id, version, source_visit_id, snag_count, generated_at, reason, generation_status, generation_error"
+        : "id, version, source_visit_id, snag_count, generated_at, reason",
+    )
     .eq("job_id", jobId)
     .order("version", { ascending: false });
   if (error) throw new Error(error.message);
-  return (data ?? []) as ReportVersion[];
+  return (data ?? []) as unknown as ReportVersion[];
 }
 
 /**

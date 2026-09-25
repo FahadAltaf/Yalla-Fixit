@@ -258,13 +258,13 @@ type JobDetailValue = {
   refreshVisits: () => Promise<boolean>;
   refreshQuotation: () => Promise<boolean>;
   /** After something changed the job: re-reads the job and History. */
-  jobChanged: () => void;
+  jobChanged: () => Promise<void>;
   /** After rooms or plans changed: job, floor plans, snags, History. */
-  areasChanged: () => void;
+  areasChanged: () => Promise<void>;
   /** After a visit was added, booked, reviewed or cancelled. */
-  visitsChanged: () => void;
+  visitsChanged: () => Promise<void>;
   /** After the quotation was generated, sent or decided. */
-  quotationChanged: () => void;
+  quotationChanged: () => Promise<void>;
   /** Every loaded slice. Resolves true when all of them came back. */
   refreshAll: () => Promise<boolean>;
   /** True while any slice is re-fetching data already on screen. */
@@ -516,31 +516,35 @@ export function JobDetailProvider({
   }, [fetchAudit]);
 
   // ── Changes: each re-reads exactly the slices it moves ────────────────
-  const jobChanged = useCallback(() => {
-    void runJob();
+  /*
+    Each resolves once the sections the change moved have been read again,
+    so an action can keep its button busy until the screen shows the
+    result -- rather than stopping, flashing the old buttons, and then
+    swapping to the new ones a moment later. History refreshes alongside
+    and is not waited on.
+  */
+  const jobChanged = useCallback(async () => {
     void refreshAudit();
+    await runJob();
   }, [runJob, refreshAudit]);
 
-  const areasChanged = useCallback(() => {
-    void runJob();
-    void runFloorPlans();
-    void runSnags();
+  const areasChanged = useCallback(async () => {
     void refreshAudit();
+    await Promise.all([runJob(), runFloorPlans(), runSnags()]);
   }, [runJob, runFloorPlans, runSnags, refreshAudit]);
 
-  const visitsChanged = useCallback(() => {
-    void runVisits();
-    void runJob();
-    void runSnags();
-    void runVisitStatus();
+  const visitsChanged = useCallback(async () => {
     void refreshAudit();
+    await Promise.all([runVisits(), runJob(), runSnags(), runVisitStatus()]);
   }, [runVisits, runJob, runSnags, runVisitStatus, refreshAudit]);
 
-  const quotationChanged = useCallback(() => {
-    if (quotationRequested.current) void runQuotation();
-    void runJob();
-    void runDesnag();
+  const quotationChanged = useCallback(async () => {
     void refreshAudit();
+    await Promise.all([
+      quotationRequested.current ? runQuotation() : Promise.resolve(true),
+      runJob(),
+      runDesnag(),
+    ]);
   }, [runQuotation, runJob, runDesnag, refreshAudit]);
 
   const refreshAll = useCallback(async () => {

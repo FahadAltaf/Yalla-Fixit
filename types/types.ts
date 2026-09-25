@@ -216,6 +216,9 @@ export interface TechnicianRole {
   id: string;
   name: string;
   sort_order: number;
+  // FR-2: row highlight colour on the schedule board (hex, e.g. #dc2626). Null
+  // = no highlight. Driver / Technician-Driver default to red.
+  color?: string | null;
   technician_count?: number;
 }
 
@@ -239,6 +242,9 @@ export interface TechnicianReference {
   shift?: TechnicianShift | null;
   team_leader_fsm_id?: string | null;
   team_leader_name?: string | null;
+  // Team-arranged row order on the schedule board ("Custom" sort). Null =
+  // not arranged yet.
+  board_position?: number | null;
 }
 
 export interface TechnicianTag {
@@ -338,8 +344,11 @@ export interface SnaggingJobVisit {
   status: SnaggingVisitStatus;
   scheduled_date: string | null;
   appointment_at: string | null;
+  /** The first of the visit's inspectors, kept for the report and the app. */
   inspector_id: string | null;
   inspector?: { id: string; full_name?: string | null; email?: string | null } | null;
+  /** Everyone attending, the first of them being `inspector`. */
+  inspectors?: Array<{ id: string; full_name?: string | null; email?: string | null }>;
   /** Fixed per visit per property (change 30), stamped when it is raised. */
   charge: number | null;
   charge_method: SnaggingVisitChargeMethod;
@@ -550,6 +559,19 @@ export interface SnaggingSnag {
    * that predate the app writing created_by.
    */
   recorded_by?: { full_name?: string | null; email?: string | null } | null;
+  /**
+   * Who worked on this defect, round by round: who recorded it, and who
+   * gave its result on each de-snag round. A round is often walked by a
+   * different inspector from the one who raised the defect.
+   */
+  people?: Array<{
+    round: number;
+    action: "recorded" | "verified";
+    name: string;
+    at: string | null;
+    /** The result given, on a verification. */
+    verdict?: string | null;
+  }>;
   floor_plan_id?: string | null;
   /** 0..1 fractions of the plan, so a pin survives any zoom level. */
   pin_x?: number | null;

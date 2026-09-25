@@ -3,6 +3,9 @@
 // Ported from the zoho-fsm-work-order-search / zoho-fsm-work-order-lines
 // Edge Functions (FRD PLAN-003/004, O-4).
 
+import { resolveAppointmentState, type AppointmentState } from "@/lib/scheduling/appointment-status";
+import { isLiveLineAssociation } from "./appointments";
+import { zonedTimeToUtc } from "@/lib/scheduling/org-time";
 import {
   fsmFail,
   fsmFetch,
@@ -56,6 +59,23 @@ type ServiceTaskLineItem = { id: string; Name?: string; Status?: string };
 type AxsItem = {
   Service_Line_Item?: { id: string } | null;
   Service_Appointment?: { id: string; name?: string } | null;
+  // The line's status on that appointment (mirrors the appointment's status:
+  // "Completed", "Cancelled", ...) and whether the association is still active.
+  SLI_Status?: string | null;
+  is_line_item_active?: boolean;
+};
+
+// When an appointment's lines disagree (e.g. one line completed early), the
+// appointment reads as its most active line.
+const STATE_RANK: Record<AppointmentState, number> = {
+  cancelled: 0,
+  cannot_complete: 0,
+  unknown: 1,
+  new: 1,
+  completed: 2,
+  scheduled: 3,
+  dispatched: 4,
+  in_progress: 5,
 };
 
 type WorkOrderDetail = {
@@ -117,8 +137,8 @@ export async function searchFsmWorkOrders(input: WorkOrderSearchInput): Promise<
     const contact = input.contact?.trim().toLowerCase();
     const company = input.company?.trim().toLowerCase();
     const address = input.address?.trim().toLowerCase();
-    const fromMs = input.dateFrom ? new Date(`${input.dateFrom}T00:00:00`).getTime() : null;
-    const toMs = input.dateTo ? new Date(`${input.dateTo}T23:59:59`).getTime() : null;
+    const fromMs = input.dateFrom ? zonedTimeToUtc(input.dateFrom, "00:00:00").getTime() : null;
+    const toMs = input.dateTo ? zonedTimeToUtc(input.dateTo, "23:59:59").getTime() : null;
 
     const matches: WorkOrder[] = [];
     for (let page = 1; page <= RECENT_PAGES; page += 1) {
@@ -167,13 +187,58 @@ export async function getFsmWorkOrderLines(workOrderId: string): Promise<FsmResu
     const wo = res.record;
     if (!wo) return fsmFail("Work order not found in Zoho FSM", 404);
 
-    // Which service lines already sit on an appointment.
+    // Coverage and appointment status both come from the junction rows already
+    // on this record (SLI_Status), so no per-appointment reads are needed. A
+    // line only counts as covered by a LIVE appointment: a cancelled one frees
+    // it (FSM lists it "yet to be scheduled"), so it stays schedulable here.
+    const lineInfoById = new Map(
+      (wo.Service_Line_Items ?? []).map(
+        (l) => [l.id, { code: l.Name ?? l.id, service: l.Service?.name ?? null }] as const,
+      ),
+    );
     const scheduledLineIds = new Set<string>();
+    const lineToAppointments = new Map<string, { id: string; name: string }[]>();
+    type ApptSummary = {
+      id: string;
+      name: string;
+      lines: { code: string; service: string | null }[];
+      state: AppointmentState;
+      status: string | null;
+    };
+    const apptMap = new Map<string, ApptSummary>();
     for (const axs of wo.Appointments_X_Services ?? []) {
-      if (axs.Service_Line_Item?.id && axs.Service_Appointment?.id) {
-        scheduledLineIds.add(axs.Service_Line_Item.id);
+      const appt = axs.Service_Appointment;
+      if (!appt?.id) continue;
+      const lineId = axs.Service_Line_Item?.id;
+      const live = isLiveLineAssociation(axs);
+      // A released association keeps its real reason (Cancelled / Cannot complete);
+      // an inactive row with any other status is treated as cancelled.
+      const resolved = resolveAppointmentState(axs.SLI_Status);
+      const state: AppointmentState = live || resolved === "cannot_complete" ? resolved : "cancelled";
+
+      const existing = apptMap.get(appt.id);
+      const entry: ApptSummary = existing ?? {
+        id: appt.id,
+        name: appt.name ?? appt.id,
+        lines: [],
+        state,
+        status: axs.SLI_Status ?? null,
+      };
+      if (existing && STATE_RANK[state] > STATE_RANK[existing.state]) {
+        existing.state = state;
+        existing.status = axs.SLI_Status ?? null;
       }
+      const li = lineId ? lineInfoById.get(lineId) : undefined;
+      if (li && !entry.lines.some((x) => x.code === li.code)) entry.lines.push(li);
+      apptMap.set(appt.id, entry);
+
+      if (!lineId || !live) continue;
+      scheduledLineIds.add(lineId);
+      const list = lineToAppointments.get(lineId) ?? [];
+      list.push({ id: appt.id, name: appt.name ?? appt.id });
+      lineToAppointments.set(lineId, list);
     }
+    const appointments = [...apptMap.values()];
 
     return fsmOk({
       workOrderId: wo.id,
@@ -186,12 +251,14 @@ export async function getFsmWorkOrderLines(workOrderId: string): Promise<FsmResu
         description: line.Description ?? null,
         status: line.Status ?? null,
         scheduled: scheduledLineIds.has(line.id),
+        appointments: lineToAppointments.get(line.id) ?? [],
       })),
       serviceTaskLineItems: (wo.Service_Tasks_Line_Items ?? []).map((t) => ({
         id: t.id,
         name: t.Name ?? t.id,
         status: t.Status ?? null,
       })),
+      appointments,
     });
   } catch (error) {
     return fsmResultFromError(error, "zoho:getFsmWorkOrderLines");

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { splitInstant, toLocalInstant } from "@/lib/snagging/schedule-defaults";
 import {
   AlertTriangle,
@@ -38,6 +38,7 @@ import { Label } from "@/components/ui/label";
 import { compressImage } from "@/lib/media/compress-image";
 import DateSelect from "@/components/ui/date-select";
 import { InspectorAssignmentAlert } from "./inspector-alert";
+import { useActiveStaff } from "./inspector-picker";
 import TimeSelect from "@/components/ui/time-select";
 import { cn } from "@/lib/utils";
 import {
@@ -51,7 +52,7 @@ import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
 import MultipleSelector from "@/components/ui/multiselect";
 import { snaggingService } from "@/modules/snagging";
-import { usersService } from "@/modules/users/services/users-service";
+import type { AssignableUser } from "@/modules/users/services/users-service";
 
 import { LocationMap } from "./location-map";
 import { LocationPicker } from "./location-picker";
@@ -61,7 +62,6 @@ import {
   ResourceType,
   type SnaggingPropertyType,
   type SnaggingTask,
-  type User,
 } from "@/types/types";
 
 import {
@@ -107,7 +107,7 @@ export function JobSetupPanel({
   onChanged,
 }: {
   task: SnaggingTask;
-  onChanged: () => void;
+  onChanged: () => void | Promise<unknown>;
 }) {
   const { userProfile } = useAuth();
   const canEdit = hasResourceAction(
@@ -118,9 +118,17 @@ export function JobSetupPanel({
   const { confirm, dialog } = useConfirm();
   const nocInputRef = useRef<HTMLInputElement | null>(null);
 
-  const [users, setUsers] = useState<User[]>([]);
-  const [usersLoading, setUsersLoading] = useState(true);
-  const [usersError, setUsersError] = useState<string | null>(null);
+  /*
+    Shared with every other picker on the page (useActiveStaff), and it
+    asks for a name and an email rather than every profile in full with
+    its role's whole permission matrix.
+  */
+  const {
+    users,
+    loading: usersLoading,
+    error: usersError,
+    reload: loadUsers,
+  } = useActiveStaff();
   const [saving, setSaving] = useState<
     null | "appt" | "contacts" | "assign" | "noc" | "location" | "property" | "client"
   >(null);
@@ -188,28 +196,6 @@ export function JobSetupPanel({
   // FR-6.01 — who checks the work before the manager signs it off.
   const [reviewerId, setReviewerId] = useState(task.reviewer_id ?? UNASSIGNED);
 
-  const loadUsers = useCallback(async () => {
-    setUsersLoading(true);
-    setUsersError(null);
-    try {
-      const rows: User[] = await usersService.getUsers();
-      setUsers(rows.filter((r) => r.is_active !== false));
-    } catch (e) {
-      // An empty Select was the only sign of a failed fetch, so "no staff
-      // exist" and "the staff list broke" looked identical.
-      setUsers([]);
-      setUsersError(
-        e instanceof Error ? e.message : "Could not load the staff list",
-      );
-    } finally {
-      setUsersLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadUsers();
-  }, [loadUsers]);
-
   // Availability for the appointment day, so a booked inspector is flagged.
   useEffect(() => {
     if (!apptDate) {
@@ -250,7 +236,7 @@ export function JobSetupPanel({
         : null;
       await snaggingService.updateTask(task.id, { appointment_at });
       toast.success("Appointment saved");
-      onChanged();
+      await onChanged();
     } catch (e) {
       toast.error(
         e instanceof Error ? e.message : "Could not save the appointment",
@@ -270,7 +256,7 @@ export function JobSetupPanel({
         client_contact_phone: cliPhone.trim() || null,
       });
       toast.success("Site contacts saved");
-      onChanged();
+      await onChanged();
     } catch (e) {
       toast.error(
         e instanceof Error ? e.message : "Could not save the contacts",
@@ -338,7 +324,7 @@ export function JobSetupPanel({
             ? "Inspector assigned"
             : `${inspectorIds.length} inspectors assigned`,
       );
-      onChanged();
+      await onChanged();
     } catch (e) {
       toast.error(
         e instanceof Error ? e.message : "Could not update the assignment",
@@ -365,7 +351,7 @@ export function JobSetupPanel({
       const { file: prepared } = await compressImage(file);
       await snaggingService.uploadDocument(task.id, prepared, "noc");
       toast.success("NOC uploaded");
-      onChanged();
+      await onChanged();
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Could not upload the NOC",
@@ -491,7 +477,7 @@ export function JobSetupPanel({
       });
       toast.success("Property updated");
       setPropertyOpen(false);
-      onChanged();
+      await onChanged();
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Could not update the property",
@@ -522,7 +508,7 @@ export function JobSetupPanel({
       });
       toast.success("Client updated");
       setClientOpen(false);
-      onChanged();
+      await onChanged();
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Could not update the client",
@@ -566,7 +552,7 @@ export function JobSetupPanel({
       });
       toast.success(lat === null ? "Location cleared" : "Location updated");
       setLocationOpen(false);
-      onChanged();
+      await onChanged();
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Could not update the location",
@@ -1630,7 +1616,7 @@ function Field({
 }
 
 /** The display name for an assigned user id, or null when unassigned. */
-function nameFor(users: User[], id?: string | null): string | null {
+function nameFor(users: AssignableUser[], id?: string | null): string | null {
   if (!id) return null;
   const match = users.find((user) => user.id === id);
   return (match?.full_name || match?.email) ?? id;

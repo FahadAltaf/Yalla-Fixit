@@ -292,7 +292,9 @@ export function SubmissionsList() {
                 size="icon"
                 className="size-8"
                 aria-label={`Actions for ${customer}`}
-                disabled={isViewing || sending}
+                // Also while an approval or send-back is in flight, so a
+                // second one can't be started behind it.
+                disabled={isViewing || sending || actions.deciding}
               >
                 {isViewing || sending ? (
                   <Loader2 className="size-4 animate-spin" />

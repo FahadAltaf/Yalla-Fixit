@@ -4,6 +4,7 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
+import { setVisitRoster } from "@/lib/server/snagging/job-roster";
 import { loadJobVisits } from "@/lib/server/snagging/job-detail-sections";
 import { createVisitSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType } from "@/types/types";
@@ -196,6 +197,8 @@ export async function POST(
         status: "requested",
         scheduled_date: input.scheduled_date.trim(),
         appointment_at: input.appointment_at ?? null,
+        // The first of them; the rest go to snagging_visit_inspectors
+        // below, once the row has an id.
         inspector_id: input.technician_ids[0] ?? null,
         charge,
         charge_method: input.charge_method,
@@ -213,6 +216,11 @@ export async function POST(
       .select("id, visit_number, charge, charge_method")
       .single();
     if (visitError) throw new Error(visitError.message);
+
+    // Everyone attending, so a visit walked by two inspectors reaches both.
+    await setVisitRoster(admin, visit.id as string, [
+      ...new Set(input.technician_ids),
+    ]);
 
     await recordAudit(admin, {
       entityType: "task",

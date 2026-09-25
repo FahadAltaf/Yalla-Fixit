@@ -1,7 +1,12 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { byCreation } from "@/lib/snagging/creation-order";
-import { hasAreaInspector, hasReviewNote, hasVerdictNote } from "@/lib/server/snagging/columns";
+import {
+  hasAreaInspector,
+  hasReviewNote,
+  hasVerdictNote,
+  hasVisitInspectors,
+} from "@/lib/server/snagging/columns";
 import { loadJobFamily, readOnRoot } from "@/lib/server/snagging/job-family";
 import { listReportVersions } from "@/lib/server/snagging/report-versions";
 import { signMediaPaths } from "@/lib/server/snagging/media";
@@ -312,6 +317,140 @@ export async function loadJobChecklist(admin: Admin, id: string) {
 }
 
 /**
+ * Fills in what a snag's own row is missing, for display.
+ *
+ * Category: a snag stores the category it was classified under, but older
+ * rows, older app builds and every copy a de-snag round carried had none,
+ * so the detail showed "—". The catalogue code says it anyway -- SN03-03-03
+ * is category SN03 -- so it is read from there.
+ *
+ * Recorded by: a round's copy of a defect has no author of its own (it was
+ * copied, not recorded), so the detail showed "—" for a defect somebody
+ * plainly raised. It shows whoever recorded the original, found through the
+ * snag code the copies share. Display only: the copy's created_by stays
+ * empty, because the phone and the sync treat created_by as "only this
+ * inspector may change it", and the round may be someone else's to walk.
+ */
+async function fillFromOriginals(admin: Admin, familyIds: string[], rows: Row[]): Promise<Row[]> {
+  const noCategory = rows.some((r) => !r.category_label && r.catalogue_code);
+  const noRecorder = rows.filter((r) => !r.recorded_by && r.snag_code);
+  if (!noCategory && noRecorder.length === 0) return rows;
+
+  const [categories, originals] = await Promise.all([
+    noCategory
+      ? admin.from("snagging_catalogue_categories").select("code, label")
+      : Promise.resolve({ data: [] as Row[], error: null }),
+    noRecorder.length > 0 && familyIds.length > 1
+      ? admin
+          .from("snagging_snags")
+          .select("snag_code, created_at, recorded_by:created_by(id, full_name, email)")
+          .in("job_id", familyIds)
+          .in("snag_code", [...new Set(noRecorder.map((r) => r.snag_code as string))])
+          .not("created_by", "is", null)
+          .order("created_at", { ascending: true })
+      : Promise.resolve({ data: [] as Row[], error: null }),
+  ]);
+  if (categories.error) throw new Error(categories.error.message);
+  if (originals.error) throw new Error(originals.error.message);
+
+  const categoryByCode = new Map(
+    ((categories.data ?? []) as Row[]).map((c) => [c.code as string, c.label as string]),
+  );
+  // The earliest recorded copy of each defect is the original.
+  const recorderByCode = new Map<string, unknown>();
+  for (const o of (originals.data ?? []) as Row[]) {
+    if (!recorderByCode.has(o.snag_code)) recorderByCode.set(o.snag_code, o.recorded_by);
+  }
+
+  return rows.map((r) => ({
+    ...r,
+    category_label:
+      r.category_label ??
+      categoryByCode.get(String(r.catalogue_code ?? "").split("-")[0]) ??
+      null,
+    recorded_by: r.recorded_by ?? recorderByCode.get(r.snag_code) ?? null,
+  }));
+}
+
+/**
+ * Who worked on each defect, round by round.
+ *
+ * A defect is one row per round it was carried into, all sharing its snag
+ * code. The round-1 row says who recorded it (created_by, or a round's
+ * row for a defect born there); each round's verdict is in the audit trail
+ * against that round's row, with whoever gave it. Round 1 might be one
+ * inspector and round 2 another, and the detail showed only a single
+ * "Recorded by" -- so the office could not tell who had passed the fix.
+ *
+ * Two queries for the whole list, whatever its length: every copy of these
+ * defects across the family, and the verdicts given on them.
+ */
+async function attachPeople(
+  admin: Admin,
+  familyIds: string[],
+  roundOf: Map<string, number>,
+  rows: Row[],
+): Promise<Row[]> {
+  const codes = [...new Set(rows.map((r) => r.snag_code as string).filter(Boolean))];
+  if (codes.length === 0) return rows;
+
+  const { data: copies, error: copyError } = await admin
+    .from("snagging_snags")
+    .select("id, job_id, snag_code, created_at, round_created, recorded_by:created_by(full_name, email)")
+    .in("job_id", familyIds)
+    .in("snag_code", codes);
+  if (copyError) throw new Error(copyError.message);
+
+  const copyIds = (copies ?? []).map((c) => c.id as string);
+  const { data: verdicts, error: verdictError } = copyIds.length
+    ? await admin
+        .from("snagging_audit_events")
+        .select("entity_id, actor_label, created_at, payload")
+        .eq("event_type", "snag_verified")
+        .in("entity_id", copyIds)
+        .order("created_at", { ascending: false })
+    : { data: [] as Row[], error: null };
+  if (verdictError) throw new Error(verdictError.message);
+
+  // The latest verdict on each copy is the one that stands.
+  const latest = new Map<string, Row>();
+  for (const v of (verdicts ?? []) as Row[]) {
+    if (!latest.has(v.entity_id)) latest.set(v.entity_id, v);
+  }
+
+  type Person = NonNullable<import("@/types/types").SnaggingSnag["people"]>[number];
+  const byCode = new Map<string, Person[]>();
+  for (const copy of (copies ?? []) as Row[]) {
+    const list = byCode.get(copy.snag_code) ?? [];
+    const round = roundOf.get(copy.job_id) ?? 1;
+    const who = firstOf(copy.recorded_by as { full_name?: string; email?: string } | null);
+    const name = who?.full_name ?? who?.email ?? null;
+    // Recorded: only on the round the defect was raised on (a carried copy has no author).
+    if (name && (copy.round_created ?? 1) === round) {
+      list.push({ round, action: "recorded", name, at: copy.created_at ?? null });
+    }
+    const verdict = latest.get(copy.id);
+    if (verdict?.actor_label) {
+      list.push({
+        round,
+        action: "verified",
+        name: verdict.actor_label as string,
+        at: (verdict.created_at as string) ?? null,
+        verdict: ((verdict.payload as { verdict?: string } | null)?.verdict as string) ?? null,
+      });
+    }
+    byCode.set(copy.snag_code, list);
+  }
+
+  return rows.map((r) => ({
+    ...r,
+    people: (byCode.get(r.snag_code) ?? []).sort(
+      (a, b) => a.round - b.round || (a.action === "recorded" ? -1 : 1),
+    ),
+  }));
+}
+
+/**
  * The snags this record shows, with their photos signed. The heaviest
  * section: it resolves the family and signs every photo.
  */
@@ -383,7 +522,15 @@ export async function loadJobSnags(admin: Admin, id: string) {
           String(y.created_at ?? "").localeCompare(String(x.created_at ?? "")),
         );
 
-  const signedSnags = await signMediaPaths(admin, snagRows ?? []);
+  const signedSnags = await signMediaPaths(
+    admin,
+    await attachPeople(
+      admin,
+      family.allIds,
+      family.roundOf,
+      await fillFromOriginals(admin, family.allIds, snagRows ?? []),
+    ),
+  );
   /*
     origin_task_id and photo.task_id -- the pre-merge aliases of job_id --
     are no longer sent: nothing in the app reads either, and job_id is on
@@ -476,6 +623,17 @@ const VISIT_COLUMNS =
   // The visit's quotation, embedded rather than fetched in a second round trip.
   "quotation_ref:quotation_id(id, quote_number, status)";
 
+/*
+  Everyone attending the visit, embedded rather than fetched per row.
+  Left out entirely where 20260924140000 has not run, so a missing table
+  costs the extra names rather than the tab -- `inspector` above is then
+  the whole answer.
+*/
+const visitRosterSelect = async (admin: Admin) =>
+  (await hasVisitInspectors(admin))
+    ? ", roster:snagging_visit_inspectors(user_profile:inspector_id(id, full_name, email))"
+    : "";
+
 function firstOfVisit<T>(v: T | T[] | null | undefined): T | null {
   return Array.isArray(v) ? (v[0] ?? null) : (v ?? null);
 }
@@ -492,13 +650,14 @@ export async function loadJobVisits(admin: Admin, id: string) {
     since most jobs are their own root (readOnRoot). The quotation used
     to be a further query after the visits; it is embedded now.
   */
+  const rosterSelect = await visitRosterSelect(admin);
   const {
     result: [{ data: visits, error }, { data: visitSnags }, versions],
   } = await readOnRoot(admin, id, (rootId) =>
     Promise.all([
       admin
         .from("snagging_job_visits")
-        .select(VISIT_COLUMNS)
+        .select(`${VISIT_COLUMNS}${rosterSelect}`)
         .eq("job_id", rootId)
         .order("visit_number", { ascending: true }),
       // What each visit actually found, counted on the job it was written to.
@@ -524,13 +683,25 @@ export async function loadJobVisits(admin: Admin, id: string) {
       const quote = firstOfVisit(
         visit.quotation_ref as { id: string; quote_number: string | null; status: string } | null,
       );
-      const { quotation_ref: _embedded, ...rest } = visit;
+      const { quotation_ref: _embedded, roster: _roster, ...rest } = visit;
       void _embedded;
+      const lead = firstOfVisit(
+        visit.inspector as { id?: string } | null,
+      ) as { id?: string } | null;
+      /*
+        Every inspector on the visit, the lead first so the row still
+        reads the same where only one attends.
+      */
+      const crew = ((_roster ?? []) as Array<Record<string, unknown>>)
+        .map((row) => firstOfVisit(row.user_profile as { id?: string } | null))
+        .filter((person): person is { id?: string } => Boolean(person));
+      const inspectors = lead
+        ? [lead, ...crew.filter((person) => person.id !== lead.id)]
+        : crew;
       return {
         ...rest,
-        inspector: firstOfVisit(
-          visit.inspector as Record<string, unknown> | null,
-        ),
+        inspector: lead,
+        inspectors,
         quotation: quote
           ? {
               id: quote.id,

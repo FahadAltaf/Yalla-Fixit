@@ -240,7 +240,13 @@ export function DesnagQuotationDialog({
                   ) : (
                     jobOptions.map((job) => (
                       <SelectItem key={job.id} value={job.id}>
-                        {job.code} — {job.unit_label}
+                        {/*
+                          The unit, not the job code. This list is read to
+                          answer "which property are we going back to",
+                          and the code led every row with a string that
+                          answers nothing.
+                        */}
+                        {job.unit_label}
                         {job.building_name ? `, ${job.building_name}` : ""}
                       </SelectItem>
                     ))

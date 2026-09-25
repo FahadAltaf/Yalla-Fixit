@@ -25,6 +25,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { snaggingService } from "@/modules/snagging";
 
+import { InspectorPicker } from "./inspector-picker";
 import { SubmitButton } from "./shared";
 
 /**
@@ -39,12 +40,21 @@ export function AdditionalVisitDialog({
   open,
   onOpenChange,
   onCreated,
+  defaultInspectorIds,
+  inspectorNames,
 }: {
   taskId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /**
+   * Who the job's work currently sits with. The visit opens on them,
+   * since the usual case is that the same people go back.
+   */
+  defaultInspectorIds?: string[];
+  /** Their names, so the picker reads properly before the staff list lands. */
+  inspectorNames?: Record<string, string>;
   /** The panel reloads itself; the visit is a row on it, not a new page. */
-  onCreated?: () => void;
+  onCreated?: () => void | Promise<unknown>;
 }) {
   const [reason, setReason] = useState("");
   const [scheduledDate, setScheduledDate] = useState("");
@@ -53,6 +63,7 @@ export function AdditionalVisitDialog({
     "quotation",
   );
   const [paymentRef, setPaymentRef] = useState("");
+  const [inspectorIds, setInspectorIds] = useState<string[]>([]);
   const [working, setWorking] = useState(false);
 
   /*
@@ -67,7 +78,10 @@ export function AdditionalVisitDialog({
     const slot = nextBookableSlot();
     setScheduledDate(slot.date);
     setTime(slot.time);
-  }, [open]);
+    // Re-seeded on each open, so a list edited and then cancelled does
+    // not survive into the next visit.
+    setInspectorIds(defaultInspectorIds ?? []);
+  }, [open, defaultInspectorIds]);
 
   const appointment = toLocalInstant(scheduledDate, time);
   const inPast = isPastSlot(scheduledDate, time);
@@ -83,6 +97,7 @@ export function AdditionalVisitDialog({
         reason: reason.trim() || undefined,
         scheduled_date: scheduledDate,
         appointment_at: appointment ? appointment.toISOString() : null,
+        technician_ids: inspectorIds,
         charge_method: chargeMethod,
         payment_reference:
           chargeMethod === "payment_link" ? paymentRef.trim() || undefined : undefined,
@@ -92,13 +107,14 @@ export function AdditionalVisitDialog({
           ? ` · AED ${visit.charge.toLocaleString()}`
           : "";
       toast.success(`Visit ${visit.visit_number} added${charge}`);
-      onOpenChange(false);
       /*
         Stays on the job. The visit is an appointment ON this record now
         (change 25), so there is no second job to navigate to — the panel
-        the dialog was opened from is where it appears.
+        the dialog was opened from is where it appears, and it is there
+        before the dialog closes.
       */
-      onCreated?.();
+      await onCreated?.();
+      onOpenChange(false);
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Could not schedule the visit",
@@ -154,6 +170,32 @@ export function AdditionalVisitDialog({
                 aria-label="Requested time"
               />
             </div>
+          </div>
+
+          {/*
+            Who goes back (change 25).
+
+            Asked while booking rather than afterwards, and opened on
+            whoever holds the job, since the usual case is that the same
+            people go back. A visit takes a set of inspectors, like the
+            job itself: a villa re-walked by two people had to be booked
+            under one of them, and the other never got it on their phone.
+          */}
+          <div className="grid gap-2">
+            <Label htmlFor="visit-inspectors">Inspectors</Label>
+            <InspectorPicker
+              value={inspectorIds}
+              onChange={setInspectorIds}
+              names={inspectorNames}
+              disabled={working}
+            />
+            <p className="text-muted-foreground text-xs">
+              {inspectorIds.length === 0
+                ? "Nobody is assigned yet; the visit can be given to somebody later."
+                : chargeMethod === "quotation"
+                  ? "The visit reaches their phones once it is booked, which is after the client approves the quotation."
+                  : "The visit reaches their phones once it is booked."}
+            </p>
           </div>
 
           {/*

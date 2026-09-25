@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
@@ -119,34 +119,36 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
       Best-effort and last: the rejection is already committed and audited,
       and a mail failure must not roll it back or fail the manager's request.
+      Sent after the response (after()), so the manager is not kept waiting
+      on the mail server for a send-back that has already happened.
     */
-    let notified = false;
-    if (job.inspector_id) {
-      const { data: inspector } = await admin
-        .from("user_profile")
-        .select("email")
-        .eq("id", job.inspector_id)
-        .maybeSingle();
+    after(async () => {
+      if (job.inspector_id) {
+        const { data: inspector } = await admin
+          .from("user_profile")
+          .select("email")
+          .eq("id", job.inspector_id)
+          .maybeSingle();
 
-      if (inspector?.email) {
-        try {
-          await emailService.sendSnaggingRejectionEmail({
-            to: inspector.email,
-            code: job.code,
-            unit:
-              [job.unit_label, job.building_name].filter(Boolean).join(", ") || job.code,
-            categoryLabel: REJECTION_LABELS[category].title,
-            remediation: REJECTION_LABELS[category].remediation,
-            reason: comment,
-            dueAt: remediationDeadline,
-            jobUrl: `${process.env.NEXT_PUBLIC_APP_URL ?? ""}/snagging/${id}`,
-          });
-          notified = true;
-        } catch (emailError) {
-          console.error("Rejection email failed:", job.code, emailError);
+        if (inspector?.email) {
+          try {
+            await emailService.sendSnaggingRejectionEmail({
+              to: inspector.email,
+              code: job.code,
+              unit:
+                [job.unit_label, job.building_name].filter(Boolean).join(", ") || job.code,
+              categoryLabel: REJECTION_LABELS[category].title,
+              remediation: REJECTION_LABELS[category].remediation,
+              reason: comment,
+              dueAt: remediationDeadline,
+              jobUrl: `${process.env.NEXT_PUBLIC_APP_URL ?? ""}/snagging/${id}`,
+            });
+          } catch (emailError) {
+            console.error("Rejection email failed:", job.code, emailError);
+          }
         }
       }
-    }
+    });
 
     return NextResponse.json({
       data: {
@@ -154,7 +156,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         status: "rejected",
         category,
         remediation_due_at: remediationDeadline,
-        inspector_notified: notified,
+        // The email goes out just after this reply.
+        inspector_notified: Boolean(job.inspector_id),
       },
     });
   } catch (error) {

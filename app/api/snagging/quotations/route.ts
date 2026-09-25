@@ -386,7 +386,6 @@ async function desnagQuotation(
     client as { name?: string | null } | null,
     config,
     {
-      jobCode: job.code as string,
       round: ((job.round_number as number) ?? 1) + 1,
       price: chosenPrice,
     },

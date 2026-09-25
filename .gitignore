@@ -64,3 +64,6 @@ supabase/**/data.local.sql
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Local debug output, never part of a commit.
+debug.log

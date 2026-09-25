@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import { readOnRoot } from "@/lib/server/snagging/job-family";
+import { loadJobFamily, readOnRoot } from "@/lib/server/snagging/job-family";
 import { signPaths } from "@/lib/server/snagging/media";
 import { generateReportPdf } from "@/lib/server/snagging/report-generate";
 import { issueReportVersion } from "@/lib/server/snagging/report-versions";
@@ -20,6 +20,13 @@ import { ActionType, ResourceType } from "@/types/types";
  * to the same path; a reissue mints the next number. Which of the two happens
  * is decided by the body, not inferred.
  */
+
+/*
+  A render takes seconds. One still "pending" or "generating" after this
+  long was cut off -- the server restarted, or the background work after an
+  approval never ran -- and nothing will finish it, so it may be retried.
+*/
+const STUCK_AFTER_MS = 10 * 60 * 1000;
 
 type VersionRow = {
   id: string;
@@ -151,6 +158,42 @@ export async function POST(
           { status: 400 },
         );
       }
+      // Only a version of this job's own report: the id comes from the
+      // browser, and the page's permission is on this job.
+      const [family, { data: target, error: targetError }] = await Promise.all([
+        loadJobFamily(admin, id),
+        admin
+          .from("snagging_report_versions")
+          .select("id, job_id, generation_status, generated_at")
+          .eq("id", body.versionId)
+          .maybeSingle(),
+      ]);
+      if (targetError) throw new Error(targetError.message);
+      if (!target || target.job_id !== family.rootId) {
+        return NextResponse.json(
+          { error: "Report version not found" },
+          { status: 404 },
+        );
+      }
+      if (target.generation_status === "generating") {
+        const age = Date.now() - new Date(target.generated_at as string).getTime();
+        if (age < STUCK_AFTER_MS) {
+          return NextResponse.json(
+            { error: "This version is being generated now. Try again in a minute." },
+            { status: 409 },
+          );
+        }
+        // Cut off part way: release it so the render below can claim it.
+        await admin
+          .from("snagging_report_versions")
+          .update({
+            generation_status: "failed",
+            generation_error: "Generation stopped before it finished",
+          })
+          .eq("id", target.id)
+          .eq("generation_status", "generating");
+      }
+
       const result = await generateReportPdf(admin, body.versionId, {
         force: true,
         actorId: profile.id,

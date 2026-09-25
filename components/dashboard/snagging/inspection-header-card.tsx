@@ -59,9 +59,13 @@ export function InspectionHeaderCard({
   pending = {},
 }: {
   task: SnaggingTask;
-  onChanged: () => void;
+  /*
+    Re-reads the job. Awaited: an action keeps its button busy until the
+    page shows the result, so the old buttons never flash back first.
+  */
+  onChanged: () => void | Promise<unknown>;
   /** After a visit is added here; defaults to `onChanged`. */
-  onVisitsChanged?: () => void;
+  onVisitsChanged?: () => void | Promise<unknown>;
   /**
    * Sections of the job still on their way, where the page loads them
    * separately. The header renders from the core job at once; what depends
@@ -211,15 +215,26 @@ export function InspectionHeaderCard({
     submittedMs + 48 * 60 * 60 * 1000 < Date.now();
 
   async function completeReview() {
+    // Hands the inspection on; the reviewer cannot take it back after.
+    const ok = await confirm({
+      title: "Complete the review?",
+      description: managerName
+        ? `${managerName} will be asked to approve or send back ${task.property?.unit_label ?? "this inspection"}.`
+        : "The approval manager will be asked to approve it or send it back.",
+      confirmText: "Complete review",
+    });
+    if (!ok) return;
+
     setWorking(true);
     try {
       await snaggingService.completeReview(task.id);
+      // Busy until the page shows the next step, not just until the reply.
+      await onChanged();
       toast.success(
         managerName
           ? `Review complete. ${managerName} can now approve or send it back.`
           : "Review complete. The approval manager can now decide.",
       );
-      onChanged();
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Could not complete the review",
@@ -230,15 +245,27 @@ export function InspectionHeaderCard({
   }
 
   async function startReview() {
+    // Taking the inspection on names you as its reviewer.
+    const ok = await confirm({
+      title: "Start reviewing this inspection?",
+      description: selfReview
+        ? `You'll review ${task.property?.unit_label ?? "this inspection"} and can then approve it or send it back.`
+        : `You'll be recorded as the reviewer of ${task.property?.unit_label ?? "this inspection"}.${managerName ? ` When you're done it goes to ${managerName} to approve.` : ""}`,
+      confirmText: "Start review",
+    });
+    if (!ok) return;
+
     setWorking(true);
     try {
-      await snaggingService.reviewTask(task.id);
+      // Reviewing a job you will also decide: started and completed in
+      // one request, so Approve and Send back appear straight away.
+      await snaggingService.reviewTask(task.id, undefined, { complete: selfReview });
       /*
-        Awaited in order: the complete endpoint refuses anything that is
-        not already `in_review`, so the status has to land first. It is
-        idempotent, so a retry after a dropped response costs nothing.
+        Busy until the page shows Approve and Send back. The button used to
+        stop the moment the server replied, so "Start review" came back for
+        a beat before the new buttons arrived.
       */
-      if (selfReview) await snaggingService.completeReview(task.id);
+      await onChanged();
       toast.success(
         selfReview
           ? "Review started. Approve or send it back when you're done."
@@ -246,7 +273,6 @@ export function InspectionHeaderCard({
             ? `Review started. Hand it to ${managerName} when you're done.`
             : "Review started. Hand it on when you're done.",
       );
-      onChanged();
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Could not start the review",
@@ -285,10 +311,11 @@ export function InspectionHeaderCard({
     setWorking(true);
     try {
       await snaggingService.approveTask(task.id);
+      // Busy until the page shows the approved job.
+      await onChanged();
       toast.success(
         "Inspection approved. Open the report to send it to the client.",
       );
-      onChanged();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not approve");
     } finally {

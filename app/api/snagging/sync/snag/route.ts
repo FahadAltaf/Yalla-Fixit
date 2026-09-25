@@ -6,7 +6,7 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { mayWriteJob } from "@/lib/server/snagging/job-roster";
-import { SNAGGING_BUCKET, mediaObjectKey } from "@/lib/server/snagging/media";
+import { SNAGGING_BUCKET, mediaObjectKey, signMediaPaths } from "@/lib/server/snagging/media";
 import { handleSyncPull } from "@/lib/server/snagging/sync-pull";
 import { handleSyncPush } from "@/lib/server/snagging/sync-push";
 import { ActionType, ResourceType } from "@/types/types";
@@ -70,6 +70,8 @@ type PhotoOutcome = {
   id: string;
   status: "applied" | "rejected";
   storage_path?: string;
+  /** A signed address for the stored file, so the phone can show it at once. */
+  url?: string | null;
   error?: string;
 };
 
@@ -217,6 +219,24 @@ export async function POST(req: NextRequest) {
           status: "rejected",
           error: result.error ?? "Rejected by the server",
         });
+      }
+    }
+
+    /*
+      Each stored photo's address, signed, so the phone shows it straight
+      away. On the web build the phone's own copy is a blob: link that dies
+      with the page, and the storage key alone is not something an image
+      can load -- the tile stayed grey until the job was next fetched whole.
+    */
+    const stored = [...outcomes.values()].filter((o) => o.status === "applied" && o.storage_path);
+    if (stored.length > 0) {
+      const signed = await signMediaPaths(
+        admin,
+        stored.map((o) => ({ id: o.id, storage_path: o.storage_path as string })),
+      );
+      for (const row of signed as Array<{ id: string; signed_url?: string | null }>) {
+        const outcome = outcomes.get(row.id);
+        if (outcome) outcome.url = row.signed_url ?? null;
       }
     }
 

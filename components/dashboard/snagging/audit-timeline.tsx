@@ -142,11 +142,25 @@ function subjectFor(event: SnaggingAuditEvent): string | null {
 
   if (event.event_type === "floor_plan_added") return text(p.label);
 
-  if (
-    event.event_type === "round_created" ||
-    event.event_type === "additional_visit_created" ||
-    event.event_type.startsWith("catalogue_entry_")
-  ) {
+  /*
+    A round and a visit are named by their number, not by the job code the
+    round happened to be given. The code is an internal string nobody in
+    operations says out loud, and the visit event never carried one at all
+    -- so this branch showed the reader nothing for half the events it
+    claimed to handle.
+  */
+  if (event.event_type === "round_created") {
+    const round = p.round_number;
+    return typeof round === "number" ? `Round ${round}` : null;
+  }
+
+  if (event.event_type === "additional_visit_created") {
+    const visit = p.visit_number;
+    return typeof visit === "number" ? `Visit ${visit}` : null;
+  }
+
+  // The catalogue's own code (SN21-07), which IS how an entry is referred to.
+  if (event.event_type.startsWith("catalogue_entry_")) {
     return text(p.code);
   }
 

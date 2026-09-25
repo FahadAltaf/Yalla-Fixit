@@ -145,6 +145,9 @@ export interface SnaggingQuotationSummary {
   /** Null until an approved quotation has been turned into a job. */
   job_id: string | null;
   job_code: string | null;
+  /** A de-snag quotation's original inspection, which its round is opened on. */
+  source_job_id?: string | null;
+  source_job_code?: string | null;
   client_name: string | null;
   unit_label: string | null;
   building_name: string | null;
@@ -859,10 +862,11 @@ export const snaggingService = {
     }),
 
   /** FR-6.01 — pick a submitted inspection up for review (submitted → in_review). */
-  reviewTask: async (id: string, comment?: string) =>
+  /** Starts the review; `complete` also completes it, in the same request. */
+  reviewTask: async (id: string, comment?: string, options: { complete?: boolean } = {}) =>
     executeRESTBackend(`/api/snagging/tasks/${id}/review`, {
       method: "POST",
-      body: { comment: comment ?? "" },
+      body: { comment: comment ?? "", ...(options.complete ? { complete_review: true } : {}) },
     }),
 
   /**
@@ -902,10 +906,19 @@ export const snaggingService = {
       report_url: string;
       expires_at: string;
       email_sent: boolean;
+      /** A wa.me link with the message filled in, for the WhatsApp channel. */
+      whatsapp_url?: string | null;
     }>(`/api/snagging/tasks/${id}/deliver`, {
       method: "POST",
       body: input as unknown as Record<string, unknown>,
     }),
+
+  /** Renders a report version's PDF again, after a failed or stuck render. */
+  retryReportVersion: async (id: string, versionId: string) =>
+    executeRESTBackend<{ status: "generated"; version: number; duration_ms: number }>(
+      `/api/snagging/tasks/${id}/report/versions`,
+      { method: "POST", body: { action: "retry", versionId } },
+    ),
 
   openRound: async (
     id: string,
@@ -917,6 +930,8 @@ export const snaggingService = {
       notes?: string;
       snag_ids?: string[];
       approval_manager_id?: string | null;
+      /** The approved de-snag quotation this round spends, when known. */
+      quotation_id?: string | null;
     },
   ) =>
     executeRESTBackend<{
@@ -978,6 +993,8 @@ export const snaggingService = {
       scheduled_date: string | null;
       appointment_at: string | null;
       inspector_id: string | null;
+      /** Everyone attending. Replaces the set; the first becomes inspector_id. */
+      technician_ids: string[];
       status: "requested" | "scheduled" | "in_progress" | "completed" | "cancelled";
       notes: string | null;
     }>,
@@ -1018,7 +1035,7 @@ export const snaggingService = {
     input: { decision: "approve" } | { decision: "send_back"; reason: string },
   ): Promise<{
     status: string;
-    generation?: { status: "generated" | "failed"; version: number; error?: string } | null;
+    generation?: { status: "pending" | "generated" | "failed"; version: number; error?: string } | null;
   }> =>
     executeRESTBackend(`/api/snagging/tasks/${id}/visits/${visitId}/review`, {
       method: "POST",

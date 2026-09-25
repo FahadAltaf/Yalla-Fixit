@@ -120,33 +120,13 @@ export async function handleSyncPull(
       device last received it. No jobs are read at all.
     */
     if (parsed.data.view === "catalogue") {
-      const catalogueSince = parsed.data.catalogue_since;
-      const wanted =
-        parsed.data.include_catalogue === true ||
-        !catalogueSince ||
-        (await catalogueChangedSince(admin, catalogueSince));
-      /*
-        Every row the catalogue sends is active (inactive ones are never
-        read), so the flag is dropped here -- a thousand "active": true
-        for nothing. The app treats a row without it as active. The full
-        pull keeps it: builds before this route store it as sent.
-      */
-      const catalogue = wanted ? await loadCatalogue(admin) : null;
-      const bare = <T extends { active?: boolean }>(rows: T[]) =>
-        rows.map(({ active: _active, ...row }) => {
-          void _active;
-          return row;
-        });
       return NextResponse.json({
         data: {
           server_time: serverTime,
-          catalogue: catalogue
-            ? {
-                categories: bare(catalogue.categories as Array<{ active?: boolean }>),
-                subcategories: bare(catalogue.subcategories as Array<{ active?: boolean }>),
-                defects: bare(catalogue.defects as Array<{ active?: boolean }>),
-              }
-            : null,
+          catalogue: await catalogueForDevice(admin, {
+            include: parsed.data.include_catalogue === true,
+            since: parsed.data.catalogue_since,
+          }),
         },
       });
     }
@@ -1002,6 +982,38 @@ async function countRooms(
  * editing a defect does, and a device that only watched the leaves would
  * keep offering a branch that had been withdrawn.
  */
+/**
+ * The catalogue for the app's capture sheet, or null when the device's copy
+ * is current: sent when it has none (`include`), has no mark, or anything
+ * changed after `since`. Shared by /sync/catalogue and the job route, which
+ * carries it when a job is opened so that is one request.
+ *
+ * Every row sent is active (inactive ones are never read), so the flag is
+ * dropped -- a thousand "active": true for nothing; the app treats a row
+ * without it as active. The full pull keeps it for older builds.
+ */
+export async function catalogueForDevice(
+  admin: Admin,
+  options: { include?: boolean; since?: string },
+) {
+  const wanted =
+    options.include === true ||
+    !options.since ||
+    (await catalogueChangedSince(admin, options.since));
+  if (!wanted) return null;
+  const catalogue = await loadCatalogue(admin);
+  const bare = <T extends { active?: boolean }>(rows: T[]) =>
+    rows.map(({ active: _active, ...row }) => {
+      void _active;
+      return row;
+    });
+  return {
+    categories: bare(catalogue.categories as Array<{ active?: boolean }>),
+    subcategories: bare(catalogue.subcategories as Array<{ active?: boolean }>),
+    defects: bare(catalogue.defects as Array<{ active?: boolean }>),
+  };
+}
+
 async function catalogueChangedSince(
   admin: Admin,
   since: string,

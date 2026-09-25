@@ -169,11 +169,28 @@ export function ReportView({ taskId }: { taskId: string }) {
         recipient: recipient.trim(),
       });
       setReportUrl(res.report_url);
-      toast.success(
-        res.email_sent
-          ? "Report emailed to the client"
-          : "Report link ready to share",
-      );
+      const whatsappUrl = res.whatsapp_url;
+      if (whatsappUrl) {
+        /*
+          The message is written; WhatsApp still has to be opened to send
+          it. A button in the toast rather than opening it here: a window
+          opened after a request returns is blocked as a pop-up.
+        */
+        toast.success("Report link ready to send", {
+          description: "Open WhatsApp to send the client the message.",
+          action: {
+            label: "Open WhatsApp",
+            onClick: () => window.open(whatsappUrl, "_blank", "noopener,noreferrer"),
+          },
+          duration: 15000,
+        });
+      } else {
+        toast.success(
+          res.email_sent
+            ? "Report emailed to the client"
+            : "Report link ready to share",
+        );
+      }
       setDeliverOpen(false);
       await load();
     } catch (error) {

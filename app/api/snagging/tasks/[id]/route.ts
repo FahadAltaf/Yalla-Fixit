@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import { recordAudit } from "@/lib/server/snagging/audit";
+import { recordAudit, recordAuditBatch } from "@/lib/server/snagging/audit";
 import { loadJobCore } from "@/lib/server/snagging/job-detail-sections";
 import { assertTransition } from "@/lib/server/snagging/workflow";
 import { updateTaskSchema } from "@/modules/snagging/schemas";
@@ -338,8 +338,11 @@ export async function PATCH(
       });
     }
 
-    for (const change of reassignments) {
-      await recordAudit(admin, {
+    // One insert for every change, not one round trip each. Still before
+    // the response: the job page reads History straight after this.
+    await recordAuditBatch(
+      admin,
+      reassignments.map((change) => ({
         entityType: "task",
         entityId: id,
         taskId: id,
@@ -351,8 +354,8 @@ export async function PATCH(
           old_value: change.from,
           new_value: change.to,
         },
-      });
-    }
+      })),
+    );
 
     return NextResponse.json({ data: { id } });
   } catch (error) {

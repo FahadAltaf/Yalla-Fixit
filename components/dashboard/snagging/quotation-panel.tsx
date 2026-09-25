@@ -48,6 +48,7 @@ import {
   SubHeading,
   SubmitButton,
   formatLocalDateTime,
+  useConfirm,
 } from "./shared";
 
 /*
@@ -110,6 +111,7 @@ export function QuotationPanel({
   task,
   quotationId,
   visitNumber,
+  onChanged,
   source,
 }: {
   /* Only these two are read, so a visit page can pass them without the
@@ -130,11 +132,12 @@ export function QuotationPanel({
   /** Which visit the quotation is for, for the panel's own wording. */
   visitNumber?: number;
   /**
-   * Part of the panel's contract with the job screen, but nothing here
-   * moves the job any more: the client approves or rejects through the
-   * emailed link, and the job screen reloads on its own.
+   * Called after the quotation changes, so a page that holds its own copy
+   * of what the quotation drives (the visit page's "Send quotation" step)
+   * shows the change. Where the page holds the quotation itself (`source`)
+   * its reload already covers this.
    */
-  onChanged: () => void;
+  onChanged?: () => void | Promise<unknown>;
   /**
    * The quotation from the page's shared data, where the page holds it
    * (the job page). The panel then neither fetches nor generates -- the
@@ -165,6 +168,7 @@ export function QuotationPanel({
   const [downloadingWord, setDownloadingWord] = useState(false);
   const [sendOpen, setSendOpen] = useState(false);
   const [regenOpen, setRegenOpen] = useState(false);
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [recipient, setRecipient] = useState("");
   const [approvalUrl, setApprovalUrl] = useState<string | null>(null);
   const busy = working || downloading || downloadingWord;
@@ -257,9 +261,12 @@ export function QuotationPanel({
 
   /** Re-reads the quotation from wherever it is held. */
   const reload = useCallback(async () => {
-    if (source) await source.reload();
-    else await load();
-  }, [source, load]);
+    if (source) {
+      await source.reload();
+      return;
+    }
+    await Promise.all([load(), onChanged?.()]);
+  }, [source, load, onChanged]);
 
   /**
    * Generate (or regenerate) the quotation. Approve and reject are the
@@ -356,9 +363,12 @@ export function QuotationPanel({
     if (!quote) return;
     if (
       approvalUrl &&
-      !window.confirm(
-        "A link has already been issued for this quotation. Getting a new one stops the old link working — send the new one instead. Continue?",
-      )
+      !(await confirm({
+        title: "Replace the approval link?",
+        description:
+          "A link has already been issued for this quotation. Getting a new one stops the old link working, so send the new one instead.",
+        confirmText: "Get a new link",
+      }))
     ) {
       return;
     }
@@ -722,6 +732,7 @@ export function QuotationPanel({
         </DataState>
       </div>
 
+      {confirmDialog}
       <Dialog open={regenOpen} onOpenChange={setRegenOpen}>
         <DialogContent>
           <DialogHeader>

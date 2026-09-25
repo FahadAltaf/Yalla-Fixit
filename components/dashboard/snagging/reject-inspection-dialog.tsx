@@ -50,7 +50,8 @@ export function RejectInspectionDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   taskId: string;
-  onRejected?: () => void;
+  /** Re-reads the job; awaited so the dialog stays busy until it shows. */
+  onRejected?: () => void | Promise<unknown>;
 }) {
   const [submitting, setSubmitting] = useState(false);
 
@@ -63,10 +64,14 @@ export function RejectInspectionDialog({
     setSubmitting(true);
     try {
       await snaggingService.rejectTask(taskId, values);
+      /*
+        The page is read again BEFORE the dialog closes, so it closes onto
+        the sent-back job rather than onto the old buttons for a beat.
+      */
+      await onRejected?.();
       toast.success("Sent back to the inspector");
       onOpenChange(false);
       form.reset();
-      onRejected?.();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not send this back");
     } finally {

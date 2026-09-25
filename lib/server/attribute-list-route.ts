@@ -24,8 +24,15 @@ export function makeAttributeListRoute(opts: {
   foreignKey: "role_id" | "service_type_id";
   label: string;
 }) {
-  const nameSchema = z.object({ name: z.string().trim().min(1) });
-  const updateSchema = z.object({ id: z.string().uuid(), name: z.string().trim().min(1) });
+  // `color` is optional; only lists that highlight (technician roles today)
+  // send it. Stored on the shared lookup_options.color column.
+  const colorSchema = z
+    .string()
+    .regex(/^#[0-9A-Fa-f]{6}$/, "Colour must be a hex value like #dc2626")
+    .nullable()
+    .optional();
+  const nameSchema = z.object({ name: z.string().trim().min(1), color: colorSchema });
+  const updateSchema = z.object({ id: z.string().uuid(), name: z.string().trim().min(1), color: colorSchema });
 
   async function guard(action: ActionType) {
     const { profile, accessUser } = await getAuthenticatedUserAccess();
@@ -77,11 +84,13 @@ export function makeAttributeListRoute(opts: {
       const parsed = nameSchema.safeParse(await req.json());
       if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
       const admin = await createAdminServerClient();
-      const { data, error } = await admin
-        .from("lookup_options")
-        .insert({ list_key: opts.listKey, name: parsed.data.name, created_by: g.profile?.id ?? null })
-        .select("*")
-        .single();
+      const insertRow: Record<string, unknown> = {
+        list_key: opts.listKey,
+        name: parsed.data.name,
+        created_by: g.profile?.id ?? null,
+      };
+      if (parsed.data.color !== undefined) insertRow.color = parsed.data.color;
+      const { data, error } = await admin.from("lookup_options").insert(insertRow).select("*").single();
       if (error) return error.code === "23505" ? dup() : (() => { throw new Error(error.message); })();
       return NextResponse.json({ data: { ...data, technician_count: 0 } });
     } catch (error) {
@@ -97,13 +106,15 @@ export function makeAttributeListRoute(opts: {
       const parsed = updateSchema.safeParse(await req.json());
       if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
       const admin = await createAdminServerClient();
+      const updateRow: Record<string, unknown> = {
+        name: parsed.data.name,
+        updated_by: g.profile?.id ?? null,
+        updated_at: new Date().toISOString(),
+      };
+      if (parsed.data.color !== undefined) updateRow.color = parsed.data.color;
       const { data, error } = await admin
         .from("lookup_options")
-        .update({
-          name: parsed.data.name,
-          updated_by: g.profile?.id ?? null,
-          updated_at: new Date().toISOString(),
-        })
+        .update(updateRow)
         .eq("id", parsed.data.id)
         // Scope by list_key so an id from another list can't be edited here.
         .eq("list_key", opts.listKey)

@@ -28,6 +28,10 @@ type Leg = {
   snag_id: string;
   status: string;
   photo_count: number;
+  /** Who raised the defect, on the leg it was raised on. */
+  recorded_by: string | null;
+  /** Who gave this leg's result, and what it was (a de-snag round). */
+  verified_by: { name: string; at: string; verdict: string | null } | null;
 };
 
 export async function GET(
@@ -66,12 +70,35 @@ export async function GET(
       // Each leg's photo count comes with it, counted by the database.
       admin
         .from("snagging_snags")
-        .select("id, job_id, status, photos:snagging_snag_photos(count)")
+        .select(
+          "id, job_id, status, round_created, recorded_by:created_by(full_name, email), photos:snagging_snag_photos(count)",
+        )
         .in("job_id", family.allIds)
         .eq("snag_code", snag.snag_code as string),
     ]);
 
     const jobById = new Map((jobs ?? []).map((job) => [job.id as string, job]));
+
+    /*
+      Who gave each leg's result: the audit trail records every verdict with
+      the inspector who gave it, against that round's row. Rounds are often
+      walked by someone other than the inspector who raised the defect, so
+      the history names both. The latest verdict on a leg is the one that
+      stands.
+    */
+    const legIds = (rows ?? []).map((row) => row.id as string);
+    const { data: verdicts } = legIds.length
+      ? await admin
+          .from("snagging_audit_events")
+          .select("entity_id, actor_label, created_at, payload")
+          .eq("event_type", "snag_verified")
+          .in("entity_id", legIds)
+          .order("created_at", { ascending: false })
+      : { data: [] };
+    const verdictByLeg = new Map<string, Record<string, unknown>>();
+    for (const v of (verdicts ?? []) as Record<string, unknown>[]) {
+      if (!verdictByLeg.has(v.entity_id as string)) verdictByLeg.set(v.entity_id as string, v);
+    }
     /*
       Each leg shows how many photos back it. The count arrives with the
       legs (embedded above); it was a separate read of every photo's snag
@@ -92,6 +119,11 @@ export async function GET(
     const legs: Leg[] = (rows ?? [])
       .map((row) => {
         const job = jobById.get(row.job_id as string);
+        const round = (job?.round_number as number) ?? 1;
+        const who = (Array.isArray(row.recorded_by) ? row.recorded_by[0] : row.recorded_by) as
+          | { full_name?: string | null; email?: string | null }
+          | null;
+        const verdict = verdictByLeg.get(row.id as string);
         return {
           job_id: row.job_id as string,
           job_code: (job?.code as string) ?? "",
@@ -100,6 +132,18 @@ export async function GET(
           snag_id: row.id as string,
           status: row.status as string,
           photo_count: photoCount.get(row.id as string) ?? 0,
+          // A carried copy has no author of its own; only the raising leg names one.
+          recorded_by:
+            ((row.round_created as number | null) ?? 1) === round
+              ? (who?.full_name ?? who?.email ?? null)
+              : null,
+          verified_by: verdict?.actor_label
+            ? {
+                name: verdict.actor_label as string,
+                at: verdict.created_at as string,
+                verdict: ((verdict.payload as { verdict?: string } | null)?.verdict as string) ?? null,
+              }
+            : null,
         };
       })
       .sort((a, b) => a.round_number - b.round_number);

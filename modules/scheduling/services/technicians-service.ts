@@ -15,17 +15,20 @@ export type { TechnicianReference } from "@/types/types";
 export async function listTechnicians(): Promise<TechnicianReference[]> {
   const supabase = await createServerClientWithCookies();
 
-  const { data, error } = await supabase
-    .from("technician_reference")
-    // role_id and service_type_id BOTH point at lookup_options, so each
-    // embed must name its foreign key explicitly -- PostgREST can't pick
-    // between two relationships to the same table on its own.
-    .select(
-      "fsm_resource_id, display_name, is_active, last_synced_at, role_id, service_type_id, shift, team_leader_fsm_id, " +
-        "role:lookup_options!technician_reference_role_id_fkey(name), " +
-        "service_type:lookup_options!technician_reference_service_type_id_fkey(name)",
-    )
-    .order("display_name", { ascending: true });
+  // role_id and service_type_id BOTH point at lookup_options, so each embed
+  // must name its foreign key explicitly -- PostgREST can't pick between two
+  // relationships to the same table on its own.
+  const baseColumns =
+    "fsm_resource_id, display_name, is_active, last_synced_at, role_id, service_type_id, shift, team_leader_fsm_id, " +
+    "role:lookup_options!technician_reference_role_id_fkey(name), " +
+    "service_type:lookup_options!technician_reference_service_type_id_fkey(name)";
+  const load = (columns: string) =>
+    supabase.from("technician_reference").select(columns).order("display_name", { ascending: true });
+
+  let { data, error } = await load(`${baseColumns}, board_position`);
+  // board_position arrives with migration 20260917090000. Until it's applied,
+  // load without it so the board still opens (Custom order just stays empty).
+  if (error?.code === "42703") ({ data, error } = await load(baseColumns));
 
   if (error) throw new Error(`Failed to load technicians: ${error.message}`);
 
@@ -50,6 +53,7 @@ export async function listTechnicians(): Promise<TechnicianReference[]> {
       shift: (r.shift as TechnicianShift) ?? null,
       team_leader_fsm_id: (r.team_leader_fsm_id as string) ?? null,
       team_leader_name: r.team_leader_fsm_id ? (nameByFsmId.get(r.team_leader_fsm_id as string) ?? null) : null,
+      board_position: typeof r.board_position === "number" ? r.board_position : null,
     };
   });
 }
@@ -70,6 +74,15 @@ export const techniciansService = {
     return executeRESTBackend<{ updated: number }>("/api/scheduling/technicians", {
       method: "PUT",
       body: { fsmResourceIds, attributes },
+    });
+  },
+
+  // Save the team's row order for the schedule board ("Custom" sort): the full
+  // list of technician ids, top to bottom.
+  saveBoardOrder: async (order: string[]): Promise<{ updated: number }> => {
+    return executeRESTBackend<{ updated: number }>("/api/scheduling/technicians/order", {
+      method: "PUT",
+      body: { order },
     });
   },
 

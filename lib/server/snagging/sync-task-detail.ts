@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { hasJobInspectors } from "@/lib/server/snagging/columns";
 import { readAllRows } from "@/lib/server/snagging/read-all";
+import { loadSigners } from "@/lib/server/snagging/signoffs";
 
 /**
  * The part of a job the card does not show, for when the job is opened.
@@ -103,6 +104,13 @@ export async function loadTaskDetail(admin: SupabaseClient, jobId: string) {
       : at.toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
   };
 
+  /*
+    Who must sign the current pass off, and who has: each inspector on the
+    job (or the live visit's crew), with when they signed. The phone holds
+    Submit until everyone has.
+  */
+  const signoffs = await loadSigners(admin, jobId, (live?.id as string | undefined) ?? null);
+
   const job = data;
   // BR-1: the property record is canonical, the job's own copy the fallback.
   const record = firstOf(job.property_record as Row | Row[] | null);
@@ -132,6 +140,7 @@ export async function loadTaskDetail(admin: SupabaseClient, jobId: string) {
     appointment_at: job.appointment_at ?? null,
     lead_inspector_id: job.inspector_id ?? null,
     inspectors,
+    signoffs,
     property: {
       client_name: (client?.name as string | null) ?? "",
       client_email: client?.email ?? null,
