@@ -107,8 +107,8 @@ export function ServicesPricingStep({ form }: StepProps) {
             Account managers
           </h3>
           <p className="text-muted-foreground mt-0.5 text-sm">
-            Printed in clause 1.1 as the client&apos;s direct contacts. Leave
-            the second blank if there is only one.
+            The client&apos;s direct contacts on the contract. Leave the
+            second blank if there is only one.
           </p>
         </div>
         {/* One row per contact, name beside number -- no boxes inside
@@ -182,7 +182,7 @@ export function ServicesPricingStep({ form }: StepProps) {
                     Supply and installation price list
                   </FormLabel>
                   <p className="text-xs text-muted-foreground">
-                    Clause 6.2. Fill in the rows below once it is on.
+                    Fill in the rows below once it is on.
                   </p>
                 </div>
                 <FormControl>
@@ -277,8 +277,8 @@ export function ServicesPricingStep({ form }: StepProps) {
                     Additional fixed price services
                   </FormLabel>
                   <p className="text-xs text-muted-foreground">
-                    Clause 6.3. The hourly rates for handyman work beyond the
-                    free hours.
+                    The hourly rates for handyman work beyond the free
+                    hours.
                   </p>
                 </div>
                 <FormControl>

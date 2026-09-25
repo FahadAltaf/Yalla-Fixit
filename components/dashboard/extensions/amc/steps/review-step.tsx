@@ -69,7 +69,7 @@ export function Fact({ label, children }: { label: string; children: React.React
 }
 
 /**
- * The services and what they cost, in one card: the schedule (clause 6.1)
+ * The services and what they cost, in one card: the schedule
  * with each line's units, frequency and price, then the subtotal,
  * discount, VAT and total under it, and the total in words. One card
  * rather than two side by side, so the prices sit under the lines they
@@ -207,7 +207,7 @@ export function ReviewStep({ form, computed }: StepProps) {
       <ReviewSection
         icon={ListCheck}
         title="Services and cost"
-        description="Clause 6.1 as it appears in the documents, with the total before and after 5% VAT."
+        description="As it appears in the documents, with the total before and after 5% VAT."
       >
         <ServicesAndCost rows={computed.frequencyRows} totals={totals} />
       </ReviewSection>

@@ -297,7 +297,7 @@ function TokenHint() {
       you edit. <code className="bg-muted rounded px-1">{"{{handymanHours}}"}</code>{" "}
       becomes the handyman hours entered, and{" "}
       <code className="bg-muted rounded px-1">{"{{nonEmergencyVisits}}"}</code>{" "}
-      the number of free non-emergency visits. In clause 1.1,{" "}
+      the number of free non-emergency visits.{" "}
       <code className="bg-muted rounded px-1">{"{{emergencyCallOuts}}"}</code>{" "}
       and{" "}
       <code className="bg-muted rounded px-1">{"{{nonEmergencyCallOuts}}"}</code>{" "}

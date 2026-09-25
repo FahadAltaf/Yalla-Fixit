@@ -585,7 +585,7 @@ export function SubmissionDetails({
         <StatCard
           label="Services"
           value={data.frequencyRows.length}
-          headline={`${data.frequencyRows.length === 1 ? "Service" : "Services"} in clause 6.1`}
+          headline={data.frequencyRows.length === 1 ? "Service" : "Services"}
           caption="Each with its own frequency and price"
         />
         <StatCard
@@ -639,7 +639,7 @@ export function SubmissionDetails({
             <ReviewSection
               icon={ListCheck}
               title="Services and cost"
-              description="Clause 6.1 as it appears in the documents, with the total before and after 5% VAT."
+              description="As it appears in the documents, with the total before and after 5% VAT."
             >
               <ServicesAndCost rows={data.frequencyRows} totals={totals} />
             </ReviewSection>
