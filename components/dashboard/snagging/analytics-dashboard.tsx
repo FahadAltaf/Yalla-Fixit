@@ -65,13 +65,12 @@ import {
   PageHeading,
   PillTabs,
   SectionCard,
-  SectionSkeleton,
   StatCard,
   StatCardGrid,
-  StatGridSkeleton,
   TaskStatusBadge,
   timeAgo,
 } from "./shared";
+import { AnalyticsBodySkeleton } from "@/components/dashboard/snagging/route-skeletons";
 
 /** Today as YYYY-MM-DD on the reader's own calendar. */
 function todayIso(): string {
@@ -337,22 +336,7 @@ export default function SnaggingAnalyticsDashboard() {
         skeleton={
           // The whole page, not just the top row: the charts and tables
           // used to pop in under a settled header and shift the layout.
-          <div className="flex flex-col gap-6">
-            <StatGridSkeleton count={5} />
-            <div className="grid gap-4 lg:grid-cols-2">
-              <SectionSkeleton />
-              <SectionSkeleton />
-            </div>
-            <SectionSkeleton />
-            {/*
-              No table-shaped placeholder for the two breakdowns below:
-              they are DataTables and render their own in-body skeleton
-              rows, so a second, differently-shaped skeleton would only
-              make the load flicker between two looks.
-            */}
-            <SectionSkeleton />
-            <SectionSkeleton />
-          </div>
+          <AnalyticsBodySkeleton />
         }
       >
         {data ? (

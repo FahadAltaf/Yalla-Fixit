@@ -281,13 +281,13 @@ export async function GET(req: NextRequest) {
         .from("amc_submissions")
         .select("*")
         .eq("owner_id", profile.id)
-        .order("updated_at", { ascending: false }),
+        .order("created_at", { ascending: false }),
       admin
         .from("amc_submissions")
         .select("*")
         .neq("owner_id", profile.id)
         .neq("status", "draft")
-        .order("updated_at", { ascending: false }),
+        .order("created_at", { ascending: false }),
     ]);
 
   if (error) {
@@ -313,13 +313,17 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  /* Waiting for approval first, then the most recently touched. */
-  rows.sort((a, b) => {
-    const waiting =
-      Number(b.status === "awaiting_approval") -
-      Number(a.status === "awaiting_approval");
-    return waiting || b.updated_at.localeCompare(a.updated_at);
-  });
+  /*
+    Newest proposal first, by when it was RAISED.
+
+    It used to lift everything awaiting approval to the top and then order
+    what was left by when it was last touched, so the list read as though
+    it had no order at all: a proposal raised on the 21st sat above one
+    raised on the 25th, and editing an old draft jumped it over newer
+    ones. Approvers have the Approvals queue for what needs deciding;
+    this list is the record of what has been raised.
+  */
+  rows.sort((a, b) => b.created_at.localeCompare(a.created_at));
 
   const ownerIds = [...new Set(rows.map((row) => row.owner_id))];
   const names = new Map<string, string>();

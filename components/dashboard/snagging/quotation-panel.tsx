@@ -49,6 +49,7 @@ import {
   SubmitButton,
   formatLocalDateTime,
   useConfirm,
+  ActionDialogContent,
 } from "./shared";
 
 /*
@@ -734,7 +735,7 @@ export function QuotationPanel({
 
       {confirmDialog}
       <Dialog open={regenOpen} onOpenChange={setRegenOpen}>
-        <DialogContent>
+        <ActionDialogContent busy={working}>
           <DialogHeader>
             <DialogTitle>Regenerate this quotation?</DialogTitle>
             <DialogDescription>
@@ -763,11 +764,11 @@ export function QuotationPanel({
               Regenerate
             </SubmitButton>
           </DialogFooter>
-        </DialogContent>
+        </ActionDialogContent>
       </Dialog>
 
       <Dialog open={sendOpen} onOpenChange={setSendOpen}>
-        <DialogContent>
+        <ActionDialogContent busy={working}>
           <DialogHeader>
             <DialogTitle>Send quotation to the client</DialogTitle>
             <DialogDescription>
@@ -803,7 +804,7 @@ export function QuotationPanel({
               Send quotation
             </SubmitButton>
           </DialogFooter>
-        </DialogContent>
+        </ActionDialogContent>
       </Dialog>
     </SectionCard>
   );

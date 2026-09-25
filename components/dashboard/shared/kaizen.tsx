@@ -51,7 +51,13 @@ export function PageHeading({
   actions?: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-wrap items-end justify-between gap-3">
+    /*
+      The actions sit level with the middle of the heading block, not
+      with the last line of its description: aligned to the bottom, a
+      button beside a two-line description hung well below the title and
+      read as though it belonged to the description rather than the page.
+    */
+    <div className="flex flex-wrap items-center justify-between gap-3">
       <div className="space-y-1.5">
         <p className="eyebrow">{eyebrow}</p>
         <h1 className="text-3xl">{title}</h1>
@@ -294,7 +300,7 @@ export function SectionCard({
 }) {
   return (
     <Card className={cn("gap-0 overflow-hidden p-0", className)}>
-      <div className="flex flex-wrap items-end justify-between gap-3 px-5 pt-5 pb-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-5 pt-5 pb-4">
         <div className="min-w-0">
           <h2 className="flex items-center gap-2 text-lg">
             {icon ? (

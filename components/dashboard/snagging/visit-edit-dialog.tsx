@@ -21,7 +21,7 @@ import { snaggingService } from "@/modules/snagging";
 import type { SnaggingJobVisit } from "@/types/types";
 
 import { InspectorPicker } from "./inspector-picker";
-import { SubmitButton } from "./shared";
+import { ActionDialogContent, SubmitButton } from "./shared";
 
 
 /**
@@ -126,7 +126,7 @@ export function VisitEditDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <ActionDialogContent busy={saving} className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>
             {book ? "Assign inspector" : "Visit"} {book ? `· Visit ${visit?.visit_number ?? ""}` : visit?.visit_number ?? ""}
@@ -202,7 +202,7 @@ export function VisitEditDialog({
             {book ? "Assign and book" : "Save"}
           </SubmitButton>
         </DialogFooter>
-      </DialogContent>
+      </ActionDialogContent>
     </Dialog>
   );
 }

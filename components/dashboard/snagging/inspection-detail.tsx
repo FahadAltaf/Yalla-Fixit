@@ -25,6 +25,7 @@ import { InspectionHeaderCard } from "./inspection-header-card";
 import { JobDetailProvider, useJobDetail, type JobDetailInitial } from "./job-detail-context";
 import { SnagWalkList } from "./snag-walk-list";
 import { VisitActivityAlerts } from "./visit-activity-alerts";
+import { JobTabsSkeleton } from "@/components/dashboard/snagging/route-skeletons";
 
 /*
   The tabs the page does not open on are split into their own chunks and
@@ -233,7 +234,7 @@ function InspectionDetailView() {
       <div className="flex flex-col gap-4">
         {toolbar}
         {visitList.length > 0 ? <VisitActivityAlerts taskId={taskId} visits={visitList} /> : null}
-        <TabsSkeleton />
+        <JobTabsSkeleton />
       </div>
     );
   }
@@ -542,40 +543,3 @@ function PanelSkeleton() {
   );
 }
 
-/**
- * The page before the job arrives: the tab row as the filled bar it is,
- * and one panel shaped like the snag list most jobs open on.
- */
-function TabsSkeleton() {
-  return (
-    <>
-      <div className="bg-muted flex w-full items-center gap-1 rounded-lg p-1">
-        {Array.from({ length: 6 }).map((_, i) => (
-          <Skeleton key={i} className="bg-background/60 h-7 flex-1 rounded-md" />
-        ))}
-      </div>
-      <Card className="gap-0 overflow-hidden p-0">
-        <div className="space-y-2 px-5 pt-5 pb-4">
-          <Skeleton className="h-5 w-44" />
-          <Skeleton className="h-3.5 w-64" />
-        </div>
-        <div className="border-t">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="flex items-start gap-3 border-b px-5 py-4 last:border-b-0">
-              <Skeleton className="size-7 shrink-0 rounded-full" />
-              <div className="flex-1 space-y-2">
-                <Skeleton className="h-4 w-2/5" />
-                <Skeleton className="h-3 w-3/5" />
-                <Skeleton className="h-12 w-12 rounded-md" />
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <Skeleton className="h-5 w-16 rounded-full" />
-                <Skeleton className="h-5 w-14 rounded-full" />
-              </div>
-            </div>
-          ))}
-        </div>
-      </Card>
-    </>
-  );
-}

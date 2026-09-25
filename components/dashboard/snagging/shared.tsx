@@ -47,6 +47,7 @@ export {
   ErrorState,
   DataState,
   SubmitButton,
+  ActionDialogContent,
   useConfirm,
   type ConfirmOptions,
 } from "@/components/dashboard/shared/kaizen-states";

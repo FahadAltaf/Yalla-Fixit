@@ -40,7 +40,12 @@ import {
 import { ActionType, ResourceType } from "@/types/types";
 
 import { ClientJobsDialog } from "./client-jobs-dialog";
-import { ErrorState, PageHeading, SubmitButton } from "./shared";
+import {
+  ActionDialogContent,
+  ErrorState,
+  PageHeading,
+  SubmitButton,
+} from "./shared";
 
 
 /**
@@ -440,7 +445,7 @@ function ClientDialog({
 
   return (
     <Dialog open={Boolean(client)} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-xl">
+      <ActionDialogContent busy={saving} className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>
             {creating ? "Add a client" : `Edit ${client?.client_name}`}
@@ -513,7 +518,7 @@ function ClientDialog({
             {creating ? "Add client" : "Save changes"}
           </SubmitButton>
         </DialogFooter>
-      </DialogContent>
+      </ActionDialogContent>
     </Dialog>
   );
 }

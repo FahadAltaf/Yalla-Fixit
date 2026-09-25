@@ -19,15 +19,14 @@ import { OpenRoundDialog } from "./open-round-dialog";
 import {
   DataState,
   HeadingSkeleton,
-  ListSkeleton,
   PageHeading,
-  SectionSkeleton,
   SeverityBadge,
   SNAG_STATUS_LABELS,
   SnagIndex,
   SubHeading,
   SubmitButton,
 } from "./shared";
+import { DesnagBodySkeleton } from "@/components/dashboard/snagging/route-skeletons";
 
 /**
  * The de-snag round builder.
@@ -174,16 +173,7 @@ export default function DesnagBuilder({ taskId }: { taskId: string }) {
         retrying={loading}
         errorTitle="Could not load the inspection"
         isEmpty={!task}
-        skeleton={
-          <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
-            <SectionSkeleton>
-              <ListSkeleton rows={6} />
-            </SectionSkeleton>
-            <SectionSkeleton className="self-start">
-              <ListSkeleton rows={3} />
-            </SectionSkeleton>
-          </div>
-        }
+        skeleton={<DesnagBodySkeleton />}
         empty={
           <Card className="p-0">
             <EmptyState

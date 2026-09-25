@@ -253,24 +253,29 @@ export function SubmissionsList() {
                 {submission.sent_back_reason}
               </span>
             ) : null}
-            {/* The client asked for changes: the owner edits and resubmits. */}
-            {submission.status === "proposal_rejected" &&
-            submission.client_rejected_reason ? (
-              <span className="text-muted-foreground max-w-[26ch] text-xs leading-snug">
-                {submission.client_rejected_reason}
-              </span>
-            ) : null}
+            {/*
+              What the CLIENT typed when they rejected it is not repeated
+              here. It is their words, in their tone, next to their name on
+              a list anyone in the office scrolls past; the proposal's own
+              page carries it in full, which is where somebody acting on it
+              is reading anyway.
+            */}
           </div>
         );
       },
       enableSorting: false,
     },
     {
-      id: "updated_at",
-      header: "Last updated",
+      /*
+        When it was raised, which is also the order the list is in -- a
+        column showing one date while the rows are ordered by another
+        reads as no order at all.
+      */
+      id: "created_at",
+      header: "Created",
       cell: ({ row }) => (
         <IconText icon={Clock} muted>
-          {format(new Date(row.original.updated_at), "dd MMM yyyy, HH:mm")}
+          {format(new Date(row.original.created_at), "dd MMM yyyy, HH:mm")}
         </IconText>
       ),
       enableSorting: false,

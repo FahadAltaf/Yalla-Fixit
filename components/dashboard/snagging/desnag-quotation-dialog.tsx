@@ -31,7 +31,11 @@ import {
 import { useDebounce } from "@/hooks/use-debounce";
 import type { SnaggingTaskSummary } from "@/types/types";
 
-import { PROPERTY_TYPE_LABELS, SubmitButton } from "./shared";
+import {
+  ActionDialogContent,
+  PROPERTY_TYPE_LABELS,
+  SubmitButton,
+} from "./shared";
 
 /** The job being returned to, when the caller already knows it. */
 type SourceJob = { id: string; label: string; property_type: string | null };
@@ -190,7 +194,7 @@ export function DesnagQuotationDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <ActionDialogContent busy={saving} className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Quote a de-snagging visit</DialogTitle>
           <DialogDescription>
@@ -308,7 +312,7 @@ export function DesnagQuotationDialog({
             Raise quotation
           </SubmitButton>
         </DialogFooter>
-      </DialogContent>
+      </ActionDialogContent>
     </Dialog>
   );
 }

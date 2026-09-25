@@ -73,6 +73,7 @@ import {
   SubHeading,
   SubmitButton,
   useConfirm,
+  ActionDialogContent,
 } from "./shared";
 
 const UNASSIGNED = "none";
@@ -288,6 +289,27 @@ export function JobSetupPanel({
     if (task.inspector_id) before.add(task.inspector_id);
 
     const removed = [...before].filter((id) => !inspectorIds.includes(id));
+
+    /* The save itself, whether or not it had to be asked about. */
+    const assigned =
+      inspectorIds.length === 0
+        ? "Inspectors cleared"
+        : inspectorIds.length === 1
+          ? "Inspector assigned"
+          : `${inspectorIds.length} inspectors assigned`;
+    const run = async () => {
+      setSaving("assign");
+      try {
+        await snaggingService.updateTask(task.id, {
+          technician_ids: inspectorIds,
+          approval_manager_id: managerId === UNASSIGNED ? null : managerId,
+          reviewer_id: reviewerId === UNASSIGNED ? null : reviewerId,
+        });
+        await onChanged();
+      } finally {
+        setSaving(null);
+      }
+    };
     if (removed.length > 0) {
       const names = removed
         .map((id) => {
@@ -306,25 +328,20 @@ export function JobSetupPanel({
             : `${names} will be taken off this job. Anything they already recorded stays on it.`,
         confirmText: removed.length === 1 ? "Take off" : "Take them off",
         variant: "destructive",
+        // The dialog saves, and stays open until the card shows the new
+        // assignment.
+        action: run,
       });
       if (!ok) return;
+      toast.success(assigned);
+      return;
     }
 
+    // Nobody is being taken off, so there is nothing to ask about.
     setSaving("assign");
     try {
-      await snaggingService.updateTask(task.id, {
-        technician_ids: inspectorIds,
-        approval_manager_id: managerId === UNASSIGNED ? null : managerId,
-        reviewer_id: reviewerId === UNASSIGNED ? null : reviewerId,
-      });
-      toast.success(
-        inspectorIds.length === 0
-          ? "Inspectors cleared"
-          : inspectorIds.length === 1
-            ? "Inspector assigned"
-            : `${inspectorIds.length} inspectors assigned`,
-      );
-      await onChanged();
+      await run();
+      toast.success(assigned);
     } catch (e) {
       toast.error(
         e instanceof Error ? e.message : "Could not update the assignment",
@@ -779,7 +796,7 @@ export function JobSetupPanel({
         the address.
       */}
       <Dialog open={propertyOpen} onOpenChange={setPropertyOpen}>
-        <DialogContent className="sm:max-w-xl">
+        <ActionDialogContent busy={saving !== null} className="sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>Property details</DialogTitle>
             <DialogDescription>
@@ -949,7 +966,7 @@ export function JobSetupPanel({
               Save property
             </SubmitButton>
           </DialogFooter>
-        </DialogContent>
+        </ActionDialogContent>
       </Dialog>
 
       {/*
@@ -958,7 +975,7 @@ export function JobSetupPanel({
         and the person who opens the door are often not the same.
       */}
       <Dialog open={clientOpen} onOpenChange={setClientOpen}>
-        <DialogContent>
+        <ActionDialogContent busy={saving !== null}>
           <DialogHeader>
             <DialogTitle>Client details</DialogTitle>
             <DialogDescription>
@@ -1020,7 +1037,7 @@ export function JobSetupPanel({
               Save client
             </SubmitButton>
           </DialogFooter>
-        </DialogContent>
+        </ActionDialogContent>
       </Dialog>
 
       {/*
@@ -1028,7 +1045,7 @@ export function JobSetupPanel({
         map — rather than two number fields. Nobody knows a unit's latitude.
       */}
       <Dialog open={locationOpen} onOpenChange={setLocationOpen}>
-        <DialogContent className="sm:max-w-2xl">
+        <ActionDialogContent busy={saving !== null} className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Property location</DialogTitle>
             <DialogDescription>
@@ -1083,7 +1100,7 @@ export function JobSetupPanel({
               </SubmitButton>
             </div>
           </DialogFooter>
-        </DialogContent>
+        </ActionDialogContent>
       </Dialog>
 
       {/* Inspector assignment (FR-3.08) */}

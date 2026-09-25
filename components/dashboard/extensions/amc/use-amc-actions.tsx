@@ -22,6 +22,8 @@ import { amcSettingsService, amcSubmissionsService } from "@/modules/amc-submiss
 import { buildAmcPdfFromSubmission, savedSettingsFor } from "./amc-document-utils";
 import { AmcPreviewDialog, previewTitle, submissionPreviewData } from "./amc-preview-dialog";
 import { AMC_APPROVALS_CHANGED } from "./amc-approval-notice";
+import { AmcLinkDialog } from "./amc-link-dialog";
+import { ActionDialogContent } from "@/components/dashboard/shared/kaizen-states";
 import { AmcSendDialog, type AmcSendRequest } from "./amc-send-dialog";
 import type { AmcSettings } from "./amc-settings";
 import type { AmcDocumentType, AmcSubmission } from "./amc-types";
@@ -84,6 +86,14 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
     documentType: AmcDocumentType;
     settings?: AmcSettings;
   } | null>(null);
+  /*
+    The link just minted, kept on screen.
+
+    It used to go to the clipboard and announce itself in a toast that
+    faded: paste into the wrong window and the only way back was to mint
+    another one, which stops the one already sent working.
+  */
+  const [issuedLink, setIssuedLink] = useState<{ label: string; url: string } | null>(null);
 
   /*
     FR5.2 — approve, or send back with a reason. The caller re-reads rather
@@ -95,45 +105,49 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
     action: "approve" | "send_back",
     reason?: string,
   ) => {
-    /* Send back already asks, in its own dialog with the reason. */
-    if (
-      action === "approve" &&
-      !(await confirm({
+    /* The decision itself, whichever way it goes. */
+    const run = async () => {
+      setDeciding(true);
+      try {
+        await amcSubmissionsService.decide(
+          action === "approve"
+            ? { action: "approve", id: submission.id }
+            : { action: "send_back", id: submission.id, reason: reason ?? "" },
+        );
+        setSendBackFor(null);
+        setSendBackReason("");
+        window.dispatchEvent(new Event(AMC_APPROVALS_CHANGED));
+        await onChanged();
+      } finally {
+        setDeciding(false);
+      }
+    };
+
+    /*
+      Approving asks first, and the dialog does the approving: it stays
+      open until the list has been read again, so the row is already gone
+      from the queue by the time it closes.
+
+      Send back has asked already, in its own dialog with the reason on
+      it, which stays open the same way while this runs.
+    */
+    if (action === "approve") {
+      const done = await confirm({
         title: "Approve this proposal?",
         description: `${submission.customer.customerName || "This proposal"}${submission.customer.proposalNumber ? ` (${submission.customer.proposalNumber})` : ""} will be approved and can then be sent to the client. It can't be edited after this.`,
         confirmText: "Approve",
-      }))
-    ) {
+        action: run,
+      });
+      if (done) toast.success("Approved. You can now send it to the client.");
       return;
     }
-    setDeciding(true);
+
     try {
-      await amcSubmissionsService.decide(
-        action === "approve"
-          ? { action: "approve", id: submission.id }
-          : { action: "send_back", id: submission.id, reason: reason ?? "" },
-      );
-      toast.success(
-        action === "approve"
-          ? "Approved. You can now send it to the client."
-          : "Sent back to the owner with your note.",
-      );
-      setSendBackFor(null);
-      setSendBackReason("");
-      window.dispatchEvent(new Event(AMC_APPROVALS_CHANGED));
-      await onChanged();
+      await run();
+      toast.success("Sent back to the owner with your note.");
     } catch (error) {
       console.error(error);
-      toast.error(
-        getErrorMessage(
-          error,
-          action === "approve"
-            ? "Couldn't approve this proposal."
-            : "Couldn't send this proposal back.",
-        ),
-      );
-    } finally {
-      setDeciding(false);
+      toast.error(getErrorMessage(error, "Couldn't send this proposal back."));
     }
   };
 
@@ -178,14 +192,18 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
       setSendRequest(null);
 
       if (deliver === "link") {
-        await navigator.clipboard.writeText(result.link).catch(() => {
-          /* Clipboard access can be refused; the link still has to reach
-             the person, so it is shown rather than silently lost. */
-          window.prompt("Copy this link and send it to the client:", result.link);
-        });
-        toast.success("Link copied. Paste it into WhatsApp or an email to send it.", {
-          id: toastId,
-        });
+        /* Copied for the common case, and shown either way. */
+        const copied = await navigator.clipboard
+          .writeText(result.link)
+          .then(() => true)
+          .catch(() => false);
+        setIssuedLink({ label, url: result.link });
+        toast.success(
+          copied
+            ? "Link copied, and shown below to copy again."
+            : "Link ready. Copy it from the panel on screen.",
+          { id: toastId },
+        );
       } else if (result.warning) {
         toast.warning(result.warning, { id: toastId });
       } else {
@@ -261,6 +279,10 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
   const dialogs = (
     <>
       {confirmDialog}
+      <AmcLinkDialog
+        link={issuedLink}
+        onClose={() => setIssuedLink(null)}
+      />
       {preview ? (
         <AmcPreviewDialog
           open
@@ -291,7 +313,7 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
         }
       />
       <Dialog open={Boolean(sendBackFor)} onOpenChange={(open) => !open && closeSendBack()}>
-        <DialogContent className="sm:max-w-md">
+        <ActionDialogContent busy={deciding} className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Send back for changes</DialogTitle>
             <DialogDescription>
@@ -325,7 +347,7 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
               Send back
             </Button>
           </DialogFooter>
-        </DialogContent>
+        </ActionDialogContent>
       </Dialog>
     </>
   );

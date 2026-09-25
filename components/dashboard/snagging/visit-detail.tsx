@@ -34,7 +34,6 @@ import {
 } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Label } from "@/components/ui/label";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
@@ -57,6 +56,7 @@ import {
 } from "./shared";
 import { SnagWalkList } from "./snag-walk-list";
 import { VisitEditDialog } from "./visit-edit-dialog";
+import { VisitBodySkeleton } from "@/components/dashboard/snagging/route-skeletons";
 
 /*
   Loaded when it is shown, as on the job page. It brings the PDF builder
@@ -198,36 +198,48 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
 
   async function approve() {
     if (!visit) return;
+    /*
+      What the server said about the report version, read after the dialog
+      has closed. Held on an object because the dialog fills it in from a
+      callback, which a plain local would be narrowed away from.
+    */
+    const outcome: {
+      generated: { status: "pending" | "generated" | "failed"; version: number } | null;
+    } = { generated: null };
     const ok = await confirm({
       title: `Approve visit ${visit.visit_number}?`,
       description:
         "Its findings are added to the client's report, which is issued as a new version. The earlier version is kept.",
       confirmText: "Approve visit",
+      /*
+        The dialog approves and stays open until the page shows the visit
+        as approved, so the click is never followed by a silent gap.
+      */
+      action: async () => {
+        setPending("approve");
+        try {
+          const result = await snaggingService.reviewVisit(taskId, visit.id, {
+            decision: "approve",
+          });
+          await load();
+          outcome.generated = result.generation ?? null;
+        } finally {
+          setPending(null);
+        }
+      },
     });
     if (!ok) return;
-    setPending("approve");
-    const id = toast.loading("Approving the visit…");
-    try {
-      const result = await snaggingService.reviewVisit(taskId, visit.id, { decision: "approve" });
-      // Refresh before the toast so the buttons have changed by the time it shows.
-      await load();
-      if (result.generation?.status === "failed") {
-        toast.warning(`Visit ${visit.visit_number} approved`, {
-          id,
-          description: "The new report version could not be issued.",
-        });
-      } else {
-        toast.success(`Visit ${visit.visit_number} approved`, {
-          id,
-          description: result.generation
-            ? `Report version ${result.generation.version} is being generated.`
-            : undefined,
-        });
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not approve the visit", { id });
-    } finally {
-      setPending(null);
+
+    if (outcome.generated?.status === "failed") {
+      toast.warning(`Visit ${visit.visit_number} approved`, {
+        description: "The new report version could not be issued.",
+      });
+    } else {
+      toast.success(`Visit ${visit.visit_number} approved`, {
+        description: outcome.generated
+          ? `Report version ${outcome.generated.version} is being generated.`
+          : undefined,
+      });
     }
   }
 
@@ -352,18 +364,7 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
         onRetry={() => void load()}
         retrying={loading}
         errorTitle="Could not load the visit"
-        skeleton={
-          <div className="flex flex-col gap-4">
-            <Skeleton className="h-28 w-full rounded-xl" />
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              {Array.from({ length: 4 }).map((_, index) => (
-                <Skeleton key={index} className="h-32 rounded-xl" />
-              ))}
-            </div>
-            <Skeleton className="h-10 w-full rounded-lg" />
-            <Skeleton className="h-64 w-full rounded-xl" />
-          </div>
-        }
+        skeleton={<VisitBodySkeleton />}
       >
         {visit && detail ? (
           <div className="flex flex-col gap-4">

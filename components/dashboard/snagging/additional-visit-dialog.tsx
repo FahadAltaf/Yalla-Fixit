@@ -26,7 +26,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { snaggingService } from "@/modules/snagging";
 
 import { InspectorPicker } from "./inspector-picker";
-import { SubmitButton } from "./shared";
+import { ActionDialogContent, SubmitButton } from "./shared";
 
 /**
  * Books an additional (chargeable) snagging visit on a property (Q1-Q6).
@@ -126,7 +126,7 @@ export function AdditionalVisitDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <ActionDialogContent busy={working}>
         <DialogHeader>
           <DialogTitle>Add an additional visit</DialogTitle>
           <DialogDescription>
@@ -281,7 +281,7 @@ export function AdditionalVisitDialog({
             Add visit
           </SubmitButton>
         </DialogFooter>
-      </DialogContent>
+      </ActionDialogContent>
     </Dialog>
   );
 }

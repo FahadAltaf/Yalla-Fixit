@@ -69,6 +69,7 @@ import {
   SubmitButton,
   formatLocalDateTime,
   useConfirm,
+  ActionDialogContent,
 } from "./shared";
 import { AdditionalVisitDialog } from "./additional-visit-dialog";
 import { useJobDetail } from "./job-detail-context";
@@ -278,55 +279,70 @@ export function AdditionalVisitsPanel({ task }: { task: SnaggingTask }) {
     if (!visit) return;
     const next = visit.charge_method === "payment_link" ? "quotation" : "payment_link";
 
+    const switched =
+      next === "payment_link"
+        ? `Visit ${visit.visit_number} is now charged by payment link`
+        : `Visit ${visit.visit_number} is now charged by quotation`;
+    const run = async () => {
+      setBusy(visit.id);
+      try {
+        await snaggingService.updateVisit(task.id, visit.id, {
+          charge_method: next,
+          payment_reference: next === "payment_link" ? paymentRef.trim() || null : null,
+        });
+        setSwitching(null);
+        await visitsChanged();
+      } finally {
+        setBusy(null);
+      }
+    };
+
+    // Dropping a live quotation is asked about, and the dialog then makes
+    // the change itself, staying open until the panel shows it.
     if (next === "payment_link" && visit.quotation && visit.quotation.status !== "rejected") {
       const ok = await confirm({
         title: `Stop charging visit ${visit.visit_number} by quotation?`,
         description: `Quotation ${visit.quotation.quote_number ?? ""} is ${visit.quotation.status}. It will no longer be linked to this visit, and the visit can be booked as soon as the payment link is paid.`,
         confirmText: "Switch to payment link",
+        action: run,
       });
-      if (!ok) return;
+      if (ok) toast.success(switched);
+      return;
     }
 
-    setBusy(visit.id);
     try {
-      await snaggingService.updateVisit(task.id, visit.id, {
-        charge_method: next,
-        payment_reference: next === "payment_link" ? paymentRef.trim() || null : null,
-      });
-      toast.success(
-        next === "payment_link"
-          ? `Visit ${visit.visit_number} is now charged by payment link`
-          : `Visit ${visit.visit_number} is now charged by quotation`,
-      );
-      setSwitching(null);
-      await visitsChanged();
+      await run();
+      toast.success(switched);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not change how the visit is charged");
-    } finally {
-      setBusy(null);
     }
   }
 
   async function cancel(visit: VisitRow) {
-    const ok = await confirm({
+    /*
+      The dialog does the cancelling and stays open until it is done, so
+      the answer to "did that work?" is on the dialog that asked. It used
+      to close on Confirm and leave the row to change moments later, with
+      a failure arriving as a toast over a page that looked untouched.
+    */
+    const done = await confirm({
       title: `Cancel visit ${visit.visit_number}?`,
       description:
         "The visit is called off. Anything it has already found stays on the job.",
       confirmText: "Cancel visit",
       cancelText: "Keep visit",
       variant: "destructive",
+      action: async () => {
+        setBusy(visit.id);
+        try {
+          await snaggingService.cancelVisit(task.id, visit.id);
+          await visitsChanged();
+        } finally {
+          setBusy(null);
+        }
+      },
     });
-    if (!ok) return;
-    setBusy(visit.id);
-    try {
-      await snaggingService.cancelVisit(task.id, visit.id);
-      await visitsChanged();
-      toast.success(`Visit ${visit.visit_number} cancelled`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not cancel the visit");
-    } finally {
-      setBusy(null);
-    }
+    if (done) toast.success(`Visit ${visit.visit_number} cancelled`);
   }
 
   if (loading) {
@@ -804,7 +820,7 @@ export function AdditionalVisitsPanel({ task }: { task: SnaggingTask }) {
           if (!open) setSwitching(null);
         }}
       >
-        <DialogContent className="sm:max-w-md">
+        <ActionDialogContent busy={busy !== null} className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>
               {switching?.charge_method === "payment_link"
@@ -846,7 +862,7 @@ export function AdditionalVisitsPanel({ task }: { task: SnaggingTask }) {
               Switch
             </SubmitButton>
           </DialogFooter>
-        </DialogContent>
+        </ActionDialogContent>
       </Dialog>
 
       {dialog}

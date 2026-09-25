@@ -41,7 +41,7 @@ export function ReviewSection({
 }) {
   return (
     <section className="space-y-4">
-      <div className="flex flex-wrap items-end justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h3 className="flex items-center gap-2 text-base font-semibold">
             <Icon className="text-brand size-4" />

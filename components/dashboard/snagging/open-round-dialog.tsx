@@ -14,6 +14,7 @@ import {
 import DateSelect from "@/components/ui/date-select";
 import { Label } from "@/components/ui/label";
 import { InspectorPicker } from "./inspector-picker";
+import { ActionDialogContent } from "@/components/dashboard/shared/kaizen-states";
 import TimeSelect from "@/components/ui/time-select";
 import {
   isPastSlot,
@@ -106,7 +107,7 @@ export function OpenRoundDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <ActionDialogContent busy={Boolean(busy)}>
         <DialogHeader>
           <DialogTitle>Open round {roundNumber}</DialogTitle>
           <DialogDescription>
@@ -182,7 +183,7 @@ export function OpenRoundDialog({
             {busy ? "Opening…" : `Open round ${roundNumber}`}
           </Button>
         </DialogFooter>
-      </DialogContent>
+      </ActionDialogContent>
     </Dialog>
   );
 }

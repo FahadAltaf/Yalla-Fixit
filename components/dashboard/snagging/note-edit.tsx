@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { ActionDialogContent } from "@/components/dashboard/shared/kaizen-states";
 
 /*
   Editing what an inspector wrote on site -- a snag's note, a room's closing
@@ -114,7 +115,7 @@ export function NoteEditDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && !saving && onClose()}>
-      <DialogContent className="sm:max-w-md">
+      <ActionDialogContent busy={saving} className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{context}</DialogDescription>
@@ -150,7 +151,7 @@ export function NoteEditDialog({
             {saving ? "Saving…" : "Save"}
           </Button>
         </DialogFooter>
-      </DialogContent>
+      </ActionDialogContent>
     </Dialog>
   );
 }

@@ -204,6 +204,30 @@ export default function ChecklistAdmin() {
 
     // This changes what every future inspection is asked, not just this
     // screen, so a stray click on a row must not carry it through.
+    /*
+      The dialog makes the change and stays open until it has, so a
+      failure is answered on the dialog that asked rather than in a toast
+      over a row that still reads the old way.
+    */
+    const run = async () => {
+      setTogglingId(item.id);
+      try {
+        await snaggingService.setChecklistItemActive(item.id, active);
+        setData((current) =>
+          current
+            ? {
+              ...current,
+              items: current.items.map((row) =>
+                row.id === item.id ? { ...row, active } : row,
+              ),
+            }
+            : current,
+        );
+      } finally {
+        setTogglingId(null);
+      }
+    };
+
     const ok = await confirm(
       active
         ? {
@@ -211,34 +235,18 @@ export default function ChecklistAdmin() {
           description:
             "New inspections will include this check again. Jobs already raised are unaffected.",
           confirmText: "Reactivate",
+          action: run,
         }
         : {
           title: "Deactivate this check?",
           description: `New inspections will not include "${item.label}". Jobs already raised keep it, and issued reports stay readable.`,
           confirmText: "Deactivate",
           variant: "destructive",
+          action: run,
         },
     );
-    if (!ok) return;
-
-    setTogglingId(item.id);
-    try {
-      await snaggingService.setChecklistItemActive(item.id, active);
-      setData((current) =>
-        current
-          ? {
-            ...current,
-            items: current.items.map((row) =>
-              row.id === item.id ? { ...row, active } : row,
-            ),
-          }
-          : current,
-      );
+    if (ok) {
       toast.success(active ? `"${item.label}" is back in use` : `"${item.label}" deactivated`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not update the check");
-    } finally {
-      setTogglingId(null);
     }
   }
 

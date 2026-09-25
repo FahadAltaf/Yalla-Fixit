@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
@@ -94,6 +94,15 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       .eq("status", "submitted");
     if (updateError) throw new Error(updateError.message);
 
+    /*
+      The audit is written after the reply (after()).
+
+      Starting a review is three round trips to the database -- read the
+      job, advance it, write the trail -- one after another, and the
+      manager waited through all three before the buttons changed. The
+      trail is not in the reply and nothing on the page reads it before
+      History is opened, so it no longer holds the click up.
+    */
     const started = {
       entityType: "task" as const,
       entityId: id,
@@ -111,22 +120,24 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       },
     };
     // Both entries in one write when the review was completed too.
-    await recordAuditBatch(
-      admin,
-      completeToo
-        ? [
-            started,
-            {
-              ...started,
-              eventType: "review_completed",
-              payload: {
-                code: job.code,
-                reviewer_id: job.reviewer_id ?? profile.id,
-                approval_manager_id: job.approval_manager_id,
+    after(() =>
+      recordAuditBatch(
+        admin,
+        completeToo
+          ? [
+              started,
+              {
+                ...started,
+                eventType: "review_completed",
+                payload: {
+                  code: job.code,
+                  reviewer_id: job.reviewer_id ?? profile.id,
+                  approval_manager_id: job.approval_manager_id,
+                },
               },
-            },
-          ]
-        : [started],
+            ]
+          : [started],
+      ),
     );
 
     return NextResponse.json({

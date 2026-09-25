@@ -28,7 +28,11 @@ import { snaggingService } from "@/modules/snagging";
 import { rejectTaskSchema, type RejectTaskInput } from "@/modules/snagging/schemas";
 import type { SnaggingRejectionCategory } from "@/types/types";
 
-import { REJECTION_RULES, REMEDIATION_SLA_HOURS } from "./shared";
+import {
+  ActionDialogContent,
+  REJECTION_RULES,
+  REMEDIATION_SLA_HOURS,
+} from "./shared";
 
 /**
  * Rejection with the three-tier branching from §5.3.
@@ -81,7 +85,7 @@ export function RejectInspectionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <ActionDialogContent busy={submitting} className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Send this inspection back</DialogTitle>
           <DialogDescription>
@@ -163,7 +167,7 @@ export function RejectInspectionDialog({
             </DialogFooter>
           </form>
         </Form>
-      </DialogContent>
+      </ActionDialogContent>
     </Dialog>
   );
 }

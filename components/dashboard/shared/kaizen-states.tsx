@@ -16,6 +16,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { DialogContent } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { StatCardGrid } from "@/components/dashboard/shared/kaizen";
@@ -144,7 +145,7 @@ export function FieldsSkeleton({
 /** The page heading block, so the title does not pop in after the body. */
 export function HeadingSkeleton({ withActions = false }: { withActions?: boolean }) {
   return (
-    <div className="flex flex-wrap items-end justify-between gap-3">
+    <div className="flex flex-wrap items-center justify-between gap-3">
       <div className="space-y-2">
         <Skeleton className="h-3 w-24" />
         <Skeleton className="h-8 w-64" />
@@ -349,6 +350,18 @@ export type ConfirmOptions = {
   confirmText?: string;
   cancelText?: string;
   variant?: "default" | "destructive";
+  /**
+   * The work itself, run while the dialog stays open.
+   *
+   * Given one, Confirm turns into a pending button, the dialog cannot be
+   * dismissed until the work finishes, and it closes only once the work
+   * has succeeded -- so nobody is left looking at a closed dialog
+   * wondering whether a delete went through. A failure keeps the dialog
+   * open with the reason on it, to retry or cancel.
+   *
+   * Left out, the dialog is a plain yes/no and closes on the answer.
+   */
+  action?: () => Promise<unknown>;
 };
 
 /**
@@ -357,6 +370,10 @@ export type ConfirmOptions = {
  * One hook per screen covers every action on it: the caller awaits a
  * boolean and keeps its own pending state, so adding a confirmation to
  * an existing handler is a single line at the top of it.
+ *
+ * Pass `action` as well and the dialog runs the work itself, staying
+ * open and undismissable until it succeeds. `await confirm(...)` then
+ * resolves true once the work is done and false if it was cancelled.
  */
 export function useConfirm() {
   const [request, setRequest] = React.useState<{
@@ -381,29 +398,95 @@ export function useConfirm() {
   );
 
   const options = request?.options;
+  /* Set while `action` is running, so the dialog can refuse to close. */
+  const [working, setWorking] = React.useState(false);
+  /* Why the work failed, kept on the dialog rather than in a toast that
+     appears over a dialog that has already gone. */
+  const [failure, setFailure] = React.useState<string | null>(null);
+
+  const accept = React.useCallback(async () => {
+    const action = request?.options.action;
+    if (!action) {
+      settle(true);
+      return;
+    }
+    setFailure(null);
+    setWorking(true);
+    try {
+      await action();
+      // Closed only once the work has actually succeeded.
+      settle(true);
+    } catch (error) {
+      setFailure(
+        error instanceof Error ? error.message : "That did not work. Try again.",
+      );
+    } finally {
+      setWorking(false);
+    }
+  }, [request, settle]);
 
   const dialog = (
     <AlertDialog
       open={request !== null}
       onOpenChange={(open) => {
-        // Dismissing by Escape or the overlay is a "no".
-        if (!open) settle(false);
+        // Dismissing by Escape or the overlay is a "no" -- but not while
+        // the work is running, when there is nothing to say no to yet.
+        if (!open && !working) {
+          setFailure(null);
+          settle(false);
+        }
       }}
     >
-      <AlertDialogContent>
+      <AlertDialogContent
+        /*
+          Escape is refused while the work runs, so a half-finished action
+          cannot be dismissed. Clicking the page behind it never closed an
+          AlertDialog in the first place.
+        */
+        onEscapeKeyDown={(event) => {
+          if (working) event.preventDefault();
+        }}
+      >
         <AlertDialogHeader>
           <AlertDialogTitle>{options?.title}</AlertDialogTitle>
           <AlertDialogDescription>{options?.description}</AlertDialogDescription>
         </AlertDialogHeader>
+        {failure ? (
+          <p className="text-destructive text-sm" role="alert">
+            {failure}
+          </p>
+        ) : null}
         <AlertDialogFooter>
-          <AlertDialogCancel onClick={() => settle(false)}>
+          <AlertDialogCancel
+            disabled={working}
+            onClick={() => {
+              setFailure(null);
+              settle(false);
+            }}
+          >
             {options?.cancelText ?? "Cancel"}
           </AlertDialogCancel>
           <AlertDialogAction
             variant={options?.variant === "destructive" ? "destructive" : "default"}
-            onClick={() => settle(true)}
+            disabled={working}
+            aria-busy={working}
+            /*
+              Kept from closing the dialog itself: AlertDialogAction closes
+              on click, which is right for a plain yes/no and wrong for one
+              that has work to finish first.
+            */
+            onClick={(event) => {
+              if (!options?.action) return settle(true);
+              event.preventDefault();
+              void accept();
+            }}
           >
-            {options?.confirmText ?? "Confirm"}
+            {working ? <Loader2 className="size-4 animate-spin" /> : null}
+            {working
+              ? (options?.confirmText ?? "Confirm") + "…"
+              : failure
+                ? "Try again"
+                : (options?.confirmText ?? "Confirm")}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -411,4 +494,34 @@ export function useConfirm() {
   );
 
   return { confirm, dialog };
+}
+
+/**
+ * A dialog body for something that performs an action.
+ *
+ * While that action runs the dialog cannot be dismissed -- no Escape, no
+ * click on the page behind it, no close cross -- so a half-finished save
+ * cannot be hidden, and the person sees the result rather than an empty
+ * screen where the dialog used to be. Pass the same flag the dialog's
+ * submit button uses for its pending state.
+ */
+export function ActionDialogContent({
+  busy = false,
+  children,
+  ...props
+}: React.ComponentProps<typeof DialogContent> & { busy?: boolean }) {
+  const block = (event: { preventDefault: () => void }) => {
+    if (busy) event.preventDefault();
+  };
+  return (
+    <DialogContent
+      showCloseButton={!busy}
+      onEscapeKeyDown={block}
+      onPointerDownOutside={block}
+      onInteractOutside={block}
+      {...props}
+    >
+      {children}
+    </DialogContent>
+  );
 }

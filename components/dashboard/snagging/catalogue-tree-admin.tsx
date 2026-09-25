@@ -41,7 +41,12 @@ import {
 
 import { RecordsToolbar } from "@/components/data-table/toolbars/records-toolbar";
 
-import { ErrorState, PageHeading, useConfirm } from "./shared";
+import {
+  ActionDialogContent,
+  ErrorState,
+  PageHeading,
+  useConfirm,
+} from "./shared";
 
 type Level = "category" | "subcategory" | "defect";
 
@@ -168,40 +173,48 @@ export default function CatalogueTreeAdmin() {
     if (togglingId) return;
     // This changes what every inspector can choose on new inspections, so a
     // stray click on a row must not carry it through.
-    const ok = await confirm(
+    /*
+      The dialog does the work and stays open until it is done, so a
+      failure is answered on the dialog that asked rather than in a toast
+      over a row that still reads the old way.
+    */
+    const run = async () => {
+      setTogglingId(id);
+      try {
+        await snaggingService.setCatalogueNodeActive(level, id, active);
+        /*
+          Only that one row changed on the server (a toggle does not
+          cascade to the rows under it), so it changes here too. This used
+          to download the whole catalogue -- over a thousand defects --
+          after every click.
+        */
+        const flip = <T extends { id: string; active: boolean }>(list: T[]) =>
+          list.map((item) => (item.id === id ? { ...item, active } : item));
+        if (level === "category") setCategories(flip);
+        else if (level === "subcategory") setSubcategories(flip);
+        else setDefects(flip);
+      } finally {
+        setTogglingId(null);
+      }
+    };
+
+    const done = await confirm(
       active
         ? {
             title: `Put "${label}" back in use?`,
             description: `Inspectors will be able to choose "${label}" again when capturing new snags.`,
             confirmText: "Reinstate",
+            action: run,
           }
         : {
             title: `Retire "${label}"?`,
             description: `Inspectors can no longer choose "${label}" on new inspections. Snags already recorded against it keep it, and issued reports still resolve.`,
             confirmText: "Retire",
             variant: "destructive",
+            action: run,
           },
     );
-    if (!ok) return;
-    setTogglingId(id);
-    try {
-      await snaggingService.setCatalogueNodeActive(level, id, active);
-      toast.success(active ? `${label} is back in use` : `${label} retired`);
-      /*
-        Only that one row changed on the server (a toggle does not cascade
-        to the rows under it), so it changes here too. This used to download
-        the whole catalogue -- over a thousand defects -- after every click.
-      */
-      const flip = <T extends { id: string; active: boolean }>(list: T[]) =>
-        list.map((item) => (item.id === id ? { ...item, active } : item));
-      if (level === "category") setCategories(flip);
-      else if (level === "subcategory") setSubcategories(flip);
-      else setDefects(flip);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not save that");
-    } finally {
-      setTogglingId(null);
-    }
+    if (done) toast.success(active ? `${label} is back in use` : `${label} retired`);
   }
 
   /*
@@ -449,7 +462,7 @@ function NodeDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent>
+      <ActionDialogContent busy={busy}>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
@@ -559,7 +572,7 @@ function NodeDialog({
             {busy ? "Saving…" : "Save"}
           </Button>
         </DialogFooter>
-      </DialogContent>
+      </ActionDialogContent>
     </Dialog>
   );
 }

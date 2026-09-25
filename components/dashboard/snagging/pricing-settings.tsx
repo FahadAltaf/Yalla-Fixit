@@ -320,20 +320,23 @@ export default function PricingSettings() {
       description:
         "New quotations will use these figures from now on. Quotations already generated keep the figures they were created with.",
       confirmText: "Save changes",
+      /*
+        The dialog saves and stays open until the new figures are on the
+        page, so a failed save is answered where it was asked instead of
+        leaving the old numbers on screen under a toast.
+      */
+      action: async () => {
+        setSaving(true);
+        try {
+          setConfig(await snaggingService.updatePricing(next));
+        } finally {
+          setSaving(false);
+        }
+      },
     });
     if (!ok) return false;
-
-    setSaving(true);
-    try {
-      setConfig(await snaggingService.updatePricing(next));
-      toast.success("Pricing saved");
-      return true;
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not save pricing");
-      return false;
-    } finally {
-      setSaving(false);
-    }
+    toast.success("Pricing saved");
+    return true;
   }
 
   const currency = config?.currency ?? "AED";
@@ -1364,7 +1367,7 @@ function GroupLabel({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-end justify-between gap-4 border-b pb-2 sm:col-span-2">
+    <div className="flex items-center justify-between gap-4 border-b pb-2 sm:col-span-2">
       <div className="min-w-0">
         <p className="text-sm font-medium">{title}</p>
         {hint ? (

@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
@@ -85,20 +85,27 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       .is("reviewed_at", null);
     if (updateError) throw new Error(updateError.message);
 
-    await recordAudit(admin, {
-      entityType: "task",
-      entityId: id,
-      taskId: id,
-      eventType: "review_completed",
-      actorId: profile.id,
-      actorLabel: profile.full_name ?? profile.email,
-      justification: parsed.data.comment?.trim() || null,
-      payload: {
-        code: job.code,
-        reviewer_id: job.reviewer_id,
-        approval_manager_id: job.approval_manager_id,
-      },
-    });
+    /*
+      Written after the reply. It is a third round trip on a click whose
+      whole job is to change which buttons are on screen, and nothing in
+      the reply depends on it.
+    */
+    after(() =>
+      recordAudit(admin, {
+        entityType: "task",
+        entityId: id,
+        taskId: id,
+        eventType: "review_completed",
+        actorId: profile.id,
+        actorLabel: profile.full_name ?? profile.email,
+        justification: parsed.data.comment?.trim() || null,
+        payload: {
+          code: job.code,
+          reviewer_id: job.reviewer_id,
+          approval_manager_id: job.approval_manager_id,
+        },
+      }),
+    );
 
     return NextResponse.json({ data: { id, status: job.status, reviewed_at: reviewedAt } });
   } catch (error) {

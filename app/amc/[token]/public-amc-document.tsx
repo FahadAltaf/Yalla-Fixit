@@ -32,6 +32,7 @@ import { Label } from "@/components/ui/label";
 import Loader from "@/components/ui/loader";
 import { Textarea } from "@/components/ui/textarea";
 import { formatCurrencyAED } from "@/utils/format-currency";
+import { ActionDialogContent } from "@/components/dashboard/shared/kaizen-states";
 import {
   ClientDocumentShell,
   ClientDownloadMenu,
@@ -249,7 +250,7 @@ export function PublicAmcDocument({ token }: { token: string }) {
             disabled={busy}
             onClick={() => start("reject")}
           >
-            <MessageSquareWarning className="size-4" /> Request changes
+            <MessageSquareWarning className="size-4" /> Reject
           </Button>
           <Button className="flex-1 sm:flex-none" disabled={busy} onClick={() => start("approve")}>
             <CheckCircle2 className="size-4" /> Approve proposal
@@ -284,7 +285,7 @@ export function PublicAmcDocument({ token }: { token: string }) {
       ]}
     >
         <Dialog open={action !== null} onOpenChange={(open) => !open && close()}>
-          <DialogContent className="sm:max-w-md">
+          <ActionDialogContent busy={busy} className="sm:max-w-md">
             <DialogHeader>
               <DialogTitle>
                 {step === "name"
@@ -293,7 +294,7 @@ export function PublicAmcDocument({ token }: { token: string }) {
                     ? `Sign ${numbered}?`
                     : action === "approve"
                       ? `Approve ${numbered}?`
-                      : `Request changes to ${numbered}?`}
+                      : `Reject ${numbered}?`}
               </DialogTitle>
               <DialogDescription>
                 {step === "name"
@@ -304,7 +305,7 @@ export function PublicAmcDocument({ token }: { token: string }) {
                     ? "This signs the contract and confirms you accept all of its terms. It is final."
                     : action === "approve"
                       ? "This confirms you accept the proposal. We will then prepare your contract for signature."
-                      : "Tell us what should change and we will send you a revised proposal."}
+                      : "Tell us why, and we will revise it and send it to you again."}
               </DialogDescription>
             </DialogHeader>
 
@@ -329,7 +330,7 @@ export function PublicAmcDocument({ token }: { token: string }) {
             ) : action === "reject" ? (
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="amc-client-reason">
-                  What should change? <span className="text-destructive">*</span>
+                  Why are you rejecting it? <span className="text-destructive">*</span>
                 </Label>
                 <Textarea
                   id="amc-client-reason"
@@ -337,7 +338,7 @@ export function PublicAmcDocument({ token }: { token: string }) {
                   autoFocus
                   rows={3}
                   onChange={(event) => setReason(event.target.value)}
-                  placeholder="Please tell us what to revise"
+                  placeholder="Please tell us what is wrong so we can revise it"
                 />
               </div>
             ) : (
@@ -375,7 +376,7 @@ export function PublicAmcDocument({ token }: { token: string }) {
                       onClick={() => void submit("reject")}
                     >
                       {busy ? <Loader2 className="size-4 animate-spin" /> : null}
-                      {busy ? "Sending…" : "Send request"}
+                      {busy ? "Rejecting…" : "Reject proposal"}
                     </Button>
                   ) : (
                     <Button disabled={busy} onClick={() => action && void submit(action)}>
@@ -398,7 +399,7 @@ export function PublicAmcDocument({ token }: { token: string }) {
                 </>
               )}
             </DialogFooter>
-          </DialogContent>
+          </ActionDialogContent>
         </Dialog>
 
         {data ? (

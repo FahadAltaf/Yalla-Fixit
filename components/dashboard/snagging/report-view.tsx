@@ -34,7 +34,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
@@ -42,7 +41,8 @@ import { snaggingService, type SnaggingQuotation } from "@/modules/snagging";
 import { ActionType, ResourceType, type SnaggingTask } from "@/types/types";
 
 import { InspectionReport } from "./inspection-report";
-import { ErrorState, SubmitButton } from "./shared";
+import { ActionDialogContent, ErrorState, SubmitButton } from "./shared";
+import { ReportSkeleton } from "@/components/dashboard/snagging/route-skeletons";
 
 const CHANNELS = [
   { key: "email", label: "Email" },
@@ -212,88 +212,8 @@ export function ReportView({ taskId }: { taskId: string }) {
     }
   }
 
-  if (loading) {
-    return (
-      <div className="flex flex-col gap-4">
-        {/* The toolbar is a justify-between row -- back link on the left,
-            Print and export on the right. A single left-hand bar let the
-            right-hand buttons pop in once the report loaded. */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <Skeleton className="h-9 w-40" />
-          <div className="flex flex-wrap items-center gap-2">
-            <Skeleton className="h-9 w-24 rounded-full" />
-            <Skeleton className="h-9 w-32 rounded-full" />
-          </div>
-        </div>
-        {/*
-          Shaped like the report, not a 600px grey slab. The document is an
-          A4 sheet -- masthead, two property/client cards, a dark visit
-          strip, a row of summary figures, then defect sections -- so the
-          placeholder is that sheet with its contents greyed, and nothing
-          jumps when the real one arrives.
-        */}
-        <div className="bg-card w-full max-w-[794px] space-y-5 rounded-lg border p-8 mx-auto">
-          <div className="flex items-start justify-between gap-6">
-            <div className="space-y-2">
-              <Skeleton className="size-12 rounded-md" />
-              <Skeleton className="h-3 w-32" />
-            </div>
-            <div className="space-y-2 text-right">
-              <Skeleton className="ml-auto h-4 w-40" />
-              <Skeleton className="ml-auto h-3 w-24" />
-            </div>
-          </div>
-
-          <div className="flex gap-3">
-            {[0, 1].map((card) => (
-              <div
-                key={card}
-                className="flex-1 space-y-2 rounded-lg border p-3"
-              >
-                <Skeleton className="h-2.5 w-16" />
-                <Skeleton className="h-4 w-3/5" />
-                <Skeleton className="h-2.5 w-4/5" />
-                <Skeleton className="h-2.5 w-2/5" />
-              </div>
-            ))}
-          </div>
-
-          <Skeleton className="h-7 w-full rounded-lg" />
-
-          <div className="space-y-2">
-            <Skeleton className="h-3 w-24" />
-            <div className="flex gap-2">
-              {[0, 1, 2, 3, 4].map((stat) => (
-                <div
-                  key={stat}
-                  className="flex-1 space-y-2 rounded-lg border p-3"
-                >
-                  <Skeleton className="h-2.5 w-12" />
-                  <Skeleton className="h-5 w-8" />
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {[0, 1].map((section) => (
-            <div key={section} className="space-y-2.5">
-              <Skeleton className="h-3 w-32" />
-              {[0, 1, 2].map((row) => (
-                <div key={row} className="flex items-start gap-3">
-                  <Skeleton className="size-12 shrink-0 rounded-md" />
-                  <div className="flex-1 space-y-1.5 pt-1">
-                    <Skeleton className="h-3 w-2/5" />
-                    <Skeleton className="h-2.5 w-3/5" />
-                  </div>
-                  <Skeleton className="h-4 w-16 shrink-0 rounded-full" />
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
+  // Shaped like the report, and the same placeholder the route shows.
+  if (loading) return <ReportSkeleton />;
 
   if (error) {
     return (
@@ -428,7 +348,7 @@ export function ReportView({ taskId }: { taskId: string }) {
       </div>
 
       <Dialog open={deliverOpen} onOpenChange={setDeliverOpen}>
-        <DialogContent>
+        <ActionDialogContent busy={busy}>
           <DialogHeader>
             <DialogTitle>Deliver report to client</DialogTitle>
             <DialogDescription>
@@ -487,7 +407,7 @@ export function ReportView({ taskId }: { taskId: string }) {
                 : "Confirm delivery"}
             </SubmitButton>
           </DialogFooter>
-        </DialogContent>
+        </ActionDialogContent>
       </Dialog>
     </div>
   );

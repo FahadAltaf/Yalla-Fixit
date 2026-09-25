@@ -67,6 +67,7 @@ import {
   SubHeading,
   SubmitButton,
   useConfirm,
+  ActionDialogContent,
 } from "./shared";
 
 /**
@@ -417,27 +418,27 @@ export function FloorPlansAreasPanel({
   async function removePlan(plan: SnaggingFloorPlan) {
     // The file is deleted outright, and every pin placed on it is left
     // without a plan to sit on.
-    const ok = await confirm({
+    await confirm({
       title: `Remove "${plan.label}"?`,
       description:
         "The uploaded plan is deleted. Areas pinned to this floor keep their names but lose their plan and pin position, and will need re-pinning.",
       confirmText: "Remove plan",
       variant: "destructive",
+      // The dialog stays open until the plan has actually gone.
+      action: () =>
+        act(
+          "plan",
+          {
+            loading: `Removing ${plan.label}…`,
+            done: "Floor plan removed",
+            failed: "Could not remove the plan",
+          },
+          async () => {
+            await snaggingService.deleteFloorPlan(plan.id);
+            if (activePlanId === plan.id) setActivePlanId(null);
+          },
+        ),
     });
-    if (!ok) return;
-
-    await act(
-      "plan",
-      {
-        loading: `Removing ${plan.label}…`,
-        done: "Floor plan removed",
-        failed: "Could not remove the plan",
-      },
-      async () => {
-        await snaggingService.deleteFloorPlan(plan.id);
-        if (activePlanId === plan.id) setActivePlanId(null);
-      },
-    );
   }
 
   // Both the Move up/down menu items and drag-and-drop end here, so the
@@ -539,23 +540,23 @@ export function FloorPlansAreasPanel({
 
   async function clearPlacement(area: SnaggingArea) {
     // The position is not recoverable — the plan has to be marked again.
-    const ok = await confirm({
+    await confirm({
       title: `Take "${area.name}" off the plan?`,
       description:
         "The area stays on the job, but it will no longer be marked on any floor plan. You can mark it again by selecting it and clicking the plan.",
       confirmText: "Take off the plan",
       variant: "destructive",
+      // The dialog stays open until the pin has actually gone.
+      action: () =>
+        place(
+          area,
+          { floor_plan_id: null, pin_x: null, pin_y: null, zone: null },
+          {
+            loading: `Taking ${area.name} off the plan…`,
+            done: "Taken off the plan",
+          },
+        ),
     });
-    if (!ok) return;
-
-    await place(
-      area,
-      { floor_plan_id: null, pin_x: null, pin_y: null, zone: null },
-      {
-        loading: `Taking ${area.name} off the plan…`,
-        done: "Taken off the plan",
-      },
-    );
   }
 
   /*
@@ -691,24 +692,24 @@ export function FloorPlansAreasPanel({
 
   async function removeArea(area: SnaggingArea) {
     // An area is not just a label: snags are recorded against it.
-    const ok = await confirm({
+    await confirm({
       title: `Remove "${area.name}"?`,
       description:
         "The area and its pin are deleted. Any snag already recorded in this area loses the area it was logged against, and it cannot be undone from here.",
       confirmText: "Remove area",
       variant: "destructive",
+      // The dialog stays open until the area has actually gone.
+      action: () =>
+        act(
+          "area",
+          {
+            loading: `Removing ${area.name}…`,
+            done: "Area removed",
+            failed: "Could not remove the area",
+          },
+          () => snaggingService.deleteArea(taskId, area.id),
+        ),
     });
-    if (!ok) return;
-
-    await act(
-      "area",
-      {
-        loading: `Removing ${area.name}…`,
-        done: "Area removed",
-        failed: "Could not remove the area",
-      },
-      () => snaggingService.deleteArea(taskId, area.id),
-    );
   }
 
   const planLabel = (id?: string | null) =>
@@ -1335,7 +1336,7 @@ export function FloorPlansAreasPanel({
           if (!open) setChosen([]);
         }}
       >
-        <DialogContent
+        <ActionDialogContent busy={busy}
           className="sm:max-w-md"
           /*
             Nothing is focused when this opens.
@@ -1411,7 +1412,7 @@ export function FloorPlansAreasPanel({
               {chosen.length > 1 ? `Add ${chosen.length} areas` : "Add area"}
             </SubmitButton>
           </DialogFooter>
-        </DialogContent>
+        </ActionDialogContent>
       </Dialog>
 
       {/* Rename plan */}
@@ -1419,7 +1420,7 @@ export function FloorPlansAreasPanel({
         open={renamingPlan !== null}
         onOpenChange={(o) => !o && !busy && setRenamingPlan(null)}
       >
-        <DialogContent>
+        <ActionDialogContent busy={busy}>
           <DialogHeader>
             <DialogTitle>Rename floor plan</DialogTitle>
             <DialogDescription>
@@ -1459,7 +1460,7 @@ export function FloorPlansAreasPanel({
               Save
             </SubmitButton>
           </DialogFooter>
-        </DialogContent>
+        </ActionDialogContent>
       </Dialog>
 
       {/* Rename area */}
@@ -1467,7 +1468,7 @@ export function FloorPlansAreasPanel({
         open={renaming !== null}
         onOpenChange={(o) => !o && setRenaming(null)}
       >
-        <DialogContent>
+        <ActionDialogContent busy={busy}>
           <DialogHeader>
             <DialogTitle>Rename area</DialogTitle>
             <DialogDescription>
@@ -1504,7 +1505,7 @@ export function FloorPlansAreasPanel({
               Save
             </SubmitButton>
           </DialogFooter>
-        </DialogContent>
+        </ActionDialogContent>
       </Dialog>
 
       <AddFloorPlanDialog

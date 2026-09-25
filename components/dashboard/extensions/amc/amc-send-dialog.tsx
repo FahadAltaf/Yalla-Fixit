@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ActionDialogContent } from "@/components/dashboard/shared/kaizen-states";
 
 import type { AmcSubmission } from "./amc-types";
 
@@ -102,7 +103,7 @@ export function AmcSendDialog({
         if (!open && !pending) onCancel();
       }}
     >
-      <DialogContent className="sm:max-w-lg">
+      <ActionDialogContent busy={pending} className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>
             {isEmail
@@ -192,7 +193,7 @@ export function AmcSendDialog({
                 : "Create and copy link"}
           </SubmitButton>
         </DialogFooter>
-      </DialogContent>
+      </ActionDialogContent>
     </Dialog>
   );
 }

@@ -41,7 +41,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Skeleton } from "@/components/ui/skeleton";
 import { YallaClassicTemplate } from "@/components/dashboard/extensions/quotation-templates/templates/YallaClassicTemplate";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
@@ -57,7 +56,9 @@ import {
   QuotationStatusBadge,
   SubmitButton,
   useConfirm,
+  ActionDialogContent,
 } from "./shared";
+import { QuotationBodySkeleton } from "@/components/dashboard/snagging/route-skeletons";
 
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -329,19 +330,18 @@ export default function QuotationDetail({ id }: { id: string }) {
           : ""
       }, outside the usual band. Once approved it can be sent to the client.`,
       confirmText: "Approve pricing",
+      // Open until the page shows the approved price.
+      action: async () => {
+        setPending("approve_rate");
+        try {
+          setQuote(await snaggingService.approveQuotationRate(id));
+        } finally {
+          setPending(null);
+        }
+      },
     });
     if (!ok) return;
-    setPending("approve_rate");
-    try {
-      setQuote(await snaggingService.approveQuotationRate(id));
-      toast.success("Rate approved");
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Could not approve the rate",
-      );
-    } finally {
-      setPending(null);
-    }
+    toast.success("Rate approved");
   }
 
   const isDecided =
@@ -418,15 +418,18 @@ export default function QuotationDetail({ id }: { id: string }) {
                     pending={pending === "regenerate"}
                     pendingLabel="Repricing…"
                     icon={<FileText className="size-4" />}
-                    onClick={async () => {
-                      const ok = await confirm({
+                    onClick={() =>
+                      void confirm({
                         title: "Regenerate this quotation?",
                         description:
                           "It is rebuilt from the current pricing, scope and terms, replacing the draft figures.",
                         confirmText: "Regenerate",
-                      });
-                      if (ok) void run("regenerate", undefined, "Repriced");
-                    }}
+                        // Open until the repriced quotation is on screen.
+                        action: async () => {
+                          await run("regenerate", undefined, "Repriced");
+                        },
+                      })
+                    }
                   >
                     Regenerate
                   </SubmitButton>
@@ -487,12 +490,7 @@ export default function QuotationDetail({ id }: { id: string }) {
         onRetry={() => void load()}
         retrying={loading}
         errorTitle="Could not load the quotation"
-        skeleton={
-          <div className="flex flex-col gap-4">
-            <Skeleton className="h-9 w-64" />
-            <Skeleton className="h-[28rem] w-full" />
-          </div>
-        }
+        skeleton={<QuotationBodySkeleton />}
       >
         {quote && doc ? (
           <div className="flex flex-col gap-4">
@@ -636,7 +634,7 @@ export default function QuotationDetail({ id }: { id: string }) {
       </DataState>
 
       <Dialog open={sendOpen} onOpenChange={setSendOpen}>
-        <DialogContent>
+        <ActionDialogContent busy={busy}>
           <DialogHeader>
             <DialogTitle>Send quotation to the client</DialogTitle>
             <DialogDescription>
@@ -692,7 +690,7 @@ export default function QuotationDetail({ id }: { id: string }) {
               Send
             </SubmitButton>
           </DialogFooter>
-        </DialogContent>
+        </ActionDialogContent>
       </Dialog>
 
       {dialog}

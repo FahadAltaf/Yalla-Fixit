@@ -222,26 +222,30 @@ export function InspectionHeaderCard({
         ? `${managerName} will be asked to approve or send back ${task.property?.unit_label ?? "this inspection"}.`
         : "The approval manager will be asked to approve it or send it back.",
       confirmText: "Complete review",
+      /*
+        The dialog does the work and stays open until the page shows the
+        next step. It used to close on Confirm and leave the card to catch
+        up, so the seconds in between looked like nothing had happened --
+        and a failure landed as a toast over a card that still offered the
+        button that had just failed.
+      */
+      action: async () => {
+        setWorking(true);
+        try {
+          await snaggingService.completeReview(task.id);
+          await onChanged();
+        } finally {
+          setWorking(false);
+        }
+      },
     });
     if (!ok) return;
 
-    setWorking(true);
-    try {
-      await snaggingService.completeReview(task.id);
-      // Busy until the page shows the next step, not just until the reply.
-      await onChanged();
-      toast.success(
-        managerName
-          ? `Review complete. ${managerName} can now approve or send it back.`
-          : "Review complete. The approval manager can now decide.",
-      );
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Could not complete the review",
-      );
-    } finally {
-      setWorking(false);
-    }
+    toast.success(
+      managerName
+        ? `Review complete. ${managerName} can now approve or send it back.`
+        : "Review complete. The approval manager can now decide.",
+    );
   }
 
   async function startReview() {
@@ -252,34 +256,33 @@ export function InspectionHeaderCard({
         ? `You'll review ${task.property?.unit_label ?? "this inspection"} and can then approve it or send it back.`
         : `You'll be recorded as the reviewer of ${task.property?.unit_label ?? "this inspection"}.${managerName ? ` When you're done it goes to ${managerName} to approve.` : ""}`,
       confirmText: "Start review",
+      /*
+        Open, and undismissable, until the page shows Approve and Send
+        back. The dialog used to close the moment Confirm was pressed and
+        the card caught up a second or two later, so the click appeared to
+        do nothing at all.
+      */
+      action: async () => {
+        setWorking(true);
+        try {
+          // Reviewing a job you will also decide: started and completed in
+          // one request, so Approve and Send back appear straight away.
+          await snaggingService.reviewTask(task.id, undefined, { complete: selfReview });
+          await onChanged();
+        } finally {
+          setWorking(false);
+        }
+      },
     });
     if (!ok) return;
 
-    setWorking(true);
-    try {
-      // Reviewing a job you will also decide: started and completed in
-      // one request, so Approve and Send back appear straight away.
-      await snaggingService.reviewTask(task.id, undefined, { complete: selfReview });
-      /*
-        Busy until the page shows Approve and Send back. The button used to
-        stop the moment the server replied, so "Start review" came back for
-        a beat before the new buttons arrived.
-      */
-      await onChanged();
-      toast.success(
-        selfReview
-          ? "Review started. Approve or send it back when you're done."
-          : managerName
-            ? `Review started. Hand it to ${managerName} when you're done.`
-            : "Review started. Hand it on when you're done.",
-      );
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Could not start the review",
-      );
-    } finally {
-      setWorking(false);
-    }
+    toast.success(
+      selfReview
+        ? "Review started. Approve or send it back when you're done."
+        : managerName
+          ? `Review started. Hand it to ${managerName} when you're done.`
+          : "Review started. Hand it on when you're done.",
+    );
   }
 
   async function approve() {
@@ -305,22 +308,22 @@ export function InspectionHeaderCard({
         ? `This accepts the inspection and lets the report go to the client. Still outstanding: ${outstanding.join(", ")}.`
         : "This accepts the inspection and lets the report go to the client.",
       confirmText: "Approve inspection",
+      // Open until the page shows the approved job.
+      action: async () => {
+        setWorking(true);
+        try {
+          await snaggingService.approveTask(task.id);
+          await onChanged();
+        } finally {
+          setWorking(false);
+        }
+      },
     });
     if (!ok) return;
 
-    setWorking(true);
-    try {
-      await snaggingService.approveTask(task.id);
-      // Busy until the page shows the approved job.
-      await onChanged();
-      toast.success(
-        "Inspection approved. Open the report to send it to the client.",
-      );
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not approve");
-    } finally {
-      setWorking(false);
-    }
+    toast.success(
+      "Inspection approved. Open the report to send it to the client.",
+    );
   }
 
   /*
