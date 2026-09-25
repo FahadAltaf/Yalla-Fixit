@@ -955,7 +955,7 @@ function ReviewNoteLine({ snag, onEdit }: { snag: Snag; onEdit?: () => void }) {
   );
 }
 
-function SnagDetailDialog({
+export function SnagDetailDialog({
   snag,
   plans,
   visitRound,

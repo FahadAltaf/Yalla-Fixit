@@ -37,8 +37,10 @@ export type PlanMarker = {
   label: string;
   /** Tailwind classes for the dot's fill and text. */
   tone: string;
-  /** Shown on hover: code, defect, result. */
+  /** Shown on hover: the defect, its result and its room. */
   title: string;
+  /** Given when the pin opens the thing it marks. */
+  onSelect?: () => void;
 };
 
 /**
@@ -303,20 +305,45 @@ export function PlanZoneCanvas({
         </span>
       ))}
 
-      {/* Snag pins, over the rooms. Each says what it is on hover. */}
-      {markers.map((marker) => (
-        <span
-          key={marker.key}
-          title={marker.title}
-          style={{ left: `${marker.x * 100}%`, top: `${marker.y * 100}%` }}
-          className={cn(
-            "absolute flex size-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-white text-[0.625rem] font-semibold shadow-md",
-            marker.tone,
-          )}
-        >
-          {marker.label}
-        </span>
-      ))}
+      {/*
+        Snag pins, over the rooms. Each says what it is on hover, and
+        opens it where the caller gave it somewhere to go -- a pin on a
+        plan is the most natural way to reach a defect, and it used to be
+        decoration.
+
+        The click is kept off the plan underneath, which would otherwise
+        read it as placing a pin.
+      */}
+      {markers.map((marker) => {
+        const style = {
+          left: `${marker.x * 100}%`,
+          top: `${marker.y * 100}%`,
+        } as const;
+        const className = cn(
+          "absolute flex size-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-white text-[0.625rem] font-semibold shadow-md",
+          marker.tone,
+        );
+        return marker.onSelect ? (
+          <button
+            key={marker.key}
+            type="button"
+            title={marker.title}
+            aria-label={marker.title}
+            style={style}
+            className={cn(className, "cursor-pointer hover:brightness-110")}
+            onClick={(event) => {
+              event.stopPropagation();
+              marker.onSelect?.();
+            }}
+          >
+            {marker.label}
+          </button>
+        ) : (
+          <span key={marker.key} title={marker.title} style={style} className={className}>
+            {marker.label}
+          </span>
+        );
+      })}
 
       {drawing ? (
         <p className="bg-background/90 text-muted-foreground pointer-events-none absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full border px-3 py-1 text-xs shadow-sm">

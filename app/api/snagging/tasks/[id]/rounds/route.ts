@@ -220,7 +220,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       .select(
         `id, job_id, area_id, snag_code, catalogue_entry_id, catalogue_code, category_label,
          element_label, defect_label, severity, note, floor_plan_id, pin_x, pin_y, status,
-         round_created`,
+         round_created, created_by`,
       )
       .in("job_id", [parent.id, ...familyIds])
       .in("status", CARRY_FORWARD_STATUSES);
@@ -604,6 +604,15 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         developer's count of what they had failed to fix vanished.
       */
       round_created: snag.round_created ?? 1,
+      /*
+        Who recorded the defect, carried with it.
+
+        The copy is the same defect, walked again -- it was not recorded
+        by whoever opened the round. Without this every carried defect
+        showed "Recorded by --" on the round, so a re-check screen could
+        not say who had found the thing being re-checked.
+      */
+      created_by: snag.created_by ?? null,
     }));
 
     if (carriedRows.length > 0) {

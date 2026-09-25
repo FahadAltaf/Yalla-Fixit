@@ -10,11 +10,21 @@ import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import { snaggingService } from "@/modules/snagging";
-import type { SnaggingSnag, SnaggingTask } from "@/types/types";
+import type { SnaggingPhoto, SnaggingSnag, SnaggingTask } from "@/types/types";
 
 import { EmptyState } from "@/components/ui/empty-state";
 
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+
+import { EvidenceViewer } from "./evidence-media";
 import { OpenRoundDialog } from "./open-round-dialog";
+import { SnagDetailDialog } from "./snag-walk-list";
 
 import {
   DataState,
@@ -25,6 +35,7 @@ import {
   SnagIndex,
   SubHeading,
   SubmitButton,
+  formatLocalDateTime,
 } from "./shared";
 import { DesnagBodySkeleton } from "@/components/dashboard/snagging/route-skeletons";
 
@@ -57,13 +68,20 @@ export default function DesnagBuilder({ taskId }: { taskId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
+  /* The defect being read, and a photo of it opened full size. */
+  const [detail, setDetail] = useState<SnaggingSnag | null>(null);
+  const [preview, setPreview] = useState<SnaggingPhoto | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      // The job and its defects are all this builder reads.
-      const loaded = await snaggingService.getTask(taskId, {}, ["snags"]);
+      /*
+        The defects, and the plans their pins sit on -- the detail dialog
+        opened from a row shows where the defect is, which is half of
+        deciding whether it carries.
+      */
+      const loaded = await snaggingService.getTask(taskId, {}, ["snags", "floor_plans"]);
       setTask(loaded);
       // Default selection: everything outstanding except low severity.
       const preselect = new Set(
@@ -234,6 +252,7 @@ export default function DesnagBuilder({ taskId }: { taskId: string }) {
                       index={index + 1}
                       checked={selected.has(snag.id)}
                       onToggle={() => toggle(snag.id)}
+                      onOpen={() => setDetail(snag)}
                     />
                   ))}
                 </ul>
@@ -290,6 +309,30 @@ export default function DesnagBuilder({ taskId }: { taskId: string }) {
         ) : null}
       </DataState>
 
+      {/*
+        The same detail the Snags tab opens, so a defect is judged on its
+        photos and its history rather than on one line of labels.
+      */}
+      <SnagDetailDialog
+        snag={detail}
+        plans={task?.floor_plans ?? []}
+        visitRound={task?.round_number ?? 1}
+        onClose={() => setDetail(null)}
+        onOpenPhoto={(photo) => setPreview(photo)}
+      />
+
+      <Dialog open={Boolean(preview)} onOpenChange={(open) => !open && setPreview(null)}>
+        <DialogContent className="max-h-[88vh] overflow-x-hidden overflow-y-auto sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Photo evidence</DialogTitle>
+            <DialogDescription>
+              {preview?.taken_at ? `Captured ${formatLocalDateTime(preview.taken_at)}` : "Evidence"}
+            </DialogDescription>
+          </DialogHeader>
+          {preview ? <EvidenceViewer photo={preview} /> : null}
+        </DialogContent>
+      </Dialog>
+
       {task ? (
         <OpenRoundDialog
           open={roundOpen}
@@ -313,11 +356,13 @@ function SnagRow({
   index,
   checked,
   onToggle,
+  onOpen,
 }: {
   snag: SnaggingSnag;
   index: number;
   checked: boolean;
   onToggle: () => void;
+  onOpen: () => void;
 }) {
   return (
     <li
@@ -332,13 +377,22 @@ function SnagRow({
         aria-label={`Carry ${snag.defect_label ?? "this snag"}`}
       />
       <SnagIndex index={index} severity={snag.severity} />
-      <div className="min-w-0 flex-1">
-        <p className="truncate font-medium">
+      {/*
+        The defect itself opens, as it does from the Snags tab: its
+        photos, its pin and what has been said about it are what decides
+        whether it carries, and the row alone shows none of that.
+      */}
+      <button
+        type="button"
+        onClick={onOpen}
+        className="min-w-0 flex-1 text-left"
+      >
+        <p className="truncate font-medium hover:underline">
           {[snag.area?.name ?? snag.area_label, snag.element_label, snag.defect_label]
             .filter(Boolean)
             .join(" · ")}
         </p>
-      </div>
+      </button>
       <SeverityBadge severity={snag.severity} />
     </li>
   );

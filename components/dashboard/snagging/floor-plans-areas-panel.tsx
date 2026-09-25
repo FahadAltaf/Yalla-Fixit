@@ -47,6 +47,7 @@ import {
   ResourceType,
   type SnaggingArea,
   type SnaggingFloorPlan,
+  type SnaggingPhoto,
   type SnaggingPropertyType,
   type SnaggingSnag as Snag,
 } from "@/types/types";
@@ -68,7 +69,11 @@ import {
   SubmitButton,
   useConfirm,
   ActionDialogContent,
+  formatLocalDateTime,
 } from "./shared";
+
+import { EvidenceViewer } from "./evidence-media";
+import { SnagDetailDialog } from "./snag-walk-list";
 
 /**
  * Prepares a file for upload. Images pass through with their natural size read.
@@ -252,6 +257,9 @@ export function FloorPlansAreasPanel({
     answer had to be decided and made every pin a two-step affair.
   */
   const [activeAreaId, setActiveAreaId] = useState<string | null>(null);
+  /* The defect opened from a pin, and a photo of it opened full size. */
+  const [detailSnag, setDetailSnag] = useState<Snag | null>(null);
+  const [photo, setPhoto] = useState<SnaggingPhoto | null>(null);
   const [placeMode, setPlaceMode] = useState<"pin" | "zone">("pin");
   const [addAreaOpen, setAddAreaOpen] = useState(false);
   /*
@@ -1104,7 +1112,20 @@ export function FloorPlansAreasPanel({
                             y: snag.pin_y as number,
                             label: String(index + 1),
                             tone: MARKER_TONE[snag.status] ?? MARKER_TONE.open,
-                            title: `${snag.snag_code} · ${snag.defect_label ?? "Snag"} · ${SNAG_STATUS_LABELS[snag.status] ?? snag.status}${snag.area?.name ? ` · ${snag.area.name}` : ""}`,
+                            /*
+                              What the defect is, not its code: the job's
+                              snags are read without snag_code, so the
+                              hover used to open with the word
+                              "undefined".
+                            */
+                            title: [
+                              snag.defect_label ?? "Snag",
+                              SNAG_STATUS_LABELS[snag.status] ?? snag.status,
+                              snag.area?.name ?? null,
+                            ]
+                              .filter(Boolean)
+                              .join(" · "),
+                            onSelect: () => setDetailSnag(snag),
                           }))
                       : []
                   }
@@ -1514,6 +1535,29 @@ export function FloorPlansAreasPanel({
         pending={running === "upload"}
         onSubmit={(planLabel, file) => upload(planLabel, file)}
       />
+
+      {/*
+        The defect a pin marks, in the same dialog the Snags tab opens.
+      */}
+      <SnagDetailDialog
+        snag={detailSnag}
+        plans={plans}
+        visitRound={detailSnag?.round_created ?? 1}
+        onClose={() => setDetailSnag(null)}
+        onOpenPhoto={(shot) => setPhoto(shot)}
+      />
+
+      <Dialog open={Boolean(photo)} onOpenChange={(open) => !open && setPhoto(null)}>
+        <DialogContent className="max-h-[88vh] overflow-x-hidden overflow-y-auto sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Photo evidence</DialogTitle>
+            <DialogDescription>
+              {photo?.taken_at ? `Captured ${formatLocalDateTime(photo.taken_at)}` : "Evidence"}
+            </DialogDescription>
+          </DialogHeader>
+          {photo ? <EvidenceViewer photo={photo} /> : null}
+        </DialogContent>
+      </Dialog>
 
       {dialog}
     </SectionCard>
