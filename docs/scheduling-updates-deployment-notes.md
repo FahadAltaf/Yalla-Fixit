@@ -78,6 +78,12 @@ No role or colour data is seeded. Roles already exist in production; colours are
 | Row order | Technician rows can be dragged into a shared "Custom" order | `technicians/order/route.ts`, `technician-order.ts` |
 | FR‑6 | Sort by Site (appointment address) | `technician-order.ts` |
 | Supervisor | The technician link (`technician_reference.team_leader_fsm_id`) is the technician's **supervisor**, not their driver (product decision, 25 Sep). Dropdowns list technicians whose role is Supervisor; the board's default grouping is by supervisor. No schema change — the column is unchanged | `scheduling/index.tsx`, `technician-order.ts` |
+| Crews (fix, 28 Sep) | Imported appointments carried only their **lead** technician: FSM's search result has no crew (`Service_Resources` is empty, `$Service_Resources` absent), only `Lead`. The import now reads each new appointment's full record, and reconcile adopts FSM's crew for entries the portal has not edited | `zoho/import-appointments.ts`, `zoho/reconcile.ts` |
+| Staying in step (fix, 28 Sep) | A day is re-read from FSM whenever it is loaded and its last pull is over 5 minutes old (claimed atomically on `schedule_versions.fsm_imported_at`, so concurrent loads and the Display poll run it once). Replaces "pull once, then on Refresh", which left days opened early empty and statuses stale | `schedule/route.ts` |
+| Pending edits | Reconcile no longer adopts FSM's window or crew over an entry with `needs_sync = true`; only its status. A Refresh used to revert un-approved edits | `zoho/reconcile.ts` |
+| Lead on reschedule | The reschedule call sent `Lead = serviceResourceIds[0]`, and assignments have no guaranteed order. It now keeps FSM's current lead when that technician is still on the job | `zoho/appointments.ts` |
+| Collapsible shifts | Night and Morning sections fold to their header; remembered per shift in localStorage | `daily-schedule/index.tsx` |
+| PDF export | Redrawn to mirror the board (rows tinted by role, hour columns, status-coloured bars, lanes, legend) instead of a table | `lib/scheduling/export-pdf.ts` |
 | Service lines | A cancelled or cannot‑complete appointment no longer counts as covering its lines, in the dialog **and** in `scheduledLineIdsOf` on publish. The publish guard now checks `Status`, not only `Cancellation_Reason` | `zoho/appointments.ts`, `zoho/work-orders.ts` |
 | Entries API | `PUT` accepts `serviceLineItemIds` for an appointment not yet created in FSM. `DELETE` lets an approver remove a sync‑failed entry from an approved day and recomputes the version status | `schedule/entries/route.ts` |
 | Timezone | Every wall‑clock ⇄ instant conversion now uses `settings.org_timezone` instead of the machine's clock, in the browser and on the server. The server's "today" was UTC, which would refuse to open today's draft before 04:00 Gulf time on a UTC host | `lib/scheduling/org-time.ts` |
@@ -86,8 +92,9 @@ No role or colour data is seeded. Roles already exist in production; colours are
 
 - The first open of a day reads that day's appointments from FSM (`/Service_Appointments/search`, `between` on `Scheduled_Start_Date_Time`), so it can take a few seconds. `schedule/route.ts` sets `maxDuration = 60`.
 - Cancelled appointments, and appointments whose technician is not in `technician_reference`, are not imported.
-- Removing an imported appointment from a draft does not stick: Refresh brings it back while FSM still has it booked.
-- FSM statuses are re-read on first open and on Refresh, not on every page load.
+- Removing an imported appointment from a draft does not stick: the next re-read brings it back while FSM still has it booked.
+- FSM is re-read for a day at most every 5 minutes, when the day is loaded (the daily board reloads quietly every 5 minutes; the Display screen already polls). Each round is one search call plus one read per appointment on that day.
+- New appointments are only added while the day is a draft or draft revision. On an approved day, statuses, times and crews still refresh, but new FSM bookings wait for a revision.
 
 ## 5. Quick check after deploying
 

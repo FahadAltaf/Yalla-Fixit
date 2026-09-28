@@ -69,6 +69,8 @@ export interface ScheduleVersion {
   decision: "approved" | "rejected" | null;
   decision_comment: string | null;
   published_at: string | null;
+  // When this day was last re-read from Zoho FSM.
+  fsm_imported_at?: string | null;
 }
 
 // FR-4: what the pull from FSM did for a date, including why appointments
@@ -94,6 +96,8 @@ export interface DayScheduleResponse {
   // FR-4: how many appointments were just pulled in from FSM, if any.
   imported?: number;
   fsmImport?: FsmImportSummary | null;
+  // True the first time a day is pulled; later pulls stay quiet unless they add something.
+  fsmFirstPull?: boolean;
 }
 
 export interface CreateEntryInput {
