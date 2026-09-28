@@ -395,8 +395,13 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
       setLeaveRecords(leave);
       // FR-4: appointments booked straight in FSM are pulled in when a day is
       // first opened.
-      const fsmMessage = describeFsmImport(result.fsmImport);
-      if (fsmMessage) toast.info(fsmMessage, { duration: 8000 });
+      // The day is re-read from FSM every few minutes; only say so when it is
+      // the first pull, something was added, or it failed.
+      const pull = result.fsmImport;
+      if (pull && (result.fsmFirstPull || pull.imported > 0 || pull.error)) {
+        const fsmMessage = describeFsmImport(pull);
+        if (fsmMessage) toast.info(fsmMessage, { duration: 8000 });
+      }
     } catch (error) {
       if (requestId === dayRequestRef.current) {
         toast.error(error instanceof Error ? error.message : "Failed to load schedule");
@@ -409,6 +414,17 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
   useEffect(() => {
     loadDay(date, { reset: true });
   }, [date, loadDay]);
+
+  // Keep an open board in step with FSM: reload quietly every few minutes.
+  // The server re-reads FSM at most once per 5 minutes per day, so this is
+  // cheap. It waits while a dialog is open, so it never pulls the rug.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (document.hidden || selectedEntry || addEntryFor || submitOpen) return;
+      loadDay(date, { silent: true });
+    }, 5 * 60_000);
+    return () => clearInterval(id);
+  }, [date, loadDay, selectedEntry, addEntryFor, submitOpen]);
 
   const changeZoom = (delta: number) => {
     setZoomIndex((prev) => {
@@ -1600,6 +1616,27 @@ function ShiftSection({
   const [rowDrag, setRowDrag] = useState<RowDrag | null>(null);
   // The row just dropped, briefly highlighted so the eye can find where it went.
   const [flashTech, setFlashTech] = useState<string | null>(null);
+  // Each shift can be folded away, and stays that way between visits.
+  const collapseKey = `yfi.scheduling.collapsed.${shift}`;
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => {
+    setCollapsed(window.localStorage.getItem(collapseKey) === "1");
+  }, [collapseKey]);
+  const toggleCollapsed = () =>
+    setCollapsed((prev) => {
+      window.localStorage.setItem(collapseKey, prev ? "0" : "1");
+      return !prev;
+    });
+  // What a folded shift still tells you.
+  const shiftEntryCount = useMemo(() => {
+    const ids = new Set<string>();
+    technicians.forEach((t) =>
+      (entriesByTechnician.get(t.fsm_resource_id) ?? []).forEach((e) => {
+        if (e.shift === shift) ids.add(e.id);
+      }),
+    );
+    return ids.size;
+  }, [technicians, entriesByTechnician, shift]);
 
   const paneRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef<HTMLDivElement>(null);
@@ -2057,10 +2094,28 @@ function ShiftSection({
 
   return (
     <div className="rounded-md border">
-      <div className="bg-muted/50 flex items-center justify-between gap-2 rounded-t-md border-b px-3 py-1.5">
-        <span className="text-sm font-semibold">{title}</span>
+      <div
+          className={cn(
+            "bg-muted/50 flex items-center justify-between gap-2 px-3 py-1.5",
+            collapsed ? "rounded-md" : "rounded-t-md border-b",
+          )}
+        >
+        <button
+          type="button"
+          onClick={toggleCollapsed}
+          aria-expanded={!collapsed}
+          className="hover:text-primary -ml-1 flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 text-left"
+          title={collapsed ? `Show the ${title}` : `Hide the ${title}`}
+        >
+          <ChevronDown className={cn("size-4 shrink-0 transition-transform", collapsed && "-rotate-90")} />
+          <span className="text-sm font-semibold">{title}</span>
+          <span className="text-muted-foreground truncate text-xs font-normal">
+            {technicians.length} technician{technicians.length === 1 ? "" : "s"} · {shiftEntryCount} appointment
+            {shiftEntryCount === 1 ? "" : "s"}
+          </span>
+        </button>
         <div className="flex min-w-0 items-center gap-3">
-          {(isEditable || canReorder) && (
+          {!collapsed && (isEditable || canReorder) && (
             <span className="text-muted-foreground hidden truncate text-[11px] xl:inline">
               {[
                 isEditable && "Drag a bar to move or reassign it, or its right edge to change its length",
@@ -2076,7 +2131,7 @@ function ShiftSection({
         </div>
       </div>
 
-      {outOfWindow.length > 0 && (
+      {!collapsed && outOfWindow.length > 0 && (
         <div className="flex items-start gap-2 border-b bg-warning/10 px-3 py-2 text-xs text-warning">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
           <span>
@@ -2092,7 +2147,7 @@ function ShiftSection({
 
       {/* Scroll pane: the hour row is frozen at the top (Excel-style) and the
           technician column is frozen at the left, both inside this pane. */}
-      <div ref={paneRef} className="max-h-[65vh] overflow-auto print:overflow-visible">
+      <div ref={paneRef} className={cn("max-h-[65vh] overflow-auto print:overflow-visible", collapsed && "hidden")}>
         <div style={{ width: `${trackWidthPct}%`, minWidth: `max(100%, ${Math.round(trackMinPx)}px)` }}>
           <div className="bg-background sticky top-0 z-40 flex border-b">
             <div

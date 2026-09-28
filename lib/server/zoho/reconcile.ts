@@ -16,6 +16,7 @@
 // than warn about it.
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
+import { crewOf } from "./import-appointments";
 import {
   fsmGetRecord,
   fsmOk,
@@ -35,6 +36,9 @@ type AppointmentDetail = {
   Cancellation_Reason?: string | null;
   Scheduled_Start_Date_Time?: string | null;
   Scheduled_End_Date_Time?: string | null;
+  Lead?: { id?: string } | null;
+  $Service_Resources?: Array<{ id?: string }> | null;
+  Service_Resources?: Array<{ id?: string }> | null;
 };
 
 type ScheduleEntryRow = {
@@ -44,6 +48,9 @@ type ScheduleEntryRow = {
   fsm_last_modified_marker: string | null;
   start_at: string;
   end_at: string;
+  // true while the portal holds an edit that hasn't been approved yet.
+  needs_sync: boolean | null;
+  schedule_entry_assignments: { technician_fsm_id: string }[] | null;
 };
 
 // Two ISO timestamps are "the same" if they land on the same instant. FSM and
@@ -79,7 +86,8 @@ export async function reconcileFsmAppointments(
     let query = admin
       .from("schedule_entries")
       .select(
-        "id, schedule_version_id, fsm_appointment_id, fsm_last_modified_marker, start_at, end_at, schedule_versions!inner(id, is_current)",
+        "id, schedule_version_id, fsm_appointment_id, fsm_last_modified_marker, start_at, end_at, needs_sync, " +
+          "schedule_entry_assignments(technician_fsm_id), schedule_versions!inner(id, is_current)",
       )
       .not("fsm_appointment_id", "is", null)
       .eq("schedule_versions.is_current", true);
@@ -90,6 +98,13 @@ export async function reconcileFsmAppointments(
     if (entriesError) throw new Error(entriesError.message);
 
     const rows = (entries ?? []) as unknown as ScheduleEntryRow[];
+    // Only technicians the portal knows can be placed on the board.
+    const { data: rosterRows } = await admin
+      .from("technician_reference")
+      .select("fsm_resource_id")
+      .eq("is_active", true);
+    const roster = new Set((rosterRows ?? []).map((t) => t.fsm_resource_id as string));
+
     let checked = 0;
     let changed = 0;
 
@@ -126,10 +141,39 @@ export async function reconcileFsmAppointments(
         // record, so a freshly-created portal appointment always looks
         // "modified". Only treat it as a change if a field the portal cares
         // about actually differs -- the scheduled window, or a cancellation.
+        // A scheduler's edit that hasn't been approved yet must survive a
+        // Refresh: FSM's window and crew are not adopted over it, only the status.
+        const pendingEdit = entry.needs_sync === true;
         const timesDiffer =
-          !sameInstant(current.Scheduled_Start_Date_Time, entry.start_at) ||
-          !sameInstant(current.Scheduled_End_Date_Time, entry.end_at);
+          !pendingEdit &&
+          (!sameInstant(current.Scheduled_Start_Date_Time, entry.start_at) ||
+            !sameInstant(current.Scheduled_End_Date_Time, entry.end_at));
         const materiallyChanged = isCancelled || timesDiffer;
+
+        // FSM's crew is authoritative too. Entries imported before 28 Sep 2026
+        // carry only the lead technician; this puts the rest of the crew back.
+        const fsmCrew = crewOf(current).filter((id) => roster.has(id));
+        const portalCrew = (entry.schedule_entry_assignments ?? []).map((a) => a.technician_fsm_id);
+        const crewDiffers =
+          !pendingEdit &&
+          fsmCrew.length > 0 &&
+          (fsmCrew.length !== portalCrew.length || fsmCrew.some((id) => !portalCrew.includes(id)));
+        if (crewDiffers) {
+          await admin.from("schedule_entry_assignments").delete().eq("schedule_entry_id", entry.id);
+          await admin
+            .from("schedule_entry_assignments")
+            .insert(fsmCrew.map((id) => ({ schedule_entry_id: entry.id, technician_fsm_id: id })));
+          await admin.from("schedule_audit_events").insert({
+            event_type: "fsm_crew_synced",
+            origin: "fsm",
+            schedule_version_id: entry.schedule_version_id,
+            affected_entity_type: "schedule_entry",
+            affected_entity_id: entry.id,
+            before_value: { technicians: portalCrew },
+            after_value: { technicians: fsmCrew },
+          });
+          if (!materiallyChanged) changed += 1;
+        }
 
         // Keep the marker in step even on a non-material bump so we don't
         // re-evaluate the same automation change every cycle.

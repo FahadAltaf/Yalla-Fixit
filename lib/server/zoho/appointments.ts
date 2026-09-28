@@ -64,6 +64,7 @@ type WorkOrderDetail = {
 
 type AppointmentDetail = {
   id: string;
+  Lead?: { id?: string } | null;
   Name?: string;
   Modified_Time?: string;
   Status?: string;
@@ -292,7 +293,12 @@ export async function updateFsmAppointment(input: UpdateAppointmentInput): Promi
     // always look "changed" and fail (YFI v1.5). Genuine external edits are
     // caught separately by reconcile. The marker is only informational here.
 
-    const lead = input.serviceResourceIds[0];
+    // Keep FSM's current lead if they are still on the job. Assignments come
+    // back from the database in no guaranteed order, so "first in the list"
+    // could silently hand the lead to someone else on every edit.
+    const currentLead = current.Lead?.id;
+    const lead =
+      currentLead && input.serviceResourceIds.includes(currentLead) ? currentLead : input.serviceResourceIds[0];
     const updateRes = await fsmFetch(
       token,
       `/Service_Appointments/${encodeURIComponent(input.appointmentId)}/actions/reschedule`,

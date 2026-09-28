@@ -3,12 +3,19 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
 import { importFsmAppointmentsForDay } from "@/lib/server/zoho/import-appointments";
+import { reconcileFsmAppointments } from "@/lib/server/zoho/reconcile";
 import { DEFAULT_ORG_TIMEZONE, todayInZone } from "@/lib/scheduling/org-time";
 import { ActionType, ResourceType } from "@/types/types";
 
 // FR-4 reads the day's appointments from FSM the first time a day is opened,
 // which can take a few seconds on a busy date.
 export const maxDuration = 60;
+
+// How long a day may go without being re-read from FSM. Appointments are
+// booked and completed all day, so "pull once" left whole days empty and
+// statuses stale; this keeps the day being looked at in step, at the cost of
+// one FSM round at most every few minutes -- and only while someone is looking.
+const FSM_REFRESH_MINUTES = 5;
 
 // DASH-001/PLAN-002: load (or create, for current/future dates) the daily
 // schedule and its current version, with entries and assignments, for the
@@ -74,22 +81,36 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // FR-4: pull appointments booked directly in FSM onto the board. Done once
-    // per version (Refresh re-runs it), and only while the day is still
-    // editable -- an approved day's entry list is fixed.
+    // FR-4: keep the day in step with Zoho FSM. New appointments are pulled in
+    // while the day is still editable (an approved day's entry list is fixed);
+    // statuses, times and crews of what is already on the board are refreshed
+    // either way.
     let imported = 0;
     let fsmImport: Awaited<ReturnType<typeof importFsmAppointmentsForDay>> | null = null;
+    let fsmFirstPull = false;
     const editable = version.status === "draft" || version.status === "draft_revision";
-    if (editable && !version.fsm_imported_at) {
-      const result = await importFsmAppointmentsForDay(admin, { date, versionId: version.id });
-      fsmImport = result;
-      imported = result.imported;
-      if (!result.error) {
-        const stamp = new Date().toISOString();
-        // If the column isn't there yet (migration not applied), this just
-        // fails quietly and the import runs again next time.
-        await admin.from("schedule_versions").update({ fsm_imported_at: stamp }).eq("id", version.id);
-        version = { ...version, fsm_imported_at: stamp };
+    const lastPull = version.fsm_imported_at ? new Date(version.fsm_imported_at).getTime() : 0;
+    if (Date.now() - lastPull > FSM_REFRESH_MINUTES * 60_000) {
+      // Claim the refresh before running it, so two people opening the day at
+      // once (or the wall display's poll) don't both run it.
+      const stamp = new Date().toISOString();
+      const threshold = new Date(Date.now() - FSM_REFRESH_MINUTES * 60_000).toISOString();
+      const { data: claimed, error: claimError } = await admin
+        .from("schedule_versions")
+        .update({ fsm_imported_at: stamp })
+        .eq("id", version.id)
+        .or(`fsm_imported_at.is.null,fsm_imported_at.lt."${threshold}"`)
+        .select("id");
+      // No fsm_imported_at column yet (migration not applied): still pull,
+      // just without the throttle.
+      if (claimError || (claimed?.length ?? 0) > 0) {
+        fsmFirstPull = !version.fsm_imported_at;
+        if (editable) {
+          fsmImport = await importFsmAppointmentsForDay(admin, { date, versionId: version.id });
+          imported = fsmImport.imported;
+        }
+        await reconcileFsmAppointments({ operatingDate: date });
+        if (!claimError) version = { ...version, fsm_imported_at: stamp };
       }
     }
 
@@ -105,7 +126,7 @@ export async function GET(req: NextRequest) {
       .order("start_at", { ascending: true });
     if (entriesError) throw new Error(entriesError.message);
 
-    return NextResponse.json({ data: { version, entries: entries ?? [], imported, fsmImport } });
+    return NextResponse.json({ data: { version, entries: entries ?? [], imported, fsmImport, fsmFirstPull } });
   } catch (error) {
     console.error("Schedule GET error:", error);
     return NextResponse.json({ error: "Failed to load schedule" }, { status: 500 });

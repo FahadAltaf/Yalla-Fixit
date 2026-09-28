@@ -13,7 +13,7 @@
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { resolveAppointmentState } from "@/lib/scheduling/appointment-status";
-import { fsmFetch, getFsmAccessToken } from "./fsm-client";
+import { fsmFetch, fsmGetRecord, getFsmAccessToken } from "./fsm-client";
 import {
   DEFAULT_ORG_TIMEZONE,
   zoneOffsetMinutes,
@@ -27,6 +27,8 @@ type Admin = Awaited<ReturnType<typeof createAdminServerClient>>;
 // cost of a busy day (FRD 6: loading a date must stay responsive).
 const MAX_PAGES = 5;
 const PER_PAGE = 200;
+// How many full appointment records to read from FSM at once.
+const FSM_READ_CONCURRENCY = 8;
 
 type FsmAppointment = {
   id: string;
@@ -55,6 +57,24 @@ type ShiftConfig = {
   day_shift_start: string;
   day_shift_end: string;
 };
+
+// The technicians on an appointment: the lead first, then the rest of the
+// crew. FSM lists the crew under $Service_Resources on the FULL record; the
+// plain Service_Resources field comes back empty, and a search result carries
+// neither -- only Lead. Importing from a search result alone therefore put
+// every appointment on its lead technician only (AP-3863, 26 Sep 2026).
+export function crewOf(appointment: {
+  Lead?: { id?: string } | null;
+  $Service_Resources?: Array<{ id?: string }> | null;
+  Service_Resources?: Array<{ id?: string }> | null;
+}): string[] {
+  const ids = [
+    appointment.Lead?.id,
+    ...(appointment.$Service_Resources ?? []).map((r) => r.id),
+    ...(appointment.Service_Resources ?? []).map((r) => r.id),
+  ].filter((id): id is string => Boolean(id));
+  return [...new Set(ids)];
+}
 
 // Why appointments were left out, so an empty board can explain itself.
 export type ImportSkipReasons = {
@@ -208,6 +228,19 @@ export async function importFsmAppointmentsForDay(
       .eq("is_active", true);
     const knownTechnicians = new Set((technicians ?? []).map((t) => t.fsm_resource_id as string));
 
+    // Read the full record of every appointment we may add, for its crew.
+    const candidates = appointments.filter(
+      (a) => !alreadyOnBoard.has(a.id) && resolveAppointmentState(a.Status) !== "cancelled",
+    );
+    const crewByAppointment = new Map<string, string[]>();
+    for (let i = 0; i < candidates.length; i += FSM_READ_CONCURRENCY) {
+      await Promise.all(
+        candidates.slice(i, i + FSM_READ_CONCURRENCY).map(async (a) => {
+          const full = await fsmGetRecord<FsmAppointment>(token, "Service_Appointments", a.id);
+          if (full.ok && full.record) crewByAppointment.set(a.id, crewOf(full.record));
+        }),
+      );
+    }
     const now = new Date().toISOString();
     const rows: Record<string, unknown>[] = [];
     const assignmentsByAppointment = new Map<string, string[]>();
@@ -217,10 +250,7 @@ export async function importFsmAppointmentsForDay(
       const workOrderId = appointment.Work_Order?.id;
       const startAt = appointment.Scheduled_Start_Date_Time;
       const endAt = appointment.Scheduled_End_Date_Time;
-      const resources = (appointment.$Service_Resources ?? appointment.Service_Resources ?? [])
-        .map((r) => r.id)
-        .filter((resourceId): resourceId is string => Boolean(resourceId));
-      if (resources.length === 0 && appointment.Lead?.id) resources.push(appointment.Lead.id);
+      const resources = crewByAppointment.get(appointment.id) ?? crewOf(appointment);
       const technicianIds = [...new Set(resources.filter((resourceId) => knownTechnicians.has(resourceId)))];
 
       if (alreadyOnBoard.has(appointment.id)) {
