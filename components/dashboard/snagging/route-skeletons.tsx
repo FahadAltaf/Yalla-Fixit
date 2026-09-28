@@ -1,4 +1,5 @@
 import { Card } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   FieldsSkeleton,
@@ -26,7 +27,17 @@ import {
   route's placeholder and the component's are one and the same.
 */
 
-/** The card a DataTable sits in: its toolbar, header row and rows. */
+/**
+ * The card a DataTable sits in: its toolbar, header row, rows and footer.
+ *
+ * Drawn as a real table rather than a stack of flex rows. Flex rows put
+ * every placeholder at its own fixed width against the left edge, which
+ * on a wide screen left most of the card empty and looked nothing like
+ * the table that replaced it. A table lays the columns out the way the
+ * real one does, so the placeholder and the thing it stands in for line
+ * up -- and the first column carries the avatar and two lines that every
+ * one of these tables leads with.
+ */
 function TableCardSkeleton({
   filters = 1,
   columns = 5,
@@ -36,6 +47,7 @@ function TableCardSkeleton({
   columns?: number;
   rows?: number;
 }) {
+  const cells = Array.from({ length: columns });
   return (
     <Card className="gap-0 overflow-hidden py-0">
       <div className="flex flex-col gap-4 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:py-6">
@@ -50,21 +62,64 @@ function TableCardSkeleton({
           <Skeleton className="h-9 w-24" />
         </div>
       </div>
-      <div className="flex h-14 items-center gap-6 border-t px-4">
-        {Array.from({ length: columns }).map((_, i) => (
-          <Skeleton key={i} className={i === 0 ? "h-3.5 w-32" : "h-3.5 w-16"} />
-        ))}
+
+      <div className="w-full overflow-x-auto">
+        <table className="w-full caption-bottom text-sm">
+          <thead className="[&_tr]:border-b">
+            <tr className="h-14 border-t">
+              {cells.map((_, i) => (
+                <th key={i} className="px-2 text-left align-middle first:pl-4 last:px-4">
+                  <Skeleton className={i === 0 ? "h-3.5 w-32" : "h-3.5 w-16"} />
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {Array.from({ length: rows }).map((_, row) => (
+              <tr key={row} className="border-b last:border-0">
+                {cells.map((_, i) =>
+                  i === 0 ? (
+                    /* Who the row is about: the avatar, the name, and the
+                       line under it -- the shape every one of these
+                       tables opens with. */
+                    /* min-w-48 and the last column's width are the live
+                       table's own, so the columns come out the same size. */
+                    <td key={i} className="h-14 w-12.5 min-w-48 p-2 pl-4 align-middle">
+                      <div className="flex items-center gap-2.5">
+                        <Skeleton className="size-8 shrink-0 rounded-full" />
+                        <div className="space-y-1.5">
+                          <Skeleton className="h-3.5 w-32" />
+                          <Skeleton className="h-3 w-24" />
+                        </div>
+                      </div>
+                    </td>
+                  ) : (
+                    <td key={i} className="h-14 p-2 align-middle last:w-29 last:px-4">
+                      <Skeleton
+                        className={cn(
+                          "h-4",
+                          i === columns - 1 ? "w-12" : i === columns - 2 ? "w-14" : "w-20",
+                        )}
+                      />
+                    </td>
+                  ),
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
-      {Array.from({ length: rows }).map((_, row) => (
-        <div key={row} className="flex h-14 items-center gap-6 border-t px-4">
-          {Array.from({ length: columns }).map((_, i) => (
-            <Skeleton
-              key={i}
-              className={i === 0 ? "h-4 w-40" : i === columns - 1 ? "h-4 w-12" : "h-4 w-16"}
-            />
-          ))}
+
+      {/* "Showing 1 to 10 of 42 entries", and the pages. */}
+      <div className="flex items-center justify-between gap-3 border-t px-6 py-4 max-sm:flex-col">
+        <Skeleton className="h-4 w-44" />
+        <div className="flex items-center gap-1.5">
+          <Skeleton className="h-8 w-20" />
+          <Skeleton className="size-8" />
+          <Skeleton className="size-8" />
+          <Skeleton className="h-8 w-16" />
         </div>
-      ))}
+      </div>
     </Card>
   );
 }

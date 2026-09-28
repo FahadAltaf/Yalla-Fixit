@@ -25,13 +25,13 @@ const COLUMNS = `id, code, element_code, element_label, defect_code, defect_labe
  */
 export async function GET(req: NextRequest) {
   try {
-    // const { profile, accessUser } = await getRequestUserAccess(req);
-    // if (!profile || !accessUser) {
-    //   return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    // }
-    // if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.VIEW)) {
-    //   return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    // }
+    const { profile, accessUser } = await getRequestUserAccess(req);
+    if (!profile || !accessUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.VIEW)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
     const params = req.nextUrl.searchParams;
     const admin = await createAdminServerClient();

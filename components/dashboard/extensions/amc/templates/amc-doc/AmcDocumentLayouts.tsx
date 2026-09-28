@@ -1,7 +1,14 @@
 import type { AmcDocumentModel } from "../../amc-document-model";
+import { AmcBrochurePage } from "./AmcBrochurePage";
 import { AmcBrandFooter, AmcBrandHeader, AmcCoverPage } from "./AmcDocParts";
 import { AmcDocumentBody, AmcPdfRenderContext } from "./AmcDocumentBody";
 import { AMC_DOC_COLORS, AMC_DOC_FONT, AMC_PAGE } from "./amc-doc-theme";
+
+/* A proposal opens on the client's brochure with their plan; a contract
+   on the cover artwork. */
+function FirstPage({ model, pdf = false }: { model: AmcDocumentModel; pdf?: boolean }) {
+  return model.brochure ? <AmcBrochurePage brochure={model.brochure} pdf={pdf} /> : <AmcCoverPage />;
+}
 
 const pageFrame = {
   width: `${AMC_PAGE.width}px`,
@@ -24,21 +31,25 @@ export function AmcDocumentContinuous({
   /* The AMC cover. Quotations have none. */
   cover?: boolean;
 }) {
+  /* A proposal is its brochure alone: no pages after it. */
+  const hasBody = model.blocks.length > 0;
   return (
     <div style={{ width: `${AMC_PAGE.width}px`, backgroundColor: AMC_DOC_COLORS.white }}>
       {cover && (
         <>
-          <AmcCoverPage />
-          <div style={{ height: "1px", backgroundColor: AMC_DOC_COLORS.rule }} />
+          <FirstPage model={model} />
+          {hasBody ? <div style={{ height: "1px", backgroundColor: AMC_DOC_COLORS.rule }} /> : null}
         </>
       )}
-      <div style={pageFrame}>
-        <AmcBrandHeader />
-        <AmcDocumentBody model={model} />
-        <div style={{ marginTop: "24px" }}>
-          <AmcBrandFooter />
+      {hasBody ? (
+        <div style={pageFrame}>
+          <AmcBrandHeader />
+          <AmcDocumentBody model={model} />
+          <div style={{ marginTop: "24px" }}>
+            <AmcBrandFooter />
+          </div>
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }
@@ -93,7 +104,8 @@ export function AmcDocumentPages({
   const total = sliceOffsets.length;
   return (
     <div>
-      {cover && <AmcCoverPage />}
+      {/* Captured for the PDF: the brochure takes its PDF padding. */}
+      {cover && <FirstPage model={model} pdf />}
       {sliceOffsets.map((offset, index) => {
         const end = sliceOffsets[index + 1] ?? bodyHeight;
         return (

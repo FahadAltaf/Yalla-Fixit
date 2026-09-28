@@ -1,18 +1,24 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
+  ArrowDown,
+  ArrowUp,
   Clock,
   FileText,
   History,
   Loader2,
   Phone,
+  GripVertical,
+  Pencil,
+  Plus,
   RotateCcw,
   Save,
   ScrollText,
   Search,
   ShieldAlert,
+  Trash2,
   TriangleAlert,
   UserCheck,
   UserRound,
@@ -21,6 +27,15 @@ import {
 import { toast } from "sonner";
 
 import { PageHeading, PillTabs, SectionCard } from "@/components/dashboard/shared/kaizen";
+import { useConfirm } from "@/components/dashboard/shared/kaizen-states";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import type { ColumnDef } from "@tanstack/react-table";
 
 import { DataTable } from "@/components/data-table";
@@ -35,6 +50,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { QuoteRichText } from "@/components/dashboard/snagging/quote-rich-text";
+import {
+  clauseListRenumbered,
+  clauseNumbering,
+  clauseTextToHtml,
+  htmlToClauseText,
+  roundTrips,
+} from "./amc-clause-editor";
 import { useAuth } from "@/context/AuthContext";
 import { cn } from "@/lib/utils";
 import {
@@ -42,12 +65,20 @@ import {
   type AmcSettingsHistoryItem,
 } from "@/modules/amc-submissions";
 
+import { AMC_BROCHURE_FIELDS } from "./amc-brochure-copy";
 import { AMC_SERVICES } from "./amc-constants";
 import {
+  AMC_UNIT_TYPES,
+  clausesByRole,
   getAmcSettingsDefaults,
+  unitTypesLabel,
+  type AmcClause,
+  type AmcClauseRole,
   type AmcSettings,
   type AmcSettingsOverrides,
 } from "./amc-settings";
+
+type AmcUnitType = (typeof AMC_UNIT_TYPES)[number];
 
 /**
  * AMC Settings (FR6.1–FR6.5).
@@ -65,6 +96,43 @@ import {
  * an admin picks the one they mean rather than scrolling past eighteen
  * text boxes to find it.
  */
+
+/*
+  The clauses an admin writes, as against the document's own scaffolding.
+
+  "Operation", "Emergency & Non-Emergency Call-Out" and "Service Frequency
+  & Provisions" are section headings the contract has always had, and the
+  services table and the signature block are drawn rather than written.
+  They are all clauses to the builder -- they carry numbers, and the ones
+  after them follow -- but there is nothing to edit in them, so listing
+  them here only made the list harder to read.
+*/
+/*
+  The document's own structure, not wording anybody edits: the headings
+  the numbered clauses hang from, the services loop, the frequency table,
+  the signature block. They are built rather than written, so they are not
+  in the list -- the numbering still counts them, which is why it runs
+  1.1, 1.2, 1.3, 2 rather than starting at 1.
+*/
+const SCAFFOLDING = new Set([
+  "operation",
+  "callOuts",
+  "frequency",
+  "scopeServices",
+  "servicesTable",
+  "signatures",
+]);
+
+const EDITABLE_CLAUSE = (clause: AmcClause) => !SCAFFOLDING.has(clause.id);
+
+/** What each standard clause is for, keyed by the role it plays. */
+/*
+  Clauses whose heading the document takes from their own first paragraph,
+  not from their title -- the price list and the handyman rates.
+*/
+const HEADING_FROM_BODY = new Set<string>(["priceListIntro", "handymanRates"]);
+
+const CLAUSE_HINTS: Partial<Record<AmcClauseRole, string>> = {};
 
 const CLAUSE_FIELDS = [
   {
@@ -147,17 +215,10 @@ const CLAUSE_FIELDS = [
     label: "Contract: Signature confirmation",
     hint: "The line above the signatures on the contract.",
   },
-  {
-    key: "proposalNotes" as const,
-    label: "Proposal: Important notes",
-    hint: "The notes at the end of every proposal, one paragraph per note.",
-  },
-  {
-    key: "proposalAcceptance" as const,
-    label: "Proposal: Acceptance statement",
-    hint: "The line above the signatures on the proposal.",
-  },
 ];
+
+/* One copy of the wording: the hints come from the field list above. */
+for (const field of CLAUSE_FIELDS) CLAUSE_HINTS[field.key] = field.hint;
 
 type AmcUser = { email: string; name: string; isAdmin: boolean };
 
@@ -365,6 +426,153 @@ export function AmcSettingsPage() {
     setSettings((current) => (current ? { ...current, ...next } : current));
 
   /*
+    The clause list is edited in place: the document is built from its
+    order, so adding, moving and removing are what make the contract
+    change rather than just its wording.
+
+    `clauses` is kept in step because everything that renders a document
+    still reads it by role.
+  */
+  const setClauseList = (next: AmcClause[]) =>
+    setSettings((current) =>
+      current
+        ? { ...current, clauseList: next, clauses: { ...current.clauses, ...clausesByRole(next) } }
+        : current,
+    );
+
+  const editClause = (id: string, change: Partial<AmcClause>) =>
+    setSettings((current) => {
+      if (!current) return current;
+      const next = current.clauseList.map((clause) =>
+        clause.id === id ? { ...clause, ...change } : clause,
+      );
+      return { ...current, clauseList: next, clauses: { ...current.clauses, ...clausesByRole(next) } };
+    });
+
+  /*
+    Puts one clause where the drop said, which is either side of the row
+    it was dropped on -- `beforeId` is the row it now comes before, and
+    null means the end of the list.
+  */
+  const reorderClause = (id: string, beforeId: string | null) => {
+    if (!settings) return;
+    const next = settings.clauseList.filter((clause) => clause.id !== id);
+    const moved = settings.clauseList.find((clause) => clause.id === id);
+    if (!moved) return;
+    const at = beforeId ? next.findIndex((clause) => clause.id === beforeId) : -1;
+    if (at < 0) next.push(moved);
+    else next.splice(at, 0, moved);
+    setClauseList(next);
+  };
+
+  const removeClause = (id: string) => {
+    if (!settings) return;
+    setClauseList(settings.clauseList.filter((clause) => clause.id !== id));
+  };
+
+  /*
+    A new clause is saved as it is added.
+
+    Adding something and then having to remember a separate Save is how a
+    clause goes missing: the list is a list of things that exist, not a
+    draft of one. Wording edits still batch behind Save changes, because
+    those are typed a character at a time.
+  */
+  const addClause = async (draft: { title: string; body: string }) => {
+    if (!settings) return null;
+    /* Its own id, so it survives being renamed and moved. */
+    const id = `custom-${Date.now().toString(36)}`;
+    const clauseList: AmcClause[] = [
+      ...settings.clauseList,
+      { id, title: draft.title, body: draft.body, level: 1, enabled: true },
+    ];
+    const next: AmcSettings = {
+      ...settings,
+      clauseList,
+      clauses: { ...settings.clauses, ...clausesByRole(clauseList) },
+    };
+    setSettings(next);
+    return (await handleSave(next)) ? id : null;
+  };
+
+  /*
+    Moving a clause by typing the number it should print under.
+
+    The number is not stored -- it is where the clause sits -- so setting
+    it to "7.2" means putting the clause second under the seventh, and
+    everything after it renumbers. That way the list can never show two
+    7.2s or skip an 8, which a free-typed label would allow within a week.
+
+    Returns why it could not be done, or null.
+  */
+  const renumberClause = (id: string, spec: string): string | null => {
+    if (!settings) return "Settings are still loading.";
+    const outcome = clauseListRenumbered(settings.clauseList, id, spec);
+    if ("error" in outcome) return outcome.error;
+    setClauseList(outcome.list);
+    return null;
+  };
+
+  /*
+    Services, edited the same way the clauses are: the order they are
+    offered in, what they are called, and which ones exist at all.
+  */
+  const reorderService = (id: string, beforeId: string | null) => {
+    if (!settings) return;
+    const rest = settings.services.filter((service) => service.id !== id);
+    const moved = settings.services.find((service) => service.id === id);
+    if (!moved) return;
+    const at = beforeId ? rest.findIndex((service) => service.id === beforeId) : -1;
+    if (at < 0) rest.push(moved);
+    else rest.splice(at, 0, moved);
+    patch({ services: rest });
+  };
+
+  const removeService = (id: string) => {
+    if (!settings) return;
+    patch({ services: settings.services.filter((service) => service.id !== id) });
+  };
+
+  /* Saved as it is added, for the same reason a clause is. */
+  const addService = async (draft: {
+    title: string;
+    body: string;
+    unitTypes?: AmcUnitType[];
+  }) => {
+    if (!settings) return null;
+    const id = `custom-${Date.now().toString(36)}`;
+    const next: AmcSettings = {
+      ...settings,
+      services: [
+        ...settings.services,
+        {
+          id,
+          label: draft.title,
+          scope: draft.title,
+          sectionTitle: `${draft.title}:`,
+          /* A number of visits a year is the ordinary case; the proposal
+             sets how many. */
+          frequencyType: "ppm" as const,
+          frequencyPerYear: 4,
+          villaOnly: false,
+          /* Every kind unless the dialog narrowed it. */
+          unitTypes: draft.unitTypes?.length ? draft.unitTypes : [...AMC_UNIT_TYPES],
+          hasScopeSection: true,
+          reference: "",
+          enabled: true,
+        },
+      ],
+      serviceScopes: { ...settings.serviceScopes, [id]: draft.body },
+    };
+    setSettings(next);
+    return (await handleSave(next)) ? id : null;
+  };
+
+  /* What a clause looked like as shipped, for "Reset to default". */
+  const defaultBodyOf = (clause: AmcClause) =>
+    defaults.clauseList.find((item) => item.id === clause.id)?.body ?? clause.body;
+
+  /*
     Only what differs from the shipped default is sent. A clause left
     alone stays absent from the override document, so a later release that
     corrects it still reaches this install.
@@ -393,15 +601,38 @@ export function AmcSettingsPage() {
           defaults.provider.coordinationEmails.join("|") ||
         PROVIDER_TEXT_FIELDS.some(({ key }) => current.provider[key] !== defaults.provider[key]);
 
+      /* The brochure field by field, like the clauses: only what was edited. */
+      const brochure = Object.fromEntries(
+        AMC_BROCHURE_FIELDS.map(({ key }) => [key, current.brochure[key]]).filter(
+          ([key, value]) => isCustomised(value as string, defaults.brochure[key as keyof AmcSettings["brochure"]]),
+        ),
+      );
+
       const sameList = (a: string[], b: string[]) =>
         [...a].sort().join("|") === [...b].sort().join("|");
       const approvalChanged = !sameList(current.approval.approvers, defaults.approval.approvers);
+
+      /*
+        The clause list goes whole or not at all: a clause added, removed
+        or moved cannot be expressed as a per-key edit. Untouched, it stays
+        out of the override document, so a later release that corrects a
+        clause still reaches this install.
+      */
+      const listChanged =
+        JSON.stringify(current.clauseList) !== JSON.stringify(defaults.clauseList);
+      /* Same for the services: added, removed or reordered is not a
+         per-key edit either. */
+      const servicesChanged =
+        JSON.stringify(current.services) !== JSON.stringify(defaults.services);
 
       return {
         ...(approvalChanged ? { approval: current.approval } : {}),
         ...(providerChanged ? { provider: current.provider } : {}),
         ...(Object.keys(clauses).length ? { clauses } : {}),
+        ...(listChanged ? { clauseList: current.clauseList } : {}),
+        ...(servicesChanged ? { services: current.services } : {}),
         ...(Object.keys(serviceScopes).length ? { serviceScopes } : {}),
+        ...(Object.keys(brochure).length ? { brochure } : {}),
       };
     },
     [defaults],
@@ -414,12 +645,13 @@ export function AmcSettingsPage() {
     [settings, saved],
   );
 
-  const handleSave = async () => {
-    if (!settings) return;
+  const handleSave = async (next?: AmcSettings) => {
+    const current = next ?? settings;
+    if (!current) return false;
     setSaving(true);
     try {
       const response = await amcSettingsService.saveSettings(
-        buildOverrides(settings),
+        buildOverrides(current),
       );
       setSettings(response.settings);
       setSaved(response.settings);
@@ -429,11 +661,13 @@ export function AmcSettingsPage() {
           ? `Saved. ${response.changedKeys.length} field${response.changedKeys.length === 1 ? "" : "s"} updated. New proposals will use this text.`
           : "Saved. There was nothing to change.",
       );
+      return true;
     } catch (error) {
       console.error(error);
       toast.error(
         error instanceof Error ? error.message : "Couldn't save AMC Settings",
       );
+      return false;
     } finally {
       setSaving(false);
     }
@@ -515,10 +749,28 @@ export function AmcSettingsPage() {
     );
   }
 
-  const customisedClauses = CLAUSE_FIELDS.filter(({ key }) =>
-    isCustomised(settings.clauses[key], defaults.clauses[key]),
-  ).length;
-  const customisedScopes = AMC_SERVICES.filter((service) =>
+  /*
+    What each clause is numbered in the document -- the same walk the
+    builder makes. Shown in the list because a clause is known by its
+    number, and because it is the clearest way to see what moving one did.
+  */
+  /*
+    How many services print a scope. On a contract this is whatever that
+    proposal selected; here, with no proposal, the whole list is the right
+    answer -- it is what a contract with everything on it numbers as.
+  */
+  const clauseNumbers = clauseNumbering(settings.clauseList, {
+    scopeSections: settings.services.filter(
+      (service) => service.enabled !== false && service.hasScopeSection !== false,
+    ).length,
+  });
+
+  const customisedClauses = settings.clauseList.filter(EDITABLE_CLAUSE).filter((clause) => {
+    const shipped = defaults.clauseList.find((item) => item.id === clause.id);
+    /* A clause somebody added is theirs entirely, so it counts. */
+    return !shipped || isCustomised(clause.body, shipped.body) || clause.title !== shipped.title;
+  }).length;
+  const customisedScopes = settings.services.filter((service) =>
     isCustomised(
       settings.serviceScopes[service.id] ?? "",
       defaults.serviceScopes[service.id] ?? "",
@@ -534,8 +786,12 @@ export function AmcSettingsPage() {
         onChange={setView}
         tabs={[
           { value: "values", label: "Standard values" },
-          { value: "clauses", label: "Contract clauses", count: CLAUSE_FIELDS.length },
-          { value: "scopes", label: "Scope of work", count: AMC_SERVICES.length },
+          {
+            value: "clauses",
+            label: "Contract clauses",
+            count: settings.clauseList.filter(EDITABLE_CLAUSE).length,
+          },
+          { value: "scopes", label: "Scope of work", count: settings.services.length },
           { value: "approvers", label: "Approvers", count: settings.approval.approvers.length },
           { value: "history", label: "Change history", count: history.length },
         ]}
@@ -611,37 +867,76 @@ export function AmcSettingsPage() {
           icon={<FileText />}
           searchable
           title="Contract clauses"
-          description={`Clauses you haven't edited keep the standard wording. Once you edit one, your version is used instead. ${customisedClauses} of ${CLAUSE_FIELDS.length} customised.`}
-          items={CLAUSE_FIELDS.map(({ key, label, hint }) => ({
-            id: key,
-            label,
-            hint,
-            value: settings.clauses[key],
-            fallback: defaults.clauses[key],
+          description={`They print in this order, numbered as they go. A clause you haven't edited keeps the standard wording. ${customisedClauses} of ${settings.clauseList.filter(EDITABLE_CLAUSE).length} customised.`}
+          addLabel="Add clause"
+          items={settings.clauseList.filter(EDITABLE_CLAUSE).map((clause) => ({
+            id: clause.id,
+            label: clause.title,
+            /* What it prints under -- "3.1" -- which is also how it is moved. */
+            number: clauseNumbers.get(clause.id)?.number,
+            /* Its number is the clause above's, so typing one here would
+               only ever move it somewhere it still would not print. */
+            numberFixed: clauseNumbers.get(clause.id)?.inherited,
+            hint: clauseNumbers.get(clause.id)?.inherited
+              ? /* It prints no heading of its own, so its number is the
+                   one above it -- saying which is the only way the number
+                   in the list is not a puzzle. */
+                `Prints under ${clauseNumbers.get(clause.id)?.number} rather than under a heading of its own.`
+              : clause.role
+                ? CLAUSE_HINTS[clause.role]
+                : "Your own clause. It prints where it sits in this list.",
+            /*
+              Two clauses print their first paragraph as their own heading
+              rather than this title, so say so instead of letting a rename
+              here quietly do nothing to the contract.
+            */
+            renameNote: HEADING_FROM_BODY.has(clause.role ?? "")
+              ? "This clause prints its first paragraph as its heading. Edit that in the text to change what the contract shows."
+              : undefined,
+            value: clause.body,
+            fallback: defaultBodyOf(clause),
+            /* A clause the contract builds rather than merely prints. */
+            fixed: Boolean(clause.role),
           }))}
-          onChange={(id, text) =>
-            patch({ clauses: { ...settings.clauses, [id]: text } })
-          }
+          onChange={(id, text) => editClause(id, { body: text })}
+          onRename={(id, title) => editClause(id, { title })}
+          onRenumber={renumberClause}
+          onReorder={reorderClause}
+          onDelete={removeClause}
+          onAdd={addClause}
         />
       ) : null}
 
       {view === "scopes" ? (
-        /* FR6.2 — "the scope of work for each service". */
+        /* FR6.2 — "the scope of work for each service". The services are
+           settings now, so this list is the services themselves. */
         <TextLibrary
           icon={<Wrench />}
           title="Service scope of work"
-          description={`What each service covers, as it prints in the contract. ${customisedScopes} of ${AMC_SERVICES.length} customised.`}
+          description={`What each service covers, as it prints in the contract. They are offered in this order. ${customisedScopes} of ${settings.services.length} customised.`}
           searchable
-          items={AMC_SERVICES.map((service) => ({
+          addLabel="Add service"
+          items={settings.services.map((service) => ({
             id: service.id,
             label: service.label,
-            hint: service.reference ? `Referenced in ${service.reference}.` : undefined,
+            hint: unitTypesLabel(service),
             value: settings.serviceScopes[service.id] ?? "",
             fallback: defaults.serviceScopes[service.id] ?? "",
           }))}
           onChange={(id, text) =>
             patch({ serviceScopes: { ...settings.serviceScopes, [id]: text } })
           }
+          onRename={(id, label) =>
+            patch({
+              services: settings.services.map((service) =>
+                service.id === id ? { ...service, label, scope: label } : service,
+              ),
+            })
+          }
+          onReorder={reorderService}
+          onDelete={removeService}
+          onAdd={addService}
+          unitTypes
         />
       ) : null}
 
@@ -665,6 +960,18 @@ type LibraryItem = {
   value: string;
   /** The shipped default, for the Customised mark and Reset. */
   fallback: string;
+  /**
+   * The document builds this one rather than merely printing it -- the
+   * scope loop, the price list, the bank table. It can still be reworded,
+   * renamed, moved and removed; removing it is what needs saying plainly.
+   */
+  fixed?: boolean;
+  /** What it prints under, when the list is numbered. */
+  number?: string;
+  /** That number is the clause above's, so it is shown but not typed. */
+  numberFixed?: boolean;
+  /** Said in the rename dialog, where the name alone is not the whole story. */
+  renameNote?: string;
 };
 
 /**
@@ -681,6 +988,13 @@ function TextLibrary({
   items,
   onChange,
   searchable,
+  addLabel,
+  onAdd,
+  unitTypes: asksUnitTypes,
+  onDelete,
+  onReorder,
+  onRename,
+  onRenumber,
 }: {
   icon: React.ReactNode;
   title: string;
@@ -688,9 +1002,50 @@ function TextLibrary({
   items: LibraryItem[];
   onChange: (id: string, text: string) => void;
   searchable?: boolean;
+  /** Given together, these turn the library into a list you can edit. */
+  addLabel?: string;
+  /** Saves as it adds; the id it was given, or null if the save failed. */
+  onAdd?: (draft: {
+    title: string;
+    body: string;
+    unitTypes?: AmcUnitType[];
+  }) => Promise<string | null>;
+  /** Asks which kinds of property the new one is offered on. */
+  unitTypes?: boolean;
+  onDelete?: (id: string) => void;
+  /** Puts `id` where `beforeId` is; at the end when that is null. */
+  onReorder?: (id: string, beforeId: string | null) => void;
+  onRename?: (id: string, title: string) => void;
+  /** Moves it to the number typed; returns why it could not, or null. */
+  onRenumber?: (id: string, number: string) => string | null;
 }) {
   const [selectedId, setSelectedId] = useState(items[0]?.id ?? "");
   const [query, setQuery] = useState("");
+  const [dragId, setDragId] = useState<string | null>(null);
+  /*
+    Where it would land: the row the line is drawn against, and which of
+    its edges. Dropping "on" a row is ambiguous -- dragging something down
+    onto row 7 plainly means putting it at 7, not above 7 -- so the drop
+    point is the gap the pointer is nearest, and the line shows it.
+  */
+  const [overId, setOverId] = useState<string | null>(null);
+  const [overBelow, setOverBelow] = useState(false);
+  const [adding, setAdding] = useState(false);
+  /* The row being renamed, and what it is being renamed to. */
+  const [renaming, setRenaming] = useState<LibraryItem | null>(null);
+  const [rename, setRename] = useState("");
+  const [renumber, setRenumber] = useState("");
+  const [renameError, setRenameError] = useState<string | null>(null);
+  /* The add dialog saves, so it has to be able to say it is working. */
+  const [addingBusy, setAddingBusy] = useState(false);
+  const [draft, setDraft] = useState<{
+    title: string;
+    body: string;
+    unitTypes: AmcUnitType[];
+    /** HTML while it is being written; blocks on save. */
+  }>({ title: "", body: "", unitTypes: [...AMC_UNIT_TYPES] });
+  const listRef = useRef<HTMLUListElement>(null);
+  const { confirm, dialog: confirmDialog } = useConfirm();
 
   const shown = useMemo(() => {
     const term = query.trim().toLowerCase();
@@ -698,12 +1053,90 @@ function TextLibrary({
   }, [items, query]);
 
   const selected = items.find((item) => item.id === selectedId) ?? items[0];
+  const selectedIndex = items.findIndex((item) => item.id === selected?.id);
+
+  /*
+    A new entry opens on its own, and the list scrolls to it -- adding
+    something and then hunting for it in a list of twenty is the whole
+    reason this felt like filing rather than writing.
+  */
+  const reveal = (id: string) => {
+    setSelectedId(id);
+    setQuery("");
+    window.requestAnimationFrame(() => {
+      listRef.current
+        ?.querySelector(`[data-row="${id}"]`)
+        ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+  };
+
+  /*
+    Adding saves, so the dialog stays put until it has: a list of clauses
+    that only exists in the browser until somebody presses Save elsewhere
+    is a list that loses one.
+  */
+  const submitDraft = async () => {
+    if (!onAdd || !draft.title.trim() || addingBusy) return;
+    if (asksUnitTypes && draft.unitTypes.length === 0) return;
+    setAddingBusy(true);
+    try {
+      const id = await onAdd({
+        title: draft.title.trim(),
+        body: htmlToClauseText(draft.body),
+        unitTypes: draft.unitTypes,
+      });
+      /* It did not save. The draft stays exactly as typed, to try again. */
+      if (!id) return;
+      setAdding(false);
+      setDraft({ title: "", body: "", unitTypes: [...AMC_UNIT_TYPES] });
+      reveal(id);
+    } finally {
+      setAddingBusy(false);
+    }
+  };
+
+  const openRename = (item: LibraryItem) => {
+    setRenaming(item);
+    setRename(item.label);
+    setRenumber(item.number ?? "");
+    setRenameError(null);
+  };
+
+  const submitRename = () => {
+    if (!renaming || !rename.trim()) return;
+    /* The number first: if it cannot be placed, nothing moves and nothing
+       is renamed, so the dialog can say why with both values still in it. */
+    if (onRenumber && renumber.trim() && renumber.trim() !== renaming.number) {
+      const problem = onRenumber(renaming.id, renumber);
+      if (problem) {
+        setRenameError(problem);
+        return;
+      }
+    }
+    if (rename.trim() !== renaming.label) onRename?.(renaming.id, rename.trim());
+    setRenaming(null);
+  };
+
+  const removeItem = async (item: LibraryItem) => {
+    if (!onDelete) return;
+    const ok = await confirm({
+      title: `Remove "${item.label}"?`,
+      description: item.fixed
+        ? "It stops printing on new documents, and the ones after it are renumbered. Documents already sent keep it."
+        : "It stops printing on new documents. Documents already sent keep it.",
+      confirmText: "Remove",
+      variant: "destructive",
+    });
+    if (ok) onDelete(item.id);
+  };
+
   if (!selected) return null;
 
   const customised = isCustomised(selected.value, selected.fallback);
   const missingTokens = tokensIn(selected.fallback).filter(
     (token) => !selected.value.includes(token),
   );
+  const draggable = Boolean(onReorder) && !query.trim();
 
   return (
     /* overflow-visible: the card normally clips its content for its rounded
@@ -714,8 +1147,201 @@ function TextLibrary({
       description={description}
       bodyClassName="border-t"
       className="overflow-visible"
+      action={
+        onAdd ? (
+          <Button size="sm" onClick={() => setAdding(true)}>
+            <Plus className="size-4" />
+            {addLabel ?? "Add"}
+          </Button>
+        ) : undefined
+      }
     >
-      <div className="grid lg:grid-cols-[18rem_minmax(0,1fr)]">
+      {confirmDialog}
+
+      {/* Named and written in one place, rather than an untitled row
+          appearing at the bottom of the list to be found and filled in. */}
+      <Dialog open={adding} onOpenChange={(open) => !open && !addingBusy && setAdding(false)}>
+        <DialogContent
+          className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl"
+          showCloseButton={!addingBusy}
+          onEscapeKeyDown={(event) => {
+            if (addingBusy) event.preventDefault();
+          }}
+          onInteractOutside={(event) => {
+            if (addingBusy) event.preventDefault();
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>{addLabel ?? "Add"}</DialogTitle>
+            <DialogDescription>
+              It is saved straight away and added at the end. Drag it up the
+              list, or set its number, to place it.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="amc-new-title">Title</Label>
+              <Input
+                id="amc-new-title"
+                autoFocus
+                value={draft.title}
+                placeholder="e.g. Data Protection"
+                onChange={(event) => setDraft((d) => ({ ...d, title: event.target.value }))}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void submitDraft();
+                }}
+              />
+            </div>
+            {asksUnitTypes ? (
+              /*
+                Which properties it is offered on. Everything by default,
+                because most services are -- narrowing it is the choice,
+                not the starting point.
+              */
+              <div className="space-y-1.5">
+                <Label>Offered on</Label>
+                <div className="flex flex-wrap gap-2">
+                  {AMC_UNIT_TYPES.map((type) => {
+                    const on = draft.unitTypes.includes(type);
+                    return (
+                      <Button
+                        key={type}
+                        type="button"
+                        size="sm"
+                        variant={on ? "default" : "outline"}
+                        aria-pressed={on}
+                        onClick={() =>
+                          setDraft((d) => ({
+                            ...d,
+                            unitTypes: on
+                              ? d.unitTypes.filter((item) => item !== type)
+                              : [...d.unitTypes, type],
+                          }))
+                        }
+                      >
+                        {type === "villa" ? "Villas" : type === "apartment" ? "Apartments" : "Offices"}
+                      </Button>
+                    );
+                  })}
+                </div>
+                {draft.unitTypes.length === 0 ? (
+                  <p className="text-destructive text-xs">
+                    Pick at least one, or it can never be offered.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
+            <div className="space-y-1.5">
+              <Label>Text</Label>
+              <QuoteRichText
+                ariaLabel="Text"
+                value={draft.body}
+                onChange={(html) => setDraft((d) => ({ ...d, body: html }))}
+                tools={["subheading", "bullet"]}
+                placeholder="Each paragraph prints as its own block, in the order shown."
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" disabled={addingBusy} onClick={() => setAdding(false)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={
+                addingBusy ||
+                !draft.title.trim() ||
+                (asksUnitTypes && draft.unitTypes.length === 0)
+              }
+              onClick={() => void submitDraft()}
+            >
+              {addingBusy ? <Loader2 className="size-4 animate-spin" /> : null}
+              {addingBusy ? "Saving..." : (addLabel ?? "Add")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Renaming is its own small thing, asked for and confirmed --
+          not a title box that rewrites the document as it is typed. */}
+      <Dialog open={Boolean(renaming)} onOpenChange={(open) => !open && setRenaming(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit</DialogTitle>
+            <DialogDescription>
+              The heading it prints under, and where it prints. Documents
+              already sent keep what they were sent with.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="amc-rename">Title</Label>
+              <Input
+                id="amc-rename"
+                autoFocus
+                value={rename}
+                onChange={(event) => setRename(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") submitRename();
+                }}
+              />
+              {renaming?.renameNote ? (
+                <p className="text-muted-foreground text-xs">{renaming.renameNote}</p>
+              ) : null}
+              {renaming?.numberFixed ? (
+                <p className="text-muted-foreground text-xs">
+                  This clause prints under {renaming.number}, which belongs to the
+                  clause above it. Drag it in the list to move it.
+                </p>
+              ) : null}
+            </div>
+            {onRenumber && renaming?.number && !renaming.numberFixed ? (
+              /*
+                The number is where it sits, so typing one moves it -- and
+                everything after it renumbers to follow. Nothing here can
+                produce two 7.2s or a gap at 8.
+              */
+              <div className="space-y-1.5">
+                <Label htmlFor="amc-renumber">Number</Label>
+                <Input
+                  id="amc-renumber"
+                  value={renumber}
+                  placeholder="7 or 7.2"
+                  inputMode="decimal"
+                  className="max-w-32 tabular-nums"
+                  onChange={(event) => {
+                    setRenumber(event.target.value);
+                    setRenameError(null);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") submitRename();
+                  }}
+                />
+                <p className="text-muted-foreground text-xs">
+                  It moves to this number and the rest renumber around it. A
+                  number with a dot makes it a sub-clause.
+                </p>
+              </div>
+            ) : null}
+            {renameError ? (
+              <p className="text-destructive flex items-start gap-1.5 text-xs">
+                <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+                <span>{renameError}</span>
+              </p>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRenaming(null)}>
+              Cancel
+            </Button>
+            <Button disabled={!rename.trim()} onClick={submitRename}>
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <div className="grid lg:grid-cols-[21rem_minmax(0,1fr)]">
         {/* The list. On wide screens it stays in view while a long clause
             scrolls on the right, just below the sticky dashboard header. */}
         <div className="border-b lg:border-r lg:border-b-0">
@@ -736,7 +1362,7 @@ function TextLibrary({
                 />
               </div>
             ) : null}
-            <ul className="max-h-[28rem] overflow-y-auto p-2 lg:max-h-[36rem]">
+            <ul ref={listRef} className="max-h-[28rem] overflow-y-auto p-2 lg:max-h-[36rem]">
               {shown.length === 0 ? (
                 <li className="text-muted-foreground px-3 py-6 text-center text-sm">
                   Nothing matches that.
@@ -746,37 +1372,153 @@ function TextLibrary({
                   const active = item.id === selected.id;
                   const changed = isCustomised(item.value, item.fallback);
                   return (
-                    <li key={item.id}>
+                    <li
+                      key={item.id}
+                      data-row={item.id}
+                      draggable={draggable}
+                      onDragStart={() => setDragId(item.id)}
+                      onDragEnd={() => {
+                        setDragId(null);
+                        setOverId(null);
+                      }}
+                      onDragOver={(event) => {
+                        if (!dragId || dragId === item.id) return;
+                        event.preventDefault();
+                        const box = event.currentTarget.getBoundingClientRect();
+                        setOverId(item.id);
+                        setOverBelow(event.clientY > box.top + box.height / 2);
+                      }}
+                      onDragLeave={(event) => {
+                        /* Only when the pointer has actually left the row,
+                           not when it crosses onto the label inside it. */
+                        if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+                        setOverId((current) => (current === item.id ? null : current));
+                      }}
+                      onDrop={(event) => {
+                        if (!dragId || dragId === item.id) return;
+                        event.preventDefault();
+                        const box = event.currentTarget.getBoundingClientRect();
+                        const below = event.clientY > box.top + box.height / 2;
+                        /* Below this row means before whatever follows it,
+                           and the end of the list when nothing does. */
+                        const index = shown.findIndex((row) => row.id === item.id);
+                        const target = below ? (shown[index + 1]?.id ?? null) : item.id;
+                        /* Dropping either side of itself is not a move. */
+                        if (target !== dragId) onReorder?.(dragId, target);
+                        setDragId(null);
+                        setOverId(null);
+                      }}
+                      /* The row is the whole target: a handle you have to
+                         hit exactly is worse than grabbing the thing
+                         itself, and the handle still says it can be
+                         dragged. */
+                      className={cn(
+                        "group/row relative flex items-center rounded-md ps-2 transition-colors",
+                        /* Opaque on hover, because the actions below sit on this
+                           colour and have to cover what is behind them. */
+                        active ? "bg-brand-50 text-brand" : "bg-card hover:bg-muted",
+                        draggable && "cursor-grab active:cursor-grabbing",
+                        dragId === item.id && "opacity-40",
+                        /* A line in the gap it would go into. */
+                        overId === item.id &&
+                          dragId !== item.id &&
+                          "before:bg-brand before:absolute before:inset-x-2 before:h-0.5 before:rounded-full before:content-['']",
+                        overId === item.id &&
+                          dragId !== item.id &&
+                          (overBelow ? "before:-bottom-px" : "before:-top-px"),
+                      )}
+                    >
+                      {draggable ? (
+                        <GripVertical
+                          className="text-muted-foreground/70 pointer-events-none absolute start-0.5 top-1/2 size-4 -translate-y-1/2 opacity-0 transition-opacity group-hover/row:opacity-100"
+                          aria-hidden
+                        />
+                      ) : null}
                       <button
                         type="button"
                         onClick={() => setSelectedId(item.id)}
+                        title={item.label}
                         className={cn(
-                          "focus-visible:ring-ring flex w-full items-center justify-between gap-2 rounded-md px-3 py-2.5 text-left text-sm transition-colors focus-visible:ring-2 focus-visible:outline-none",
-                          active ? "bg-brand-50 text-brand font-medium" : "hover:bg-muted/60",
+                          "focus-visible:ring-ring min-w-0 flex-1 rounded-md py-2.5 pe-2 ps-3 text-left text-sm transition-colors focus-visible:ring-2 focus-visible:outline-none",
+                          active && "font-medium",
                         )}
                       >
-                        <span className="min-w-0">{item.label}</span>
-                        {changed ? (
-                          <span
-                            className="bg-warning size-2 shrink-0 rounded-full"
-                            title="Customised"
-                            aria-label="Customised"
-                          />
-                        ) : null}
+                        {/* Two lines before it gives up, rather than cutting
+                            "Materials, Spare Parts, Consumables & Labor" off
+                            at the comma with half the row still empty. */}
+                        <span className="line-clamp-2 break-words">
+                          {item.number ? (
+                            <span className="text-muted-foreground me-1.5 tabular-nums">
+                              {item.number}
+                            </span>
+                          ) : null}
+                          {item.label}
+                        </span>
                       </button>
+                      {changed ? (
+                        <span
+                          className="bg-warning me-2 size-2 shrink-0 rounded-full transition-opacity group-hover/row:opacity-0"
+                          title="Customised"
+                          aria-label="Customised"
+                        />
+                      ) : null}
+                      {/* The row's own actions. Laid over the end of the row
+                          rather than beside it, on the row's own background,
+                          so a title is not cut short to hold space for
+                          buttons that are not being shown. */}
+                      {onDelete || onRename ? (
+                        <span className="absolute end-1 top-1/2 flex shrink-0 -translate-y-1/2 items-center rounded-md bg-inherit ps-3 opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100">
+                          {onRename ? (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="text-muted-foreground hover:text-foreground size-7"
+                              aria-label={`Edit ${item.label}`}
+                              title="Edit"
+                              onClick={() => openRename(item)}
+                            >
+                              <Pencil className="size-3.5" />
+                            </Button>
+                          ) : null}
+                          {onDelete ? (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="text-muted-foreground hover:text-destructive size-7"
+                            aria-label={`Remove ${item.label}`}
+                            title="Remove"
+                            onClick={() => void removeItem(item)}
+                          >
+                            <Trash2 className="size-3.5" />
+                          </Button>
+                          ) : null}
+                        </span>
+                      ) : null}
                     </li>
                   );
                 })
               )}
             </ul>
+            {draggable ? (
+              <p className="text-muted-foreground border-t px-3 py-2 text-xs">
+                Drag to reorder. They print in this order.
+              </p>
+            ) : null}
           </div>
         </div>
 
         {/* The editor */}
         <div className="min-w-0 space-y-3 p-5">
           <div className="flex flex-wrap items-start justify-between gap-2">
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <Label htmlFor={`amc-text-${selected.id}`} className="text-base font-semibold">
+                {selected.number ? (
+                  <span className="text-muted-foreground me-1.5 tabular-nums">
+                    {selected.number}
+                  </span>
+                ) : null}
                 {selected.label}
               </Label>
               {selected.hint ? (
@@ -784,6 +1526,36 @@ function TextLibrary({
               ) : null}
             </div>
             <div className="flex items-center gap-2">
+              {/* Keyboard's way to reorder: dragging is a mouse, and the
+                  order is part of the document. */}
+              {onReorder ? (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="size-8"
+                    aria-label="Move up"
+                    title="Move up"
+                    disabled={selectedIndex <= 0}
+                    onClick={() => onReorder(selected.id, items[selectedIndex - 1]?.id ?? null)}
+                  >
+                    <ArrowUp className="size-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="size-8"
+                    aria-label="Move down"
+                    title="Move down"
+                    disabled={selectedIndex < 0 || selectedIndex >= items.length - 1}
+                    onClick={() => onReorder(selected.id, items[selectedIndex + 2]?.id ?? null)}
+                  >
+                    <ArrowDown className="size-4" />
+                  </Button>
+                </>
+              ) : null}
               {customised ? (
                 <>
                   <Badge variant="secondary" className="bg-warning/10 text-warning border-0">
@@ -807,13 +1579,33 @@ function TextLibrary({
             </div>
           </div>
 
-          <Textarea
-            id={`amc-text-${selected.id}`}
-            rows={14}
-            value={selected.value}
-            onChange={(event) => onChange(selected.id, event.target.value)}
-            className="min-h-72 font-mono text-[13px] leading-relaxed"
-          />
+          {/*
+            The same editor the snagging quotation's scope and terms use,
+            so a paragraph looks like a paragraph instead of a blank line
+            counted in a monospace box.
+
+            Wording the editor cannot hold exactly -- a line break inside a
+            paragraph -- keeps the plain box: losing a line of a contract to
+            a convenience is not a trade worth making.
+          */}
+          {roundTrips(selected.value) ? (
+            <QuoteRichText
+              key={selected.id}
+              ariaLabel={selected.label}
+              value={clauseTextToHtml(selected.value)}
+              onChange={(html) => onChange(selected.id, htmlToClauseText(html))}
+              tools={["subheading", "bullet"]}
+              placeholder="Each paragraph prints as its own block, in the order shown."
+            />
+          ) : (
+            <Textarea
+              id={`amc-text-${selected.id}`}
+              rows={14}
+              value={selected.value}
+              onChange={(event) => onChange(selected.id, event.target.value)}
+              className="min-h-72 font-mono text-[13px] leading-relaxed"
+            />
+          )}
 
           {missingTokens.length > 0 ? (
             <p className="text-destructive flex items-start gap-1.5 text-xs">
@@ -855,6 +1647,11 @@ function describeKey(path: string): string {
     if (!key) return "Scope of work";
     const service = AMC_SERVICES.find((item) => item.id === key);
     return `Scope of work: ${service?.label ?? key}`;
+  }
+  if (group === "brochure") {
+    if (!key) return "Proposal brochure";
+    const field = AMC_BROCHURE_FIELDS.find((item) => item.key === key);
+    return `Proposal brochure: ${field?.label ?? key}`;
   }
   if (group === "approval") return "Approvers";
   if (group === "provider") {

@@ -25,13 +25,13 @@ import { ActionType, ResourceType } from "@/types/types";
 
 export async function GET(req: NextRequest) {
   try {
-    // const { profile, accessUser } = await getRequestUserAccess(req);
-    // if (!profile || !accessUser) {
-    //   return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    // }
-    // if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.VIEW)) {
-    //   return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    // }
+    const { profile, accessUser } = await getRequestUserAccess(req);
+    if (!profile || !accessUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.VIEW)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
     const admin = await createAdminServerClient();
     return NextResponse.json(await listClients(admin, req.nextUrl.searchParams));

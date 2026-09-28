@@ -201,6 +201,8 @@ export interface AmcService {
 }
 
 export interface FrequencyRow {
+  /** Which service the row is, so the contract can renumber its scope. */
+  serviceId: string;
   scope: string;
   /* FR4.1 — "each with the units, frequency and price entered". */
   units: number;

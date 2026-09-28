@@ -1,7 +1,6 @@
 import { format } from "date-fns";
 
 import {
-  AMC_SERVICES,
   getDefaultFrequencyForService,
   getServicesForUnitType,
 } from "./amc-constants";
@@ -15,7 +14,7 @@ import type {
   FrequencyRow,
 } from "./amc-types";
 import { amountToWordsAed } from "./utils/amount-to-words";
-import { getAmcSettingsDefaults } from "./amc-settings";
+import { getAmcSettingsDefaults, servicesForProperty } from "./amc-settings";
 import type { AmcSettings } from "./amc-settings";
 
 const VAT_RATE = 0.05;
@@ -87,17 +86,26 @@ function formatFrequencyForPdf(service: AmcService, frequency: number): string {
   }
 }
 
-function buildFrequencyRows(data: AmcFormData): FrequencyRow[] {
-  const allowedIds = new Set(
-    getServicesForUnitType(data.unitType).map((service) => service.id),
-  );
+/*
+  The services on this proposal, priced.
+
+  Taken from AMC Settings, which is where they live now: a service added
+  there has to reach the frequency table, the proposal's list and the
+  contract's scope, and reading them from three places is how those three
+  drift apart.
+*/
+function buildFrequencyRows(data: AmcFormData, settings: AmcSettings): FrequencyRow[] {
+  const offered = servicesForProperty(settings, data.unitType);
+  const allowedIds = new Set(offered.map((service) => service.id));
+  const byId = new Map(offered.map((service) => [service.id, service]));
 
   return data.serviceRows
     .filter((row) => row.included && allowedIds.has(row.serviceId))
     .map((row) => {
-      const service = AMC_SERVICES.find((item) => item.id === row.serviceId);
+      const service = byId.get(row.serviceId);
       if (!service) return null;
       return {
+        serviceId: service.id,
         scope: service.scope,
         units: row.units,
         frequency: formatFrequencyForPdf(service, row.frequency),
@@ -135,7 +143,7 @@ export function computeAmcData(
     ),
     endDate,
     totals: calculateAmcTotals(data),
-    frequencyRows: buildFrequencyRows(data),
+    frequencyRows: buildFrequencyRows(data, settings),
     formData: data,
   };
 }
@@ -208,8 +216,9 @@ export function formatDisplayDate(isoDate: string): string {
 export function getServiceFrequencyLabel(
   serviceId: string,
   data: AmcFormData,
+  settings: AmcSettings = getAmcSettingsDefaults(),
 ): string {
-  const service = AMC_SERVICES.find((item) => item.id === serviceId);
+  const service = settings.services.find((item) => item.id === serviceId);
   const row = data.serviceRows.find((item) => item.serviceId === serviceId);
   if (!service || !row) return "";
   return formatFrequencyForPdf(service, row.frequency);

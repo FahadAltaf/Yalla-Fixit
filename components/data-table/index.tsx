@@ -183,7 +183,9 @@ export function DataTable<TData, TValue>({
                       <TableHead
                         key={header.id}
                         style={{ width: `${header.getSize()}px` }}
-                        className="text-muted-foreground hover:text-black hover:bg-muted first:pl-4 last:px-4"
+                        /* text-foreground, not black: on a dark theme the header
+                             went black on a dark hover and disappeared. */
+                        className="text-muted-foreground hover:text-foreground hover:bg-muted first:pl-4 last:px-4"
                       >
                         {header.isPlaceholder ? null : header.column.getCanSort() ? (
                           <div

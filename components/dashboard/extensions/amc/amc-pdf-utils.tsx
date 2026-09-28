@@ -13,11 +13,13 @@ import {
   computeBodySliceOffsets,
   measureAmcLayoutHeights,
 } from "./amc-pdf-pagination";
+import type { AmcBrochure } from "./amc-brochure";
 import type { AmcComputedData } from "./amc-types";
 import {
   AmcDocumentMeasure,
   AmcDocumentPages,
 } from "./templates/amc-doc/AmcDocumentLayouts";
+import { AmcBrochurePage } from "./templates/amc-doc/AmcBrochurePage";
 import { AMC_PAGE } from "./templates/amc-doc/amc-doc-theme";
 
 /*
@@ -60,6 +62,54 @@ async function settle(container: HTMLElement) {
 
 /* A timer, not an animation frame: a background tab pauses frames. */
 const yieldToBrowser = () => new Promise((resolve) => setTimeout(resolve, 16));
+
+/**
+ * A proposal's brochure page as a JPEG, for the Word file's cover: Word
+ * cannot lay the page out itself, so it carries the same picture the PDF
+ * shows as its first page.
+ */
+export async function captureAmcBrochureImage(
+  brochure: AmcBrochure,
+  scale = 2,
+): Promise<{ data: Uint8Array; width: number; height: number }> {
+  const tempDiv = document.createElement("div");
+  tempDiv.style.cssText = `position: absolute; left: -9999px; top: 0; width: ${AMC_PAGE.width}px; background: #ffffff;`;
+  document.body.appendChild(tempDiv);
+  const root = createRoot(tempDiv);
+  try {
+    flushSync(() => root.render(<AmcBrochurePage brochure={brochure} pdf />));
+    await settle(tempDiv);
+    const page = tempDiv.firstElementChild as HTMLElement;
+    const canvas = await html2canvas(page, {
+      useCORS: true,
+      allowTaint: true,
+      background: "#ffffff",
+      logging: false,
+      width: page.offsetWidth,
+      height: page.offsetHeight,
+      ...({
+        // Only this page and the styles, as the PDF capture below does.
+        ignoreElements: (element: Element) =>
+          element !== tempDiv &&
+          !element.contains(tempDiv) &&
+          !tempDiv.contains(element) &&
+          !document.head.contains(element) &&
+          element.tagName !== "STYLE" &&
+          element.tagName !== "LINK" &&
+          element.parentElement !== null,
+        scale,
+        onclone: (doc: Document) => sanitizeUnsupportedColors(doc),
+      } as object),
+    });
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.88));
+    if (!blob) throw new Error("Could not draw the proposal's first page");
+    /* Its size in CSS pixels too: the page is as tall as its content. */
+    return { data: new Uint8Array(await blob.arrayBuffer()), width: page.offsetWidth, height: page.offsetHeight };
+  } finally {
+    root.unmount();
+    if (document.body.contains(tempDiv)) document.body.removeChild(tempDiv);
+  }
+}
 
 export async function generateAmcPDFBlob(
   data: AmcComputedData,
@@ -108,17 +158,25 @@ export async function generateBrandedPdfBlob(
   const root = createRoot(tempDiv);
 
   try {
-    /* flushSync: measure only after React has actually committed. */
-    flushSync(() => root.render(<AmcDocumentMeasure model={model} />));
-    await settle(tempDiv);
+    /*
+      A proposal is its brochure alone, with no body to lay out: no pages
+      after the first, rather than one empty page with a header and footer.
+    */
+    let bodyHeight = 0;
+    let sliceOffsets: number[] = [];
+    if (model.blocks.length > 0) {
+      /* flushSync: measure only after React has actually committed. */
+      flushSync(() => root.render(<AmcDocumentMeasure model={model} />));
+      await settle(tempDiv);
 
-    const { bodyHeight, viewportHeight, breakPoints } =
-      measureAmcLayoutHeights(tempDiv);
-    const sliceOffsets = computeBodySliceOffsets(
-      bodyHeight,
-      viewportHeight,
-      breakPoints,
-    );
+      const measured = measureAmcLayoutHeights(tempDiv);
+      bodyHeight = measured.bodyHeight;
+      sliceOffsets = computeBodySliceOffsets(
+        measured.bodyHeight,
+        measured.viewportHeight,
+        measured.breakPoints,
+      );
+    }
 
     flushSync(() =>
       root.render(
@@ -136,13 +194,18 @@ export async function generateBrandedPdfBlob(
       tempDiv.querySelectorAll<HTMLElement>("[data-amc-page]"),
     );
 
+    /*
+      Each page is as tall as it is drawn: an A4 page for the contract, and
+      one continuous page for the proposal, which follows the client's
+      template (210mm wide, as tall as its content).
+    */
     const PAGE_W_MM = 210;
-    const PAGE_H_MM = 297;
+    const heightMm = (el: HTMLElement) => (PAGE_W_MM * el.offsetHeight) / el.offsetWidth;
 
     const pdf = new jsPDF({
       orientation: "portrait",
       unit: "mm",
-      format: [PAGE_W_MM, PAGE_H_MM],
+      format: [PAGE_W_MM, pageElements.length ? heightMm(pageElements[0]) : 297],
     });
 
     for (let index = 0; index < pageElements.length; index++) {
@@ -197,6 +260,7 @@ export async function generateBrandedPdfBlob(
         imageQuality,
       );
 
+      const PAGE_H_MM = heightMm(pageEl);
       if (index > 0) {
         pdf.addPage([PAGE_W_MM, PAGE_H_MM], "portrait");
       }

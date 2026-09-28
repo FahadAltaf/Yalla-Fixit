@@ -1,8 +1,12 @@
+/*
+  What the proposal, the client's brochure page, reads from a proposal:
+  the services chosen, the property, the dates and the fee (2026-09-28).
+  The old proposal template's commercial terms went with it.
+*/
 import { AMC_SERVICES } from "./amc-constants";
 import {
   computeServiceRowPrice,
   formatDisplayDate,
-  formatPaymentTermsLabel,
 } from "./amc-pricing";
 import type { AmcComputedData, AmcFormData } from "./amc-types";
 
@@ -15,14 +19,12 @@ export interface ProposalServiceRow {
   price: number;
 }
 
-export interface ProposalCommercialTerm {
-  label: string;
-  value: string;
-}
-
 export function buildProposalServiceRows(
   data: AmcFormData,
   frequencyRows: AmcComputedData["frequencyRows"],
+  /* The services as AMC Settings holds them; the shipped list is the
+     fallback for a caller that has no settings to hand. */
+  services: ReadonlyArray<{ id: string; label: string; scope: string }> = AMC_SERVICES,
 ): ProposalServiceRow[] {
   const frequencyByScope = new Map(
     frequencyRows.map((row) => [row.scope, row.frequency]),
@@ -31,7 +33,7 @@ export function buildProposalServiceRows(
   return data.serviceRows
     .filter((row) => row.included)
     .map((row) => {
-      const service = AMC_SERVICES.find((item) => item.id === row.serviceId);
+      const service = services.find((item) => item.id === row.serviceId);
       if (!service) return null;
 
       return {
@@ -61,12 +63,6 @@ export function getProposalCoverageMonths(data: AmcFormData): number {
   return Math.max(1, months || 12);
 }
 
-/* FR4.3: no package to name any more -- the AMC is described by the
-   property category it covers. */
-export function getProposalAmcType(data: AmcFormData): string {
-  return data.propertyCategory === "commercial" ? "COMMERCIAL" : "RESIDENTIAL";
-}
-
 export function getProposalContactPerson(data: AmcFormData): string {
   const primary = data.coordinationContacts[0]?.name?.trim();
   return primary || data.customerName || "—";
@@ -79,62 +75,12 @@ export function getProposalPropertyLabel(data: AmcFormData): string {
     .join(" — ") || "—";
 }
 
-export function buildProposalCommercialTerms(
-  data: AmcFormData,
-  /* From AMC Settings (standard values). */
-  commitments: { standardResponseTime: string; emergencyResponseTime: string },
-): ProposalCommercialTerm[] {
-  const emergencyIncluded = data.serviceRows.some(
-    (row) => row.included && row.serviceId === "emergency",
-  );
-  const ppmRow = data.serviceRows.find(
-    (row) => row.included && row.serviceId === "ac-ppm",
-  );
-  /*
-    FR4.2: print the frequency the team entered. This previously fell
-    through to the package's visit count, which is why a frequency edited
-    to 5 still printed as 1 per year. If AC PPM is not on the proposal
-    there is no visit count to state, so the row is dropped below.
-  */
-  const ppmVisits = ppmRow?.frequency;
-
-  return [
-    {
-      label: "Payment Terms",
-      value: formatPaymentTermsLabel(data.paymentTerms),
-    },
-    ...(ppmVisits
-      ? [
-          {
-            label: "Preventive Maintenance Visits",
-            value: `${ppmVisits} visit${ppmVisits === 1 ? "" : "s"} per year`,
-          },
-        ]
-      : []),
-    {
-      label: "Emergency Call-outs",
-      value: emergencyIncluded ? "Unlimited" : "As agreed",
-    },
-    {
-      label: "Standard Response Time",
-      value: commitments.standardResponseTime,
-    },
-    {
-      label: "Emergency Response Time",
-      value: commitments.emergencyResponseTime,
-    },
-  ];
-}
-
-export { PROPOSAL_IMPORTANT_NOTES } from "./amc-contract-content";
-
 export function formatProposalFee(amount: number): string {
   return new Intl.NumberFormat("en-AE", {
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   }).format(amount);
 }
-
 
 export function getProposalStartLabel(data: AmcFormData): string {
   return formatDisplayDate(data.startDate) || "—";

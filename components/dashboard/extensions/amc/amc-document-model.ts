@@ -1,7 +1,9 @@
 import { formatCurrencyAED } from "@/utils/format-currency";
 
+import { buildAmcBrochure, type AmcBrochure } from "./amc-brochure";
 import { AMC_PROVIDER } from "./amc-constants";
 import { formatPhoneForDocument } from "./amc-phone";
+import { servicesForProperty } from "./amc-settings";
 import {
   buildClause1Operation,
   buildPriceListRows,
@@ -14,15 +16,6 @@ import {
   formatDisplayDate,
   formatPaymentTermsLabel,
 } from "./amc-pricing";
-import {
-  buildProposalCommercialTerms,
-  buildProposalServiceRows,
-  formatProposalFee,
-  getProposalContactPerson,
-  getProposalCoverageMonths,
-  getProposalPropertyLabel,
-  getProposalStartLabel,
-} from "./amc-proposal-content";
 import type { AmcComputedData } from "./amc-types";
 
 /**
@@ -76,6 +69,8 @@ export type Block =
 
 export type AmcDocumentModel = {
   documentType?: string;
+  /* A proposal: the client's brochure with their plan, and nothing after it. */
+  brochure?: AmcBrochure;
   blocks: Block[];
 };
 
@@ -178,90 +173,12 @@ function opening(data: AmcComputedData): Block[] {
 // ---------------------------------------------------------------------------
 
 /*
-  What each service covers, for the proposal's Services table: every point
-  from AMC Settings, the same text the contract prints for the service, so
-  an edit there reaches both documents. One point prints as a sentence,
-  several as a bulleted list.
+  A proposal is its first page alone: the client's brochure with the plan
+  they chose (amc-brochure.ts), and no pages after it (2026-09-28). The
+  client asked for the brochure to show only what was chosen and what it
+  covers; the details table, commercial offer, notes and signature pages
+  that used to follow it went at the same time.
 */
-function proposalCoverage(data: AmcComputedData, serviceId: string): Run[][] {
-  const text = data.settings.serviceScopes[serviceId];
-  const points = text !== undefined ? fillBlocks(text, data) : [];
-  if (!points.length) return [[t("—", { tone: "muted" })]];
-  return points.map((point) => [t(points.length > 1 ? `• ${point}` : point)]);
-}
-
-function proposalBlocks(data: AmcComputedData): Block[] {
-  const { formData, totals, frequencyRows } = data;
-  const services = buildProposalServiceRows(formData, frequencyRows);
-  const terms = buildProposalCommercialTerms(formData, data.settings.provider);
-
-  return [
-    ...opening(data),
-    detailsTable([
-      ["Prepared For", [t(formData.customerName || "—", { bold: true })]],
-      ["Property", getProposalPropertyLabel(formData)],
-      ["Property Type", data.propertyTypeLabel],
-      ["Contact Person", getProposalContactPerson(formData)],
-      ["Contract Start", getProposalStartLabel(formData)],
-      [
-        "Coverage",
-        [t(`${getProposalCoverageMonths(formData)} Months`, { bold: true, tone: "brand" })],
-      ],
-      ["Validity", data.settings.provider.proposalValidity],
-    ]),
-
-    { kind: "heading", number: "1", text: "Services Included" },
-    {
-      kind: "table",
-      widths: [20, 37, 8, 14, 21],
-      header: [
-        headerCell("Service"),
-        headerCell("Coverage"),
-        headerCell("Units", "center"),
-        headerCell("Frequency", "center"),
-        headerCell("Price (AED)", "right"),
-      ],
-      rows: zebra(
-        services.length
-          ? services.map((row) => [
-              cell([[t(row.service, { bold: true })]]),
-              cell(proposalCoverage(data, row.serviceId)),
-              cell(String(row.units), { align: "center" }),
-              cell(row.frequency, { align: "center" }),
-              cell(formatCurrencyAED(row.price), { align: "right" }),
-            ])
-          : [[cell("No services selected."), cell(""), cell(""), cell(""), cell("")]],
-      ),
-    },
-
-    { kind: "heading", number: "2", text: "Commercial Offer" },
-    detailsTable([
-      [
-        "Annual Maintenance Contract Fee",
-        [
-          t(`AED ${formatProposalFee(totals.finalPrice)}`, { bold: true, tone: "brand" }),
-          t("  (Excluding 5% VAT)", { tone: "muted" }),
-        ],
-      ],
-      ...terms.map((term): [string, string] => [term.label, term.value]),
-    ]),
-
-    { kind: "heading", number: "3", text: "Important Notes" },
-    { kind: "bullets", items: fillBlocks(data.settings.clauses.proposalNotes, data).map((note) => [t(note)]) },
-
-    { kind: "heading", number: "4", text: "Client Acceptance" },
-    {
-      kind: "paragraph",
-      runs: [t(data.settings.clauses.proposalAcceptance, { bold: true })],
-    },
-    { kind: "paragraph", runs: [t("Date:  ____________________________")] },
-    {
-      kind: "signatures",
-      left: "On behalf of Yalla Fix It LLC",
-      right: `On behalf of ${formData.customerName || "the Client"}`,
-    },
-  ];
-}
 
 // ---------------------------------------------------------------------------
 // Contract
@@ -344,7 +261,119 @@ function contractBlocks(data: AmcComputedData): Block[] {
     ),
   };
 
-  /* 1 — Operation, from AMC Settings (1.1–1.3) */
+  /*
+    The body, built from the clause list (AMC Settings).
+
+    It used to be this function: every heading, every number and every
+    section written out in order, so the only thing an admin could change
+    was the wording inside one. The list is the order now -- a clause can
+    be moved, taken out or added -- and the numbers come from where each
+    one sits rather than from the text.
+  */
+  /* The proposal's closing pages are in the list, but the contract has
+     never carried them -- so they take no number here either, which is
+     what left a gap where clause 8 should have been. */
+  const PROPOSAL_ONLY = new Set(["proposalNotes", "proposalAcceptance"]);
+  const clauses = settings.clauseList.filter(
+    (clause) => clause.enabled !== false && !(clause.role && PROPOSAL_ONLY.has(clause.role)),
+  );
+  /*
+    The scopes this contract prints, from AMC Settings.
+
+    A service is a setting now, so its scope comes from there too -- and a
+    service somebody added carries its own, which is what makes it appear
+    in the contract at all. The shipped sections are still the fallback
+    for a service whose scope has never been written.
+  */
+  const shipped = new Map(
+    getSelectedScopeSections(selectedIds).map((section) => [section.serviceId, section]),
+  );
+  const sections = servicesForProperty(settings, formData.unitType)
+    .filter(
+      (service) =>
+        service.hasScopeSection !== false && selectedIds.includes(service.id),
+    )
+    .map((service) => {
+      const fallback = shipped.get(service.id);
+      return {
+        serviceId: service.id,
+        sectionNumber: fallback?.sectionNumber ?? "",
+        title: service.sectionTitle ?? fallback?.title ?? `${service.label}:`,
+        intro: fallback?.intro,
+        bullets: fallback?.bullets ?? [],
+      };
+    });
+
+  /*
+    Pass one: what each clause is numbered.
+
+    Done before anything is drawn because clauses refer to each other --
+    "as per definition of emergency on Clause No 3.1" -- and a reference
+    has to survive the clause it points at being moved.
+  */
+  type Numbered = { clause: (typeof clauses)[number]; number: string; subFrom: number };
+  const numbered: Numbered[] = [];
+  const numberOf = new Map<string, string>();
+  let major = 0;
+  let minor = 0;
+  for (const clause of clauses) {
+    let number: string;
+    if (clause.level === 1) {
+      major += 1;
+      minor = 0;
+      number = String(major);
+    } else {
+      minor += 1;
+      number = `${major}.${minor}`;
+    }
+    let subFrom = minor;
+    /*
+      The services are the sub-clauses: one number each, and the clauses
+      after them carry on from where the services end. The clause that
+      holds them is not a line of its own.
+    */
+    if (clause.role === "scopeServices") {
+      subFrom = minor;
+      minor += Math.max(0, sections.length - 1);
+      number = `${major}.${subFrom}`;
+    }
+    numbered.push({ clause, number, subFrom });
+    numberOf.set(clause.id, number);
+    if (clause.role) numberOf.set(clause.role, number);
+  }
+
+  /* A reference to a clause that has been removed says so, rather than
+     printing a number that is now somebody else's. */
+  const refText = (value: string) =>
+    value.replace(/\{\{clause:([A-Za-z]+)\}\}/g, (_, role: string) => numberOf.get(role) ?? "—");
+  const fillRef = (value: string) => fill(value).map(refText);
+
+  /* 2 — the services, numbered under the scope clause they sit in. The
+     6.1 table's REFERENCE column follows these numbers. */
+  const renumber = new Map<string, string>();
+
+  const scopeBlocks = (startAt: number, parent: string): Block[] => {
+    const out: Block[] = [];
+    sections.forEach((section, index) => {
+      const number = `${parent}.${startAt + index}`;
+      renumber.set(section.serviceId, number);
+      const row = formData.serviceRows.find((r) => r.serviceId === section.serviceId);
+      const units = row?.units ?? 1;
+      const title = `${section.title.replace(/:\s*$/, "")}: ${units} ${units === 1 ? "Unit" : "Units"}`;
+      /* FR6.2 — the scope text comes from AMC Settings. When the built-in
+         section has an intro, the first block is that intro. */
+      const text = settings.serviceScopes[section.serviceId];
+      const blocks = text === undefined ? null : fill(text);
+      const intro = blocks ? (section.intro ? blocks[0] : undefined) : section.intro;
+      const bullets = blocks ? (section.intro ? blocks.slice(1) : blocks) : section.bullets;
+      out.push({ kind: "subheading", number, text: title });
+      if (intro) out.push({ kind: "paragraph", runs: [t(refText(intro))] });
+      if (bullets.length) out.push({ kind: "bullets", items: bullets.map((b) => [t(refText(b))]) });
+    });
+    return out;
+  };
+
+  /* 1.1 — the call-out lines are built from the proposal, not typed. */
   const clause1 = buildClause1Operation({
     accountManagers: formData.accountManagers ?? [],
     helpdeskIncluded: selectedIds.includes("helpdesk"),
@@ -353,229 +382,307 @@ function contractBlocks(data: AmcComputedData): Block[] {
   });
   type Section = { paragraphs?: string[]; bullets?: string[]; listItems?: string[] };
   const [s11, s12, s13] = clause1.sections as Section[];
-  const operation: Block[] = [
-    { kind: "heading", number: "1", text: "Operation" },
-    { kind: "subheading", number: "1.1", text: "Helpdesk and Scheduling" },
-    ...(s11.paragraphs ?? []).map((p): Block => ({ kind: "paragraph", runs: [t(p)] })),
-    ...(s11.listItems?.length
-      ? [
-          {
-            kind: "lettered",
-            items: s11.listItems.map((item, index) => ({
-              letter: `${String.fromCharCode(65 + index)}.`,
-              runs: [t(item)],
-            })),
-          } as Block,
-        ]
-      : []),
-    { kind: "subheading", number: "1.2", text: "Maintenance Team" },
-    { kind: "bullets", items: (s12.bullets ?? []).map((b) => [t(b)]) },
-    { kind: "subheading", number: "1.3", text: "Working Hours" },
-    { kind: "bullets", items: (s13.paragraphs ?? []).map((p) => [t(p)]) },
-  ];
 
-  /* 2 — Scope of works. Only the services on this contract, numbered
-     2.1, 2.2 … in order — the catalogue numbers left gaps when a service
-     was not selected, and the 6.1 table references follow the new numbers. */
-  const sections = getSelectedScopeSections(selectedIds);
-  const renumber = new Map<string, string>();
-  const scope: Block[] = [
-    { kind: "heading", number: "2", text: "Scope of Works" },
-    ...fill(settings.clauses.scopeIntro).map((line): Block => ({ kind: "paragraph", runs: [t(line)] })),
-  ];
-  sections.forEach((section, index) => {
-    const number = `2.${index + 1}`;
-    renumber.set(section.sectionNumber, number);
-    const row = formData.serviceRows.find((r) => r.serviceId === section.serviceId);
-    const units = row?.units ?? 1;
-    const title = `${section.title.replace(/:\s*$/, "")}: ${units} ${units === 1 ? "Unit" : "Units"}`;
-    /* FR6.2 — the scope text comes from AMC Settings. When the built-in
-       section has an intro, the first block is that intro. */
-    const text = settings.serviceScopes[section.serviceId];
-    const blocks = text === undefined ? null : fill(text);
-    const intro = blocks ? (section.intro ? blocks[0] : undefined) : section.intro;
-    const bullets = blocks ? (section.intro ? blocks.slice(1) : blocks) : section.bullets;
-    scope.push({ kind: "subheading", number, text: title });
-    if (intro) scope.push({ kind: "paragraph", runs: [t(intro)] });
-    if (bullets.length) scope.push({ kind: "bullets", items: bullets.map((b) => [t(b)]) });
-  });
+  /*
+    What the frequency table's REFERENCE column points at.
 
-  /* 3 — Call-outs, from AMC Settings */
-  const callOuts: Block[] = [
-    { kind: "heading", number: "3", text: "Emergency & Non-Emergency Call-Out" },
-    { kind: "subheading", number: "3.1", text: "Emergency Call-Out" },
-    { kind: "bullets", items: fill(settings.clauses.emergencyCallOut).map((b) => [t(b)]) },
-    { kind: "subheading", number: "3.2", text: "Non-Emergency Call-Out" },
-    { kind: "bullets", items: fill(settings.clauses.nonEmergencyCallOut).map((b) => [t(b)]) },
-  ];
-
-  /* 4 — Materials. A line ending in ":" introduces the lines after it. */
-  const materials: Block[] = [
-    { kind: "heading", number: "4", text: "Materials, Spare Parts, Consumables & Labor" },
-  ];
-  let pending: Run[][] = [];
-  const flush = () => {
-    if (pending.length) materials.push({ kind: "bullets", items: pending });
-    pending = [];
-  };
-  for (const line of fill(settings.clauses.materials)) {
-    if (/:\s*$/.test(line)) {
-      flush();
-      materials.push({ kind: "subheading", text: line.replace(/:\s*$/, "") });
-    } else {
-      pending.push([t(line)]);
+    By service, not by the number the scope used to carry: the scopes are
+    numbered by where they sit now, and a service somebody added never had
+    an old number to rewrite.
+  */
+  const referenceFor = (row: { serviceId: string; reference: string }) => {
+    const number = renumber.get(row.serviceId);
+    if (!number) {
+      return row.reference.replace(/2\.\d+/, (n) => renumber.get(n) ?? n);
     }
-  }
-  flush();
-
-  /* 5 — Services excluded: first block is the intro (from AMC Settings). */
-  const [excludedIntro, ...excluded] = fill(settings.clauses.servicesExcluded);
-  /* The other services offered: an introduction, the points, and a
-     closing note (AMC Settings). */
-  const offer = fill(settings.clauses.excludedOffer);
-  const offerIntro = offer.length > 1 ? offer[0] : undefined;
-  const offerClose = offer.length > 2 ? offer[offer.length - 1] : undefined;
-  const offerPoints = offer.length > 2 ? offer.slice(1, -1) : offer.length === 2 ? offer.slice(1) : offer;
-  const exclusions: Block[] = [
-    { kind: "heading", number: "5", text: "Services Excluded" },
-    ...(excludedIntro ? [{ kind: "paragraph", runs: [t(excludedIntro)] } as Block] : []),
-    ...(excluded.length ? [{ kind: "bullets", items: excluded.map((b) => [t(b)]) } as Block] : []),
-    ...(offerIntro ? [{ kind: "paragraph", runs: [t(offerIntro)] } as Block] : []),
-    ...(offerPoints.length ? [{ kind: "bullets", items: offerPoints.map((b) => [t(b)]) } as Block] : []),
-    ...(offerClose ? [{ kind: "paragraph", runs: [t(offerClose, { tone: "muted" })] } as Block] : []),
-  ];
-
-  /* 6 — Frequency table, price list, fixed-price handyman */
-  const referenceFor = (reference: string) =>
-    reference.replace(/2\.\d+/, (n) => renumber.get(n) ?? n);
-  const frequency: Block[] = [
-    { kind: "heading", number: "6", text: "Service Frequency & Provisions" },
-    {
-      kind: "subheading",
-      number: "6.1",
-      text: `Scope of work and frequency of the services of the annual maintenance contract (${data.documentTitle}).`,
-    },
-    {
-      kind: "table",
-      widths: [36, 8, 17, 22, 17],
-      header: [
-        headerCell("SCOPE OF MAINTENANCE WORKS"),
-        headerCell("UNITS", "center"),
-        headerCell("FREQUENCY", "center"),
-        headerCell("PRICE (AED)", "right"),
-        headerCell("REFERENCE", "center"),
-      ],
-      rows: zebra(
-        frequencyRows.map((row) => [
-          cell(row.scope),
-          cell(String(row.units), { align: "center" }),
-          cell(row.frequency, { align: "center" }),
-          cell(formatCurrencyAED(row.price), { align: "right" }),
-          cell([[t(referenceFor(row.reference), { tone: "muted" })]], { align: "center" }),
-        ]),
-      ),
-    },
-  ];
+    /* Only the number moves; the word in front of it is the reference's
+       own ("Clause 2.1"), and a service added today has none yet. */
+    const prefix = row.reference.replace(/\s*\d+(\.\d+)?\s*$/, "").trim();
+    return `${prefix || "Clause"} ${number}`;
+  };
 
   const priceList = buildPriceListRows(formData.priceListRows ?? []);
-  if (formData.optionalSections?.supplyInstallPriceList) {
-    /* From AMC Settings: the first block is the title. */
-    const [title, ...intro] = fill(settings.clauses.priceListIntro);
-    if (title) frequency.push({ kind: "subheading", number: "6.2", text: title.replace(/\.$/, "") });
-    frequency.push(...intro.map((line): Block => ({ kind: "paragraph", runs: [t(line)] })));
-    if (priceList.length) {
-      frequency.push({
-        kind: "table",
-        widths: [8, 22, 38, 16, 16],
-        header: [
-          headerCell("No.", "center"),
-          headerCell("Category"),
-          headerCell("Description"),
-          headerCell("Brand"),
-          headerCell("Price (AED)", "right"),
-        ],
-        rows: zebra(
-          priceList.map((row) => [
-            cell(row.no, { align: "center" }),
-            cell(row.category),
-            cell(row.description),
-            cell(row.brand),
-            cell(row.price, { align: "right" }),
-          ]),
-        ),
+  const invoiceTerms = fillRef(settings.clauses.invoiceTerms);
+
+  /*
+    What a clause is called in the document.
+
+    Three of them have never used a fixed title: 6.1 names the contract it
+    belongs to, and 6.2 and 6.3 take their heading from the first line of
+    their own text, which is where an admin edits it.
+  */
+  const headingOf = ({ clause }: Numbered): string => {
+    if (clause.role === "servicesTable") {
+      return `Scope of work and frequency of the services of the annual maintenance contract (${data.documentTitle}).`;
+    }
+    if (clause.role === "priceListIntro" || clause.role === "handymanRates") {
+      const [first] = fillRef(clause.body);
+      if (first) {
+        return clause.role === "priceListIntro" ? first.replace(/\.$/, "") : first;
+      }
+    }
+    return clause.title;
+  };
+
+  /* What a clause draws beneath its own heading. */
+  const contentOf = ({ clause, number, subFrom }: Numbered): Block[] => {
+    switch (clause.role) {
+      case "helpdeskScheduling":
+        return [
+          ...(s11.paragraphs ?? []).map((p): Block => ({ kind: "paragraph", runs: [t(refText(p))] })),
+          ...(s11.listItems?.length
+            ? [
+                {
+                  kind: "lettered",
+                  items: s11.listItems.map((item, index) => ({
+                    letter: `${String.fromCharCode(65 + index)}.`,
+                    runs: [t(refText(item))],
+                  })),
+                } as Block,
+              ]
+            : []),
+        ];
+      case "maintenanceTeam":
+        return [{ kind: "bullets", items: (s12.bullets ?? []).map((b) => [t(refText(b))]) }];
+      case "workingHours":
+        return [{ kind: "bullets", items: (s13.paragraphs ?? []).map((p) => [t(refText(p))]) }];
+      case "scopeIntro":
+        return fillRef(clause.body).map((line): Block => ({ kind: "paragraph", runs: [t(line)] }));
+      case "scopeServices":
+        return scopeBlocks(subFrom, String(major === 0 ? 1 : number.split(".")[0]));
+      case "emergencyCallOut":
+      case "nonEmergencyCallOut":
+      case "termination":
+        return [{ kind: "bullets", items: fillRef(clause.body).map((b) => [t(b)]) }];
+      case "materials": {
+        /* A line ending in ":" introduces the lines after it. */
+        const out: Block[] = [];
+        let pending: Run[][] = [];
+        const flush = () => {
+          if (pending.length) out.push({ kind: "bullets", items: pending });
+          pending = [];
+        };
+        for (const line of fillRef(clause.body)) {
+          if (/:\s*$/.test(line)) {
+            flush();
+            out.push({ kind: "subheading", text: line.replace(/:\s*$/, "") });
+          } else {
+            pending.push([t(line)]);
+          }
+        }
+        flush();
+        return out;
+      }
+      case "servicesExcluded": {
+        const [intro, ...rest] = fillRef(clause.body);
+        return [
+          ...(intro ? [{ kind: "paragraph", runs: [t(intro)] } as Block] : []),
+          ...(rest.length ? [{ kind: "bullets", items: rest.map((b) => [t(b)]) } as Block] : []),
+        ];
+      }
+      case "excludedOffer": {
+        /* An introduction, the points, and a closing note. */
+        const offer = fillRef(clause.body);
+        const intro = offer.length > 1 ? offer[0] : undefined;
+        const close = offer.length > 2 ? offer[offer.length - 1] : undefined;
+        const points = offer.length > 2 ? offer.slice(1, -1) : offer.length === 2 ? offer.slice(1) : offer;
+        return [
+          ...(intro ? [{ kind: "paragraph", runs: [t(intro)] } as Block] : []),
+          ...(points.length ? [{ kind: "bullets", items: points.map((b) => [t(b)]) } as Block] : []),
+          ...(close ? [{ kind: "paragraph", runs: [t(close, { tone: "muted" })] } as Block] : []),
+        ];
+      }
+      case "servicesTable":
+        return [
+          {
+            kind: "table",
+            widths: [36, 8, 17, 22, 17],
+            header: [
+              headerCell("SCOPE OF MAINTENANCE WORKS"),
+              headerCell("UNITS", "center"),
+              headerCell("FREQUENCY", "center"),
+              headerCell("PRICE (AED)", "right"),
+              headerCell("REFERENCE", "center"),
+            ],
+            rows: zebra(
+              frequencyRows.map((row) => [
+                cell(row.scope),
+                cell(String(row.units), { align: "center" }),
+                cell(row.frequency, { align: "center" }),
+                cell(formatCurrencyAED(row.price), { align: "right" }),
+                cell([[t(referenceFor(row), { tone: "muted" })]], { align: "center" }),
+              ]),
+            ),
+          },
+        ];
+      case "priceListIntro": {
+        if (!formData.optionalSections?.supplyInstallPriceList) return [];
+        /* The first block is the title, which the heading already shows. */
+        const [, ...intro] = fillRef(clause.body);
+        return [
+          ...intro.map((line): Block => ({ kind: "paragraph", runs: [t(line)] })),
+          ...(priceList.length
+            ? [
+                {
+                  kind: "table",
+                  widths: [8, 22, 38, 16, 16],
+                  header: [
+                    headerCell("No.", "center"),
+                    headerCell("Category"),
+                    headerCell("Description"),
+                    headerCell("Brand"),
+                    headerCell("Price (AED)", "right"),
+                  ],
+                  rows: zebra(
+                    priceList.map((row) => [
+                      cell(row.no, { align: "center" }),
+                      cell(row.category),
+                      cell(row.description),
+                      cell(row.brand),
+                      cell(row.price, { align: "right" }),
+                    ]),
+                  ),
+                } as Block,
+              ]
+            : []),
+        ];
+      }
+      case "handymanRates": {
+        if (!formData.optionalSections?.additionalFixedPriceServices) return [];
+        /* The first block is the title; then one rate per block. A rate
+           that starts "A." keeps its letter, one that does not is
+           lettered in order. */
+        const [, ...rates] = fillRef(clause.body);
+        if (!rates.length) return [];
+        return [
+          {
+            kind: "lettered",
+            items: rates.map((rate, index) => {
+              const match = rate.match(/^([A-Z])[.)]\s*(.*)$/);
+              return match
+                ? { letter: `${match[1]}.`, runs: [t(match[2])] }
+                : { letter: `${String.fromCharCode(65 + index)}.`, runs: [t(rate)] };
+            }),
+          },
+        ];
+      }
+      case "generalTerms": {
+        /*
+          "7.x text" prints as a numbered term; a line without a number
+          continues the term above it.
+
+          The numbers are renumbered from the clause's own, so moving the
+          general terms does not leave a section numbered 6 whose terms
+          all still read 7.1, 7.2 and so on. In the standard order this
+          gives exactly the numbers the text already carries.
+        */
+        const out: Block[] = [];
+        let term = 0;
+        for (const line of fillRef(clause.body)) {
+          const match = line.match(/^(\d+\.\d+)\s+(.*)$/);
+          if (!match) {
+            out.push({ kind: "paragraph", runs: [t(line)] });
+            continue;
+          }
+          term += 1;
+          const termNumber = `${number}.${term}`;
+          if (/^(Modes?|Moods?) of payment/i.test(match[2])) {
+            out.push({
+              kind: "subheading",
+              number: termNumber,
+              text: "Modes of Payment (cash, cheque or bank transfer)",
+            });
+          } else {
+            out.push({ kind: "term", number: termNumber, runs: [t(match[2])] });
+          }
+        }
+        return out;
+      }
+      case "bankDetails":
+        return [
+          {
+            kind: "table",
+            widths: [32, 68],
+            /* One "Label: value" line per row. */
+            rows: zebra(
+              fillRef(clause.body).map((line) => {
+                const at = line.indexOf(":");
+                const label = at > 0 ? line.slice(0, at).trim() : "";
+                const value = at > 0 ? line.slice(at + 1).trim() : line;
+                return [cell([[t(label, { bold: true })]], { shade: "label" }), cell(value)];
+              }),
+            ),
+          },
+        ];
+      case "invoiceTerms":
+        return [
+          {
+            kind: "paragraph",
+            runs: [
+              t("Annual contract value: "),
+              t(`${formatCurrencyAED(totals.grandTotal)} (VAT inclusive).`, { bold: true }),
+              ...(invoiceTerms[0] ? [t(` ${invoiceTerms[0]}`)] : []),
+            ],
+          },
+          ...invoiceTerms.slice(1).map((line): Block => ({ kind: "paragraph", runs: [t(line)] })),
+        ];
+      case "contractConfirmation":
+        return [
+          { kind: "paragraph", runs: [t(refText(clause.body), { bold: true })] },
+          { kind: "paragraph", runs: [t("Date:  ____________________________")] },
+        ];
+      case "signatures":
+        return [
+          {
+            kind: "signatures",
+            left: "On behalf of Yalla Fix It LLC",
+            right: `On behalf of ${formData.customerName || "the Client"}`,
+          },
+        ];
+      default:
+        /* A clause somebody added: its heading, then its text. */
+        return fillRef(clause.body).map((line): Block => ({ kind: "paragraph", runs: [t(line)] }));
+    }
+  };
+
+  /*
+    Pass two: the document.
+
+    A heading with nothing under it is still drawn -- it is a section of
+    the contract, and the clauses beneath it are its content. The ones
+    that draw nothing at all (a price list that was switched off) take
+    their heading with them.
+  */
+  const body: Block[] = [];
+  /* Switched off in the proposal, so they take their heading with them. */
+  const SILENT_WHEN_EMPTY = new Set(["priceListIntro", "handymanRates", "signatures"]);
+  /*
+    Clauses that run on from the one above rather than announcing
+    themselves: the other services offered continue clause 5, the bank
+    table and the invoice terms continue clause 7, the confirmation
+    continues clause 8, and the services carry their own numbers.
+  */
+  const NO_HEADING = new Set([
+    "scopeServices",
+    "excludedOffer",
+    "bankDetails",
+    "invoiceTerms",
+    "contractConfirmation",
+    "signatures",
+  ]);
+  for (const entry of numbered) {
+    const role = entry.clause.role;
+    const content = contentOf(entry);
+    if (content.length === 0 && role && SILENT_WHEN_EMPTY.has(role)) continue;
+    if (!role || !NO_HEADING.has(role)) {
+      body.push({
+        kind: entry.clause.level === 1 ? "heading" : "subheading",
+        number: entry.number,
+        text: refText(headingOf(entry)),
       });
     }
+    body.push(...content);
   }
-  if (formData.optionalSections?.additionalFixedPriceServices) {
-    /* From AMC Settings: the first block is the title, then one rate per
-       block. A rate that starts "A." keeps its letter; one that does not
-       is lettered in order. */
-    const [rateTitle, ...rates] = fill(settings.clauses.handymanRates);
-    if (rateTitle) frequency.push({ kind: "subheading", number: "6.3", text: rateTitle });
-    if (rates.length) {
-      frequency.push({
-        kind: "lettered",
-        items: rates.map((rate, index) => {
-          const match = rate.match(/^([A-Z])[.)]\s*(.*)$/);
-          return match
-            ? { letter: `${match[1]}.`, runs: [t(match[2])] }
-            : { letter: `${String.fromCharCode(65 + index)}.`, runs: [t(rate)] };
-        }),
-      });
-    }
-  }
-
-  /* 7 — General terms. "7.x text" prints with a red number; a line with
-     no number continues the term above it. */
-  const invoiceTerms = fill(settings.clauses.invoiceTerms);
-  const terms: Block[] = [{ kind: "heading", number: "7", text: "General Terms and Conditions and Payment" }];
-  for (const line of fill(settings.clauses.generalTerms)) {
-    const match = line.match(/^(7\.\d+)\s+(.*)$/);
-    if (!match) {
-      terms.push({ kind: "paragraph", runs: [t(line)] });
-    } else if (/^(Modes?|Moods?) of payment/i.test(match[2])) {
-      terms.push({ kind: "subheading", number: match[1], text: "Modes of Payment (cash, cheque or bank transfer)" });
-    } else {
-      terms.push({ kind: "term", number: match[1], runs: [t(match[2])] });
-    }
-  }
-  terms.push(
-    {
-      kind: "table",
-      widths: [32, 68],
-      /* From AMC Settings: one "Label: value" line per row. */
-      rows: zebra(
-        fill(settings.clauses.bankDetails).map((line) => {
-          const at = line.indexOf(":");
-          const label = at > 0 ? line.slice(0, at).trim() : "";
-          const value = at > 0 ? line.slice(at + 1).trim() : line;
-          return [cell([[t(label, { bold: true })]], { shade: "label" }), cell(value)];
-        }),
-      ),
-    },
-    {
-      kind: "paragraph",
-      runs: [
-        t("Annual contract value: "),
-        t(`${formatCurrencyAED(totals.grandTotal)} (VAT inclusive).`, { bold: true }),
-        ...(invoiceTerms[0] ? [t(` ${invoiceTerms[0]}`)] : []),
-      ],
-    },
-    ...invoiceTerms.slice(1).map((line): Block => ({ kind: "paragraph", runs: [t(line)] })),
-  );
-
-  /* 8 — Termination, from AMC Settings */
-  const termination: Block[] = [
-    { kind: "heading", number: "8", text: "Termination" },
-    { kind: "bullets", items: fill(settings.clauses.termination).map((b) => [t(b)]) },
-    { kind: "paragraph", runs: [t(settings.clauses.contractConfirmation, { bold: true })] },
-    { kind: "paragraph", runs: [t("Date:  ____________________________")] },
-    {
-      kind: "signatures",
-      left: "On behalf of Yalla Fix It LLC",
-      right: `On behalf of ${formData.customerName || "the Client"}`,
-    },
-  ];
 
   return [
     ...opening(data),
@@ -584,20 +691,17 @@ function contractBlocks(data: AmcComputedData): Block[] {
     details,
     { kind: "label", text: "Customer Coordination – Contact Persons" },
     contactTable,
-    ...operation,
-    ...scope,
-    ...callOuts,
-    ...materials,
-    ...exclusions,
-    ...frequency,
-    ...terms,
-    ...termination,
+    ...body,
   ];
 }
 
 export function buildAmcDocumentModel(data: AmcComputedData): AmcDocumentModel {
+  if (data.documentType === "contract") {
+    return { documentType: data.documentType, blocks: contractBlocks(data) };
+  }
   return {
     documentType: data.documentType,
-    blocks: data.documentType === "contract" ? contractBlocks(data) : proposalBlocks(data),
+    brochure: buildAmcBrochure(data),
+    blocks: [],
   };
 }

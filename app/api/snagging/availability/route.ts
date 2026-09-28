@@ -14,13 +14,13 @@ import { ActionType, ResourceType } from "@/types/types";
  */
 export async function GET(req: NextRequest) {
   try {
-    // const { profile, accessUser } = await getRequestUserAccess(req);
-    // if (!profile || !accessUser) {
-    //   return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    // }
-    // if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.VIEW)) {
-    //   return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    // }
+    const { profile, accessUser } = await getRequestUserAccess(req);
+    if (!profile || !accessUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.VIEW)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
     const date = req.nextUrl.searchParams.get("date");
     const excludeJobId = req.nextUrl.searchParams.get("excludeJobId");

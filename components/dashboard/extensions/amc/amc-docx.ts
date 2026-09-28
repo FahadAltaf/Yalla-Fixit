@@ -52,6 +52,8 @@ import {
 /* A4, in twentieths of a point. */
 const PAGE_W = 11906;
 const PAGE_H = 16838;
+/* The tallest page Word allows: 22 inches, in twips. */
+const WORD_MAX_PAGE_H = 31680;
 const MARGIN_X = 1080;
 const CONTENT_W = PAGE_W - MARGIN_X * 2;
 
@@ -461,6 +463,35 @@ async function image(url: string): Promise<Uint8Array> {
   return new Uint8Array(await response.arrayBuffer());
 }
 
+/*
+  The first page. A proposal opens on the client's brochure with their plan,
+  which Word cannot lay out, so it is the picture the PDF shows; anything
+  else opens on the cover artwork.
+*/
+async function coverImage(
+  model: AmcDocumentModel,
+): Promise<{ data: Uint8Array; type: "png" | "jpg"; pageWidth: number; pageHeight: number }> {
+  if (model.brochure) {
+    const { captureAmcBrochureImage } = await import("./amc-pdf-utils");
+    const shot = await captureAmcBrochureImage(model.brochure);
+    /*
+      The proposal is one continuous page, as tall as the template's
+      content: its Word page is A4's width and that page's height. Word
+      will not make a page taller than 22 inches, so a longer proposal
+      (many services) is scaled down evenly to fit, never stretched.
+    */
+    const height = (PAGE_W * shot.height) / shot.width;
+    const fit = Math.min(1, WORD_MAX_PAGE_H / height);
+    return {
+      data: shot.data,
+      type: "jpg",
+      pageWidth: Math.round(PAGE_W * fit),
+      pageHeight: Math.round(height * fit),
+    };
+  }
+  return { data: await image(AMC_BRAND_IMAGES.cover), type: "png", pageWidth: PAGE_W, pageHeight: PAGE_H };
+}
+
 /* Pixels at 96 dpi, which is what ImageRun's transformation takes. */
 const px = (inches: number) => Math.round(inches * 96);
 
@@ -535,7 +566,7 @@ export async function generateBrandedDocxBlob(
   const [logo, iso, cover, photos] = await Promise.all([
     image(AMC_BRAND_IMAGES.logo),
     Promise.all(AMC_BRAND_IMAGES.iso.map((badge) => image(badge.src))),
-    withCover ? image(AMC_BRAND_IMAGES.cover) : Promise.resolve(null),
+    withCover ? coverImage(model) : Promise.resolve(null),
     loadPhotos(model),
   ]);
 
@@ -662,13 +693,13 @@ export async function generateBrandedDocxBlob(
       ],
     },
     sections: [
-      /* The cover: the artwork, full page, behind an empty page. */
+      /* The cover: the artwork (or the brochure), full page, behind an empty page. */
       ...(cover
         ? [
             {
               properties: {
                 page: {
-                  size: { width: PAGE_W, height: PAGE_H },
+                  size: { width: cover.pageWidth, height: cover.pageHeight },
                   margin: { top: 0, right: 0, bottom: 0, left: 0 },
                 },
               },
@@ -676,9 +707,12 @@ export async function generateBrandedDocxBlob(
                 new Paragraph({
                   children: [
                     new ImageRun({
-                      type: "png",
-                      data: cover,
-                      transformation: { width: px(8.27), height: px(11.69) },
+                      type: cover.type,
+                      data: cover.data,
+                      transformation: {
+                        width: px((8.27 * cover.pageWidth) / PAGE_W),
+                        height: px((8.27 * cover.pageHeight) / PAGE_W),
+                      },
                       floating: {
                         horizontalPosition: {
                           relative: HorizontalPositionRelativeFrom.PAGE,
@@ -697,6 +731,9 @@ export async function generateBrandedDocxBlob(
             },
           ]
         : []),
+      /* The body, when there is one: a proposal is its brochure alone. */
+      ...(model.blocks.length > 0 || !cover
+        ? [
       {
         properties: {
           ...(cover ? { type: SectionType.NEXT_PAGE } : {}),
@@ -717,6 +754,8 @@ export async function generateBrandedDocxBlob(
         footers: { default: footer },
         children: model.blocks.flatMap((block) => renderBlock(block, photos)),
       },
+          ]
+        : []),
     ],
   });
 

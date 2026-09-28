@@ -74,13 +74,13 @@ export function fillAmcTokens(text: string, serviceRows: TokenServiceRow[]): str
     .replace(
       /\{\{emergencyCallOuts\}\}/g,
       emergency
-        ? "Unlimited emergency call-outs (as per definition of emergency on Clause No 3.1)"
+        ? "Unlimited emergency call-outs (as per definition of emergency on Clause No {{clause:emergencyCallOut}})"
         : "",
     )
     .replace(
       /\{\{nonEmergencyCallOuts\}\}/g,
       nonEmergency
-        ? `${plural(nonEmergency.frequency, "free non-emergency call-out")} per year${perUnit(nonEmergency.units)} (as per definition of non-emergency on Clause No 3.2)`
+        ? `${plural(nonEmergency.frequency, "free non-emergency call-out")} per year${perUnit(nonEmergency.units)} (as per definition of non-emergency on Clause No {{clause:nonEmergencyCallOut}})`
         : "",
     )
     /* An emptied token can leave a double space behind. Newlines are left
@@ -209,7 +209,7 @@ export const CLAUSE_1_OPERATION = {
 export const CLAUSE_2_INTRO = [
   "2- Scope of Works:",
   "YALLA FIX IT ONE PERSON COMPANY LLC will respond to maintenance requests and schedule the Planned Preventive Maintenance for the originally installed MEP services in the property (as per the coverage set out in this contract).",
-  "(Building Management Systems (BMS) are not covered in this contract. See Clause No.5 for full list)",
+  "(Building Management Systems (BMS) are not covered in this contract. See Clause No.{{clause:servicesExcluded}} for full list)",
 ];
 
 export const SCOPE_SECTIONS: ScopeSectionContent[] = [
@@ -438,7 +438,7 @@ export const CLAUSE_5_EXCLUDED = {
     "All kind of upholstery cleaning/shampooing (Dry and Wet), Glass cleaning, façade cleaning, deep cleaning.",
     "Disinfection and sanitization for COVID-19 (preventive and active case) listed as per DM and DHA regulations.",
     "Soft cleaning, housekeeping, house maid and hurly babysitter and elderly care. Trained and certified personnel under TPH group for domestic workers.",
-    "Any work and services not expressively covered in this contract scope of work (Clause 6.1) will be charged separately according to price list (Clause 6.2).",
+    "Any work and services not expressively covered in this contract scope of work (Clause {{clause:servicesTable}}) will be charged separately according to price list (Clause {{clause:priceListIntro}}).",
   ],
 };
 

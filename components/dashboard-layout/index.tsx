@@ -209,7 +209,16 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
                   asChild
                 >
                   <Link href="/">
-                  <Image src={CompanyLogo} alt="Company Logo" width={140} height={140} className="w-[140px] h-auto" unoptimized />
+                  {/* The mark is drawn in dark ink, which is invisible on the
+                        dark theme's sidebar, so there it is flattened to white. */}
+                  <Image
+                    src={CompanyLogo}
+                    alt="Company Logo"
+                    width={140}
+                    height={140}
+                    className="h-auto w-[140px] dark:brightness-0 dark:invert"
+                    unoptimized
+                  />
 
                   </Link>
                 </SidebarMenuButton>

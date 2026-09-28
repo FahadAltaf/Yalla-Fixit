@@ -48,13 +48,13 @@ export async function GET(
   ctx: { params: Promise<{ id: string }> },
 ) {
   try {
-    // const { profile, accessUser } = await getRequestUserAccess(req);
-    // if (!profile || !accessUser) {
-    //   return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    // }
-    // if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.VIEW)) {
-    //   return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    // }
+    const { profile, accessUser } = await getRequestUserAccess(req);
+    if (!profile || !accessUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.VIEW)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
     const { id } = await ctx.params;
     const admin = await createAdminServerClient();
