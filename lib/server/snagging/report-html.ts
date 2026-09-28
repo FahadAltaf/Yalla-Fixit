@@ -666,7 +666,7 @@ export function renderReportHtml(
                <strong>${esc(data.signOff.signerName ?? "—")}</strong>
                <div class="doc__date">${fmtDate(data.signOff.signedAt)}</div>
              </div>
-             ${data.signOff.signatureUrl ? `<img src="${esc(data.signOff.signatureUrl)}" alt="Client signature" />` : ""}
+             ${data.signOff.signatureUrl ? `<img src="${esc(data.signOff.signatureUrl)}" alt="Inspector signature" />` : ""}
            </div>
          </section>`
       : ""

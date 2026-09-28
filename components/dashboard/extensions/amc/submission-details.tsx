@@ -201,11 +201,11 @@ function buildTimeline(s: AmcSubmission): Step[] {
     steps.push(
       sentBack
         ? {
-            label: "Sent back",
-            at: s.decided_at,
-            note: s.sent_back_reason,
-            tone: "bad",
-          }
+          label: "Sent back",
+          at: s.decided_at,
+          note: s.sent_back_reason,
+          tone: "bad",
+        }
         : { label: "Approved internally", at: s.decided_at, tone: "good" },
     );
   }
@@ -215,16 +215,16 @@ function buildTimeline(s: AmcSubmission): Step[] {
     steps.push(
       s.client_decision === "rejected"
         ? {
-            label: `${s.client_decided_by_name || "The client"} asked for changes`,
-            at: s.client_decided_at,
-            note: s.client_rejected_reason,
-            tone: "bad",
-          }
+          label: `${s.client_decided_by_name || "The client"} asked for changes`,
+          at: s.client_decided_at,
+          note: s.client_rejected_reason,
+          tone: "bad",
+        }
         : {
-            label: `${s.client_decided_by_name || "The client"} approved the proposal`,
-            at: s.client_decided_at,
-            tone: "good",
-          },
+          label: `${s.client_decided_by_name || "The client"} approved the proposal`,
+          at: s.client_decided_at,
+          tone: "good",
+        },
     );
   }
   if (s.contract_sent_at)
@@ -438,25 +438,25 @@ export function SubmissionDetails({
       ? { tone: "bad" as const, title: "Sent back by the approver", body: submission.sent_back_reason }
       : submission.status === "proposal_rejected" && submission.client_rejected_reason
         ? {
-            tone: "bad" as const,
-            title: `The client asked for changes${submission.client_decided_by_name ? ` (${submission.client_decided_by_name})` : ""}`,
-            body: submission.client_rejected_reason,
-          }
+          tone: "bad" as const,
+          title: `The client asked for changes${submission.client_decided_by_name ? ` (${submission.client_decided_by_name})` : ""}`,
+          body: submission.client_rejected_reason,
+        }
         : awaiting
           ? {
-              tone: "warn" as const,
-              title: canApprove ? "Waiting for your decision" : "Waiting for the approver",
-              body: canApprove
-                ? "Read it through, preview the documents, then approve it or send it back with a note."
-                : "It is locked while it waits. Nothing goes to the client until it is approved.",
-            }
+            tone: "warn" as const,
+            title: canApprove ? "Waiting for your decision" : "Waiting for the approver",
+            body: canApprove
+              ? "Read it through, preview the documents, then approve it or send it back with a note."
+              : "It is locked while it waits. Nothing goes to the client until it is approved.",
+          }
           : null;
 
   return (
     <div className="flex w-full flex-1 flex-col gap-6">
       {/* The proposal at a glance, and what can be done with it. */}
       <Card className="gap-0 overflow-hidden p-0">
-        <div className="flex flex-wrap items-start justify-between gap-4 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-4 p-5">
           <div className="min-w-0 space-y-1.5">
             <p className="eyebrow">
               AMC proposal{submission.customer.proposalNumber ? ` · ${submission.customer.proposalNumber}` : ""}
@@ -614,74 +614,74 @@ export function SubmissionDetails({
 
       {/* The record, laid out exactly as the Review step showed it. */}
       <Card className="min-w-0 gap-0 p-0">
-          <div className="space-y-8 p-4 sm:p-6">
-            <ReviewSection
-              icon={Building2}
-              title="Property and customer"
-              description="What the proposal and the contract are written for."
-            >
-              <dl className="grid gap-x-6 gap-y-4 rounded-lg border p-4 sm:grid-cols-2 xl:grid-cols-4">
-                <Fact label="Customer">{form.customerName}</Fact>
-                <Fact label="Customer ID">{form.customerId}</Fact>
-                <Fact label="Phone">{formatPhoneForDocument(form.customerPhone)}</Fact>
-                <Fact label="Email">{form.customerEmail}</Fact>
-                <Fact label="Property category">
-                  <span className="capitalize">{form.propertyCategory}</span>
-                </Fact>
-                <Fact label="Unit type">
-                  <span className="capitalize">{form.unitType}</span>
-                </Fact>
-                <Fact label="Property detail">{form.propertyDetail}</Fact>
-                <Fact label="Address">{form.propertyAddress}</Fact>
-                <Fact label="Contract period">
-                  <span className="inline-flex items-center gap-1.5">
-                    <CalendarRange className="text-muted-foreground size-3.5" aria-hidden />
-                    {formatDisplayDate(form.startDate)} → {data.endDate || "—"}
-                  </span>
-                </Fact>
-                <Fact label="Payment terms">{formatPaymentTermsLabel(form.paymentTerms)}</Fact>
-                <Fact label="Proposal number">{submission.customer.proposalNumber}</Fact>
-                <Fact label="Property type">{sentenceCase(data.propertyTypeLabel)}</Fact>
-              </dl>
-            </ReviewSection>
+        <div className="space-y-8 p-4 sm:p-6">
+          <ReviewSection
+            icon={Building2}
+            title="Property and customer"
+            description="What the proposal and the contract are written for."
+          >
+            <dl className="grid gap-x-6 gap-y-4 rounded-lg border p-4 sm:grid-cols-2 xl:grid-cols-4">
+              <Fact label="Customer">{form.customerName}</Fact>
+              <Fact label="Customer ID">{form.customerId}</Fact>
+              <Fact label="Phone">{formatPhoneForDocument(form.customerPhone)}</Fact>
+              <Fact label="Email">{form.customerEmail}</Fact>
+              <Fact label="Property category">
+                <span className="capitalize">{form.propertyCategory}</span>
+              </Fact>
+              <Fact label="Unit type">
+                <span className="capitalize">{form.unitType}</span>
+              </Fact>
+              <Fact label="Property detail">{form.propertyDetail}</Fact>
+              <Fact label="Address">{form.propertyAddress}</Fact>
+              <Fact label="Contract period">
+                <span className="inline-flex items-center gap-1.5">
+                  <CalendarRange className="text-muted-foreground size-3.5" aria-hidden />
+                  {formatDisplayDate(form.startDate)} → {data.endDate || "—"}
+                </span>
+              </Fact>
+              <Fact label="Payment terms">{formatPaymentTermsLabel(form.paymentTerms)}</Fact>
+              <Fact label="Proposal number">{submission.customer.proposalNumber}</Fact>
+              <Fact label="Property type">{sentenceCase(data.propertyTypeLabel)}</Fact>
+            </dl>
+          </ReviewSection>
 
-            <ReviewSection
-              icon={ListCheck}
-              title="Services and cost"
-              description="As it appears in the documents, with the total before and after 5% VAT."
-            >
-              <ServicesAndCost rows={data.frequencyRows} totals={totals} />
-            </ReviewSection>
+          <ReviewSection
+            icon={ListCheck}
+            title="Services and cost"
+            description="As it appears in the documents, with the total before and after 5% VAT."
+          >
+            <ServicesAndCost rows={data.frequencyRows} totals={totals} />
+          </ReviewSection>
 
-            <ReviewSection
-              icon={Users}
-              title="Contacts"
-              description={`${contactCount} ${contactCount === 1 ? "person" : "people"} named in the contract.`}
-            >
-              <div className="space-y-6 rounded-lg border p-4">
-                <ContactGroup
-                  title="Coordination contacts"
-                  people={form.coordinationContacts.map((contact) => ({
-                    name: contact.name,
-                    phone: contact.phone,
-                    role: contact.designation
-                      ? sentenceCase(formatDesignationLabel(contact.designation))
-                      : "",
-                  }))}
-                  empty="No coordination contacts on this proposal."
-                />
-                <ContactGroup
-                  title="Account managers"
-                  people={(form.accountManagers ?? []).map((manager) => ({
-                    name: manager.name,
-                    phone: manager.phone,
-                    role: "Account manager",
-                  }))}
-                  empty="No account managers on this proposal."
-                />
-              </div>
-            </ReviewSection>
-          </div>
+          <ReviewSection
+            icon={Users}
+            title="Contacts"
+            description={`${contactCount} ${contactCount === 1 ? "person" : "people"} named in the contract.`}
+          >
+            <div className="space-y-6 rounded-lg border p-4">
+              <ContactGroup
+                title="Coordination contacts"
+                people={form.coordinationContacts.map((contact) => ({
+                  name: contact.name,
+                  phone: contact.phone,
+                  role: contact.designation
+                    ? sentenceCase(formatDesignationLabel(contact.designation))
+                    : "",
+                }))}
+                empty="No coordination contacts on this proposal."
+              />
+              <ContactGroup
+                title="Account managers"
+                people={(form.accountManagers ?? []).map((manager) => ({
+                  name: manager.name,
+                  phone: manager.phone,
+                  role: "Account manager",
+                }))}
+                empty="No account managers on this proposal."
+              />
+            </div>
+          </ReviewSection>
+        </div>
       </Card>
 
       {/*
@@ -702,13 +702,12 @@ export function SubmissionDetails({
                 <span className="bg-border absolute top-4 left-[5px] h-full w-px" aria-hidden />
               )}
               <span
-                className={`relative mt-1.5 size-[11px] shrink-0 rounded-full ring-4 ring-background ${
-                  step.tone === "good"
+                className={`relative mt-1.5 size-[11px] shrink-0 rounded-full ring-4 ring-background ${step.tone === "good"
                     ? "bg-green-600"
                     : step.tone === "bad"
                       ? "bg-destructive"
                       : "bg-muted-foreground/40"
-                }`}
+                  }`}
                 aria-hidden
               />
               <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-6">

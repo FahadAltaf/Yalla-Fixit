@@ -45,6 +45,7 @@ import { YallaClassicTemplate } from "@/components/dashboard/extensions/quotatio
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
 import {
+  SNAGGING_QUOTATION_SECTION_STYLE,
   snaggingQuoteToTemplateData,
   type SnaggingQuoteDoc,
 } from "@/lib/snagging/quotation-template-data";
@@ -198,7 +199,7 @@ export default function QuotationDetail({ id }: { id: string }) {
     return (await loadPdfUtils()).generateQuotationPDFBlob(
       "yalla-classic",
       snaggingQuoteToTemplateData(doc),
-      { scale: 2 },
+      { scale: 2, sectionStyle: SNAGGING_QUOTATION_SECTION_STYLE },
       "without",
     );
   }
@@ -227,6 +228,9 @@ export default function QuotationDetail({ id }: { id: string }) {
         await (await loadPdfUtils()).generateQuotationDocxBlob(
           snaggingQuoteToTemplateData(doc),
           "without",
+          false,
+          "",
+          SNAGGING_QUOTATION_SECTION_STYLE,
         ),
         `Quotation-${quote.quote_number}.docx`,
       );
@@ -627,6 +631,7 @@ export default function QuotationDetail({ id }: { id: string }) {
                 data={snaggingQuoteToTemplateData(doc)}
                 hideDiscount
                 type="review"
+                sectionStyle={SNAGGING_QUOTATION_SECTION_STYLE}
               />
             </Card>
           </div>

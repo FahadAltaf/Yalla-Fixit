@@ -6,6 +6,7 @@ import { loadJobFamily } from "./job-family";
 import { readAllRows } from "./read-all";
 import { QUOTATION_DOCUMENT_COLUMNS } from "./quotation";
 import { hasAreaInspector } from "./columns";
+import { loadReportSignoff } from "./signoffs";
 
 /**
  * The one description of a client report (FR-7.02 → FR-7.04).
@@ -445,12 +446,32 @@ export async function buildReportData(
     roundOf: family.roundOf,
   });
 
+  /*
+    The one signature the client sees. The job's own, and when it has none
+    (a job with several inspectors submitted before that was kept, see
+    loadReportSignoff) one inspector's sign-off -- the lead's, whom the
+    report names first, when they signed. Every other inspector's stays
+    internal (the job page's sign-offs).
+  */
+  const leadForSignature = firstOf(job.inspector as ProfileRow | ProfileRow[] | null);
+  const fallbackSignoff = job.signature_path
+    ? null
+    : await loadReportSignoff(
+        admin,
+        String(job.id),
+        leadForSignature?.id ? String(leadForSignature.id) : null,
+      ).catch((error) => {
+        console.error("Report sign-off could not be read; the report shows none:", error);
+        return null;
+      });
+  const shownSignaturePath = job.signature_path ?? fallbackSignoff?.signature_path ?? null;
+
   // Every signed URL at once: the photos (one pass, not one per photo), the
   // sign-off signature and the floor plans.
   const [signedDefects, signatureUrls, signedPlanRows] = await Promise.all([
     signMediaPaths(admin, defects, PHOTO_TTL_SECONDS),
-    job.signature_path
-      ? signPaths(admin, [job.signature_path], PHOTO_TTL_SECONDS)
+    shownSignaturePath
+      ? signPaths(admin, [shownSignaturePath], PHOTO_TTL_SECONDS)
       : Promise.resolve(new Map<string, string>()),
     signMediaPaths(
       admin,
@@ -583,8 +604,8 @@ export async function buildReportData(
 
   const client = firstOf(job.client as ClientRow | ClientRow[] | null);
 
-  const signatureUrl = job.signature_path
-    ? (signatureUrls.get(job.signature_path) ?? null)
+  const signatureUrl = shownSignaturePath
+    ? (signatureUrls.get(shownSignaturePath) ?? null)
     : null;
 
   const signedPlans = signedPlanRows as Array<Record<string, unknown>>;
@@ -686,8 +707,9 @@ export async function buildReportData(
         })),
     },
     signOff: {
-      signedAt: job.signed_at ?? null,
-      signerName: job.signer_name ?? null,
+      signedAt: job.signed_at ?? fallbackSignoff?.signed_at ?? null,
+      /* The name that goes with the signature shown. */
+      signerName: fallbackSignoff ? (fallbackSignoff.signer_name ?? job.signer_name ?? null) : (job.signer_name ?? null),
       signatureUrl,
     },
     // Only a settled quote belongs on a client-facing document.

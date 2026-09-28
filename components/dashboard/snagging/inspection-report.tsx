@@ -45,11 +45,11 @@ function pad(
 ): CSSProperties {
   return forPDF
     ? {
-        paddingTop: 0,
-        paddingBottom: vertical * 2,
-        paddingLeft: horizontal,
-        paddingRight: horizontal,
-      }
+      paddingTop: 0,
+      paddingBottom: vertical * 2,
+      paddingLeft: horizontal,
+      paddingRight: horizontal,
+    }
     : { padding: `${vertical}px ${horizontal}px` };
 }
 
@@ -788,15 +788,15 @@ function Tag({
         borderRadius: 3,
         ...(forPDF
           ? {
-              /* The capture draws text about four pixels lower than the
-                 page lays it out, so the box carries that below the line
-                 instead of clipping it. */
-              lineHeight: "10px",
-              paddingTop: 0,
-              paddingBottom: 8,
-              paddingLeft: 7,
-              paddingRight: 7,
-            }
+            /* The capture draws text about four pixels lower than the
+               page lays it out, so the box carries that below the line
+               instead of clipping it. */
+            lineHeight: "10px",
+            paddingTop: 0,
+            paddingBottom: 8,
+            paddingLeft: 7,
+            paddingRight: 7,
+          }
           : { lineHeight: "12px", padding: "3px 7px" }),
       }}
     >
@@ -1326,9 +1326,9 @@ export const InspectionReport = forwardRef<
   /* Cover facts, derived once so the table stays readable. */
   const apptTime = task.appointment_at
     ? new Date(task.appointment_at).toLocaleTimeString("en-GB", {
-        hour: "2-digit",
-        minute: "2-digit",
-      })
+      hour: "2-digit",
+      minute: "2-digit",
+    })
     : "—";
   const visitTypeLabel =
     task.visit_type === "additional"
@@ -1479,15 +1479,15 @@ export const InspectionReport = forwardRef<
                 label2="Property type"
                 value2={property?.property_type ?? "—"}
               />
-              <tr>
+              {/* <tr>
                 <Cell label colSpan={8}>
                   Legends: (severity grade)
                 </Cell>
-              </tr>
+              </tr> */}
               {/* All four grades on one row, the way the cover legend reads. */}
               {/* Each grade shown the way the defect cards tag it: the word
                   in its own colour on its own tint. */}
-              <tr>
+              {/* <tr>
                 <Cell fill={FILL.high} colSpan={2} align="center">
                   <span
                     style={{
@@ -1544,7 +1544,7 @@ export const InspectionReport = forwardRef<
                     Conformity
                   </span>
                 </Cell>
-              </tr>
+              </tr> */}
             </tbody>
           </table>
         </div>
@@ -1743,13 +1743,12 @@ export const InspectionReport = forwardRef<
           {task.visit_type === "desnag" ? (
             <Stat
               label="Defects re-checked"
-              value={`${
-                snags.filter(
-                  (s) =>
-                    (s.round_created ?? 1) < (task.round_number ?? 1) &&
-                    s.status !== "pending_verification",
-                ).length
-              }/${snags.filter((s) => (s.round_created ?? 1) < (task.round_number ?? 1)).length}`}
+              value={`${snags.filter(
+                (s) =>
+                  (s.round_created ?? 1) < (task.round_number ?? 1) &&
+                  s.status !== "pending_verification",
+              ).length
+                }/${snags.filter((s) => (s.round_created ?? 1) < (task.round_number ?? 1)).length}`}
             />
           ) : (
             <Stat
@@ -1962,7 +1961,7 @@ export const InspectionReport = forwardRef<
                   </>
                 ) : null}
                 {plansWithPins.length > 1 ||
-                (task.floor_plans ?? []).length > 1 ? (
+                  (task.floor_plans ?? []).length > 1 ? (
                   <div
                     style={{
                       fontSize: 10.5,

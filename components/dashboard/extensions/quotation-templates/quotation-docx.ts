@@ -22,6 +22,7 @@ import { formatCurrencyAED } from "@/utils/format-currency";
 import { loadPhoto, type Photo } from "../amc/amc-docx";
 import { lineDiscount, quotationDisplayNumber, quotationFigures } from "./quotation-figures";
 import type { QuotationData } from "./quotation-templates";
+import type { QuotationSectionStyle } from "./templates/YallaClassicTemplate";
 
 /**
  * The quotation as an editable Word file, in the same design as the PDF
@@ -75,6 +76,65 @@ const cell = (children: Paragraph[], width: number, opts: { fill?: string; borde
 const sectionTitle = (text: string) =>
   p([run(text.toUpperCase(), { bold: true, px: 11 })], { before: 360, after: 160 });
 
+const BRAND_RED = "AA282A";
+
+/*
+  A snagging quotation's boxed section, as the PDF draws it
+  (YallaClassicTemplate Section): a header row, then the lines on a shaded
+  or white panel, in one bordered table.
+*/
+function sectionBox(style: QuotationSectionStyle, title: string, lines: Paragraph[]): Table {
+  const edge = (color: string, sz = 4): IBorderOptions => ({ style: BorderStyle.SINGLE, size: sz, color });
+  const look = {
+    banded: { headFill: "000000", titleColor: "FFFFFF", bodyFill: ROW_ALT, border: edge(RULE), left: edge(RULE) },
+    tinted: { headFill: ROW_ALT, titleColor: BRAND_RED, bodyFill: ROW_ALT, border: none, left: edge(BRAND_RED, 18) },
+    panel: { headFill: ROW_ALT, titleColor: INK, bodyFill: ROW_ALT, border: edge(RULE), left: edge(RULE) },
+    outlined: { headFill: "F1F5F9", titleColor: BRAND_RED, bodyFill: "FFFFFF", border: edge("CBD5E1"), left: edge("CBD5E1") },
+    plain: { headFill: "FFFFFF", titleColor: INK, bodyFill: "FFFFFF", border: none, left: none },
+  }[style];
+  const borders = { top: look.border, bottom: look.border, right: look.border, left: look.left };
+  return new Table({
+    width: { size: CONTENT_W, type: WidthType.DXA },
+    columnWidths: [CONTENT_W],
+    rows: [
+      new TableRow({
+        cantSplit: true,
+        children: [
+          new TableCell({
+            width: { size: CONTENT_W, type: WidthType.DXA },
+            borders: { ...borders, bottom: style === "outlined" ? look.border : none },
+            shading: { type: ShadingType.CLEAR, color: "auto", fill: look.headFill },
+            margins: { top: 120, bottom: 120, left: 220, right: 220 },
+            children: [
+              p(
+                [
+                  run(style === "panel" ? title : title.toUpperCase(), {
+                    bold: true,
+                    color: look.titleColor,
+                    px: style === "panel" ? 13 : style === "tinted" ? 12 : 11,
+                  }),
+                ],
+                { after: 0 },
+              ),
+            ],
+          }),
+        ],
+      }),
+      new TableRow({
+        children: [
+          new TableCell({
+            width: { size: CONTENT_W, type: WidthType.DXA },
+            borders: { ...borders, top: none },
+            shading: { type: ShadingType.CLEAR, color: "auto", fill: look.bodyFill },
+            margins: { top: 160, bottom: 160, left: 220, right: 220 },
+            children: lines.length ? lines : [p([])],
+          }),
+        ],
+      }),
+    ],
+  });
+}
+
 /* Word needs a paragraph between two tables, or it joins them. */
 const gap = (after = 120) => new Paragraph({ spacing: { after }, children: [] });
 
@@ -91,9 +151,14 @@ export async function generateQuotationWordBlob(
     discountMode?: string;
     includeServiceItemImages?: boolean;
     rootQuotationNumber?: string;
+    /* Snagging quotations box their sections; everything else is "plain". */
+    sectionStyle?: QuotationSectionStyle;
   } = {},
 ): Promise<Blob> {
-  const { hideDiscount = false, discountMode, includeServiceItemImages = false, rootQuotationNumber } = options;
+  const { hideDiscount = false, discountMode, includeServiceItemImages = false, rootQuotationNumber, sectionStyle = "plain" } = options;
+  const styled = sectionStyle !== "plain";
+  /* Scope headings in the section's accent, as the PDF. */
+  const accent = styled ? BRAND_RED : DARK;
   const figures = quotationFigures(data);
   const isByTotal = discountMode === "with-total" || discountMode === "with-total-no-list";
   const showDiscountColumn = !hideDiscount && !isByTotal;
@@ -153,8 +218,51 @@ export async function generateQuotationWordBlob(
     ],
   });
 
-  /* ── Customer and service address ── */
-  const parties = new Table({
+  /* ── Customer and service address ──
+     A styled (snagging) quotation sets them on light panels, a narrow gap
+     column between so Word keeps them apart. */
+  const panelEdge: IBorderOptions = { style: BorderStyle.SINGLE, size: 4, color: RULE };
+  const panelCell = (children: Paragraph[], width: number) =>
+    new TableCell({
+      width: { size: width, type: WidthType.DXA },
+      borders: { top: panelEdge, bottom: panelEdge, left: panelEdge, right: panelEdge },
+      shading: { type: ShadingType.CLEAR, color: "auto", fill: ROW_ALT },
+      margins: { top: 180, bottom: 180, left: 220, right: 220 },
+      children,
+    });
+  const panelGap = 240;
+  const panelW = Math.round((CONTENT_W - panelGap) / 2);
+  const styledParties = new Table({
+    width: { size: CONTENT_W, type: WidthType.DXA },
+    columnWidths: [panelW, panelGap, CONTENT_W - panelW - panelGap],
+    rows: [
+      new TableRow({
+        children: [
+          panelCell(
+            [
+              p([run("Customer", { bold: true, px: 14 })], { after: 60 }),
+              p([run(data.customerCompanyName, { bold: true })], { after: 20 }),
+              ...[data.customerContact, data.customerPhone, data.customerEmail]
+                .filter((value): value is string => Boolean(value))
+                .map((value) => p([run(value)], { after: 20 })),
+            ],
+            panelW,
+          ),
+          cell([p([])], panelGap, { margin: 0 }),
+          data.serviceAddress
+            ? panelCell(
+                [
+                  p([run("Service Address", { bold: true, px: 14 })], { after: 60 }),
+                  p([run(data.serviceAddress, { color: "475569" })]),
+                ],
+                CONTENT_W - panelW - panelGap,
+              )
+            : cell([p([])], CONTENT_W - panelW - panelGap, { margin: 0 }),
+        ],
+      }),
+    ],
+  });
+  const plainParties = new Table({
     width: { size: CONTENT_W, type: WidthType.DXA },
     columnWidths: [half, CONTENT_W - half],
     rows: [
@@ -352,7 +460,7 @@ export async function generateQuotationWordBlob(
         ...(bullet ? [run("•  ", { bold: true, color: SLATE })] : []),
         ...inline(line.text, {
           bold: strong,
-          color: bullet ? SLATE : DARK,
+          color: bullet ? SLATE : heading ? accent : DARK,
           ...(heading ? { px: 13 } : {}),
         }),
       ],
@@ -381,6 +489,11 @@ export async function generateQuotationWordBlob(
     ["SWIFT CODE", "ADCBAEAA"],
   ];
 
+  const bankLines = [
+    p([run("For any questions contact "), run("800-PERFECT", { bold: true, color: DARK })], { after: 120 }),
+    ...bank.map(([label, value]) => p([run(`${label}: `, { bold: true, color: DARK }), run(value)], { after: 30 })),
+  ];
+
   const doc = new Document({
     creator: data.companyName || "Yalla Fix It",
     title: `Quotation ${quotationDisplayNumber(data, rootQuotationNumber)}`,
@@ -396,16 +509,25 @@ export async function generateQuotationWordBlob(
         children: [
           header,
           gap(360),
-          parties,
+          styled ? styledParties : plainParties,
           gap(280),
           items,
           gap(120),
           totals,
-          ...(scope.length ? [sectionTitle("Scope of Work"), ...scope] : []),
-          ...(terms.length ? [sectionTitle("Terms and Conditions"), ...terms] : []),
-          sectionTitle("Bank Details & Support"),
-          p([run("For any questions contact "), run("800-PERFECT", { bold: true, color: DARK })], { after: 120 }),
-          ...bank.map(([label, value]) => p([run(`${label}: `, { bold: true, color: DARK }), run(value)], { after: 30 })),
+          ...(styled
+            ? [
+                ...(scope.length ? [gap(240), sectionBox(sectionStyle, "Scope of Work", scope)] : []),
+                gap(240),
+                sectionBox(sectionStyle, "Terms and Conditions", terms),
+                gap(240),
+                sectionBox(sectionStyle, "Bank Details & Support", bankLines),
+              ]
+            : [
+                ...(scope.length ? [sectionTitle("Scope of Work"), ...scope] : []),
+                ...(terms.length ? [sectionTitle("Terms and Conditions"), ...terms] : []),
+                sectionTitle("Bank Details & Support"),
+                ...bankLines,
+              ]),
         ],
       },
     ],

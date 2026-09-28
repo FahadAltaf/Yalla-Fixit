@@ -411,9 +411,16 @@ export async function generateInspectionReportDocx(
       if (photo.signed_url && isPhoto(photo)) urls.add(photo.signed_url);
     }
   }
-  const [logo, isoBadges, ...loaded] = await Promise.all([
+  const [logo, isoBadges, signature, ...loaded] = await Promise.all([
     loadPhoto(AMC_BRAND_IMAGES.logoTrimmed),
     Promise.all(AMC_BRAND_IMAGES.iso.map((badge) => loadPhoto(badge.src))),
+    /*
+      The one signature the client is shown, as on the PDF and the report
+      page: the job's own, or one inspector's sign-off when a job with
+      several inspectors carries none (job-detail-sections). One that
+      fails to load is left out rather than failing the file.
+    */
+    submission?.signature_url ? loadPhoto(submission.signature_url) : Promise.resolve(null),
     ...[...urls].map(async (url) => [url, await loadPhoto(url)] as const),
   ]);
   const photos = new Map(loaded as [string, Photo | null][]);
@@ -1216,6 +1223,14 @@ export async function generateInspectionReportDocx(
             : "",
         },
       ]),
+    );
+  }
+  if (signature) {
+    body.push(
+      new Paragraph({
+        spacing: { before: 60, after: 160 },
+        children: [imageRun(signature, 220, 80)],
+      }),
     );
   }
   body.push(

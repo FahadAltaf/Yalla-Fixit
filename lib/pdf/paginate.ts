@@ -207,7 +207,13 @@ export function canvasToPdfBlob(
     const remaining = contentHeight - (sourceY + ideal);
     let end = sourceY + ideal;
 
-    if (remaining > minSlicePx) {
+    /*
+      Any page with content after it breaks at a safe place, however little
+      is left. This used to apply only when more than minSlicePx remained,
+      so a document ending a few lines past a page was cut at the exact page
+      height -- through the middle of its last line of text.
+    */
+    if (remaining > 0) {
       const minEnd = sourceY + minSlicePx;
       end =
         breakAboveBlocks(

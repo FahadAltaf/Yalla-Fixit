@@ -478,7 +478,7 @@ export function AmcBrochurePage({ brochure, pdf = false }: { brochure: AmcBrochu
                     <img
                       src={CONTACT_ICONS[index]}
                       alt=""
-                      style={{ height: "9px", width: "auto", display: "block", position: "relative", top: px(d(10)) }}
+                      style={{ height: "9px", width: "auto", display: "block", position: "relative", top: px(pdf ? d(10) + 2 : 0) }}
                     />
                   ) : null}
                   {item}

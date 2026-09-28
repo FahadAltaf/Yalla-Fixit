@@ -9,7 +9,11 @@ import {
   generateQuotationPDFBlob,
 } from "@/components/dashboard/extensions/quotation-templates/pdf-utils";
 import { YallaClassicTemplate } from "@/components/dashboard/extensions/quotation-templates/templates/YallaClassicTemplate";
-import { snaggingQuoteToTemplateData, type SnaggingQuoteDoc } from "@/lib/snagging/quotation-template-data";
+import {
+  SNAGGING_QUOTATION_SECTION_STYLE,
+  snaggingQuoteToTemplateData,
+  type SnaggingQuoteDoc,
+} from "@/lib/snagging/quotation-template-data";
 import { StatusMessageCard } from "@/components/quotations/status-message-card";
 import {
   ClientDocumentShell,
@@ -169,8 +173,13 @@ export function PublicQuotation({ token }: { token: string }) {
     const data = snaggingQuoteToTemplateData(quote);
     const blob =
       format === "pdf"
-        ? await generateQuotationPDFBlob("yalla-classic", data, { scale: 2 }, "without")
-        : await generateQuotationDocxBlob(data, "without");
+        ? await generateQuotationPDFBlob(
+            "yalla-classic",
+            data,
+            { scale: 2, sectionStyle: SNAGGING_QUOTATION_SECTION_STYLE },
+            "without",
+          )
+        : await generateQuotationDocxBlob(data, "without", false, "", SNAGGING_QUOTATION_SECTION_STYLE);
     saveAs(blob, `Quotation-${quote.quote_number}.${format}`);
   }
 
@@ -353,7 +362,12 @@ export function PublicQuotation({ token }: { token: string }) {
         </Dialog>
 
       <FitToWidth>
-        <YallaClassicTemplate data={doc} discountMode="without" hideDiscount />
+        <YallaClassicTemplate
+          data={doc}
+          discountMode="without"
+          hideDiscount
+          sectionStyle={SNAGGING_QUOTATION_SECTION_STYLE}
+        />
       </FitToWidth>
     </ClientDocumentShell>
   );

@@ -15,7 +15,7 @@ import { isZone } from "@/lib/snagging/zone-geometry";
 import { inParallel, planWaves } from "@/lib/server/snagging/push-plan";
 import { readAllRows } from "@/lib/server/snagging/read-all";
 import { loadJobRosters } from "@/lib/server/snagging/job-roster";
-import { assertEveryoneSigned, recordSignoff } from "@/lib/server/snagging/signoffs";
+import { assertEveryoneSigned, loadOwnSignoff, recordSignoff } from "@/lib/server/snagging/signoffs";
 import { SNAGGING_BUCKET, mediaObjectKey } from "@/lib/server/snagging/media";
 import {
   approvalDueAt,
@@ -1184,6 +1184,18 @@ async function applySubmission(admin: Admin, ctx: Ctx, payload: Record<string, u
       signedAt: (payload.signed_at as string) ?? new Date().toISOString(),
     });
   }
+  /*
+    The client's report shows one signature: the one on the job. A
+    submitter who signed their part earlier sends no second drawing, which
+    used to clear the job's signature and leave the report unsigned; their
+    own sign-off is that signature. Every inspector's stays in the sign-offs.
+  */
+  const ownSignoff = signaturePath ? null : await loadOwnSignoff(admin, job.id, null, ctx.userId);
+  const clientSignature = {
+    path: signaturePath ?? ownSignoff?.signature_path ?? null,
+    name: (payload.signer_name as string | undefined) ?? ownSignoff?.signer_name ?? null,
+    at: (payload.signed_at as string | undefined) ?? ownSignoff?.signed_at ?? null,
+  };
 
   const submittedAt = new Date().toISOString();
   const { error } = await admin
@@ -1200,9 +1212,9 @@ async function applySubmission(admin: Admin, ctx: Ctx, payload: Record<string, u
       review_started_at: null,
       reviewed_at: null,
       escalated_at: null,
-      signer_name: (payload.signer_name as string) ?? null,
-      signed_at: (payload.signed_at as string) ?? submittedAt,
-      signature_path: signaturePath ?? null,
+      signer_name: clientSignature.name,
+      signed_at: clientSignature.at ?? submittedAt,
+      signature_path: clientSignature.path,
     })
     .eq("id", job.id);
   if (error) throw new Error(error.message);

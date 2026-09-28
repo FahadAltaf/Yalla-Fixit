@@ -11,6 +11,7 @@ import {
 import { loadJobFamily, readOnRoot } from "@/lib/server/snagging/job-family";
 import { listReportVersions } from "@/lib/server/snagging/report-versions";
 import { signMediaPaths } from "@/lib/server/snagging/media";
+import { loadSignoffRecords } from "@/lib/server/snagging/signoffs";
 
 /*
   The job detail, one section per endpoint.
@@ -213,7 +214,7 @@ export async function loadJobCore(admin: Admin, id: string) {
     were three separate waits -- the documents in parallel, then the
     signature after them -- and none depends on another.
   */
-  const [nocSigned, deedSigned, signatureSigned] = await Promise.all([
+  const [nocSigned, deedSigned, signatureSigned, signoffs] = await Promise.all([
     // Sign the property's NOC and title deed (FR-3.04 / FR-1.09) so the job can
     // show "on file" with a view/download link — reusing the existing
     // property-level document, never a second upload.
@@ -228,6 +229,23 @@ export async function loadJobCore(admin: Admin, id: string) {
     job.signature_path
       ? signMediaPaths(admin, [{ id: job.id, storage_path: job.signature_path }])
       : Promise.resolve([]),
+    /*
+      Every inspector's own signature, for the office. The client's report
+      carries one (the job's, above); these stay internal -- this route is
+      staff-only, and nothing client-facing reads it.
+    */
+    loadSignoffRecords(admin, job.id, async (paths) => {
+      const rows = await signMediaPaths(
+        admin,
+        paths.map((path) => ({ id: path, storage_path: path })),
+      );
+      return new Map(
+        rows.map((row) => [row.id, (row as { signed_url?: string }).signed_url ?? ""]),
+      );
+    }).catch((error) => {
+      console.error("Sign-offs could not be read; the job loads without them:", error);
+      return [];
+    }),
   ]);
   const propertyWithDocs = {
     ...property,
@@ -272,15 +290,28 @@ export async function loadJobCore(admin: Admin, id: string) {
   }));
 
   const signatureRow = job.signature_path ? (signatureSigned[0] ?? null) : null;
+  /*
+    The one signature the report shows. The job's own; when it has none (a
+    job with several inspectors submitted before that was kept) one
+    inspector's sign-off on the job's pass -- the one the report names
+    ("Inspected by", the first of the team) when they signed, otherwise
+    the first to sign. The rest stay in `signoffs`, internal.
+  */
+  const passSignoffs = (signoffs as Array<{ visit_id: string | null; inspector_id: string; signer_name: string | null; signature_url: string | null }>)
+    .filter((signoff) => !signoff.visit_id && signoff.signature_url);
+  const fallbackSignoff = signatureRow
+    ? null
+    : (passSignoffs.find((signoff) => signoff.inspector_id === people[0]?.id) ?? passSignoffs[0] ?? null);
   const submissions = job.signed_at
     ? [{
         id: job.id,
         task_id: job.id,
         attempt: 1,
         signed_at: job.signed_at,
-        signer_name: job.signer_name,
+        signer_name: fallbackSignoff ? (fallbackSignoff.signer_name ?? job.signer_name) : job.signer_name,
         signature_path: job.signature_path,
-        signature_url: (signatureRow as { signed_url?: string } | null)?.signed_url ?? null,
+        signature_url:
+          (signatureRow as { signed_url?: string } | null)?.signed_url ?? fallbackSignoff?.signature_url ?? null,
       }]
     : [];
 
@@ -310,6 +341,7 @@ export async function loadJobCore(admin: Admin, id: string) {
     assignees,
     approvals: [],
     submissions,
+    signoffs,
   };
 }
 

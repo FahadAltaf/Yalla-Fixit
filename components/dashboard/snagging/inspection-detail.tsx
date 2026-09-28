@@ -19,6 +19,7 @@ import { ActionType, ResourceType } from "@/types/types";
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
 
 import { ErrorState } from "./shared";
+import { SignoffsCard } from "./signoffs-card";
 
 import { InspectorAssignmentAlert } from "./inspector-alert";
 import { InspectionHeaderCard } from "./inspection-header-card";
@@ -472,7 +473,15 @@ function InspectionDetailView() {
           />,
         )}
         {isOriginal ? panel("visits", "mt-4", <AdditionalVisitsPanel task={task} />) : null}
-        {panel("history", "mt-4", <AuditTimeline />)}
+        {panel(
+          "history",
+          "mt-4 flex flex-col gap-6",
+          <>
+            {/* Every inspector's signature, kept internally. */}
+            <SignoffsCard signoffs={task.signoffs} clientSigner={task.submissions?.[0]?.signer_name} />
+            <AuditTimeline />
+          </>,
+        )}
       </Tabs>
     </div>
   );

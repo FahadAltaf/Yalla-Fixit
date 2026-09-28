@@ -39,6 +39,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
 import {
+  SNAGGING_QUOTATION_SECTION_STYLE,
   snaggingQuoteToTemplateData,
   type SnaggingQuoteDoc,
 } from "@/lib/snagging/quotation-template-data";
@@ -303,7 +304,7 @@ export function QuotationPanel({
     const blob = await (await loadPdfUtils()).generateQuotationPDFBlob(
       "yalla-classic",
       snaggingQuoteToTemplateData(toDocData(quote)),
-      { scale: 2 },
+      { scale: 2, sectionStyle: SNAGGING_QUOTATION_SECTION_STYLE },
       "without",
     );
     return blobToBase64(blob);
@@ -318,6 +319,9 @@ export function QuotationPanel({
       const blob = await (await loadPdfUtils()).generateQuotationDocxBlob(
         snaggingQuoteToTemplateData(toDocData(quote)),
         "without",
+        false,
+        "",
+        SNAGGING_QUOTATION_SECTION_STYLE,
       );
       saveAs(blob, `Quotation-${quote.quote_number}.docx`);
       toast.success("Word file downloaded", { id: t });
@@ -339,7 +343,7 @@ export function QuotationPanel({
       const blob = await (await loadPdfUtils()).generateQuotationPDFBlob(
         "yalla-classic",
         snaggingQuoteToTemplateData(toDocData(quote)),
-        { scale: 2 },
+        { scale: 2, sectionStyle: SNAGGING_QUOTATION_SECTION_STYLE },
         "without",
       );
       saveAs(blob, `Quotation-${quote.quote_number}.pdf`);
@@ -735,6 +739,7 @@ export function QuotationPanel({
                     <YallaClassicTemplate
                       data={snaggingQuoteToTemplateData(toDocData(quote))}
                       hideDiscount
+                      sectionStyle={SNAGGING_QUOTATION_SECTION_STYLE}
                     />
                   </div>
                 </div>

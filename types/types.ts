@@ -728,6 +728,22 @@ export interface SnaggingTask {
   floor_plans?: SnaggingFloorPlan[];
   checklist?: SnaggingChecklistItem[];
   submissions?: SnaggingSubmission[];
+  /**
+   * Every inspector's own sign-off (the job's pass and its visits), for
+   * staff only. The client's report shows one signature: `submissions[0]`.
+   */
+  signoffs?: SnaggingSignoff[];
+}
+
+/** One inspector's signature on a pass of a job (internal record). */
+export interface SnaggingSignoff {
+  id: string;
+  visit_id: string | null;
+  inspector_id: string;
+  inspector_name: string;
+  signer_name: string | null;
+  signed_at: string;
+  signature_url: string | null;
 }
 
 /** One append-only audit event on an inspection (BR-5). */

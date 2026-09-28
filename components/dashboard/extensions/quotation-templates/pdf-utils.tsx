@@ -6,7 +6,7 @@ import { canvasToPdfBlob, collectPdfBlocks } from "@/lib/pdf/paginate";
 import { sanitizeUnsupportedColors } from "@/lib/pdf/sanitize-colors";
 
 import { QuotationData } from "./quotation-templates";
-import { YallaClassicTemplate } from "./templates/YallaClassicTemplate";
+import { YallaClassicTemplate, type QuotationSectionStyle } from "./templates/YallaClassicTemplate";
 import { ModernBoldTemplate } from "./templates/ModernBoldTemplate";
 import { MinimalCleanTemplate } from "./templates/MinimalCleanTemplate";
 
@@ -14,6 +14,8 @@ export interface PDFGeneratorOptions {
   scale?: number;
   imageFormat?: "JPEG" | "PNG";
   imageQuality?: number;
+  /** Snagging quotations box their sections; everything else is "plain". */
+  sectionStyle?: QuotationSectionStyle;
 }
 
 /** Resolves once fonts and every <img> in the container have loaded (or failed), or after `capMs`. */
@@ -45,7 +47,7 @@ export async function generateQuotationPDFBlob(
   includeServiceItemImages = false,
   rootQuotationNumber = "",
 ): Promise<Blob> {
-  const { scale = 2, imageFormat = "JPEG", imageQuality = 0.92 } = options;
+  const { scale = 2, imageFormat = "JPEG", imageQuality = 0.92, sectionStyle = "plain" } = options;
 
   const tempDiv = document.createElement("div");
   tempDiv.style.cssText = `
@@ -77,6 +79,7 @@ export async function generateQuotationPDFBlob(
             discountMode={discountMode}
             includeServiceItemImages={includeServiceItemImages}
             rootQuotationNumber={rootQuotationNumber}
+            sectionStyle={sectionStyle}
           />
         );
     }
@@ -135,6 +138,7 @@ export async function generateQuotationDocxBlob(
   discountMode: "with" | "without" | "with-total" | "with-total-no-list" = "with",
   includeServiceItemImages = false,
   rootQuotationNumber = "",
+  sectionStyle: QuotationSectionStyle = "plain",
 ): Promise<Blob> {
   const { generateQuotationWordBlob } = await import("./quotation-docx");
   return generateQuotationWordBlob(data, {
@@ -142,5 +146,6 @@ export async function generateQuotationDocxBlob(
     discountMode,
     includeServiceItemImages,
     rootQuotationNumber,
+    sectionStyle,
   });
 }

@@ -1,4 +1,17 @@
 import type { QuotationData } from "@/components/dashboard/extensions/quotation-templates/quotation-templates";
+import type { QuotationSectionStyle } from "@/components/dashboard/extensions/quotation-templates/templates/YallaClassicTemplate";
+
+/**
+ * How a snagging quotation sets its Scope of Work, Terms and Bank Details
+ * (2026-09-28): each boxed with its own header, as the client asked, so
+ * they do not look plain beside the line table: light tinted panels with
+ * black titles, after the client's reference quotation.
+ * The Customer and Service Address blocks take the same panels. (A black
+ * header bar was tried first and read too heavy.) Only snagging quotations
+ * pass this -- the shared template keeps its original "plain" sections
+ * everywhere else. One place, for the preview, the PDF and the Word file.
+ */
+export const SNAGGING_QUOTATION_SECTION_STYLE: QuotationSectionStyle = "panel";
 
 /**
  * The stored quotation shape that both the coordinator panel and the public
