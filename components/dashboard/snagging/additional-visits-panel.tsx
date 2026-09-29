@@ -480,7 +480,7 @@ export function AdditionalVisitsPanel({ task }: { task: SnaggingTask }) {
           <EmptyState
             icon={<CalendarClock className="size-6" />}
             title="No additional visits"
-            description="Add one when an area could not be inspected and the client is paying for a return trip — by quotation or by payment link."
+            description="Add one when an area could not be inspected and the client is paying for a return trip, by quotation or by payment link."
           />
         ) : (
           <div className="overflow-x-auto">
@@ -674,7 +674,7 @@ export function AdditionalVisitsPanel({ task }: { task: SnaggingTask }) {
                 id="switch-payment-ref"
                 value={paymentRef}
                 onChange={(event) => setPaymentRef(event.target.value)}
-                placeholder="Optional — the link or transaction id"
+                placeholder="Optional. The link or transaction id"
               />
             </div>
           ) : null}

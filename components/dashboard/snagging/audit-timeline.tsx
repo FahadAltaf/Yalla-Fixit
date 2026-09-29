@@ -250,7 +250,7 @@ export function AuditTimeline() {
     <SectionCard
       title="History"
       icon={<History />}
-      description="Every recorded action on this inspection"
+      description="Every recorded action on this inspection."
       bodyClassName="border-t"
       action={
         <div className="flex items-center gap-1.5">

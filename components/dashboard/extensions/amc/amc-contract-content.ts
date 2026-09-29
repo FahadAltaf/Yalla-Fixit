@@ -442,16 +442,23 @@ export const CLAUSE_5_EXCLUDED = {
   ],
 };
 
+/*
+  The clause numbers are not written into this wording any more. Where a
+  clause prints is where it sits in the list (amc-document-model), so a
+  number typed here would be a second opinion -- and the one that went
+  stale the first time a clause moved or was switched off. The rates are
+  numbered under their clause for the same reason.
+*/
 export const CLAUSE_6_3_HANDYMAN = {
-  title: "6.3 Any handyman works exceeded from the given limited free handyman hours in the contract (non-quoted jobs) will be charged as below fix rate. (for a team of one technician and one helper with basic tools and equipment), materials to be provided by customer.",
+  title: "Any handyman works exceeded from the given limited free handyman hours in the contract (non-quoted jobs) will be charged as below fix rate. (for a team of one technician and one helper with basic tools and equipment), materials to be provided by customer.",
   rates: [
-    { label: "A.", text: "First Hour – 199.00 AED + VAT" },
-    { label: "B.", text: "Succeeding Hours – 99.00 AED + VAT" },
+    { text: "First Hour – 199.00 AED + VAT" },
+    { text: "Succeeding Hours – 99.00 AED + VAT" },
   ],
 };
 
 export const CLAUSE_6_2_INTRO = [
-  "6.2 Supply and installation price list.",
+  "Supply and installation price list.",
   "The prices of the following items are predefined but subject to customer approval. The purpose of this list is to reduce the process steps and decrease the resolution lead-time for the customer satisfaction.",
   "Prices for other areas/items are and per term and condition of the contract and quotation-based.",
   "Below pricelist is exclusive to this property and cannot be used as reference rate for any other location.",

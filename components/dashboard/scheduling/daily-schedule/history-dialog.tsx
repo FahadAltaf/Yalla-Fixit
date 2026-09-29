@@ -124,7 +124,7 @@ export default function HistoryDialog({ date, onOpenChange }: Props) {
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[86vh] w-[calc(100%-2rem)] overflow-hidden sm:max-w-4xl">
         <DialogHeader>
-          <DialogTitle>Schedule history — {formatDate(date)}</DialogTitle>
+          <DialogTitle>Schedule history: {formatDate(date)}</DialogTitle>
           <DialogDescription>
             Every version of this day, with the appointments it held and a timeline of what happened to it.
           </DialogDescription>

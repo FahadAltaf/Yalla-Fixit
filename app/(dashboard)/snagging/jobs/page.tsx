@@ -12,7 +12,7 @@ import type { SnaggingTaskSummary } from "@/types/types";
 const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
 const title = "Jobs | Property Care Snagging";
 const description =
-  "Every inspection task, its round, its inspector, and the snag counts the field has sent back.";
+  "Every snagging inspection and re-inspection: the property, its inspector, where it has got to, and the defects found so far.";
 
 export const metadata: Metadata = {
   title,

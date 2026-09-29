@@ -79,7 +79,7 @@ export default function SnaggingOverviewDashboard() {
     <div className="flex flex-col gap-6">
       <PageHeading
         eyebrow="Property care"
-        title="Snagging Overview"
+        title="Snagging overview"
         /*
           Whose figures these are, said out loud (FR-10.01).
 

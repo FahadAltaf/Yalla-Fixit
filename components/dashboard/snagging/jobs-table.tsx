@@ -174,7 +174,7 @@ export default function JobsTable({
       <PageHeading
         eyebrow="Operations"
         title="Jobs"
-        description="Every inspection task, its round, its inspector, and the snag counts the field has sent back."
+        description="Every snagging inspection and re-inspection: the property, its inspector, where it has got to, and the defects found so far."
         actions={
           canCreate ? (
             // A job starts from a quotation the client has approved.

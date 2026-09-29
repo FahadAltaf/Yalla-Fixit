@@ -2491,7 +2491,7 @@ const TechnicianRow = memo(function TechnicianRow({
             // A long press on touch would otherwise open the context menu.
             onContextMenu={(e) => e.preventDefault()}
             className="group/grip text-muted-foreground hover:bg-muted hover:text-foreground focus:bg-primary/10 focus:text-primary data-[pressing=true]:bg-primary/15 data-[pressing=true]:text-primary absolute inset-y-0 left-0 flex w-7 cursor-grab touch-none items-center justify-center opacity-0 transition-[opacity,background-color,color] duration-150 group-hover/row:opacity-100 focus:opacity-100 focus:outline-none active:cursor-grabbing data-[pressing=true]:opacity-100"
-            title="Drag to reorder — or click, then use ↑ ↓"
+            title="Drag to reorder, or click and use ↑ ↓"
             aria-label={`Reorder ${technician.display_name}: drag the handle, or use the arrow keys`}
           >
             <GripVertical className="size-4 transition-transform duration-200 group-data-[pressing=true]/grip:scale-125" />

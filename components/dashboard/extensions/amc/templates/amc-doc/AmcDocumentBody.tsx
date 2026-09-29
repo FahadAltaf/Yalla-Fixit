@@ -213,7 +213,9 @@ function renderBlock(block: Block, key: number, keepWithPrevious: boolean, pdf: 
           data-amc-keep=""
           style={{ ...text, fontSize: pt(AMC_DOC_PT.subheading), fontWeight: 700, margin: "12px 0 5px" }}
         >
-          {block.number && <span style={{ marginRight: "10px" }}>{block.number}</span>}
+          {block.number && (
+            <span style={{ marginRight: "10px", color: AMC_DOC_COLORS.brand }}>{block.number}</span>
+          )}
           {block.text}
         </h3>
       );
@@ -241,16 +243,23 @@ function renderBlock(block: Block, key: number, keepWithPrevious: boolean, pdf: 
         </ul>
       );
 
-    case "lettered":
+    /* Sub-points of a clause: "6.3.1", not "A." -- and the same red as
+       every other number in the document. Indented further than a term
+       because the number they carry is one level longer. */
+    case "numbered":
       return (
         <div key={key} style={{ margin: "0 0 6px" }}>
           {block.items.map((item, index) => (
             <p
-              key={item.letter}
+              key={item.number}
               {...(index === 0 ? breakAttr : { "data-amc-break": "" })}
-              style={{ ...text, position: "relative", paddingLeft: "22px", margin: "0 0 3px" }}
+              style={{ ...text, position: "relative", paddingLeft: "48px", margin: "0 0 3px" }}
             >
-              <span style={{ position: "absolute", left: 0, fontWeight: 700 }}>{item.letter}</span>
+              <span
+                style={{ position: "absolute", left: 0, fontWeight: 700, color: AMC_DOC_COLORS.brand }}
+              >
+                {item.number}
+              </span>
               <Runs runs={item.runs} />
             </p>
           ))}

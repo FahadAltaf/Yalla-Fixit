@@ -454,7 +454,7 @@ export function QuotationTemplatesPage() {
       {!hasSearched && !searchResults && !isSearching && (
         <EmptyState
           title="Search for a quotation"
-          description="Enter the name of the quotation you are looking for and click the search button."
+          description="Enter the name of the quotation you are looking for and click Search."
           icon={<Search className="size-5" />}
         />
       )}

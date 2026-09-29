@@ -332,17 +332,27 @@ function renderBlock(block: Block, photos: Photos): (Paragraph | Table)[] {
       ];
 
     case "subheading":
+      /* The number in brand red, as a heading's is -- two runs rather
+         than one so the colour stops at the number. */
       return [
         para(
-          runs(
-            [
-              {
-                text: `${block.number ? `${block.number}  ` : ""}${block.text}`,
-                bold: true,
-              },
-            ],
-            AMC_DOC_PT.subheading,
-          ),
+          [
+            ...(block.number
+              ? [
+                  new TextRun({
+                    text: `${block.number}  `,
+                    bold: true,
+                    color: toneHex.brand,
+                    size: half(AMC_DOC_PT.subheading),
+                  }),
+                ]
+              : []),
+            new TextRun({
+              text: block.text,
+              bold: true,
+              size: half(AMC_DOC_PT.subheading),
+            }),
+          ],
           { spacing: { before: 180, after: 80 }, keepNext: true },
         ),
       ];
@@ -358,20 +368,22 @@ function renderBlock(block: Block, photos: Photos): (Paragraph | Table)[] {
         }),
       );
 
-    case "lettered":
+    case "numbered":
+      /* Indented wider than a term: "6.3.1" is longer than "6.3". */
       return block.items.map((item) =>
         para(
           [
             new TextRun({
-              text: `${item.letter}\t`,
+              text: `${item.number}\t`,
               bold: true,
+              color: toneHex.brand,
               size: half(AMC_DOC_PT.body),
             }),
             ...runs(item.runs),
           ],
           {
-            indent: { left: 440, hanging: 440 },
-            tabStops: [{ type: TabStopType.LEFT, position: 440 }],
+            indent: { left: 780, hanging: 780 },
+            tabStops: [{ type: TabStopType.LEFT, position: 780 }],
           },
         ),
       );

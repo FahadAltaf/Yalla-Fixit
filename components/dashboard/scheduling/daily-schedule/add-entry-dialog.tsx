@@ -395,7 +395,7 @@ export default function AddEntryDialog({
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[92vh] w-[calc(100%-2rem)] sm:max-w-3xl lg:max-w-6xl overflow-y-auto [scrollbar-gutter:stable] [scrollbar-width:thin]">
         <DialogHeader>
-          <DialogTitle>Add Schedule Entry — {effectiveShift === "night" ? "Night" : "Morning"} Shift</DialogTitle>
+          <DialogTitle>Add schedule entry: {effectiveShift === "night" ? "night" : "morning"} shift</DialogTitle>
           <DialogDescription>
             Attach an existing Zoho FSM work order or appointment, or drop a free-text note on the board.
           </DialogDescription>

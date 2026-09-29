@@ -95,7 +95,7 @@ export const QUOTATION_TEMPLATES: QuotationTemplate[] = [
   {
     id: "yalla-classic",
     name: "Classic Professional",
-    description: "Clean corporate layout matching Yalla Fix It style — full T&C, itemized table, VAT breakdown.",
+    description: "The house corporate layout. Carries the full terms, an itemised table and the VAT breakdown.",
     tag: "Professional",
     color: "#1a56db",
     previewBg: "from-blue-50 to-slate-100",
@@ -103,7 +103,7 @@ export const QUOTATION_TEMPLATES: QuotationTemplate[] = [
   {
     id: "modern-bold",
     name: "Modern Bold",
-    description: "Dark header accent, bold typography, ideal for construction & technical services.",
+    description: "A dark header and heavier type. Suits construction and technical work.",
     tag: "Modern",
     color: "#0f766e",
     previewBg: "from-teal-50 to-emerald-100",
@@ -111,7 +111,7 @@ export const QUOTATION_TEMPLATES: QuotationTemplate[] = [
   {
     id: "minimal-clean",
     name: "Minimal Clean",
-    description: "Ultra-clean single-column layout. Great for quick service quotes with minimal T&C.",
+    description: "A plain single column with short terms. Suits a quick service quote.",
     tag: "Minimal",
     color: "#7c3aed",
     previewBg: "from-violet-50 to-purple-100",

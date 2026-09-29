@@ -63,7 +63,7 @@ export type Block =
   | { kind: "subheading"; number?: string; text: string }
   | { kind: "paragraph"; runs: Run[] }
   | { kind: "bullets"; items: Run[][] }
-  | { kind: "lettered"; items: { letter: string; runs: Run[] }[] }
+  | { kind: "numbered"; items: { number: string; runs: Run[] }[] }
   | { kind: "term"; number: string; runs: Run[] }
   | { kind: "signatures"; left: string; right: string };
 
@@ -134,6 +134,20 @@ export function detailsTable(rows: [string, Run[] | string][]): Block {
 function fillBlocks(value: string, data: AmcComputedData): string[] {
   return textBlocks(fillAmcTokens(value ?? "", data.formData.serviceRows));
 }
+
+/**
+ * A line without the list marker it was typed with.
+ *
+ * Stored wording carries whatever marker whoever wrote it used -- "A.",
+ * "b)", "1." -- and the document numbers its own lines from where they
+ * sit. Leaving both would print "6.3.1 A. First Hour".
+ *
+ * Only a marker at the very start goes, and only when something follows
+ * it, so a line that opens with an initial or a figure ("2 per year")
+ * keeps its text.
+ */
+export const stripListMarker = (line: string) =>
+  line.replace(/^\s*(?:[A-Za-z]|\d{1,2})[.)]\s+(?=\S)/, "");
 
 /* "21,100.00" — the Word design's number style. */
 export const amount = (value: number) =>
@@ -274,8 +288,39 @@ function contractBlocks(data: AmcComputedData): Block[] {
      never carried them -- so they take no number here either, which is
      what left a gap where clause 8 should have been. */
   const PROPOSAL_ONLY = new Set(["proposalNotes", "proposalAcceptance"]);
+  const priceList = buildPriceListRows(formData.priceListRows ?? []);
+
+  /*
+    A clause that prints nothing takes no number with it.
+
+    Two of them draw nothing on most contracts: the price list when it was
+    never switched on, and the handyman rates when no rate is written. They
+    were numbered first and dropped afterwards, so the number each had
+    taken stayed empty -- which is how a contract came to run 6.1, 6.3 with
+    no 6.2 anywhere. Deciding it here, before anything is numbered, is what
+    makes the sequence answer for itself.
+
+    Asked of the clause rather than of its drawn content because content
+    needs the number this decides -- so it reads the same conditions the
+    drawing does, and the two are checked against each other below.
+  */
+  const drawsNothing = (clause: { role?: string; body?: string }): boolean => {
+    if (clause.role === "priceListIntro") {
+      if (!formData.optionalSections?.supplyInstallPriceList) return true;
+      /* The first block is the heading; what follows is the content. */
+      return fill(clause.body ?? "").length <= 1 && priceList.length === 0;
+    }
+    if (clause.role === "handymanRates") {
+      return fill(clause.body ?? "").length <= 1;
+    }
+    return false;
+  };
+
   const clauses = settings.clauseList.filter(
-    (clause) => clause.enabled !== false && !(clause.role && PROPOSAL_ONLY.has(clause.role)),
+    (clause) =>
+      clause.enabled !== false &&
+      !(clause.role && PROPOSAL_ONLY.has(clause.role)) &&
+      !drawsNothing(clause),
   );
   /*
     The scopes this contract prints, from AMC Settings.
@@ -401,7 +446,6 @@ function contractBlocks(data: AmcComputedData): Block[] {
     return `${prefix || "Clause"} ${number}`;
   };
 
-  const priceList = buildPriceListRows(formData.priceListRows ?? []);
   const invoiceTerms = fillRef(settings.clauses.invoiceTerms);
 
   /*
@@ -433,9 +477,9 @@ function contractBlocks(data: AmcComputedData): Block[] {
           ...(s11.listItems?.length
             ? [
                 {
-                  kind: "lettered",
+                  kind: "numbered",
                   items: s11.listItems.map((item, index) => ({
-                    letter: `${String.fromCharCode(65 + index)}.`,
+                    number: `${number}.${index + 1}`,
                     runs: [t(refText(item))],
                   })),
                 } as Block,
@@ -493,15 +537,24 @@ function contractBlocks(data: AmcComputedData): Block[] {
         ];
       }
       case "servicesTable":
+        /*
+          What is covered and how often, without a price per line.
+
+          This table used to carry a PRICE (AED) column, which invited the
+          customer to read the contract as a shopping list and argue a line
+          at a time. The figure that is actually agreed is the annual
+          contract value on the first page, so that is the only price the
+          document quotes. The per-service prices are still computed and
+          still feed that total -- they are simply not printed here.
+        */
         return [
           {
             kind: "table",
-            widths: [36, 8, 17, 22, 17],
+            widths: [45, 10, 25, 20],
             header: [
               headerCell("SCOPE OF MAINTENANCE WORKS"),
               headerCell("UNITS", "center"),
               headerCell("FREQUENCY", "center"),
-              headerCell("PRICE (AED)", "right"),
               headerCell("REFERENCE", "center"),
             ],
             rows: zebra(
@@ -509,7 +562,6 @@ function contractBlocks(data: AmcComputedData): Block[] {
                 cell(row.scope),
                 cell(String(row.units), { align: "center" }),
                 cell(row.frequency, { align: "center" }),
-                cell(formatCurrencyAED(row.price), { align: "right" }),
                 cell([[t(referenceFor(row), { tone: "muted" })]], { align: "center" }),
               ]),
             ),
@@ -554,15 +606,20 @@ function contractBlocks(data: AmcComputedData): Block[] {
            lettered in order. */
         const [, ...rates] = fillRef(clause.body);
         if (!rates.length) return [];
+        /*
+          These read "A." and "B." in the wording shipped before, and some
+          saved settings still carry those letters. The marker a line was
+          typed with is dropped either way and the line takes the number of
+          its position under this clause, so the document counts one way
+          throughout instead of switching to letters two levels down.
+        */
         return [
           {
-            kind: "lettered",
-            items: rates.map((rate, index) => {
-              const match = rate.match(/^([A-Z])[.)]\s*(.*)$/);
-              return match
-                ? { letter: `${match[1]}.`, runs: [t(match[2])] }
-                : { letter: `${String.fromCharCode(65 + index)}.`, runs: [t(rate)] };
-            }),
+            kind: "numbered",
+            items: rates.map((rate, index) => ({
+              number: `${number}.${index + 1}`,
+              runs: [t(stripListMarker(rate))],
+            })),
           },
         ];
       }
@@ -654,7 +711,12 @@ function contractBlocks(data: AmcComputedData): Block[] {
     their heading with them.
   */
   const body: Block[] = [];
-  /* Switched off in the proposal, so they take their heading with them. */
+  /*
+    Kept as a backstop, not as the decision: `drawsNothing` above has
+    already left these out of the numbering, so one reaching here empty
+    means the two disagree. It is dropped rather than printed as a bare
+    heading, and the number it took is the one gap this cannot catch.
+  */
   const SILENT_WHEN_EMPTY = new Set(["priceListIntro", "handymanRates", "signatures"]);
   /*
     Clauses that run on from the one above rather than announcing

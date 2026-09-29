@@ -241,7 +241,7 @@ export default function ClientsAdmin({
         <PageHeading
           eyebrow="Master data"
           title="Clients"
-          description="Everyone jobs and quotations are raised for."
+          description="The people and companies jobs and quotations are raised for."
         />
         <ErrorState
           title="Could not load clients"
@@ -258,7 +258,7 @@ export default function ClientsAdmin({
         <PageHeading
           eyebrow="Master data"
           title="Clients"
-          description="Everyone jobs and quotations are raised for. Correct a phone number or an email here and every future document picks it up."
+          description="The people and companies jobs and quotations are raised for. Correct a phone number or an email here and every future document picks it up."
           actions={
             canCreate ? (
               <Button

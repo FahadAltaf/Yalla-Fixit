@@ -45,7 +45,7 @@ export function InspectorPerformance() {
     <div ref={anchor}>
       <SectionShell
         title="Inspector performance"
-        description="Workload per inspector. Snag counts are deliberately absent because they measure the building, not the person."
+        description="Workload per inspector. Snag count is not shown: it measures the building, not the inspector."
         icon={<Users />}
         muted
         loading={!visible || loading}

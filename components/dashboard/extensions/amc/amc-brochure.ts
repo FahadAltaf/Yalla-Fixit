@@ -79,7 +79,12 @@ export type AmcBrochure = {
   annualFee: number;
   monthlyFee: number;
   paymentTerms: string;
-  services: { label: string; detail: string }[];
+  /*
+    What this client's plan covers, a row each. Units and frequency stay
+    apart rather than joined into one line, because the page prints them
+    as their own columns -- the contract's scope table, without a price.
+  */
+  services: { label: string; units: number; frequency: string }[];
 };
 
 const lines = (text: string) =>
@@ -154,9 +159,8 @@ export function buildAmcBrochure(data: AmcComputedData): AmcBrochure {
     paymentTerms: formatPaymentTermsLabel(formData.paymentTerms),
     services: buildProposalServiceRows(formData, frequencyRows, data.settings.services).map((row) => ({
       label: row.service,
-      detail: [row.frequency, row.units > 1 ? `${row.units} units` : null]
-        .filter(Boolean)
-        .join(" · "),
+      units: row.units,
+      frequency: row.frequency,
     })),
   };
 }

@@ -215,7 +215,7 @@ export function PublicQuotation({ token }: { token: string }) {
     return (
       <StatusMessageCard
         title="Quotation approved"
-        description="Thank you — your approval has been recorded and our team will be in touch to schedule your inspection."
+        description="Thank you. Your approval has been recorded, and our team will be in touch to schedule your inspection."
         icon={<CheckCircle2 size={32} className="text-green-600" />}
         iconBg="bg-green-50"
       />

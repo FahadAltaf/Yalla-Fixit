@@ -1878,7 +1878,7 @@ function PropertyStep({
       <FormSection
         icon={Building2}
         title="Property details"
-        description="The unit being inspected. Built up area sets the price."
+        description="The unit being inspected. Built-up area sets the price."
       >
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           <Field label="Unit reference" required error={errors.unit_label}>
@@ -1946,7 +1946,7 @@ function PropertyStep({
           ) : null}
 
           <Field
-            label="Built up area (sq ft)"
+            label="Built-up area (sq ft)"
             required
             hint="The price is based on this."
             error={errors.built_up_area}

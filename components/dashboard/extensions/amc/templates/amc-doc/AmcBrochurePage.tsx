@@ -59,6 +59,23 @@ const C = {
   white: "#FFFFFF",
 } as const;
 
+/* The covered-scope table's cells: its head, then its rows. */
+const headCell = {
+  padding: "7px 10px",
+  fontSize: "10px",
+  fontWeight: 700,
+  letterSpacing: "0.02em",
+  textAlign: "center",
+  verticalAlign: "middle",
+} as const;
+
+const bodyCell = {
+  padding: "7px 10px",
+  textAlign: "center",
+  verticalAlign: "middle",
+  borderBottom: `1px solid ${C.line}`,
+} as const;
+
 const W = AMC_PAGE.width;
 /* One content width for every section: the template's 110-unit margin. */
 const M = 48;
@@ -385,32 +402,58 @@ export function AmcBrochurePage({ brochure, pdf = false }: { brochure: AmcBrochu
           {copy.servicesTitle ? (
             <div style={{ fontSize: "20px", fontWeight: 700, lineHeight: "26px", color: C.red }}>{copy.servicesTitle}</div>
           ) : null}
+          {/*
+            What the plan covers, as a table rather than a grid of ticks.
+
+            It read as three columns of service names with "2 per year ·
+            5 units" underneath in grey, which buried the two things a
+            client checks. They are columns now, headed like the scope
+            table in the contract so the proposal and the contract the
+            client signs afterwards show the same thing the same way.
+
+            Every row here is a service that was included -- the excluded
+            ones are never built -- so the tick is a confirmation, not a
+            comparison: this is covered, and the price is the one figure
+            quoted above.
+          */}
           {brochure.services.length ? (
-            <div
+            <table
               style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(3, 1fr)",
-                columnGap: "16px",
-                rowGap: "16px",
+                width: "100%",
+                borderCollapse: "collapse",
                 marginTop: px(20 + d(20) - d(12)),
+                fontSize: "12px",
+                lineHeight: "16px",
               }}
             >
-              {brochure.services.map((service) => (
-                <div key={service.label} style={{ display: "flex", alignItems: "flex-start", gap: "8px" }}>
-                  <img
-                    src={iconTick.src}
-                    alt=""
-                    style={{ height: "11px", width: "auto", display: "block", flexShrink: 0, marginTop: px(3 + d(12) - 1) }}
-                  />
-                  <div>
-                    <div style={{ fontSize: "12px", lineHeight: "16px" }}>{service.label}</div>
-                    {service.detail ? (
-                      <div style={{ fontSize: "10px", lineHeight: "14px", color: C.soft }}>{service.detail}</div>
-                    ) : null}
-                  </div>
-                </div>
-              ))}
-            </div>
+              <thead>
+                <tr style={{ backgroundColor: C.red, color: C.white }}>
+                  <th style={{ ...headCell, textAlign: "left" }}>SCOPE OF MAINTENANCE WORKS</th>
+                  <th style={{ ...headCell, width: "14%" }}>UNITS</th>
+                  <th style={{ ...headCell, width: "26%" }}>FREQUENCY</th>
+                  <th style={{ ...headCell, width: "16%" }}>COVERED</th>
+                </tr>
+              </thead>
+              <tbody>
+                {brochure.services.map((service, index) => (
+                  <tr
+                    key={service.label}
+                    style={index % 2 === 1 ? { backgroundColor: C.band } : undefined}
+                  >
+                    <td style={{ ...bodyCell, textAlign: "left" }}>{service.label}</td>
+                    <td style={bodyCell}>{service.units}</td>
+                    <td style={bodyCell}>{service.frequency}</td>
+                    <td style={bodyCell}>
+                      <img
+                        src={iconTick.src}
+                        alt="Covered"
+                        style={{ height: "11px", width: "auto", display: "inline-block" }}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           ) : (
             <div style={{ fontSize: "12px", marginTop: "16px" }}>No services selected.</div>
           )}

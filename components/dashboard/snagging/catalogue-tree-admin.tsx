@@ -241,11 +241,24 @@ export default function CatalogueTreeAdmin() {
     with its actions on the right, then the table in a card with the
     house toolbar.
   */
+  /*
+    What the heading counts.
+
+    `total` rather than the rows on screen: the table reads a page of
+    defects now, so counting what is rendered would announce a catalogue
+    of ten. `total` follows the filters, so it says "matching" once one is
+    set rather than presenting a search result as the whole catalogue.
+    Categories still arrive complete, so they are counted as they are.
+  */
+  const narrowed =
+    Boolean(debouncedSearch.trim()) || category !== "all" || subcategory !== "all";
+  const defectCount = `${total.toLocaleString()} ${narrowed ? "matching " : ""}defects`;
+
   const heading = (
     <PageHeading
       eyebrow="Master data"
       title="Snag catalogue"
-      description={`Category, then sub-category, then defect. ${defects.length.toLocaleString()} defects across ${categories.length} categories.`}
+      description={`Category, then sub-category, then defect. ${defectCount} across ${categories.length} categories.`}
       actions={
         canCreate ? (
           <div className="flex flex-wrap gap-2">

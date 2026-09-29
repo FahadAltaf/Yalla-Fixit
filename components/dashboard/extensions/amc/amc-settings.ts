@@ -431,12 +431,12 @@ export function getAmcSettingsDefaults(): AmcSettings {
       ),
       excludedOffer: joinLines(CLAUSE_5_EXCLUDED.footerParagraphs),
       priceListIntro: joinLines(
-        CLAUSE_6_2_INTRO[0].replace(/^6\.2\s*/, "").replace(/\.$/, ""),
+        CLAUSE_6_2_INTRO[0].replace(/\.$/, ""),
         CLAUSE_6_2_INTRO.slice(1),
       ),
       handymanRates: joinLines(
-        CLAUSE_6_3_HANDYMAN.title.replace(/^6\.3\s*/, ""),
-        CLAUSE_6_3_HANDYMAN.rates.map((rate) => `${rate.label} ${rate.text}`),
+        CLAUSE_6_3_HANDYMAN.title,
+        CLAUSE_6_3_HANDYMAN.rates.map((rate) => rate.text),
       ),
       generalTerms: joinLines(CLAUSE_7_TERMS),
       bankDetails: joinLines(BANK_DETAILS.map((row) => `${row.label}: ${row.value}`)),

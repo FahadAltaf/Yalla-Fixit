@@ -517,7 +517,7 @@ export function ExtensionsPageClient() {
             {!appointment && !searchError && !isSearching && (
               <EmptyState
                 title="Search for an appointment"
-                description="Enter the name of the appointment you are looking for and click search."
+                description="Enter the name of the appointment you are looking for and click Search."
                 icon={<Search className="size-5" />}
               />
             )}
