@@ -84,9 +84,9 @@ export function SnagIndex({
 }) {
   const tone =
     severity === "high"
-      ? "bg-danger text-white"
+      ? "bg-danger text-primary-foreground"
       : severity === "medium"
-        ? "bg-warning text-white"
+        ? "bg-warning text-primary-foreground"
         : "bg-ink/25 text-ink";
 
   return (
@@ -268,9 +268,9 @@ export function AccessStateBadge({ state }: { state: SnaggingAreaAccessState }) 
 export function AccessIndex({ state }: { state: SnaggingAreaAccessState }) {
   const tone =
     state === "not_accessible"
-      ? "bg-danger text-white"
+      ? "bg-danger text-primary-foreground"
       : state === "limited_access"
-        ? "bg-warning text-white"
+        ? "bg-warning text-primary-foreground"
         : "bg-ink/25 text-ink";
 
   return (
@@ -293,7 +293,7 @@ export function AccessIndex({ state }: { state: SnaggingAreaAccessState }) {
 export function CompletedIndex() {
   return (
     <span
-      className="bg-success inline-flex size-7 shrink-0 items-center justify-center rounded-full text-white"
+      className="bg-success text-primary-foreground inline-flex size-7 shrink-0 items-center justify-center rounded-full"
       aria-label="Completed"
     >
       <Check className="size-3.5" aria-hidden />

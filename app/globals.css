@@ -14,19 +14,24 @@
   --font-mono: var(--font-geist-mono);
   /* Kaizen palette exposed as Tailwind utilities (bg-brand,
      text-ink-soft, border-hairline) for the cases where a component
-     needs the source colour rather than its shadcn role. */
-  --color-brand: var(--kz-brand);
-  --color-brand-dark: var(--kz-brand-dark);
-  --color-brand-50: var(--kz-brand-50);
-  --color-brand-100: var(--kz-brand-100);
-  --color-brand-200: var(--kz-brand-200);
-  --color-ink: var(--kz-ink);
-  --color-ink-soft: var(--kz-ink-soft);
-  --color-mist: var(--kz-mist);
-  --color-mist-soft: var(--kz-mist-soft);
-  --color-success: var(--kz-success);
-  --color-warning: var(--kz-warning);
-  --color-danger: var(--kz-danger);
+     needs the source colour rather than its shadcn role.
+     They point at the themed --ui-* layer (declared in :root and .dark
+     below), not at --kz-* directly: `@theme inline` bakes the variable
+     name into every utility, so pointing at the fixed source tokens left
+     text-warning, bg-mist, text-ink-soft and friends on their light
+     values in dark mode (orange on brown, charcoal on near-black). */
+  --color-brand: var(--ui-brand);
+  --color-brand-dark: var(--ui-brand-dark);
+  --color-brand-50: var(--ui-brand-50);
+  --color-brand-100: var(--ui-brand-100);
+  --color-brand-200: var(--ui-brand-200);
+  --color-ink: var(--ui-ink);
+  --color-ink-soft: var(--ui-ink-soft);
+  --color-mist: var(--ui-mist);
+  --color-mist-soft: var(--ui-mist-soft);
+  --color-success: var(--ui-success);
+  --color-warning: var(--ui-warning);
+  --color-danger: var(--ui-danger);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -115,6 +120,21 @@
   --kz-tracking-tight: -0.02em;
   --kz-tracking-eyebrow: 0.14em;
 
+  /* ---- Themed palette utilities (bg-brand, text-warning, ...) ----
+     Light mode is the source palette unchanged; .dark re-points these. */
+  --ui-brand: var(--kz-brand);
+  --ui-brand-dark: var(--kz-brand-dark);
+  --ui-brand-50: var(--kz-brand-50);
+  --ui-brand-100: var(--kz-brand-100);
+  --ui-brand-200: var(--kz-brand-200);
+  --ui-ink: var(--kz-ink);
+  --ui-ink-soft: var(--kz-ink-soft);
+  --ui-mist: var(--kz-mist);
+  --ui-mist-soft: var(--kz-mist-soft);
+  --ui-success: var(--kz-success);
+  --ui-warning: var(--kz-warning);
+  --ui-danger: var(--kz-danger);
+
   /* ---- Mapped onto shadcn ---- */
   --background: #ffffff;
   --foreground: var(--kz-ink);
@@ -178,6 +198,10 @@
    two stay recognisably the same brand. Brand red at full strength is
    too dark to read on ink, so accents step up to brand-200. */
 .dark {
+  /* Native controls (date/time pickers, number spinners, select popups,
+     autofill, scrollbars) follow the theme instead of staying light. */
+  color-scheme: dark;
+
   --background: var(--kz-ink);
   --foreground: #ffffff;
   --card: #1d2023;
@@ -196,7 +220,30 @@
   --accent: rgba(255, 255, 255, 0.08);
   --accent-foreground: var(--kz-brand-200);
 
-  --destructive: #ef6b6b;
+  /* One step lighter than it was (#ef6b6b) so the tinted destructive
+     badge (text on a 20% wash of itself) clears 4.5:1 on a card. */
+  --destructive: #fa8a8a;
+
+  /* Palette utilities, re-pointed for dark.
+     Status text sits on a 10-20% wash of its own colour, so each tone is
+     the light 300/400 step: 4.9:1 or better against its own 20% wash on
+     a card (success 5.6, warning 6.2, danger 4.9, brand 4.9) and 5.9 to
+     7.9 against the usual 10%. Solid fills of these tones take dark text
+     (text-primary-foreground), not white. Ink flips to the foreground and
+     mist to the raised neutral, so a neutral chip (bg-mist
+     text-ink-soft) is grey-on-grey at 6.3:1 rather than a white pill. */
+  --ui-brand: #e69499;
+  --ui-brand-dark: #e0868b; /* hover lifts on dark rather than sinking */
+  --ui-brand-50: rgba(230, 148, 153, 0.12);
+  --ui-brand-100: rgba(230, 148, 153, 0.2);
+  --ui-brand-200: rgba(230, 148, 153, 0.32);
+  --ui-ink: #ffffff;
+  --ui-ink-soft: #b9bcbf;
+  --ui-mist: #33373b;
+  --ui-mist-soft: #262a2e;
+  --ui-success: #34d399;
+  --ui-warning: #fbbf24;
+  --ui-danger: #fa8a8a;
 
   --border: rgba(255, 255, 255, 0.1);
   --input: rgba(255, 255, 255, 0.15);
@@ -206,7 +253,8 @@
   --chart-2: var(--kz-brand-200);
   --chart-3: #f0d3d5;
   --chart-4: #8b9094;
-  --chart-5: #5c6165;
+  /* #5c6165 was 2.6:1 on a card, under the 3:1 a bar or arc needs. */
+  --chart-5: #70757a;
 
   --sidebar: #1d2023;
   --sidebar-foreground: #ffffff;
@@ -216,7 +264,44 @@
   --sidebar-accent-foreground: var(--kz-brand-200);
   --sidebar-border: rgba(255, 255, 255, 0.1);
   --sidebar-ring: #d4696f;
+
+  /* react-international-phone (components/ui/phone-input) ships white
+     and whitesmoke defaults: a white country list and a whitesmoke
+     disabled field in dark mode. Point them at the theme instead. */
+  --react-international-phone-background-color: var(--popover);
+  --react-international-phone-text-color: var(--foreground);
+  --react-international-phone-border-color: var(--input);
+  --react-international-phone-country-selector-background-color-hover: var(--accent);
+  --react-international-phone-country-selector-arrow-color: var(--muted-foreground);
+  --react-international-phone-selected-dropdown-item-background-color: var(--accent);
+  --react-international-phone-dropdown-item-dial-code-color: var(--muted-foreground);
+  --react-international-phone-dropdown-preferred-list-divider-color: var(--border);
+  --react-international-phone-dropdown-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --react-international-phone-disabled-background-color: rgba(255, 255, 255, 0.06);
+  --react-international-phone-disabled-text-color: var(--muted-foreground);
+  --react-international-phone-disabled-country-selector-arrow-color: var(--muted-foreground);
 }
+/* Pins, zone outlines and labels drawn over a photo or a floor plan sit
+   on the image, not on the themed surface: a plan is white paper in both
+   themes, and the pale dark-mode tones (and dark text on a filled pin)
+   would wash out on it. Wrap such an overlay in this class and it keeps
+   the light palette whatever the theme. */
+.kz-tones-light {
+  --ui-brand: var(--kz-brand);
+  --ui-brand-dark: var(--kz-brand-dark);
+  --ui-brand-50: var(--kz-brand-50);
+  --ui-brand-100: var(--kz-brand-100);
+  --ui-brand-200: var(--kz-brand-200);
+  --ui-ink: var(--kz-ink);
+  --ui-ink-soft: var(--kz-ink-soft);
+  --ui-mist: var(--kz-mist);
+  --ui-mist-soft: var(--kz-mist-soft);
+  --ui-success: var(--kz-success);
+  --ui-warning: var(--kz-warning);
+  --ui-danger: var(--kz-danger);
+  --primary-foreground: #ffffff;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -316,7 +401,7 @@
   .kz-card-interactive:hover {
     transform: translateY(-2px);
     box-shadow: var(--kz-shadow-md);
-    border-color: color-mix(in srgb, var(--kz-brand) 30%, transparent);
+    border-color: color-mix(in srgb, var(--ui-brand) 30%, transparent);
   }
 
   /* The one near-black band per page. */
@@ -433,4 +518,19 @@ html {
 
 .recharts-legend-wrapper {
   width: 100% !important;
+}
+
+/* Browser autofill paints its own light-yellow/white fill and dark text
+   over an input, which in dark mode left a white box with the value in
+   near-black. An inset shadow is the only way to repaint it (the UA
+   background cannot be overridden), and the long transition stops the
+   fill flashing back in. */
+.dark input:-webkit-autofill,
+.dark textarea:-webkit-autofill,
+.dark select:-webkit-autofill {
+  -webkit-text-fill-color: var(--foreground);
+  caret-color: var(--foreground);
+  -webkit-box-shadow: 0 0 0 1000px var(--muted) inset;
+  box-shadow: 0 0 0 1000px var(--muted) inset;
+  transition: background-color 9999s ease-out 0s;
 }

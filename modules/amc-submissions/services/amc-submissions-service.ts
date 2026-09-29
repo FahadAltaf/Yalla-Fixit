@@ -66,11 +66,25 @@ export const amcSubmissionsService = {
       { method: "POST", body: input as unknown as Record<string, unknown> },
     ),
 
-  listSubmissions: async (): Promise<AmcSubmissionListResponse> => {
+  /* One page of the proposals list, filtered and searched on the server. */
+  listSubmissions: async (filters: {
+    status?: string;
+    scope?: "all" | "mine";
+    search?: string;
+    page: number;
+    pageSize: number;
+  }): Promise<AmcSubmissionListResponse> => {
     return executeRESTBackend<AmcSubmissionListResponse>(
       "/api/amc-submissions",
       {
         method: "GET",
+        params: {
+          ...(filters.status && filters.status !== "all" ? { status: filters.status } : {}),
+          ...(filters.scope === "mine" ? { scope: "mine" } : {}),
+          ...(filters.search ? { search: filters.search } : {}),
+          page: String(filters.page),
+          pageSize: String(filters.pageSize),
+        },
       },
     );
   },

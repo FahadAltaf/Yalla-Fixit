@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   CalendarIcon,
   CheckCircle2,
@@ -16,6 +16,7 @@ import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
+import { Card } from "@/components/ui/card";
 import {
   type ChartConfig,
   ChartContainer,
@@ -30,6 +31,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Progress } from "@/components/ui/progress";
+import { Skeleton } from "@/components/ui/skeleton";
 import { DataTable } from "@/components/data-table";
 import {
   getSnaggingDeveloperColumns,
@@ -47,7 +49,7 @@ import {
 } from "@/lib/snagging/export-table";
 import { cn } from "@/lib/utils";
 import { CHART_COLOR, PIPELINE_COLOR } from "@/lib/snagging/chart-palette";
-import { snaggingService } from "@/modules/snagging";
+import { TASK_STATUS_LABELS } from "@/lib/snagging/status-labels";
 import {
   ActionType,
   ResourceType,
@@ -57,20 +59,23 @@ import {
 
 import { SnagsByCategory } from "./overview/snags-by-category";
 import {
+  ChartSkeleton,
+  InlineError,
+  SectionShell,
+  TableSkeleton,
+} from "./overview/section-shell";
+import { useSection, type Section } from "./overview/use-section";
+import {
   AnalyticsDrilldown,
   type DrilldownRequest,
 } from "./analytics-drilldown";
 import {
-  DataState,
   PageHeading,
   PillTabs,
-  SectionCard,
   StatCard,
   StatCardGrid,
-  TaskStatusBadge,
   timeAgo,
 } from "./shared";
-import { AnalyticsBodySkeleton } from "@/components/dashboard/snagging/route-skeletons";
 
 /** Today as YYYY-MM-DD on the reader's own calendar. */
 function todayIso(): string {
@@ -172,6 +177,43 @@ const completedChartConfig = {
   count: { label: "Completed", color: CHART_COLOR.neutral },
 } satisfies ChartConfig;
 
+/*
+  What each `?section=` of /api/snagging/analytics answers with. The
+  shapes are the whole payload's, cut per card, so the two can never
+  drift apart. The overdue count travels with the queue: it is the
+  queue's oldest band, and both are live rather than dated.
+*/
+type TimeMetrics = Omit<SnaggingAnalytics["timeMetrics"], "overdueApprovals">;
+type ReviewQueue = SnaggingAnalytics["reviewQueue"] & {
+  overdueApprovals: number;
+};
+
+const ANALYTICS_URL = "/api/snagging/analytics";
+
+/**
+ * One card's request. The dates are left off a live section on
+ * purpose: its URL then stays the same whatever range is picked, so
+ * changing the dates does not refetch a queue they do not affect.
+ */
+function sectionUrl(
+  section: string,
+  range?: { from: string; to: string },
+): string {
+  const params = new URLSearchParams({ section, ...range });
+  return `${ANALYTICS_URL}?${params.toString()}`;
+}
+
+/**
+ * A section's data only once it is current.
+ *
+ * `useSection` keeps the last response while a new one is in flight, so
+ * without this a card would briefly describe the previous date range in
+ * its header while its body showed a skeleton for the new one.
+ */
+function settled<T>(section: Section<T>): T | null {
+  return section.loading || section.error ? null : section.data;
+}
+
 /**
  * Operations analytics (FR-10.01 to FR-10.06).
  *
@@ -185,14 +227,17 @@ const completedChartConfig = {
  * against an inspector (FR-10.04), because snag volume measures the
  * building somebody was sent to, not how well they walked it.
  *
+ * Every card loads on its own, the way the Overview does. The page used
+ * to wait on one request for everything, so the quick figures sat behind
+ * the developer breakdown and one failing query put the whole page into
+ * an error. Now each card has its own skeleton, fills in when its own
+ * figures arrive, and offers its own retry.
+ *
  * Every figure opens the records behind it (FR-10.06), and every list
  * exports as CSV or Excel.
  */
 export default function SnaggingAnalyticsDashboard() {
   const { userProfile } = useAuth();
-  const [data, setData] = useState<SnaggingAnalytics | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   // Local calendar dates: toISOString() gave yesterday's date to anyone
   // east of UTC before their clock passed UTC midnight.
   const [from, setFrom] = useState(() => {
@@ -218,30 +263,47 @@ export default function SnaggingAnalyticsDashboard() {
     ActionType.EXPORT,
   );
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    // A new date range is a different list; staying on page 4 of the old
-    // one would land on an empty table.
+  /*
+    One request per card. The dates ride in each URL, and `useSection`
+    is keyed by URL, so a new range refetches every dated card and each
+    range is cached separately. The chart's grain is deliberately not in
+    the URL: every grain is already in the completed payload, so
+    switching between day, week and month must not refetch.
+  */
+  const range = { from, to };
+  const time = useSection<TimeMetrics>(sectionUrl("time", range));
+  // A live queue: no dates (see its copy below).
+  const queue = useSection<ReviewQueue>(sectionUrl("queue"));
+  const status = useSection<SnaggingAnalytics["byStatus"]>(
+    sectionUrl("status", range),
+  );
+  const completed = useSection<SnaggingAnalytics["completed"]>(
+    sectionUrl("completed", range),
+  );
+  const developers = useSection<SnaggingAnalytics["byDeveloper"]>(
+    sectionUrl("developers", range),
+  );
+  const inspectors = useSection<SnaggingAnalytics["byInspector"]>(
+    sectionUrl("inspectors", range),
+  );
+
+  const timeData = settled(time);
+  const queueData = settled(queue);
+  const statusRows = settled(status);
+  const completedData = settled(completed);
+
+  // A new date range is a different list; staying on page 4 of the old
+  // one would land on an empty table.
+  function changeFrom(value: string) {
+    setFrom(value);
     setDeveloperPage(0);
     setInspectorPage(0);
-    try {
-      setData(await snaggingService.getAnalytics({ from, to }));
-    } catch (err) {
-      // A toast here left the page on a permanent skeleton, which reads
-      // as "still working" rather than "the request failed".
-      setError(err instanceof Error ? err.message : "Could not load analytics");
-    } finally {
-      setLoading(false);
-    }
-    // Deliberately not keyed on the chart's grain: every grain is already
-    // in the payload, so switching between day, week and month must not
-    // refetch and blank the page.
-  }, [from, to]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  }
+  function changeTo(value: string) {
+    setTo(value);
+    setDeveloperPage(0);
+    setInspectorPage(0);
+  }
 
   /** Opens the records behind a figure, in the dates currently selected. */
   const open = useCallback(
@@ -251,21 +313,22 @@ export default function SnaggingAnalyticsDashboard() {
     [from, to, granularity],
   );
 
-  const developerRows = useMemo(() => data?.byDeveloper ?? [], [data]);
-  const inspectorRows = useMemo(() => data?.byInspector ?? [], [data]);
+  const developerRows = settled(developers) ?? [];
+  const inspectorRows = settled(inspectors) ?? [];
 
-  // Both breakdowns arrive whole with the analytics payload, so the page
-  // is sliced here rather than round-tripping — the same shape the
+  // Both breakdowns arrive whole with their section, so the page is
+  // sliced here rather than round-tripping — the same shape the
   // catalogue and roles tables use against the shared DataTable.
-  const developerPageRows = useMemo(() => {
-    const start = developerPage * developerPageSize;
-    return developerRows.slice(start, start + developerPageSize);
-  }, [developerRows, developerPage, developerPageSize]);
-
-  const inspectorPageRows = useMemo(() => {
-    const start = inspectorPage * inspectorPageSize;
-    return inspectorRows.slice(start, start + inspectorPageSize);
-  }, [inspectorRows, inspectorPage, inspectorPageSize]);
+  const developerStart = developerPage * developerPageSize;
+  const developerPageRows = developerRows.slice(
+    developerStart,
+    developerStart + developerPageSize,
+  );
+  const inspectorStart = inspectorPage * inspectorPageSize;
+  const inspectorPageRows = inspectorRows.slice(
+    inspectorStart,
+    inspectorStart + inspectorPageSize,
+  );
 
   function exportDevelopers(format: ExportFormat) {
     void exportTable({
@@ -307,10 +370,14 @@ export default function SnaggingAnalyticsDashboard() {
     });
   }
 
-  const statusTotal = (data?.byStatus ?? []).reduce(
+  const statusTotal = (statusRows ?? []).reduce(
     (sum, row) => sum + row.count,
     0,
   );
+
+  // The dialog keeps the figures it has while its own refresh is in
+  // flight, rather than blanking behind the reader.
+  const dialogDevelopers = developers.data ?? [];
 
   return (
     <div className="flex flex-col gap-6">
@@ -321,61 +388,61 @@ export default function SnaggingAnalyticsDashboard() {
         actions={
           <div className="flex flex-wrap items-end gap-2">
             {/* From runs up to To; To runs from From up to today. */}
-            <DateField label="From" value={from} onChange={setFrom} max={to} />
-            <DateField label="To" value={to} onChange={setTo} min={from} max={todayIso()} />
+            <DateField label="From" value={from} onChange={changeFrom} max={to} />
+            <DateField label="To" value={to} onChange={changeTo} min={from} max={todayIso()} />
           </div>
         }
       />
 
-      <DataState
-        loading={loading}
-        error={error}
-        onRetry={() => void load()}
-        retrying={loading}
-        errorTitle="Could not load analytics"
-        skeleton={
-          // The whole page, not just the top row: the charts and tables
-          // used to pop in under a settled header and shift the layout.
-          <AnalyticsBodySkeleton />
-        }
-      >
-        {data ? (
-          <div className="flex flex-col gap-6">
-            {/* FR-10.02 — the five time metrics. */}
-            <StatCardGrid columns={5}>
+      <div className="flex flex-col gap-6">
+        {/*
+          FR-10.02 — the five time metrics, as two sections in one row.
+          The four period figures share one request; the overdue count is
+          live and comes with the review queue, so a slow or failed one
+          leaves the other standing.
+        */}
+        <StatCardGrid columns={5}>
+          {time.error ? (
+            <div className="@xl/main:col-span-2 @5xl/main:col-span-4">
+              <InlineError message={time.error} onRetry={time.reload} />
+            </div>
+          ) : !timeData ? (
+            Array.from({ length: 4 }).map((_, index) => (
+              <StatTileSkeleton key={index} />
+            ))
+          ) : (
+            <>
               <StatCard
                 label="Average time on site"
-                value={formatMinutes(data.timeMetrics.avgMinutesOnSite)}
+                value={formatMinutes(timeData.avgMinutesOnSite)}
                 headline="Arrival to submission"
-                caption={sampleCaption(data.timeMetrics.onSiteSample, "walk")}
+                caption={sampleCaption(timeData.onSiteSample, "walk")}
                 onSelect={() => open({ metric: "time_on_site" })}
               />
               <StatCard
                 label="Average submit to approval"
-                value={formatMinutes(
-                  data.timeMetrics.avgSubmitToApprovalMinutes,
-                )}
+                value={formatMinutes(timeData.avgSubmitToApprovalMinutes)}
                 headline="How long the office took"
                 caption={sampleCaption(
-                  data.timeMetrics.submitToApprovalSample,
+                  timeData.submitToApprovalSample,
                   "approval",
                 )}
                 onSelect={() => open({ metric: "submit_to_approval" })}
               />
               <StatCard
                 label="First-time approval"
-                value={percent(data.timeMetrics.firstTimeApprovalRate)}
+                value={percent(timeData.firstTimeApprovalRate)}
                 headline={
-                  data.timeMetrics.firstTimeApprovalRate === null
+                  timeData.firstTimeApprovalRate === null
                     ? "Nothing approved yet"
                     : "Approved without being sent back"
                 }
                 caption={sampleCaption(
-                  data.timeMetrics.firstTimeApprovalSample,
+                  timeData.firstTimeApprovalSample,
                   "approval",
                 )}
                 tone={
-                  (data.timeMetrics.firstTimeApprovalRate ?? 0) >= 90
+                  (timeData.firstTimeApprovalRate ?? 0) >= 90
                     ? "good"
                     : "neutral"
                 }
@@ -385,18 +452,15 @@ export default function SnaggingAnalyticsDashboard() {
               />
               <StatCard
                 label="Delivered within 24 hours"
-                value={percent(data.timeMetrics.deliveredWithin24hRate)}
+                value={percent(timeData.deliveredWithin24hRate)}
                 headline={
-                  data.timeMetrics.deliveredWithin24hRate === null
+                  timeData.deliveredWithin24hRate === null
                     ? "Nothing delivered yet"
                     : "Approval to the client"
                 }
-                caption={sampleCaption(
-                  data.timeMetrics.deliveredSample,
-                  "report",
-                )}
+                caption={sampleCaption(timeData.deliveredSample, "report")}
                 tone={
-                  (data.timeMetrics.deliveredWithin24hRate ?? 0) >= 95
+                  (timeData.deliveredWithin24hRate ?? 0) >= 95
                     ? "good"
                     : "neutral"
                 }
@@ -404,303 +468,331 @@ export default function SnaggingAnalyticsDashboard() {
                   open({ metric: "delivered_sla", value: "within" })
                 }
               />
-              <StatCard
-                label="Approvals overdue"
-                value={data.timeMetrics.overdueApprovals}
-                headline="Past the 48-hour escalation point"
-                caption="Live figures, not filtered by the dates above"
-                tone={data.timeMetrics.overdueApprovals > 0 ? "bad" : "good"}
-                onSelect={() => open({ metric: "overdue_approvals" })}
-              />
-            </StatCardGrid>
+            </>
+          )}
+          {queue.error ? (
+            <InlineError message={queue.error} onRetry={queue.reload} />
+          ) : !queueData ? (
+            <StatTileSkeleton />
+          ) : (
+            <StatCard
+              label="Approvals overdue"
+              value={queueData.overdueApprovals}
+              headline="Past the 48-hour escalation point"
+              caption="Live figures, not filtered by the dates above"
+              tone={queueData.overdueApprovals > 0 ? "bad" : "good"}
+              onSelect={() => open({ metric: "overdue_approvals" })}
+            />
+          )}
+        </StatCardGrid>
 
-            <div className="grid gap-4 lg:grid-cols-2">
-              {/* FR-10.01 — jobs by status. */}
-              <SectionCard
-                title="Jobs by status"
+        <div className="grid gap-4 lg:grid-cols-2">
+          {/* FR-10.01 — jobs by status. */}
+          <SectionShell
+            title="Jobs by status"
+            icon={<Inbox />}
+            description={
+              statusRows
+                ? `${statusTotal} raised in this period`
+                : "Jobs raised in this period"
+            }
+            loading={!statusRows}
+            error={status.error}
+            onRetry={status.reload}
+            isEmpty={statusRows?.length === 0}
+            empty={
+              <EmptyState
                 icon={<Inbox />}
-                description={`${statusTotal} raised in this period`}
-                bodyClassName="px-5 pb-5"
-              >
-                {data.byStatus.length === 0 ? (
-                  <EmptyState
-                    icon={<Inbox />}
-                    title="No jobs raised in this period"
-                    description="Widen the dates to look further back."
-                    className="py-8"
-                  />
-                ) : (
-                  <div className="space-y-3">
-                    {data.byStatus.map((row) => (
-                      <button
-                        key={row.status}
-                        type="button"
-                        onClick={() =>
-                          open({ metric: "status", value: row.status })
-                        }
-                        className="focus-visible:ring-ring hover:bg-muted/50 -mx-2 flex w-[calc(100%+1rem)] items-center gap-3 rounded-md px-2 py-1 text-left focus-visible:ring-2 focus-visible:outline-none"
-                      >
-                        <span className="w-28 shrink-0">
-                          <TaskStatusBadge status={row.status} />
-                        </span>
-                        {/* Same stage colours as the Overview pipeline —
-                            one job status should not look like two
-                            different things on two pages. */}
-                        <Progress
-                          value={
-                            statusTotal ? (row.count / statusTotal) * 100 : 0
-                          }
-                          className="flex-1"
-                          indicatorStyle={{
-                            background:
-                              PIPELINE_COLOR[row.status] ?? CHART_COLOR.neutral,
-                          }}
-                        />
-                        <span className="w-10 text-right text-sm tabular-nums">
-                          {row.count}
-                        </span>
-                        {/* <span className="w-20 shrink-0 text-right">
-                          <StatusTrend value={row.trend} />
-                        </span> */}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </SectionCard>
-
-              {/* FR-10.01 — the review queue by submission time. */}
-              <SectionCard
-                title="Waiting on review"
-                icon={<Hourglass />}
-                description={
-                  data.reviewQueue.oldestSubmittedAt
-                    ? `Oldest submitted ${timeAgo(data.reviewQueue.oldestSubmittedAt)}.`
-                    : "Submitted inspections, by how long they have been queued."
-                }
-                action={
-                  <Badge variant="secondary" className="font-medium">
-                    {data.reviewQueue.total} in queue
-                  </Badge>
-                }
-                bodyClassName="px-5 pb-5"
-              >
-                {/*
-                  The three bands stay on screen at zero rather than
-                  giving way to an empty state. They are three short rows
-                  either way, and an empty queue reads perfectly well as
-                  three zeros — where the empty state put a large dashed
-                  panel in a card that is stretched to its neighbour, so
-                  the good news arrived as a hole in the page.
-                */}
-                <div className="space-y-3">
-                  {QUEUE_BANDS.map((band) => {
-                    const count =
-                      data.reviewQueue.buckets.find(
-                        (entry) => entry.bucket === band.bucket,
-                      )?.count ?? 0;
-                    return (
-                      <button
-                        key={band.bucket}
-                        type="button"
-                        disabled={count === 0}
-                        onClick={() =>
-                          open({ metric: "review_queue", value: band.bucket })
-                        }
-                        className="focus-visible:ring-ring hover:bg-muted/50 -mx-2 flex w-[calc(100%+1rem)] items-center gap-3 rounded-md px-2 py-1 text-left focus-visible:ring-2 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-60"
-                      >
-                        <span className="w-36 shrink-0 text-sm">
-                          {band.label}
-                        </span>
-                        <Progress
-                          value={
-                            data.reviewQueue.total
-                              ? (count / data.reviewQueue.total) * 100
-                              : 0
-                          }
-                          className="flex-1"
-                        />
-                        <span
-                          className={cn(
-                            "w-10 text-right text-sm font-medium tabular-nums",
-                            count > 0 && band.tone,
-                          )}
-                        >
-                          {count}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-                <p className="text-muted-foreground mt-4 text-xs">
-                  A live queue, so it ignores the dates above. Time bands are
-                  labelled as well as coloured.
-                </p>
-              </SectionCard>
-            </div>
-
-            {/* FR-10.01 — jobs completed by day, week or month. */}
-            <SectionCard
-              title="Jobs completed"
-              icon={<CheckCircle2 />}
-              description={`${data.completed.total} counted at approval. Click a bar for the jobs in that period.`}
-              action={
-                <PillTabs
-                  tabs={GRANULARITY_TABS}
-                  value={granularity}
-                  onChange={setGranularity}
-                />
-              }
-              bodyClassName="px-5 pb-5"
-            >
-              {data.completed.total === 0 ? (
-                <EmptyState
-                  icon={<Hourglass />}
-                  title="Nothing approved in this period"
-                  description="A job counts as completed when it is approved. Widen the dates, or check the review queue above."
-                  className="py-8"
-                />
-              ) : (
-                <ChartContainer
-                  config={completedChartConfig}
-                  className="h-64 w-full"
+                title="No jobs raised in this period"
+                description="Widen the dates to look further back."
+                className="py-8"
+              />
+            }
+            skeleton={<BarRowsSkeleton rows={5} />}
+          >
+            <div className="space-y-3">
+              {(statusRows ?? []).map((row) => (
+                <button
+                  key={row.status}
+                  type="button"
+                  onClick={() => open({ metric: "status", value: row.status })}
+                  className="focus-visible:ring-ring hover:bg-muted/50 -mx-2 flex w-[calc(100%+1rem)] items-center gap-3 rounded-md px-2 py-1 text-left focus-visible:ring-2 focus-visible:outline-none"
                 >
-                  <BarChart
-                    data={data.completed.series[granularity]}
-                    margin={{ left: -20, right: 8 }}
-                  >
-                    <CartesianGrid vertical={false} />
-                    {/* Wider gap between date ticks: a 30-day range at day
-                        grain was printing a label under every bar and they
-                        overlapped into a grey smear. */}
-                    <XAxis
-                      dataKey="label"
-                      tickLine={false}
-                      axisLine={false}
-                      tickMargin={8}
-                      minTickGap={48}
-                    />
-                    {/* Scaled to the data rather than to a fixed ceiling,
-                        so one completed job does not draw an axis to four. */}
-                    <YAxis
-                      tickLine={false}
-                      axisLine={false}
-                      allowDecimals={false}
-                      domain={[
-                        0,
-                        (dataMax: number) =>
-                          Math.max(1, Math.ceil(dataMax * 1.2)),
-                      ]}
-                      width={40}
-                    />
-                    <ChartTooltip
-                      content={<ChartTooltipContent labelKey="label" />}
-                    />
-                    <Bar
-                      dataKey="count"
-                      fill="var(--color-count)"
-                      radius={[4, 4, 0, 0]}
-                      className="cursor-pointer"
-                      onClick={(entry: { period?: string }) =>
-                        entry.period
-                          ? open({ metric: "completed", value: entry.period })
-                          : undefined
-                      }
-                    />
-                  </BarChart>
-                </ChartContainer>
-              )}
-            </SectionCard>
+                  {/* Plain text, not a status pill: the coloured bar
+                      beside it already carries the stage colour, and a
+                      column of pills made five rows of chrome out of what
+                      is a simple labelled list. */}
+                  <span className="w-28 shrink-0 truncate text-sm">
+                    {TASK_STATUS_LABELS[row.status]}
+                  </span>
+                  {/* Same stage colours as the Overview pipeline —
+                      one job status should not look like two
+                      different things on two pages. */}
+                  <Progress
+                    value={statusTotal ? (row.count / statusTotal) * 100 : 0}
+                    className="flex-1"
+                    indicatorStyle={{
+                      background:
+                        PIPELINE_COLOR[row.status] ?? CHART_COLOR.neutral,
+                    }}
+                  />
+                  <span className="w-10 text-right text-sm tabular-nums">
+                    {row.count}
+                  </span>
+                  {/* <span className="w-20 shrink-0 text-right">
+                    <StatusTrend value={row.trend} />
+                  </span> */}
+                </button>
+              ))}
+            </div>
+          </SectionShell>
 
-            {/* FR-10.03 — developer view. */}
-            <SectionCard
-              title="Developer view"
-              icon={<HardHat />}
-              description="Units inspected, snags per unit, and what those units keep failing on."
-              action={
-                canExport ? (
-                  <ExportMenu
-                    onExport={exportDevelopers}
-                    disabled={developerRows.length === 0}
-                  />
-                ) : null
-              }
+          {/* FR-10.01 — the review queue by submission time. */}
+          <SectionShell
+            title="Waiting on review"
+            icon={<Hourglass />}
+            description={
+              queueData?.oldestSubmittedAt
+                ? `Oldest submitted ${timeAgo(queueData.oldestSubmittedAt)}.`
+                : "Submitted inspections, by how long they have been queued."
+            }
+            action={
+              queueData ? (
+                <Badge variant="secondary" className="font-medium">
+                  {queueData.total} in queue
+                </Badge>
+              ) : null
+            }
+            loading={!queueData}
+            error={queue.error}
+            onRetry={queue.reload}
+            skeleton={<BarRowsSkeleton rows={3} />}
+          >
+            {/*
+              The three bands stay on screen at zero rather than
+              giving way to an empty state. They are three short rows
+              either way, and an empty queue reads perfectly well as
+              three zeros — where the empty state put a large dashed
+              panel in a card that is stretched to its neighbour, so
+              the good news arrived as a hole in the page.
+            */}
+            <div className="space-y-3">
+              {QUEUE_BANDS.map((band) => {
+                const count =
+                  queueData?.buckets.find(
+                    (entry) => entry.bucket === band.bucket,
+                  )?.count ?? 0;
+                const total = queueData?.total ?? 0;
+                return (
+                  <button
+                    key={band.bucket}
+                    type="button"
+                    disabled={count === 0}
+                    onClick={() =>
+                      open({ metric: "review_queue", value: band.bucket })
+                    }
+                    className="focus-visible:ring-ring hover:bg-muted/50 -mx-2 flex w-[calc(100%+1rem)] items-center gap-3 rounded-md px-2 py-1 text-left focus-visible:ring-2 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-60"
+                  >
+                    <span className="w-36 shrink-0 text-sm">{band.label}</span>
+                    <Progress
+                      value={total ? (count / total) * 100 : 0}
+                      className="flex-1"
+                    />
+                    <span
+                      className={cn(
+                        "w-10 text-right text-sm font-medium tabular-nums",
+                        count > 0 && band.tone,
+                      )}
+                    >
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-muted-foreground mt-4 text-xs">
+              A live queue, so it ignores the dates above. Time bands are
+              labelled as well as coloured.
+            </p>
+          </SectionShell>
+        </div>
+
+        {/* FR-10.01 — jobs completed by day, week or month. */}
+        <SectionShell
+          title="Jobs completed"
+          icon={<CheckCircle2 />}
+          description={
+            completedData
+              ? `${completedData.total} counted at approval. Click a bar for the jobs in that period.`
+              : "Counted at approval. Click a bar for the jobs in that period."
+          }
+          action={
+            <PillTabs
+              tabs={GRANULARITY_TABS}
+              value={granularity}
+              onChange={setGranularity}
+            />
+          }
+          loading={!completedData}
+          error={completed.error}
+          onRetry={completed.reload}
+          isEmpty={completedData?.total === 0}
+          empty={
+            <EmptyState
+              icon={<Hourglass />}
+              title="Nothing approved in this period"
+              description="A job counts as completed when it is approved. Widen the dates, or check the review queue above."
+              className="py-8"
+            />
+          }
+          skeleton={<ChartSkeleton bars={14} className="h-64" />}
+        >
+          <ChartContainer config={completedChartConfig} className="h-64 w-full">
+            <BarChart
+              data={completedData?.series[granularity] ?? []}
+              margin={{ left: -20, right: 8 }}
             >
-              <DataTable
-                data={developerPageRows}
-                columns={getSnaggingDeveloperColumns({
-                  onViewDefects: (row) => setDefectsFor(row.developer_name),
-                })}
-                // A breakdown, not a list to search: the heading above
-                // already says what these rows are, so no toolbar.
-                onGlobalFilterChange={() => { }}
-                onPageChange={setDeveloperPage}
-                onPageSizeChange={(size) => {
-                  setDeveloperPageSize(size);
-                  setDeveloperPage(0);
-                }}
-                pageSize={developerPageSize}
-                currentPage={developerPage}
-                loading={loading}
-                rowCount={developerRows.length}
-                type="snagging-analytics-developer"
-                isPagination={true}
-                handleRowClick={(row) =>
-                  open({ metric: "developer", value: row.developer_name })
-                }
-                emptyState={
-                  <EmptyState
-                    icon={<HardHat />}
-                    title="No developer data in this period"
-                    description="Snag rates appear here once inspections in these dates carry a developer on the property record."
-                  />
+              <CartesianGrid vertical={false} />
+              {/* Wider gap between date ticks: a 30-day range at day
+                  grain was printing a label under every bar and they
+                  overlapped into a grey smear. */}
+              <XAxis
+                dataKey="label"
+                tickLine={false}
+                axisLine={false}
+                tickMargin={8}
+                minTickGap={48}
+              />
+              {/* Scaled to the data rather than to a fixed ceiling,
+                  so one completed job does not draw an axis to four. */}
+              <YAxis
+                tickLine={false}
+                axisLine={false}
+                allowDecimals={false}
+                domain={[
+                  0,
+                  (dataMax: number) => Math.max(1, Math.ceil(dataMax * 1.2)),
+                ]}
+                width={40}
+              />
+              <ChartTooltip content={<ChartTooltipContent labelKey="label" />} />
+              <Bar
+                dataKey="count"
+                fill="var(--color-count)"
+                radius={[4, 4, 0, 0]}
+                className="cursor-pointer"
+                onClick={(entry: { period?: string }) =>
+                  entry.period
+                    ? open({ metric: "completed", value: entry.period })
+                    : undefined
                 }
               />
-            </SectionCard>
+            </BarChart>
+          </ChartContainer>
+        </SectionShell>
 
-            {/* FR-10.04 — inspector view. */}
-            <SectionCard
-              title="Inspector view"
-              icon={<UserRound />}
-              description="Inspections carried out and how long each took. Snag count is not shown: it measures the building, not the inspector."
-              action={
-                canExport ? (
-                  <ExportMenu
-                    onExport={exportInspectors}
-                    disabled={inspectorRows.length === 0}
-                  />
-                ) : null
-              }
-            >
-                <DataTable
-                  data={inspectorPageRows}
-                  columns={getSnaggingInspectorColumns()}
-                  onGlobalFilterChange={() => { }}
-                  onPageChange={setInspectorPage}
-                  onPageSizeChange={(size) => {
-                    setInspectorPageSize(size);
-                    setInspectorPage(0);
-                  }}
-                  pageSize={inspectorPageSize}
-                  currentPage={inspectorPage}
-                  loading={loading}
-                  rowCount={inspectorRows.length}
-                  type="snagging-analytics-inspector"
-                  isPagination={true}
-                  handleRowClick={(row) =>
-                    open({ metric: "inspector", value: row.user_id })
-                  }
-                  emptyState={
-                    <EmptyState
-                      icon={<UserRound />}
-                      title="No inspections assigned in this period"
-                      description="Nobody walked a unit between these dates. Widen the range to see earlier activity."
-                    />
-                  }
-                />
-            </SectionCard>
-          </div>
-        ) : null}
-      </DataState>
+        {/* FR-10.03 — developer view. */}
+        <SectionShell
+          title="Developer view"
+          icon={<HardHat />}
+          description="Units inspected, snags per unit, and what those units keep failing on."
+          action={
+            canExport ? (
+              <ExportMenu
+                onExport={exportDevelopers}
+                disabled={developerRows.length === 0}
+              />
+            ) : null
+          }
+          loading={!settled(developers)}
+          error={developers.error}
+          onRetry={developers.reload}
+          skeleton={<TableSkeleton rows={5} columns={6} />}
+          // The table pads its own rows and runs edge to edge, as it did
+          // before the card loaded on its own.
+          bodyClassName="px-0 pb-0"
+        >
+          <DataTable
+            data={developerPageRows}
+            columns={getSnaggingDeveloperColumns({
+              onViewDefects: (row) => setDefectsFor(row.developer_name),
+            })}
+            // A breakdown, not a list to search: the heading above
+            // already says what these rows are, so no toolbar.
+            onGlobalFilterChange={() => { }}
+            onPageChange={setDeveloperPage}
+            onPageSizeChange={(size) => {
+              setDeveloperPageSize(size);
+              setDeveloperPage(0);
+            }}
+            pageSize={developerPageSize}
+            currentPage={developerPage}
+            // The card shows its own skeleton while loading, so the
+            // table only ever renders settled rows.
+            loading={false}
+            rowCount={developerRows.length}
+            type="snagging-analytics-developer"
+            isPagination={true}
+            handleRowClick={(row) =>
+              open({ metric: "developer", value: row.developer_name })
+            }
+            emptyState={
+              <EmptyState
+                icon={<HardHat />}
+                title="No developer data in this period"
+                description="Snag rates appear here once inspections in these dates carry a developer on the property record."
+              />
+            }
+          />
+        </SectionShell>
+
+        {/* FR-10.04 — inspector view. */}
+        <SectionShell
+          title="Inspector view"
+          icon={<UserRound />}
+          description="Inspections carried out and how long each took. Snag count is not shown: it measures the building, not the inspector."
+          action={
+            canExport ? (
+              <ExportMenu
+                onExport={exportInspectors}
+                disabled={inspectorRows.length === 0}
+              />
+            ) : null
+          }
+          loading={!settled(inspectors)}
+          error={inspectors.error}
+          onRetry={inspectors.reload}
+          skeleton={<TableSkeleton rows={5} columns={5} />}
+          bodyClassName="px-0 pb-0"
+        >
+          <DataTable
+            data={inspectorPageRows}
+            columns={getSnaggingInspectorColumns()}
+            onGlobalFilterChange={() => { }}
+            onPageChange={setInspectorPage}
+            onPageSizeChange={(size) => {
+              setInspectorPageSize(size);
+              setInspectorPage(0);
+            }}
+            pageSize={inspectorPageSize}
+            currentPage={inspectorPage}
+            loading={false}
+            rowCount={inspectorRows.length}
+            type="snagging-analytics-inspector"
+            isPagination={true}
+            handleRowClick={(row) =>
+              open({ metric: "inspector", value: row.user_id })
+            }
+            emptyState={
+              <EmptyState
+                icon={<UserRound />}
+                title="No inspections assigned in this period"
+                description="Nobody walked a unit between these dates. Widen the range to see earlier activity."
+              />
+            }
+          />
+        </SectionShell>
+      </div>
 
       {/*
         Snags by category, moved here from the Overview.
@@ -717,14 +809,14 @@ export default function SnaggingAnalyticsDashboard() {
         developer={
           defectsFor === null
             ? null
-            : (developerRows.find((row) => row.developer_name === defectsFor) ?? {
+            : (dialogDevelopers.find((row) => row.developer_name === defectsFor) ?? {
                 ...EMPTY_DEVELOPER,
                 developer_name: defectsFor,
               })
         }
         onClose={() => setDefectsFor(null)}
-        onRefresh={() => void load()}
-        refreshing={loading}
+        onRefresh={developers.reload}
+        refreshing={developers.loading}
       />
 
       <AnalyticsDrilldown
@@ -732,6 +824,44 @@ export default function SnaggingAnalyticsDashboard() {
         onClose={() => setDrilldown(null)}
         canExport={canExport}
       />
+    </div>
+  );
+}
+
+/**
+ * One stat card's placeholder, shaped like the real card.
+ *
+ * The KPI row is two sections sharing one grid, so each card has to be
+ * able to stand in on its own; a whole-row skeleton would bring its own
+ * grid and knock the five columns out of line.
+ */
+function StatTileSkeleton() {
+  return (
+    <Card className="h-full">
+      <div className="flex items-start justify-between gap-2 px-4">
+        <div className="space-y-2">
+          <Skeleton className="h-4 w-24" />
+          <Skeleton className="h-7 w-20" />
+        </div>
+      </div>
+      <div className="space-y-1.5 px-4">
+        <Skeleton className="h-4 w-32" />
+      </div>
+    </Card>
+  );
+}
+
+/** Label, bar, count: the rhythm of the status and queue rows. */
+function BarRowsSkeleton({ rows }: { rows: number }) {
+  return (
+    <div className="space-y-3">
+      {Array.from({ length: rows }).map((_, index) => (
+        <div key={index} className="flex items-center gap-3 py-1">
+          <Skeleton className="h-4 w-24 shrink-0" />
+          <Skeleton className="h-1.5 flex-1 rounded-full" />
+          <Skeleton className="h-4 w-8 shrink-0" />
+        </div>
+      ))}
     </div>
   );
 }

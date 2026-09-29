@@ -1318,7 +1318,7 @@ function SnagPlanPin({
 
   return (
     <div
-      className="bg-muted relative mx-auto max-w-full overflow-hidden rounded-md border"
+      className="kz-tones-light bg-muted relative mx-auto max-w-full overflow-hidden rounded-md border"
       style={{
         aspectRatio:
           plan.width && plan.height
@@ -1762,13 +1762,13 @@ function MarkedEvidence({ photo }: { photo: SnaggingPhoto }) {
     <div className="relative">
       <EvidenceViewer photo={photo} />
       <span
-        className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2"
+        className="kz-tones-light pointer-events-none absolute -translate-x-1/2 -translate-y-1/2"
         style={{ left: `${x! * 100}%`, top: `${y! * 100}%` }}
         aria-hidden
       >
         <span className="border-danger bg-danger/25 block size-7 rounded-full border-2 shadow-[0_0_0_2px_rgba(255,255,255,0.85)]" />
       </span>
-      <span className="bg-danger absolute top-2 left-2 rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white uppercase">
+      <span className="kz-tones-light bg-danger absolute top-2 left-2 rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white uppercase">
         Marked defect
       </span>
     </div>

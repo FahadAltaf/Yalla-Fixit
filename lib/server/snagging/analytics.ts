@@ -181,6 +181,20 @@ function chunk<T>(items: T[], size: number): T[][] {
   return out;
 }
 
+/** The four dates a job can fall into a period by. */
+export type JobDateAnchor =
+  | "created_at"
+  | "submitted_at"
+  | "approved_at"
+  | "delivered_at";
+
+const ALL_DATE_ANCHORS: readonly JobDateAnchor[] = [
+  "created_at",
+  "submitted_at",
+  "approved_at",
+  "delivered_at",
+];
+
 /**
  * Every job the period touches, by any of its four dates.
  *
@@ -189,12 +203,19 @@ function chunk<T>(items: T[], size: number): T[][] {
  * what this endpoint used to do — silently dropped it from the approval
  * and delivery figures, so each metric picks its own anchor from this
  * set rather than sharing one filter.
+ *
+ * `dates` narrows the set to the anchors one figure actually reads. The
+ * analytics page loads each card on its own, and a card that only
+ * counts approvals has no use for every job merely raised in the
+ * period; it still applies its own in-range filter to what comes back,
+ * so narrowing the read never changes a figure.
  */
 export async function loadJobsTouchingRange(
   admin: SupabaseClient,
   range: DateRange,
+  dates: readonly JobDateAnchor[] = ALL_DATE_ANCHORS,
 ): Promise<AnalyticsJob[]> {
-  const anchors = ["created_at", "submitted_at", "approved_at", "delivered_at"]
+  const anchors = dates
     .map((column) => `and(${column}.gte.${range.fromTs},${column}.lte.${range.toTs})`)
     .join(",");
 

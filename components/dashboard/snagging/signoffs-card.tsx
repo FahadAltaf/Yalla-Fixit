@@ -34,13 +34,21 @@ export function SignoffsCard({
 }) {
   if (!signoffs?.length) return null;
 
+  /* The row whose signature the client's report shows, named by the
+     inspector's name rather than the email a phone may have signed with. */
+  const onReport = (signoff: SnaggingSignoff) =>
+    !signoff.visit_id &&
+    Boolean(clientSigner) &&
+    (signoff.signer_name === clientSigner || signoff.inspector_name === clientSigner);
+  const reportName = signoffs.find(onReport)?.inspector_name ?? clientSigner ?? null;
+
   return (
     <SectionCard
       icon={<PenLine />}
       title="Inspector sign-offs"
       description={
-        clientSigner
-          ? `Every inspector's signature, kept internally. The client's report shows one: ${clientSigner}'s.`
+        reportName
+          ? `Every inspector's signature, kept internally. The client's report shows one: ${reportName}'s.`
           : "Every inspector's signature, kept internally. The client's report shows one."
       }
       action={
@@ -53,16 +61,12 @@ export function SignoffsCard({
     >
       <ul className="divide-y">
         {signoffs.map((signoff) => {
-          const onReport =
-            !signoff.visit_id &&
-            Boolean(clientSigner) &&
-            (signoff.signer_name === clientSigner || signoff.inspector_name === clientSigner);
           return (
             <li key={signoff.id} className="flex flex-wrap items-center gap-4 px-5 py-3.5">
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-sm font-medium">{signoff.inspector_name}</span>
-                  {onReport ? (
+                  {onReport(signoff) ? (
                     <Badge variant="secondary" className="text-xs">
                       On the client&apos;s report
                     </Badge>
@@ -72,7 +76,9 @@ export function SignoffsCard({
                   {signoff.visit_id ? "Return visit" : "Inspection"} · signed {WHEN.format(new Date(signoff.signed_at))}
                 </p>
               </div>
-              <div className="bg-background flex h-14 w-40 items-center justify-center rounded-md border">
+              {/* White paper in both themes: the ink is dark, and on the dark
+                  card it disappeared. */}
+              <div className="flex h-14 w-40 items-center justify-center rounded-md border bg-white">
                 {signoff.signature_url ? (
                   <img
                     src={signoff.signature_url}
@@ -80,7 +86,7 @@ export function SignoffsCard({
                     className="max-h-12 max-w-36 object-contain"
                   />
                 ) : (
-                  <span className="text-muted-foreground text-xs">No drawing</span>
+                  <span className="text-xs text-slate-500">No drawing</span>
                 )}
               </div>
             </li>

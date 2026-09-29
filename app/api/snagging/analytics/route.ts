@@ -22,6 +22,7 @@ import {
   resolveRange,
   type AnalyticsJob,
   type DateRange,
+  type SnagRow,
 } from "@/lib/server/snagging/analytics";
 import { DELIVERY_SLA_HOURS } from "@/lib/server/snagging/workflow";
 import {
@@ -46,9 +47,34 @@ import {
  * dates: the review queue and the overdue count. Both are worklists, and
  * a worklist narrowed to last month tells a reviewer there is less
  * waiting than there is.
+ *
+ * `?section=` returns one card's figures instead of the whole payload.
+ * The analytics page loads every card on its own, the way the Overview
+ * does, so a slow developer breakdown no longer holds up the KPI row and
+ * one failing query costs one card rather than the page. Each section
+ * reads only the rows its own figures anchor on. Without the parameter
+ * the endpoint still answers with everything, as it always has.
  */
 
 const GRANULARITIES: SnaggingAnalyticsGranularity[] = ["day", "week", "month"];
+
+/** The cards the analytics page loads one at a time. */
+const SECTIONS = [
+  "time",
+  "queue",
+  "status",
+  "completed",
+  "developers",
+  "inspectors",
+] as const;
+
+type AnalyticsSection = (typeof SECTIONS)[number];
+
+type AdminClient = Awaited<ReturnType<typeof createAdminServerClient>>;
+
+function isSection(value: string): value is AnalyticsSection {
+  return (SECTIONS as readonly string[]).includes(value);
+}
 
 const STATUS_ORDER: SnaggingTaskStatus[] = [
   "draft",
@@ -77,6 +103,22 @@ export async function GET(req: NextRequest) {
     const params = req.nextUrl.searchParams;
     const range = resolveRange(params.get("from"), params.get("to"));
 
+    // One card's figures. The guard above has already run, so a section
+    // is exactly as protected as the whole payload.
+    const section = params.get("section");
+    if (section !== null) {
+      if (!isSection(section)) {
+        return NextResponse.json(
+          { error: "Unknown analytics section" },
+          { status: 400 },
+        );
+      }
+      const admin = await createAdminServerClient();
+      return NextResponse.json({
+        data: await loadSection(admin, section, range),
+      });
+    }
+
     const admin = await createAdminServerClient();
     // The equivalent window before this one, for the period-on-period
     // trends. Fetched rather than derived, because a job raised before the
@@ -104,27 +146,16 @@ export async function GET(req: NextRequest) {
     // Counted from the jobs themselves, which carry their inspector.
     const byInspector = computeByInspector(raised);
 
-    const snagsByJob = new Map<
-      string,
-      { total: number; outstanding: number }
-    >();
-    const defectsByJob = new Map<string, string[]>();
-    for (const snag of snags) {
-      const tally = snagsByJob.get(snag.job_id) ?? { total: 0, outstanding: 0 };
-      tally.total += 1;
-      if (OUTSTANDING_SNAG_STATUSES.has(snag.status)) tally.outstanding += 1;
-      snagsByJob.set(snag.job_id, tally);
-
-      const labels = defectsByJob.get(snag.job_id) ?? [];
-      labels.push(snag.defect_label ?? "Unclassified");
-      defectsByJob.set(snag.job_id, labels);
-    }
+    const { snagsByJob, defectsByJob } = tallySnags(snags);
 
     const data: SnaggingAnalytics = {
       byStatus: computeByStatus(raised, raisedBefore),
       reviewQueue: computeReviewQueue(queue),
       completed: computeCompleted(jobs, range),
-      timeMetrics: computeTimeMetrics(jobs, queue, range),
+      timeMetrics: {
+        ...computeTimeMetrics(jobs, range),
+        overdueApprovals: countOverdueApprovals(queue),
+      },
       byDeveloper: computeByDeveloper(
         raised,
         raisedBefore,
@@ -142,6 +173,108 @@ export async function GET(req: NextRequest) {
       { status: 500 },
     );
   }
+}
+
+/**
+ * One card's figures, reading only the jobs that card counts.
+ *
+ * Every section runs the same compute function the whole payload does,
+ * so a card loaded on its own and the same card in the full response
+ * cannot disagree. What changes is the read: each asks
+ * `loadJobsTouchingRange` only for the dates its figures anchor on,
+ * rather than every job the period touches by any of its four dates.
+ */
+async function loadSection(
+  admin: AdminClient,
+  section: AnalyticsSection,
+  range: DateRange,
+): Promise<unknown> {
+  switch (section) {
+    case "time": {
+      // Time on site anchors on submission, turnaround and first-time
+      // approval on approval, the SLA on delivery. Creation never enters
+      // these four, and the live overdue count rides with the queue.
+      const jobs = await loadJobsTouchingRange(admin, range, [
+        "submitted_at",
+        "approved_at",
+        "delivered_at",
+      ]);
+      return computeTimeMetrics(jobs, range);
+    }
+
+    case "queue": {
+      // Live: no dates. The overdue card is the queue's oldest band, so
+      // it is answered from the same read rather than a second one.
+      const queue = await loadReviewQueue(admin);
+      return {
+        ...computeReviewQueue(queue),
+        overdueApprovals: countOverdueApprovals(queue),
+      };
+    }
+
+    case "status": {
+      const previous = previousRange(range);
+      const [jobs, previousJobs] = await Promise.all([
+        loadJobsTouchingRange(admin, range, ["created_at"]),
+        loadJobsTouchingRange(admin, previous, ["created_at"]),
+      ]);
+      return computeByStatus(
+        jobs.filter((job) => inRange(job.created_at, range)),
+        previousJobs.filter((job) => inRange(job.created_at, previous)),
+      );
+    }
+
+    case "completed": {
+      // Counted at approval, so approval is the only date it needs.
+      const jobs = await loadJobsTouchingRange(admin, range, ["approved_at"]);
+      return computeCompleted(jobs, range);
+    }
+
+    case "developers": {
+      const previous = previousRange(range);
+      const [jobs, previousJobs] = await Promise.all([
+        loadJobsTouchingRange(admin, range, ["created_at"]),
+        loadJobsTouchingRange(admin, previous, ["created_at"]),
+      ]);
+      const raised = jobs.filter((job) => inRange(job.created_at, range));
+      const raisedBefore = previousJobs.filter((job) =>
+        inRange(job.created_at, previous),
+      );
+      const snags = await loadSnagsForJobs(
+        admin,
+        raised.map((job) => job.id),
+      );
+      const { snagsByJob, defectsByJob } = tallySnags(snags);
+      return computeByDeveloper(raised, raisedBefore, snagsByJob, defectsByJob);
+    }
+
+    case "inspectors": {
+      const jobs = await loadJobsTouchingRange(admin, range, ["created_at"]);
+      return computeByInspector(
+        jobs.filter((job) => inRange(job.created_at, range)),
+      );
+    }
+  }
+}
+
+/** Per job: how many snags, how many still open, and which defects. */
+function tallySnags(snags: SnagRow[]): {
+  snagsByJob: Map<string, { total: number; outstanding: number }>;
+  defectsByJob: Map<string, string[]>;
+} {
+  const snagsByJob = new Map<string, { total: number; outstanding: number }>();
+  const defectsByJob = new Map<string, string[]>();
+  for (const snag of snags) {
+    const tally = snagsByJob.get(snag.job_id) ?? { total: 0, outstanding: 0 };
+    tally.total += 1;
+    if (OUTSTANDING_SNAG_STATUSES.has(snag.status)) tally.outstanding += 1;
+    snagsByJob.set(snag.job_id, tally);
+
+    const labels = defectsByJob.get(snag.job_id) ?? [];
+    labels.push(snag.defect_label ?? "Unclassified");
+    defectsByJob.set(snag.job_id, labels);
+  }
+  return { snagsByJob, defectsByJob };
 }
 
 /**
@@ -225,9 +358,8 @@ function computeCompleted(
  */
 function computeTimeMetrics(
   jobs: AnalyticsJob[],
-  queue: AnalyticsJob[],
   range: DateRange,
-): SnaggingAnalytics["timeMetrics"] {
+): Omit<SnaggingAnalytics["timeMetrics"], "overdueApprovals"> {
   // Time on site: arrival to submission, anchored on the day the walk
   // was submitted.
   const onSite = jobs
@@ -269,10 +401,18 @@ function computeTimeMetrics(
     firstTimeApprovalSample: approvedInRange.length,
     deliveredWithin24hRate: percentage(onTime, delivered.length),
     deliveredSample: delivered.length,
-    overdueApprovals: queue.filter(
-      (job) => queueBucketOf(job.submitted_at) === "over_48h",
-    ).length,
   };
+}
+
+/**
+ * The fifth time metric: approvals past the 48-hour escalation point.
+ *
+ * Counted from the live queue, not the selected dates, so it sits apart
+ * from the four period figures above.
+ */
+function countOverdueApprovals(queue: AnalyticsJob[]): number {
+  return queue.filter((job) => queueBucketOf(job.submitted_at) === "over_48h")
+    .length;
 }
 
 /**

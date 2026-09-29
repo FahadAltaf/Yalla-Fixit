@@ -7,7 +7,11 @@ import { hasResourceAction } from "@/lib/role-permissions";
 import { canApproveAmc } from "@/components/dashboard/extensions/amc/amc-settings";
 import { readAmcSettings } from "@/lib/server/amc/settings";
 import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
-import { isAmcSubmissionEditable } from "@/components/dashboard/extensions/amc/amc-types";
+import {
+  AMC_STATUSES,
+  isAmcSubmissionEditable,
+} from "@/components/dashboard/extensions/amc/amc-types";
+import { likeTerm, pageParams } from "@/lib/server/snagging/search";
 import { ActionType, ResourceType } from "@/types/types";
 import type {
   AmcDocumentType,
@@ -279,57 +283,88 @@ export async function GET(req: NextRequest) {
     what they approved, sent back, and what the client did with it. Other
     people's drafts stay private.
 
-    Two reads rather than one `or` filter: the owner clause and the
-    approver clause select on different columns, and an `or` spanning
-    both is easy to get subtly wrong in a way that leaks drafts. Union by
-    id here instead, where the intent is legible.
+    One page at a time, counted by the database.
+
+    This used to read every proposal the viewer could see -- their own and,
+    for an approver, the whole queue -- in two unbounded reads, union them
+    here and send the lot, and the table then sliced a page out of it in
+    the browser. Every visit downloaded the entire history to draw ten
+    rows, the search only ever looked at what had already arrived, and the
+    two reads stopped silently at the API's 1,000-row cap. Now the filters,
+    the search and the page are applied in one ordered query, and the
+    total comes back with it.
+
+    That means the owner clause and the approver clause have to be one
+    filter again ("mine, or anyone's past draft"). It is spelled out in
+    visibilityClauses below, the one place it lives.
   */
+  const params = req.nextUrl.searchParams;
+  const { from, to } = pageParams(params, { defaultSize: 10, maxSize: 100 });
+  const statusParam = params.get("status");
+  const status = (AMC_STATUSES as readonly string[]).includes(statusParam ?? "")
+    ? (statusParam as AmcSubmissionStatus)
+    : null;
+  const mineOnly = params.get("scope") === "mine";
+  const term = likeTerm(params.get("search"));
+
   /* FR5.3: the approvers chosen in AMC Settings, or the role permission
-     when none are chosen. */
-  /*
-    The settings, the caller's own submissions and the approval queue are
-    read together: they were three round trips one after another. The queue
-    is only USED when the caller turns out to be an approver -- it is never
-    sent to anyone else.
-  */
-  const [settings, { data: own, error }, { data: queue, error: queueError }] =
-    await Promise.all([
-      readAmcSettings(admin),
-      admin
-        .from("amc_submissions")
-        .select(LIST_COLUMNS)
-        .eq("owner_id", profile.id)
-        .order("created_at", { ascending: false }),
-      admin
-        .from("amc_submissions")
-        .select(LIST_COLUMNS)
-        .neq("owner_id", profile.id)
-        .neq("status", "draft")
-        .order("created_at", { ascending: false }),
-    ]);
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
-
+     when none are chosen. Read first, because it decides which rows the
+     queries below may return. */
+  const settings = await readAmcSettings(admin);
   const canApprove = canApproveAmc(
     settings,
     profile.email,
     hasResourceAction(gate.accessUser, ResourceType.AMC, ActionType.APPROVE),
   );
 
-  const rows = [...((own ?? []) as unknown as AmcSubmissionRow[])];
+  /*
+    Whose proposals: always the caller's own; for an approver, also anyone
+    else's once it has left draft. Null means "only mine", applied as a
+    plain equality rather than an `or`.
+  */
+  const visibilityClauses =
+    canApprove && !mineOnly ? [`owner_id.eq.${profile.id}`, "status.neq.draft"] : null;
 
-  if (canApprove) {
-    if (queueError) {
-      return NextResponse.json({ error: queueError.message }, { status: 500 });
+  /*
+    The search box: the customer, the proposal number, the address -- and,
+    for an approver, who raised it. A name lives on user_profile, so the
+    people who match are found first and their proposals matched by id,
+    the same way the Quotations list finds a client's quotations.
+  */
+  let searchClauses: string[] | null = null;
+  if (term) {
+    let ownerIds: string[] = [];
+    if (canApprove) {
+      const { data: owners, error: ownerError } = await admin
+        .from("user_profile")
+        .select("id")
+        .or(`full_name.ilike.${term},email.ilike.${term}`)
+        .limit(200);
+      if (ownerError) {
+        return NextResponse.json({ error: ownerError.message }, { status: 500 });
+      }
+      ownerIds = (owners ?? []).map((row) => String(row.id));
     }
-
-    const seen = new Set(rows.map((row) => row.id));
-    for (const row of (queue ?? []) as unknown as AmcSubmissionRow[]) {
-      if (!seen.has(row.id)) rows.push(row);
-    }
+    searchClauses = [
+      `customer->>customerName.ilike.${term}`,
+      `proposal_number.ilike.${term}`,
+      `property->>propertyAddress.ilike.${term}`,
+      ...(ownerIds.length ? [`owner_id.in.(${ownerIds.join(",")})`] : []),
+    ];
   }
+
+  /*
+    The two groups as ONE `or` filter, (visible) AND (matches the search).
+    Written out as "each search clause AND visible" so the query carries a
+    single documented logic tree rather than two `or` parameters whose
+    combination is easy to get subtly wrong in a way that leaks drafts.
+  */
+  const orFilter =
+    visibilityClauses && searchClauses
+      ? searchClauses
+          .map((clause) => `and(${clause},or(${visibilityClauses.join(",")}))`)
+          .join(",")
+      : (visibilityClauses ?? searchClauses)?.join(",") ?? null;
 
   /*
     Newest proposal first, by when it was RAISED.
@@ -339,10 +374,58 @@ export async function GET(req: NextRequest) {
     it had no order at all: a proposal raised on the 21st sat above one
     raised on the 25th, and editing an old draft jumped it over newer
     ones. Approvers have the Approvals queue for what needs deciding;
-    this list is the record of what has been raised.
+    this list is the record of what has been raised. The id breaks ties so
+    a row can never appear on two pages.
   */
-  rows.sort((a, b) => b.created_at.localeCompare(a.created_at));
+  let pageQuery = admin
+    .from("amc_submissions")
+    .select(LIST_COLUMNS, { count: "exact" })
+    .order("created_at", { ascending: false })
+    .order("id")
+    .range(from, to);
+  if (!visibilityClauses) pageQuery = pageQuery.eq("owner_id", profile.id);
+  if (orFilter) pageQuery = pageQuery.or(orFilter);
+  if (status) pageQuery = pageQuery.eq("status", status);
 
+  /*
+    How many proposals sit in each status, for the status filter's counts.
+    They follow the scope and the search but not the status picked, so the
+    other options still say how many they would show.
+  */
+  const countFor = async (value: AmcSubmissionStatus | null) => {
+    let counter = admin
+      .from("amc_submissions")
+      .select("id", { count: "exact", head: true });
+    if (!visibilityClauses) counter = counter.eq("owner_id", profile.id);
+    if (orFilter) counter = counter.or(orFilter);
+    if (value) counter = counter.eq("status", value);
+    const { count, error: countError } = await counter;
+    if (countError) throw new Error(countError.message);
+    return count ?? 0;
+  };
+
+  let results;
+  try {
+    results = await Promise.all([
+      pageQuery,
+      countFor(null),
+      ...AMC_STATUSES.map((value) => countFor(value)),
+    ]);
+  } catch (countError) {
+    return NextResponse.json(
+      { error: countError instanceof Error ? countError.message : "Could not count proposals" },
+      { status: 500 },
+    );
+  }
+
+  const [{ data, error, count }, all, ...byStatus] = results;
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  const rows = (data ?? []) as unknown as AmcSubmissionRow[];
+
+  // Names for the "Submitted by" column, for this page's owners only.
   const ownerIds = [...new Set(rows.map((row) => row.owner_id))];
   const names = new Map<string, string>();
   if (ownerIds.length > 0) {
@@ -364,7 +447,11 @@ export async function GET(req: NextRequest) {
   );
   return NextResponse.json({
     submissions,
-    totalCount: submissions.length,
+    totalCount: count ?? 0,
+    counts: {
+      all,
+      ...Object.fromEntries(AMC_STATUSES.map((value, i) => [value, byStatus[i]])),
+    } as Record<string, number>,
     canApprove,
   });
 }

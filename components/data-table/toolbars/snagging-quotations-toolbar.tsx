@@ -64,7 +64,9 @@ export function SnaggingQuotationsToolbar({
             <Input
               id={searchInputId}
               type="search"
-              placeholder="Search..."
+              // What listQuotations matches: the client's name as well as
+              // the quotation's own number and address.
+              placeholder="Search by client, quote number or unit…"
               className="peer w-full ps-9"
               value={globalFilter}
               onChange={(event) => onGlobalFilterChange(event.target.value)}

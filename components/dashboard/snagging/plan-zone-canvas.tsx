@@ -194,7 +194,7 @@ export function PlanZoneCanvas({
       onMouseMove={(event) => drawing && setHover(at(event))}
       onMouseLeave={() => setHover(null)}
       className={cn(
-        "border-border bg-mist-soft relative overflow-hidden rounded-lg border select-none",
+        "kz-tones-light border-border bg-muted relative overflow-hidden rounded-lg border select-none",
         !readOnly && activeKey && "cursor-crosshair",
       )}
     >

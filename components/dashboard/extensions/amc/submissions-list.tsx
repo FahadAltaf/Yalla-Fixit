@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { format } from "date-fns";
@@ -45,6 +45,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useDebounce } from "@/hooks/use-debounce";
 import { amcSubmissionsService } from "@/modules/amc-submissions";
 
 import { AMC_APPROVALS_CHANGED } from "./amc-approval-notice";
@@ -80,7 +81,10 @@ export function SubmissionsList() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  /* The current page's rows only; the server does the paging. */
   const [submissions, setSubmissions] = useState<AmcSubmission[]>([]);
+  const [total, setTotal] = useState(0);
+  const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [canApprove, setCanApprove] = useState(false);
@@ -111,24 +115,57 @@ export function SubmissionsList() {
     [pathname, router, searchParams],
   );
 
+  /*
+    A page at a time from the server, filtered and searched there too.
+
+    The whole history used to arrive on every visit and be sliced into
+    pages here, so the table downloaded every proposal to draw ten, and
+    the search could only look through what had already arrived. The
+    search is sent a moment after typing stops, not on every keystroke.
+  */
+  const debouncedSearch = useDebounce(search.trim(), 300);
+
+  /* Only the latest request may fill the table: a slower reply for an
+     earlier filter or page must not land last and show the wrong rows. */
+  const ticket = useRef(0);
   const loadSubmissions = useCallback(async () => {
+    const mine = ++ticket.current;
     setIsLoading(true);
     setLoadError(false);
     try {
-      const response = await amcSubmissionsService.listSubmissions();
+      const response = await amcSubmissionsService.listSubmissions({
+        status,
+        scope,
+        search: debouncedSearch || undefined,
+        page,
+        pageSize,
+      });
+      if (mine !== ticket.current) return;
       setSubmissions(response.submissions);
+      setTotal(response.totalCount ?? 0);
+      setStatusCounts(response.counts ?? {});
       /* FR3.2 — the server decides this from role_access; the list just
          reflects it, so approval rights are never inferred client-side. */
       setCanApprove(Boolean(response.canApprove));
+      /*
+        A page that has emptied under the reader -- the last proposal on
+        it approved out of an "Awaiting approval" filter, say -- steps
+        back to the last page that still has rows rather than showing an
+        empty table with pages still listed below it.
+      */
+      const lastPage = Math.max(0, Math.ceil((response.totalCount ?? 0) / pageSize) - 1);
+      if (page > lastPage) setPage(lastPage);
     } catch (error) {
+      if (mine !== ticket.current) return;
       console.error(error);
       setSubmissions([]);
+      setTotal(0);
       setLoadError(true);
       toast.error(getErrorMessage(error, "Couldn't load submissions. Try again."));
     } finally {
-      setIsLoading(false);
+      if (mine === ticket.current) setIsLoading(false);
     }
-  }, []);
+  }, [status, scope, debouncedSearch, page, pageSize]);
 
   useEffect(() => {
     void loadSubmissions();
@@ -142,38 +179,6 @@ export function SubmissionsList() {
   }, [loadSubmissions]);
 
   const actions = useAmcActions({ onChanged: loadSubmissions });
-
-  /* How many proposals sit in each status, for the filter's counts. */
-  const statusCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const sub of submissions) counts.set(sub.status, (counts.get(sub.status) ?? 0) + 1);
-    return counts;
-  }, [submissions]);
-
-  const visible = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return submissions.filter((sub) => {
-      if (scope === "mine" && sub.is_own === false) return false;
-      if (status !== "all" && sub.status !== status) return false;
-      if (!q) return true;
-      return [
-        sub.customer.customerName,
-        sub.customer.proposalNumber,
-        sub.property.propertyAddress,
-        sub.owner_name,
-      ]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(q));
-    });
-  }, [submissions, search, scope, status]);
-
-  const total = visible.length;
-  const pageCount = Math.max(1, Math.ceil(total / pageSize));
-  // A narrowed result set never leaves you stranded on a page that no
-  // longer exists.
-  const currentPage = Math.min(page, pageCount - 1);
-  const pageStart = currentPage * pageSize;
-  const pageRows = visible.slice(pageStart, pageStart + pageSize);
 
   const filtered = status !== "all" || scope !== "all" || Boolean(search);
   const clearFilters = () => {
@@ -432,11 +437,11 @@ export function SubmissionsList() {
         ) : (
           <DataTable
             columns={columns}
-            data={pageRows}
+            data={submissions}
             loading={isLoading}
             rowCount={total}
             pageSize={pageSize}
-            currentPage={currentPage}
+            currentPage={page}
             isPagination
             onPageChange={setPage}
             onPageSizeChange={(size) => {
@@ -460,6 +465,10 @@ export function SubmissionsList() {
                   setPage(0);
                 }}
                 isSearchLoading={isLoading}
+                /* What the server matches (GET /api/amc-submissions). An
+                   approver can also find a proposal by who raised it; the
+                   box is too narrow to say so without cutting it off. */
+                searchPlaceholder="Search by customer, number or address…"
                 filters={
                   <>
                     {/* Whose proposals: an approver sees everyone's. */}
@@ -480,10 +489,10 @@ export function SubmissionsList() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="all">All statuses ({submissions.length})</SelectItem>
+                        <SelectItem value="all">All statuses ({statusCounts.all ?? 0})</SelectItem>
                         {AMC_STATUSES.map((value) => (
                           <SelectItem key={value} value={value}>
-                            {AMC_STATUS_LABELS[value]} ({statusCounts.get(value) ?? 0})
+                            {AMC_STATUS_LABELS[value]} ({statusCounts[value] ?? 0})
                           </SelectItem>
                         ))}
                       </SelectContent>

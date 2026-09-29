@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { hasJobInspectors } from "./columns";
 
+import { likeTerm } from "@/lib/server/snagging/search";
 import { APPROVAL_SLA_HOURS } from "@/lib/server/snagging/workflow";
 import type { SnaggingVisitType } from "@/types/types";
 
@@ -76,15 +77,34 @@ export async function listJobs(
   if (status && status !== "all")
     query = query.in("status", status.split(","));
 
-  const search = params.get("search")?.trim();
-  if (search) {
-    const term = `%${search}%`;
+  /*
+    The search box: the job code, the unit, building and community -- and
+    the client. A client's name lives on the client record, not the job,
+    so the clients that match are found first and their jobs matched by
+    id, the same way the Quotations list does it; the contact name the
+    job carries for the visit is matched on the job itself.
+
+    The text goes through likeTerm, which drops the characters that would
+    otherwise end or rewrite the `or` filter (a comma or bracket in a
+    name used to break the query outright).
+  */
+  const term = likeTerm(params.get("search"));
+  if (term) {
+    const { data: clients, error: clientError } = await admin
+      .from("snagging_clients")
+      .select("id")
+      .ilike("name", term)
+      .limit(200);
+    if (clientError) throw new Error(clientError.message);
+    const clientIds = (clients ?? []).map((row) => row.id as string);
     query = query.or(
       [
         `code.ilike.${term}`,
         `unit_label.ilike.${term}`,
         `building_name.ilike.${term}`,
         `community.ilike.${term}`,
+        `client_contact_name.ilike.${term}`,
+        ...(clientIds.length ? [`client_id.in.(${clientIds.join(",")})`] : []),
       ].join(","),
     );
   }

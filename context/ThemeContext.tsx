@@ -5,6 +5,7 @@ import React, {
   useState,
   useContext,
   useEffect,
+  useRef,
   ReactNode,
   startTransition,
 } from "react";
@@ -50,6 +51,13 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   const [favicon, setFaviconState] = useState<string>("/favicon.ico");
 
+  // Read by the system-theme listener, which outlives the render that
+  // registered it, so it re-applies the current tenant colour.
+  const primaryColorRef = useRef(primaryColor);
+  useEffect(() => {
+    primaryColorRef.current = primaryColor;
+  }, [primaryColor]);
+
   useEffect(() => {
     if (settings) {
       // Batch state updates to prevent cascading renders
@@ -86,6 +94,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
         const newTheme = mediaQuery.matches ? "dark" : "light";
         root.classList.remove("light", "dark");
         root.classList.add(newTheme);
+        applyBrandPalette(primaryColorRef.current);
       }
     };
 
@@ -100,34 +109,16 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     };
   }, [theme]);
 
+  // Runs after the theme effect above (effects run in declaration
+  // order), so the html element already carries the new light/dark class
+  // when the palette reads it.
   useEffect(() => {
-    const root = document.documentElement;
-    root.style.setProperty("--primary", primaryColor);
-
-    /*
-      The brand end of the chart ramp, tinted rather than repeated.
-
-      This used to stamp the tenant's primary colour onto --chart-1
-      through --chart-4 identically, which collapsed a five-step ramp
-      into one colour: every line, bar and segment in the app came out
-      the same red, so a two-series chart had two indistinguishable
-      series and a six-stage pipeline read as one block. Only --chart-5
-      survived, because it was the one the loop did not reach.
-
-      Chart 1 stays the brand colour exactly. Charts 2 and 3 are lighter
-      mixes of it, so a single-hue ramp still reads as one family. Charts
-      4 and 5 are deliberately left alone — they are the neutral end of
-      the ramp defined in globals.css, and a chart needs somewhere
-      uncoloured to put the data that carries no meaning.
-    */
-    root.style.setProperty("--chart-1", primaryColor);
-    root.style.setProperty("--chart-2", mixWithWhite(primaryColor, 0.3));
-    root.style.setProperty("--chart-3", mixWithWhite(primaryColor, 0.55));
+    applyBrandPalette(primaryColor);
 
     // root.style.setProperty("--secondary", secondaryColor);
     localStorage.setItem("primaryColor", primaryColor);
     localStorage.setItem("secondaryColor", secondaryColor);
-  }, [primaryColor, secondaryColor]);
+  }, [primaryColor, secondaryColor, theme]);
 
   useEffect(() => {
     // Update document title when site title changes
@@ -216,6 +207,55 @@ export function useTheme() {
     throw new Error("useTheme must be used within a ThemeProvider");
   }
   return context;
+}
+
+const KAIZEN_PRIMARY = "#8c1d24";
+
+/**
+ * Writes the tenant's primary colour onto the root element.
+ *
+ * Inline custom properties outrank every stylesheet rule, including the
+ * `.dark` block in globals.css. This used to stamp the light brand red
+ * (#8C1D24) onto --primary in both themes, so in dark mode every
+ * `text-primary` link, focus accent and chart series came out dark red on
+ * near-black (about 2:1) and the designed dark primary never applied.
+ *
+ * Light mode: the tenant colour exactly, as before.
+ * Dark mode, default Kaizen red: the inline values are removed so the
+ *   dark ramp designed in globals.css (#D4696F and its tints) applies.
+ * Dark mode, a tenant's own colour: a lighter step of it, so it still
+ *   reads on a dark card and still takes dark text on a filled button.
+ *
+ * The brand end of the chart ramp is tinted rather than repeated. It used
+ * to stamp the tenant's primary onto --chart-1 through --chart-4
+ * identically, which collapsed a five-step ramp into one colour. Chart 1
+ * is the brand colour; charts 2 and 3 are lighter mixes of it, so a
+ * single-hue ramp still reads as one family. Charts 4 and 5 are left
+ * alone — they are the neutral end of the ramp defined in globals.css.
+ */
+function applyBrandPalette(primaryColor: string) {
+  const root = document.documentElement;
+  const isDark = root.classList.contains("dark");
+  const props = ["--primary", "--chart-1", "--chart-2", "--chart-3"] as const;
+
+  if (!isDark) {
+    root.style.setProperty("--primary", primaryColor);
+    root.style.setProperty("--chart-1", primaryColor);
+    root.style.setProperty("--chart-2", mixWithWhite(primaryColor, 0.3));
+    root.style.setProperty("--chart-3", mixWithWhite(primaryColor, 0.55));
+    return;
+  }
+
+  if (primaryColor.trim().toLowerCase() === KAIZEN_PRIMARY) {
+    props.forEach((prop) => root.style.removeProperty(prop));
+    return;
+  }
+
+  const lifted = mixWithWhite(primaryColor, 0.4);
+  root.style.setProperty("--primary", lifted);
+  root.style.setProperty("--chart-1", lifted);
+  root.style.setProperty("--chart-2", mixWithWhite(primaryColor, 0.65));
+  root.style.setProperty("--chart-3", mixWithWhite(primaryColor, 0.8));
 }
 
 /**

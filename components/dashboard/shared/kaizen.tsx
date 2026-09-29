@@ -348,7 +348,7 @@ export function PillTabs<T extends string>({
             className={cn(
               "focus-visible:ring-ring inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none",
               active
-                ? "border-brand bg-brand text-white"
+                ? "border-brand bg-brand text-primary-foreground"
                 : "border-border text-ink-soft hover:bg-mist-soft",
             )}
           >
@@ -357,7 +357,7 @@ export function PillTabs<T extends string>({
               <span
                 className={cn(
                   "tabular-nums",
-                  active ? "text-white/80" : "text-muted-foreground",
+                  active ? "text-primary-foreground/80" : "text-muted-foreground",
                 )}
               >
                 {tab.count}

@@ -67,7 +67,9 @@ export function SnaggingJobsToolbar({
             <Input
               id={searchInputId}
               type="search"
-              placeholder="Search..."
+              // What listJobs matches: the client's name as well as the
+              // job's own code and address.
+              placeholder="Search by client, job code or unit…"
               className="peer w-full ps-9"
               value={globalFilter}
               onChange={handleFilterChange}

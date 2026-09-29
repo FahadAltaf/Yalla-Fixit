@@ -692,7 +692,7 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
                     onClick={() => void handleStepClick(step.id)}
                     className={cn(
                       "inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-sm font-medium transition-colors",
-                      isActive && "border-brand bg-brand text-white",
+                      isActive && "border-brand bg-brand text-primary-foreground",
                       isComplete &&
                         "border-brand/30 bg-brand-50 text-brand hover:bg-brand-50/70 cursor-pointer",
                       !isActive &&

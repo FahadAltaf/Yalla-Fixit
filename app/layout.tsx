@@ -7,8 +7,10 @@ import {
   WebsiteSchema,
 } from "@/components/structured-data";
 import { AuthProvider } from "@/context/AuthContext";
-import { Toaster } from "sonner";
-import { ThemeProviderWrapper } from "@/context/theme-provider-wrapper";
+import {
+  ThemedToaster,
+  ThemeProviderWrapper,
+} from "@/context/theme-provider-wrapper";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { loadSignedInUser } from "@/utils/load-signed-in-user";
 
@@ -141,7 +143,7 @@ export default async function RootLayout({
             <TooltipProvider>
               {children}
             </TooltipProvider>
-            <Toaster position="top-center" duration={3000} richColors />
+            <ThemedToaster />
           </ThemeProviderWrapper>
         </AuthProvider>
       </body>

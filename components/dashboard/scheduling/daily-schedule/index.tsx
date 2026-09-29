@@ -1229,7 +1229,7 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
               Sync failed
             </span>
             <span className="inline-flex items-center gap-1">
-              <span className="border-border bg-ink/40 size-2.5 rounded-sm border border-dashed" />
+              <span className="border-border bg-ink/40 dark:bg-ink/25 size-2.5 rounded-sm border border-dashed" />
               Note
             </span>
           </div>
@@ -2279,7 +2279,7 @@ function ShiftSection({
               className={cn(
                 "flex max-w-xs flex-col gap-0.5 rounded-lg px-2.5 py-1.5 text-xs shadow-lg ring-1",
                 entryDrag.blockedReason
-                  ? "bg-destructive ring-destructive text-white"
+                  ? "bg-destructive ring-destructive text-primary-foreground"
                   : "bg-popover text-popover-foreground ring-foreground/10",
               )}
             >
@@ -2657,9 +2657,9 @@ const TechnicianRow = memo(function TechnicianRow({
               : "scheduled";
           const stateLabel = state ? APPOINTMENT_STATE_LABELS[state] : null;
           const boxColour = syncFailed
-            ? "bg-danger text-white"
+            ? "bg-danger text-primary-foreground"
             : isFreeText
-              ? "border border-dashed border-border bg-ink/40 text-white"
+              ? "border border-dashed border-border bg-ink/40 text-white dark:bg-ink/25"
               : APPOINTMENT_STATE_STYLES[state ?? "scheduled"].bar;
 
           // Rings only mark real, actionable states: an out-of-window time, or
@@ -2760,8 +2760,12 @@ const TechnicianRow = memo(function TechnicianRow({
           <div
             aria-hidden
             className={cn(
-              "pointer-events-none absolute z-30 flex flex-col justify-center gap-0.5 overflow-hidden rounded px-2 text-white shadow-lg ring-2 ring-white",
-              ghost.blockedReason ? "bg-destructive" : ghostView.freeText ? "bg-ink/70" : "bg-primary",
+              "pointer-events-none absolute z-30 flex flex-col justify-center gap-0.5 overflow-hidden rounded px-2 shadow-lg ring-2 ring-white",
+              ghost.blockedReason
+                ? "bg-destructive text-primary-foreground"
+                : ghostView.freeText
+                  ? "bg-ink/70 text-white dark:bg-ink/25"
+                  : "bg-primary text-primary-foreground",
             )}
             style={{
               left: `${ghostView.leftPct}%`,

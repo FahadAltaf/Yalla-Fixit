@@ -14,6 +14,7 @@ import { Card } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -387,6 +388,13 @@ export default function CatalogueTreeAdmin() {
   );
 }
 
+/* The severities a defect can start at, each with the dot the tables use. */
+const SEVERITY_OPTIONS: { value: CatalogueDefect["default_severity"]; label: string; dot: string }[] = [
+  { value: "high", label: "High", dot: "bg-red-500" },
+  { value: "medium", label: "Medium", dot: "bg-amber-500" },
+  { value: "low", label: "Low", dot: "bg-emerald-500" },
+];
+
 /** Adds or edits one node, at whichever level. */
 function NodeDialog({
   level,
@@ -426,6 +434,26 @@ function NodeDialog({
   }`;
 
   const options = subcategories.filter((s) => s.category_id === categoryId);
+  /*
+    A defect always has a sub-category picked. The default came from the
+    table's filter, which could belong to another category than the one
+    chosen here, so the field showed empty and Save stayed disabled. The
+    first sub-category of the chosen category stands in until one is picked.
+  */
+  const chosenSubcategoryId = options.some((s) => s.id === subcategoryId)
+    ? subcategoryId
+    : (options[0]?.id ?? "");
+
+  /* The code this node will print as, built from its parents' codes. */
+  const categoryCode = categories.find((c) => c.id === categoryId)?.code ?? "";
+  const subcategoryCode = options.find((s) => s.id === chosenSubcategoryId)?.code ?? "";
+  const typed = code.trim().toUpperCase() || "__";
+  const codePreview =
+    level === "category"
+      ? typed
+      : level === "subcategory"
+        ? `${categoryCode || "SN__"}-${typed}`
+        : `${categoryCode || "SN__"}-${subcategoryCode || "__"}-${typed}`;
 
   async function save() {
     setBusy(true);
@@ -436,7 +464,7 @@ function NodeDialog({
       };
       if (level === "subcategory") payload.category_id = categoryId;
       if (level === "defect") {
-        payload.subcategory_id = subcategoryId;
+        payload.subcategory_id = chosenSubcategoryId;
         payload.default_severity = severity;
       }
 
@@ -458,13 +486,20 @@ function NodeDialog({
     code.trim().length >= 2 &&
     label.trim().length >= 2 &&
     (level !== "subcategory" || categoryId) &&
-    (level !== "defect" || subcategoryId);
+    (level !== "defect" || chosenSubcategoryId);
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <ActionDialogContent busy={busy} className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>
+            {level === "defect"
+              ? "Where it sits in the catalogue, its code and the severity an inspector starts from."
+              : level === "subcategory"
+                ? "The category it belongs to, its code and its name."
+                : "Its code and its name. Sub-categories and defects are added under it."}
+          </DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-4">
@@ -475,10 +510,11 @@ function NodeDialog({
                 value={categoryId}
                 onValueChange={(value) => {
                   setCategoryId(value);
-                  setSubcategoryId("");
+                  // The new category's first sub-category, not an empty field.
+                  setSubcategoryId(subcategories.find((s) => s.category_id === value)?.id ?? "");
                 }}
               >
-                <SelectTrigger id="node-category">
+                <SelectTrigger id="node-category" className="w-full">
                   <SelectValue placeholder="Pick a category" />
                 </SelectTrigger>
                 <SelectContent>
@@ -495,9 +531,9 @@ function NodeDialog({
           {level === "defect" ? (
             <div className="grid gap-2">
               <Label htmlFor="node-subcategory">Sub-category</Label>
-              <Select value={subcategoryId} onValueChange={setSubcategoryId}>
-                <SelectTrigger id="node-subcategory">
-                  <SelectValue placeholder="Pick a sub-category" />
+              <Select value={chosenSubcategoryId} onValueChange={setSubcategoryId} disabled={options.length === 0}>
+                <SelectTrigger id="node-subcategory" className="w-full">
+                  <SelectValue placeholder={options.length ? "Pick a sub-category" : "No sub-categories in this category yet"} />
                 </SelectTrigger>
                 <SelectContent>
                   {options.map((s) => (
@@ -518,11 +554,15 @@ function NodeDialog({
               onChange={(event) => setCode(event.target.value.toUpperCase())}
               placeholder={level === "category" ? "SN21" : "07"}
               maxLength={4}
-              className="font-mono"
+              className="w-full font-mono"
             />
             <p className="text-muted-foreground text-xs">
               Two to four characters. It becomes part of the snag code at this
               level, so changing it later changes how existing snags read.
+            </p>
+            <p className="text-muted-foreground text-xs">
+              Snag code:{" "}
+              <span className="text-foreground bg-muted rounded px-1.5 py-0.5 font-mono">{codePreview}</span>
             </p>
           </div>
 
@@ -535,6 +575,7 @@ function NodeDialog({
               placeholder={
                 level === "category" ? "Civil & Structural" : "Concrete elements"
               }
+              className="w-full"
             />
           </div>
 
@@ -547,13 +588,18 @@ function NodeDialog({
                   setSeverity(value as CatalogueDefect["default_severity"])
                 }
               >
-                <SelectTrigger id="node-severity">
+                <SelectTrigger id="node-severity" className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="high">High</SelectItem>
-                  <SelectItem value="medium">Medium</SelectItem>
-                  <SelectItem value="low">Low</SelectItem>
+                  {SEVERITY_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      <span className="flex items-center gap-2">
+                        <span className={`size-2 rounded-full ${option.dot}`} aria-hidden />
+                        {option.label}
+                      </span>
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
               <p className="text-muted-foreground text-xs">
