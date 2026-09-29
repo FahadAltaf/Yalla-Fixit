@@ -124,41 +124,57 @@ export function ServicesAndCost({
         </Table>
       </div>
 
-      <dl className="bg-muted/20 space-y-2 border-t px-4 py-3 text-sm">
-        <div className="flex items-center justify-between gap-4">
-          <dt className="text-muted-foreground">Subtotal</dt>
-          <dd>
-            <Money value={totals.subtotal} />
-          </dd>
-        </div>
-        {totals.discountAmount > 0 ? (
-          <div className="flex items-center justify-between gap-4">
-            <dt className="text-muted-foreground">Discount ({totals.discountPercent}%)</dt>
-            <dd className="inline-flex items-center gap-1">
-              − <Money value={totals.discountAmount} />
+      {/*
+        The sum, under the column it sums.
+
+        It ran the full width of the table, so on a wide screen "Subtotal"
+        sat at the far left with its figure a foot away at the right, and
+        the grand total looked like one more line of five. It is a block
+        under the price column now: the figures stay beside their labels,
+        and the total that matters is the one thing set apart.
+      */}
+      <div className="bg-muted/20 border-t px-4 py-3">
+        <dl className="ml-auto w-full max-w-xs space-y-2 text-sm">
+          <div className="flex items-baseline justify-between gap-4">
+            <dt className="text-muted-foreground">Subtotal</dt>
+            <dd className="tabular-nums">
+              <Money value={totals.subtotal} />
             </dd>
           </div>
-        ) : null}
-        <div className="flex items-center justify-between gap-4">
-          <dt className="text-muted-foreground">Annual fee (excl. VAT)</dt>
-          <dd>
-            <Money value={totals.finalPrice} />
-          </dd>
-        </div>
-        <div className="flex items-center justify-between gap-4">
-          <dt className="text-muted-foreground">VAT (5%)</dt>
-          <dd>
-            <Money value={totals.vatAmount} />
-          </dd>
-        </div>
-        <div className="flex items-center justify-between gap-4 border-t pt-2.5">
-          <dt className="font-semibold">Grand total</dt>
-          <dd className="text-lg font-semibold">
-            <Money value={totals.grandTotal} />
-          </dd>
-        </div>
-        <p className="text-muted-foreground text-xs leading-relaxed">{totals.amountInWords}</p>
-      </dl>
+          {totals.discountAmount > 0 ? (
+            <div className="flex items-baseline justify-between gap-4">
+              <dt className="text-muted-foreground">
+                Discount ({totals.discountPercent}%)
+              </dt>
+              <dd className="text-success inline-flex items-center gap-1 tabular-nums">
+                − <Money value={totals.discountAmount} />
+              </dd>
+            </div>
+          ) : null}
+          <div className="flex items-baseline justify-between gap-4">
+            <dt className="text-muted-foreground">Annual fee (excl. VAT)</dt>
+            <dd className="tabular-nums">
+              <Money value={totals.finalPrice} />
+            </dd>
+          </div>
+          <div className="flex items-baseline justify-between gap-4">
+            <dt className="text-muted-foreground">VAT (5%)</dt>
+            <dd className="tabular-nums">
+              <Money value={totals.vatAmount} />
+            </dd>
+          </div>
+          <div className="mt-1 flex items-baseline justify-between gap-4 border-t pt-2.5">
+            <dt className="font-semibold">Grand total</dt>
+            <dd className="text-brand text-lg font-semibold tabular-nums">
+              <Money value={totals.grandTotal} />
+            </dd>
+          </div>
+          {/* The figure written out, as the document prints it. */}
+          <p className="text-muted-foreground border-t pt-2 text-xs leading-relaxed">
+            {totals.amountInWords}
+          </p>
+        </dl>
+      </div>
     </div>
   );
 }

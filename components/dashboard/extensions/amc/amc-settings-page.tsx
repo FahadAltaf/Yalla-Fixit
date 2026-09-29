@@ -52,8 +52,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { QuoteRichText } from "@/components/dashboard/snagging/quote-rich-text";
 import {
-  clauseListRenumbered,
-  clauseNumbering,
   clauseTextToHtml,
   htmlToClauseText,
   roundTrips,
@@ -131,6 +129,21 @@ const EDITABLE_CLAUSE = (clause: AmcClause) => !SCAFFOLDING.has(clause.id);
   not from their title -- the price list and the handyman rates.
 */
 const HEADING_FROM_BODY = new Set<string>(["priceListIntro", "handymanRates"]);
+
+/**
+ * Clauses that print under the clause above rather than announcing
+ * themselves, so the list says so instead of showing a number that
+ * belongs to something else. The document builder holds the same set
+ * (amc-document-model, NO_HEADING); these two are the ones the contract
+ * runs on without a heading.
+ */
+const RUNS_ON_ABOVE = new Set([
+  "excludedOffer",
+  "bankDetails",
+  "invoiceTerms",
+  "contractConfirmation",
+  "signatures",
+]);
 
 const CLAUSE_HINTS: Partial<Record<AmcClauseRole, string>> = {};
 
@@ -496,24 +509,6 @@ export function AmcSettingsPage() {
   };
 
   /*
-    Moving a clause by typing the number it should print under.
-
-    The number is not stored -- it is where the clause sits -- so setting
-    it to "7.2" means putting the clause second under the seventh, and
-    everything after it renumbers. That way the list can never show two
-    7.2s or skip an 8, which a free-typed label would allow within a week.
-
-    Returns why it could not be done, or null.
-  */
-  const renumberClause = (id: string, spec: string): string | null => {
-    if (!settings) return "Settings are still loading.";
-    const outcome = clauseListRenumbered(settings.clauseList, id, spec);
-    if ("error" in outcome) return outcome.error;
-    setClauseList(outcome.list);
-    return null;
-  };
-
-  /*
     Services, edited the same way the clauses are: the order they are
     offered in, what they are called, and which ones exist at all.
   */
@@ -749,22 +744,6 @@ export function AmcSettingsPage() {
     );
   }
 
-  /*
-    What each clause is numbered in the document -- the same walk the
-    builder makes. Shown in the list because a clause is known by its
-    number, and because it is the clearest way to see what moving one did.
-  */
-  /*
-    How many services print a scope. On a contract this is whatever that
-    proposal selected; here, with no proposal, the whole list is the right
-    answer -- it is what a contract with everything on it numbers as.
-  */
-  const clauseNumbers = clauseNumbering(settings.clauseList, {
-    scopeSections: settings.services.filter(
-      (service) => service.enabled !== false && service.hasScopeSection !== false,
-    ).length,
-  });
-
   const customisedClauses = settings.clauseList.filter(EDITABLE_CLAUSE).filter((clause) => {
     const shipped = defaults.clauseList.find((item) => item.id === clause.id);
     /* A clause somebody added is theirs entirely, so it counts. */
@@ -867,21 +846,25 @@ export function AmcSettingsPage() {
           icon={<FileText />}
           searchable
           title="Contract clauses"
-          description={`They print in this order, numbered as they go. A clause you haven't edited keeps the standard wording. ${customisedClauses} of ${settings.clauseList.filter(EDITABLE_CLAUSE).length} customised.`}
+          description={`They print in this order and are numbered from it. A clause you haven't edited keeps the standard wording. ${customisedClauses} of ${settings.clauseList.filter(EDITABLE_CLAUSE).length} customised.`}
           addLabel="Add clause"
           items={settings.clauseList.filter(EDITABLE_CLAUSE).map((clause) => ({
             id: clause.id,
             label: clause.title,
-            /* What it prints under -- "3.1" -- which is also how it is moved. */
-            number: clauseNumbers.get(clause.id)?.number,
-            /* Its number is the clause above's, so typing one here would
-               only ever move it somewhere it still would not print. */
-            numberFixed: clauseNumbers.get(clause.id)?.inherited,
-            hint: clauseNumbers.get(clause.id)?.inherited
-              ? /* It prints no heading of its own, so its number is the
-                   one above it -- saying which is the only way the number
-                   in the list is not a puzzle. */
-                `Prints under ${clauseNumbers.get(clause.id)?.number} rather than under a heading of its own.`
+            /*
+              No number here, on purpose.
+
+              The list used to show what each clause prints under. That
+              number depends on the proposal: a clause that draws nothing
+              takes no number, and the price list is switched on per
+              proposal, so one clause can be 6.2 on one contract and 6.3
+              on the next. The list could only ever show one of them, and
+              it showed several clauses the number of the clause above.
+              Order is the thing that is actually true here, so order is
+              what it shows.
+            */
+            hint: RUNS_ON_ABOVE.has(clause.role ?? "")
+              ? "Prints under the clause above it rather than under a heading of its own."
               : clause.role
                 ? CLAUSE_HINTS[clause.role]
                 : "Your own clause. It prints where it sits in this list.",
@@ -900,7 +883,6 @@ export function AmcSettingsPage() {
           }))}
           onChange={(id, text) => editClause(id, { body: text })}
           onRename={(id, title) => editClause(id, { title })}
-          onRenumber={renumberClause}
           onReorder={reorderClause}
           onDelete={removeClause}
           onAdd={addClause}
@@ -966,10 +948,6 @@ type LibraryItem = {
    * renamed, moved and removed; removing it is what needs saying plainly.
    */
   fixed?: boolean;
-  /** What it prints under, when the list is numbered. */
-  number?: string;
-  /** That number is the clause above's, so it is shown but not typed. */
-  numberFixed?: boolean;
   /** Said in the rename dialog, where the name alone is not the whole story. */
   renameNote?: string;
 };
@@ -994,7 +972,6 @@ function TextLibrary({
   onDelete,
   onReorder,
   onRename,
-  onRenumber,
 }: {
   icon: React.ReactNode;
   title: string;
@@ -1016,8 +993,6 @@ function TextLibrary({
   /** Puts `id` where `beforeId` is; at the end when that is null. */
   onReorder?: (id: string, beforeId: string | null) => void;
   onRename?: (id: string, title: string) => void;
-  /** Moves it to the number typed; returns why it could not, or null. */
-  onRenumber?: (id: string, number: string) => string | null;
 }) {
   const [selectedId, setSelectedId] = useState(items[0]?.id ?? "");
   const [query, setQuery] = useState("");
@@ -1034,7 +1009,6 @@ function TextLibrary({
   /* The row being renamed, and what it is being renamed to. */
   const [renaming, setRenaming] = useState<LibraryItem | null>(null);
   const [rename, setRename] = useState("");
-  const [renumber, setRenumber] = useState("");
   const [renameError, setRenameError] = useState<string | null>(null);
   /* The add dialog saves, so it has to be able to say it is working. */
   const [addingBusy, setAddingBusy] = useState(false);
@@ -1098,21 +1072,11 @@ function TextLibrary({
   const openRename = (item: LibraryItem) => {
     setRenaming(item);
     setRename(item.label);
-    setRenumber(item.number ?? "");
     setRenameError(null);
   };
 
   const submitRename = () => {
     if (!renaming || !rename.trim()) return;
-    /* The number first: if it cannot be placed, nothing moves and nothing
-       is renamed, so the dialog can say why with both values still in it. */
-    if (onRenumber && renumber.trim() && renumber.trim() !== renaming.number) {
-      const problem = onRenumber(renaming.id, renumber);
-      if (problem) {
-        setRenameError(problem);
-        return;
-      }
-    }
     if (rename.trim() !== renaming.label) onRename?.(renaming.id, rename.trim());
     setRenaming(null);
   };
@@ -1288,41 +1252,7 @@ function TextLibrary({
               {renaming?.renameNote ? (
                 <p className="text-muted-foreground text-xs">{renaming.renameNote}</p>
               ) : null}
-              {renaming?.numberFixed ? (
-                <p className="text-muted-foreground text-xs">
-                  This clause prints under {renaming.number}, which belongs to the
-                  clause above it. Drag it in the list to move it.
-                </p>
-              ) : null}
             </div>
-            {onRenumber && renaming?.number && !renaming.numberFixed ? (
-              /*
-                The number is where it sits, so typing one moves it -- and
-                everything after it renumbers to follow. Nothing here can
-                produce two 7.2s or a gap at 8.
-              */
-              <div className="space-y-1.5">
-                <Label htmlFor="amc-renumber">Number</Label>
-                <Input
-                  id="amc-renumber"
-                  value={renumber}
-                  placeholder="7 or 7.2"
-                  inputMode="decimal"
-                  className="max-w-32 tabular-nums"
-                  onChange={(event) => {
-                    setRenumber(event.target.value);
-                    setRenameError(null);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") submitRename();
-                  }}
-                />
-                <p className="text-muted-foreground text-xs">
-                  It moves to this number and the rest renumber around it. A
-                  number with a dot makes it a sub-clause.
-                </p>
-              </div>
-            ) : null}
             {renameError ? (
               <p className="text-destructive flex items-start gap-1.5 text-xs">
                 <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
@@ -1446,14 +1376,7 @@ function TextLibrary({
                         {/* Two lines before it gives up, rather than cutting
                             "Materials, Spare Parts, Consumables & Labor" off
                             at the comma with half the row still empty. */}
-                        <span className="line-clamp-2 break-words">
-                          {item.number ? (
-                            <span className="text-muted-foreground me-1.5 tabular-nums">
-                              {item.number}
-                            </span>
-                          ) : null}
-                          {item.label}
-                        </span>
+                        <span className="line-clamp-2 break-words">{item.label}</span>
                       </button>
                       {changed ? (
                         <span
@@ -1514,11 +1437,6 @@ function TextLibrary({
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div className="min-w-0 flex-1">
               <Label htmlFor={`amc-text-${selected.id}`} className="text-base font-semibold">
-                {selected.number ? (
-                  <span className="text-muted-foreground me-1.5 tabular-nums">
-                    {selected.number}
-                  </span>
-                ) : null}
                 {selected.label}
               </Label>
               {selected.hint ? (

@@ -19,6 +19,7 @@ import {
   CLAUSE_5_EXCLUDED,
   CLAUSE_8_TERMINATION,
   SCOPE_SECTIONS,
+  stripListMarker,
 } from "./amc-contract-content";
 
 /**
@@ -487,6 +488,27 @@ export function getAmcSettingsDefaults(): AmcSettings {
  * clause is empty, not that it should fall back to the shipped text — so
  * this checks for presence, not truthiness.
  */
+/**
+ * Clause bodies whose lines the document numbers from where they sit.
+ *
+ * Wording for these must not carry its own "A." or "1.", or the contract
+ * prints the marker and the number it worked out: "6.2.1 A. First Hour".
+ * Stripping on the way in is what keeps the editor and the contract
+ * saying the same thing, including for wording saved before these lines
+ * were numbered rather than lettered.
+ *
+ * A clause whose lines start being numbered belongs in this set.
+ */
+const NUMBERED_BODY_ROLES = ["handymanRates"] as const;
+
+/** Every line of a clause, without the markers the document replaces. */
+function withoutListMarkers(body: string): string {
+  return body
+    .split(/\r?\n/)
+    .map((line) => stripListMarker(line))
+    .join("\n");
+}
+
 export function mergeAmcSettings(
   defaults: AmcSettings,
   overrides: AmcSettingsOverrides | null | undefined,
@@ -510,8 +532,23 @@ export function mergeAmcSettings(
       ),
     ),
   };
+  /*
+    The first line of these clauses is their heading and the rest are
+    numbered by the document, so no line of them keeps a marker of its
+    own. Done here rather than only when the contract is drawn, so the
+    settings editor shows exactly what prints.
+  */
+  for (const role of NUMBERED_BODY_ROLES) {
+    const body = mergedClauses[role];
+    if (typeof body === "string") mergedClauses[role] = withoutListMarkers(body);
+  }
+
   const clauseList = (
     overrides.clauseList?.length ? overrides.clauseList : clauseListFrom(mergedClauses)
+  ).map((clause) =>
+    clause.role && (NUMBERED_BODY_ROLES as readonly string[]).includes(clause.role)
+      ? { ...clause, body: withoutListMarkers(clause.body ?? "") }
+      : clause,
   ).filter(
     /* The old proposal template's notes and acceptance line: the proposal
        is the brochure alone now (2026-09-28), so they print nowhere and are

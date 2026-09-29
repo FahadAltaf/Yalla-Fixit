@@ -325,6 +325,23 @@ export function SectionCard({
  * A row of pill tabs / filters, the shape used on the jobs table and
  * the scheduling nav. Generic so both stay identical.
  */
+/**
+ * The count beside a tab's name.
+ *
+ * Nothing is drawn for zero or for a count that has not arrived: a tab
+ * reading "Contacts 0" while its data is still loading says something
+ * false, and one reading "0" when the answer really is none says less
+ * than the empty state behind it already does.
+ */
+export function TabCount({ value }: { value?: number }) {
+  if (!value) return null;
+  return (
+    <Badge variant="secondary" className="ml-1.5 px-1.5 font-normal tabular-nums">
+      {value}
+    </Badge>
+  );
+}
+
 export function PillTabs<T extends string>({
   tabs,
   value,

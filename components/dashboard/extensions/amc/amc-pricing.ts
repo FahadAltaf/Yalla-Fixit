@@ -19,6 +19,20 @@ import type { AmcSettings } from "./amc-settings";
 
 const VAT_RATE = 0.05;
 
+/**
+ * The VAT-inclusive total, from the figure a submission stores.
+ *
+ * A submission stores `final_price`, which is the annual fee BEFORE VAT.
+ * The proposal, the contract and the detail page all quote the grand
+ * total, which is that plus VAT, so a list showing one price per
+ * submission has to do this sum rather than print what it was given.
+ * Printing the stored figure under a heading like "Final price" is how a
+ * proposal came to read 3,500 in the list and 3,675 on its own page.
+ */
+export function grandTotalOf(finalPriceExclVat: number): number {
+  return finalPriceExclVat * (1 + VAT_RATE);
+}
+
 /*
   FR2.5: Price = Base Price x Units x Frequency, read only, recomputed on
   every change. The base price is entered per proposal (FR2.4) and

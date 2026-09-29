@@ -59,23 +59,6 @@ const C = {
   white: "#FFFFFF",
 } as const;
 
-/* The covered-scope table's cells: its head, then its rows. */
-const headCell = {
-  padding: "7px 10px",
-  fontSize: "10px",
-  fontWeight: 700,
-  letterSpacing: "0.02em",
-  textAlign: "center",
-  verticalAlign: "middle",
-} as const;
-
-const bodyCell = {
-  padding: "7px 10px",
-  textAlign: "center",
-  verticalAlign: "middle",
-  borderBottom: `1px solid ${C.line}`,
-} as const;
-
 const W = AMC_PAGE.width;
 /* One content width for every section: the template's 110-unit margin. */
 const M = 48;
@@ -363,7 +346,96 @@ export function AmcBrochurePage({ brochure, pdf = false }: { brochure: AmcBrochu
           ) : null}
         </div>
 
-        {/* 7. Build your own AMC: the copy left, the template's puzzle right */}
+        {/* 7. What they chose is covered */}
+        <div
+          style={{
+            marginTop: "40px",
+            backgroundColor: C.white,
+            border: `1px solid ${C.line}`,
+            borderRadius: "12px",
+            padding: `${px(28 - d(20))} 28px ${px(28 + d(11))}`,
+          }}
+        >
+          {copy.servicesTitle ? (
+            <div style={{ fontSize: "20px", fontWeight: 700, lineHeight: "26px", color: C.red }}>{copy.servicesTitle}</div>
+          ) : null}
+          {/*
+            What the plan covers: a tick and the service, three across.
+
+            This was briefly a four-column table with its own red header
+            band. For three or four services that was a lot of furniture
+            around very little -- a header row, a rule under every line
+            and a column whose every cell said the same thing -- and it
+            repeated the red band the plan strip above already uses. The
+            list is back, with what the table was for kept: the units and
+            the frequency, under each name rather than in columns of
+            their own.
+          */}
+          {brochure.services.length ? (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(3, 1fr)",
+                columnGap: "20px",
+                rowGap: "14px",
+                marginTop: px(20 + d(20) - d(12)),
+              }}
+            >
+              {brochure.services.map((service) => {
+                /* "5 units · 2 per year". A single unit is not worth
+                   saying, so that line reads just "2 per year". */
+                const detail = [
+                  service.units > 1 ? `${service.units} units` : null,
+                  service.frequency,
+                ]
+                  .filter(Boolean)
+                  .join(" · ");
+                return (
+                  <div
+                    key={service.label}
+                    style={{ display: "flex", alignItems: "flex-start", gap: "9px" }}
+                  >
+                    <img
+                      src={iconTick.src}
+                      alt=""
+                      style={{
+                        height: "12px",
+                        width: "auto",
+                        display: "block",
+                        flexShrink: 0,
+                        marginTop: px(3 + d(12.5) - 1),
+                      }}
+                    />
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: "12.5px", fontWeight: 700, lineHeight: "17px" }}>
+                        {service.label}
+                      </div>
+                      {detail ? (
+                        <div
+                          style={{
+                            fontSize: "10px",
+                            lineHeight: "14px",
+                            color: C.soft,
+                            marginTop: px(1),
+                          }}
+                        >
+                          {detail}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div style={{ fontSize: "12px", marginTop: "16px" }}>No services selected.</div>
+          )}
+          {copy.servicesNote ? (
+            <div style={{ fontSize: "11px", lineHeight: "15px", fontStyle: "italic", marginTop: "16px" }}>{copy.servicesNote}</div>
+          ) : null}
+        </div>
+
+        {/* 8. Build your own AMC: the copy left, the template's puzzle right */}
         {copy.buildTitle || copy.buildLead.length || copy.buildNote ? (
           <div style={{ display: "flex", alignItems: "center", gap: "24px", marginTop: "40px" }}>
             <div style={{ flex: "0 0 220px" }}>
@@ -389,78 +461,6 @@ export function AmcBrochurePage({ brochure, pdf = false }: { brochure: AmcBrochu
           </div>
         ) : null}
 
-        {/* 8. What they chose is covered */}
-        <div
-          style={{
-            marginTop: "40px",
-            backgroundColor: C.white,
-            border: `1px solid ${C.line}`,
-            borderRadius: "12px",
-            padding: `${px(28 - d(20))} 28px ${px(28 + d(11))}`,
-          }}
-        >
-          {copy.servicesTitle ? (
-            <div style={{ fontSize: "20px", fontWeight: 700, lineHeight: "26px", color: C.red }}>{copy.servicesTitle}</div>
-          ) : null}
-          {/*
-            What the plan covers, as a table rather than a grid of ticks.
-
-            It read as three columns of service names with "2 per year ·
-            5 units" underneath in grey, which buried the two things a
-            client checks. They are columns now, headed like the scope
-            table in the contract so the proposal and the contract the
-            client signs afterwards show the same thing the same way.
-
-            Every row here is a service that was included -- the excluded
-            ones are never built -- so the tick is a confirmation, not a
-            comparison: this is covered, and the price is the one figure
-            quoted above.
-          */}
-          {brochure.services.length ? (
-            <table
-              style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                marginTop: px(20 + d(20) - d(12)),
-                fontSize: "12px",
-                lineHeight: "16px",
-              }}
-            >
-              <thead>
-                <tr style={{ backgroundColor: C.red, color: C.white }}>
-                  <th style={{ ...headCell, textAlign: "left" }}>SCOPE OF MAINTENANCE WORKS</th>
-                  <th style={{ ...headCell, width: "14%" }}>UNITS</th>
-                  <th style={{ ...headCell, width: "26%" }}>FREQUENCY</th>
-                  <th style={{ ...headCell, width: "16%" }}>COVERED</th>
-                </tr>
-              </thead>
-              <tbody>
-                {brochure.services.map((service, index) => (
-                  <tr
-                    key={service.label}
-                    style={index % 2 === 1 ? { backgroundColor: C.band } : undefined}
-                  >
-                    <td style={{ ...bodyCell, textAlign: "left" }}>{service.label}</td>
-                    <td style={bodyCell}>{service.units}</td>
-                    <td style={bodyCell}>{service.frequency}</td>
-                    <td style={bodyCell}>
-                      <img
-                        src={iconTick.src}
-                        alt="Covered"
-                        style={{ height: "11px", width: "auto", display: "inline-block" }}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <div style={{ fontSize: "12px", marginTop: "16px" }}>No services selected.</div>
-          )}
-          {copy.servicesNote ? (
-            <div style={{ fontSize: "11px", lineHeight: "15px", fontStyle: "italic", marginTop: "16px" }}>{copy.servicesNote}</div>
-          ) : null}
-        </div>
 
         {/* 9. Trusted, the button, how to reach us, the address */}
         {/* 28px: with the space above the large type it reads as 48. */}
@@ -568,23 +568,68 @@ function PlanCard({
   pdf?: boolean;
 }) {
   const d = (fontSize: number) => (pdf ? dropFor(fontSize) : 0);
+  /*
+    The client's plan, filled rather than outlined.
+
+    A red keyline around a white card read as a box someone had drawn
+    round a number, and at a glance it looked no different from Coverage
+    and Payment beside it. The plan sheet fills its chosen column solid
+    and captions it, so this does too: the one card that carries the
+    price is the one the eye lands on, and the other two stay quiet.
+  */
   const style: CSSProperties = {
     flex: width ? `0 0 ${width}px` : 1,
     position: "relative",
     textAlign: "center",
-    padding: `${20 - d(12)}px 12px ${20 + d(9.5)}px`,
-    backgroundColor: C.white,
-    color: C.text,
-    /* The client's own plan: outlined in the primary red. */
-    border: highlight ? `2px solid ${C.red}` : `1px solid ${C.line}`,
-    borderBottom: highlight ? `2px solid ${C.red}` : "none",
+    padding: `${(highlight ? 14 : 20) - d(12)}px 12px ${20 + d(9.5)}px`,
+    backgroundColor: highlight ? C.plan : C.white,
+    color: highlight ? C.white : C.text,
+    border: highlight ? `1px solid ${C.plan}` : `1px solid ${C.line}`,
+    borderBottom: highlight ? `1px solid ${C.plan}` : "none",
   };
   return (
     <div style={style}>
+      {/* What this column is, the way the plan sheet marks its own. */}
+      {highlight ? (
+        <div
+          style={{
+            display: "inline-block",
+            backgroundColor: C.white,
+            color: C.plan,
+            borderRadius: "999px",
+            /* html2canvas sits small caps low in their line box, so the
+               PDF takes the drop off the top and gives it back below --
+               the same trick the property-type pill above uses. */
+            padding: pdf ? `0 10px ${4 + 2 * (d(8) - 2)}px` : "2px 10px",
+            fontSize: "8px",
+            fontWeight: 700,
+            letterSpacing: "0.08em",
+            lineHeight: pdf ? `${11 - 2 * (d(8) - 2)}px` : "11px",
+            marginBottom: "6px",
+          }}
+        >
+          YOUR PLAN
+        </div>
+      ) : null}
       <div style={{ fontSize: "12px", fontWeight: 700, lineHeight: "15px" }}>{title}</div>
-      <div style={{ marginTop: `${Math.max(0, 8 - (d(20) - d(12)))}px`, lineHeight: "24px", color: C.red }}>{value}</div>
+      <div
+        style={{
+          marginTop: `${Math.max(0, 8 - (d(20) - d(12)))}px`,
+          lineHeight: "24px",
+          color: highlight ? C.white : C.red,
+        }}
+      >
+        {value}
+      </div>
       {/* Kept even when empty, so every card has the same anatomy and height. */}
-      <div style={{ fontSize: "9.5px", lineHeight: "13px", marginTop: `${4 + d(20) - d(9.5)}px` }}>
+      <div
+        style={{
+          fontSize: "9.5px",
+          lineHeight: "13px",
+          marginTop: `${4 + d(20) - d(9.5)}px`,
+          opacity: highlight ? 0.9 : 1,
+        }}
+      >
         {caption ?? " "}
       </div>
     </div>

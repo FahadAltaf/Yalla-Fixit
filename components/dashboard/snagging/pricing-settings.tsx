@@ -73,6 +73,7 @@ import {
   FieldsSkeleton,
   HeadingSkeleton,
   PageHeading,
+  PillTabs,
   SectionCard,
   SectionSkeleton,
   ActionDialogContent,
@@ -228,6 +229,14 @@ type ChargesDraft = {
  * screens next to it, which is how a coordinator learns one page from
  * another.
  */
+/**
+ * The tabs this page is divided into.
+ *
+ * The rates and the preview both need a rate card; the scope and terms do
+ * not, which is why a database without one still has something to show.
+ */
+type SettingsView = "rates" | "preview" | "terms";
+
 export default function PricingSettings() {
   const { userProfile } = useAuth();
   const canEdit = hasResourceAction(
@@ -244,6 +253,16 @@ export default function PricingSettings() {
   const [search, setSearch] = useState("");
 
   /** Which dialog is open, and on what. */
+  /*
+    Which tab is open.
+
+    The page was one column of everything: the rate table, the charges
+    that sit on top of it, a live quote preview, and the wording printed
+    on the quotation. Four separate jobs, and the last of them only
+    reachable by scrolling past the other three. They are tabs now, the
+    way AMC Settings does it.
+  */
+  const [view, setView] = useState<SettingsView>("rates");
   const [editingType, setEditingType] = useState<RateRow | null>(null);
   const [editingCharges, setEditingCharges] = useState(false);
   /*
@@ -306,6 +325,18 @@ export default function PricingSettings() {
         row.note.toLowerCase().includes(needle),
     );
   }, [rows, search]);
+
+  /*
+    The tab actually shown.
+
+    Without a rate card the first two tabs have nothing to draw, so the
+    bar offers only the third. Falling back here rather than correcting
+    the state in an effect keeps the page from rendering an empty tab
+    first and then moving, and matches how the job page resolves a tab it
+    does not have.
+  */
+  const activeView: SettingsView =
+    config?.rate_card || view === "terms" ? view : "terms";
 
   /**
    * Writes the whole config back.
@@ -483,7 +514,29 @@ export default function PricingSettings() {
                   migration against this database.
                 </AlertDescription>
               </Alert>
-            ) : (
+            ) : null}
+
+            {/*
+              The rate card has to exist before any of it can be priced,
+              so without one there is nothing to put under the first two
+              tabs. The scope and terms are stored separately and are
+              still editable, which is why that tab stands on its own.
+            */}
+            <PillTabs<SettingsView>
+              value={activeView}
+              onChange={setView}
+              tabs={
+                config.rate_card
+                  ? [
+                      { value: "rates" as const, label: "Rate card", count: visible.length },
+                      { value: "preview" as const, label: "Quote preview" },
+                      { value: "terms" as const, label: "Scope & terms" },
+                    ]
+                  : [{ value: "terms" as const, label: "Scope & terms" }]
+              }
+            />
+
+            {activeView === "rates" && config.rate_card ? (
               <>
                 <Card className="py-0">
                   <DataTable
@@ -570,47 +623,51 @@ export default function PricingSettings() {
                     </Figure>
                   </dl>
                 </SectionCard>
-
-                <QuotePreview config={config} />
               </>
-            )}
+            ) : null}
 
-            <SectionCard
-              title="Scope of work & terms"
-              icon={<FileText />}
-              description="Printed on every snagging quotation."
-              action={
-                canEdit ? (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button size="sm" variant="ghost">
-                        <Pencil className="size-3.5" />
-                        Edit
-                        <ChevronDown className="size-3.5" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => setEditingTerms("scope")}>
-                        Scope of work
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => setEditingTerms("terms")}>
-                        Terms &amp; conditions
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                ) : null
-              }
-              bodyClassName="border-t"
-            >
-              <div className="grid lg:grid-cols-2">
-                <div className="border-b p-5 lg:border-r lg:border-b-0">
-                  <TextBlock label="Scope of work" value={config.scope_of_work} kind="scope" />
+            {activeView === "preview" && config.rate_card ? (
+              <QuotePreview config={config} />
+            ) : null}
+
+            {activeView === "terms" ? (
+              <SectionCard
+                title="Scope of work & terms"
+                icon={<FileText />}
+                description="Printed on every snagging quotation."
+                action={
+                  canEdit ? (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button size="sm" variant="ghost">
+                          <Pencil className="size-3.5" />
+                          Edit
+                          <ChevronDown className="size-3.5" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => setEditingTerms("scope")}>
+                          Scope of work
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setEditingTerms("terms")}>
+                          Terms &amp; conditions
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  ) : null
+                }
+                bodyClassName="border-t"
+              >
+                <div className="grid lg:grid-cols-2">
+                  <div className="border-b p-5 lg:border-r lg:border-b-0">
+                    <TextBlock label="Scope of work" value={config.scope_of_work} kind="scope" />
+                  </div>
+                  <div className="p-5">
+                    <TextBlock label="Terms & conditions" value={config.terms} kind="terms" />
+                  </div>
                 </div>
-                <div className="p-5">
-                  <TextBlock label="Terms & conditions" value={config.terms} kind="terms" />
-                </div>
-              </div>
-            </SectionCard>
+              </SectionCard>
+            ) : null}
           </div>
         ) : null}
       </DataState>

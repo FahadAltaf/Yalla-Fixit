@@ -9,6 +9,7 @@ import {
   buildPriceListRows,
   fillAmcTokens,
   getSelectedScopeSections,
+  stripListMarker,
   textBlocks,
 } from "./amc-contract-content";
 import {
@@ -134,20 +135,6 @@ export function detailsTable(rows: [string, Run[] | string][]): Block {
 function fillBlocks(value: string, data: AmcComputedData): string[] {
   return textBlocks(fillAmcTokens(value ?? "", data.formData.serviceRows));
 }
-
-/**
- * A line without the list marker it was typed with.
- *
- * Stored wording carries whatever marker whoever wrote it used -- "A.",
- * "b)", "1." -- and the document numbers its own lines from where they
- * sit. Leaving both would print "6.3.1 A. First Hour".
- *
- * Only a marker at the very start goes, and only when something follows
- * it, so a line that opens with an initial or a figure ("2 per year")
- * keeps its text.
- */
-export const stripListMarker = (line: string) =>
-  line.replace(/^\s*(?:[A-Za-z]|\d{1,2})[.)]\s+(?=\S)/, "");
 
 /* "21,100.00" — the Word design's number style. */
 export const amount = (value: number) =>
@@ -601,9 +588,7 @@ function contractBlocks(data: AmcComputedData): Block[] {
       }
       case "handymanRates": {
         if (!formData.optionalSections?.additionalFixedPriceServices) return [];
-        /* The first block is the title; then one rate per block. A rate
-           that starts "A." keeps its letter, one that does not is
-           lettered in order. */
+        /* The first block is the title; then one rate per block. */
         const [, ...rates] = fillRef(clause.body);
         if (!rates.length) return [];
         /*

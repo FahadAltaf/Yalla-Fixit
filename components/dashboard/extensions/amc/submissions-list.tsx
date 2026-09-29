@@ -48,6 +48,8 @@ import {
 import { useDebounce } from "@/hooks/use-debounce";
 import { amcSubmissionsService } from "@/modules/amc-submissions";
 
+import { grandTotalOf } from "./amc-pricing";
+
 import { AMC_APPROVALS_CHANGED } from "./amc-approval-notice";
 import { amcStatusTone } from "./amc-status";
 import { useAmcActions } from "./use-amc-actions";
@@ -228,10 +230,14 @@ export function SubmissionsList() {
       : []),
     {
       id: "final_price",
-      header: "Final price",
+      /* The figure the proposal, the contract and the detail page all
+         quote: the annual fee with VAT on it. The column showed the
+         stored ex-VAT price under this heading, which read as a different
+         and smaller number than the same proposal's own page. */
+      header: "Grand total",
       cell: ({ row }) => (
         <Money
-          value={Number(row.original.final_price)}
+          value={grandTotalOf(Number(row.original.final_price))}
           className="text-sm font-medium"
         />
       ),

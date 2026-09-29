@@ -17,6 +17,7 @@ import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { ActionType, ResourceType } from "@/types/types";
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
+import { TabCount } from "@/components/dashboard/shared/kaizen";
 
 import { ErrorState } from "./shared";
 import { SignoffsCard } from "./signoffs-card";
@@ -544,15 +545,6 @@ function formatClock(at: number): string {
  * the same radius, padding and type scale as every other count in the
  * app — and changes with it.
  */
-function TabCount({ value }: { value?: number }) {
-  if (!value) return null;
-  return (
-    <Badge variant="secondary" className="ml-1.5 px-1.5 font-normal tabular-nums">
-      {value}
-    </Badge>
-  );
-}
-
 /** A small spinner on a tab whose data is being re-read; the data stays. */
 function TabBusy({ on }: { on: boolean }) {
   if (!on) return null;

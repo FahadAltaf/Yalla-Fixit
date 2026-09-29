@@ -1,5 +1,22 @@
 import { formatPhoneForDocument } from "./amc-phone";
 
+/**
+ * A line without the list marker it was typed with.
+ *
+ * Some clause lines are numbered by the document from where they sit, so
+ * a marker in the stored wording -- "A.", "b)", "1." -- would print twice
+ * over: "6.2.1 A. First Hour". Settings strip it on the way in
+ * (NUMBERED_BODY_ROLES) so the editor shows what the contract prints, and
+ * the builder strips it again on the way out so wording saved before that
+ * still prints cleanly.
+ *
+ * Only a marker at the very start goes, and only when something follows
+ * it, so a line opening with an initial or a figure ("2 per year") keeps
+ * its text.
+ */
+export const stripListMarker = (line: string) =>
+  line.replace(/^\s*(?:[A-Za-z]|\d{1,2})[.)]\s+(?=\S)/, "");
+
 export interface ScopeSectionContent {
   serviceId: string;
   sectionNumber: string;
@@ -156,9 +173,9 @@ export function buildClause1Operation(opts: {
         listItems,
         /* The direct-contact line is the highlighted one. Keyed off its
            position rather than a fixed index, because the line above it
-           can be absent. */
+           can be absent. Nothing reads this yet: the builder draws every
+           item alike. */
         highlightIndex: directContactLine ? listItems.length - 1 : -1,
-        listType: "letter" as const,
       },
       {
         title: "1.2 Maintenance team",

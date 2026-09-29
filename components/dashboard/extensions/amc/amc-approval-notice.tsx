@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { amcSubmissionsService } from "@/modules/amc-submissions";
 import { formatCurrencyAED } from "@/utils/format-currency";
 
+import { grandTotalOf } from "./amc-pricing";
 import type { AmcPendingApproval } from "./amc-types";
 
 /**
@@ -136,7 +137,7 @@ export function AmcApprovalNotice({
                 <p className="text-muted-foreground text-xs">
                   {[
                     item.ownerName ? `From ${item.ownerName}` : null,
-                    formatCurrencyAED(item.finalPrice),
+                    formatCurrencyAED(grandTotalOf(item.finalPrice)),
                     item.submittedAt
                       ? formatDistanceToNow(new Date(item.submittedAt), {
                           addSuffix: true,

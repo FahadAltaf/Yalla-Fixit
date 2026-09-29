@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { addDays, differenceInCalendarMonths, format } from "date-fns";
 import {
@@ -40,9 +40,11 @@ import {
   StatCard,
   StatCardGrid,
   SubHeading,
+  TabCount,
   timeAgo,
 } from "@/components/dashboard/shared/kaizen";
 import { Card } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Money } from "@/components/ui/money";
 import { formatCurrencyAED } from "@/utils/format-currency";
 import { amcSubmissionsService } from "@/modules/amc-submissions";
@@ -340,6 +342,9 @@ function termMonths(start?: string, end?: string): number | null {
  * with the history beside it. The actions are the list's own
  * (useAmcActions).
  */
+/** The tabs this page has, and the only values ?tab= may carry. */
+const TABS = new Set(["record", "services", "contacts", "history"]);
+
 export function SubmissionDetails({
   submission,
   onView,
@@ -431,6 +436,39 @@ export function SubmissionDetails({
   const contactCount =
     form.coordinationContacts.filter((c) => c.name?.trim() || c.phone?.trim()).length +
     (form.accountManagers ?? []).filter((m) => m.name?.trim() || m.phone?.trim()).length;
+
+  /*
+    Which tab is open, and the ones opened so far.
+
+    The tab is in the URL so a link can point at one and a refresh keeps
+    the reader where they were, as the job page does it. A tab stays
+    mounted once opened, hidden rather than unmounted, so returning to one
+    shows it exactly as it was left.
+  */
+  const [tab, setTabState] = useState<string | null>(null);
+  const [opened, setOpened] = useState<Set<string>>(() => new Set());
+  useEffect(() => {
+    const asked = new URLSearchParams(window.location.search).get("tab");
+    if (asked) setTabState(asked);
+  }, []);
+  const setTab = useCallback((next: string) => {
+    setTabState(next);
+    setOpened((prev) => (prev.has(next) ? prev : new Set(prev).add(next)));
+    const query = new URLSearchParams(window.location.search);
+    query.set("tab", next);
+    window.history.replaceState(null, "", `?${query.toString()}`);
+  }, []);
+  /* A stale or mistyped ?tab= falls back to the record rather than
+     leaving the page below the tab bar empty. */
+  const activeTab = TABS.has(tab ?? "") ? (tab as string) : "record";
+  const mounted = useMemo(() => new Set([...opened, activeTab]), [opened, activeTab]);
+  /* A tab's body, mounted on first open and kept after. */
+  const panel = (value: string, children: ReactNode) =>
+    mounted.has(value) ? (
+      <TabsContent value={value} forceMount className="mt-4 data-[state=inactive]:hidden">
+        {children}
+      </TabsContent>
+    ) : null;
 
   /* The one thing on this proposal that needs somebody's attention. */
   const attention =
@@ -581,152 +619,203 @@ export function SubmissionDetails({
         ) : null}
       </Card>
 
-      {/* The four figures that matter, in the product's one stat tile. */}
-      <StatCardGrid columns={4}>
-        <StatCard
-          label="Grand total"
-          value={<Money value={totals.grandTotal} />}
-          headline={`${formatCurrencyAED(totals.finalPrice)} a year before VAT`}
-          caption={
-            totals.discountAmount > 0 ? `${totals.discountPercent}% discount applied` : "No discount"
-          }
-        />
-        <StatCard
-          label="Services"
-          value={data.frequencyRows.length}
-          headline={data.frequencyRows.length === 1 ? "Service" : "Services"}
-          caption="Each with its own frequency and price"
-        />
-        <StatCard
-          label="Contract term"
-          value={months !== null ? `${months} ${months === 1 ? "month" : "months"}` : "—"}
-          headline={`${formatDisplayDate(form.startDate) || "—"} to ${data.endDate || "—"}`}
-          caption={`Paid ${formatPaymentTermsLabel(form.paymentTerms).toLowerCase()}`}
-        />
-        <StatCard
-          label="Stage"
-          value={AMC_STATUS_LABELS[submission.status] ?? submission.status}
-          headline={stage.next}
-          caption={`Updated ${timeAgo(submission.updated_at)}`}
-          tone={stage.tone}
-        />
-      </StatCardGrid>
-
-      {/* The record, laid out exactly as the Review step showed it. */}
-      <Card className="min-w-0 gap-0 p-0">
-        <div className="space-y-8 p-4 sm:p-6">
-          <ReviewSection
-            icon={Building2}
-            title="Property and customer"
-            description="What the proposal and the contract are written for."
-          >
-            <dl className="grid gap-x-6 gap-y-4 rounded-lg border p-4 sm:grid-cols-2 xl:grid-cols-4">
-              <Fact label="Customer">{form.customerName}</Fact>
-              <Fact label="Customer ID">{form.customerId}</Fact>
-              <Fact label="Phone">{formatPhoneForDocument(form.customerPhone)}</Fact>
-              <Fact label="Email">{form.customerEmail}</Fact>
-              <Fact label="Property category">
-                <span className="capitalize">{form.propertyCategory}</span>
-              </Fact>
-              <Fact label="Unit type">
-                <span className="capitalize">{form.unitType}</span>
-              </Fact>
-              <Fact label="Property detail">{form.propertyDetail}</Fact>
-              <Fact label="Address">{form.propertyAddress}</Fact>
-              <Fact label="Contract period">
-                <span className="inline-flex items-center gap-1.5">
-                  <CalendarRange className="text-muted-foreground size-3.5" aria-hidden />
-                  {formatDisplayDate(form.startDate)} → {data.endDate || "—"}
-                </span>
-              </Fact>
-              <Fact label="Payment terms">{formatPaymentTermsLabel(form.paymentTerms)}</Fact>
-              <Fact label="Proposal number">{submission.customer.proposalNumber}</Fact>
-              <Fact label="Property type">{sentenceCase(data.propertyTypeLabel)}</Fact>
-            </dl>
-          </ReviewSection>
-
-          <ReviewSection
-            icon={ListCheck}
-            title="Services and cost"
-            description="As it appears in the documents, with the total before and after 5% VAT."
-          >
-            <ServicesAndCost rows={data.frequencyRows} totals={totals} />
-          </ReviewSection>
-
-          <ReviewSection
-            icon={Users}
-            title="Contacts"
-            description={`${contactCount} ${contactCount === 1 ? "person" : "people"} named in the contract.`}
-          >
-            <div className="space-y-6 rounded-lg border p-4">
-              <ContactGroup
-                title="Coordination contacts"
-                people={form.coordinationContacts.map((contact) => ({
-                  name: contact.name,
-                  phone: contact.phone,
-                  role: contact.designation
-                    ? sentenceCase(formatDesignationLabel(contact.designation))
-                    : "",
-                }))}
-                empty="No coordination contacts on this proposal."
-              />
-              <ContactGroup
-                title="Account managers"
-                people={(form.accountManagers ?? []).map((manager) => ({
-                  name: manager.name,
-                  phone: manager.phone,
-                  role: "Account manager",
-                }))}
-                empty="No account managers on this proposal."
-              />
-            </div>
-          </ReviewSection>
-        </div>
-      </Card>
-
       {/*
-        Everything that has happened to it, oldest first, under the record:
-        a full-width list reads better than a narrow column beside it, and
-        the timeline grows with every round of approval.
+        The record, in tabs.
+
+        It was one column: the property, the services, the contacts and
+        then every event, so reading the cost meant scrolling past the
+        address and reading the history meant scrolling past everything.
+        Same shape as a job page now. The header above stays put, because
+        the actions are there and they apply whichever tab is open.
       */}
-      <SectionCard
-        icon={<History />}
-        title="History"
-        description={`${timeline.length} ${timeline.length === 1 ? "event" : "events"}, oldest first.`}
-        bodyClassName="px-5 pb-5"
-      >
-        <ol className="relative">
-          {timeline.map((step, index) => (
-            <li key={`${step.label}-${index}`} className="relative flex gap-4 pb-5 last:pb-0">
-              {index < timeline.length - 1 && (
-                <span className="bg-border absolute top-4 left-[5px] h-full w-px" aria-hidden />
-              )}
-              <span
-                className={`relative mt-1.5 size-[11px] shrink-0 rounded-full ring-4 ring-background ${step.tone === "good"
-                    ? "bg-green-600"
-                    : step.tone === "bad"
-                      ? "bg-destructive"
-                      : "bg-muted-foreground/40"
-                  }`}
-                aria-hidden
+      <Tabs value={activeTab} onValueChange={setTab}>
+        <TabsList className="h-auto w-full flex-wrap justify-start gap-1 group-data-horizontal/tabs:h-auto">
+          <TabsTrigger value="record">Property &amp; customer</TabsTrigger>
+          <TabsTrigger value="services">
+            Services &amp; cost
+            <TabCount value={data.frequencyRows.length} />
+          </TabsTrigger>
+          <TabsTrigger value="contacts">
+            Contacts
+            <TabCount value={contactCount} />
+          </TabsTrigger>
+          <TabsTrigger value="history">
+            History
+            <TabCount value={timeline.length} />
+          </TabsTrigger>
+        </TabsList>
+
+        {panel(
+          "record",
+          <div className="flex flex-col gap-4">
+            {/*
+              The four figures, on the tab the page opens on rather than
+              above the bar. They describe the proposal as a whole, and
+              this is the tab that describes the proposal as a whole; on
+              the cost and contact tabs they repeated what was already in
+              front of you.
+            */}
+            <StatCardGrid columns={4}>
+              <StatCard
+                label="Grand total"
+                value={<Money value={totals.grandTotal} />}
+                headline={`${formatCurrencyAED(totals.finalPrice)} a year before VAT`}
+                caption={
+                  totals.discountAmount > 0
+                    ? `${totals.discountPercent}% discount applied`
+                    : "No discount"
+                }
               />
-              <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
-                <div className="min-w-0 text-sm">
-                  <p className="leading-snug font-medium">{step.label}</p>
-                  {step.note && (
-                    <p className="bg-muted/50 text-muted-foreground mt-1.5 max-w-3xl rounded-md px-2.5 py-1.5 text-xs whitespace-pre-line">
-                      {step.note}
-                    </p>
-                  )}
-                </div>
-                <p className="text-muted-foreground shrink-0 text-xs tabular-nums sm:pt-0.5">
-                  {formatWhen(step.at)}
-                </p>
+              <StatCard
+                label="Services"
+                value={data.frequencyRows.length}
+                headline={data.frequencyRows.length === 1 ? "Service" : "Services"}
+                caption="Each with its own frequency and price"
+              />
+              <StatCard
+                label="Contract term"
+                value={months !== null ? `${months} ${months === 1 ? "month" : "months"}` : "—"}
+                headline={`${formatDisplayDate(form.startDate) || "—"} to ${data.endDate || "—"}`}
+                caption={`Paid ${formatPaymentTermsLabel(form.paymentTerms).toLowerCase()}`}
+              />
+              <StatCard
+                label="Stage"
+                value={AMC_STATUS_LABELS[submission.status] ?? submission.status}
+                headline={stage.next}
+                caption={`Updated ${timeAgo(submission.updated_at)}`}
+                tone={stage.tone}
+              />
+            </StatCardGrid>
+
+            <Card className="min-w-0 gap-0 p-4 sm:p-6">
+              <ReviewSection
+                icon={Building2}
+                title="Property and customer"
+                description="What the proposal and the contract are written for."
+              >
+                <dl className="grid gap-x-6 gap-y-4 rounded-lg border p-4 sm:grid-cols-2 xl:grid-cols-4">
+                  <Fact label="Customer">{form.customerName}</Fact>
+                  <Fact label="Customer ID">{form.customerId}</Fact>
+                  <Fact label="Phone">{formatPhoneForDocument(form.customerPhone)}</Fact>
+                  <Fact label="Email">{form.customerEmail}</Fact>
+                  <Fact label="Property category">
+                    <span className="capitalize">{form.propertyCategory}</span>
+                  </Fact>
+                  <Fact label="Unit type">
+                    <span className="capitalize">{form.unitType}</span>
+                  </Fact>
+                  <Fact label="Property detail">{form.propertyDetail}</Fact>
+                  <Fact label="Address">{form.propertyAddress}</Fact>
+                  <Fact label="Contract period">
+                    <span className="inline-flex items-center gap-1.5">
+                      <CalendarRange className="text-muted-foreground size-3.5" aria-hidden />
+                      {formatDisplayDate(form.startDate)} → {data.endDate || "—"}
+                    </span>
+                  </Fact>
+                  <Fact label="Payment terms">{formatPaymentTermsLabel(form.paymentTerms)}</Fact>
+                  <Fact label="Proposal number">{submission.customer.proposalNumber}</Fact>
+                  <Fact label="Property type">{sentenceCase(data.propertyTypeLabel)}</Fact>
+                </dl>
+              </ReviewSection>
+            </Card>
+          </div>,
+        )}
+
+        {panel(
+          "services",
+          <Card className="min-w-0 gap-0 p-4 sm:p-6">
+            <ReviewSection
+              icon={ListCheck}
+              title="Services and cost"
+              description="As it appears in the documents, with the total before and after 5% VAT."
+            >
+              <ServicesAndCost rows={data.frequencyRows} totals={totals} />
+            </ReviewSection>
+          </Card>,
+        )}
+
+        {panel(
+          "contacts",
+          <Card className="min-w-0 gap-0 p-4 sm:p-6">
+            <ReviewSection
+              icon={Users}
+              title="Contacts"
+              description={`${contactCount} ${contactCount === 1 ? "person" : "people"} named in the contract.`}
+            >
+              {/*
+                The two groups sit directly on the card. They used to be
+                boxed inside it, which put a border around a border around
+                each person's own bordered card: three frames deep before
+                you reached a name.
+              */}
+              <div className="space-y-6">
+                <ContactGroup
+                  title="Coordination contacts"
+                  people={form.coordinationContacts.map((contact) => ({
+                    name: contact.name,
+                    phone: contact.phone,
+                    role: contact.designation
+                      ? sentenceCase(formatDesignationLabel(contact.designation))
+                      : "",
+                  }))}
+                  empty="No coordination contacts on this proposal."
+                />
+                <ContactGroup
+                  title="Account managers"
+                  people={(form.accountManagers ?? []).map((manager) => ({
+                    name: manager.name,
+                    phone: manager.phone,
+                    role: "Account manager",
+                  }))}
+                  empty="No account managers on this proposal."
+                />
               </div>
-            </li>
-          ))}
-        </ol>
-      </SectionCard>
+            </ReviewSection>
+          </Card>,
+        )}
+
+        {panel(
+          "history",
+            <SectionCard
+              icon={<History />}
+              title="History"
+              description={`${timeline.length} ${timeline.length === 1 ? "event" : "events"}, oldest first.`}
+              bodyClassName="px-5 pb-5"
+            >
+              <ol className="relative">
+                {timeline.map((step, index) => (
+                  <li key={`${step.label}-${index}`} className="relative flex gap-4 pb-5 last:pb-0">
+                    {index < timeline.length - 1 && (
+                      <span className="bg-border absolute top-4 left-[5px] h-full w-px" aria-hidden />
+                    )}
+                    <span
+                      className={`relative mt-1.5 size-[11px] shrink-0 rounded-full ring-4 ring-background ${step.tone === "good"
+                          ? "bg-green-600"
+                          : step.tone === "bad"
+                            ? "bg-destructive"
+                            : "bg-muted-foreground/40"
+                        }`}
+                      aria-hidden
+                    />
+                    <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
+                      <div className="min-w-0 text-sm">
+                        <p className="leading-snug font-medium">{step.label}</p>
+                        {step.note && (
+                          <p className="bg-muted/50 text-muted-foreground mt-1.5 max-w-3xl rounded-md px-2.5 py-1.5 text-xs whitespace-pre-line">
+                            {step.note}
+                          </p>
+                        )}
+                      </div>
+                      <p className="text-muted-foreground shrink-0 text-xs tabular-nums sm:pt-0.5">
+                        {formatWhen(step.at)}
+                      </p>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            </SectionCard>
+        )}
+      </Tabs>
     </div>
   );
 }
