@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useDebounce } from "@/hooks/use-debounce";
 import { BookMarked, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -83,53 +84,68 @@ export default function CatalogueAdmin() {
   const canEdit = hasResourceAction(userProfile, ResourceType.SNAGGING_CATALOGUE, ActionType.EDIT);
   const canCreate = hasResourceAction(userProfile, ResourceType.SNAGGING_CATALOGUE, ActionType.CREATE);
 
+  /*
+    Read a page at a time, filtered in the database.
+
+    The whole library used to arrive on mount and the screen filtered and
+    sliced it here. That is fine at a few hundred rows and wrong at any
+    size beyond it -- and it silently truncated once the table passed the
+    API's row cap. Same shape as the jobs and quotations tables now.
+  */
+  const debouncedSearch = useDebounce(search, 400);
+
+  /*
+    Discards a response that has been overtaken.
+
+    Without it a slow early request lands after a fast later one and the
+    table shows rows for a filter the user has already moved off.
+  */
+  const ticket = useRef(0);
+
   const load = useCallback(async () => {
+    const mine = ++ticket.current;
     setLoading(true);
     setError(null);
     try {
-      setData(await snaggingService.listCatalogue());
+      const next = await snaggingService.listCatalogue(
+        { search: debouncedSearch, element },
+        currentPage,
+        pageSize,
+      );
+      if (mine !== ticket.current) return;
+      setData(next);
     } catch (err) {
+      if (mine !== ticket.current) return;
       // Held on screen instead of toasted: an empty catalogue table and
       // a catalogue that failed to load look identical otherwise.
       setError(err instanceof Error ? err.message : "Could not load the catalogue");
     } finally {
-      setLoading(false);
+      if (mine === ticket.current) setLoading(false);
     }
-  }, []);
+  }, [debouncedSearch, element, currentPage, pageSize]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const elements = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const entry of data?.entries ?? []) map.set(entry.element_code, entry.element_label);
-    return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1]));
-  }, [data]);
+  // A new filter or search starts at page one, so nobody lands on an
+  // empty page 4 of a shorter result set.
+  useEffect(() => {
+    setCurrentPage(0);
+  }, [debouncedSearch, element]);
 
-  // Filtering happens here rather than server-side: the whole catalogue
-  // is a few hundred rows, it is already loaded, and a round trip per
-  // keystroke would be slower than the filter.
-  const visible = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    return (data?.entries ?? []).filter((entry) => {
-      if (element !== "all" && entry.element_code !== element) return false;
-      if (!term) return true;
-      return (
-        entry.code.toLowerCase().includes(term) ||
-        entry.defect_label.toLowerCase().includes(term) ||
-        entry.element_label.toLowerCase().includes(term)
-      );
-    });
-  }, [data, element, search]);
+  /*
+    From the server, not the page. Deriving these from the rows on screen
+    meant the filter's own options shrank as you paged through it.
+  */
+  const elements = useMemo(
+    () => (data?.elements ?? []).map((e) => [e.code, e.label] as [string, string]),
+    [data],
+  );
 
-  // The catalogue is a few hundred rows and already in memory, so the
-  // page is sliced here rather than round-tripping per page — the same
-  // shape the roles table uses against the shared DataTable.
-  const paginated = useMemo(() => {
-    const start = currentPage * pageSize;
-    return visible.slice(start, start + pageSize);
-  }, [visible, currentPage, pageSize]);
+  // The rows for this page, already filtered and sliced by the database.
+  const paginated = data?.entries ?? [];
+  const totalRows = data?.total ?? paginated.length;
 
   function handleGlobalFilterChange(value: string) {
     setSearch(value);
@@ -290,7 +306,7 @@ export default function CatalogueAdmin() {
             pageSize={pageSize}
             currentPage={currentPage}
             loading={loading}
-            rowCount={visible.length}
+            rowCount={totalRows}
             type="snagging-catalogue"
             isPagination={true}
             emptyState={

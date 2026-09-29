@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useDebounce } from "@/hooks/use-debounce";
 import { BookMarked, Plus } from "lucide-react";
 import { toast } from "sonner";
 
@@ -79,6 +80,8 @@ export default function CatalogueTreeAdmin() {
   const [categories, setCategories] = useState<CatalogueCategory[]>([]);
   const [subcategories, setSubcategories] = useState<CatalogueSubcategory[]>([]);
   const [defects, setDefects] = useState<CatalogueDefect[]>([]);
+  /** Defects matching the filters across every page, for the pager. */
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
@@ -94,24 +97,53 @@ export default function CatalogueTreeAdmin() {
     { level: Level; row?: CatalogueRow | CatalogueCategory | CatalogueSubcategory } | null
   >(null);
 
+  /*
+    A page of defects at a time, filtered in the database.
+
+    The whole taxonomy used to arrive on mount -- already past a thousand
+    defects -- and the screen filtered and sliced it to show ten. The two
+    upper levels still come back whole, because they are a handful of rows
+    and the screen needs all of them: both filters are built from them and
+    every defect resolves its parents through them.
+  */
+  const debouncedSearch = useDebounce(search, 400);
+
+  /* Discards a response a later filter has already overtaken. */
+  const ticket = useRef(0);
+
   const load = useCallback(async () => {
+    const mine = ++ticket.current;
     setLoading(true);
     setError(null);
     try {
-      const tree = await snaggingService.getCatalogueTree();
+      const tree = await snaggingService.getCatalogueTree(false, {
+        page,
+        pageSize,
+        search: debouncedSearch,
+        category,
+        subcategory,
+      });
+      if (mine !== ticket.current) return;
       setCategories(tree.categories);
       setSubcategories(tree.subcategories);
       setDefects(tree.defects);
+      setTotal(tree.total ?? tree.defects.length);
     } catch (err) {
+      if (mine !== ticket.current) return;
       setError(err instanceof Error ? err.message : "Could not load the catalogue");
     } finally {
-      setLoading(false);
+      if (mine === ticket.current) setLoading(false);
     }
-  }, []);
+  }, [page, pageSize, debouncedSearch, category, subcategory]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // A new filter or search starts at page one.
+  useEffect(() => {
+    setPage(0);
+  }, [debouncedSearch, category, subcategory]);
 
   /** Every defect with its parents resolved, which is what the table shows. */
   const rows = useMemo<CatalogueRow[]>(() => {
@@ -149,26 +181,12 @@ export default function CatalogueTreeAdmin() {
     [subcategories, category],
   );
 
-  const visible = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    return rows.filter((row) => {
-      if (category !== "all" && row.category_id !== category) return false;
-      if (subcategory !== "all" && row.subcategory_id !== subcategory) return false;
-      if (!term) return true;
-      return (
-        row.label.toLowerCase().includes(term) ||
-        row.full_code.toLowerCase().includes(term) ||
-        row.subcategory_label.toLowerCase().includes(term) ||
-        row.category_label.toLowerCase().includes(term) ||
-        (row.source_code ?? "").toLowerCase().includes(term)
-      );
-    });
-  }, [rows, category, subcategory, search]);
-
-  const paginated = useMemo(
-    () => visible.slice(page * pageSize, page * pageSize + pageSize),
-    [visible, page, pageSize],
-  );
+  /*
+    `rows` is already this page, filtered and ordered by the database, so
+    there is nothing left to narrow here. It still resolves each defect's
+    parents from the two complete upper levels above.
+  */
+  const paginated = rows;
 
   async function toggle(level: Level, id: string, active: boolean, label: string) {
     if (togglingId) return;
@@ -354,7 +372,7 @@ export default function CatalogueTreeAdmin() {
           pageSize={pageSize}
           currentPage={page}
           loading={loading}
-          rowCount={visible.length}
+          rowCount={total}
           type="snagging-catalogue"
           isPagination={true}
           emptyState={

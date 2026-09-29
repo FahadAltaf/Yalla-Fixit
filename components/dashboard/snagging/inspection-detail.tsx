@@ -145,9 +145,18 @@ function InspectionDetailView() {
         : null,
     [job.data, checklist.data, snags.data, floorPlans.data, visitStatus.data, desnag.data],
   );
-  // The snag list needs its plans (for pins) and the checklist (for its
-  // summary line) as well as the snags themselves.
-  const snagListReady = snags.data !== null && floorPlans.data !== null && checklist.data !== null;
+  /*
+    The snag list needs the snags. That is all.
+
+    It used to wait for the floor plans and the checklist as well -- the
+    plans for pin positions, the checklist for a summary line. The page
+    normally serves all three together, so this only shows when the server
+    read did not run or failed and the browser is fetching the sections
+    itself: the list now appears with the snags rather than after the
+    slowest of three. A row whose plan has not arrived draws no pin, which
+    is what it already does for a snag that was never pinned.
+  */
+  const snagListReady = snags.data !== null;
 
   // The tab lives in the URL so a link can point at one, and a refresh
   // keeps the reviewer where they were.

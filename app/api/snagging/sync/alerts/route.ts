@@ -5,6 +5,7 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { hasTable } from "@/lib/server/snagging/columns";
+import { readAllRows } from "@/lib/server/snagging/read-all";
 import { ActionType, ResourceType } from "@/types/types";
 
 const bodySchema = z.object({
@@ -14,7 +15,8 @@ const bodySchema = z.object({
   read: z.array(z.string().uuid()).max(500).optional(),
   /** "Mark all as read". */
   read_all: z.boolean().optional(),
-  limit: z.number().int().min(1).max(100).optional(),
+  /** How many of the newest a first load gets (no `since`). A delta gets every change. */
+  limit: z.number().int().min(1).max(200).optional(),
 });
 
 /*
@@ -56,8 +58,8 @@ function toAlert(row: AlertRow) {
  *
  * Does everything the Alerts tab and its badge need at once: marks the
  * alerts the phone read (`read`, or `read_all`), then answers with the
- * alerts new or changed since the phone's cursor (newest first, the last
- * `limit` on a first load), the unread count for the badge, and who the
+ * alerts new or changed since the phone's cursor (every one of them,
+ * newest first; the newest `limit` on a first load), the unread count for the badge, and who the
  * inspector is (name and role, for the Profile screen). A read made on one
  * device reaches the others through `since`, which also matches read_at.
  *
@@ -78,7 +80,7 @@ export async function POST(req: NextRequest) {
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
     }
-    const { since, read, read_all: readAll, limit = 50 } = parsed.data;
+    const { since, read, read_all: readAll, limit = 200 } = parsed.data;
 
     const admin = await createAdminServerClient();
     const serverTime = new Date().toISOString();
@@ -114,16 +116,37 @@ export async function POST(req: NextRequest) {
       if (error) throw new Error(error.message);
     }
 
-    let listQuery = admin
-      .from("snagging_notifications")
-      .select(ALERT_COLUMNS)
-      .eq("user_id", profile.id)
-      .order("created_at", { ascending: false })
-      .limit(limit);
-    if (since) {
-      // New since the cursor, or read since it (on this phone or another).
-      listQuery = listQuery.or(`created_at.gt.${since},read_at.gt.${since}`);
-    }
+    /*
+      A delta is every alert new or read since the cursor, paged through.
+      It was capped at 50, and the phone moves its cursor to server_time
+      whatever it got: after "Mark all as read" on 300 alerts, or a day
+      offline, the rest never arrived and stayed unread on the phone for
+      good. A first load takes the newest `limit`; older ones are history.
+    */
+    const listQuery = since
+      ? readAllRows<AlertRow>(
+          (from, to) =>
+            admin
+              .from("snagging_notifications")
+              .select(ALERT_COLUMNS)
+              .eq("user_id", profile.id)
+              // New since the cursor, or read since it (on this phone or another).
+              .or(`created_at.gt."${since}",read_at.gt."${since}"`)
+              .order("created_at", { ascending: false })
+              .order("id", { ascending: false })
+              .range(from, to),
+          "alerts",
+        ).then(
+          (data) => ({ data, error: null }),
+          (error: Error) => ({ data: null, error: { message: error.message } }),
+        )
+      : admin
+          .from("snagging_notifications")
+          .select(ALERT_COLUMNS)
+          .eq("user_id", profile.id)
+          .order("created_at", { ascending: false })
+          .order("id", { ascending: false })
+          .limit(limit);
 
     const [list, unread] = await Promise.all([
       listQuery,

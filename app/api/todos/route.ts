@@ -325,7 +325,19 @@ export async function GET(req: NextRequest) {
     }
 
     const page = Number(req.nextUrl.searchParams.get("page") ?? 0);
-    const pageSize = Number(req.nextUrl.searchParams.get("pageSize") ?? 100);
+    /*
+      Clamped. This was `Number(... ?? 100)` with no bound and no finiteness
+      check, so `?pageSize=1e9` was accepted and every todo the query
+      returned was serialised into one response.
+
+      This bounds the RESPONSE only. The read above is still unbounded and
+      still pages in JavaScript -- see AUDIT_SCALABILITY.md A-7 for the
+      query-side fix, which is a larger change.
+    */
+    const pageSize = Math.min(
+      Math.max(Math.floor(Number(req.nextUrl.searchParams.get("pageSize"))) || 100, 1),
+      200,
+    );
 
     const todos = await loadTodos();
     const visibleTodos = todos.filter((todo) =>

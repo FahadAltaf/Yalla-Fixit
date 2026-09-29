@@ -1,7 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
+import { hasResourceAction } from "@/lib/role-permissions";
+import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
+import { ActionType, ResourceType } from "@/types/types";
 
 export async function POST(request: NextRequest) {
   try {
+    /*
+      Authorised like any other route.
+
+      These proxied an Edge Function using the server's anon key with no
+      permission check of their own -- the same anti-pattern already fixed in
+      app/api/service-resources/route.ts. Callers are the browser, which
+      carries the session cookie.
+    */
+    const { profile, accessUser } = await getAuthenticatedUserAccess();
+    if (!profile || !accessUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (!hasResourceAction(accessUser, ResourceType.SCHEDULING, ActionType.VIEW)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
     const body = await request.json();
 
     const supabaseUrl = process.env.SUPABASE_URL;

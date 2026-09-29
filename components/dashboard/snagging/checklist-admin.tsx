@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useDebounce } from "@/hooks/use-debounce";
 import { Check, ChevronsUpDown, ClipboardList, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -133,56 +134,56 @@ export default function ChecklistAdmin() {
     ActionType.CREATE,
   );
 
+  /*
+    Read a page at a time, filtered in the database.
+
+    The whole library used to arrive on mount and the screen filtered and
+    sliced it here. Same shape as the jobs and quotations tables now, and
+    the summary figures come from the server so they describe the whole
+    filtered library rather than the ten rows on screen.
+  */
+  const debouncedSearch = useDebounce(search, 400);
+
+  /* Discards a response that a later filter has already overtaken. */
+  const ticket = useRef(0);
+
   const load = useCallback(async () => {
+    const mine = ++ticket.current;
     setLoading(true);
     setError(null);
     try {
-      setData(await snaggingService.listChecklistLibrary({ audience }));
+      const next = await snaggingService.listChecklistLibrary(
+        { audience, search: debouncedSearch, group, propertyType },
+        currentPage,
+        pageSize,
+      );
+      if (mine !== ticket.current) return;
+      setData(next);
     } catch (err) {
+      if (mine !== ticket.current) return;
       // Held on screen rather than toasted: an empty library and a library
       // that failed to load look identical otherwise.
       setError(
         err instanceof Error ? err.message : "Could not load the checklist library",
       );
     } finally {
-      setLoading(false);
+      if (mine === ticket.current) setLoading(false);
     }
-  }, [audience]);
+  }, [audience, debouncedSearch, group, propertyType, currentPage, pageSize]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  /*
-    Filtered here rather than server-side.
+  // A new filter or search starts at page one, so nobody lands on an
+  // empty page 4 of a shorter result set.
+  useEffect(() => {
+    setCurrentPage(0);
+  }, [audience, debouncedSearch, group, propertyType]);
 
-    The library is under a hundred rows and already loaded, so a round trip
-    per keystroke would be slower than the filter. The route still supports
-    the same filters for anything that wants to page it properly later.
-  */
-  const visible = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    const appliesKey =
-      propertyType === "all"
-        ? null
-        : (`applies_${propertyType}` as keyof SnaggingChecklistLibraryItem);
-
-    return (data?.items ?? []).filter((item) => {
-      if (group !== "all" && item.group_name !== group) return false;
-      if (appliesKey && !item[appliesKey]) return false;
-      if (!term) return true;
-      return (
-        item.code.toLowerCase().includes(term) ||
-        item.label.toLowerCase().includes(term) ||
-        item.group_name.toLowerCase().includes(term)
-      );
-    });
-  }, [data, group, propertyType, search]);
-
-  const paginated = useMemo(() => {
-    const start = currentPage * pageSize;
-    return visible.slice(start, start + pageSize);
-  }, [visible, currentPage, pageSize]);
+  // The rows for this page, already filtered and sliced by the database.
+  const paginated = data?.items ?? [];
+  const totalRows = data?.totalCount ?? paginated.length;
 
   function handleGlobalFilterChange(value: string) {
     setSearch(value);
@@ -368,7 +369,7 @@ export default function ChecklistAdmin() {
             pageSize={pageSize}
             currentPage={currentPage}
             loading={loading}
-            rowCount={visible.length}
+            rowCount={totalRows}
             type="snagging-checklist"
             isPagination={true}
             emptyState={

@@ -9,6 +9,8 @@ import {
   catalogueToggleSchema,
 } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType } from "@/types/types";
+import { likeTerm, pageParams } from "@/lib/server/snagging/search";
+import { readAllRows } from "@/lib/server/snagging/read-all";
 
 /* Every column, named. The only reader of this v1 endpoint is
    catalogue-admin, which nothing mounts, so nothing is dropped. */
@@ -36,20 +38,39 @@ export async function GET(req: NextRequest) {
     const params = req.nextUrl.searchParams;
     const admin = await createAdminServerClient();
 
-    let query = admin
+    /*
+      Server-side paging, like the jobs and quotations lists.
+
+      This read every entry and the screen filtered and sliced the result
+      in the browser, so the whole library crossed the wire to show ten
+      rows. Filtering, sorting and paging now happen in the database and
+      the response carries the total the pager needs.
+    */
+    const { from, to } = pageParams(params, { defaultSize: 10, maxSize: 100 });
+
+    let entriesQuery = admin
       .from("snagging_catalogue_entries")
       .select(COLUMNS, { count: "exact" })
-      .order("sort_order", { ascending: true });
+      .order("sort_order", { ascending: true })
+      .range(from, to);
 
-    if (params.get("activeOnly") === "true") query = query.eq("active", true);
+    if (params.get("activeOnly") === "true") {
+      entriesQuery = entriesQuery.eq("active", true);
+    }
 
     const element = params.get("element");
-    if (element && element !== "all") query = query.eq("element_code", element);
+    if (element && element !== "all") {
+      entriesQuery = entriesQuery.eq("element_code", element);
+    }
 
-    const search = params.get("search")?.trim();
-    if (search) {
-      const term = `%${search}%`;
-      query = query.or(
+    /*
+      likeTerm already returns the wrapped `%term%` pattern and null when
+      nothing usable is left, so it is used as-is. Wrapping it again gave
+      `%%term%%`, and `%null%` for an empty box.
+    */
+    const term = likeTerm(params.get("search"));
+    if (term) {
+      entriesQuery = entriesQuery.or(
         [
           `code.ilike.${term}`,
           `defect_label.ilike.${term}`,
@@ -58,25 +79,53 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const [entries, areas] = await Promise.all([
-      query,
+    const [entries, elementRows, areas] = await Promise.all([
+      entriesQuery,
       // The area -> element applicability matrix now lives on the areas
       // row itself, as the element_codes text[] column. There is no
       // separate snagging_catalogue_area_elements table any more.
-      admin
-        .from("snagging_catalogue_areas")
-        .select("code, label, sort_order, element_codes")
-        .order("sort_order", { ascending: true }),
+      // Not paged by the caller -- the screen needs every area to build
+      // its element filter -- so it is read to exhaustion rather than
+      // stopping at PostgREST's silent 1,000-row cap.
+      /*
+        The element filter's options, from the whole library rather than
+        the page -- otherwise paging would shrink the dropdown as you used
+        it. Two short columns, read to exhaustion; the distinct set is
+        inherently small even when the table is not.
+      */
+      readAllRows<{ element_code: string; element_label: string }>(
+        (rangeFrom, rangeTo) =>
+          admin
+            .from("snagging_catalogue_entries")
+            .select("element_code, element_label")
+            .order("element_label", { ascending: true })
+            .range(rangeFrom, rangeTo),
+        "catalogue elements",
+      ),
+      readAllRows<{
+        code: string;
+        label: string | null;
+        sort_order: number | null;
+        element_codes: string[] | null;
+      }>(
+        (from, to) =>
+          admin
+            .from("snagging_catalogue_areas")
+            .select("code, label, sort_order, element_codes")
+            .order("sort_order", { ascending: true })
+            .range(from, to),
+        "catalogue areas",
+      ),
     ]);
 
     if (entries.error) throw new Error(entries.error.message);
-    if (areas.error) throw new Error(areas.error.message);
+    const entryRows = entries.data ?? [];
 
     // Rebuild the flat { area_code, element_code, sort_order } pairs the
     // response has always exposed by expanding each area's element_codes
     // array, so the client sees the same shape it did when the matrix was
     // its own table.
-    const areaRows = (areas.data ?? []) as Array<{
+    const areaRows = areas as Array<{
       code: string;
       label: string | null;
       sort_order: number | null;
@@ -91,21 +140,29 @@ export async function GET(req: NextRequest) {
       })),
     );
 
-    // No totalCount here on purpose: the client's REST helper treats a
-    // { data, totalCount } envelope as a paginated response and returns
-    // it whole, which would hand the caller the envelope instead of the
-    // catalogue. The catalogue is not paginated, so it returns a plain
-    // { data } the helper unwraps to the object the screen expects.
+    /*
+      The total stays INSIDE data, not beside it.
+
+      The client's REST helper treats a top-level { data, totalCount } as
+      its own pagination envelope and hands the caller that envelope
+      instead of the catalogue. The screen reads data.total.
+    */
     return NextResponse.json({
       data: {
-        entries: entries.data ?? [],
+        entries: entryRows,
         areas: areaRows.map(({ code, label, sort_order }) => ({
           code,
           label,
           sort_order,
         })),
         area_elements,
-        total: entries.count ?? 0,
+        // Distinct, sorted by label, for the element filter.
+        elements: [
+          ...new Map(
+            elementRows.map((row) => [row.element_code, row.element_label]),
+          ).entries(),
+        ].map(([code, label]) => ({ code, label })),
+        total: entries.count ?? entryRows.length,
       },
     });
   } catch (error) {

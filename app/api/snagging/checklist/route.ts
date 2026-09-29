@@ -10,6 +10,8 @@ import {
   checklistToggleSchema,
 } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType } from "@/types/types";
+import { likeTerm, pageParams } from "@/lib/server/snagging/search";
+import { readAllRows } from "@/lib/server/snagging/read-all";
 
 /**
  * The checklist library (N1, FR-4.13).
@@ -44,70 +46,127 @@ export async function GET(req: NextRequest) {
     const params = req.nextUrl.searchParams;
     const admin = await createAdminServerClient();
 
-    let query = admin
-      .from(TABLE)
-      .select(COLUMNS, { count: "exact" })
-      .order("sort_order", { ascending: true });
+    /*
+      Server-side paging, like the jobs and quotations lists.
 
-    if (params.get("activeOnly") === "true") query = query.eq("active", true);
+      This read the whole library and the screen filtered and sliced it in
+      the browser. Filtering and paging now happen in the database.
+
+      The summary figures are counted SEPARATELY rather than derived from
+      the page: activeCount and mandatoryCount describe the whole filtered
+      library, and computing them from ten visible rows made them wrong
+      rather than merely short.
+    */
+    const { from, to } = pageParams(params, { defaultSize: 10, maxSize: 100 });
 
     /*
-      One audience at a time (N1).
+      Every filter the screen offers, applied to any of the three queries.
 
-      The two lists are different documents for different readers, and
-      showing them interleaved would let somebody retire a client-facing
-      line believing they were changing what inspectors see. The screen
-      always names which one it is showing; the default is the technician
-      list, because that is the one in daily use.
+      The page query and the two head-counts select different columns, so
+      their builder types differ. Rather than thread a recursive generic
+      through them -- which makes the compiler chase PostgrestFilterBuilder's
+      own generics until it gives up -- the builder is narrowed to the two
+      methods this needs and widened back at the boundary. The call sites
+      keep their real types.
     */
-    const audience = params.get("audience") ?? "technician";
-    if (audience !== "all") query = query.eq("audience", audience);
-
-    const group = params.get("group");
-    if (group && group !== "all") query = query.eq("group_name", group);
-
-    // The four applicability columns are booleans rather than one enum, so
-    // filtering by property type is a column choice, not a value match.
-    const propertyType = params.get("propertyType");
-    const appliesColumn: Record<string, string> = {
-      apartment: "applies_apartment",
-      villa: "applies_villa",
-      townhouse: "applies_townhouse",
-      commercial: "applies_commercial",
+    type Chainable = {
+      eq(column: string, value: unknown): Chainable;
+      or(filters: string): Chainable;
     };
-    if (propertyType && appliesColumn[propertyType]) {
-      query = query.eq(appliesColumn[propertyType], true);
+
+    function applyFilters<T>(query: T): T {
+      let q = query as Chainable;
+
+      if (params.get("activeOnly") === "true") q = q.eq("active", true);
+
+      /*
+        One audience at a time (N1). The two lists are different documents
+        for different readers; the default is the technician list, because
+        that is the one in daily use.
+      */
+      const audience = params.get("audience") ?? "technician";
+      if (audience !== "all") q = q.eq("audience", audience);
+
+      const group = params.get("group");
+      if (group && group !== "all") q = q.eq("group_name", group);
+
+      // The four applicability columns are booleans rather than one enum,
+      // so filtering by property type is a column choice, not a value match.
+      const propertyType = params.get("propertyType");
+      const appliesColumn: Record<string, string> = {
+        apartment: "applies_apartment",
+        villa: "applies_villa",
+        townhouse: "applies_townhouse",
+        commercial: "applies_commercial",
+      };
+      if (propertyType && appliesColumn[propertyType]) {
+        q = q.eq(appliesColumn[propertyType], true);
+      }
+
+      // likeTerm returns the wrapped `%term%` pattern, or null when the
+      // box holds nothing usable.
+      const term = likeTerm(params.get("search"));
+      if (term) {
+        q = q.or(
+          [
+            `code.ilike.${term}`,
+            `label.ilike.${term}`,
+            `group_name.ilike.${term}`,
+          ].join(","),
+        );
+      }
+
+      return q as T;
     }
 
-    const search = params.get("search")?.trim();
-    if (search) {
-      const term = `%${search}%`;
-      query = query.or(
-        [`code.ilike.${term}`, `label.ilike.${term}`, `group_name.ilike.${term}`].join(","),
-      );
-    }
+    const [page, activeCount, mandatoryCount, allGroups] = await Promise.all([
+      applyFilters(
+        admin.from(TABLE).select(COLUMNS, { count: "exact" }),
+      )
+        .order("sort_order", { ascending: true })
+        .range(from, to),
 
-    // The page and the group list are read together. Groups come from the
-    // whole library, not the filtered page, so the group filter does not
-    // shrink its own list of options as it is used.
-    const [{ data, error, count }, { data: allGroups }] = await Promise.all([
-      query,
-      admin.from(TABLE).select("group_name").order("sort_order", { ascending: true }),
+      applyFilters(
+        admin.from(TABLE).select("id", { count: "exact", head: true }),
+      ).eq("active", true),
+
+      applyFilters(
+        admin.from(TABLE).select("id", { count: "exact", head: true }),
+      )
+        .eq("active", true)
+        .eq("mandatory", true),
+
+      // The group list comes from the whole library, not the filtered
+      // page, so the group filter does not shrink its own options as it is
+      // used. Read to exhaustion rather than stopping at the row cap.
+      readAllRows<{ group_name: string }>(
+        (rangeFrom, rangeTo) =>
+          admin
+            .from(TABLE)
+            .select("group_name")
+            .order("sort_order", { ascending: true })
+            .range(rangeFrom, rangeTo),
+        "checklist groups",
+      ),
     ]);
-    if (error) throw new Error(error.message);
 
-    const items = data ?? [];
-    const groups = [
-      ...new Set((allGroups ?? []).map((row) => row.group_name as string)),
-    ];
+    if (page.error) throw new Error(page.error.message);
+    const items = page.data ?? [];
 
+    const groups = [...new Set(allGroups.map((row) => row.group_name))];
+
+    /*
+      totalCount sits INSIDE data: the client's REST helper treats a
+      top-level { data, totalCount } as its own pagination envelope and
+      would hand the screen that envelope instead of the library.
+    */
     return NextResponse.json({
       data: {
         items,
         groups,
-        totalCount: count ?? items.length,
-        activeCount: items.filter((item) => item.active).length,
-        mandatoryCount: items.filter((item) => item.active && item.mandatory).length,
+        totalCount: page.count ?? items.length,
+        activeCount: activeCount.count ?? 0,
+        mandatoryCount: mandatoryCount.count ?? 0,
       },
     });
   } catch (error) {

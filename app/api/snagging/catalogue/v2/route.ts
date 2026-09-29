@@ -12,6 +12,7 @@ import {
   catalogueToggleSchema,
 } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType } from "@/types/types";
+import { likeTerm, pageParams } from "@/lib/server/snagging/search";
 
 /**
  * The snag catalogue, on its new three-level structure (Action Points P1).
@@ -77,7 +78,8 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const activeOnly = req.nextUrl.searchParams.get("activeOnly") === "true";
+    const params = req.nextUrl.searchParams;
+    const activeOnly = params.get("activeOnly") === "true";
     const admin = await createAdminServerClient();
 
     /*
@@ -99,6 +101,8 @@ export async function GET(req: NextRequest) {
           .from(table)
           .select(columns)
           .order("sort_order", { ascending: true })
+          // The id breaks sort_order ties, so pages neither repeat nor skip rows.
+          .order("id", { ascending: true })
           .range(from, from + size - 1);
         if (error) throw new Error(error.message);
         const page = (data ?? []) as T[];
@@ -107,20 +111,100 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const [categories, subcategories, defects] = await Promise.all([
+    /*
+      The two upper levels whole, the defects a page at a time.
+
+      Categories and subcategories are a handful of rows each and the
+      screen needs all of them -- to populate the two filters and to
+      resolve each defect's parents -- so they still come back complete.
+      Defects are the level that grows: already past a thousand, and the
+      table only ever shows ten of them.
+
+      A request with no `page` still gets every defect, because the mobile
+      sync and the pickers read this route for the whole taxonomy.
+    */
+    const wantsPage = params.get("page") !== null || params.get("pageSize") !== null;
+
+    const [categories, subcategories] = await Promise.all([
       readAll<{ active: boolean }>(LEVELS.category.table, LEVELS.category.columns),
-      readAll<{ active: boolean }>(LEVELS.subcategory.table, LEVELS.subcategory.columns),
-      readAll<{ active: boolean }>(LEVELS.defect.table, LEVELS.defect.columns),
+      readAll<{ active: boolean; id: string; category_id: string }>(
+        LEVELS.subcategory.table,
+        LEVELS.subcategory.columns,
+      ),
     ]);
 
     const keep = <T extends { active: boolean }>(rows: T[]) =>
       rows.filter((row) => !activeOnly || row.active);
 
+    if (!wantsPage) {
+      const defects = await readAll<{ active: boolean }>(
+        LEVELS.defect.table,
+        LEVELS.defect.columns,
+      );
+      return NextResponse.json({
+        data: {
+          categories: keep(categories),
+          subcategories: keep(subcategories),
+          defects: keep(defects),
+        },
+      });
+    }
+
+    const { from, to } = pageParams(params, { defaultSize: 10, maxSize: 100 });
+
+    let defectQuery = admin
+      .from(LEVELS.defect.table)
+      .select(LEVELS.defect.columns, { count: "exact" })
+      .order("sort_order", { ascending: true })
+      .range(from, to);
+
+    if (activeOnly) defectQuery = defectQuery.eq("active", true);
+
+    /*
+      The two filters narrow in the database. Subcategory is the finer of
+      the two, so it wins when both are set -- filtering by a category AND
+      one of its subcategories is the same set either way.
+    */
+    const subcategoryId = params.get("subcategory");
+    const categoryId = params.get("category");
+    if (subcategoryId && subcategoryId !== "all") {
+      defectQuery = defectQuery.eq("subcategory_id", subcategoryId);
+    } else if (categoryId && categoryId !== "all") {
+      const inCategory = subcategories
+        .filter((row) => row.category_id === categoryId)
+        .map((row) => row.id);
+      // No subcategories means no defects; `.in()` with an empty list is
+      // an error in PostgREST, so answer directly.
+      if (inCategory.length === 0) {
+        return NextResponse.json({
+          data: {
+            categories: keep(categories),
+            subcategories: keep(subcategories),
+            defects: [],
+            total: 0,
+          },
+        });
+      }
+      defectQuery = defectQuery.in("subcategory_id", inCategory);
+    }
+
+    // likeTerm returns the wrapped `%term%` pattern, or null when empty.
+    const term = likeTerm(params.get("search"));
+    if (term) {
+      defectQuery = defectQuery.or(
+        [`code.ilike.${term}`, `label.ilike.${term}`, `source_code.ilike.${term}`].join(","),
+      );
+    }
+
+    const paged = await defectQuery;
+    if (paged.error) throw new Error(paged.error.message);
+
     return NextResponse.json({
       data: {
         categories: keep(categories),
         subcategories: keep(subcategories),
-        defects: keep(defects),
+        defects: (paged.data ?? []) as Array<{ active: boolean }>,
+        total: paged.count ?? 0,
       },
     });
   } catch (error) {

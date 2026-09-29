@@ -550,6 +550,13 @@ export const syncPullSchema = z.object({
   list: z.enum(["active", "done"]).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
   before: isoDateTime.optional(),
+  /*
+    With `before`, the id of the last card on the previous Done page. The
+    page is ordered by (created_at, id), and two jobs raised in the same
+    instant straddled a page break: paging on created_at alone skipped the
+    second, and the phone deleted it as gone.
+  */
+  before_id: z.string().uuid().optional(),
 });
 
 export const mediaSignSchema = z.object({

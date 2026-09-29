@@ -1,8 +1,15 @@
 
-// GraphQL query for fetching all rolesCollection
+// Read a page at a time. With no `first`, pg_graphql returns only its
+// default page -- so the roles table and every role picker built on this
+// quietly missed everything after it, with no error to notice. Same fix
+// as GET_USERS in users-graphql.ts, which documented the bug first.
 export const GET_ALL_ROLES = `
- query GetAllRoles {
-  rolesCollection {
+ query GetAllRoles($first: Int, $after: Cursor) {
+  rolesCollection(first: $first, after: $after, orderBy: [{ created_at: AscNullsLast }]) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
     edges {
       node {
         id

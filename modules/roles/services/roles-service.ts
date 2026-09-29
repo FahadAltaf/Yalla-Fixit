@@ -32,10 +32,34 @@ export const rolesService = {
    */
   getAllRoles: async () => {
     try {
-      const data = await executeGraphQLBackend(GET_ALL_ROLES);
-      return data.rolesCollection.edges.map(
-        (edge: { node: Role }) => edge.node
-      );
+      /*
+        Walked, not fetched once. pg_graphql caps a collection at its
+        default page size unless `first` is given, and this returned only
+        that first page -- silently, so a role added past the cap simply
+        did not exist for the pickers.
+
+        The ceiling is a guard against an unbounded loop, not a real limit;
+        a deployment with more roles than this has other problems.
+      */
+      const PAGE = 100;
+      const MAX_PAGES = 50;
+      const roles: Role[] = [];
+      let after: string | null = null;
+
+      for (let page = 0; page < MAX_PAGES; page += 1) {
+        const data = await executeGraphQLBackend(GET_ALL_ROLES, {
+          first: PAGE,
+          after,
+        });
+        const collection = data?.rolesCollection;
+        roles.push(
+          ...(collection?.edges ?? []).map((edge: { node: Role }) => edge.node),
+        );
+        if (!collection?.pageInfo?.hasNextPage) break;
+        after = collection.pageInfo.endCursor;
+      }
+
+      return roles;
     } catch (error) {
       console.error("Error fetching roles:", error);
       return [];

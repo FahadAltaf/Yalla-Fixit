@@ -5,11 +5,9 @@ import type { JobDetailInitial } from "@/components/dashboard/snagging/job-detai
 import {
   loadJobChecklist,
   loadJobCore,
-  loadJobDesnagQuotation,
   loadJobFloorPlans,
   loadJobSnags,
   loadJobVisitStatus,
-  loadJobVisits,
 } from "@/lib/server/snagging/job-detail-sections";
 import { canViewSnagging } from "@/lib/server/snagging/page-access";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
@@ -47,14 +45,18 @@ export async function generateMetadata({
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Every section of the job, read here on the server, all at once.
+ * What the first screen needs, read here on the server.
  *
  * The page used to load in the browser first and only then ask for its
- * seven sections -- the job, checklist, snags, plans, visit status, de-snag
- * quotation and visits -- so nothing could show until after that extra
- * round trip. They now arrive with the page. Each section is read by the
- * same function its API route uses, so what the server sends is exactly
- * what a refresh would fetch.
+ * seven sections, so nothing could show until after that extra round trip.
+ * Reading them here fixed that and left a smaller version of the same
+ * problem: `await` on all seven holds the first byte for the SLOWEST of
+ * them, and two of the seven are for things the landing tab never shows.
+ *
+ * So the de-snag quotation and the visit list are left out, and the page
+ * fetches each itself after paint. Both were on the critical path for a
+ * badge and a button. What stays is what the Snags tab and the header
+ * render, which is also the cheap end of the seven.
  *
  * Only for someone signed in with Snagging access; anyone else gets the
  * page's own requests, which the API answers as before. A section that
@@ -72,14 +74,23 @@ async function readSections(id: string): Promise<JobDetailInitial | undefined> {
         return undefined;
       });
 
-    const [job, checklist, snags, floorPlans, visitStatus, desnag, visits] = await Promise.all([
+    /*
+      Five, not seven. Each of these is on the first screen:
+
+      `checklist` for the Snags tab's summary line and the tab's count.
+      `visitStatus` because the header counts an area as walked unless the
+      visit that added it is still with the manager -- an empty set reads
+      every such area as walked, so the coverage figure would show too high
+      and then correct itself. `floorPlans` for the pin beside each row;
+      it signs its URLs in one batched call that is usually already cached,
+      so it is not the expense it looks like.
+    */
+    const [job, checklist, snags, visitStatus, floorPlans] = await Promise.all([
       settle(loadJobCore(admin, id)),
       settle(loadJobChecklist(admin, id)),
       settle(loadJobSnags(admin, id)),
-      settle(loadJobFloorPlans(admin, id)),
       settle(loadJobVisitStatus(admin, id)),
-      settle(loadJobDesnagQuotation(admin, id)),
-      settle(loadJobVisits(admin, id)),
+      settle(loadJobFloorPlans(admin, id)),
     ]);
 
     // No such job: the page shows its own "not found" from its request.
@@ -88,15 +99,18 @@ async function readSections(id: string): Promise<JobDetailInitial | undefined> {
     /*
       The rows these loaders return are exactly what the section routes
       send as JSON, which the page already reads in these shapes.
+
+      The de-snag quotation and the visit list are absent on purpose: the
+      context treats a missing key as "fetch it yourself", so the browser
+      requests each one after paint. The header hides the de-snag button
+      until its own fetch lands, and the visits badge appears with it.
     */
     return {
       job,
       checklist,
       snags,
-      floorPlans,
       visitStatus,
-      desnag,
-      visits,
+      floorPlans,
     } as unknown as JobDetailInitial;
   } catch (error) {
     console.error("Job sections (server) failed; the page will fetch them:", error);

@@ -5,7 +5,7 @@ import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { hasAreaInspector, hasJobInspectors } from "@/lib/server/snagging/columns";
 import { loadSyncChildren } from "@/lib/server/snagging/sync-children";
-import { readAllRows } from "@/lib/server/snagging/read-all";
+import { chunkIds, readAllByIds, readAllRows } from "@/lib/server/snagging/read-all";
 import { syncPullSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType } from "@/types/types";
 
@@ -79,6 +79,7 @@ export async function handleSyncPull(
       list: param("list"),
       limit: param("limit"),
       before: param("before"),
+      before_id: param("before_id"),
     });
     if (!parsed.success) {
       return NextResponse.json(
@@ -171,11 +172,30 @@ export async function handleSyncPull(
     };
 
     // 1. Which jobs is this inspector on? (lead, a visit, or a room)
-    const assignedQuery = admin
-      .from("snagging_jobs")
-      .select("id, status, parent_job_id")
-      .eq("inspector_id", profile.id)
-      .in("status", WORKABLE_JOB_STATUSES);
+    /*
+      Paged, all four of them.
+
+      These are the ROOTS of the snapshot, and they were unbounded selects
+      -- which PostgREST silently caps at 1,000 rows. read-all.ts was
+      written for exactly this failure: the phone treats a snapshot as the
+      whole truth, so a job missing from the payload is a job the handset
+      DELETES. The child tables were fixed for it; these parents were not.
+    */
+    const assignedQuery = readAllRows<{
+      id: string;
+      status: string;
+      parent_job_id: string | null;
+    }>(
+      (from, to) =>
+        admin
+          .from("snagging_jobs")
+          .select("id, status, parent_job_id")
+          .eq("inspector_id", profile.id)
+          .in("status", WORKABLE_JOB_STATUSES)
+          .order("id", { ascending: true })
+          .range(from, to),
+      "assigned jobs",
+    );
 
     /*
       An inspector booked onto an additional VISIT gets the job as well
@@ -187,11 +207,17 @@ export async function handleSyncPull(
       inspector an empty device on the morning of a trip they are booked
       for.
     */
-    const visitJobsQuery = admin
-      .from("snagging_job_visits")
-      .select("job_id")
-      .eq("inspector_id", profile.id)
-      .in("status", ["scheduled", "in_progress"]);
+    const visitJobsQuery = readAllRows<{ job_id: string }>(
+      (from, to) =>
+        admin
+          .from("snagging_job_visits")
+          .select("job_id")
+          .eq("inspector_id", profile.id)
+          .in("status", ["scheduled", "in_progress"])
+          .order("job_id", { ascending: true })
+          .range(from, to),
+      "visit jobs",
+    );
 
     /*
       Several inspectors on one job (point 6): an inspector given only
@@ -204,15 +230,18 @@ export async function handleSyncPull(
       of the day those two were the first thing every handset waited on.
     */
     const roomJobsQuery = (await hasAreaInspector(admin))
-      ? admin
-          .from("snagging_areas")
-          .select("job_id, job:job_id!inner(id, status)")
-          .eq("inspector_id", profile.id)
-          .in("job.status", WORKABLE_JOB_STATUSES)
-      : Promise.resolve({
-          data: [] as Array<{ job_id: string; job: unknown }>,
-          error: null,
-        });
+      ? readAllRows<{ job_id: string; job?: { status?: string } | { status?: string }[] | null }>(
+          (from, to) =>
+            admin
+              .from("snagging_areas")
+              .select("job_id, job:job_id!inner(id, status)")
+              .eq("inspector_id", profile.id)
+              .in("job.status", WORKABLE_JOB_STATUSES)
+              .order("job_id", { ascending: true })
+              .range(from, to),
+          "room-held jobs",
+        )
+      : Promise.resolve([] as Array<{ job_id: string; job?: { status?: string } | { status?: string }[] | null }>);
 
     /*
       Several inspectors on one job, none senior (2026-09-23): the job's
@@ -222,35 +251,35 @@ export async function handleSyncPull(
       the room query, so the two are read as one list below.
     */
     const rosterJobsQuery = (await hasJobInspectors(admin))
-      ? admin
-          .from("snagging_job_inspectors")
-          .select("job_id, job:job_id!inner(id, status)")
-          .eq("inspector_id", profile.id)
-          .in("job.status", WORKABLE_JOB_STATUSES)
-      : Promise.resolve({
-          data: [] as Array<{ job_id: string; job: unknown }>,
-          error: null,
-        });
+      ? readAllRows<{ job_id: string; job?: { status?: string } | { status?: string }[] | null }>(
+          (from, to) =>
+            admin
+              .from("snagging_job_inspectors")
+              .select("job_id, job:job_id!inner(id, status)")
+              .eq("inspector_id", profile.id)
+              .in("job.status", WORKABLE_JOB_STATUSES)
+              .order("job_id", { ascending: true })
+              .range(from, to),
+          "roster jobs",
+        )
+      : Promise.resolve([] as Array<{ job_id: string; job?: { status?: string } | { status?: string }[] | null }>);
 
-    // None depends on the others, so all four go together.
-    const [
-      { data: assigned, error: assignedError },
-      { data: visitJobs, error: visitJobsError },
-      { data: heldRooms, error: roomError },
-      { data: rosterRows, error: rosterError },
-    ] = await Promise.all([assignedQuery, visitJobsQuery, roomJobsQuery, rosterJobsQuery]);
-    if (assignedError) throw new Error(assignedError.message);
-    if (visitJobsError) throw new Error(visitJobsError.message);
-    if (roomError) throw new Error(roomError.message);
-    if (rosterError) throw new Error(rosterError.message);
+    // None depends on the others, so all four go together. readAllRows
+    // rejects on a failed page, so there is no per-query error to unpack.
+    const [assigned, visitJobs, heldRooms, rosterRows] = await Promise.all([
+      assignedQuery,
+      visitJobsQuery,
+      roomJobsQuery,
+      rosterJobsQuery,
+    ]);
     // A job reached through the roster is read exactly like one reached through a room.
-    const roomRows = [...(heldRooms ?? []), ...(rosterRows ?? [])];
-    const roomJobIds = [...new Set((roomRows ?? []).map((r) => r.job_id as string))];
+    const roomRows = [...heldRooms, ...rosterRows];
+    const roomJobIds = [...new Set(roomRows.map((r) => r.job_id))];
 
     const assignedIds = Array.from(
       new Set([
-        ...(assigned ?? []).map((r) => r.id as string),
-        ...(visitJobs ?? []).map((r) => r.job_id as string),
+        ...assigned.map((r) => r.id),
+        ...visitJobs.map((r) => r.job_id),
         ...roomJobIds,
       ]),
     );
@@ -268,12 +297,41 @@ export async function handleSyncPull(
       way to tell a return trip from the original inspection, because they
       are now the same job.
     */
-    const liveVisitsQuery = admin
-      .from("snagging_job_visits")
-      .select("id, job_id, visit_number, review_note, scheduled_date, appointment_at")
-      .in("job_id", assignedIds)
-      .in("status", ["scheduled", "in_progress"])
-      .order("visit_number", { ascending: false });
+    /*
+      These three filter on every job the inspector has ever been on, so
+      the ids go a chunk at a time and each chunk is paged (readAllByIds):
+      one `in.(…)` list of a long history outgrew the gateway's URL limit,
+      and finished visits past 1,000 were silently dropped. Each chunk is
+      ordered highest visit first, and a job's visits all fall in one chunk,
+      so "the first seen is the latest" still holds below.
+    */
+    const asResult = <T,>(work: Promise<T[]>) =>
+      work.then(
+        (data) => ({ data, error: null as { message: string } | null }),
+        (error: Error) => ({ data: null as T[] | null, error: { message: error.message } }),
+      );
+    const liveVisitsQuery = asResult(
+      readAllByIds<{
+        id: string;
+        job_id: string;
+        visit_number: number;
+        review_note: string | null;
+        scheduled_date: string | null;
+        appointment_at: string | null;
+      }>(
+        assignedIds,
+        (chunk, from, to) =>
+          admin
+            .from("snagging_job_visits")
+            .select("id, job_id, visit_number, review_note, scheduled_date, appointment_at")
+            .in("job_id", chunk)
+            .in("status", ["scheduled", "in_progress"])
+            .order("visit_number", { ascending: false })
+            .order("id", { ascending: true })
+            .range(from, to),
+        "live visits",
+      ),
+    );
 
     /*
       The most recent FINISHED visit per job: submitted for review, or
@@ -282,14 +340,33 @@ export async function handleSyncPull(
       dated weeks ago, with that round's old send-back note on the card,
       and the inspector could not find the visit they had just submitted.
     */
-    const doneVisitsQuery = admin
-      .from("snagging_job_visits")
-      .select(
-        "id, job_id, visit_number, status, scheduled_date, appointment_at, submitted_at, completed_at, updated_at",
-      )
-      .in("job_id", assignedIds)
-      .in("status", ["submitted", "completed"])
-      .order("visit_number", { ascending: false });
+    const doneVisitsQuery = asResult(
+      readAllByIds<{
+        id: string;
+        job_id: string;
+        visit_number: number;
+        status: string;
+        scheduled_date: string | null;
+        appointment_at: string | null;
+        submitted_at: string | null;
+        completed_at: string | null;
+        updated_at: string | null;
+      }>(
+        assignedIds,
+        (chunk, from, to) =>
+          admin
+            .from("snagging_job_visits")
+            .select(
+              "id, job_id, visit_number, status, scheduled_date, appointment_at, submitted_at, completed_at, updated_at",
+            )
+            .in("job_id", chunk)
+            .in("status", ["submitted", "completed"])
+            .order("visit_number", { ascending: false })
+            .order("id", { ascending: true })
+            .range(from, to),
+        "finished visits",
+      ),
+    );
 
     /*
       An additional visit also needs its ORIGINAL inspection on the device.
@@ -303,12 +380,21 @@ export async function handleSyncPull(
       Read-only context: the app shows these as "already on record" and
       the sync only ever writes back to the job the inspector is on.
     */
-    const parentsQuery = admin
-      .from("snagging_jobs")
-      .select("id, parent_job_id")
-      .in("id", assignedIds)
-      .eq("visit_type", "additional")
-      .not("parent_job_id", "is", null);
+    const parentsQuery = asResult(
+      readAllByIds<{ id: string; parent_job_id: string }>(
+        assignedIds,
+        (chunk, from, to) =>
+          admin
+            .from("snagging_jobs")
+            .select("id, parent_job_id")
+            .in("id", chunk)
+            .eq("visit_type", "additional")
+            .not("parent_job_id", "is", null)
+            .order("id", { ascending: true })
+            .range(from, to),
+        "parent jobs",
+      ),
+    );
 
     // All three hang off the assigned jobs only, so they run together.
     const [
@@ -511,37 +597,103 @@ export async function handleSyncPull(
 
 
     // 2. Jobs -> wire "tasks" (with a property sub-object + team list).
-    let jobQuery = admin
-      .from("snagging_jobs")
-      // Typed loosely: the column list depends on the view.
-      .select<string, Record<string, unknown>>(
-        listView
-          ? CARD_COLUMNS
-          : `id, code, status, round_number, visit_type, visit_charge, parent_job_id, scheduled_date, notes,
-         locked, rejection_reason, rejection_category, remediation_due_at, updated_at, created_at,
-         unit_label, building_name, community, property_type, developer_name,
-         appointment_at, bedrooms, built_up_area_sqft, plot_area_sqft, floors,
-         external_areas_in_scope, location_lat, location_lng, noc_required, noc_path,
-         developer_contact_name, developer_contact_phone,
-         client_contact_name, client_contact_phone,
-         property_record:property_id(unit_label, building_name, community, property_type,
-           developer_name, bedrooms, built_up_area_sqft, plot_area_sqft, floors,
-           external_areas_in_scope, location_lat, location_lng, noc_required, noc_path),
-         client:client_id(name, email, phone),
-         inspector_id,
-         inspector:inspector_id(full_name, email)`,
-      )
-      .in("id", listView ? listIds : jobIds);
+    const jobColumns =
+      listView
+        ? CARD_COLUMNS
+        : `id, code, status, round_number, visit_type, visit_charge, parent_job_id, scheduled_date, notes,
+       locked, rejection_reason, rejection_category, remediation_due_at, updated_at, created_at,
+       unit_label, building_name, community, property_type, developer_name,
+       appointment_at, bedrooms, built_up_area_sqft, plot_area_sqft, floors,
+       external_areas_in_scope, location_lat, location_lng, noc_required, noc_path,
+       developer_contact_name, developer_contact_phone,
+       client_contact_name, client_contact_phone,
+       property_record:property_id(unit_label, building_name, community, property_type,
+         developer_name, bedrooms, built_up_area_sqft, plot_area_sqft, floors,
+         external_areas_in_scope, location_lat, location_lng, noc_required, noc_path),
+       client:client_id(name, email, phone),
+       inspector_id,
+       inspector:inspector_id(full_name, email)`;
     /* Done, a page at a time, newest first -- one more row than the page,
        to know whether there is another. */
     const donePage = listView && !since && listKind === "done";
-    if (donePage) {
-      jobQuery = jobQuery
-        .order("created_at", { ascending: false })
-        .order("id", { ascending: false })
-        .limit(pageSize + 1);
-      if (parsed.data.before) jobQuery = jobQuery.lt("created_at", parsed.data.before);
-    }
+    const before = parsed.data.before;
+    const beforeId = parsed.data.before_id;
+
+    /*
+      Read in chunks of ids. The id list is every job the inspector has
+      ever been on, and one `.in()` over all of it both ran past the URL
+      length the database gateway accepts and came back capped at 1,000
+      rows -- the jobs past that simply never reached the phone.
+
+      A delta reads only the jobs that changed. It used to read them all
+      and filter here, which was cheap at a handful of jobs and is not at
+      thousands.
+    */
+    const readJobs = async (): Promise<Record<string, unknown>[]> => {
+      if (!donePage) {
+        const ids = since ? ((await changedPromise) ?? []) : listView ? listIds : jobIds;
+        return readAllByIds<Record<string, unknown>>(
+          ids,
+          (chunk, from, to) =>
+            admin
+              .from("snagging_jobs")
+              // Typed loosely: the column list depends on the view.
+              .select<string, Record<string, unknown>>(jobColumns)
+              .in("id", chunk)
+              .order("id", { ascending: true })
+              .range(from, to),
+          "jobs",
+        );
+      }
+      /*
+        A Done page: the newest pageSize + 1 of each chunk, merged, is the
+        newest pageSize + 1 overall. Ordered and paged on (created_at, id):
+        paging on created_at alone skipped a job raised in the same instant
+        as the last card of the page before.
+      */
+      const chunks = chunkIds([...new Set(listIds)]);
+      const pages: Record<string, unknown>[][] = [];
+      let next = 0;
+      const worker = async () => {
+        while (next < chunks.length) {
+          const chunk = chunks[next++];
+          let query = admin
+            .from("snagging_jobs")
+            .select<string, Record<string, unknown>>(jobColumns)
+            .in("id", chunk)
+            .order("created_at", { ascending: false })
+            .order("id", { ascending: false })
+            .limit(pageSize + 1);
+          if (before) {
+            query = beforeId
+              ? query.or(
+                  `created_at.lt."${before}",and(created_at.eq."${before}",id.lt.${beforeId})`,
+                )
+              : query.lt("created_at", before);
+          }
+          const { data, error } = await query;
+          if (error) throw new Error(error.message);
+          pages.push(data ?? []);
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(4, chunks.length) }, worker));
+      /* Postgres writes every timestamp in the same zone and trims only
+         trailing zeros from the fraction, so the strings sort as the times
+         do; a uuid compares as its lower-case text does. */
+      const key = (row: Record<string, unknown>) => [
+        String(row.created_at ?? ""),
+        String(row.id ?? ""),
+      ];
+      return pages
+        .flat()
+        .sort((x, y) => {
+          const [xa, xi] = key(x);
+          const [ya, yi] = key(y);
+          if (xa !== ya) return xa < ya ? 1 : -1;
+          return xi < yi ? 1 : xi > yi ? -1 : 0;
+        })
+        .slice(0, pageSize + 1);
+    };
 
     /*
       A delta is "jobs that changed", and a visit changing is the job
@@ -554,24 +706,9 @@ export async function handleSyncPull(
       it as "approved, nothing to do", and the inspector booked onto the
       visit never saw it in Today.
     */
-    /*
-      Read together, and the delta filtered here rather than in the query:
-      the jobs read used to wait for the check to finish, one more round
-      trip to the database on every pull. The inspector's own jobs are a
-      handful of rows, so reading the unchanged ones costs less than the
-      wait did.
-    */
-    const [{ data: allJobs, error: jobError }, changedIds] = await Promise.all([
-      jobQuery,
-      changedPromise,
-    ]);
-    if (jobError) throw new Error(jobError.message);
-    const changedSet = changedIds ? new Set(changedIds) : null;
-    const hasMore = donePage && (allJobs ?? []).length > pageSize;
-    const pageJobs = donePage ? (allJobs ?? []).slice(0, pageSize) : allJobs;
-    const jobs = changedSet
-      ? (pageJobs ?? []).filter((job) => changedSet.has((job as { id: string }).id))
-      : pageJobs;
+    const allJobs = await readJobs();
+    const hasMore = donePage && allJobs.length > pageSize;
+    const jobs = donePage ? allJobs.slice(0, pageSize) : allJobs;
     const roomCounts =
       (await roomCountsPromise) ??
       (listView
@@ -804,6 +941,11 @@ export async function handleSyncPull(
                 hasMore && jobs && jobs.length > 0
                   ? ((jobs[jobs.length - 1] as { created_at: string }).created_at ?? null)
                   : null,
+              // Sent back as before_id, with next_before, so a tie is not skipped.
+              next_before_id:
+                hasMore && jobs && jobs.length > 0
+                  ? ((jobs[jobs.length - 1] as { id: string }).id ?? null)
+                  : null,
             }
           : {}),
       },
@@ -886,12 +1028,13 @@ async function countVisitSnags(
   const counts = new Map<string, number>();
   if (visitIds.length === 0) return counts;
   // Paged: an unpaged select undercounts past 1,000 rows (see read-all).
-  const data = await readAllRows<{ visit_id: string }>(
-    (from, to) =>
+  const data = await readAllByIds<{ visit_id: string }>(
+    visitIds,
+    (chunk, from, to) =>
       admin
         .from("snagging_snags")
         .select("id, visit_id")
-        .in("visit_id", visitIds)
+        .in("visit_id", chunk)
         .neq("status", "withdrawn")
         .order("id", { ascending: true })
         .range(from, to),
@@ -915,30 +1058,54 @@ async function changedJobIds(
   since: string,
   options: { rooms?: boolean } = {},
 ): Promise<string[]> {
-  const [
-    { data: changedJobs, error: changedError },
-    { data: changedVisits, error: visitsError },
-    { data: changedRooms, error: roomsError },
-  ] = await Promise.all([
-    admin.from("snagging_jobs").select("id").in("id", jobIds).gt("updated_at", since),
-    admin
-      .from("snagging_job_visits")
-      .select("job_id")
-      .in("job_id", jobIds)
-      .gt("updated_at", since),
+  /*
+    Chunked and paged (readAllByIds): the ids are every job the inspector
+    has been on, and a bulk edit can change more than 1,000 rooms at once
+    -- a single select dropped the rest, and the phone, having moved its
+    cursor on, never heard about those jobs.
+  */
+  const [changedJobs, changedVisits, changedRooms] = await Promise.all([
+    readAllByIds<{ id: string }>(
+      jobIds,
+      (chunk, from, to) =>
+        admin
+          .from("snagging_jobs")
+          .select("id")
+          .in("id", chunk)
+          .gt("updated_at", since)
+          .order("id", { ascending: true })
+          .range(from, to),
+      "changed jobs",
+    ),
+    readAllByIds<{ id: string; job_id: string }>(
+      jobIds,
+      (chunk, from, to) =>
+        admin
+          .from("snagging_job_visits")
+          .select("id, job_id")
+          .in("job_id", chunk)
+          .gt("updated_at", since)
+          .order("id", { ascending: true })
+          .range(from, to),
+      "changed visits",
+    ),
     /* A card shows rooms done, and confirming a room writes the room, not
        the job -- so on the list, a changed room is a changed job. */
     options.rooms
-      ? admin
-          .from("snagging_areas")
-          .select("job_id")
-          .in("job_id", jobIds)
-          .gt("updated_at", since)
-      : Promise.resolve({ data: [] as Array<{ job_id: string }>, error: null }),
+      ? readAllByIds<{ id: string; job_id: string }>(
+          jobIds,
+          (chunk, from, to) =>
+            admin
+              .from("snagging_areas")
+              .select("id, job_id")
+              .in("job_id", chunk)
+              .gt("updated_at", since)
+              .order("id", { ascending: true })
+              .range(from, to),
+          "changed rooms",
+        )
+      : Promise.resolve([] as Array<{ job_id: string }>),
   ]);
-  if (changedError) throw new Error(changedError.message);
-  if (visitsError) throw new Error(visitsError.message);
-  if (roomsError) throw new Error(roomsError.message);
   return [
     ...new Set([
       ...(changedJobs ?? []).map((row) => row.id as string),
@@ -955,12 +1122,13 @@ async function countRooms(
 ): Promise<Map<string, { total: number; done: number }>> {
   const counts = new Map<string, { total: number; done: number }>();
   if (jobIds.length === 0) return counts;
-  const rows = await readAllRows<{ job_id: string; confirmed_at: string | null }>(
-    (from, to) =>
+  const rows = await readAllByIds<{ job_id: string; confirmed_at: string | null }>(
+    jobIds,
+    (chunk, from, to) =>
       admin
         .from("snagging_areas")
         .select("id, job_id, confirmed_at")
-        .in("job_id", jobIds)
+        .in("job_id", chunk)
         .order("id", { ascending: true })
         .range(from, to),
     "room counts",
@@ -1011,6 +1179,8 @@ export async function catalogueForDevice(
     categories: bare(catalogue.categories as Array<{ active?: boolean }>),
     subcategories: bare(catalogue.subcategories as Array<{ active?: boolean }>),
     defects: bare(catalogue.defects as Array<{ active?: boolean }>),
+    /* The phone keeps its own copy if fewer rows than these arrive. */
+    counts: catalogue.counts,
   };
 }
 
@@ -1061,7 +1231,15 @@ async function loadCatalogue(admin: Admin) {
         .from(table)
         .select(columns)
         .eq("active", true)
+        /*
+          The id breaks ties. sort_order repeats across sub-categories, and
+          Postgres does not hold tied rows in one order between two page
+          reads, so page 2 could repeat rows of page 1 and skip others --
+          and the phone, which replaces its catalogue with what arrives,
+          lost the skipped defects.
+        */
         .order("sort_order", { ascending: true })
+        .order("id", { ascending: true })
         .range(from, from + size - 1);
       if (error) throw new Error(error.message);
       const page = (data ?? []) as T[];
@@ -1070,7 +1248,21 @@ async function loadCatalogue(admin: Admin) {
     }
   }
 
-  const [categories, subcategories, defects] = await Promise.all([
+  /*
+    How many rows each level has, counted in the same pass, so the phone
+    can tell a short catalogue from a complete one and keep the copy it
+    has rather than replace it with a partial list.
+  */
+  const countActive = async (table: string) => {
+    const { count, error } = await admin
+      .from(table)
+      .select("id", { count: "exact", head: true })
+      .eq("active", true);
+    if (error) throw new Error(error.message);
+    return count ?? 0;
+  };
+
+  const [categories, subcategories, defects, counts] = await Promise.all([
     readAll(
       "snagging_catalogue_categories",
       "id, code, label, sort_order, active",
@@ -1083,7 +1275,12 @@ async function loadCatalogue(admin: Admin) {
       "snagging_catalogue_defects",
       "id, subcategory_id, code, label, default_severity, guidance, sort_order, active",
     ),
+    Promise.all([
+      countActive("snagging_catalogue_categories"),
+      countActive("snagging_catalogue_subcategories"),
+      countActive("snagging_catalogue_defects"),
+    ]).then(([c, s, d]) => ({ categories: c, subcategories: s, defects: d })),
   ]);
 
-  return { categories, subcategories, defects };
+  return { categories, subcategories, defects, counts };
 }

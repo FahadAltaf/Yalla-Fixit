@@ -13,7 +13,7 @@ import {
 } from "@/lib/server/snagging/columns";
 import { isZone } from "@/lib/snagging/zone-geometry";
 import { inParallel, planWaves } from "@/lib/server/snagging/push-plan";
-import { readAllRows } from "@/lib/server/snagging/read-all";
+import { readAllByIds, readAllRows } from "@/lib/server/snagging/read-all";
 import { loadJobRosters } from "@/lib/server/snagging/job-roster";
 import { assertEveryoneSigned, loadOwnSignoff, recordSignoff } from "@/lib/server/snagging/signoffs";
 import { SNAGGING_BUCKET, mediaObjectKey } from "@/lib/server/snagging/media";
@@ -1025,7 +1025,26 @@ async function applySubmission(admin: Admin, ctx: Ctx, payload: Record<string, u
       .select("round_number, visit_type, created_at")
       .eq("id", job.id)
       .maybeSingle(),
-    admin.from("snagging_snags").select("id, snag_code, status").eq("job_id", job.id).neq("status", "withdrawn"),
+    /*
+      Paged like the photos below. A single select stopped at 1,000 rows,
+      so on a bigger job the photo, verification and Poor-result checks
+      further down ran on an arbitrary 1,000 snags and the rest went
+      through unchecked.
+    */
+    readAllRows<{ id: string; snag_code: string; status: string }>(
+      (from, to) =>
+        admin
+          .from("snagging_snags")
+          .select("id, snag_code, status")
+          .eq("job_id", job.id)
+          .neq("status", "withdrawn")
+          .order("id", { ascending: true })
+          .range(from, to),
+      "submission snags",
+    ).then(
+      (data) => ({ data, error: null as { message: string } | null }),
+      (error: Error) => ({ data: null, error: { message: error.message } }),
+    ),
     // Paged, so a big job is never reported as having photo-less snags.
     readAllRows<{ snag_id: string; round_number: number | null }>(
       (from, to) =>
@@ -1140,12 +1159,19 @@ async function applySubmission(admin: Admin, ctx: Ctx, payload: Record<string, u
       const withNotes = await hasVerdictNote(admin);
       const notes = new Map<string, string | null>();
       if (withNotes) {
-        const { data: noteRows, error: noteError } = await admin
-          .from("snagging_snags")
-          .select("id, verdict_note")
-          .in("id", poor.map((s) => s.id as string));
-        if (noteError) throw new Error(noteError.message);
-        for (const row of noteRows ?? []) notes.set(row.id as string, (row.verdict_note as string | null) ?? null);
+        // Chunked: a big job can have more poor-quality verdicts than one URL holds.
+        const noteRows = await readAllByIds<{ id: string; verdict_note: string | null }>(
+          poor.map((s) => s.id as string),
+          (chunk, from, to) =>
+            admin
+              .from("snagging_snags")
+              .select("id, verdict_note")
+              .in("id", chunk)
+              .order("id", { ascending: true })
+              .range(from, to),
+          "verdict notes",
+        );
+        for (const row of noteRows) notes.set(row.id, row.verdict_note ?? null);
       }
       const short = poor.filter(
         (s) =>
@@ -1274,7 +1300,25 @@ async function submitVisit(
       .eq("job_id", job.id)
       .eq("visit_id", visit.id)
       .neq("status", "withdrawn"),
-    admin.from("snagging_snag_photos").select("snag_id").eq("job_id", job.id),
+    /*
+      Paged: this reads the whole job's photos (the visit's snags sit on
+      the original job), and past 1,000 of them a single select came back
+      short, so the visit's snags looked photo-less and it could not be
+      submitted.
+    */
+    readAllRows<{ snag_id: string }>(
+      (from, to) =>
+        admin
+          .from("snagging_snag_photos")
+          .select("id, snag_id")
+          .eq("job_id", job.id)
+          .order("id", { ascending: true })
+          .range(from, to),
+      "visit submission photos",
+    ).then(
+      (data) => ({ data, error: null as { message: string } | null }),
+      (error: Error) => ({ data: null, error: { message: error.message } }),
+    ),
   ]);
   if (snagRows.error) throw new Error(snagRows.error.message);
   if (photoRows.error) throw new Error(photoRows.error.message);

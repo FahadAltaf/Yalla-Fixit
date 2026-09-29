@@ -94,6 +94,71 @@ export type PdfRenderResult = {
 };
 
 /**
+ * How many reports may be rendering at once, process-wide.
+ *
+ * Each render is a whole Chrome -- roughly 300MB while it holds a report
+ * with photos. Nothing bounded this: approval renders inside `after()`,
+ * which defers the work but does not limit it, and the report-versions
+ * route calls it inline. Ten simultaneous approvals meant ten Chromes on
+ * one long-running host, and the OOM killer takes the entire server with
+ * every in-flight request on it.
+ *
+ * Two is deliberately conservative; raise it against measured host memory,
+ * not optimism.
+ */
+const MAX_CONCURRENT_RENDERS = Number(process.env.REPORT_RENDER_CONCURRENCY) || 2;
+
+/**
+ * How long a render may WAIT for a slot before giving up.
+ *
+ * A queue with no ceiling is just a slower way to fall over: requests pile
+ * up holding sockets until the proxy times them out anyway. Failing here is
+ * recoverable -- the caller reports it and the report can be generated
+ * again -- whereas an exhausted host is not.
+ */
+const RENDER_QUEUE_TIMEOUT_MS = 90_000;
+
+let activeRenders = 0;
+const renderQueue: Array<() => void> = [];
+
+export class RenderBusyError extends Error {
+  constructor() {
+    super(
+      "The server is already generating as many reports as it can at once. Try again in a moment.",
+    );
+    this.name = "RenderBusyError";
+  }
+}
+
+/** Runs `work` with a render slot held, releasing it whatever happens. */
+async function withRenderSlot<T>(work: () => Promise<T>): Promise<T> {
+  if (activeRenders >= MAX_CONCURRENT_RENDERS) {
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const at = renderQueue.indexOf(admit);
+        if (at !== -1) renderQueue.splice(at, 1);
+        reject(new RenderBusyError());
+      }, RENDER_QUEUE_TIMEOUT_MS);
+
+      function admit() {
+        clearTimeout(timer);
+        resolve();
+      }
+
+      renderQueue.push(admit);
+    });
+  }
+
+  activeRenders += 1;
+  try {
+    return await work();
+  } finally {
+    activeRenders -= 1;
+    renderQueue.shift()?.();
+  }
+}
+
+/**
  * Prints one HTML document to an A4 PDF.
  *
  * The browser is always closed -- success, thrown error or timeout -- because
@@ -101,9 +166,18 @@ export type PdfRenderResult = {
  * dies.
  */
 export async function renderPdfFromHtml(html: string): Promise<PdfRenderResult> {
+  // The executable check is outside the gate: a host with no browser should
+  // fail immediately rather than queue for a slot it can never use.
   const executablePath = resolveBrowserPath();
   if (!executablePath) throw new BrowserUnavailableError();
 
+  return withRenderSlot(() => renderWithBrowser(html, executablePath));
+}
+
+async function renderWithBrowser(
+  html: string,
+  executablePath: string,
+): Promise<PdfRenderResult> {
   const started = Date.now();
   const puppeteer = await loadPuppeteer();
 

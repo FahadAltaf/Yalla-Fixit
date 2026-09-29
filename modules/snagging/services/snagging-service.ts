@@ -91,6 +91,9 @@ export interface CatalogueResponse {
     element_code: string;
     sort_order: number;
   }>;
+  /** The element filter's options, from the whole library not the page. */
+  elements?: Array<{ code: string; label: string }>;
+  /** Rows matching the filters, across every page. */
   total?: number;
 }
 
@@ -1050,8 +1053,10 @@ export const snaggingService = {
 
   listCatalogue: async (
     filters: { search?: string; element?: string; activeOnly?: boolean } = {},
+    page = 0,
+    pageSize = 10,
   ): Promise<CatalogueResponse> => {
-    const params: Record<string, string | number> = {};
+    const params: Record<string, string | number> = { page, pageSize };
     if (filters.search) params.search = filters.search;
     if (filters.element && filters.element !== "all")
       params.element = filters.element;
@@ -1090,17 +1095,45 @@ export const snaggingService = {
    * on a site connection is the difference between the sheet opening and
    * the inspector giving up.
    */
+  /**
+   * The catalogue taxonomy.
+   *
+   * Without `page` the whole thing comes back, which is what the pickers
+   * and the mobile sync want. With `page` the two upper levels still come
+   * back whole -- the screen needs them for its filters and to resolve
+   * each defect's parents -- and only the defects are paged, with `total`
+   * for the pager.
+   */
   getCatalogueTree: async (
     activeOnly = false,
+    options: {
+      page?: number;
+      pageSize?: number;
+      search?: string;
+      category?: string;
+      subcategory?: string;
+    } = {},
   ): Promise<{
     categories: CatalogueCategory[];
     subcategories: CatalogueSubcategory[];
     defects: CatalogueDefect[];
-  }> =>
-    executeRESTBackend("/api/snagging/catalogue/v2", {
+    total?: number;
+  }> => {
+    const params: Record<string, string | number> = {};
+    if (activeOnly) params.activeOnly = "true";
+    if (options.page !== undefined) params.page = options.page;
+    if (options.pageSize !== undefined) params.pageSize = options.pageSize;
+    if (options.search) params.search = options.search;
+    if (options.category && options.category !== "all")
+      params.category = options.category;
+    if (options.subcategory && options.subcategory !== "all")
+      params.subcategory = options.subcategory;
+
+    return executeRESTBackend("/api/snagging/catalogue/v2", {
       method: "GET",
-      params: activeOnly ? { activeOnly: "true" } : {},
-    }),
+      params,
+    });
+  },
 
   createCatalogueNode: async (
     level: "category" | "subcategory" | "defect",
@@ -1144,8 +1177,10 @@ export const snaggingService = {
       /** Which list to read (N1). Defaults to the technician one. */
       audience?: "technician" | "client";
     } = {},
+    page = 0,
+    pageSize = 10,
   ): Promise<ChecklistLibraryResponse> => {
-    const params: Record<string, string | number> = {};
+    const params: Record<string, string | number> = { page, pageSize };
     if (filters.search) params.search = filters.search;
     if (filters.group && filters.group !== "all") params.group = filters.group;
     if (filters.propertyType && filters.propertyType !== "all")

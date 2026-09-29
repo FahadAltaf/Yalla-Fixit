@@ -62,33 +62,108 @@ export function fsmAuthHeaders(token: string): Record<string, string> {
   };
 }
 
-// One FSM call. Never throws on a non-2xx -- returns the parsed body either
-// way so the caller can surface Zoho's own validation detail, which is what
-// the schedulers actually need to see when a sync fails.
+/**
+ * How long one FSM call may take before it is abandoned.
+ *
+ * Node's fetch has NO default response timeout. Without this a hung Zoho
+ * socket pins the calling request handler forever, and because several
+ * paths fan out 8 calls at a time, a single slow tenant was enough to
+ * accumulate handlers until the event loop and socket pool were exhausted.
+ */
+const FSM_TIMEOUT_MS = 20_000;
+
+/** Attempts per call, including the first. */
+const FSM_MAX_ATTEMPTS = 3;
+
+/** Transient by nature: rate limiting and Zoho-side faults. */
+function isRetryable(status: number): boolean {
+  return status === 429 || status === 408 || status >= 500;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * One FSM call. Never throws on a non-2xx -- returns the parsed body either
+ * way so the caller can surface Zoho's own validation detail, which is what
+ * the schedulers actually need to see when a sync fails.
+ *
+ * Retries a 429 or a 5xx with exponential backoff, honouring `Retry-After`
+ * when Zoho sends one. FSM enforces per-minute and per-day API credits, and
+ * before this a single 429 silently degraded a whole import into partial
+ * data with nothing to say so. The pattern is the one already used in
+ * app/api/zoho-file/route.ts; it simply was never applied to the shared
+ * client every other call goes through.
+ *
+ * A timeout is surfaced as status 408 so callers keep their single
+ * `{ ok, status, json }` shape rather than having to catch.
+ */
 export async function fsmFetch(
   token: string,
   path: string,
   init?: RequestInit,
 ): Promise<{ ok: boolean; status: number; json: any }> {
-  const res = await fetch(`${FSM_BASE_URL}${path}`, {
-    ...init,
-    headers: { ...fsmAuthHeaders(token), ...(init?.headers ?? {}) },
-    // FSM data is never cacheable for scheduling purposes -- a stale read is
-    // exactly the failure mode the re-read-before-write logic exists to stop.
-    cache: "no-store",
-  });
+  let lastError: unknown = null;
 
-  // 204 is FSM's "no matching records" for search endpoints, not an error.
-  if (res.status === 204) return { ok: res.ok, status: res.status, json: {} };
+  for (let attempt = 1; attempt <= FSM_MAX_ATTEMPTS; attempt += 1) {
+    let res: Response;
+    try {
+      res = await fetch(`${FSM_BASE_URL}${path}`, {
+        ...init,
+        headers: { ...fsmAuthHeaders(token), ...(init?.headers ?? {}) },
+        // FSM data is never cacheable for scheduling purposes -- a stale read
+        // is exactly the failure mode the re-read-before-write logic exists
+        // to stop.
+        cache: "no-store",
+        signal: AbortSignal.timeout(FSM_TIMEOUT_MS),
+      });
+    } catch (error) {
+      // A timeout or a socket error. Retryable, but only so many times.
+      lastError = error;
+      if (attempt === FSM_MAX_ATTEMPTS) {
+        return {
+          ok: false,
+          status: 408,
+          json: {
+            error: "FSM request timed out or the connection failed",
+            detail: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
+      await sleep(Math.min(2 ** attempt * 500, 8_000));
+      continue;
+    }
 
-  const text = await res.text();
-  let json: any;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    json = { raw: text };
+    if (isRetryable(res.status) && attempt < FSM_MAX_ATTEMPTS) {
+      const retryAfter = Number(res.headers.get("retry-after"));
+      const wait = Number.isFinite(retryAfter) && retryAfter > 0
+        ? Math.min(retryAfter * 1000, 30_000)
+        : Math.min(2 ** attempt * 500, 8_000);
+      await sleep(wait);
+      continue;
+    }
+
+    // 204 is FSM's "no matching records" for search endpoints, not an error.
+    if (res.status === 204) return { ok: res.ok, status: res.status, json: {} };
+
+    const text = await res.text();
+    let json: any;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      json = { raw: text };
+    }
+    return { ok: res.ok, status: res.status, json };
   }
-  return { ok: res.ok, status: res.status, json };
+
+  // Only reachable if every attempt threw; the loop returns otherwise.
+  return {
+    ok: false,
+    status: 408,
+    json: {
+      error: "FSM request failed",
+      detail: lastError instanceof Error ? lastError.message : String(lastError),
+    },
+  };
 }
 
 // Read a single record from a module, returning the unwrapped `data[0]`.

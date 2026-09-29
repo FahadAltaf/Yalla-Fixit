@@ -132,12 +132,38 @@ function validDay(value: string | null): string | null {
  * east of Greenwich can still ask for their own today), and a start
  * after the end is pulled back to it.
  */
+/**
+ * The widest window analytics will read, in days.
+ *
+ * Just over a year, so a year-on-year comparison still works. Everything
+ * this module does is proportional to the rows in the window, and nothing
+ * upstream bounds it.
+ */
+const MAX_RANGE_DAYS = 400;
+
 export function resolveRange(fromParam: string | null, toParam: string | null): DateRange {
   const latest = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
   let to = validDay(toParam) ?? new Date().toISOString().slice(0, 10);
   if (to > latest) to = latest;
   let from = validDay(fromParam) ?? defaultFrom();
   if (from > to) from = to;
+
+  /*
+    A floor as well as a ceiling.
+
+    Only the upper bound was clamped, so `?from=2000-01-01` was a valid
+    request -- and analytics answers it by reading every job in the window
+    and every snag belonging to them into this process. That made a single
+    authenticated GET enough to exhaust the server's memory. The window is
+    now bounded at both ends; a wider ask is silently narrowed rather than
+    refused, because the figures stay meaningful either way.
+  */
+  const earliest = new Date(
+    Date.parse(`${to}T00:00:00.000Z`) - MAX_RANGE_DAYS * 86_400_000,
+  )
+    .toISOString()
+    .slice(0, 10);
+  if (from < earliest) from = earliest;
   return {
     from,
     to,

@@ -5,6 +5,7 @@ import { signMediaPaths, signPaths } from "@/lib/server/snagging/media";
 import { loadJobFamily } from "@/lib/server/snagging/job-family";
 import { QUOTATION_DOCUMENT_COLUMNS } from "@/lib/server/snagging/quotation";
 import { hashReportToken } from "@/lib/server/snagging/report-token";
+import { readAllRows } from "@/lib/server/snagging/read-all";
 
 /**
  * Public client report data, addressed by a link token (FR-5.04-06).
@@ -112,26 +113,40 @@ async function assembleReport(admin: Admin, jobId: string) {
   const unapproved = (row: Record<string, unknown>) =>
     typeof row.visit_id === "string" && unapprovedVisits.has(row.visit_id);
 
-  const [{ data: checklistRows }, { data: allSnagRows }] = await Promise.all([
+  const [{ data: checklistRows }, allSnagRows] = await Promise.all([
     admin
       .from("snagging_job_checklist")
       .select("id, code, group_name, label, mandatory, status, reason, sort_order, visit_id")
       .eq("job_id", jobId)
       .order("sort_order", { ascending: true }),
-    admin
-      .from("snagging_snags")
-      .select(
-        `id, job_id, area_id, snag_code, catalogue_code, element_label, defect_label,
-         severity, note, pin_x, pin_y, status, round_created, visit_id,
-         area:snagging_areas(id, name),
-         photos:snagging_snag_photos(id, snag_id, storage_path, taken_at)`,
-      )
-      .in("job_id", snagJobIds)
-      .neq("status", "withdrawn")
-      .order("snag_code", { ascending: true }),
+    /*
+      Paged, because a report must never quietly leave defects out.
+
+      This is the CLIENT's copy of the document. It read the snags in one
+      unbounded select, which PostgREST silently caps at 1,000 rows, while
+      lib/server/snagging/report-data.ts:393 reads the same thing through
+      readAllRows. On a job past a thousand defects the two documents
+      disagreed -- and the one that was short was the one sent out.
+    */
+    readAllRows<Record<string, unknown>>(
+      (from, to) =>
+        admin
+          .from("snagging_snags")
+          .select(
+            `id, job_id, area_id, snag_code, catalogue_code, element_label, defect_label,
+             severity, note, pin_x, pin_y, status, round_created, visit_id,
+             area:snagging_areas(id, name),
+             photos:snagging_snag_photos(id, snag_id, storage_path, taken_at)`,
+          )
+          .in("job_id", snagJobIds)
+          .neq("status", "withdrawn")
+          .order("snag_code", { ascending: true })
+          .range(from, to),
+      "client report snags",
+    ),
   ]);
 
-  const snagRows = (allSnagRows ?? []).filter(
+  const snagRows = allSnagRows.filter(
     (row) => !unapproved(row as Record<string, unknown>),
   );
   const checklist = (checklistRows ?? []).map((row) =>
