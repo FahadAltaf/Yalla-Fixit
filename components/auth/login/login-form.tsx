@@ -12,7 +12,6 @@ import {
   verifyOtp,
   type AuthServiceError,
 } from "@/modules/auth/services/auth-service";
-import { usersService } from "@/modules/users";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -110,11 +109,21 @@ const LoginForm = () => {
     setError(null);
 
     try {
-      const user = await usersService.getUserByEmail({
-        email: { ilike: email },
+      // Asked of a public route: /api/graphql needs a session, and there is none yet.
+      const response = await fetch("/api/auth/check-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
       });
+      const body = (await response.json().catch(() => ({}))) as {
+        exists?: boolean;
+        error?: string;
+      };
+      if (!response.ok) {
+        throw new Error(body.error ?? "Unable to verify email. Please try again.");
+      }
 
-      if (user) {
+      if (body.exists) {
         setEmailVerified(true);
         toast.success("Email verified! Please continue with your login.");
       } else {
