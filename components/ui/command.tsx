@@ -4,6 +4,7 @@ import * as React from "react";
 import { Command as CommandPrimitive } from "cmdk";
 
 import { cn } from "@/lib/actions/utils";
+import { matchLabel } from "@/lib/command-filter";
 import {
   Dialog,
   DialogContent,
@@ -17,11 +18,19 @@ import { SearchIcon, Tick02Icon } from "@hugeicons/core-free-icons";
 
 function Command({
   className,
+  /*
+    Every list searches the same way unless it says otherwise: rows that
+    contain what was typed, matched on the text the user sees rather than
+    on an id (see lib/command-filter). cmdk's own fuzzy score is what made
+    a search for a name return unrelated people.
+  */
+  filter = matchLabel,
   ...props
 }: React.ComponentProps<typeof CommandPrimitive>) {
   return (
     <CommandPrimitive
       data-slot="command"
+      filter={filter}
       className={cn(
         "bg-popover text-popover-foreground rounded-xl! p-1 flex size-full flex-col overflow-hidden",
         className

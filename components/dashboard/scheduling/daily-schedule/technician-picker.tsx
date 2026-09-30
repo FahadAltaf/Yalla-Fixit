@@ -80,7 +80,10 @@ export default function TechnicianPicker({
                 return (
                   <CommandItem
                     key={t.fsm_resource_id}
-                    value={t.display_name}
+                    // The id keeps two technicians with one name apart; the
+                    // name is what the search reads.
+                    value={t.fsm_resource_id}
+                    keywords={[t.display_name]}
                     onSelect={() => onToggle(t.fsm_resource_id)}
                     className="cursor-pointer gap-2"
                   >

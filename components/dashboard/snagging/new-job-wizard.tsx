@@ -3370,11 +3370,11 @@ function AssignStep({
         */}
         <Field
           label="Inspectors"
-          hint={
-            draft.technician_ids.length > 0
-              ? "They will see the job on their phone as soon as it is created."
-              : "Optional. Leave empty to assign from the job later."
-          }
+        // hint={
+        //   draft.technician_ids.length > 0
+        //     ? "They will see the job on their phone as soon as it is created."
+        //     : "Optional. Leave empty to assign from the job later."
+        // }
         >
           <InspectorPicker
             value={draft.technician_ids}

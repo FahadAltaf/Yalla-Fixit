@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { splitInstant, toLocalInstant } from "@/lib/snagging/schedule-defaults";
 import {
   AlertTriangle,
@@ -127,11 +127,33 @@ export function JobSetupPanel({
     its role's whole permission matrix.
   */
   const {
-    users,
+    users: staff,
     loading: usersLoading,
     error: usersError,
     reload: loadUsers,
   } = useActiveStaff();
+  /*
+    The staff list holds only people with access to Snagging. Somebody
+    already on this job who has since lost that access (or been
+    deactivated) is not in it, and would show as a blank select or a bare
+    id. They are added back for THIS job, so who is on it still reads as a
+    name and can be taken off; they are not offered anywhere else.
+  */
+  const users = useMemo(() => {
+    const known = new Set(staff.map((person) => person.id));
+    const onJob: AssignableUser[] = [];
+    const keep = (id?: string | null, name?: string | null, email?: string | null) => {
+      if (!id || known.has(id)) return;
+      known.add(id);
+      onJob.push({ id, full_name: name ?? undefined, email: email ?? undefined, is_active: true });
+    };
+    for (const assignee of task.assignees ?? []) {
+      keep(assignee.user_id, assignee.user_profile?.full_name, assignee.user_profile?.email);
+    }
+    keep(task.approval_manager_id, task.manager?.full_name, task.manager?.email);
+    keep(task.reviewer_id, task.reviewer?.full_name, task.reviewer?.email);
+    return onJob.length > 0 ? [...staff, ...onJob] : staff;
+  }, [staff, task.assignees, task.approval_manager_id, task.manager, task.reviewer_id, task.reviewer]);
   const [saving, setSaving] = useState<
     null | "appt" | "contacts" | "assign" | "noc" | "gatepass" | "location" | "property" | "client"
   >(null);

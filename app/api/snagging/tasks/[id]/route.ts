@@ -5,6 +5,7 @@ import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit, recordAuditBatch } from "@/lib/server/snagging/audit";
 import { loadJobCore } from "@/lib/server/snagging/job-detail-sections";
+import { staffWithoutAccess } from "@/lib/server/snagging/staff";
 import { assertTransition } from "@/lib/server/snagging/workflow";
 import { updateTaskSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType, SnaggingTaskStatus } from "@/types/types";
@@ -180,6 +181,36 @@ export async function PATCH(
     const assigningInspector =
       assignedInspectorId != null &&
       assignedInspectorId !== existing.inspector_id;
+    /*
+      Nobody new goes onto a job who cannot open Snagging: the job would
+      never reach their phone. The pickers only offer people who can; this
+      holds the same line for a request that did not come from a picker.
+      People already on the job are not re-checked, so a job can still be
+      saved with someone whose access was removed later.
+    */
+    if (assignedInspectorIds && assignedInspectorIds.length > 0) {
+      const { data: current } = await admin
+        .from("snagging_job_inspectors")
+        .select("inspector_id")
+        .eq("job_id", id);
+      const already = new Set([
+        ...(current ?? []).map((row) => row.inspector_id as string),
+        ...(existing.inspector_id ? [existing.inspector_id as string] : []),
+      ]);
+      const blocked = await staffWithoutAccess(
+        admin,
+        assignedInspectorIds.filter((inspectorId) => !already.has(inspectorId)),
+      );
+      if (blocked.length > 0) {
+        return NextResponse.json(
+          {
+            error: `${blocked.join(", ")} ${blocked.length === 1 ? "does" : "do"} not have access to Snagging, so the job would never reach their phone. Give them access under Roles, or pick someone else.`,
+          },
+          { status: 400 },
+        );
+      }
+    }
+
     if (assigningInspector) {
       // 1. The client must have approved the quotation — unless this is a child
       //    job (de-snag round / additional visit), whose parent already cleared

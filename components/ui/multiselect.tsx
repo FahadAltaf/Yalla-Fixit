@@ -5,6 +5,7 @@ import { X } from "lucide-react";
 import * as React from "react";
 import { forwardRef, useEffect } from "react";
 
+import { matchLabel } from "@/lib/command-filter";
 import { cn } from "@/lib/utils";
 import {
   Command,
@@ -449,20 +450,13 @@ const MultipleSelector = React.forwardRef<
       return undefined;
     }, [options, selectables, creatable]);
 
-    /** Avoid Creatable Selector freezing or lagging when paste a long string. */
-    const commandFilter = React.useCallback(() => {
-      if (commandProps?.filter) {
-        return commandProps.filter;
-      }
-
-      if (creatable) {
-        return (value: string, search: string) => {
-          return value.toLowerCase().includes(search.toLowerCase()) ? 1 : -1;
-        };
-      }
-      // Using default filter in `cmdk`. We don&lsquo;t have to provide it.
-      return undefined;
-    }, [creatable, commandProps?.filter]);
+    /*
+      The shared "contains what was typed" match (lib/command-filter),
+      unless the caller brings its own. Each row is searched by its label:
+      a row's value is its id, and searching that is why typing a name
+      used to return whoever's id shared a letter with it.
+    */
+    const commandFilter = commandProps?.filter ?? matchLabel;
 
     return (
       <Command
@@ -481,7 +475,7 @@ const MultipleSelector = React.forwardRef<
             ? commandProps.shouldFilter
             : !onSearch
         } // When onSearch is provided, we don&lsquo;t want to filter the options. You can still override it.
-        filter={commandFilter()}
+        filter={commandFilter}
       >
         <div
           className={cn(
@@ -644,6 +638,7 @@ const MultipleSelector = React.forwardRef<
                               <CommandItem
                                 key={option.value}
                                 value={option.value}
+                                keywords={[option.label]}
                                 disabled={false}
                                 onMouseDown={(e) => {
                                   e.preventDefault();

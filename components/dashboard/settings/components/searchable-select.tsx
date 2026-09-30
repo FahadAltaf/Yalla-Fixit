@@ -44,12 +44,6 @@ export function SearchableSelect({
 
   const selectedOption = options.find((option) => option.value === value);
 
-  // Custom filter function for case-insensitive includes matching
-  const filterFunction = React.useCallback((value: string, search: string) => {
-    const searchLower = search.toLowerCase();
-    const valueLower = value.toLowerCase();
-    return valueLower.includes(searchLower) ? 1 : 0;
-  }, []);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -69,7 +63,7 @@ export function SearchableSelect({
         className="w-[var(--radix-popover-trigger-width)] p-0 overflow-hidden"
         align="start"
       >
-        <Command shouldFilter={true} filter={filterFunction}>
+        <Command>
           <CommandInput placeholder="Search..." />
           <CommandList className="">
             <CommandEmpty>{emptyMessage}</CommandEmpty>
@@ -77,7 +71,9 @@ export function SearchableSelect({
               {options.map((option) => (
                 <CommandItem
                   key={option.value}
-                  value={`${option.label} ${option.value}`}
+                  // Searched by its label; the id only keeps the row unique.
+                  value={option.value}
+                  keywords={[option.label]}
                   onSelect={() => {
                     onValueChange(option.value === value ? "" : option.value);
                     setOpen(false);

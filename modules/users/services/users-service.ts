@@ -1,6 +1,5 @@
 import {
   DELETE_USER,
-  GET_ASSIGNABLE_USERS,
   GET_USERS,
   GET_USERS_BY_EMAIL,
   GET_USERS_BY_ID,
@@ -10,6 +9,7 @@ import {
   UPDATE_USER,
 } from "./users-graphql";
 import { executeGraphQLBackend } from "@/lib/graphql-server";
+import { executeRESTBackend } from "@/lib/rest-server";
 import { User } from "@/types/types";
 
 /** Enough of a person to put them in a picker. */
@@ -169,6 +169,12 @@ export const usersService = {
   /**
    * Everyone who can be assigned to a job, a round or a visit: id, name
    * and email, nothing else. Shared and briefly cached (see above).
+   *
+   * Only people with access to Snagging (the admin role, or a role with
+   * Snagging's View permission), and only the active ones. This read every
+   * profile in the company, so the pickers offered people who could not
+   * open the module: assigned as an inspector, the job never reached their
+   * phone. The server decides who qualifies (/api/snagging/staff).
    */
   getAssignableUsers: async (): Promise<AssignableUser[]> => {
     if (staffCache && Date.now() - staffCache.at < STAFF_TTL_MS) {
@@ -177,21 +183,9 @@ export const usersService = {
     if (staffInFlight) return staffInFlight;
 
     staffInFlight = (async () => {
-      const users: AssignableUser[] = [];
-      let after: string | null = null;
-      // A hard stop, so a server that never reports the last page cannot loop.
-      for (let page = 0; page < 200; page += 1) {
-        const response = await executeGraphQLBackend(GET_ASSIGNABLE_USERS, {
-          first: 100,
-          after,
-        });
-        const collection = response.user_profileCollection;
-        users.push(
-          ...collection.edges.map((edge: { node: AssignableUser }) => edge.node),
-        );
-        if (!collection.pageInfo?.hasNextPage || !collection.pageInfo.endCursor) break;
-        after = collection.pageInfo.endCursor;
-      }
+      const users = await executeRESTBackend<AssignableUser[]>("/api/snagging/staff", {
+        method: "GET",
+      });
       staffCache = { at: Date.now(), users };
       return users;
     })();

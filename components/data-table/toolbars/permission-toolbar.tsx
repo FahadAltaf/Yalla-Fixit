@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { RefreshCwIcon, Check, ChevronsUpDown } from "lucide-react";
 import {
@@ -46,12 +46,6 @@ export function PermissionDataTableToolbar({
     (role) => role.id === selectedRoleId
   );
 
-  // Custom filter function for case-insensitive includes matching
-  const filterFunction = useCallback((value: string, search: string) => {
-    const searchLower = search.toLowerCase();
-    const valueLower = value.toLowerCase();
-    return valueLower.includes(searchLower) ? 1 : 0;
-  }, []);
 
   return (
     <div className="flex gap-2 sm:gap-4 py-4 sm:py-6 px-4 flex-row items-center justify-between">
@@ -76,7 +70,7 @@ export function PermissionDataTableToolbar({
               className="w-(--radix-popover-trigger-width) p-0 overflow-hidden"
               align="start"
             >
-              <Command shouldFilter={true} filter={filterFunction}>
+              <Command>
                 <CommandInput placeholder="Search roles..." />
                 <CommandList className="max-h-[300px]">
                   <CommandEmpty>No roles found.</CommandEmpty>
@@ -86,7 +80,9 @@ export function PermissionDataTableToolbar({
                       return (
                         <CommandItem
                           key={role.id}
-                          value={`${role.name} ${role.id}`}
+                          // Searched by its name; the id only keeps the row unique.
+                          value={role.id}
+                          keywords={[role.name]}
                           onSelect={() => {
                             onRoleChange(isSelected ? null : role.id);
                             setOpen(false);
