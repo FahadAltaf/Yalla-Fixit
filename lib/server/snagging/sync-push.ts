@@ -587,7 +587,15 @@ async function applySnag(admin: Admin, ctx: Ctx, payload: Record<string, unknown
       "found on visit 2" depends on this being right.
     */
     ...(job.visit ? { visit_id: job.visit.id } : {}),
-    created_by: ctx.userId,
+    /*
+      Who raised it, set when it is raised and not touched again.
+
+      This is an upsert, so writing it unconditionally meant every later
+      edit reassigned the snag to whoever made that edit -- a reviewer
+      fixing a typo became the person who found the defect, and the
+      report said so.
+    */
+    ...(ctx.mutation.op === "update" ? {} : { created_by: ctx.userId }),
     created_at: (payload.captured_at as string) ?? new Date().toISOString(),
   };
   let { error } = await admin.from("snagging_snags").upsert(row, { onConflict: "id" });
