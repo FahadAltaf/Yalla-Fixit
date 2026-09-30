@@ -1,16 +1,10 @@
 /**
  * pg_graphql queries, from either side of the app.
  *
- * In the browser this posts to `/api/graphql`, which authenticates the
- * caller's session before it will forward anything.
- *
- * On the server it talks to Supabase directly. That matters for more than
- * speed: `app/auth/callback/route.ts` resolves a new user's profile and role
- * through this helper *during sign-in*, when there is no session cookie to
- * present yet. Routing that through the authenticated endpoint would have
- * made the route impossible to protect without breaking login — so the
- * server does not take the HTTP hop at all, and the public route is free to
- * demand a session.
+ * In the browser this posts to `/api/graphql`, which forwards the query
+ * with the anon key and asks for no session (pages used before sign-in
+ * call it). On the server it talks to Supabase directly and skips the
+ * HTTP hop.
  */
 export async function executeGraphQLBackend<T = any>(
   query: string,

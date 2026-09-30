@@ -1,32 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
-
 /**
- * pg_graphql, for the browser only.
+ * pg_graphql, for the browser.
  *
- * This forwards a caller-supplied query to Supabase using the project's anon
- * key, so whoever reaches it can author arbitrary reads. It was unauthenticated
- * and live: an anonymous POST to the production host returned 200.
+ * Forwards the query to Supabase with the project's anon key, so what it
+ * can read is whatever row-level security allows the anon role. It asks
+ * for no session: pages used before sign-in (the login screen's email
+ * check among them) call it too, and requiring one stopped every sign-in
+ * at "HTTP error! status: 401".
  *
- * It now requires a signed-in session. Server-side callers do not come through
- * here at all -- `lib/graphql-server.ts` talks to Supabase directly when it is
- * not running in a browser, which is what lets this route demand a session
- * without breaking `app/auth/callback/route.ts`, where a user is resolved
- * before any cookie exists.
- *
- * Still deliberately not offered: depth and complexity limits. Everything this
- * key can read is behind RLS, and the session check removes the anonymous
- * amplification, but a signed-in user can still author an expensive query.
- * Bound it here if this is ever exposed more widely.
+ * Server-side callers do not come through here -- `lib/graphql-server.ts`
+ * talks to Supabase directly when it is not running in a browser.
  */
 export async function POST(req: NextRequest) {
   try {
-    const { profile, accessUser } = await getAuthenticatedUserAccess();
-    if (!profile || !accessUser) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
     const { query, variables } = await req.json();
 
     if (!query) {
