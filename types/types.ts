@@ -733,6 +733,21 @@ export interface SnaggingTask {
    * staff only. The client's report shows one signature: `submissions[0]`.
    */
   signoffs?: SnaggingSignoff[];
+  /**
+   * The job's gate pass: the permit security asks for at the gate. The
+   * job's own (one per trip to site), unlike the NOC, which is the
+   * property's. The url is signed and short-lived.
+   */
+  /**
+   * The status of the inspection's own quotation, newest first; null when
+   * the job has none. Only one the client has been sent, or has rejected,
+   * holds assignment back.
+   */
+  quotation_status?: string | null;
+  gatepass_path?: string | null;
+  gatepass_url?: string | null;
+  /** False where the database has no gate pass column yet. */
+  gatepass_available?: boolean;
 }
 
 /** One inspector's signature on a pass of a job (internal record). */

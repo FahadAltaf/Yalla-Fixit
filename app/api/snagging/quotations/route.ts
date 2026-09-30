@@ -259,7 +259,12 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    return NextResponse.json({ data: toWire(row) }, { status: 201 });
+    /* With the address it was raised for, so the form can attach the
+       documents picked on it (there is no job yet to hang them on). */
+    return NextResponse.json(
+      { data: { ...toWire(row), property_id: property.id } },
+      { status: 201 },
+    );
   } catch (error) {
     console.error("Snagging quotations POST error:", error);
     return NextResponse.json(

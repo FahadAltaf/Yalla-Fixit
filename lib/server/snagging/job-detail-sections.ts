@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { byCreation } from "@/lib/snagging/creation-order";
 import {
   hasAreaInspector,
+  hasGatepass,
   hasJobInspectors,
   hasReviewNote,
   hasVerdictNote,
@@ -101,7 +102,9 @@ const SNAG_PHOTO_COLUMNS =
 // Composed select strings are beyond the client's select-string type
 // parser, so these queries name their row type (Row) instead of inferring it.
 type Row = Record<string, any>;
-const coreSelect = (withRoomInspector: boolean, withRoster: boolean) => `${JOB_COLUMNS},
+const coreSelect = (withRoomInspector: boolean, withRoster: boolean, withGatepass: boolean) => `${JOB_COLUMNS},${
+  withGatepass ? "\n  gatepass_path," : ""
+}
   client:client_id(name, email, phone),
   inspector:inspector_id(id, full_name, email),
   manager:approval_manager_id(full_name, email),
@@ -144,15 +147,32 @@ export async function loadJobCore(admin: Admin, id: string) {
     Which optional columns this database has, asked once per process and
     remembered (columns.ts), so they cost nothing per request.
   */
-  const [withRoomInspector, withRoster] = await Promise.all([
+  const [withRoomInspector, withRoster, withGatepass] = await Promise.all([
     hasAreaInspector(admin),
     hasJobInspectors(admin),
+    hasGatepass(admin),
   ]);
-  const { data: job, error } = await admin
-    .from("snagging_jobs")
-    .select<string, Row>(coreSelect(withRoomInspector, withRoster))
-    .eq("id", id)
-    .maybeSingle();
+  const [{ data: job, error }, { data: inspectionQuote }] = await Promise.all([
+    admin
+      .from("snagging_jobs")
+      .select<string, Row>(coreSelect(withRoomInspector, withRoster, withGatepass))
+      .eq("id", id)
+      .maybeSingle(),
+    /*
+      The inspection's own quotation, newest first (a visit's is another
+      document). Read for one question the Setup tab asks: is this job
+      waiting on a client (sent, or rejected), or has nobody been sent
+      anything yet? The second may be assigned straight away.
+    */
+    admin
+      .from("snagging_quotations")
+      .select("status")
+      .eq("job_id", id)
+      .neq("quote_kind", "visit")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
 
   if (error) throw new Error(error.message);
   if (!job) return null;
@@ -214,7 +234,8 @@ export async function loadJobCore(admin: Admin, id: string) {
     were three separate waits -- the documents in parallel, then the
     signature after them -- and none depends on another.
   */
-  const [nocSigned, deedSigned, signatureSigned, signoffs] = await Promise.all([
+  const gatepassPath = (job.gatepass_path as string | null | undefined) ?? null;
+  const [nocSigned, deedSigned, gatepassSigned, signatureSigned, signoffs] = await Promise.all([
     // Sign the property's NOC and title deed (FR-3.04 / FR-1.09) so the job can
     // show "on file" with a view/download link — reusing the existing
     // property-level document, never a second upload.
@@ -223,6 +244,10 @@ export async function loadJobCore(admin: Admin, id: string) {
       : Promise.resolve([]),
     property.title_deed_path
       ? signMediaPaths(admin, [{ id: "deed", storage_path: property.title_deed_path as string }])
+      : Promise.resolve([]),
+    // The gate pass is the job's own, not the property's: one per trip to site.
+    gatepassPath
+      ? signMediaPaths(admin, [{ id: "gatepass", storage_path: gatepassPath }])
       : Promise.resolve([]),
     // Sign the signature image so the report can render the sign-off; the
     // stored path is private like every other object in the bucket.
@@ -337,6 +362,12 @@ export async function loadJobCore(admin: Admin, id: string) {
     task_type: "single_unit",
     parent_task_id: job.parent_job_id,
     property: propertyWithDocs,
+    /* Null when the job has no quotation of its own (raised from scratch). */
+    quotation_status: (inspectionQuote?.status as string | undefined) ?? null,
+    gatepass_path: gatepassPath,
+    gatepass_url: (gatepassSigned[0] as { signed_url?: string } | undefined)?.signed_url ?? null,
+    /* False where the column is not there yet, so the page can hide the upload. */
+    gatepass_available: withGatepass,
     areas,
     assignees,
     approvals: [],

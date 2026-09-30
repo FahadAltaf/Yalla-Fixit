@@ -139,6 +139,8 @@ export interface SnaggingPricingConfig {
 /** One row of the Quotations list: what the table shows and filters on. */
 export interface SnaggingQuotationSummary {
   id: string;
+  /** The address it was raised for. Sent when one is created, not on the list. */
+  property_id?: string | null;
   quote_number: string;
   status: "draft" | "sent" | "approved" | "rejected";
   quote_kind: "inspection" | "visit" | "desnag";
@@ -825,11 +827,27 @@ export const snaggingService = {
       params: { areaId },
     }),
 
-  /** Uploads a title deed (E8) or NOC (E10) and attaches it to the job. */
+  /** Uploads a title deed or NOC straight onto an address, with no job involved. */
+  uploadPropertyDocument: async (
+    propertyId: string,
+    file: File,
+    kind: "title_deed" | "noc",
+  ): Promise<{ kind: string; storage_path: string }> => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("property_id", propertyId);
+    form.append("kind", kind);
+    const response = await fetch("/api/snagging/documents", { method: "POST", body: form });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload?.error ?? "Failed to upload the document");
+    return payload.data;
+  },
+
+  /** Uploads a title deed (E8), NOC (E10) or gate pass and attaches it to the job. */
   uploadDocument: async (
     taskId: string,
     file: File,
-    kind: "title_deed" | "noc",
+    kind: "title_deed" | "noc" | "gatepass",
   ): Promise<{ kind: string; storage_path: string }> => {
     const form = new FormData();
     form.append("file", file);

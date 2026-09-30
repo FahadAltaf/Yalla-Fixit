@@ -98,9 +98,9 @@ export async function POST(req: NextRequest) {
     const snapshot = propertySnapshot(property.columns);
 
     // 2. Create the job. The unique index on `code` is the arbiter.
-    // An inspector is NOT assigned here (FR-3.08): assignment is gated on the
-    // client approving the quotation, and happens from the job afterwards. A
-    // brand-new job has no approved quotation, so it starts unassigned.
+    // An inspector is not assigned by this insert. The wizard assigns one
+    // straight after, through the job's own PATCH, so creation and the Setup
+    // tab share one set of checks (approval manager, no double-booking).
     const inspectorId = null;
     let job: { id: string; code: string } | null = null;
     let lastError: string | null = null;

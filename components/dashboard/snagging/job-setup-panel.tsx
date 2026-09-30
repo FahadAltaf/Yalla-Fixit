@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Save,
   ShieldCheck,
+  Ticket,
   Upload,
   UserCog,
 } from "lucide-react";
@@ -118,6 +119,7 @@ export function JobSetupPanel({
   );
   const { confirm, dialog } = useConfirm();
   const nocInputRef = useRef<HTMLInputElement | null>(null);
+  const gatepassInputRef = useRef<HTMLInputElement | null>(null);
 
   /*
     Shared with every other picker on the page (useActiveStaff), and it
@@ -131,7 +133,7 @@ export function JobSetupPanel({
     reload: loadUsers,
   } = useActiveStaff();
   const [saving, setSaving] = useState<
-    null | "appt" | "contacts" | "assign" | "noc" | "location" | "property" | "client"
+    null | "appt" | "contacts" | "assign" | "noc" | "gatepass" | "location" | "property" | "client"
   >(null);
 
   /*
@@ -225,8 +227,14 @@ export function JobSetupPanel({
 
   // The quotation approval flips the job draft -> assigned; a child job (round /
   // additional visit) is created assigned. So anything past draft has cleared
-  // the gate. `locked` (approved report) freezes further edits.
-  const quotationApproved = task.status !== "draft";
+  // the gate -- and so has a draft job whose quotation nobody has been sent
+  // (none, or still a draft): a job raised from scratch has no client to wait
+  // on, and assigning it is what moves it on. Only a quotation that is with
+  // the client, or that they rejected, holds it. `locked` (approved report)
+  // freezes further edits.
+  const quotationApproved =
+    task.status !== "draft" ||
+    !(task.quotation_status === "sent" || task.quotation_status === "rejected");
   const canAssign = canEdit && quotationApproved && !task.locked;
 
   async function saveAppointment() {
@@ -377,6 +385,32 @@ export function JobSetupPanel({
       setSaving(null);
       // Clearing lets the same file be picked again after a failure.
       if (nocInputRef.current) nocInputRef.current.value = "";
+    }
+  }
+
+  /**
+   * Attach or replace the gate pass without leaving the job.
+   *
+   * The job's own document, not the property's: security issues it for one
+   * trip, so a pass from an earlier job on the same unit is no use here.
+   * The inspector's phone shows it as soon as it next syncs.
+   */
+  async function uploadGatepass(file: File) {
+    setSaving("gatepass");
+    try {
+      const { file: prepared } = await compressImage(file);
+      await snaggingService.uploadDocument(task.id, prepared, "gatepass");
+      toast.success("Gate pass uploaded", {
+        description: "The inspector can open it from the job on their phone.",
+      });
+      await onChanged();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not upload the gate pass",
+      );
+    } finally {
+      setSaving(null);
+      if (gatepassInputRef.current) gatepassInputRef.current.value = "";
     }
   }
 
@@ -581,6 +615,7 @@ export function JobSetupPanel({
 
   const nocRequired = Boolean(property?.noc_required);
   const nocOnFile = Boolean(property?.noc_path);
+  const gatepassOnFile = Boolean(task.gatepass_path);
 
   return (
     // Four cards rather than four hairline-divided strips inside one.
@@ -1559,6 +1594,86 @@ export function JobSetupPanel({
           </Alert>
         ) : null}
       </SetupSection>
+
+      {/*
+        The gate pass, beside the NOC because it is asked for at the same
+        door. Hidden where the database has no column for it yet, rather
+        than offering an upload that would be refused.
+      */}
+      {task.gatepass_available === false ? null : (
+        <SetupSection
+          icon={Ticket}
+          title="Gate pass"
+          description="The permit security asks for before the inspector is let on site. Belongs to this job only, and shows on the inspector's phone once uploaded."
+          action={
+            <Badge
+              variant="secondary"
+              className={cn(
+                "border-0 font-medium",
+                gatepassOnFile ? "bg-success/10 text-success" : "bg-mist text-ink-soft",
+              )}
+            >
+              {gatepassOnFile ? "On file" : "Not uploaded"}
+            </Badge>
+          }
+        >
+          <div className="overflow-hidden rounded-lg border">
+            <DataRow
+              className="py-3"
+              icon={<FileText aria-hidden />}
+              active={gatepassOnFile}
+              title="Gate pass"
+              subtitle={
+                gatepassOnFile
+                  ? "On file and available to the inspector"
+                  : "Not uploaded. Add it if the community or building asks for one."
+              }
+              trailing={
+                <div className="flex items-center gap-2">
+                  {gatepassOnFile && task.gatepass_url ? (
+                    <Button asChild size="sm" variant="outline">
+                      <a href={task.gatepass_url} target="_blank" rel="noopener noreferrer">
+                        <Download className="size-3.5" />
+                        View
+                      </a>
+                    </Button>
+                  ) : null}
+                  {canEdit ? (
+                    <SubmitButton
+                      size="sm"
+                      variant={gatepassOnFile ? "outline" : "default"}
+                      onClick={() => gatepassInputRef.current?.click()}
+                      disabled={saving !== null}
+                      pending={saving === "gatepass"}
+                      pendingLabel="Uploading…"
+                      icon={<Upload className="size-3.5" />}
+                    >
+                      {gatepassOnFile ? "Replace" : "Upload gate pass"}
+                    </SubmitButton>
+                  ) : null}
+                </div>
+              }
+            />
+          </div>
+
+          <input
+            ref={gatepassInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,application/pdf"
+            hidden
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void uploadGatepass(file);
+            }}
+          />
+
+          {canEdit ? (
+            <p className="text-muted-foreground mt-2 text-xs">
+              PNG, JPG, WEBP or PDF, up to 15MB.
+            </p>
+          ) : null}
+        </SetupSection>
+      )}
 
       {dialog}
     </div>

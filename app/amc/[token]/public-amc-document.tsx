@@ -342,9 +342,9 @@ export function PublicAmcDocument({ token }: { token: string }) {
                 />
               </div>
             ) : (
-              <p className="text-sm text-slate-600">
+              <p className="text-muted-foreground text-sm">
                 {action === "sign" ? "Signing" : "Approving"} as{" "}
-                <strong className="text-slate-900">{name.trim()}</strong>.
+                <strong className="text-foreground">{name.trim()}</strong>.
               </p>
             )}
 

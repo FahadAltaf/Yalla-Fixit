@@ -40,11 +40,21 @@ export function splitEvidence(
   const before: SnaggingPhoto[] = [];
   const after: SnaggingPhoto[] = [];
 
+  /*
+    The original inspection has no "before": everything goes to `after`,
+    as the note above says. The raised-on-this-round rule below was added
+    for rounds and caught round 1 too (a defect raised on round 1, shot on
+    round 1), so every photo went to `before` -- which the snag popup
+    never draws on a first inspection. It said "2 files" over "No photo
+    uploaded yet".
+  */
+  const firstInspection = visitRound <= 1;
+
   for (const photo of photos ?? []) {
     // A photo with no round recorded predates the column; it belongs to
     // the visit that raised the defect, which is the earliest one there is.
     const shotOn = photo.round_number ?? 1;
-    if (shotOn < visitRound || shotOn <= raisedOnRound) before.push(photo);
+    if (!firstInspection && (shotOn < visitRound || shotOn <= raisedOnRound)) before.push(photo);
     else after.push(photo);
   }
 

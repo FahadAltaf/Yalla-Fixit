@@ -18,7 +18,7 @@ export type ClientRow = {
   created_at?: string | null;
 };
 
-export function toOption(row: ClientRow, jobCount?: number) {
+export function toOption(row: ClientRow, jobCount?: number, addressCount?: number) {
   return {
     id: row.id,
     client_name: row.name,
@@ -33,6 +33,8 @@ export function toOption(row: ClientRow, jobCount?: number) {
       the Clients page that has a column for it.
     */
     job_count: jobCount,
+    /* The addresses (property records) on file for them; same rule as job_count. */
+    property_count: addressCount,
   };
 }
 
@@ -61,10 +63,18 @@ export async function listClients(admin: SupabaseClient, params: URLSearchParams
 
   let query = admin
     .from("snagging_clients")
-    .select<string, ClientRow & { job_count?: { count: number }[] | null }>(
-      // Each client's job count, counted by the database in the same
-      // query when the page shows it.
-      `id, name, email, phone, company, notes, created_at${withCounts ? ", job_count:snagging_jobs(count)" : ""}`,
+    .select<
+      string,
+      ClientRow & {
+        job_count?: { count: number }[] | null;
+        address_count?: { count: number }[] | null;
+      }
+    >(
+      // Each client's job and address counts, counted by the database in
+      // the same query when the page shows them.
+      `id, name, email, phone, company, notes, created_at${
+        withCounts ? ", job_count:snagging_jobs(count), address_count:snagging_properties(count)" : ""
+      }`,
       { count: paged ? "exact" : undefined },
     )
     .order(sortColumn, { ascending, nullsFirst: false })
@@ -104,7 +114,9 @@ export async function listClients(admin: SupabaseClient, params: URLSearchParams
   );
 
   return {
-    data: (data ?? []).map((row) => toOption(row, counts.get(row.id) ?? 0)),
+    data: (data ?? []).map((row) =>
+      toOption(row, counts.get(row.id) ?? 0, row.address_count?.[0]?.count ?? 0),
+    ),
     totalCount,
   };
 }

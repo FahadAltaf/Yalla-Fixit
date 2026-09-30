@@ -48,6 +48,10 @@ export const hasAreaInspector = (admin: SupabaseClient) =>
 export const hasVerdictNote = (admin: SupabaseClient) =>
   hasColumn(admin, "snagging_snags", "verdict_note");
 
+/** The job's gate pass (20260930100000_job_gatepass). */
+export const hasGatepass = (admin: SupabaseClient) =>
+  hasColumn(admin, "snagging_jobs", "gatepass_path");
+
 /** The reviewer's note to the inspector (20260922110000_snag_review_note). */
 export const hasReviewNote = (admin: SupabaseClient) =>
   hasColumn(admin, "snagging_snags", "review_note");

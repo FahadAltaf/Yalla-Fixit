@@ -302,8 +302,8 @@ export function PublicQuotation({ token }: { token: string }) {
                 />
               </div>
             ) : decision === "approve" ? (
-              <p className="text-sm text-slate-600">
-                Approving as <strong className="text-slate-900">{name.trim()}</strong>.
+              <p className="text-muted-foreground text-sm">
+                Approving as <strong className="text-foreground">{name.trim()}</strong>.
               </p>
             ) : (
               <div className="flex flex-col gap-1.5">

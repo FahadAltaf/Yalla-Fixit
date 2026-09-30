@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import { hasAreaInspector, hasJobInspectors } from "@/lib/server/snagging/columns";
+import { hasAreaInspector, hasGatepass, hasJobInspectors } from "@/lib/server/snagging/columns";
 import { loadSyncChildren } from "@/lib/server/snagging/sync-children";
 import { chunkIds, readAllByIds, readAllRows } from "@/lib/server/snagging/read-all";
 import { syncPullSchema } from "@/modules/snagging/schemas";
@@ -597,11 +597,14 @@ export async function handleSyncPull(
 
 
     // 2. Jobs -> wire "tasks" (with a property sub-object + team list).
+    const withGatepass = listView ? false : await hasGatepass(admin);
     const jobColumns =
       listView
         ? CARD_COLUMNS
         : `id, code, status, round_number, visit_type, visit_charge, parent_job_id, scheduled_date, notes,
-       locked, rejection_reason, rejection_category, remediation_due_at, updated_at, created_at,
+       locked, rejection_reason, rejection_category, remediation_due_at, updated_at, created_at,${
+         withGatepass ? " gatepass_path," : ""
+       }
        unit_label, building_name, community, property_type, developer_name,
        appointment_at, bedrooms, built_up_area_sqft, plot_area_sqft, floors,
        external_areas_in_scope, location_lat, location_lng, noc_required, noc_path,
@@ -852,6 +855,8 @@ export async function handleSyncPull(
           // Whether there is a NOC to open; the phone fetches the file
           // itself on demand (/api/snagging/tasks/[id]/noc), never the path.
           noc_on_file: Boolean(pick("noc_path")),
+          // The job's own gate pass; opened the same way (/tasks/[id]/gatepass).
+          gatepass_on_file: Boolean((j as unknown as Record<string, unknown>).gatepass_path),
         },
         appointment_at: j.appointment_at,
         team,

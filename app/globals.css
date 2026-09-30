@@ -21,6 +21,16 @@
      text-warning, bg-mist, text-ink-soft and friends on their light
      values in dark mode (orange on brown, charcoal on near-black). */
   --color-brand: var(--ui-brand);
+  /* Text in the brand or primary colour reads its own token, so a fill
+     and the words beside it can differ. In light they are one red. In
+     dark the fill stays brand red with white text on it, while brand-red
+     WORDS step up to a lighter tone: the red itself is about 2.8:1 on a
+     dark card, fine for a button and unreadable as type. */
+  --text-color-brand: var(--ui-brand-text);
+  --text-color-primary: var(--primary-text);
+  /* Text on a solid status fill (bg-success, bg-warning, bg-danger):
+     white in light, ink in dark, where those fills are pale. */
+  --color-on-tone: var(--ui-on-tone);
   --color-brand-dark: var(--ui-brand-dark);
   --color-brand-50: var(--ui-brand-50);
   --color-brand-100: var(--ui-brand-100);
@@ -123,6 +133,7 @@
   /* ---- Themed palette utilities (bg-brand, text-warning, ...) ----
      Light mode is the source palette unchanged; .dark re-points these. */
   --ui-brand: var(--kz-brand);
+  --ui-brand-text: var(--kz-brand);
   --ui-brand-dark: var(--kz-brand-dark);
   --ui-brand-50: var(--kz-brand-50);
   --ui-brand-100: var(--kz-brand-100);
@@ -134,6 +145,7 @@
   --ui-success: var(--kz-success);
   --ui-warning: var(--kz-warning);
   --ui-danger: var(--kz-danger);
+  --ui-on-tone: #ffffff;
 
   /* ---- Mapped onto shadcn ---- */
   --background: #ffffff;
@@ -145,6 +157,8 @@
 
   --primary: var(--kz-brand);
   --primary-foreground: #ffffff;
+  /* Words in the primary colour. The same red here; lighter in dark. */
+  --primary-text: var(--primary);
 
   /* Secondary and muted both land on mist-soft: the system alternates
      white and mist-soft surfaces and has no third neutral. */
@@ -196,7 +210,13 @@
    near-black #16181A band with white text and brand-200 accents. This
    extends that motif rather than inventing a second palette, so the
    two stay recognisably the same brand. Brand red at full strength is
-   too dark to read on ink, so accents step up to brand-200. */
+   too dark to read on ink, so accents step up to brand-200.
+
+   Filled controls are the brand red, as in light, with white text: a
+   pale pink button read as a different brand and as half-disabled. The
+   red is one step brighter than the light #8C1D24, which sank into the
+   dark surface (1.8:1 against a card). #C02A33 is 3.1:1 against the page
+   and carries white text at 5.8:1. */
 .dark {
   /* Native controls (date/time pickers, number spinners, select popups,
      autofill, scrollbars) follow the theme instead of staying light. */
@@ -209,8 +229,9 @@
   --popover: #1d2023;
   --popover-foreground: #ffffff;
 
-  --primary: #d4696f;
-  --primary-foreground: var(--kz-ink);
+  --primary: #c02a33;
+  --primary-foreground: #ffffff;
+  --primary-text: #e69499;
 
   --secondary: #262a2e;
   --secondary-foreground: #ffffff;
@@ -228,12 +249,15 @@
      Status text sits on a 10-20% wash of its own colour, so each tone is
      the light 300/400 step: 4.9:1 or better against its own 20% wash on
      a card (success 5.6, warning 6.2, danger 4.9, brand 4.9) and 5.9 to
-     7.9 against the usual 10%. Solid fills of these tones take dark text
-     (text-primary-foreground), not white. Ink flips to the foreground and
+     7.9 against the usual 10%. Solid fills of the status tones take dark
+     text (text-on-tone), not white; the brand fill is the red above and
+     takes white. Ink flips to the foreground and
      mist to the raised neutral, so a neutral chip (bg-mist
      text-ink-soft) is grey-on-grey at 6.3:1 rather than a white pill. */
-  --ui-brand: #e69499;
-  --ui-brand-dark: #e0868b; /* hover lifts on dark rather than sinking */
+  --ui-brand: #c02a33; /* fills and borders */
+  --ui-brand-text: #e69499; /* brand-red words and icons */
+  --ui-brand-dark: #cc3640; /* hover lifts on dark rather than sinking */
+  --ui-on-tone: var(--kz-ink);
   --ui-brand-50: rgba(230, 148, 153, 0.12);
   --ui-brand-100: rgba(230, 148, 153, 0.2);
   --ui-brand-200: rgba(230, 148, 153, 0.32);
@@ -258,8 +282,8 @@
 
   --sidebar: #1d2023;
   --sidebar-foreground: #ffffff;
-  --sidebar-primary: #d4696f;
-  --sidebar-primary-foreground: var(--kz-ink);
+  --sidebar-primary: #c02a33;
+  --sidebar-primary-foreground: #ffffff;
   --sidebar-accent: rgba(255, 255, 255, 0.08);
   --sidebar-accent-foreground: var(--kz-brand-200);
   --sidebar-border: rgba(255, 255, 255, 0.1);
@@ -288,6 +312,8 @@
    the light palette whatever the theme. */
 .kz-tones-light {
   --ui-brand: var(--kz-brand);
+  --ui-brand-text: var(--kz-brand);
+  --ui-on-tone: #ffffff;
   --ui-brand-dark: var(--kz-brand-dark);
   --ui-brand-50: var(--kz-brand-50);
   --ui-brand-100: var(--kz-brand-100);

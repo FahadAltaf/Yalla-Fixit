@@ -5,6 +5,7 @@ import type { ColumnDef } from "@tanstack/react-table";
 import {
   Briefcase,
   Mail,
+  MapPin,
   Pencil,
   Phone,
   Plus,
@@ -39,6 +40,7 @@ import {
 } from "@/modules/snagging";
 import { ActionType, ResourceType } from "@/types/types";
 
+import { ClientAddressesDialog } from "./client-addresses-dialog";
 import { ClientJobsDialog } from "./client-jobs-dialog";
 import {
   ActionDialogContent,
@@ -94,6 +96,8 @@ export default function ClientsAdmin({
   const [sort, setSort] = useState<{ sortBy?: string; sortOrder?: "asc" | "desc" }>({});
   // The client whose jobs are open in a popup.
   const [jobsFor, setJobsFor] = useState<SnaggingClientOption | null>(null);
+  // The client whose addresses are open in a popup.
+  const [addressesFor, setAddressesFor] = useState<SnaggingClientOption | null>(null);
   const [editing, setEditing] = useState<SnaggingClientOption | null>(null);
   /** Distinguishes "add a client" from "edit this one" in the same dialog. */
   const [creating, setCreating] = useState(false);
@@ -179,6 +183,42 @@ export default function ClientsAdmin({
         ),
       },
       {
+        id: "property_count",
+        header: "Addresses",
+        accessorKey: "property_count",
+        // Counted per page on the server, like the jobs beside it.
+        enableSorting: false,
+        /*
+          Where the client's units are kept. There was nowhere to see or
+          add one: an address only existed as a side effect of a quotation,
+          so a returning client's was typed in again each time.
+        */
+        cell: ({ row }) => {
+          const count = row.original.property_count ?? 0;
+          if (count === 0 && !canCreate) {
+            return <span className="text-muted-foreground text-sm">None yet</span>;
+          }
+          return (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={(event) => {
+                event.stopPropagation();
+                setAddressesFor(row.original);
+              }}
+              aria-label={
+                count === 0
+                  ? `Add an address for ${row.original.client_name}`
+                  : `View ${count} addresses for ${row.original.client_name}`
+              }
+            >
+              <MapPin className="size-3.5" aria-hidden />
+              {count === 0 ? "Add address" : `Addresses (${count})`}
+            </Button>
+          );
+        },
+      },
+      {
         id: "job_count",
         header: "Jobs",
         accessorKey: "job_count",
@@ -232,7 +272,7 @@ export default function ClientsAdmin({
           ) : null,
       },
     ],
-    [canEdit],
+    [canEdit, canCreate],
   );
 
   if (error) {
@@ -258,7 +298,7 @@ export default function ClientsAdmin({
         <PageHeading
           eyebrow="Master data"
           title="Clients"
-          description="The people and companies jobs and quotations are raised for. Correct a phone number or an email here and every future document picks it up."
+          description="The people and companies jobs and quotations are raised for, and the addresses on file for each. Correct a phone number or an address here and every future document picks it up."
           actions={
             canCreate ? (
               <Button
@@ -344,13 +384,27 @@ export default function ClientsAdmin({
         client={editing}
         creating={creating}
         onClose={() => setEditing(null)}
-        onSaved={() => {
+        onSaved={(created) => {
           setEditing(null);
           void load();
+          // A new client has no address yet; offer it while they are in mind.
+          if (created?.id) {
+            toast.success("Client added", {
+              description: "Add their address so it fills in on their quotations.",
+              action: { label: "Add address", onClick: () => setAddressesFor(created) },
+            });
+          }
         }}
       />
 
       <ClientJobsDialog client={jobsFor} onClose={() => setJobsFor(null)} />
+
+      <ClientAddressesDialog
+        client={addressesFor}
+        canEdit={canCreate || canEdit}
+        onClose={() => setAddressesFor(null)}
+        onChanged={() => void load()}
+      />
     </div>
   );
 }
@@ -392,7 +446,8 @@ function ClientDialog({
   client: SnaggingClientOption | null;
   creating: boolean;
   onClose: () => void;
-  onSaved: () => void;
+  /** Passed the new client when one was added, nothing on an edit. */
+  onSaved: (created?: SnaggingClientOption) => void;
 }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -417,13 +472,15 @@ function ClientDialog({
     setSaving(true);
     try {
       if (creating || !client.id) {
-        await snaggingService.createClient({
+        const created = await snaggingService.createClient({
           client_name: name.trim(),
           client_email: email.trim() || undefined,
           client_phone: phone.trim() || undefined,
           company: company.trim() || undefined,
         });
-        toast.success("Client added");
+        // The page announces it, with the offer to add an address.
+        onSaved(created);
+        return;
       } else {
         await snaggingService.updateClient({
           id: client.id,

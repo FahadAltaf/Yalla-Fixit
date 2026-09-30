@@ -42,6 +42,7 @@ import {
 import { nowLocal, toLocalInstant } from "@/lib/snagging/schedule-defaults";
 import { PlanZoneCanvas } from "./plan-zone-canvas";
 import { LocationPicker } from "./location-picker";
+import { InspectorPicker } from "./inspector-picker";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -165,6 +166,48 @@ type Draft = {
   technician_ids: string[];
   approval_manager_id: string;
 };
+
+/** The draft with a saved property's fields laid over it; null returns to "new". */
+function withProperty(current: Draft, prop: SnaggingProperty | null, areasTouched: boolean): Draft {
+  const s = (v: number | null | undefined) => (v != null ? String(v) : "");
+  return {
+    ...current,
+    property_id: prop?.id ?? "",
+    unit_label: prop?.unit_label ?? (prop ? "" : current.unit_label),
+    building_name: prop?.building_name ?? (prop ? "" : current.building_name),
+    community: prop?.community ?? (prop ? "" : current.community),
+    developer_name: prop?.developer_name ?? (prop ? "" : current.developer_name),
+    property_type: (prop?.property_type as SnaggingPropertyType) ?? current.property_type,
+    bedrooms: prop?.bedrooms ?? current.bedrooms,
+    built_up_area: prop ? s(prop.built_up_area_sqft) : current.built_up_area,
+    plot_area: prop ? s(prop.plot_area_sqft) : current.plot_area,
+    external_areas_in_scope: prop ? Boolean(prop.external_areas_in_scope) : current.external_areas_in_scope,
+    floors: prop ? s(prop.floors) : current.floors,
+    location_lat: prop ? s(prop.location_lat) : current.location_lat,
+    location_lng: prop ? s(prop.location_lng) : current.location_lng,
+    title_deed_path: prop?.title_deed_path ?? (prop ? "" : current.title_deed_path),
+    noc_required: prop ? Boolean(prop.noc_required) : current.noc_required,
+    noc_path: prop?.noc_path ?? (prop ? "" : current.noc_path),
+    areas: areasTouched ? current.areas : [],
+  };
+}
+
+/** The address fields, emptied: what a saved property leaves behind when its client goes. */
+const BLANK_PROPERTY = {
+  property_id: "",
+  unit_label: "",
+  building_name: "",
+  community: "",
+  developer_name: "",
+  built_up_area: "",
+  plot_area: "",
+  floors: "",
+  location_lat: "",
+  location_lng: "",
+  title_deed_path: "",
+  noc_required: false,
+  noc_path: "",
+} satisfies Partial<Draft>;
 
 /**
  * The full ladder to a job.
@@ -298,6 +341,14 @@ export default function NewJobWizard({
   );
   const [quotationError, setQuotationError] = useState<string | null>(null);
   const [quotationLabel, setQuotationLabel] = useState<string | null>(null);
+  /*
+    Whether an inspector may be picked while the job is being created:
+    always, once the form has settled. A job raised from an approved
+    quotation has cleared the client's approval; one raised from scratch
+    has no quotation to wait on. (The one job that does wait -- a
+    quotation still with the client -- is never created from this form.)
+  */
+  const canAssignInspector = !quotationLoading;
   const [step, setStep] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [users, setUsers] = useState<AssignableUser[]>([]);
@@ -306,6 +357,7 @@ export default function NewJobWizard({
   const [plans, setPlans] = useState<PendingPlan[]>([]);
   const [titleDeedFile, setTitleDeedFile] = useState<File | null>(null);
   const [nocFile, setNocFile] = useState<File | null>(null);
+  const [gatepassFile, setGatepassFile] = useState<File | null>(null);
 
   const [draft, setDraft] = useState<Draft>({
     client_id: "",
@@ -620,28 +672,39 @@ export default function NewJobWizard({
   // Reuse an existing property (BR-1): prefill every field from the record and
   // remember its id so the job links to it. Passing null returns to "new".
   function applyProperty(prop: SnaggingProperty | null) {
-    const type = (prop?.property_type as SnaggingPropertyType) ?? draft.property_type;
-    const s = (v: number | null | undefined) => (v != null ? String(v) : "");
-    setDraft((current) => ({
-      ...current,
-      property_id: prop?.id ?? "",
-      unit_label: prop?.unit_label ?? (prop ? "" : current.unit_label),
-      building_name: prop?.building_name ?? (prop ? "" : current.building_name),
-      community: prop?.community ?? (prop ? "" : current.community),
-      developer_name: prop?.developer_name ?? (prop ? "" : current.developer_name),
-      property_type: type,
-      bedrooms: prop?.bedrooms ?? current.bedrooms,
-      built_up_area: prop ? s(prop.built_up_area_sqft) : current.built_up_area,
-      plot_area: prop ? s(prop.plot_area_sqft) : current.plot_area,
-      external_areas_in_scope: prop ? Boolean(prop.external_areas_in_scope) : current.external_areas_in_scope,
-      floors: prop ? s(prop.floors) : current.floors,
-      location_lat: prop ? s(prop.location_lat) : current.location_lat,
-      location_lng: prop ? s(prop.location_lng) : current.location_lng,
-      title_deed_path: prop?.title_deed_path ?? (prop ? "" : current.title_deed_path),
-      noc_required: prop ? Boolean(prop.noc_required) : current.noc_required,
-      noc_path: prop?.noc_path ?? (prop ? "" : current.noc_path),
-      areas: areasTouched.current ? current.areas : [],
-    }));
+    setDraft((current) => withProperty(current, prop, areasTouched.current));
+  }
+
+  /*
+    Picking a client fills in their address.
+
+    A client on file already has the unit their last quotation or job was
+    for, but the form opened on "New property" and left the coordinator to
+    find the dropdown and pick it -- or, more often, to type the address
+    again, which made a second record of the same unit. The newest address
+    on file is now filled in as soon as the client's list arrives.
+
+    Only into an empty form: a quotation being edited, a job raised from a
+    quotation and an address somebody has started typing are all left
+    alone, and the check is made against the draft as it is when the list
+    lands, not as it was when the request left.
+  */
+  const autofillProperty = useCallback((clientId: string, prop: SnaggingProperty | undefined) => {
+    if (!prop) return;
+    setDraft((current) =>
+      current.client_id === clientId && !current.property_id && !current.unit_label.trim()
+        ? withProperty(current, prop, areasTouched.current)
+        : current,
+    );
+  }, []);
+
+  /*
+    The client changed, so the address that came from the last one goes.
+    Only an address taken from a saved property: one typed by hand is the
+    coordinator's own work and stays.
+  */
+  function releaseProperty() {
+    setDraft((current) => (current.property_id ? { ...current, ...BLANK_PROPERTY } : current));
   }
 
   // What is stopping this step, in words. Empty means the step passes —
@@ -655,10 +718,12 @@ export default function NewJobWizard({
         // later. The rooms are what the inspector cannot walk without.
         return draft.areas.length > 0 ? [] : [AREAS_ERROR];
       case "assign": {
-        // Schedule + contacts are optional here; the inspector is assigned from
-        // the job only after the client approves the quotation (FR-3.08).
-        // What is NOT optional is that a slot which is set is a slot that
-        // can still be kept.
+        // Schedule, contacts and the inspector are all optional here. What
+        // is NOT optional is that a slot which is set is a slot that can
+        // still be kept, and that an inspector has somebody to sign them off.
+        if (draft.technician_ids.length > 0 && !draft.approval_manager_id) {
+          return ["Select an approval manager before assigning an inspector."];
+        }
         const at = toLocalInstant(draft.appointment_date, draft.appointment_time);
         if (at && at.getTime() < Date.now()) {
           return ["The appointment is in the past. Pick a later date or time."];
@@ -779,8 +844,35 @@ export default function NewJobWizard({
           reprice from, so a fix that lived only on the quotation would
           not survive one.
         */
+        /*
+          The title deed and the NOC picked on this form.
+
+          They were only ever uploaded once a job existed, and a quotation
+          stops before there is one -- so a file chosen here was simply
+          dropped, and the address still read "Not uploaded" afterwards.
+          They go straight onto the address now. A failure costs the file,
+          not the quotation: it is reported and the quotation still opens.
+        */
+        const attachDocuments = async (propertyId: string | null | undefined) => {
+          if (!propertyId) return;
+          for (const [file, kind, label] of [
+            [titleDeedFile, "title_deed", "title deed"],
+            [nocFile, "noc", "NOC"],
+          ] as const) {
+            if (!file) continue;
+            stage(`Uploading the ${label}…`);
+            try {
+              const { file: prepared } = await compressImage(file);
+              await snaggingService.uploadPropertyDocument(propertyId, prepared, kind);
+            } catch {
+              toast.warning(`The ${label} did not upload. Add it from the client's address.`);
+            }
+          }
+        };
+
         if (editQuotationId) {
-          await snaggingService.updateQuotation(editQuotationId, payload);
+          const saved = await snaggingService.updateQuotation(editQuotationId, payload);
+          await attachDocuments(saved.property_id ?? draft.property_id);
           toast.success(`Quotation ${quotationLabel ?? ""} saved`.replace("  ", " "), {
             id: progress,
             description: undefined,
@@ -790,6 +882,7 @@ export default function NewJobWizard({
         }
 
         const quote = await snaggingService.createQuotation(payload);
+        await attachDocuments(quote.property_id ?? draft.property_id);
         toast.success(`Quotation ${quote.quote_number} created`, {
           id: progress,
           description: "Opening it now.",
@@ -839,12 +932,35 @@ export default function NewJobWizard({
           name: area.name,
           catalogue_area_code: area.code ?? undefined,
         })),
-        // The inspector is assigned from the job after the quotation is
-        // approved (FR-3.08); creation never assigns one.
+        // Assigned just below, through the same route the job page uses.
         technician_ids: [],
         approval_manager_id: draft.approval_manager_id || null,
         notes: draft.notes,
       });
+
+      /*
+        The inspector, when one was picked (optional).
+
+        Sent through the job's own update rather than with the create, so
+        it passes the same checks as assigning from the job page -- an
+        approval manager, nobody double-booked -- and leaves the same
+        history entry. A refusal costs the assignment,
+        not the job: it is reported and the job still opens, where it can
+        be assigned.
+      */
+      if (canAssignInspector && draft.technician_ids.length > 0) {
+        stage(
+          draft.technician_ids.length === 1 ? "Assigning the inspector…" : "Assigning the inspectors…",
+        );
+        try {
+          await snaggingService.updateTask(created.id, { technician_ids: draft.technician_ids });
+        } catch (error) {
+          toast.warning("The job was created, but no inspector was assigned.", {
+            description: `${error instanceof Error ? error.message : "Something went wrong."} Assign one from the job.`,
+            duration: 10000,
+          });
+        }
+      }
 
       // Plans upload after the task exists, so each attaches to it. A
       // failed plan does not lose the job — it is reported and the job
@@ -941,6 +1057,15 @@ export default function NewJobWizard({
           await snaggingService.uploadDocument(created.id, noc, "noc");
         } catch {
           toast.warning("The NOC did not upload. Add it from the job.");
+        }
+      }
+      if (gatepassFile) {
+        stage("Uploading the gate pass…");
+        try {
+          const { file: gatepass } = await compressImage(gatepassFile);
+          await snaggingService.uploadDocument(created.id, gatepass, "gatepass");
+        } catch {
+          toast.warning("The gate pass did not upload. Add it from the job.");
         }
       }
 
@@ -1058,6 +1183,8 @@ export default function NewJobWizard({
                 setPropertyType={setPropertyType}
                 setBedrooms={setBedrooms}
                 applyProperty={applyProperty}
+                autofillProperty={autofillProperty}
+                releaseProperty={releaseProperty}
                 titleDeedFile={titleDeedFile}
                 setTitleDeedFile={setTitleDeedFile}
                 nocFile={nocFile}
@@ -1081,6 +1208,9 @@ export default function NewJobWizard({
                 usersLoading={usersLoading}
                 usersError={usersError}
                 retryUsers={() => void loadUsers()}
+                canAssignInspector={canAssignInspector}
+                gatepassFile={gatepassFile}
+                setGatepassFile={setGatepassFile}
               />
             )}
           </div>
@@ -1194,9 +1324,12 @@ function Field({
 function ClientPicker({
   draft,
   set,
+  releaseProperty,
 }: {
   draft: Draft;
   set: <K extends keyof Draft>(key: K, value: Draft[K]) => void;
+  /** Empties an address that came from the previous client's saved property. */
+  releaseProperty: () => void;
 }) {
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
@@ -1236,6 +1369,7 @@ function ClientPicker({
   const matches = clients;
 
   function choose(client: SnaggingClientOption) {
+    releaseProperty();
     set("client_id", client.id ?? "");
     set("property_id", "");
     set("client_name", client.client_name);
@@ -1249,6 +1383,7 @@ function ClientPicker({
   // The new client has already been persisted by the dialog, so it arrives
   // with an id we link the job to.
   function saveNew(client: SnaggingClientOption) {
+    releaseProperty();
     set("client_id", client.id ?? "");
     set("property_id", "");
     set("client_name", client.client_name);
@@ -1259,6 +1394,7 @@ function ClientPicker({
   }
 
   function clear() {
+    releaseProperty();
     set("client_id", "");
     set("property_id", "");
     set("client_name", "");
@@ -1674,6 +1810,8 @@ function PropertyStep({
   setPropertyType,
   setBedrooms,
   applyProperty,
+  autofillProperty,
+  releaseProperty,
   titleDeedFile,
   setTitleDeedFile,
   nocFile,
@@ -1688,6 +1826,9 @@ function PropertyStep({
   setPropertyType: (value: SnaggingPropertyType) => void;
   setBedrooms: (value: number) => void;
   applyProperty: (prop: SnaggingProperty | null) => void;
+  /** Fills in the client's newest address when the form has none yet. */
+  autofillProperty: (clientId: string, prop: SnaggingProperty | undefined) => void;
+  releaseProperty: () => void;
   titleDeedFile: File | null;
   setTitleDeedFile: (file: File | null) => void;
   nocFile: File | null;
@@ -1733,7 +1874,10 @@ function PropertyStep({
     snaggingService
       .listProperties(clientId)
       .then((rows) => {
-        if (active) setLookup({ clientId, state: "ready", rows });
+        if (!active) return;
+        setLookup({ clientId, state: "ready", rows });
+        // Newest first, so the first is the address they were last quoted for.
+        autofillProperty(clientId, rows[0]);
       })
       .catch(() => {
         // Not the same as "this client has none": an empty list here would
@@ -1743,7 +1887,7 @@ function PropertyStep({
     return () => {
       active = false;
     };
-  }, []);
+  }, [autofillProperty]);
 
   useEffect(() => {
     if (!draft.client_id) return;
@@ -1804,7 +1948,7 @@ function PropertyStep({
         description="Who the quotation is for. Pick someone on file, or add them with +."
       >
         <Field label="Client" required hint="Search clients on file, or add a new one with +." error={errors.client}>
-          <ClientPicker draft={draft} set={set} />
+          <ClientPicker draft={draft} set={set} releaseProperty={releaseProperty} />
         </Field>
 
         {draft.client_id && propertiesState === "loading" ? (
@@ -1840,18 +1984,27 @@ function PropertyStep({
 
         {draft.client_id && propertiesState === "ready" && clientProperties.length === 0 ? (
           <p className="text-muted-foreground text-xs">
-            No properties on file for this client yet. The details below will
-            create the first one.
+            No address on file for this client yet. The details below will be
+            saved as their first, and filled in for you next time.
           </p>
         ) : null}
 
         {draft.client_id && propertiesState === "ready" && clientProperties.length > 0 ? (
-          <Field label="Property" hint="Reuse one on file, or start a new one.">
+          <Field
+            label="Address on file"
+            hint={
+              clientProperties.length === 1
+                ? "Filled in from this client's saved address. Choose New property for a different unit."
+                : `This client has ${clientProperties.length} addresses on file. Pick the one this is for, or New property.`
+            }
+          >
             <Select
               value={draft.property_id || "new"}
-              onValueChange={(value) =>
-                applyProperty(value === "new" ? null : clientProperties.find((p) => p.id === value) ?? null)
-              }
+              onValueChange={(value) => {
+                // "New property" starts from an empty address, not a copy of the saved one.
+                if (value === "new") releaseProperty();
+                else applyProperty(clientProperties.find((p) => p.id === value) ?? null);
+              }}
             >
               <SelectTrigger className="w-full">
                 <SelectValue />
@@ -1860,7 +2013,8 @@ function PropertyStep({
                 <SelectItem value="new">New property</SelectItem>
                 {clientProperties.map((p) => (
                   <SelectItem key={p.id} value={p.id}>
-                    {[p.unit_label, p.building_name].filter(Boolean).join(", ") || p.unit_label}
+                    {[p.unit_label, p.building_name, p.community].filter(Boolean).join(", ") ||
+                      p.unit_label}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -1870,7 +2024,7 @@ function PropertyStep({
 
         {draft.property_id ? (
           <p className="text-muted-foreground -mt-2 text-xs">
-            Reusing a saved property. Any edits below update that property record.
+            Using a saved address. Any edits below update that address for this client.
           </p>
         ) : null}
       </FormSection>
@@ -2069,14 +2223,22 @@ function PropertyStep({
         <div className="grid gap-4 md:grid-cols-2">
           <DocumentField
             label="Title deed"
-            hint="Optional. Confirms the unit and its area."
+            hint={
+              draft.title_deed_path
+                ? "One is on file for this address. Choose a file to replace it."
+                : "Optional. Confirms the unit and its area."
+            }
             file={titleDeedFile}
             onPick={setTitleDeedFile}
           />
           {draft.noc_required ? (
             <DocumentField
               label="NOC / authorization letter"
-              hint="Optional. Never blocks the job."
+              hint={
+                draft.noc_path
+                  ? "One is on file for this address. Choose a file to replace it."
+                  : "Optional. Never blocks the job."
+              }
               file={nocFile}
               onPick={setNocFile}
             />
@@ -3136,6 +3298,9 @@ function AssignStep({
   usersLoading,
   usersError,
   retryUsers,
+  canAssignInspector,
+  gatepassFile,
+  setGatepassFile,
 }: {
   draft: Draft;
   set: <K extends keyof Draft>(key: K, value: Draft[K]) => void;
@@ -3143,6 +3308,10 @@ function AssignStep({
   usersLoading: boolean;
   usersError: string | null;
   retryUsers: () => void;
+  /** False only while the quotation the job is raised from is still loading. */
+  canAssignInspector: boolean;
+  gatepassFile: File | null;
+  setGatepassFile: (file: File | null) => void;
 }) {
   const scheduled = draft.appointment_date ? parseISO(draft.appointment_date) : undefined;
   const now = nowLocal();
@@ -3157,8 +3326,8 @@ function AssignStep({
           Schedule and site contacts
         </h2>
         <p className="text-muted-foreground mt-1 text-sm">
-          When the inspection happens and who gives access. The inspector is assigned from the job
-          once the client approves the quotation; you can pre-select the approval manager here.
+          When the inspection happens, who goes and who gives access. Everything here is
+          optional and can be set from the job later.
         </p>
       </div>
 
@@ -3191,6 +3360,28 @@ function AssignStep({
               </SelectContent>
             </Select>
           )}
+        </Field>
+
+        {/*
+          The inspector, asked here so a job can be created and handed out
+          in one go. It used to be assigned only from the job afterwards:
+          create, open the job, find the Setup tab, assign. Optional --
+          leave it empty and the job is created unassigned, as before.
+        */}
+        <Field
+          label="Inspectors"
+          hint={
+            draft.technician_ids.length > 0
+              ? "They will see the job on their phone as soon as it is created."
+              : "Optional. Leave empty to assign from the job later."
+          }
+        >
+          <InspectorPicker
+            value={draft.technician_ids}
+            onChange={(ids) => set("technician_ids", ids)}
+            disabled={!canAssignInspector}
+            placeholder="Assign inspectors (optional)"
+          />
         </Field>
       </div>
 
@@ -3272,6 +3463,20 @@ function AssignStep({
             onChange={(v) => set("client_contact_phone", v)}
           />
         </Field>
+      </div>
+
+      {/*
+        The gate pass, where the visit is booked: it is issued for this
+        trip, not for the unit, so it sits with the appointment rather than
+        with the property's papers on the first step.
+      */}
+      <div className="grid gap-4 md:grid-cols-2">
+        <DocumentField
+          label="Gate pass"
+          hint="Optional. The inspector can open it on their phone at the gate."
+          file={gatepassFile}
+          onPick={setGatepassFile}
+        />
       </div>
 
       {/* {draft.noc_required ? (

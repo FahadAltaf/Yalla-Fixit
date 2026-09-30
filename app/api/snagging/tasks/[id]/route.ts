@@ -200,14 +200,29 @@ export async function PATCH(
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle();
-        if (!quote || quote.status !== "approved") {
+        /*
+          A quotation the client has been sent, or has turned down, holds
+          the job back, as before. A job raised from scratch has nothing to
+          wait on -- no quotation, or only the draft its Quotation tab
+          writes the first time it is opened, which nobody has been sent --
+          and it used to be refused here for good: it could be created and
+          never given to anyone. Assigning it is what takes it out of draft,
+          the step a quotation's approval makes for a job that has one, so
+          the inspector's phone lists it as work to do.
+        */
+        if (quote?.status === "sent" || quote?.status === "rejected") {
           return NextResponse.json(
             {
               error:
-                "Assign an inspector only after the client approves the quotation.",
+                quote.status === "sent"
+                  ? "This job's quotation is with the client. Assign an inspector once it is approved."
+                  : "The client rejected this job's quotation. Assign an inspector once a quotation is approved.",
             },
             { status: 409 },
           );
+        }
+        if (quote?.status !== "approved" && existing.status === "draft" && updates.status === undefined) {
+          updates.status = "assigned";
         }
       }
       // 2. An approval manager is mandatory (already on the job, or set now).

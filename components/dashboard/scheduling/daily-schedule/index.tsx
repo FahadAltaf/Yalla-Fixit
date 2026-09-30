@@ -2279,7 +2279,7 @@ function ShiftSection({
               className={cn(
                 "flex max-w-xs flex-col gap-0.5 rounded-lg px-2.5 py-1.5 text-xs shadow-lg ring-1",
                 entryDrag.blockedReason
-                  ? "bg-destructive ring-destructive text-primary-foreground"
+                  ? "bg-destructive ring-destructive text-on-tone"
                   : "bg-popover text-popover-foreground ring-foreground/10",
               )}
             >
@@ -2657,7 +2657,7 @@ const TechnicianRow = memo(function TechnicianRow({
               : "scheduled";
           const stateLabel = state ? APPOINTMENT_STATE_LABELS[state] : null;
           const boxColour = syncFailed
-            ? "bg-danger text-primary-foreground"
+            ? "bg-danger text-on-tone"
             : isFreeText
               ? "border border-dashed border-border bg-ink/40 text-white dark:bg-ink/25"
               : APPOINTMENT_STATE_STYLES[state ?? "scheduled"].bar;
@@ -2762,7 +2762,7 @@ const TechnicianRow = memo(function TechnicianRow({
             className={cn(
               "pointer-events-none absolute z-30 flex flex-col justify-center gap-0.5 overflow-hidden rounded px-2 shadow-lg ring-2 ring-white",
               ghost.blockedReason
-                ? "bg-destructive text-primary-foreground"
+                ? "bg-destructive text-on-tone"
                 : ghostView.freeText
                   ? "bg-ink/70 text-white dark:bg-ink/25"
                   : "bg-primary text-primary-foreground",

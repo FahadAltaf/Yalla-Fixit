@@ -364,7 +364,7 @@ function InspectionDetailView() {
             <TabsTrigger value="visits">
               Additional visits
               {visitsNeedingAction > 0 ? (
-                <Badge className="bg-warning text-primary-foreground ml-1.5 px-1.5 font-normal tabular-nums">
+                <Badge className="bg-warning text-on-tone ml-1.5 px-1.5 font-normal tabular-nums">
                   {visitsNeedingAction}
                 </Badge>
               ) : null}

@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
+import { signPaths } from "@/lib/server/snagging/media";
 import { propertyColumns } from "@/lib/server/snagging/property";
 import { propertyUpsertSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType } from "@/types/types";
@@ -55,7 +56,28 @@ export async function GET(req: NextRequest) {
     if (clientId) query = query.eq("client_id", clientId);
     const { data, error } = await query;
     if (error) throw new Error(error.message);
-    return NextResponse.json({ data: data ?? [] });
+
+    /*
+      One client's addresses carry a link to each document on file, so the
+      Clients page can open the deed or the NOC. Signed in one batch, and
+      only for a single client: the unfiltered list is a picker's and has
+      no use for them.
+    */
+    const rows = (data ?? []) as unknown as Array<
+      Record<string, unknown> & { title_deed_path: string | null; noc_path: string | null }
+    >;
+    if (!clientId) return NextResponse.json({ data: rows });
+    const paths = rows
+      .flatMap((row) => [row.title_deed_path, row.noc_path])
+      .filter((path): path is string => Boolean(path));
+    const signed = await signPaths(admin, paths);
+    return NextResponse.json({
+      data: rows.map((row) => ({
+        ...row,
+        title_deed_url: row.title_deed_path ? (signed.get(row.title_deed_path) ?? null) : null,
+        noc_url: row.noc_path ? (signed.get(row.noc_path) ?? null) : null,
+      })),
+    });
   } catch (error) {
     console.error("Snagging properties GET error:", error);
     return NextResponse.json(

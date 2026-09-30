@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { hasJobInspectors } from "@/lib/server/snagging/columns";
+import { hasGatepass, hasJobInspectors } from "@/lib/server/snagging/columns";
 import { readAllRows } from "@/lib/server/snagging/read-all";
 import { loadSigners } from "@/lib/server/snagging/signoffs";
 
@@ -18,7 +18,9 @@ import { loadSigners } from "@/lib/server/snagging/signoffs";
 
 type Row = Record<string, unknown>;
 
-const DETAIL_COLUMNS = `id, parent_job_id, notes, locked,
+const detailColumns = (withGatepass: boolean) => `id, parent_job_id, notes, locked,${
+  withGatepass ? " gatepass_path," : ""
+}
   remediation_due_at, appointment_at, inspector_id,
   unit_label, building_name, community, property_type, developer_name,
   bedrooms, built_up_area_sqft, plot_area_sqft, floors, external_areas_in_scope,
@@ -36,9 +38,10 @@ function firstOf<T>(value: T | T[] | null | undefined): T | null {
 }
 
 export async function loadTaskDetail(admin: SupabaseClient, jobId: string) {
+  const withGatepass = await hasGatepass(admin);
   // The job, its visits and what each finished visit found, read together.
   const [{ data, error }, visits, visitSnags, roster] = await Promise.all([
-    admin.from("snagging_jobs").select<string, Row>(DETAIL_COLUMNS).eq("id", jobId).maybeSingle(),
+    admin.from("snagging_jobs").select<string, Row>(detailColumns(withGatepass)).eq("id", jobId).maybeSingle(),
     admin
       .from("snagging_job_visits")
       .select("id, visit_number, status, scheduled_date, appointment_at, submitted_at")
@@ -165,6 +168,8 @@ export async function loadTaskDetail(admin: SupabaseClient, jobId: string) {
       noc_required: pick("noc_required"),
       // Whether there is a NOC to open; the file itself is fetched on demand.
       noc_on_file: Boolean(pick("noc_path")),
+      // The job's own gate pass; opened the same way (/tasks/[id]/gatepass).
+      gatepass_on_file: Boolean(job.gatepass_path),
     },
   };
 }
