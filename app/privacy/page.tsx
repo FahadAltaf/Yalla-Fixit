@@ -1,4 +1,7 @@
 import type { Metadata } from "next";
+import Image from "next/image";
+
+import CompanyLogo from "@/public/site-logo.webp";
 
 /**
  * The privacy policy for the YFI Snagging inspection app.
@@ -55,10 +58,21 @@ export default function PrivacyPolicyPage() {
   return (
     <main className="mx-auto w-full max-w-2xl px-4 py-12 sm:py-16">
       <header>
-        <p className="text-muted-foreground text-xs font-semibold tracking-widest uppercase">
-          Yalla Fix It
-        </p>
-        <h1 className="text-foreground mt-2 text-3xl font-semibold tracking-tight text-balance">
+        {/*
+          The mark, because this page is the one thing a store reviewer
+          sees outside the app, and an unbranded wall of text reads like a
+          placeholder. Flattened to white on the dark theme, where the
+          logo's own dark ink would otherwise vanish into the background.
+        */}
+        <Image
+          src={CompanyLogo}
+          alt="Yalla Fix It"
+          width={132}
+          height={44}
+          priority
+          className="h-auto w-[132px] dark:brightness-0 dark:invert"
+        />
+        <h1 className="text-foreground mt-6 text-3xl font-semibold tracking-tight text-balance">
           Privacy Policy
         </h1>
         <p className="text-muted-foreground mt-3 text-[0.95rem]">
