@@ -336,7 +336,7 @@ function coverBlock(data: ReportData, version: number | null): string {
         <span class="rank">${index + 1}</span>
         <span class="rank__label">${esc(row.label)}</span>
         <span class="bar"><span class="bar__fill" style="width:${Math.max(4, Math.round((row.count / total) * 100))}%"></span></span>
-        <span class="rank__count">${row.count}</span>
+        <span class="rank__count">${row.count}<span class="rank__share">  ${Math.round((row.count / total) * 100)}%</span></span>
       </li>`,
     )
     .join("");
@@ -504,7 +504,7 @@ export function renderReportHtml(
   /* masthead */
   .masthead { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
   .masthead__brand { display: flex; align-items: flex-start; gap: ${print ? "10px" : "14px"}; }
-  .masthead__logo { width: ${print ? "38px" : "52px"}; height: auto; flex: none; }
+  .masthead__logo { width: ${print ? "38px" : "52px"}; height: auto; flex: none; object-fit: contain; }
   .masthead__site { color: var(--brand); }
   .wordmark { font-size: ${print ? "15px" : "20px"}; font-weight: 800; letter-spacing: -0.3px; }
   .masthead__sub { font-size: ${print ? "8.5px" : "12px"}; color: var(--sub); margin-top: 2px; }
@@ -557,10 +557,15 @@ export function renderReportHtml(
   .ranks li { display: flex; align-items: center; gap: 10px; padding: ${print ? "0 12px 8px" : "0 14px 10px"}; padding-top: ${print ? "8px" : "10px"}; border-top: 1px solid var(--line); }
   .ranks li:first-child { border-top: none; }
   .rank { width: 14px; color: var(--faint); font-size: ${print ? "9px" : "12px"}; }
-  .rank__label { flex: 1; font-weight: 600; }
-  .rank__count { width: 26px; text-align: right; font-weight: 700; }
-  .bar { width: ${print ? "90px" : "140px"}; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
-  .bar__fill { display: block; height: 6px; background: var(--brand); }
+  .rank__label { width: 38%; font-weight: 600; }
+  .rank__count { width: 42px; text-align: right; font-weight: 700; }
+  .rank__share { font-weight: 400; color: var(--sub); font-size: 0.85em; }
+  /* The bar takes the width the label is not using: a 90px stub
+     drew the same dash for two defects as for one, which left the
+     ranking to the numbers beside it. Rounded where the value
+     ends and square at the baseline, so it reads as a length. */
+  .bar { flex: 1; height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+  .bar__fill { display: block; height: 8px; background: var(--brand); border-radius: 0 4px 4px 0; }
   .gap__name { flex: 1; }
   .gap__why { color: var(--sub); font-weight: 400; margin-left: 4px; }
   .tag {
@@ -587,7 +592,7 @@ export function renderReportHtml(
   .plan { margin: 0 0 ${print ? "10px" : "16px"}; }
   .plan__label { font-weight: 700; font-size: ${print ? "10px" : "14px"}; margin-bottom: 6px; }
   .plan__frame { position: relative; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #fff; }
-  .plan__frame img { display: block; width: 100%; height: auto; }
+  .plan__frame img { display: block; width: 100%; height: auto; object-fit: fill; }
   .plan__pin { position: absolute; transform: translate(-50%, -50%); min-width: ${print ? "14px" : "20px"}; height: ${print ? "14px" : "20px"}; padding: 0 3px; border-radius: 999px; border: 2px solid #fff; color: #fff; font-size: ${print ? "7px" : "10px"}; font-weight: 700; display: flex; align-items: center; justify-content: center; box-shadow: 0 1px 2px rgba(0,0,0,.35); }
   .snag__sub { color: var(--sub); font-size: ${print ? "9.5px" : "13px"}; margin-left: 6px; }
   .snag__meta { display: flex; align-items: center; gap: 8px; font-size: ${print ? "8.5px" : "12px"}; color: var(--faint); }
@@ -605,7 +610,9 @@ export function renderReportHtml(
   .compare__label--after { color: var(--brand); }
   .photos { display: grid; grid-template-columns: repeat(${print ? 4 : 2}, 1fr); gap: 8px; margin-top: 8px; }
   .photo { position: relative; margin: 0; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--card); aspect-ratio: 4 / 3; }
-  .photo img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  /* Photographs and plans fill their frame; a logo or a signature
+     is fitted instead, because stretching either makes it wrong. */
+  .photo img { display: block; width: 100%; height: 100%; object-fit: fill; }
   .photo--video { display: flex; align-items: center; justify-content: center; color: var(--sub); font-size: ${print ? "8.5px" : "12px"}; }
   .marker { position: absolute; width: 26px; height: 26px; margin: -13px 0 0 -13px; border: 2px solid #a81d1d; background: rgba(168,29,29,0.22); border-radius: 50%; box-shadow: 0 0 0 2px rgba(255,255,255,0.85); }
   .marker-tag { position: absolute; top: 4px; left: 4px; background: #a81d1d; color: #fff; font-size: ${print ? "6.5px" : "10px"}; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; padding: 1px 5px; border-radius: 3px; }
@@ -618,7 +625,7 @@ export function renderReportHtml(
   .gap__title { font-size: ${print ? "9px" : "13px"}; text-transform: uppercase; letter-spacing: 0.5px; color: var(--faint); margin: 10px 0 4px; }
 
   .signoff { border: 1px solid var(--line); border-radius: 8px; background: var(--card); padding: ${print ? "10px 14px" : "16px"}; display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
-  .signoff img { max-height: ${print ? "48px" : "64px"}; }
+  .signoff img { max-height: ${print ? "48px" : "64px"}; object-fit: contain; }
   .footnote { margin-top: 12px; color: var(--faint); font-size: ${print ? "7.5px" : "11px"}; text-align: center; }
 
   ${
@@ -639,7 +646,7 @@ export function renderReportHtml(
          @media (max-width: 420px) {
            .parties { grid-template-columns: 1fr; }
            .summary { grid-template-columns: repeat(2, 1fr); }
-           .bar { width: 80px; }
+           .rank__label { width: 44%; }
          }`
   }
 </style>`;

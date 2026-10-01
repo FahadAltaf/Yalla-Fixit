@@ -235,8 +235,10 @@ function BarChart({
           <div
             style={{
               flex: 1,
-              height: 9,
+              height: 8,
               background: C.line,
+              borderRadius: 4,
+              overflow: "hidden",
               /* Level with the label, which the PDF draws lower. */
               marginTop: forPDF ? 5 : 0,
             }}
@@ -244,8 +246,12 @@ function BarChart({
             <div
               style={{
                 width: `${Math.max(2, Math.round((row.value / denominator) * 100))}%`,
-                height: 9,
+                height: 8,
                 background: row.color,
+                /* Round at the end the value reaches, square where it
+                   leaves the baseline: the bar reads as a length from
+                   zero rather than as a floating pill. */
+                borderRadius: "0 4px 4px 0",
               }}
             />
           </div>
@@ -297,6 +303,27 @@ function areaLetter(index: number): string {
 }
 
 /** Badge palettes. Background and text are always set as a pair. */
+/*
+  The severity colours the CHARTS draw with, which are not the ones the
+  badges wear.
+
+  A badge's colour is text on a tint, so it is picked for reading contrast
+  and has to stay dark. A bar is a block of colour at 9px, judged on
+  whether three of them can be told apart -- including by a reader who
+  cannot separate red from green. Medium was carrying both jobs, and the
+  one colour that could do both came out mustard.
+
+  Split, each can be right. These three are checked with the palette
+  validator: adjacent CVD separation 13.7 (deutan) against a 6-8 floor,
+  normal vision 17.8, all three at 3:1 or better on the card. Re-run
+  `validate_palette.js` before changing any of them.
+*/
+const SEVERITY_BAR = {
+  high: "#c81e3a",
+  medium: "#d97706",
+  low: "#2255b3",
+} as const;
+
 const TONE = {
   high: { bg: "#fdecec", fg: "#c81e3a" },
   medium: { bg: "#fff6e6", fg: "#b3720a" },
@@ -673,12 +700,13 @@ function Para({ children }: { children: React.ReactNode }) {
 }
 
 /*
-  One photograph, cropped to fill its tile.
+  One photograph, filling its tile.
 
-  Drawn as a background image rather than an <img> with object-fit: the
-  PDF capture ignores object-fit and stretched every photo to the tile's
-  shape. A background with background-size: cover is drawn the same on
-  screen and in the PDF.
+  Drawn as a background rather than an <img>: the PDF capture ignores
+  object-fit, so a photo fitted that way came out one shape on screen and
+  another in the file. background-size is drawn the same in both, and
+  `100% 100%` is the background spelling of object-fit: fill -- the tile
+  is covered edge to edge with nothing cropped away.
 */
 function PhotoTile({
   photo,
@@ -703,7 +731,7 @@ function PhotoTile({
             height: PHOTO_H,
             backgroundColor: C.card,
             backgroundImage: `url("${url}")`,
-            backgroundSize: "cover",
+            backgroundSize: "100% 100%",
             backgroundPosition: "center",
             backgroundRepeat: "no-repeat",
             border: `1px solid ${C.grid}`,
@@ -1247,9 +1275,9 @@ export const InspectionReport = forwardRef<
     about what "high" looks like.
   */
   const severityRows = [
-    { label: "High", value: high, color: TONE.high.fg },
-    { label: "Medium", value: medium, color: TONE.medium.fg },
-    { label: "Low", value: low, color: TONE.low.fg },
+    { label: "High", value: high, color: SEVERITY_BAR.high },
+    { label: "Medium", value: medium, color: SEVERITY_BAR.medium },
+    { label: "Low", value: low, color: SEVERITY_BAR.low },
   ].filter((row) => row.value > 0);
   const accessIssues = areas.filter(
     (a) => a.access_state && a.access_state !== "accessible",
@@ -1773,9 +1801,18 @@ export const InspectionReport = forwardRef<
         {snags.length > 0 ? (
           <div data-pdf-block style={{ marginTop: 15, breakInside: "avoid" }}>
             <Heading>What was found</Heading>
-            <div style={{ display: "flex", gap: 10 }}>
-              <div style={{ width: "50%" }}>
-                <Card style={pad(forPDF, 6, 12)}>
+            {/*
+              Stretched, so the pair reads as one answer.
+
+              The two cards hold different numbers of rows -- a unit with
+              only medium defects has one row of severity beside three of
+              category -- so left to themselves they ended at different
+              heights and the block looked like two unrelated boxes that
+              happened to be side by side.
+            */}
+            <div style={{ display: "flex", gap: 10, alignItems: "stretch" }}>
+              <div style={{ width: "50%", display: "flex" }}>
+                <Card style={{ ...pad(forPDF, 6, 12), flex: 1 }}>
                   <div
                     style={{
                       fontSize: 9,
@@ -1790,8 +1827,8 @@ export const InspectionReport = forwardRef<
                   <BarChart rows={severityRows} total={snags.length} />
                 </Card>
               </div>
-              <div style={{ width: "50%" }}>
-                <Card style={pad(forPDF, 6, 12)}>
+              <div style={{ width: "50%", display: "flex" }}>
+                <Card style={{ ...pad(forPDF, 6, 12), flex: 1 }}>
                   <div
                     style={{
                       fontSize: 9,
@@ -1835,9 +1872,17 @@ export const InspectionReport = forwardRef<
                     <span style={{ width: 12, color: C.sub, fontSize: 9 }}>
                       {index + 1}
                     </span>
+                    {/*
+                      The label takes only the width it needs; the bar
+                      takes the rest. It used to be the other way round --
+                      the label stretched and the bar was a 90px stub
+                      pinned to the right margin, so four rows of two,
+                      one, one, one all drew the same short dash and the
+                      ranking was carried by the numbers alone.
+                    */}
                     <span
                       style={{
-                        flex: 1,
+                        width: "38%",
                         fontWeight: 600,
                         fontSize: 10,
                         color: C.ink,
@@ -1847,10 +1892,10 @@ export const InspectionReport = forwardRef<
                     </span>
                     <span
                       style={{
-                        width: 90,
-                        height: 6,
+                        flex: 1,
+                        height: 8,
                         background: C.line,
-                        borderRadius: 3,
+                        borderRadius: 4,
                         overflow: "hidden",
                         /* Level with the text, which the PDF draws lower. */
                         marginTop: forPDF ? 6 : 0,
@@ -1860,14 +1905,15 @@ export const InspectionReport = forwardRef<
                         style={{
                           display: "block",
                           width: `${Math.max(4, share)}%`,
-                          height: 6,
+                          height: 8,
                           background: C.brand,
+                          borderRadius: "0 4px 4px 0",
                         }}
                       />
                     </span>
                     <span
                       style={{
-                        width: 26,
+                        width: 42,
                         textAlign: "right",
                         fontWeight: 700,
                         fontSize: 10,
@@ -1875,6 +1921,12 @@ export const InspectionReport = forwardRef<
                       }}
                     >
                       {row.count}
+                      <span
+                        style={{ fontWeight: 400, color: C.sub, fontSize: 8.5 }}
+                      >
+                        {"  "}
+                        {share}%
+                      </span>
                     </span>
                   </div>
                 );
@@ -1997,6 +2049,7 @@ export const InspectionReport = forwardRef<
                         maxHeight: PLAN_MAX_H,
                         width: "auto",
                         height: "auto",
+                        objectFit: "fill",
                       }}
                     />
                     {pins.map((snag) => (

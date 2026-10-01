@@ -85,13 +85,23 @@ export function ServicesAndCost({
   return (
     <div className="overflow-hidden rounded-lg border">
       <div className="overflow-x-auto">
-        <Table>
+        {/*
+          Four columns, measured.
+
+          They were left to size themselves, so the service name took
+          most of the table and Units, Frequency and Price were crowded
+          into what was left at three different widths. The name still
+          gets the room it needs for two lines; the three figures get a
+          column each of the same width, which is what makes a row read
+          straight across.
+        */}
+        <Table className="table-fixed">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="h-10">Service</TableHead>
-              <TableHead className="h-10 text-right">Units</TableHead>
-              <TableHead className="h-10">Frequency</TableHead>
-              <TableHead className="h-10 text-right">Price</TableHead>
+              <TableHead className="h-10 w-[40%]">Service</TableHead>
+              <TableHead className="h-10 w-[20%] text-right">Units</TableHead>
+              <TableHead className="h-10 w-[20%] text-right">Frequency</TableHead>
+              <TableHead className="h-10 w-[20%] text-right">Price</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -104,17 +114,27 @@ export function ServicesAndCost({
             ) : (
               rows.map((row) => (
                 <TableRow key={row.scope}>
-                  <TableCell className="text-sm">
+                  <TableCell className="align-top text-sm">
                     <span className="font-medium">{row.scope}</span>
                     {row.reference ? (
-                      <span className="text-muted-foreground block text-xs">{row.reference}</span>
+                      <span className="text-muted-foreground mt-0.5 block text-xs">
+                        {row.reference}
+                      </span>
                     ) : null}
                   </TableCell>
-                  <TableCell className="text-right text-sm tabular-nums">{row.units}</TableCell>
-                  <TableCell className="text-muted-foreground text-sm whitespace-nowrap">
+                  {/*
+                    The three figures sit on the row's first line, not in
+                    its middle: a service whose name wraps to two lines
+                    pushed its units and price down to sit against nothing
+                    while the name above them ran on.
+                  */}
+                  <TableCell className="align-top text-right text-sm tabular-nums">
+                    {row.units}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground align-top text-right text-sm whitespace-nowrap">
                     {row.frequency}
                   </TableCell>
-                  <TableCell className="text-right text-sm whitespace-nowrap">
+                  <TableCell className="align-top text-right text-sm font-medium whitespace-nowrap tabular-nums">
                     <Money value={Number(row.price) || 0} />
                   </TableCell>
                 </TableRow>

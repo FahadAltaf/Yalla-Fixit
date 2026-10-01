@@ -127,7 +127,7 @@ export function EvidenceViewer({
       height={960}
       unoptimized
       onError={() => setFailed(true)}
-      className={cn("h-auto w-full rounded-md object-contain", className)}
+      className={cn("h-auto w-full rounded-md object-fill", className)}
     />
   );
 }
@@ -164,7 +164,7 @@ export function EvidenceThumbnail({
           muted
           playsInline
           onError={() => setFailed(true)}
-          className={cn("relative size-full object-cover", className)}
+          className={cn("relative size-full object-fill", className)}
         />
         <span className="@container pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-1">
           <span className="flex size-7 items-center justify-center rounded-full bg-black/60 ring-1 ring-white/30">
@@ -188,7 +188,7 @@ export function EvidenceThumbnail({
       unoptimized
       sizes="120px"
       onError={() => setFailed(true)}
-      className={cn("object-cover", className)}
+      className={cn("object-fill", className)}
     />
   );
 }

@@ -215,7 +215,10 @@ export function PlanZoneCanvas({
       <img
         src={src}
         alt={alt}
-        className={cn("block w-full", loadedSrc !== src && "absolute inset-x-0 top-0 opacity-0")}
+        className={cn(
+          "block w-full object-fill",
+          loadedSrc !== src && "absolute inset-x-0 top-0 opacity-0",
+        )}
         draggable={false}
         onLoad={() => setLoadedSrc(src)}
         onError={() => setLoadedSrc(src)}
