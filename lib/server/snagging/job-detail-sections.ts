@@ -489,6 +489,9 @@ async function attachPeople(
         .from("snagging_audit_events")
         .select("entity_id, actor_label, created_at, payload")
         .eq("event_type", "snag_verified")
+        // Its only writer (sync-push) uses this entity type; naming it lets
+        // the (entity_type, entity_id, created_at) index serve the lookup.
+        .eq("entity_type", "verification")
         .in("entity_id", copyIds)
         .order("created_at", { ascending: false })
     : { data: [] as Row[], error: null };
