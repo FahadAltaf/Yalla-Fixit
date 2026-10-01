@@ -1253,7 +1253,11 @@ async function applySubmission(admin: Admin, ctx: Ctx, payload: Record<string, u
     .eq("id", job.id);
   if (error) throw new Error(error.message);
 
-  const { error: lockError } = await admin.from("snagging_snags").update({ locked: true }).eq("job_id", job.id);
+  const { error: lockError } = await admin
+    .from("snagging_snags")
+    .update({ locked: true })
+    .eq("job_id", job.id)
+    .eq("locked", false);
   if (lockError) throw new Error(lockError.message);
 
   // FR-6.04 — the status change that hands the job to the approval queue
@@ -1379,7 +1383,8 @@ async function submitVisit(
     .from("snagging_snags")
     .update({ locked: true })
     .eq("job_id", job.id)
-    .eq("visit_id", visit.id);
+    .eq("visit_id", visit.id)
+    .eq("locked", false);
   if (lockError) throw new Error(lockError.message);
 
   auditFrom(ctx, {
