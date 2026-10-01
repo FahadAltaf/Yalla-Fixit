@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import { mayWriteJob } from "@/lib/server/snagging/job-roster";
+import { loadJobRosters, mayWriteJob } from "@/lib/server/snagging/job-roster";
 import { SNAGGING_BUCKET, mediaObjectKey } from "@/lib/server/snagging/media";
 import { mediaSignSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType } from "@/types/types";
@@ -58,13 +58,21 @@ export async function POST(req: NextRequest) {
       and each uploads their own photos. Also whoever is booked on its live
       visit -- the same people the push accepts the photo record from.
     */
+    /*
+      A job with no lead used to be open to anyone with edit access. Now
+      only someone on the job may sign for it, and a job nobody is on yet
+      (no lead, empty roster) only a manager with approve access.
+    */
     if (
-      job.inspector_id &&
       job.inspector_id !== profile.id &&
       !isAdminUser(accessUser) &&
       !(await mayWriteJob(admin, job.id, profile.id))
     ) {
-      return NextResponse.json({ error: "Not assigned to this inspection" }, { status: 403 });
+      const unassigned =
+        !job.inspector_id && !(await loadJobRosters(admin, [job.id])).get(job.id)?.size;
+      if (!unassigned || !hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.APPROVE)) {
+        return NextResponse.json({ error: "Not assigned to this inspection" }, { status: 403 });
+      }
     }
 
     const path = mediaObjectKey({
