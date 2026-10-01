@@ -1,8 +1,8 @@
 import { getAmcBrochureDefaults, type AmcBrochureKey } from "./amc-brochure-copy";
 import { formatPaymentTermsLabel } from "./amc-pricing";
+import { formatPhoneForDocument } from "./amc-phone";
 import {
   buildProposalServiceRows,
-  getProposalContactPerson,
   getProposalCoverageMonths,
   getProposalPropertyLabel,
   getProposalStartLabel,
@@ -67,10 +67,16 @@ export type AmcBrochure = {
   reference: string;
   issued: string;
   customerName: string;
-  /* The client's coordination contact. */
-  contactPerson: string;
-  /* Yalla Fix It's account managers named on the proposal. */
-  accountManagers: string[];
+  /*
+    Everyone named on the proposal, with the number to reach them on.
+
+    Both were names only, and the client's side was the FIRST coordination
+    contact rather than all of them -- so a proposal naming a tenant and a
+    representative printed one of them, and neither could be rung off the
+    page.
+  */
+  contacts: { name: string; phone: string }[];
+  accountManagers: { name: string; phone: string }[];
   propertyLabel: string;
   propertyType: string;
   coverageMonths: number;
@@ -146,10 +152,18 @@ export function buildAmcBrochure(data: AmcComputedData): AmcBrochure {
     reference: formData.proposalNumber?.trim() ?? "",
     issued: data.proposalDate ?? "",
     customerName: formData.customerName || "—",
-    contactPerson: getProposalContactPerson(formData),
+    contacts: (formData.coordinationContacts ?? [])
+      .map((contact) => ({
+        name: contact.name?.trim() ?? "",
+        phone: formatPhoneForDocument(contact.phone ?? ""),
+      }))
+      .filter((contact) => contact.name || contact.phone),
     accountManagers: (formData.accountManagers ?? [])
-      .map((manager) => manager.name?.trim())
-      .filter((name): name is string => Boolean(name)),
+      .map((manager) => ({
+        name: manager.name?.trim() ?? "",
+        phone: formatPhoneForDocument(manager.phone ?? ""),
+      }))
+      .filter((manager) => manager.name || manager.phone),
     propertyLabel: getProposalPropertyLabel(formData),
     propertyType: data.propertyTypeLabel,
     coverageMonths: getProposalCoverageMonths(formData),

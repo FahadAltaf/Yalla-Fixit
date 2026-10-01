@@ -1273,10 +1273,12 @@ function NoteRow({
 /**
  * The plan the snag was pinned on, with the pin.
  *
- * The container is given the plan's own aspect ratio, so an
- * object-contain image fills it exactly — that makes the stored 0..1
- * fraction map straight onto a percentage offset with no letterbox to
- * correct for.
+ * The container is given the plan's own aspect ratio and the image fills
+ * it outright, so the stored 0..1 fraction maps straight onto a
+ * percentage offset. Filling rather than fitting is what makes that
+ * exact: a plan whose stored width and height are missing or wrong would
+ * letterbox inside the box under object-contain, and every pin on it
+ * would sit off by the size of the letterbox.
  */
 function SnagPlanPin({
   snag,
@@ -1337,7 +1339,7 @@ function SnagPlanPin({
         alt={plan.label}
         fill
         unoptimized
-        className="object-contain"
+        className="object-fill"
       />
       <span
         className={cn(

@@ -59,27 +59,44 @@ const C = {
   white: "#FFFFFF",
 } as const;
 
+/* The covered-plan table: its column heads, its group bands, its cells. */
+const planHead = {
+  padding: "7px 10px",
+  fontSize: "9px",
+  fontWeight: 700,
+  letterSpacing: "0.04em",
+  textAlign: "center",
+  verticalAlign: "middle",
+  color: C.text,
+  backgroundColor: C.white,
+  borderBottom: `1px solid ${C.line}`,
+} as const;
+
+const planCell = {
+  padding: "8px 10px",
+  fontSize: "11.5px",
+  lineHeight: "15px",
+  textAlign: "center",
+  verticalAlign: "middle",
+  borderBottom: `1px solid ${C.line}`,
+} as const;
+
 const W = AMC_PAGE.width;
 /* One content width for every section: the template's 110-unit margin. */
 const M = 48;
 
 /*
   The photo strip, 28% of the page's width as in the template, cut into
-  the template's three cells. Each photo is drawn at the size and offset
-  the template places it (its own proportions, never stretched) and its
-  cell clips it, which is how the template crops them.
+  the template's three cells. Each photo now fills its cell outright
+  (object-fit: fill) rather than being placed at an offset and clipped,
+  so no cell can come out with a band of background down one side.
 */
 const STRIP = 224;
 const PHOTOS = [
-  { image: photoInterior, alt: "Apartment interior", cell: 251, left: -155.5, top: -12, width: 414.8 },
-  { image: photoVilla, alt: "Villa exterior", cell: 292, left: -55.8, top: -99.3, width: 392.9 },
-  { image: photoDining, alt: "Restaurant with a marina view", cell: 251, left: -52.5, top: 0, width: 331.3 },
-].map((photo) => ({
-  ...photo,
-  src: photo.image.src,
-  /* Height from the photo's own proportions, so none is ever stretched. */
-  height: (photo.width * photo.image.height) / photo.image.width,
-}));
+  { image: photoInterior, alt: "Apartment interior", cell: 251 },
+  { image: photoVilla, alt: "Villa exterior", cell: 292 },
+  { image: photoDining, alt: "Restaurant with a marina view", cell: 251 },
+].map((photo) => ({ ...photo, src: photo.image.src }));
 
 const ISO = [
   { src: iso14001.src, alt: "ISO 14001:2015 certified" },
@@ -149,11 +166,21 @@ export function AmcBrochurePage({ brochure, pdf = false }: { brochure: AmcBrochu
           justifyContent: "space-between",
         }}
       >
-        <img src={logo.src} alt="Yalla Fix It Facility Management" style={{ height: "64px", width: "auto", display: "block" }} />
+        <img
+          src={logo.src}
+          alt="Yalla Fix It Facility Management"
+          /* contain, not fill: a stretched wordmark is the wrong mark. */
+          style={{ height: "64px", width: "auto", objectFit: "contain", display: "block" }}
+        />
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "6px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
             {ISO.map((badge) => (
-              <img key={badge.src} src={badge.src} alt={badge.alt} style={{ height: "52px", width: "auto", display: "block" }} />
+              <img
+                key={badge.src}
+                src={badge.src}
+                alt={badge.alt}
+                style={{ height: "52px", width: "auto", objectFit: "contain", display: "block" }}
+              />
             ))}
           </div>
           {brochure.reference || brochure.issued ? (
@@ -171,18 +198,15 @@ export function AmcBrochurePage({ brochure, pdf = false }: { brochure: AmcBrochu
         {PHOTOS.map((photo) => (
           <div
             key={photo.src}
-            style={{ width: `${photo.cell}px`, height: `${STRIP}px`, overflow: "hidden", position: "relative" }}
+            style={{ width: `${photo.cell}px`, height: `${STRIP}px`, overflow: "hidden" }}
           >
             <img
               src={photo.src}
               alt={photo.alt}
               style={{
-                position: "absolute",
-                left: `${photo.left}px`,
-                top: `${photo.top}px`,
-                width: `${photo.width}px`,
-                height: `${photo.height}px`,
-                maxWidth: "none",
+                width: "100%",
+                height: "100%",
+                objectFit: "fill",
                 display: "block",
               }}
             />
@@ -251,7 +275,11 @@ export function AmcBrochurePage({ brochure, pdf = false }: { brochure: AmcBrochu
           {copy.why.map((item, index) => (
             <div key={index}>
               <div style={{ height: "38px", display: "flex", justifyContent: "center", alignItems: "flex-end" }}>
-                <img src={ICONS[item.icon]} alt="" style={{ maxHeight: "38px", height: "38px", width: "auto", display: "block" }} />
+                <img
+                  src={ICONS[item.icon]}
+                  alt=""
+                  style={{ maxHeight: "38px", height: "38px", width: "auto", objectFit: "contain", display: "block" }}
+                />
               </div>
               <div style={{ fontSize: "13px", fontWeight: 700, lineHeight: "17px", color: C.red, marginTop: px(12 - d(13)) }}>
                 {item.title}
@@ -271,17 +299,33 @@ export function AmcBrochurePage({ brochure, pdf = false }: { brochure: AmcBrochu
           </div>
         ) : null}
 
-        {/* 6. One strip: who it is for, their plan, coverage, payment */}
+        {/*
+          6. One strip: who it is for, their plan, coverage, payment.
+
+          Four tiles with the band between them, not four panes sharing
+          one edge. The row used to be hairline-apart and underscored in
+          red, which left a stray rule running past two white cards that
+          had no bottom border of their own, and sat the red customer
+          block hard against the red plan card as a single slab. The gap
+          separates the two reds and the rule is gone.
+        */}
         <div
           style={{
             display: "flex",
-            gap: "2px",
+            gap: "8px",
             alignItems: "stretch",
             marginTop: px(32 + d(20)),
-            borderBottom: `2px solid ${C.plan}`,
           }}
         >
-          <div style={{ flex: "0 0 222px", backgroundColor: C.plan, color: C.white, padding: `${px(20 - d(9))} 16px 20px` }}>
+          <div
+            style={{
+              flex: "0 0 226px",
+              backgroundColor: C.plan,
+              color: C.white,
+              borderRadius: "10px",
+              padding: `${px(20 - d(9))} 16px 20px`,
+            }}
+          >
             <div style={{ fontSize: "9px", fontWeight: 700, letterSpacing: "0.08em", opacity: 0.85 }}>PREPARED FOR</div>
             <div style={{ fontSize: "18px", fontWeight: 700, lineHeight: "22px", marginTop: px(Math.max(0, 4 - (d(18) - d(9)))) }}>{brochure.customerName}</div>
             <div style={{ fontSize: "10.5px", lineHeight: "14px", marginTop: px(4 + d(18) - d(10.5)) }}>{brochure.propertyLabel}</div>
@@ -304,11 +348,20 @@ export function AmcBrochurePage({ brochure, pdf = false }: { brochure: AmcBrochu
             ) : null}
           </div>
 
+          {/*
+            The three figures share the room equally.
+
+            The plan was a fixed 196px and the other two split whatever
+            was left, so the row ran wide, wide, narrow, narrow and read
+            as two pairs of unrelated cards. One width between them makes
+            it one row. The title is two words for the same reason: at a
+            third of the space "Annual Maintenance Contract" wrapped to
+            three lines where "Coverage" and "Payment" sat on one.
+          */}
           <PlanCard
             pdf={pdf}
             highlight
-            width={196}
-            title="Annual Maintenance Contract"
+            title="Maintenance plan"
             value={
               <>
                 <Small pdf={pdf}>AED </Small>
@@ -329,35 +382,80 @@ export function AmcBrochurePage({ brochure, pdf = false }: { brochure: AmcBrochu
             }
             caption={`From ${brochure.startLabel}`}
           />
-          <PlanCard pdf={pdf} title="Payment" value={<Big>{brochure.paymentTerms}</Big>} caption={null} />
+          <PlanCard
+            pdf={pdf}
+            title="Payment"
+            value={<Big>{brochure.paymentTerms}</Big>}
+            /* The third tile held a word and nothing else, where the two
+               beside it each said what their figure meant. */
+            caption={`AED ${formatProposalFee(brochure.annualFee)} excl. VAT, ${
+              brochure.paymentTerms.toLowerCase() === "annual"
+                ? "in one payment"
+                : "by instalment"
+            }`}
+          />
         </div>
 
-        {/* Who to talk to, out of the cards and labelled */}
-        <div style={{ fontSize: "11px", lineHeight: "15px", marginTop: "12px" }}>
-          <span style={{ fontWeight: 700 }}>Contact person:</span> {brochure.contactPerson}
+        {/*
+          Who to talk to, on both sides, with the number to ring.
+
+          This named the first coordination contact and listed the account
+          managers by name alone -- so a proposal naming a tenant and a
+          representative printed one of them, and nobody on the page could
+          be called off it.
+        */}
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "4px 28px",
+            fontSize: "11px",
+            lineHeight: "15px",
+            marginTop: "12px",
+          }}
+        >
+          {brochure.contacts.length ? (
+            <div>
+              <span style={{ fontWeight: 700 }}>
+                Contact{brochure.contacts.length > 1 ? "s" : ""}:
+              </span>{" "}
+              {brochure.contacts
+                .map((c) => [c.name, c.phone].filter(Boolean).join(" · "))
+                .join("   |   ")}
+            </div>
+          ) : null}
           {brochure.accountManagers.length ? (
-            <>
-              <span style={{ padding: "0 8px" }}>·</span>
+            <div>
               <span style={{ fontWeight: 700 }}>
                 Account manager{brochure.accountManagers.length > 1 ? "s" : ""}:
               </span>{" "}
-              {brochure.accountManagers.join(", ")}
-            </>
+              {brochure.accountManagers
+                .map((m) => [m.name, m.phone].filter(Boolean).join(" · "))
+                .join("   |   ")}
+            </div>
           ) : null}
         </div>
 
-        {/* 7. What they chose is covered */}
-        <div
-          style={{
-            marginTop: "40px",
-            backgroundColor: C.white,
-            border: `1px solid ${C.line}`,
-            borderRadius: "12px",
-            padding: `${px(28 - d(20))} 28px ${px(28 + d(11))}`,
-          }}
-        >
+        {/* 7. What they chose is covered.
+
+            No card around it: the table carries its own border, so a
+            white panel behind it only boxed a box. The heading and the
+            note now sit on the band like every other heading on the
+            page. */}
+        <div style={{ marginTop: "40px" }}>
           {copy.servicesTitle ? (
-            <div style={{ fontSize: "20px", fontWeight: 700, lineHeight: "26px", color: C.red }}>{copy.servicesTitle}</div>
+            /* Centred over its table, as "Your plan" is over the strip. */
+            <div
+              style={{
+                textAlign: "center",
+                fontSize: "20px",
+                fontWeight: 700,
+                lineHeight: "26px",
+                color: C.red,
+              }}
+            >
+              {copy.servicesTitle}
+            </div>
           ) : null}
           {/*
             What the plan covers: a tick and the service, three across.
@@ -374,58 +472,97 @@ export function AmcBrochurePage({ brochure, pdf = false }: { brochure: AmcBrochu
           {brochure.services.length ? (
             <div
               style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(3, 1fr)",
-                columnGap: "20px",
-                rowGap: "14px",
                 marginTop: px(20 + d(20) - d(12)),
+                /* Its own white, now that there is no card behind it:
+                   the section sits on the grey band, and a table with
+                   transparent rows would read as part of the band. */
+                backgroundColor: C.white,
+                border: `1px solid ${C.line}`,
+                borderRadius: "10px",
+                overflow: "hidden",
               }}
             >
-              {brochure.services.map((service) => {
-                /* "5 units · 2 per year". A single unit is not worth
-                   saying, so that line reads just "2 per year". */
-                const detail = [
-                  service.units > 1 ? `${service.units} units` : null,
-                  service.frequency,
-                ]
-                  .filter(Boolean)
-                  .join(" · ");
-                return (
-                  <div
-                    key={service.label}
-                    style={{ display: "flex", alignItems: "flex-start", gap: "9px" }}
-                  >
-                    <img
-                      src={iconTick.src}
-                      alt=""
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    {/* The plan sheet's red block, naming the column the
+                        rows belong to. It compares four plans; this is
+                        written for one, so it names that one. */}
+                    <th
                       style={{
-                        height: "12px",
-                        width: "auto",
-                        display: "block",
-                        flexShrink: 0,
-                        marginTop: px(3 + d(12.5) - 1),
+                        width: "46%",
+                        backgroundColor: C.plan,
+                        color: C.white,
+                        textAlign: "left",
+                        verticalAlign: "middle",
+                        padding: `${px(14 - d(15))} 14px ${px(14 + d(9))}`,
                       }}
-                    />
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: "12.5px", fontWeight: 700, lineHeight: "17px" }}>
-                        {service.label}
+                    >
+                      <div style={{ fontSize: "15px", fontWeight: 700, lineHeight: "20px" }}>
+                        Your plan
                       </div>
-                      {detail ? (
-                        <div
+                      <div
+                        style={{
+                          fontSize: "9px",
+                          lineHeight: "13px",
+                          opacity: 0.9,
+                          marginTop: px(2),
+                        }}
+                      >
+                        AED {formatProposalFee(brochure.monthlyFee)} a month · AED{" "}
+                        {formatProposalFee(brochure.annualFee)} a year excl. VAT
+                      </div>
+                    </th>
+                    <th style={planHead}>UNITS</th>
+                    <th style={planHead}>FREQUENCY</th>
+                    <th style={planHead}>COVERED</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {brochure.services.map((service) => (
+                    <tr key={service.label}>
+                      <td style={{ ...planCell, textAlign: "left", fontWeight: 700 }}>
+                        {service.label}
+                      </td>
+                      <td style={planCell}>{service.units}</td>
+                      <td style={planCell}>{service.frequency}</td>
+                      <td style={planCell}>
+                        <img
+                          src={iconTick.src}
+                          alt="Covered"
                           style={{
-                            fontSize: "10px",
-                            lineHeight: "14px",
-                            color: C.soft,
-                            marginTop: px(1),
+                            height: "12px",
+                            width: "12px",
+                            objectFit: "contain",
+                            display: "inline-block",
                           }}
-                        >
-                          {detail}
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                );
-              })}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                  {/*
+                    What is true of the contract rather than of any one
+                    service, in the merged rows the plan sheet puts at the
+                    bottom for exactly this. They read as their own rows
+                    without a band announcing them, because the left-hand
+                    label already says which is which.
+                  */}
+                  <tr>
+                    <td style={{ ...planCell, textAlign: "left", fontWeight: 700 }}>Coverage</td>
+                    <td colSpan={3} style={planCell}>
+                      {brochure.coverageMonths}{" "}
+                      {brochure.coverageMonths === 1 ? "month" : "months"} from{" "}
+                      {brochure.startLabel}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style={{ ...planCell, textAlign: "left", fontWeight: 700 }}>Payment</td>
+                    <td colSpan={3} style={{ ...planCell, borderBottom: "none" }}>
+                      {brochure.paymentTerms}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           ) : (
             <div style={{ fontSize: "12px", marginTop: "16px" }}>No services selected.</div>
@@ -456,7 +593,7 @@ export function AmcBrochurePage({ brochure, pdf = false }: { brochure: AmcBrochu
             <img
               src={puzzle.src}
               alt="Build your own AMC: electrical, duct cleaning, plumbing, AC, painting, water tank, handyman and emergency modules"
-              style={{ flex: "1 1 auto", minWidth: 0, width: "100%", height: "auto", display: "block" }}
+              style={{ flex: "1 1 auto", minWidth: 0, width: "100%", height: "auto", objectFit: "contain", display: "block" }}
             />
           </div>
         ) : null}
@@ -521,7 +658,7 @@ export function AmcBrochurePage({ brochure, pdf = false }: { brochure: AmcBrochu
                     <img
                       src={CONTACT_ICONS[index]}
                       alt=""
-                      style={{ height: "9px", width: "auto", display: "block", position: "relative", top: px(pdf ? d(10) + 2 : 0) }}
+                      style={{ height: "9px", width: "auto", objectFit: "contain", display: "block", position: "relative", top: px(pdf ? d(10) + 2 : 0) }}
                     />
                   ) : null}
                   {item}
@@ -581,36 +718,15 @@ function PlanCard({
     flex: width ? `0 0 ${width}px` : 1,
     position: "relative",
     textAlign: "center",
-    padding: `${(highlight ? 14 : 20) - d(12)}px 12px ${20 + d(9.5)}px`,
+    padding: `${20 - d(12)}px 12px ${20 + d(9.5)}px`,
     backgroundColor: highlight ? C.plan : C.white,
     color: highlight ? C.white : C.text,
-    border: highlight ? `1px solid ${C.plan}` : `1px solid ${C.line}`,
-    borderBottom: highlight ? `1px solid ${C.plan}` : "none",
+    borderRadius: "10px",
+    /* The filled card is its own shape; only the quiet ones need an edge. */
+    border: highlight ? "none" : `1px solid ${C.line}`,
   };
   return (
     <div style={style}>
-      {/* What this column is, the way the plan sheet marks its own. */}
-      {highlight ? (
-        <div
-          style={{
-            display: "inline-block",
-            backgroundColor: C.white,
-            color: C.plan,
-            borderRadius: "999px",
-            /* html2canvas sits small caps low in their line box, so the
-               PDF takes the drop off the top and gives it back below --
-               the same trick the property-type pill above uses. */
-            padding: pdf ? `0 10px ${4 + 2 * (d(8) - 2)}px` : "2px 10px",
-            fontSize: "8px",
-            fontWeight: 700,
-            letterSpacing: "0.08em",
-            lineHeight: pdf ? `${11 - 2 * (d(8) - 2)}px` : "11px",
-            marginBottom: "6px",
-          }}
-        >
-          YOUR PLAN
-        </div>
-      ) : null}
       <div style={{ fontSize: "12px", fontWeight: 700, lineHeight: "15px" }}>{title}</div>
       <div
         style={{

@@ -63,10 +63,6 @@ export function getProposalCoverageMonths(data: AmcFormData): number {
   return Math.max(1, months || 12);
 }
 
-export function getProposalContactPerson(data: AmcFormData): string {
-  const primary = data.coordinationContacts[0]?.name?.trim();
-  return primary || data.customerName || "—";
-}
 
 export function getProposalPropertyLabel(data: AmcFormData): string {
   return [data.propertyDetail, data.propertyAddress]

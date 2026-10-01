@@ -8,6 +8,7 @@ import {
   CalendarRange,
   CheckCircle2,
   ChevronDown,
+  Circle,
   Download,
   FileType,
   EyeIcon,
@@ -23,6 +24,7 @@ import {
   Undo2,
   UserRound,
   Users,
+  XCircle,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -36,6 +38,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  DataRow,
   SectionCard,
   StatCard,
   StatCardGrid,
@@ -44,6 +47,13 @@ import {
   timeAgo,
 } from "@/components/dashboard/shared/kaizen";
 import { Card } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Money } from "@/components/ui/money";
 import { formatCurrencyAED } from "@/utils/format-currency";
@@ -343,7 +353,7 @@ function termMonths(start?: string, end?: string): number | null {
  * (useAmcActions).
  */
 /** The tabs this page has, and the only values ?tab= may carry. */
-const TABS = new Set(["record", "services", "contacts", "history"]);
+const TABS = new Set(["record", "services", "history"]);
 
 export function SubmissionDetails({
   submission,
@@ -433,6 +443,16 @@ export function SubmissionDetails({
   const resend = sendable ? lastSentAt(submission, sendable) : null;
   const stage = STAGE[submission.status] ?? { next: "", tone: "neutral" as const };
   const months = termMonths(form.startDate, form.endDate);
+  /* Oldest first is how a trail is read; newest first is how it is
+     checked. The job page offers both, so this does too. */
+  const [historyOrder, setHistoryOrder] = useState<"desc" | "asc">("desc");
+
+  /* `timeline` is built oldest first; this is the copy the tab draws. */
+  const orderedTimeline = useMemo(
+    () => (historyOrder === "asc" ? timeline : [...timeline].reverse()),
+    [timeline, historyOrder],
+  );
+
   const contactCount =
     form.coordinationContacts.filter((c) => c.name?.trim() || c.phone?.trim()).length +
     (form.accountManagers ?? []).filter((m) => m.name?.trim() || m.phone?.trim()).length;
@@ -630,14 +650,16 @@ export function SubmissionDetails({
       */}
       <Tabs value={activeTab} onValueChange={setTab}>
         <TabsList className="h-auto w-full flex-wrap justify-start gap-1 group-data-horizontal/tabs:h-auto">
-          <TabsTrigger value="record">Property &amp; customer</TabsTrigger>
+          {/*
+            "Details" rather than "Property & customer": the tab now
+            holds the property, the customer, the contract dates and
+            everyone named on it, and a title that lists two of those
+            four reads as though the rest are somewhere else.
+          */}
+          <TabsTrigger value="record">Details</TabsTrigger>
           <TabsTrigger value="services">
             Services &amp; cost
             <TabCount value={data.frequencyRows.length} />
-          </TabsTrigger>
-          <TabsTrigger value="contacts">
-            Contacts
-            <TabCount value={contactCount} />
           </TabsTrigger>
           <TabsTrigger value="history">
             History
@@ -718,6 +740,53 @@ export function SubmissionDetails({
                 </dl>
               </ReviewSection>
             </Card>
+
+            {/*
+              Everyone named on the proposal, in a card of its own.
+
+              They were a tab, which gave two or three names a whole page
+              and put them a click from the property they are contacts
+              for. Folding them into the card above instead needed a rule
+              across the middle to keep them apart, which is a card doing
+              the job of two. The page stacks cards the way a job page
+              stacks its panels, so this is one of those.
+            */}
+            <Card className="min-w-0 gap-0 p-4 sm:p-6">
+              <ReviewSection
+                icon={Users}
+                title="Contacts"
+                description={`${contactCount} ${contactCount === 1 ? "person" : "people"} named in the contract.`}
+              >
+                {/*
+                  The two groups sit directly on the card. They used to be
+                  boxed inside it, which put a border around a border around
+                  each person's own bordered card: three frames deep before
+                  you reached a name.
+                */}
+                <div className="space-y-6">
+                  <ContactGroup
+                    title="Coordination contacts"
+                    people={form.coordinationContacts.map((contact) => ({
+                      name: contact.name,
+                      phone: contact.phone,
+                      role: contact.designation
+                        ? sentenceCase(formatDesignationLabel(contact.designation))
+                        : "",
+                    }))}
+                    empty="No coordination contacts on this proposal."
+                  />
+                  <ContactGroup
+                    title="Account managers"
+                    people={(form.accountManagers ?? []).map((manager) => ({
+                      name: manager.name,
+                      phone: manager.phone,
+                      role: "Account manager",
+                    }))}
+                    empty="No account managers on this proposal."
+                  />
+                </div>
+                </ReviewSection>
+            </Card>
           </div>,
         )}
 
@@ -735,83 +804,60 @@ export function SubmissionDetails({
         )}
 
         {panel(
-          "contacts",
-          <Card className="min-w-0 gap-0 p-4 sm:p-6">
-            <ReviewSection
-              icon={Users}
-              title="Contacts"
-              description={`${contactCount} ${contactCount === 1 ? "person" : "people"} named in the contract.`}
-            >
-              {/*
-                The two groups sit directly on the card. They used to be
-                boxed inside it, which put a border around a border around
-                each person's own bordered card: three frames deep before
-                you reached a name.
-              */}
-              <div className="space-y-6">
-                <ContactGroup
-                  title="Coordination contacts"
-                  people={form.coordinationContacts.map((contact) => ({
-                    name: contact.name,
-                    phone: contact.phone,
-                    role: contact.designation
-                      ? sentenceCase(formatDesignationLabel(contact.designation))
-                      : "",
-                  }))}
-                  empty="No coordination contacts on this proposal."
-                />
-                <ContactGroup
-                  title="Account managers"
-                  people={(form.accountManagers ?? []).map((manager) => ({
-                    name: manager.name,
-                    phone: manager.phone,
-                    role: "Account manager",
-                  }))}
-                  empty="No account managers on this proposal."
-                />
-              </div>
-            </ReviewSection>
-          </Card>,
-        )}
-
-        {panel(
           "history",
             <SectionCard
               icon={<History />}
               title="History"
-              description={`${timeline.length} ${timeline.length === 1 ? "event" : "events"}, oldest first.`}
-              bodyClassName="px-5 pb-5"
+              description={`Every recorded action on this proposal. ${timeline.length} ${
+                timeline.length === 1 ? "event" : "events"
+              }.`}
+              bodyClassName="border-t"
+              action={
+                <Select
+                  value={historyOrder}
+                  onValueChange={(value) => setHistoryOrder(value as "desc" | "asc")}
+                >
+                  <SelectTrigger size="sm" className="w-[130px]" aria-label="Sort history">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="desc">Newest first</SelectItem>
+                    <SelectItem value="asc">Oldest first</SelectItem>
+                  </SelectContent>
+                </Select>
+              }
             >
-              <ol className="relative">
-                {timeline.map((step, index) => (
-                  <li key={`${step.label}-${index}`} className="relative flex gap-4 pb-5 last:pb-0">
-                    {index < timeline.length - 1 && (
-                      <span className="bg-border absolute top-4 left-[5px] h-full w-px" aria-hidden />
-                    )}
-                    <span
-                      className={`relative mt-1.5 size-[11px] shrink-0 rounded-full ring-4 ring-background ${step.tone === "good"
-                          ? "bg-green-600"
-                          : step.tone === "bad"
-                            ? "bg-destructive"
-                            : "bg-muted-foreground/40"
-                        }`}
-                      aria-hidden
-                    />
-                    <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
-                      <div className="min-w-0 text-sm">
-                        <p className="leading-snug font-medium">{step.label}</p>
-                        {step.note && (
-                          <p className="bg-muted/50 text-muted-foreground mt-1.5 max-w-3xl rounded-md px-2.5 py-1.5 text-xs whitespace-pre-line">
-                            {step.note}
-                          </p>
-                        )}
-                      </div>
-                      <p className="text-muted-foreground shrink-0 text-xs tabular-nums sm:pt-0.5">
-                        {formatWhen(step.at)}
-                      </p>
-                    </div>
-                  </li>
-                ))}
+              {/*
+                The same row a job's history uses: an icon in its own
+                square, what happened, who by, and when on the right. The
+                dot-and-rail timeline this replaced drew a vertical line
+                down the page for a list that is almost always two or
+                three entries long, and it looked nothing like the history
+                a reader sees on a job.
+              */}
+              <ol className="divide-y">
+                {orderedTimeline.map((step, index) => {
+                  const Icon =
+                    step.tone === "good"
+                      ? CheckCircle2
+                      : step.tone === "bad"
+                        ? XCircle
+                        : Circle;
+                  return (
+                    <li key={`${step.label}-${index}`}>
+                      <DataRow
+                        icon={<Icon aria-hidden />}
+                        title={step.label}
+                        subtitle={step.note ? step.note : undefined}
+                        trailing={
+                          <span className="text-muted-foreground text-xs">
+                            {formatWhen(step.at)}
+                          </span>
+                        }
+                      />
+                    </li>
+                  );
+                })}
               </ol>
             </SectionCard>
         )}

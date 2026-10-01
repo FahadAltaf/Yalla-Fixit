@@ -117,7 +117,7 @@ export function FloorPlansPanel({ taskId }: { taskId: string }) {
                   fill
                   unoptimized
                   sizes="240px"
-                  className="object-cover"
+                  className="object-fill"
                 />
               ) : null}
             </div>
