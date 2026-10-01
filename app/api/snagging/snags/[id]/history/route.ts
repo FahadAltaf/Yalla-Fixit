@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
-import { hasResourceAction } from "@/lib/role-permissions";
+import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { loadJobFamily } from "@/lib/server/snagging/job-family";
+import { loadJobRosters, mayWriteJob } from "@/lib/server/snagging/job-roster";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
@@ -39,7 +40,7 @@ export async function GET(
   ctx: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { profile, accessUser } = await getRequestUserAccess(req);
+    const { profile, accessUser, origin } = await getRequestUserAccess(req);
     if (!profile || !accessUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -60,6 +61,26 @@ export async function GET(
       return NextResponse.json({ error: "Snag not found" }, { status: 404 });
 
     const family = await loadJobFamily(admin, snag.job_id as string);
+
+    /*
+      The app only shows a defect to the people on its job, so a request
+      from the app (a bearer token) must come from someone on the job's
+      family: its lead or roster, or that of any round or visit, or the
+      live visit's inspector, crew or a room holder. Admins and approvers
+      pass. The portal's job pages show every job to anyone with view
+      access, so portal requests keep that.
+    */
+    if (
+      origin === "mobile" &&
+      !isAdminUser(accessUser) &&
+      !hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.APPROVE)
+    ) {
+      const rosters = await loadJobRosters(admin, family.allIds);
+      const onFamily =
+        family.allIds.some((jobId) => rosters.get(jobId)?.has(profile.id)) ||
+        (await mayWriteJob(admin, snag.job_id as string, profile.id));
+      if (!onFamily) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
     // Every row for this defect, on any visit in the family.
     const [{ data: jobs }, { data: rows }] = await Promise.all([
