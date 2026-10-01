@@ -122,7 +122,16 @@ export async function POST(req: NextRequest) {
       whatever it got: after "Mark all as read" on 300 alerts, or a day
       offline, the rest never arrived and stayed unread on the phone for
       good. A first load takes the newest `limit`; older ones are history.
+
+      Rows this request has just marked read (read_at = serverTime) are not
+      sent back unless they are new since the cursor: the phone already
+      shows them read. "Mark all as read" on 3,000 alerts used to send all
+      3,000 straight back.
     */
+    const readHere = Boolean(readAll) || Boolean(read && read.length > 0);
+    const changedSince = readHere
+      ? `created_at.gt."${since}",and(read_at.gt."${since}",read_at.neq."${serverTime}")`
+      : `created_at.gt."${since}",read_at.gt."${since}"`;
     const listQuery = since
       ? readAllRows<AlertRow>(
           (from, to) =>
@@ -131,7 +140,7 @@ export async function POST(req: NextRequest) {
               .select(ALERT_COLUMNS)
               .eq("user_id", profile.id)
               // New since the cursor, or read since it (on this phone or another).
-              .or(`created_at.gt."${since}",read_at.gt."${since}"`)
+              .or(changedSince)
               .order("created_at", { ascending: false })
               .order("id", { ascending: false })
               .range(from, to),
