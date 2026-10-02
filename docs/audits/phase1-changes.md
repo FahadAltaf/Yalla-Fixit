@@ -4,6 +4,8 @@
 **Source:** `docs/audits/performance-audit-2026-10-01.md` (finding IDs below refer to it)
 **Inputs:** `SUPABASE_REGION` and `VERCEL_FUNCTION_REGION` blank; `STAGING_AVAILABLE=no`.
 
+> **Note (2 October 2026):** the helper scripts and proof tests under `docs/audits/perf/` were deleted once the Phase 1 fixes were merged into `dev`. They were never committed. References to them below are kept as the record of what was run; the results quoted here stand, but the files can no longer be re-run.
+
 Nothing was pushed, merged, deployed or applied. No production endpoint, key or database was used, and no dev server was started. Every fix sits on its own branch in its own git worktree, branched from `main`. The main checkouts were not modified: the mobile checkout is still clean, and the portal's 7 uncommitted files are yours and untouched.
 
 ## 1. Status

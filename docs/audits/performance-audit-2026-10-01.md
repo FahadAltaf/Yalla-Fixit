@@ -4,6 +4,8 @@
 **Scope:** inspector app `yfi-mobile-app/YFI-MobileApp` (commit `04ce640`, phone DB version 38) and the portal API `Yalla Fixit` (commit `b626c4f`, `/api/snagging/*`, `lib/server/snagging/*`, `supabase/migrations/*`).
 **Mode:** read-only. No source, migration or config file was changed. No query, load test or script was run against any network database or server. Helper scripts written: `docs/audits/perf/scripts/sqlite-plans.mjs` (run locally, results below) and `docs/audits/perf/scripts/api-latency.mjs` (written for staging, **not run**).
 
+> **Note (2 October 2026):** the helper scripts and proof tests under `docs/audits/perf/` were deleted once the Phase 1 fixes were merged into `dev`. They were never committed. References to them below are kept as the record of what was run; the results quoted here stand, but the files can no longer be re-run.
+
 ---
 
 ## 1. Executive summary
