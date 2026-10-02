@@ -34,7 +34,8 @@ import {
   zonedTimeToUtc,
 } from "@/lib/scheduling/org-time";
 import {
-  resolveShift,
+  reachesOutsideUsualHours,
+  resolveHomeShift,
   shiftWindowLabel,
   shiftBoundsFor,
   APPOINTMENT_TYPES,
@@ -112,11 +113,14 @@ export default function AddEntryDialog({
   const creatingNew = mode === "fsm" && appointmentChoice === NEW_APPOINTMENT;
   const isAllDay = creatingNew && scheduleType === "All Day";
 
-  // Time-bound entries derive their shift from the start time (D-01). All-Day
-  // entries have no start time, so they stay on the shift being added to.
-  const resolvedShift = useMemo(() => resolveShift(startTime, config), [startTime, config]);
-  const effectiveShift: ShiftType = isAllDay ? shift : (resolvedShift ?? shift);
-  const shiftMoved = !isAllDay && resolvedShift !== null && resolvedShift !== shift;
+  // A time-bound entry is filed under the shift that covers most of it, which
+  // is the grid the board shows it in. All-Day entries have no time, so they
+  // stay on the shift being added to.
+  const resolvedShift = useMemo(() => resolveHomeShift(startTime, endTime, config), [startTime, endTime, config]);
+  const effectiveShift: ShiftType = isAllDay ? shift : resolvedShift;
+  const shiftMoved = !isAllDay && endTime > startTime && resolvedShift !== shift;
+  const outsideUsualHours =
+    !isAllDay && endTime > startTime && reachesOutsideUsualHours(startTime, endTime, config);
 
   const onLeaveByTechnician = useMemo(() => {
     const startAt = zonedTimeToUtc(date, startTime).getTime();
@@ -378,7 +382,7 @@ export default function AddEntryDialog({
       }
       toast.success(
         shiftMoved
-          ? `Entry added to the ${effectiveShift === "night" ? "Night" : "Morning"} shift (based on its start time)`
+          ? `Entry added. It is shown in the ${effectiveShift === "night" ? "Night" : "Morning"} Shift grid, which covers most of it`
           : "Entry added to the draft",
       );
       onAdded();
@@ -706,20 +710,20 @@ export default function AddEntryDialog({
               <div className="flex items-start gap-2 rounded-md border border-brand/40 bg-brand-50 px-3 py-2 text-xs text-brand">
                 <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
                 <span>
-                  {formatTimeAmPm(startTime)} falls in the{" "}
+                  {formatTimeAmPm(startTime)} – {formatTimeAmPm(endTime)} falls mostly in the{" "}
                   <b>{effectiveShift === "night" ? "Night" : "Morning"} shift</b> ({shiftWindowLabel(effectiveShift, config)}
-                  ), so this entry will be placed there.
+                  ), so this entry is shown in that grid.
                 </span>
               </div>
             )}
 
-            {!isAllDay && resolvedShift === null && (
-              <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+            {outsideUsualHours && (
+              <div className="text-muted-foreground flex items-start gap-2 rounded-md border px-3 py-2 text-xs">
                 <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
                 <span>
-                  {formatTimeAmPm(startTime)} is outside both shift windows (Night {shiftWindowLabel("night", config)},
-                  Morning {shiftWindowLabel("day", config)}). It will be saved under the{" "}
-                  {shift === "night" ? "Night" : "Morning"} shift and flagged on the grid as out of window.
+                  Part of this is outside the usual shift hours (Night {shiftWindowLabel("night", config)}, Morning{" "}
+                  {shiftWindowLabel("day", config)}). That is fine: the{" "}
+                  {effectiveShift === "night" ? "Night" : "Morning"} Shift grid stretches to show all of it.
                 </span>
               </div>
             )}

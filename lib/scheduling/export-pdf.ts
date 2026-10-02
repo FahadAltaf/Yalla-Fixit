@@ -19,7 +19,9 @@ export type PdfBar = {
   widthPct: number;
   lane: number;
   allDay: boolean;
-  outside: boolean; // pinned to an edge: scheduled outside this shift window
+  // The job starts before / runs on after the hours this section shows.
+  continuesBefore: boolean;
+  continuesAfter: boolean;
   primary: string;
   secondary: string;
   timeLabel: string;
@@ -42,7 +44,10 @@ export type PdfRow = {
 export type PdfSection = {
   title: string;
   window: string; // "12:00 AM – 9:00 AM"
-  bounds: { start: number; end: number }; // minutes of day
+  bounds: { start: number; end: number }; // minutes from the day's midnight
+  // Set when the section shows more than the shift's usual hours, because a
+  // job that day reaches outside them.
+  usualHours?: { start: number; end: number } | null;
   rows: PdfRow[];
 };
 
@@ -181,6 +186,13 @@ export function exportSchedulePdf(opts: {
       const h = Math.floor(minutes / 60) % 24;
       return `${h % 12 === 0 ? 12 : h % 12} ${h < 12 ? "AM" : "PM"}`;
     };
+    // The stretches of this section that lie outside the shift's usual hours.
+    const usual = section.usualHours;
+    const extraHours: Array<[number, number]> = [];
+    if (usual) {
+      if (section.bounds.start < usual.start) extraHours.push([section.bounds.start, Math.min(usual.start, section.bounds.end)]);
+      if (section.bounds.end > usual.end) extraHours.push([Math.max(usual.end, section.bounds.start), section.bounds.end]);
+    }
 
     const drawSectionHeader = (continued: boolean) => {
       setFill(BRAND);
@@ -191,7 +203,12 @@ export function exportSchedulePdf(opts: {
       doc.text(`${section.title}${continued ? " (continued)" : ""}`, MARGIN + 2, y + 4.9);
       doc.setFont("helvetica", "normal");
       doc.setFontSize(8);
-      doc.text(section.window, pageW - MARGIN - 2, y + 4.9, { align: "right" });
+      doc.text(
+        section.usualHours ? `${section.window}  (stretched to fit the day's jobs)` : section.window,
+        pageW - MARGIN - 2,
+        y + 4.9,
+        { align: "right" },
+      );
       y += SECTION_HDR_H;
     };
 
@@ -202,8 +219,14 @@ export function exportSchedulePdf(opts: {
       doc.setFontSize(7.5);
       setText([40, 46, 44]);
       doc.text("Technician", MARGIN + 1.5, y + 4.1);
+      // Hours outside the shift's usual window are shaded, as on the board.
+      extraHours.forEach(([from, to]) => {
+        setFill([214, 218, 211]);
+        doc.rect(xAt(from), y, xAt(to) - xAt(from), HOUR_HDR_H, "F");
+      });
       setDraw(RULE);
       doc.setLineWidth(0.15);
+      setText([40, 46, 44]);
       hours.forEach((m) => {
         const x = xAt(m);
         doc.line(x, y, x, y + HOUR_HDR_H);
@@ -256,6 +279,14 @@ export function exportSchedulePdf(opts: {
         doc.setFontSize(6.5);
         setText(hexToRgb(WARNING));
         doc.text(fit(`On leave: ${row.leave}`, trackW - 4), trackX + 1.5, y + 3.2);
+      }
+
+      // Hours outside the shift's usual window, shaded lightly.
+      if (!row.leave) {
+        extraHours.forEach(([from, to]) => {
+          setFill([243, 244, 241]);
+          doc.rect(xAt(from), y, xAt(to) - xAt(from), rowH, "F");
+        });
       }
 
       // Hour gridlines.
@@ -319,31 +350,48 @@ export function exportSchedulePdf(opts: {
         if (bar.syncFailed) stripes(x, top, w, h);
 
         // Actionable states get a ring, as on screen.
-        if (bar.outside || bar.conflictsWithLeave) {
-          setDraw(hexToRgb(bar.outside ? WARNING : SYNC_FAILED));
+        if (bar.conflictsWithLeave) {
+          setDraw(hexToRgb(SYNC_FAILED));
           doc.setLineWidth(0.5);
           doc.roundedRect(x, top, w, h, 0.8, 0.8, "D");
         }
 
-        // Text: primary line (bold), secondary line if the bar is tall enough.
-        const innerW = w - 2.4;
-        setText([255, 255, 255]);
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(6.5);
-        const marker = bar.syncFailed || bar.outside ? "! " : "";
-        const primary = fit(`${marker}${bar.primary}`, innerW);
-        const withSecondary = bar.secondary && h >= 7;
-        const py = withSecondary ? top + 3.4 : top + h / 2 + 1.1;
-        doc.text(primary, x + 1.2, py);
-        if (bar.state === "cancelled") {
-          setDraw([255, 255, 255]);
-          doc.setLineWidth(0.3);
-          doc.line(x + 1.2, py - 0.9, x + 1.2 + doc.getTextWidth(primary), py - 0.9);
+        // A job that runs on beyond this section's hours: a white arrowhead on
+        // the edge it continues past, and its real times in place of the
+        // second line, since the bar's length no longer tells them.
+        const ARROW_W = 2.2;
+        const mid = top + h / 2;
+        setFill([255, 255, 255]);
+        if (bar.continuesBefore) doc.triangle(x + 0.5, mid, x + 0.5 + ARROW_W, mid - 1.6, x + 0.5 + ARROW_W, mid + 1.6, "F");
+        if (bar.continuesAfter) {
+          doc.triangle(x + w - 0.5, mid, x + w - 0.5 - ARROW_W, mid - 1.6, x + w - 0.5 - ARROW_W, mid + 1.6, "F");
         }
-        if (withSecondary) {
-          doc.setFont("helvetica", "normal");
-          doc.setFontSize(6);
-          doc.text(fit(bar.secondary, innerW), x + 1.2, top + 6.6);
+        const padLeft = bar.continuesBefore ? ARROW_W + 1.4 : 1.2;
+        const padRight = bar.continuesAfter ? ARROW_W + 1.4 : 1.2;
+        const runsOn = bar.continuesBefore || bar.continuesAfter;
+
+        // Text: primary line (bold), secondary line if the bar is tall enough.
+        const innerW = w - padLeft - padRight;
+        if (innerW > 3) {
+          setText([255, 255, 255]);
+          doc.setFont("helvetica", "bold");
+          doc.setFontSize(6.5);
+          const marker = bar.syncFailed ? "! " : "";
+          const primary = fit(`${marker}${bar.primary}`, innerW);
+          const secondary = runsOn && !bar.allDay ? bar.timeLabel : bar.secondary;
+          const withSecondary = secondary && h >= 7;
+          const py = withSecondary ? top + 3.4 : top + h / 2 + 1.1;
+          doc.text(primary, x + padLeft, py);
+          if (bar.state === "cancelled") {
+            setDraw([255, 255, 255]);
+            doc.setLineWidth(0.3);
+            doc.line(x + padLeft, py - 0.9, x + padLeft + doc.getTextWidth(primary), py - 0.9);
+          }
+          if (withSecondary) {
+            doc.setFont("helvetica", "normal");
+            doc.setFontSize(6);
+            doc.text(fit(secondary, innerW), x + padLeft, top + 6.6);
+          }
         }
       });
 

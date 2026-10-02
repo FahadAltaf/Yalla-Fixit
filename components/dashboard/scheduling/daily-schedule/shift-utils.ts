@@ -1,5 +1,6 @@
 import type { SchedulingConfig, ShiftType } from "@/modules/scheduling";
 import { formatTimeAmPm } from "@/components/ui/time-select";
+import { DAY_MINUTES, configuredWindows, homeShift } from "@/lib/scheduling/board-layout";
 
 // FSM Service Appointment Type picklist (per YFI + FSM). "-None-" is the
 // unset value; the team must choose a real type before saving.
@@ -53,6 +54,32 @@ export function shiftWindowLabel(shift: ShiftType, config: SchedulingConfig) {
   const toHhmm = (m: number) =>
     `${String(Math.floor((m >= 1440 ? 1439 : m) / 60)).padStart(2, "0")}:${String((m >= 1440 ? 1439 : m) % 60).padStart(2, "0")}`;
   return `${formatTimeAmPm(toHhmm(start))}–${formatTimeAmPm(toHhmm(end))}`;
+}
+
+// The grid a job with these clock times is shown in: the shift that covers
+// most of it (the board's rule, lib/scheduling/board-layout.ts). An end at or
+// before the start is read as ending the next day.
+export function resolveHomeShift(startTime: string, endTime: string, config: SchedulingConfig): ShiftType {
+  const startMin = hhmmToMinutes(startTime);
+  let endMin = hhmmToMinutes(endTime);
+  if (endMin <= startMin) endMin += DAY_MINUTES;
+  return homeShift({ startMin, endMin }, configuredWindows(config));
+}
+
+// Whether any of the job lies outside both shifts' usual hours. Not an error:
+// the grid stretches to show it. Worth saying, so it is never a surprise.
+export function reachesOutsideUsualHours(startTime: string, endTime: string, config: SchedulingConfig): boolean {
+  const startMin = hhmmToMinutes(startTime);
+  let endMin = hhmmToMinutes(endTime);
+  if (endMin <= startMin) endMin += DAY_MINUTES;
+  const windows = configuredWindows(config);
+  const from = Math.min(windows.day.start, windows.night.start);
+  const to = Math.max(windows.day.end, windows.night.end);
+  const gapFrom = Math.min(windows.day.end, windows.night.end);
+  const gapTo = Math.max(windows.day.start, windows.night.start);
+  if (startMin < from || endMin > to) return true;
+  // A gap between the two windows, if the configuration has one.
+  return gapTo > gapFrom && startMin < gapTo && endMin > gapFrom;
 }
 
 // Which shift a start time belongs to. The configured windows currently

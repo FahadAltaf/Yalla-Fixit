@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import CompanyLogo from "@/public/site-logo.webp";
-import { Activity, Clock, TriangleAlert, Users } from "lucide-react";
+import { Activity, ChevronsLeft, ChevronsRight, Clock, TriangleAlert, Users } from "lucide-react";
 import {
   scheduleService,
   type ScheduleEntry,
@@ -22,6 +22,14 @@ import {
   todayInZone,
   zonedMinutesOfDay,
 } from "@/lib/scheduling/org-time";
+import {
+  DAY_MINUTES,
+  configuredWindows,
+  entryRange,
+  fitDayWindow,
+  isOnDay,
+  placeRange,
+} from "@/lib/scheduling/board-layout";
 import { cn } from "@/lib/actions/utils";
 
 // Wall-display view of the day's schedule.
@@ -43,24 +51,27 @@ function todayIso() {
   return todayInZone();
 }
 
-function minutesOfDay(iso: string) {
-  return zonedMinutesOfDay(iso);
-}
-
+// A clock time for minutes counted from the day's midnight; a value on the
+// day before or after says so.
 function hhmm(totalMinutes: number) {
-  const m = ((totalMinutes % 1440) + 1440) % 1440;
+  const dayOffset = Math.floor(totalMinutes / DAY_MINUTES);
+  const m = totalMinutes - dayOffset * DAY_MINUTES;
   const h = Math.floor(m / 60);
   const mm = String(m % 60).padStart(2, "0");
   const suffix = h < 12 ? "AM" : "PM";
   const h12 = h % 12 === 0 ? 12 : h % 12;
-  return `${h12}:${mm} ${suffix}`;
+  const clock = `${h12}:${mm} ${suffix}`;
+  if (dayOffset === 0) return clock;
+  return dayOffset > 0 ? `${clock} next day` : `${clock} the day before`;
 }
 
-function parseHhmm(value: string, fallback: number) {
-  const [h, m] = (value || "").split(":").map(Number);
-  if (!Number.isFinite(h) || !Number.isFinite(m)) return fallback;
-  return h * 60 + m;
-}
+// Used until the shift configuration has loaded.
+const FALLBACK_WINDOWS = {
+  night_shift_start: "00:00",
+  night_shift_end: "09:00",
+  day_shift_start: "08:00",
+  day_shift_end: "17:00",
+};
 
 type Row = { technicianId: string; technicianName: string; entries: ScheduleEntry[] };
 
@@ -78,7 +89,8 @@ export default function ScheduleDisplay() {
   const load = useCallback(async (targetDate: string) => {
     try {
       const day = await scheduleService.getDay(targetDate);
-      setEntries(day.entries ?? []);
+      // Yesterday's jobs that are still running belong on today's screen too.
+      setEntries([...(day.carriedOver ?? []), ...(day.entries ?? [])]);
       setLastUpdated(Date.now());
       setFailed(false);
     } catch {
@@ -116,18 +128,22 @@ export default function ScheduleDisplay() {
     return () => clearInterval(id);
   }, []);
 
-  // The window the board spans: the union of both configured shifts, so a
-  // single screen shows the whole operating day.
-  const bounds = useMemo(() => {
-    if (!config) return { start: 0, end: 1440 };
-    const nightStart = parseHhmm(config.night_shift_start, 0);
-    let nightEnd = parseHhmm(config.night_shift_end, 9 * 60);
-    const dayStart = parseHhmm(config.day_shift_start, 8 * 60);
-    let dayEnd = parseHhmm(config.day_shift_end, 17 * 60);
-    if (nightEnd <= nightStart) nightEnd += 1440;
-    if (dayEnd <= dayStart) dayEnd += 1440;
-    return { start: Math.min(nightStart, dayStart), end: Math.max(nightEnd, dayEnd) };
-  }, [config]);
+  const windows = useMemo(() => configuredWindows(config ?? FALLBACK_WINDOWS), [config]);
+
+  // Only what falls on this day. An entry Zoho FSM has moved to another date
+  // stays on this day's list, but there is nothing of it to show here.
+  const dayEntries = useMemo(
+    () => entries.filter((entry) => isOnDay(entryRange(entry, date), windows)),
+    [entries, date, windows],
+  );
+
+  // The window the board spans: both configured shifts together, stretched to
+  // the day's work. It used to stop at the end of the morning shift, so a job
+  // at 5 PM or later never appeared on the screen.
+  const bounds = useMemo(
+    () => fitDayWindow(windows, dayEntries.map((entry) => entryRange(entry, date))),
+    [windows, dayEntries, date],
+  );
 
   const span = Math.max(1, bounds.end - bounds.start);
 
@@ -135,7 +151,7 @@ export default function ScheduleDisplay() {
   // show ~90 idle rows, and empty rows are noise on a status board.
   const rows = useMemo<Row[]>(() => {
     const byTech = new Map<string, Row>();
-    entries.forEach((entry) => {
+    dayEntries.forEach((entry) => {
       (entry.schedule_entry_assignments ?? []).forEach((a) => {
         const existing = byTech.get(a.technician_fsm_id);
         const name = a.technician_reference?.display_name ?? a.technician_fsm_id;
@@ -144,7 +160,7 @@ export default function ScheduleDisplay() {
       });
     });
     return [...byTech.values()].sort((a, b) => a.technicianName.localeCompare(b.technicianName));
-  }, [entries]);
+  }, [dayEntries]);
 
   const stateOf = useCallback(
     (entry: ScheduleEntry): AppointmentState | "note" =>
@@ -160,12 +176,12 @@ export default function ScheduleDisplay() {
     const tally: Record<AppointmentState, number> = {
       new: 0, scheduled: 0, dispatched: 0, in_progress: 0, completed: 0, cannot_complete: 0, cancelled: 0, unknown: 0,
     };
-    entries.forEach((e) => {
+    dayEntries.forEach((e) => {
       const state = stateOf(e);
       if (state !== "note") tally[state] += 1;
     });
     return tally;
-  }, [entries, stateOf]);
+  }, [dayEntries, stateOf]);
 
   const hourMarks = useMemo(() => {
     const marks: number[] = [];
@@ -200,15 +216,17 @@ export default function ScheduleDisplay() {
   };
 
   const place = (entry: ScheduleEntry) => {
-    const start = minutesOfDay(entry.start_at);
-    let end = minutesOfDay(entry.end_at);
-    if (end <= start) end += 1440;
-    const visibleStart = Math.max(start, bounds.start);
-    const visibleEnd = Math.min(end, bounds.end);
-    if (visibleEnd <= visibleStart) return null;
-    const left = ((visibleStart - bounds.start) / span) * 100;
-    const width = Math.max(((visibleEnd - visibleStart) / span) * 100, 3);
-    return { left, width: Math.min(width, 100 - left), start, end };
+    const placed = placeRange(entryRange(entry, date), bounds, 3);
+    if (!placed) return null;
+    return {
+      left: placed.leftPct,
+      width: placed.widthPct,
+      start: placed.startMin,
+      end: placed.endMin,
+      // It began before midnight, or runs on past it.
+      startsEarlier: placed.clippedStart,
+      runsOn: placed.clippedEnd,
+    };
   };
 
   return (
@@ -354,11 +372,13 @@ export default function ScheduleDisplay() {
                               width: `${pos.width}%`,
                               top: `${(laneOf.get(entry.id) ?? 0) * 3}rem`,
                             }}
-                            title={`${label} · ${stateLabel} · ${hhmm(pos.start)}–${hhmm(pos.end)}`}
+                            title={`${label} · ${stateLabel} · ${hhmm(pos.start)} – ${hhmm(pos.end)}`}
                           >
+                            {pos.startsEarlier && <ChevronsLeft className="-ml-1 size-4 shrink-0" />}
                             <span className="truncate text-sm font-semibold">{label}</span>
-                            <span className="ml-auto shrink-0 text-xs font-medium tabular-nums opacity-90">
-                              {hhmm(pos.start)}
+                            <span className="ml-auto flex shrink-0 items-center gap-1 text-xs font-medium tabular-nums opacity-90">
+                              {pos.startsEarlier ? `until ${hhmm(pos.end)}` : hhmm(pos.start)}
+                              {pos.runsOn && <ChevronsRight className="-mr-1 size-4" />}
                             </span>
                           </div>
                         );

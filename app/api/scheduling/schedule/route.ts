@@ -2,9 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
-import { importFsmAppointmentsForDay } from "@/lib/server/zoho/import-appointments";
+import {
+  importFsmAppointmentsForDay,
+  readUnplacedAppointments,
+  type UnplacedAppointment,
+} from "@/lib/server/zoho/import-appointments";
 import { reconcileFsmAppointments } from "@/lib/server/zoho/reconcile";
-import { DEFAULT_ORG_TIMEZONE, todayInZone } from "@/lib/scheduling/org-time";
+import {
+  DEFAULT_ORG_TIMEZONE,
+  addDaysToDateString,
+  todayInZone,
+  zonedTimeToUtc,
+} from "@/lib/scheduling/org-time";
 import { ActionType, ResourceType } from "@/types/types";
 
 // FR-4 reads the day's appointments from FSM the first time a day is opened,
@@ -16,6 +25,14 @@ export const maxDuration = 60;
 // statuses stale; this keeps the day being looked at in step, at the cost of
 // one FSM round at most every few minutes -- and only while someone is looking.
 const FSM_REFRESH_MINUTES = 5;
+
+// How far back to look for a job that is still running on the day shown.
+const CARRY_OVER_DAYS = 7;
+
+const ENTRY_SELECT =
+  "*, schedule_entry_assignments(id, technician_fsm_id, technician_reference(display_name)), " +
+  "created_by_user:user_profile!schedule_entries_created_by_fkey(full_name, email), " +
+  "updated_by_user:user_profile!schedule_entries_updated_by_fkey(full_name, email)";
 
 // DASH-001/PLAN-002: load (or create, for current/future dates) the daily
 // schedule and its current version, with entries and assignments, for the
@@ -36,6 +53,8 @@ export async function GET(req: NextRequest) {
     }
 
     const admin = await createAdminServerClient();
+    const { data: zoneRow } = await admin.from("settings").select("org_timezone").eq("id", 1).maybeSingle();
+    const timeZone = zoneRow?.org_timezone || DEFAULT_ORG_TIMEZONE;
 
     // The day IS its current version now -- there is no separate
     // daily_schedules row, and no current_version_id pointer to keep in step
@@ -53,10 +72,9 @@ export async function GET(req: NextRequest) {
       // BR-016: past dates are read-only and never auto-create a draft.
       // "Today" is the ORG's date, not the server's: a UTC host is still on
       // yesterday until 04:00 Gulf time, and would refuse to open today's draft.
-      const { data: zoneRow } = await admin.from("settings").select("org_timezone").eq("id", 1).maybeSingle();
-      const today = todayInZone(zoneRow?.org_timezone || DEFAULT_ORG_TIMEZONE);
+      const today = todayInZone(timeZone);
       if (date < today) {
-        return NextResponse.json({ data: { version: null, entries: [] } });
+        return NextResponse.json({ data: { version: null, entries: [], carriedOver: [], unplaced: [] } });
       }
 
       const { data: created, error: createError } = await admin
@@ -116,17 +134,58 @@ export async function GET(req: NextRequest) {
 
     const { data: entries, error: entriesError } = await admin
       .from("schedule_entries")
-      .select(
-        "*, schedule_entry_assignments(id, technician_fsm_id, technician_reference(display_name)), " +
-          "created_by_user:user_profile!schedule_entries_created_by_fkey(full_name, email), " +
-          "updated_by_user:user_profile!schedule_entries_updated_by_fkey(full_name, email)",
-      )
+      .select(ENTRY_SELECT)
       .eq("schedule_version_id", version.id)
       .order("shift", { ascending: true })
       .order("start_at", { ascending: true });
     if (entriesError) throw new Error(entriesError.message);
 
-    return NextResponse.json({ data: { version, entries: entries ?? [], imported, fsmImport, fsmFirstPull } });
+    // A job that started on an earlier day and is still running on this one
+    // (22:00 -> 04:00) belongs to that day's schedule, so this day never
+    // showed it and its technicians looked free until it ended. It is sent
+    // along, marked, to be drawn but not edited here.
+    let carriedOver: Record<string, unknown>[] = [];
+    const dayStart = zonedTimeToUtc(date, "00:00:00", timeZone).toISOString();
+    const { data: carriedRows, error: carriedError } = await admin
+      .from("schedule_entries")
+      .select(`${ENTRY_SELECT}, schedule_versions!inner(is_current)`)
+      .eq("schedule_versions.is_current", true)
+      .lt("operating_date", date)
+      .gte("operating_date", addDaysToDateString(date, -CARRY_OVER_DAYS))
+      .gt("end_at", dayStart)
+      .order("start_at", { ascending: true });
+    if (carriedError) {
+      // Never a reason to fail the day itself.
+      console.error("Schedule GET carried-over error:", carriedError.message);
+    } else {
+      // An appointment FSM moved onto this date is already here as this day's own entry.
+      const own = new Set(
+        ((entries ?? []) as unknown as Array<{ fsm_appointment_id: string | null }>)
+          .map((e) => e.fsm_appointment_id)
+          .filter((id): id is string => Boolean(id)),
+      );
+      carriedOver = ((carriedRows ?? []) as unknown as Array<Record<string, unknown>>)
+        .filter((row) => !row.fsm_appointment_id || !own.has(row.fsm_appointment_id as string))
+        .map((row) => {
+          const { schedule_versions: _version, ...entry } = row;
+          void _version;
+          return { ...entry, carried_over: true };
+        });
+    }
+
+    // FSM appointments for the date with nobody to draw them on. Only while
+    // the day still takes new bookings; an approved day's list is fixed.
+    let unplaced: UnplacedAppointment[] = [];
+    if (editable) {
+      unplaced =
+        fsmImport && !fsmImport.error
+          ? (fsmImport.unplaced ?? [])
+          : await readUnplacedAppointments(admin, version.id);
+    }
+
+    return NextResponse.json({
+      data: { version, entries: entries ?? [], carriedOver, unplaced, imported, fsmImport, fsmFirstPull },
+    });
   } catch (error) {
     console.error("Schedule GET error:", error);
     return NextResponse.json({ error: "Failed to load schedule" }, { status: 500 });

@@ -21,14 +21,17 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dialog";
 import { AlertTriangle, ExternalLink, Loader2, RefreshCw, Trash2 } from "lucide-react";
 import TimeSelect, { formatTimeAmPm } from "@/components/ui/time-select";
-import { resolveShift, shiftWindowLabel, fsmRecordUrl } from "./shift-utils";
+import { reachesOutsideUsualHours, resolveHomeShift, shiftWindowLabel, fsmRecordUrl } from "./shift-utils";
 import {
   APPOINTMENT_STATE_LABELS,
   APPOINTMENT_STATE_STYLES,
   resolveAppointmentState,
 } from "@/lib/scheduling/appointment-status";
 import {
+  addDaysToDateString,
+  formatZonedDate,
   formatZonedTime,
+  zonedDateString,
   zonedHhmm,
   zonedTimeToUtc,
 } from "@/lib/scheduling/org-time";
@@ -56,6 +59,15 @@ type Props = {
 // The entry's time of day in the org's zone (not the viewer's).
 function toLocalHhmm(iso: string) {
   return zonedHhmm(iso);
+}
+
+// Whole days between two YYYY-MM-DD dates.
+function daysBetween(from: string, to: string) {
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000);
+}
+
+function dayLabel(date: string) {
+  return formatZonedDate(zonedTimeToUtc(date, "12:00"), { weekday: "short", day: "numeric", month: "short" });
 }
 
 const PUBLISHED_LIKE: ScheduleVersionStatus[] = ["published", "partially_synced"];
@@ -174,12 +186,27 @@ export default function EntryDetailDialog({
     setSelectedLineIds((prev) => (prev.includes(id) ? prev.filter((l) => l !== id) : [...prev, id]));
   const linesChanged = canEditLines && !sameIds(selectedLineIds, originalLineIds);
 
-  const resolvedShift = useMemo(() => resolveShift(startTime, config), [startTime, config]);
-  const targetShift: ShiftType = resolvedShift ?? entry.shift;
+  // The dialog edits clock times; the dates stay where they are. The job's
+  // own dates are used, not the day it is listed under: a job that runs over
+  // midnight, or one Zoho FSM has moved to another date, would otherwise be
+  // pulled back onto this day just by saving it.
+  const startDay = zonedDateString(entry.start_at);
+  const endDay = zonedDateString(entry.end_at);
+  const spansDays = daysBetween(startDay, endDay);
+  const listedDay = entry.operating_date;
+  const newStartAt = zonedTimeToUtc(startDay, startTime);
+  const newEndAt = zonedTimeToUtc(addDaysToDateString(startDay, spansDays), endTime);
+
+  const isAllDayEntry = entry.fsm_schedule_type === "All Day";
+  const originalShift: ShiftType = isAllDayEntry
+    ? entry.shift
+    : resolveHomeShift(toLocalHhmm(entry.start_at), toLocalHhmm(entry.end_at), config);
+  const targetShift: ShiftType = isAllDayEntry ? entry.shift : resolveHomeShift(startTime, endTime, config);
+  const outsideUsualHours = !isAllDayEntry && reachesOutsideUsualHours(startTime, endTime, config);
 
   const onLeave = useMemo(() => {
-    const startAt = zonedTimeToUtc(entry.operating_date, startTime).getTime();
-    const endAt = zonedTimeToUtc(entry.operating_date, endTime).getTime();
+    const startAt = newStartAt.getTime();
+    const endAt = newEndAt.getTime();
     const map = new Map<string, LeaveRecord>();
     leaveRecords.forEach((r) => {
       if (r.status !== "active") return;
@@ -188,15 +215,15 @@ export default function EntryDetailDialog({
       }
     });
     return map;
-  }, [leaveRecords, entry.operating_date, startTime, endTime]);
+    // The two instants are derived from exactly these values.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leaveRecords, startDay, spansDays, startTime, endTime]);
 
   const techsChanged =
     selectedTechs.length !== originalTechs.length ||
     selectedTechs.some((t) => !originalTechs.includes(t));
   const timeChanged = startTime !== toLocalHhmm(entry.start_at) || endTime !== toLocalHhmm(entry.end_at);
   const dirty = timeChanged || techsChanged || linesChanged;
-
-  const outOfWindow = resolvedShift === null || resolvedShift !== entry.shift;
 
   const technicianNames = originalTechs
     .map((id) => technicians.find((t) => t.fsm_resource_id === id)?.display_name ?? id)
@@ -212,8 +239,12 @@ export default function EntryDetailDialog({
   };
 
   const handleSave = async () => {
-    if (endTime <= startTime) {
-      toast.error("End time must be after start time");
+    if (newEndAt.getTime() <= newStartAt.getTime()) {
+      toast.error(
+        spansDays > 0
+          ? `End time must be after the start. This job ends on ${dayLabel(endDay)}.`
+          : "End time must be after start time",
+      );
       return;
     }
     if (selectedTechs.length === 0) {
@@ -224,9 +255,9 @@ export default function EntryDetailDialog({
       toast.error("Select at least one service line");
       return;
     }
-    const day = entry.operating_date;
-    const startAt = zonedTimeToUtc(day, startTime).toISOString();
-    const endAt = zonedTimeToUtc(day, endTime).toISOString();
+    // Times that were not touched go back exactly as they came.
+    const startAt = startTime === toLocalHhmm(entry.start_at) ? entry.start_at : newStartAt.toISOString();
+    const endAt = endTime === toLocalHhmm(entry.end_at) ? entry.end_at : newEndAt.toISOString();
     setSaving(true);
     try {
       if (canEditPublished) {
@@ -248,8 +279,8 @@ export default function EntryDetailDialog({
           ...(linesChanged ? { serviceLineItemIds: selectedLineIds } : {}),
         });
         toast.success(
-          targetShift !== entry.shift
-            ? `Saved and moved to the ${targetShift === "night" ? "Night" : "Morning"} shift`
+          targetShift !== originalShift
+            ? `Saved. It is now shown in the ${targetShift === "night" ? "Night" : "Morning"} Shift grid`
             : "Entry updated",
         );
       }
@@ -324,7 +355,7 @@ export default function EntryDetailDialog({
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge status={entry.entry_type.replace(/_/g, " ")} />
             <StatusBadge status={entry.sync_status.replace(/_/g, " ")} />
-            <StatusBadge status={entry.shift === "night" ? "night shift" : "morning shift"} />
+            <StatusBadge status={originalShift === "night" ? "night shift" : "morning shift"} />
             {entry.origin === "fsm" && <StatusBadge status="fsm" />}
           </div>
 
@@ -358,8 +389,17 @@ export default function EntryDetailDialog({
             )}
             {entry.title && entry.entry_type !== "free_text" && <Detail label="Summary">{entry.title}</Detail>}
             <Detail label="Scheduled">
-              {formatTimeAmPm(toLocalHhmm(entry.start_at))} – {formatTimeAmPm(toLocalHhmm(entry.end_at))} on{" "}
-              {entry.operating_date}
+              {spansDays > 0 || startDay !== listedDay ? (
+                <>
+                  {formatTimeAmPm(toLocalHhmm(entry.start_at))} on {dayLabel(startDay)} –{" "}
+                  {formatTimeAmPm(toLocalHhmm(entry.end_at))} on {dayLabel(endDay)}
+                </>
+              ) : (
+                <>
+                  {formatTimeAmPm(toLocalHhmm(entry.start_at))} – {formatTimeAmPm(toLocalHhmm(entry.end_at))} on{" "}
+                  {entry.operating_date}
+                </>
+              )}
             </Detail>
             {/* FR-3: the colour bucket next to FSM's own status text, so a red bar
                 can be traced back to the raw value and the rule that produced it. */}
@@ -464,13 +504,13 @@ export default function EntryDetailDialog({
             </div>
           )}
 
-          {outOfWindow && (
+          {startDay !== listedDay && (
             <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
               <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
               <span>
-                This entry is filed under the {entry.shift === "night" ? "Night" : "Morning"} shift (
-                {shiftWindowLabel(entry.shift, config)}) but starts at {formatTimeAmPm(toLocalHhmm(entry.start_at))},
-                outside that window{canEdit ? " — change the time below to place it correctly." : "."}
+                This entry is on the schedule for {dayLabel(listedDay)}, but it is now timed for {dayLabel(startDay)}
+                {entry.origin === "fsm" || entry.fsm_appointment_id ? " in Zoho FSM" : ""}. It is not drawn on this
+                day’s board. Saving here keeps it on {dayLabel(startDay)}.
               </span>
             </div>
           )}
@@ -490,13 +530,20 @@ export default function EntryDetailDialog({
                   <TimeSelect value={endTime} onChange={setEndTime} aria-label="End time" />
                 </label>
               </div>
-              {resolvedShift === null ? (
-                <span className="text-[11px] text-warning">
-                  {formatTimeAmPm(startTime)} is outside both shift windows — it will stay flagged on the grid.
+              {spansDays > 0 && (
+                <span className="text-muted-foreground text-[11px]">
+                  This job runs over midnight: it starts on {dayLabel(startDay)} and ends on {dayLabel(endDay)}. The
+                  times above are on those dates.
                 </span>
-              ) : resolvedShift !== entry.shift ? (
+              )}
+              {targetShift !== originalShift ? (
                 <span className="text-[11px] text-brand">
-                  Saving moves this entry to the {resolvedShift === "night" ? "Night" : "Morning"} shift.
+                  Most of this time is in the {targetShift === "night" ? "Night" : "Morning"} shift (
+                  {shiftWindowLabel(targetShift, config)}), so saving shows it in that grid.
+                </span>
+              ) : outsideUsualHours && timeChanged ? (
+                <span className="text-muted-foreground text-[11px]">
+                  Part of this is outside the usual shift hours. That is fine: the grid stretches to show it.
                 </span>
               ) : null}
 
