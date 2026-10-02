@@ -1,0 +1,60 @@
+# Line endings.
+#
+# The repository had no rule, and core.autocrlf was off, so whatever
+# endings a file happened to be written with were what got committed:
+# 603 files stored LF, 155 stored CRLF, and five were mixed within a
+# single file. Any tool that rewrote a file whole then flipped its
+# endings and showed every line as changed, which buries a one-line
+# edit in a thousand-line diff and conflicts with every other branch
+# that touches the file.
+#
+# Git now stores LF for all text, and checks LF back out on every
+# platform, so neither a tool nor an editor can reintroduce CRLF.
+
+# The default: detect text, store it with LF.
+* text=auto
+
+# Declared rather than detected.
+#
+# Git guesses whether a file is text, and it guessed wrong at least once
+# here: daily-schedule/index.tsx was classified binary (it is valid UTF-8
+# with no NUL bytes; the mixed endings appear to have confused the
+# heuristic), so git would neither diff nor merge it. Naming the
+# extensions settles it.
+*.ts            text eol=lf
+*.tsx           text eol=lf
+*.mjs           text eol=lf
+*.css           text eol=lf
+*.json          text eol=lf
+*.md            text eol=lf
+*.mdc           text eol=lf
+*.sql           text eol=lf
+*.html          text eol=lf
+*.svg           text eol=lf
+*.toml          text eol=lf
+*.webmanifest   text eol=lf
+*.log           text eol=lf
+.gitignore      text eol=lf
+.cursorrules    text eol=lf
+*.example       text eol=lf
+
+# PowerShell keeps CRLF: it is a Windows script, and the 5.1 parser is
+# particular about line endings inside here-strings.
+*.ps1           text eol=crlf
+
+# Never converted, never diffed as text.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.webp  binary
+*.ico   binary
+*.pdf   binary
+*.docx  binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.otf   binary
+*.stackdump binary
+
+# Generated; a diff of it is noise either way.
+*.lock  text eol=lf -diff
