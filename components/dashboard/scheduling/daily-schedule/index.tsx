@@ -38,7 +38,7 @@ import {
   configuredWindows,
   dayLimits,
   entryRange,
-  fitWindows,
+  fitGrid,
   homeShift,
   isOnDay,
   minutesFromDayStart,
@@ -109,7 +109,8 @@ import EntryDetailDialog from "./entry-detail-dialog";
 import { fsmRecordUrl } from "./shift-utils";
 import RejectDialog from "./reject-dialog";
 import HistoryDialog from "./history-dialog";
-import { formatTimeAmPm, TIME_STEP_MINUTES } from "@/components/ui/time-select";
+import TimeSelect, { formatTimeAmPm, TIME_STEP_MINUTES } from "@/components/ui/time-select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 type Props = {
   technicians: TechnicianReference[];
@@ -161,12 +162,30 @@ function formatRange(startMin: number, endMin: number) {
   return `${clockLabel(startMin)} – ${clockLabel(endMin)}`;
 }
 
-// The grid an entry belongs to, or null when none of it falls on this date
-// (Zoho FSM moved it to another day).
-function homeOfEntry(entry: ScheduleEntry, date: string, windows: ShiftWindows): ShiftKey | null {
-  if (entry.fsm_schedule_type === "All Day") return entry.carried_over ? null : entry.shift;
-  const range = entryRange(entry, date);
-  return isOnDay(range, windows) ? homeShift(range, windows) : null;
+// Whether any of an entry falls on this date. Zoho FSM may have moved it to
+// another day since it was listed here.
+function onThisDay(entry: ScheduleEntry, date: string, windows: ShiftWindows): boolean {
+  if (entry.fsm_schedule_type === "All Day") return !entry.carried_over;
+  return isOnDay(entryRange(entry, date), windows);
+}
+
+// The jobs a technician's row draws in one grid. A technician with a shift has
+// one row, in that shift's grid, and it draws every job of theirs that day.
+// A technician with no shift set has a row in both grids; each draws the jobs
+// whose times belong to it, so nothing is drawn twice.
+function entriesForGrid(
+  entries: ScheduleEntry[],
+  technicianShift: TechnicianReference["shift"],
+  grid: ShiftKey,
+  date: string,
+  windows: ShiftWindows,
+): ScheduleEntry[] {
+  const today = entries.filter((entry) => onThisDay(entry, date, windows));
+  if (technicianShift) return today;
+  return today.filter(
+    (entry) =>
+      (entry.fsm_schedule_type === "All Day" ? entry.shift : homeShift(entryRange(entry, date), windows)) === grid,
+  );
 }
 
 // A leave record overlaps the selected day if it touches any moment of it.
@@ -496,60 +515,6 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
     [carriedOver, entries],
   );
 
-  // Where the day's work sits (lib/scheduling/board-layout.ts): each job's
-  // home grid, the hours each grid has to show to fit its jobs, and who has
-  // work in which grid. `offDay` holds entries on this day's list that no
-  // longer fall on this date at all.
-  const layout = useMemo(() => {
-    if (!windows) return null;
-    const homeTechs: Record<ShiftKey, Set<string>> = { day: new Set(), night: new Set() };
-    const homeEntryIds: Record<ShiftKey, Set<string>> = { day: new Set(), night: new Set() };
-    const jobs: Array<{ range: MinuteRange; home: ShiftKey }> = [];
-    const offDay: ScheduleEntry[] = [];
-    boardEntries.forEach((entry) => {
-      const home = homeOfEntry(entry, date, windows);
-      if (!home) {
-        if (!entry.carried_over) offDay.push(entry);
-        return;
-      }
-      if (entry.fsm_schedule_type !== "All Day") jobs.push({ range: entryRange(entry, date), home });
-      homeEntryIds[home].add(entry.id);
-      (entry.schedule_entry_assignments ?? []).forEach((a) => homeTechs[home].add(a.technician_fsm_id));
-    });
-    return { fitted: fitWindows(windows, jobs), homeTechs, homeEntryIds, offDay };
-  }, [windows, boardEntries, date]);
-
-  // The grids' hours as objects that only change when the hours do, so the
-  // memoised rows are not re-rendered by every unrelated edit.
-  const nightStart = layout?.fitted.night.start ?? null;
-  const nightEnd = layout?.fitted.night.end ?? null;
-  const dayStart = layout?.fitted.day.start ?? null;
-  const dayEnd = layout?.fitted.day.end ?? null;
-  const nightBounds = useMemo<FittedBounds | null>(
-    () =>
-      windows && nightStart !== null && nightEnd !== null
-        ? {
-            start: nightStart,
-            end: nightEnd,
-            configured: windows.night,
-            stretched: nightStart !== windows.night.start || nightEnd !== windows.night.end,
-          }
-        : null,
-    [windows, nightStart, nightEnd],
-  );
-  const dayBounds = useMemo<FittedBounds | null>(
-    () =>
-      windows && dayStart !== null && dayEnd !== null
-        ? {
-            start: dayStart,
-            end: dayEnd,
-            configured: windows.day,
-            stretched: dayStart !== windows.day.start || dayEnd !== windows.day.end,
-          }
-        : null,
-    [windows, dayStart, dayEnd],
-  );
-
   // Leave affecting the currently-selected date, keyed by technician.
   const leaveByTechnician = useMemo(() => {
     const map = new Map<string, LeaveRecord>();
@@ -671,15 +636,12 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
     siteByTechnician,
   ]);
 
-  // Rows follow the work: a technician has a row in a grid when it is their
-  // shift (or they have none set), or when they have a job there today. Going
-  // by the shift alone left a job with no row to be drawn on whenever its
-  // crew worked outside their usual hours.
+  // A technician's row is in the grid of their own shift, whatever the hours
+  // of their jobs (team decision, 2 Oct 2026). A technician with no shift set
+  // is in both.
   const sectionTechnicians = useMemo(() => {
     const belongs = (t: TechnicianReference, key: ShiftKey) =>
-      !t.shift ||
-      t.shift === (key === "night" ? "night" : "morning") ||
-      Boolean(layout?.homeTechs[key].has(t.fsm_resource_id));
+      !t.shift || t.shift === (key === "night" ? "night" : "morning");
     const active = technicians.filter((t) => t.is_active);
     return {
       night: visibleTechnicians.filter((t) => belongs(t, "night")),
@@ -687,7 +649,77 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
       nightPick: active.filter((t) => belongs(t, "night")),
       dayPick: active.filter((t) => belongs(t, "day")),
     };
-  }, [visibleTechnicians, technicians, layout]);
+  }, [visibleTechnicians, technicians]);
+
+  // Each grid's hours for the day (lib/scheduling/board-layout.ts): its usual
+  // hours, stretched to show every job on its rows in full. `gridEntryIds`
+  // is what each grid draws; `offDay` holds entries on this day's list that
+  // no longer fall on this date at all.
+  const layout = useMemo(() => {
+    if (!windows) return null;
+    const offDay = boardEntries.filter((entry) => !entry.carried_over && !onThisDay(entry, date, windows));
+    const gridOf = (key: ShiftKey, bounds: Bounds) => {
+      const ids = new Set<string>();
+      const ranges: MinuteRange[] = [];
+      sectionTechnicians[key].forEach((t) =>
+        entriesForGrid(entriesByTechnician.get(t.fsm_resource_id) ?? [], t.shift, key, date, windows).forEach(
+          (entry) => {
+            if (ids.has(entry.id)) return;
+            ids.add(entry.id);
+            if (entry.fsm_schedule_type !== "All Day") ranges.push(entryRange(entry, date));
+          },
+        ),
+      );
+      return { fitted: fitGrid(bounds, ranges, windows), ids };
+    };
+    const night = gridOf("night", windows.night);
+    const day = gridOf("day", windows.day);
+    return {
+      fitted: { night: night.fitted, day: day.fitted },
+      gridEntryIds: { night: night.ids, day: day.ids },
+      offDay,
+    };
+  }, [windows, boardEntries, entriesByTechnician, sectionTechnicians, date]);
+
+  // The grids' hours as objects that only change when the hours do, so the
+  // memoised rows are not re-rendered by every unrelated edit.
+  const nightStart = layout?.fitted.night.start ?? null;
+  const nightEnd = layout?.fitted.night.end ?? null;
+  const dayStart = layout?.fitted.day.start ?? null;
+  const dayEnd = layout?.fitted.day.end ?? null;
+  const nightBounds = useMemo<FittedBounds | null>(
+    () =>
+      windows && nightStart !== null && nightEnd !== null
+        ? {
+            start: nightStart,
+            end: nightEnd,
+            configured: windows.night,
+            stretched: nightStart !== windows.night.start || nightEnd !== windows.night.end,
+          }
+        : null,
+    [windows, nightStart, nightEnd],
+  );
+  const dayBounds = useMemo<FittedBounds | null>(
+    () =>
+      windows && dayStart !== null && dayEnd !== null
+        ? {
+            start: dayStart,
+            end: dayEnd,
+            configured: windows.day,
+            stretched: dayStart !== windows.day.start || dayEnd !== windows.day.end,
+          }
+        : null,
+    [windows, dayStart, dayEnd],
+  );
+
+  // The team sets each grid's usual hours on the board. Saved for everyone.
+  const saveShiftHours = async (shift: ShiftKey, start: string, end: string) => {
+    const updated = await scheduleService.updateConfig(
+      shift === "night" ? { night_shift_start: start, night_shift_end: end } : { day_shift_start: start, day_shift_end: end },
+    );
+    setConfig(updated);
+    toast.success(`${shift === "night" ? "Night" : "Morning"} shift hours saved for everyone`);
+  };
 
   const isEditable = version?.status === "draft" || version?.status === "draft_revision";
 
@@ -1015,7 +1047,11 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
       techs: TechnicianReference[],
     ): PdfSection => {
       const rows: PdfRow[] = techs.map((t) => {
-        const placements = placeRowEntries(entriesByTechnician.get(t.fsm_resource_id) ?? [], bounds, date, shift);
+        const placements = placeRowEntries(
+          entriesForGrid(entriesByTechnician.get(t.fsm_resource_id) ?? [], t.shift, shift, date, windows!),
+          bounds,
+          date,
+        );
         const leave = leaveByTechnician.get(t.fsm_resource_id);
         const { laneOf, laneCount } = laneLayout(placements.map((p) => p.entry));
         const bars: PdfBar[] = placements.map(({ entry: e, placed }) => {
@@ -1412,7 +1448,9 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
               date={date}
               windows={windows}
               bounds={nightBounds}
-              homeEntryIds={layout.homeEntryIds.night}
+              gridEntryIds={layout.gridEntryIds.night}
+              canEditHours={Boolean(access?.canEdit)}
+              onSaveHours={(start, end) => saveShiftHours("night", start, end)}
               zoom={zoom}
               fieldVis={fieldVis}
               // Night-shift technicians, those with no shift set, and anyone
@@ -1442,7 +1480,9 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
               date={date}
               windows={windows}
               bounds={dayBounds}
-              homeEntryIds={layout.homeEntryIds.day}
+              gridEntryIds={layout.gridEntryIds.day}
+              canEditHours={Boolean(access?.canEdit)}
+              onSaveHours={(start, end) => saveShiftHours("day", start, end)}
               zoom={zoom}
               fieldVis={fieldVis}
               technicians={sectionTechnicians.day}
@@ -1697,6 +1737,119 @@ function BoardNotices({
   );
 }
 
+// The hours a grid shows, and where the team changes its usual hours. A job
+// outside the usual hours still widens the grid for that day.
+function HoursControl({
+  title,
+  bounds,
+  canEdit,
+  onSave,
+}: {
+  title: string;
+  bounds: FittedBounds;
+  canEdit: boolean;
+  onSave: (start: string, end: string) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
+  const [saving, setSaving] = useState(false);
+  const usual = formatRange(bounds.configured.start, bounds.configured.end);
+  const shown = formatRange(bounds.start, bounds.end);
+
+  const openWith = (next: boolean) => {
+    if (next) {
+      // A shift that runs past midnight ends after 1440; show its clock time.
+      const clock = (minutes: number) => {
+        const m = ((minutes % DAY_MINUTES) + DAY_MINUTES) % DAY_MINUTES;
+        return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+      };
+      setStart(clock(bounds.configured.start));
+      setEnd(clock(bounds.configured.end));
+    }
+    setOpen(next);
+  };
+
+  const save = async () => {
+    if (!start || !end) return;
+    setSaving(true);
+    try {
+      await onSave(start, end);
+      setOpen(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn’t save the shift hours");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const label = (
+    <>
+      <Clock className="size-3.5 shrink-0" />
+      <span className="tabular-nums">{shown}</span>
+      {bounds.stretched && <span className="text-muted-foreground font-normal"> · widened for today’s jobs</span>}
+    </>
+  );
+
+  if (!canEdit) {
+    return (
+      <span
+        className="text-muted-foreground flex shrink-0 items-center gap-1.5 text-xs"
+        title={bounds.stretched ? `Usual hours ${usual}. Shown wider today so every job fits.` : `Usual hours ${usual}`}
+      >
+        {label}
+      </span>
+    );
+  }
+
+  return (
+    <Popover open={open} onOpenChange={openWith}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            "hover:bg-muted hover:text-foreground flex shrink-0 items-center gap-1.5 rounded px-1.5 py-0.5 text-xs",
+            bounds.stretched ? "text-foreground font-medium" : "text-muted-foreground",
+          )}
+          title={`Usual hours ${usual}. Click to change the hours this grid shows.`}
+        >
+          {label}
+          <ChevronDown className="size-3 shrink-0 opacity-70" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80">
+        <div className="text-sm font-medium">{title} hours</div>
+        <p className="text-muted-foreground text-xs">
+          The hours this grid shows every day, for everyone. A job outside them still widens the grid on its day.
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          <label className="flex flex-col gap-1 text-xs">
+            From
+            <TimeSelect value={start} onChange={setStart} aria-label={`${title} starts`} />
+          </label>
+          <label className="flex flex-col gap-1 text-xs">
+            To
+            <TimeSelect value={end} onChange={setEnd} aria-label={`${title} ends`} />
+          </label>
+        </div>
+        {start && end && end <= start && (
+          <p className="text-muted-foreground text-xs">
+            An end at or before the start means the shift runs past midnight.
+          </p>
+        )}
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={() => setOpen(false)} disabled={saving}>
+            Cancel
+          </Button>
+          <Button size="sm" onClick={save} disabled={saving || !start || !end}>
+            {saving ? "Saving…" : "Save for everyone"}
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 const TECH_COL_WIDTH = 224; // px — sticky first column, so it needs a fixed width
 // A press that moves less than this is a click, not a drag.
 const DRAG_THRESHOLD_PX = 4;
@@ -1772,16 +1925,17 @@ function spanPct(startMin: number, endMin: number, bounds: Bounds) {
 
 // How an entry sits in one grid, or null when none of it is in there.
 //
-// A grid draws every job that overlaps its hours, wherever the job is filed.
-// It used to draw only the jobs filed under its own shift, which is how a
-// 05:00 - 17:00 job vanished: filed under Night by its start time, and absent
-// from the Morning grid where its technicians' rows were (AP-3869).
-function placeEntry(entry: ScheduleEntry, bounds: Bounds, date: string, shift: ShiftKey): Placement | null {
+// A row draws every job of its technician, in the grid of that technician's
+// shift; the grid's hours are fitted to them, so only midnight clips a bar.
+// The board used to draw only the jobs filed under the grid's own shift,
+// which is how a 05:00 - 17:00 job vanished: filed under Night by its start
+// time, and absent from the Morning grid where its technicians' rows were
+// (AP-3869).
+function placeEntry(entry: ScheduleEntry, bounds: Bounds, date: string): Placement | null {
   const range = entryRange(entry, date);
-  // All-Day appointments have no time -- they span the whole row of the shift
-  // they were added to.
+  // All-Day appointments have no time -- they span the whole row.
   if (entry.fsm_schedule_type === "All Day") {
-    if (entry.shift !== shift || entry.carried_over) return null;
+    if (entry.carried_over) return null;
     return {
       ...range,
       visibleStart: bounds.start,
@@ -1798,10 +1952,10 @@ function placeEntry(entry: ScheduleEntry, bounds: Bounds, date: string, shift: S
 }
 
 // A technician's bars in one grid.
-function placeRowEntries(entries: ScheduleEntry[], bounds: Bounds, date: string, shift: ShiftKey): PlacedEntry[] {
+function placeRowEntries(entries: ScheduleEntry[], bounds: Bounds, date: string): PlacedEntry[] {
   const out: PlacedEntry[] = [];
   entries.forEach((entry) => {
-    const placed = placeEntry(entry, bounds, date, shift);
+    const placed = placeEntry(entry, bounds, date);
     if (placed) out.push({ entry, placed });
   });
   return out;
@@ -1868,7 +2022,9 @@ function ShiftSection({
   date,
   windows,
   bounds,
-  homeEntryIds,
+  gridEntryIds,
+  canEditHours,
+  onSaveHours,
   zoom,
   fieldVis,
   technicians,
@@ -1894,10 +2050,13 @@ function ShiftSection({
   // The day on the board; every time in the grid is minutes from its midnight.
   date: string;
   windows: ShiftWindows;
-  // This grid's hours today: the configured window, stretched to fit its jobs.
+  // This grid's hours today: its usual hours, stretched to fit its rows' jobs.
   bounds: FittedBounds;
-  // The jobs that belong to this grid (the rest are drawn where they overlap).
-  homeEntryIds: Set<string>;
+  // The jobs drawn in this grid: every job of its rows that is on this day.
+  gridEntryIds: Set<string>;
+  // The usual hours are set on the board, for everyone, by users who may edit.
+  canEditHours: boolean;
+  onSaveHours: (start: string, end: string) => Promise<void>;
   zoom: number;
   fieldVis: FieldVis;
   technicians: TechnicianReference[];
@@ -1945,11 +2104,11 @@ function ShiftSection({
     const ids = new Set<string>();
     technicians.forEach((t) =>
       (entriesByTechnician.get(t.fsm_resource_id) ?? []).forEach((e) => {
-        if (homeEntryIds.has(e.id)) ids.add(e.id);
+        if (gridEntryIds.has(e.id)) ids.add(e.id);
       }),
     );
     return ids.size;
-  }, [technicians, entriesByTechnician, homeEntryIds]);
+  }, [technicians, entriesByTechnician, gridEntryIds]);
 
   const paneRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef<HTMLDivElement>(null);
@@ -2443,20 +2602,7 @@ function ShiftSection({
                 .join(" · ")}
             </span>
           )}
-          <span
-            className={cn(
-              "shrink-0 text-xs tabular-nums",
-              bounds.stretched ? "text-foreground font-medium" : "text-muted-foreground",
-            )}
-            title={
-              bounds.stretched
-                ? `Usual hours ${formatRange(bounds.configured.start, bounds.configured.end)}. Shown wider today so every job fits.`
-                : undefined
-            }
-          >
-            {formatRange(bounds.start, bounds.end)}
-            {bounds.stretched && <span className="text-muted-foreground font-normal"> · stretched to fit today’s jobs</span>}
-          </span>
+          <HoursControl title={title} bounds={bounds} canEdit={canEditHours} onSave={onSaveHours} />
         </div>
       </div>
 
@@ -2515,7 +2661,9 @@ function ShiftSection({
 
           {technicians.length === 0 ? (
             <div className="text-muted-foreground p-4 text-center text-sm">
-              No technicians match the current filters.
+              {pickTechnicians.length === 0
+                ? `No technician is on the ${title.toLowerCase()}. A technician's shift is set in Technicians & Leave.`
+                : "No technicians match the current filters."}
             </div>
           ) : (
             <div ref={rowsRef} className="relative">
@@ -2659,6 +2807,7 @@ type TechnicianRowProps = {
   technician: TechnicianReference;
   // All of this technician's entries for the day (any shift) — a stable array.
   entries: ScheduleEntry[];
+  // The grid this row is in.
   shift: ShiftType;
   date: string;
   windows: ShiftWindows;
@@ -2725,10 +2874,13 @@ const TechnicianRow = memo(function TechnicianRow({
   onRoleChange,
 }: TechnicianRowProps) {
   const id = technician.fsm_resource_id;
-  // Every job of theirs that overlaps this grid's hours, wherever it is filed.
-  const placements = useMemo(() => placeRowEntries(entries, bounds, date, shift), [entries, bounds, date, shift]);
+  // Every job of theirs that day, in full (the grid's hours are fitted to them).
+  const technicianShift = technician.shift;
+  const placements = useMemo(
+    () => placeRowEntries(entriesForGrid(entries, technicianShift, shift, date, windows), bounds, date),
+    [entries, technicianShift, shift, bounds, date, windows],
+  );
   const rowEntries = useMemo(() => placements.map((p) => p.entry), [placements]);
-  const otherGrid = shift === "night" ? "Morning Shift" : "Night Shift";
   const dayEnd = dayLimits(windows).end;
 
   // L-2: flag entries that overlap another appointment for the same
@@ -2963,9 +3115,7 @@ const TechnicianRow = memo(function TechnicianRow({
           const { leftPct, widthPct } = resizing ? spanPct(placed.visibleStart, shownEnd, bounds) : placed;
           const isFreeText = entry.entry_type === "free_text";
 
-          // Where the rest of a bar that runs beyond this grid is. A job is
-          // whole in its own grid; only midnight can cut it there.
-          const home = allDay ? shift : homeShift({ startMin, endMin }, windows);
+          // The grid is fitted to its rows' jobs, so only midnight cuts a bar.
           const runsOn: string[] = [];
           if (carried) {
             runsOn.push(
@@ -2975,7 +3125,6 @@ const TechnicianRow = memo(function TechnicianRow({
             runsOn.push("Starts the day before");
           }
           if (endMin > dayEnd) runsOn.push("Runs on past midnight into the next day");
-          if (home !== shift && (clippedStart || clippedEnd)) runsOn.push(`Shown in full in the ${otherGrid} grid`);
           const runsOnNote = runsOn.length > 0 ? ` · ${runsOn.join(" · ")}` : "";
           const conflictsWithLeave = leave ? entryOverlapsLeave(entry, leave) : false;
           const label = entryLabel(entry);

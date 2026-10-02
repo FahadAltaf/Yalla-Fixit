@@ -185,6 +185,17 @@ export const scheduleService = {
     return executeRESTBackend<SchedulingConfig>("/api/scheduling/config", { method: "GET" });
   },
 
+  // The hours each shift's grid shows, changed from the board for everyone.
+  // Times are "HH:mm"; an end at or before the start runs past midnight.
+  updateConfig: async (
+    data: Partial<Pick<SchedulingConfig, "night_shift_start" | "night_shift_end" | "day_shift_start" | "day_shift_end">>,
+  ): Promise<SchedulingConfig> => {
+    return executeRESTBackend<SchedulingConfig>("/api/scheduling/config", {
+      method: "PUT",
+      body: data as unknown as Record<string, unknown>,
+    });
+  },
+
   getDay: async (date: string): Promise<DayScheduleResponse> => {
     return executeRESTBackend<DayScheduleResponse>("/api/scheduling/schedule", {
       method: "GET",

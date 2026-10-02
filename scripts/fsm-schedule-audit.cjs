@@ -12,8 +12,9 @@
 //           to the window; a technician's row appears only in the grid for
 //           their own shift.
 //   NOW     the rules in lib/scheduling/board-layout.ts, by running that module
-//           itself. This needs bun (it loads TypeScript); under node the NOW
-//           columns are left empty.
+//           itself: a technician's row is in the grid of their own shift, and
+//           each grid's hours stretch to fit the jobs on its rows. This needs
+//           bun (it loads TypeScript); under node the NOW columns are empty.
 //
 // --cache=file.json keeps the FSM records it read, so a second run on the same
 // range asks FSM nothing.
@@ -269,7 +270,7 @@ async function main() {
     const of = m - d * 1440;
     return `${String(Math.floor(of / 60)).padStart(2, "0")}:${String(of % 60).padStart(2, "0")}${d === 0 ? "" : d > 0 ? `(+${d}d)` : `(${d}d)`}`;
   };
-  const nowStats = { placeable: 0, whole: 0, pastMidnight: 0, noRow: 0, stretchedDays: new Map(), maxHours: { day: 0, night: 0 } };
+  const nowStats = { placeable: 0, whole: 0, pastMidnight: 0, noRow: 0, bothGrids: 0, stretchedDays: new Map(), maxHours: { day: 0, night: 0 } };
   if (layout) {
     const tz = settings.org_timezone || "Asia/Dubai";
     const windows = layout.configuredWindows(settings);
@@ -281,42 +282,53 @@ async function main() {
       if (!byDate.has(r.date)) byDate.set(r.date, []);
       byDate.get(r.date).push(r);
     });
+    // A technician's row is in the grid of their own shift; one with no shift
+    // set is in both, and each grid then draws the jobs whose times belong to it.
+    const gridsOf = (id, range) => {
+      const t = tech.get(id);
+      if (!t || !t.is_active) return [];
+      if (t.shift === "night") return ["night"];
+      if (t.shift === "morning") return ["day"];
+      return [layout.homeShift(range, windows)];
+    };
     byDate.forEach((list, date) => {
       const jobs = list.filter(placeable).map((r) => {
         const range = layout.entryRange({ start_at: r.startIso, end_at: r.endIso }, date, tz);
-        return { r, range, home: layout.homeShift(range, windows) };
+        const grids = [...new Set(r.crew.flatMap((id) => gridsOf(id, range)))];
+        return { r, range, grids };
       });
-      const fitted = layout.fitWindows(windows, jobs);
+      const fitted = {};
       ["day", "night"].forEach((key) => {
+        const ranges = jobs.filter((j) => j.grids.includes(key)).map((j) => j.range);
+        fitted[key] = layout.fitGrid(windows[key], ranges, windows);
         nowStats.maxHours[key] = Math.max(nowStats.maxHours[key], (fitted[key].end - fitted[key].start) / 60);
         if (fitted[key].stretched) {
           const label = `${key === "day" ? "Morning" : "Night"} ${clock(fitted[key].start)}-${clock(fitted[key].end)}`;
           nowStats.stretchedDays.set(label, (nowStats.stretchedDays.get(label) || 0) + 1);
         }
       });
-      jobs.forEach(({ r, range, home }) => {
-        const placed = layout.placeRange(range, fitted[home]);
-        const crewWithRow = r.crew.filter((id) => tech.has(id) && tech.get(id).is_active);
+      jobs.forEach(({ r, range, grids }) => {
+        const crewWithRow = r.crew.filter((id) => gridsOf(id, range).length > 0);
+        const placements = grids.map((key) => layout.placeRange(range, fitted[key]));
         nowStats.placeable += 1;
-        r.now.grid = home === "day" ? "Morning" : "Night";
-        r.now.gridHours = `${clock(fitted[home].start)}-${clock(fitted[home].end)}`;
+        if (grids.length > 1) nowStats.bothGrids += 1;
+        r.now.grid = grids.map((key) => (key === "day" ? "Morning" : "Night")).join(" + ");
+        r.now.gridHours = grids.map((key) => `${clock(fitted[key].start)}-${clock(fitted[key].end)}`).join(" / ");
         r.now.visibleTo = `${crewWithRow.length} of ${r.crew.length}`;
-        if (!placed) {
+        const first = placements[0];
+        if (placements.some((p) => !p)) {
           r.now.drawn = "NOT DRAWN";
           nowStats.noRow += 1;
-        } else if (placed.clippedStart || placed.clippedEnd) {
-          r.now.drawn = `${clock(placed.visibleStart)}-${clock(placed.visibleEnd)} of ${clock(range.startMin)}-${clock(range.endMin)}`;
+        } else if (placements.some((p) => p.clippedStart || p.clippedEnd)) {
+          r.now.drawn = `${clock(first.visibleStart)}-${clock(first.visibleEnd)} of ${clock(range.startMin)}-${clock(range.endMin)}`;
           r.now.note = "runs past midnight: the rest is drawn on the next day's board";
           nowStats.pastMidnight += 1;
         } else {
           r.now.drawn = "whole";
           nowStats.whole += 1;
         }
-        // Where else it shows: the other grid draws the part that overlaps its hours.
-        const other = home === "day" ? "night" : "day";
-        const inOther = layout.placeRange(range, fitted[other]);
-        if (inOther) {
-          r.now.note = [r.now.note, `also drawn ${clock(inOther.visibleStart)}-${clock(inOther.visibleEnd)} in the ${other === "day" ? "Morning" : "Night"} grid, on rows that are shown there`].filter(Boolean).join("; ");
+        if (grids.length > 1) {
+          r.now.note = [r.now.note, "its crew is on both shifts, so it is drawn in both grids"].filter(Boolean).join("; ");
         }
       });
       list.filter((r) => !placeable(r)).forEach((r) => {
@@ -411,7 +423,8 @@ async function main() {
   if (layout) {
     console.log(`\n=========== WITH THE BOARD'S CURRENT RULES ===========`);
     console.log(`  ${String(nowStats.placeable).padStart(5)}  live appointments with at least one technician the portal knows`);
-    console.log(`  ${String(nowStats.whole).padStart(5)}  drawn whole, in one grid, on a row for every such technician`);
+    console.log(`  ${String(nowStats.whole).padStart(5)}  drawn whole, on the row of every such technician, in the grid of that technician's shift`);
+    console.log(`  ${String(nowStats.bothGrids).padStart(5)}  of them have a crew on both shifts, so they are drawn in both grids`);
     console.log(`  ${String(nowStats.pastMidnight).padStart(5)}  drawn up to midnight; the rest on the next day's board`);
     console.log(`  ${String(nowStats.noRow).padStart(5)}  NOT drawn (must be 0)`);
     console.log(`  ${String(live.filter((r) => r.now.drawn === "listed above the board").length).padStart(5)}  listed above the board instead (nobody to draw them on)`);

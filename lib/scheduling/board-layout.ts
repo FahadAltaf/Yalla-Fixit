@@ -9,19 +9,20 @@
 // database, invisible on the screen. In Aug-Sep 2026 that hid 332 of 848 live
 // FSM appointments, and clipped part of 393.
 //
-// The rules now, used by the daily board, its PDF and the wall display:
+// The rules now (decided with the team, 2 Oct 2026), used by the daily
+// board, its PDF and the wall display:
 //
-//   1. HOME GRID. A job belongs to the shift that covers most of it (equal
-//      cover: the shift it starts in, morning winning the shared hour; no
-//      cover at all: the nearer shift).
-//   2. THE GRID FITS THE WORK. A grid's window stretches, in whole hours, to
-//      show every one of its jobs in full -- so work before 08:00 or after
-//      17:00 is drawn, not pinned to an edge.
-//   3. ROWS FOLLOW THE WORK. A technician has a row in a grid when it is
-//      their shift OR they have a job whose home is that grid.
-//   4. EVERY ROW IS TRUTHFUL. A row draws every job of that technician that
-//      overlaps the grid's hours, including one whose home is the other grid
-//      (clipped, and marked as continuing), so a busy hour never looks free.
+//   1. A TECHNICIAN'S ROW IS IN THE GRID OF THEIR OWN SHIFT, whatever the
+//      hours of their jobs. Night technicians are night technicians because
+//      the team made them so; a technician with no shift set is in both.
+//   2. A ROW DRAWS EVERY JOB OF THAT TECHNICIAN THAT DAY, in full.
+//   3. THE GRID FITS THE WORK. A grid's hours stretch, in whole hours, to
+//      show every job on its rows -- so a night job running past 09:00, or a
+//      morning job starting at 05:00, is drawn, not pinned to an edge. The
+//      team sets each grid's usual hours on the board itself.
+//   4. ONLY MIDNIGHT CUTS A BAR. A job that runs on into the next day is
+//      drawn to the end of the day with an open, dashed edge, and again on
+//      the next day from its left edge.
 //
 // Times are minutes from midnight of the BOARD's date in the org's timezone.
 // They are not minutes of the day: a job that runs past midnight ends after
@@ -141,7 +142,11 @@ export function shiftAtMinute(minute: number, windows: ShiftWindows): ShiftKey |
   return null;
 }
 
-/** Rule 1: the grid a job belongs to. */
+/** The shift a job's TIMES belong to: the one that covers most of it (equal
+ *  cover: the one it starts in, morning winning the shared hour; no cover:
+ *  the nearer one). This is the label stored on an entry and used in
+ *  messages. It does not decide where a job is drawn; the technician's shift
+ *  does (rule 1). */
 export function homeShift(range: MinuteRange, windows: ShiftWindows): ShiftKey {
   const onDay = clipToDay(range, windows);
   const day = overlapMinutes(onDay, windows.day);
@@ -154,28 +159,23 @@ export function homeShift(range: MinuteRange, windows: ShiftWindows): ShiftKey {
   return "day";
 }
 
-/** Rule 2: each grid's window for the day, stretched in whole hours to show
- *  all of its own jobs. Never reaches outside the board's day. */
-export function fitWindows(
-  windows: ShiftWindows,
-  jobs: Array<{ range: MinuteRange; home: ShiftKey }>,
-): Record<ShiftKey, FittedBounds> {
+/** Rule 3: a grid's hours for the day, stretched in whole hours to show all
+ *  of the jobs on its rows. Never reaches outside the board's day. */
+export function fitGrid(bounds: Bounds, ranges: MinuteRange[], windows: ShiftWindows): FittedBounds {
   const limits = dayLimits(windows);
-  const fitted: Record<ShiftKey, Bounds> = { day: { ...windows.day }, night: { ...windows.night } };
-  for (const job of jobs) {
-    const start = Math.max(job.range.startMin, limits.start);
-    const end = Math.min(job.range.endMin, limits.end);
+  const fitted: Bounds = { ...bounds };
+  for (const range of ranges) {
+    const start = Math.max(range.startMin, limits.start);
+    const end = Math.min(range.endMin, limits.end);
     if (end <= start) continue;
-    const grid = fitted[job.home];
-    grid.start = Math.max(limits.start, Math.min(grid.start, Math.floor(start / 60) * 60));
-    grid.end = Math.min(limits.end, Math.max(grid.end, Math.ceil(end / 60) * 60));
+    fitted.start = Math.max(limits.start, Math.min(fitted.start, Math.floor(start / 60) * 60));
+    fitted.end = Math.min(limits.end, Math.max(fitted.end, Math.ceil(end / 60) * 60));
   }
-  const finish = (key: ShiftKey): FittedBounds => ({
-    ...fitted[key],
-    configured: windows[key],
-    stretched: fitted[key].start !== windows[key].start || fitted[key].end !== windows[key].end,
-  });
-  return { day: finish("day"), night: finish("night") };
+  return {
+    ...fitted,
+    configured: bounds,
+    stretched: fitted.start !== bounds.start || fitted.end !== bounds.end,
+  };
 }
 
 /** Left/width percentages for a time range inside a grid: never runs off the
@@ -188,7 +188,8 @@ export function spanPercent(startMin: number, endMin: number, bounds: Bounds, mi
   return { leftPct, widthPct };
 }
 
-/** Rule 4: how a job sits in one grid, or null when none of it is in there. */
+/** How a job sits in one grid, or null when none of it is in there. With a
+ *  grid fitted to its jobs (fitGrid), only midnight can clip a bar. */
 export function placeRange(range: MinuteRange, bounds: Bounds, minWidthPct = 6): BarPlacement | null {
   const visibleStart = Math.max(range.startMin, bounds.start);
   const visibleEnd = Math.min(range.endMin, bounds.end);
@@ -207,24 +208,11 @@ export function placeRange(range: MinuteRange, bounds: Bounds, minWidthPct = 6):
 /** A single timeline for the whole day (the wall display): both windows
  *  together, stretched to fit the day's work. */
 export function fitDayWindow(windows: ShiftWindows, ranges: MinuteRange[]): FittedBounds {
-  const limits = dayLimits(windows);
   const configured: Bounds = {
     start: Math.min(windows.day.start, windows.night.start),
     end: Math.max(windows.day.end, windows.night.end),
   };
-  const fitted = { ...configured };
-  for (const range of ranges) {
-    const start = Math.max(range.startMin, limits.start);
-    const end = Math.min(range.endMin, limits.end);
-    if (end <= start) continue;
-    fitted.start = Math.max(limits.start, Math.min(fitted.start, Math.floor(start / 60) * 60));
-    fitted.end = Math.min(limits.end, Math.max(fitted.end, Math.ceil(end / 60) * 60));
-  }
-  return {
-    ...fitted,
-    configured,
-    stretched: fitted.start !== configured.start || fitted.end !== configured.end,
-  };
+  return fitGrid(configured, ranges, windows);
 }
 
 /** How many calendar days after the board's date a minute value falls

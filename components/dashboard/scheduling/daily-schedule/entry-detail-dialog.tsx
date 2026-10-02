@@ -21,7 +21,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dialog";
 import { AlertTriangle, ExternalLink, Loader2, RefreshCw, Trash2 } from "lucide-react";
 import TimeSelect, { formatTimeAmPm } from "@/components/ui/time-select";
-import { reachesOutsideUsualHours, resolveHomeShift, shiftWindowLabel, fsmRecordUrl } from "./shift-utils";
+import { reachesOutsideUsualHours, fsmRecordUrl } from "./shift-utils";
 import {
   APPOINTMENT_STATE_LABELS,
   APPOINTMENT_STATE_STYLES,
@@ -198,10 +198,9 @@ export default function EntryDetailDialog({
   const newEndAt = zonedTimeToUtc(addDaysToDateString(startDay, spansDays), endTime);
 
   const isAllDayEntry = entry.fsm_schedule_type === "All Day";
-  const originalShift: ShiftType = isAllDayEntry
-    ? entry.shift
-    : resolveHomeShift(toLocalHhmm(entry.start_at), toLocalHhmm(entry.end_at), config);
-  const targetShift: ShiftType = isAllDayEntry ? entry.shift : resolveHomeShift(startTime, endTime, config);
+  // The grid an entry is drawn in follows its technicians' shifts, so a time
+  // change never moves it between grids. Its shift label stays as filed.
+  const targetShift: ShiftType = entry.shift;
   const outsideUsualHours = !isAllDayEntry && reachesOutsideUsualHours(startTime, endTime, config);
 
   const onLeave = useMemo(() => {
@@ -278,11 +277,7 @@ export default function EntryDetailDialog({
           technicianFsmIds: selectedTechs,
           ...(linesChanged ? { serviceLineItemIds: selectedLineIds } : {}),
         });
-        toast.success(
-          targetShift !== originalShift
-            ? `Saved. It is now shown in the ${targetShift === "night" ? "Night" : "Morning"} Shift grid`
-            : "Entry updated",
-        );
+        toast.success("Entry updated");
       }
       onChanged();
     } catch (error) {
@@ -355,7 +350,7 @@ export default function EntryDetailDialog({
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge status={entry.entry_type.replace(/_/g, " ")} />
             <StatusBadge status={entry.sync_status.replace(/_/g, " ")} />
-            <StatusBadge status={originalShift === "night" ? "night shift" : "morning shift"} />
+            <StatusBadge status={entry.shift === "night" ? "night shift" : "morning shift"} />
             {entry.origin === "fsm" && <StatusBadge status="fsm" />}
           </div>
 
@@ -536,16 +531,11 @@ export default function EntryDetailDialog({
                   times above are on those dates.
                 </span>
               )}
-              {targetShift !== originalShift ? (
-                <span className="text-[11px] text-brand">
-                  Most of this time is in the {targetShift === "night" ? "Night" : "Morning"} shift (
-                  {shiftWindowLabel(targetShift, config)}), so saving shows it in that grid.
-                </span>
-              ) : outsideUsualHours && timeChanged ? (
+              {outsideUsualHours && timeChanged && (
                 <span className="text-muted-foreground text-[11px]">
-                  Part of this is outside the usual shift hours. That is fine: the grid stretches to show it.
+                  Part of this is outside the usual shift hours. That is fine: the grid widens to show it.
                 </span>
-              ) : null}
+              )}
 
               {canEditLines && (
                 <div>
