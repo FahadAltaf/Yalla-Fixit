@@ -1,6 +1,6 @@
 # Scheduling updates — deployment notes
 
-Branch: `scheduling-updates` (cut from `main` on 16 Sep 2026) · Prepared 18 Sep 2026 by Sami
+Branch: `scheduling-updates` (cut from `main` on 16 Sep 2026) · Prepared 18 Sep 2026 by Sami · last updated 2 Oct 2026
 
 Implements the 11 Sep scheduling FRD (FR‑1 to FR‑6) plus fixes found while testing against production. No new dependencies; `bun.lock` is deliberately not part of this branch.
 
@@ -84,6 +84,12 @@ No role or colour data is seeded. Roles already exist in production; colours are
 | Lead on reschedule | The reschedule call sent `Lead = serviceResourceIds[0]`, and assignments have no guaranteed order. It now keeps FSM's current lead when that technician is still on the job | `zoho/appointments.ts` |
 | Collapsible shifts | Night and Morning sections fold to their header; remembered per shift in localStorage | `daily-schedule/index.tsx` |
 | PDF export | Redrawn to mirror the board (rows tinted by role, hour columns, status-coloured bars, lanes, legend) instead of a table | `lib/scheduling/export-pdf.ts` |
+| Board placement (fix, 29 Sep) | A job was filed under one shift by its start time, drawn only in that grid, and a technician had a row only in the grid of their own shift. A 05:00 to 17:00 job (AP‑3869) was filed under Night, where none of its morning-shift crew had a row: in the database, invisible on screen. It hid 336 of 852 live appointments in Aug to Sep. Now (rules revised 2 Oct after team feedback): a technician's row is in the grid of **their own shift** (`technician_reference.shift`; unset = both grids, each drawing the jobs whose times belong to it); a row draws every job of that technician that day; each grid's hours stretch in whole hours to fit the jobs on its rows; only midnight clips a bar. `schedule_entries.shift` is now a label, not a visibility rule. One module, shared by the board, the PDF and the Display | `lib/scheduling/board-layout.ts` (new), `daily-schedule/index.tsx`, `display/index.tsx`, `export-pdf.ts` |
+| Shift hours on the board (2 Oct) | The team sets each grid's usual hours from the board (the hours at the right of each shift heading). New `PUT /api/scheduling/config` writes `settings.night_shift_start/end` and `day_shift_start/end`, for users with SCHEDULING/EDIT, with an audit event `shift_hours_changed`. No schema change | `app/api/scheduling/config/route.ts`, `daily-schedule/index.tsx` |
+| Import window (fix, 29 Sep) | **FSM reads the timestamps of a date search in its own timezone (US Pacific), not as instants.** Measured: asking for 00:00 to 23:59 Gulf on the 29th returned 13:00 on the 28th to 12:59 on the 29th. `Z` and `+04:00` spellings behave the same. Every appointment starting at 13:00 or later was imported onto the next day and missing from its own. The import now searches the day ±36 h and keeps what starts on the day by each record's own `Scheduled_Start_Date_Time`. The offset moves with US daylight saving, so it is not hardcoded | `zoho/import-appointments.ts` |
+| Entries on the wrong day | On each import of an editable day, entries with `origin = 'fsm'` and `needs_sync = false` whose time does not touch the day are **deleted** from that day's version (audit event `fsm_entries_moved_to_their_own_day`, with the rows in `before_value`). This repairs what the old window misfiled, and follows an appointment FSM moves to another date. Portal-created entries and entries with a pending edit are never removed; the board lists them instead | `zoho/import-appointments.ts` |
+| Jobs over midnight | The day route also returns `carriedOver`: entries of current versions from the previous 7 days whose `end_at` is after this day's start, marked `carried_over`. They are drawn, not edited, on the later day. The entry dialog now keeps a job's own dates when saving; it used to rebuild both times on `operating_date` | `schedule/route.ts`, `entry-detail-dialog.tsx` |
+| Appointments with no row | An appointment with no technician, or none in `technician_reference`, used to be skipped silently. The import returns them as `unplaced` and keeps the latest list as an audit event (`fsm_appointments_not_placed`, written only when it changes); the day route returns it on every load and the board lists them with links | `zoho/import-appointments.ts`, `schedule/route.ts` |
 | Service lines | A cancelled or cannot‑complete appointment no longer counts as covering its lines, in the dialog **and** in `scheduledLineIdsOf` on publish. The publish guard now checks `Status`, not only `Cancellation_Reason` | `zoho/appointments.ts`, `zoho/work-orders.ts` |
 | Entries API | `PUT` accepts `serviceLineItemIds` for an appointment not yet created in FSM. `DELETE` lets an approver remove a sync‑failed entry from an approved day and recomputes the version status | `schedule/entries/route.ts` |
 | Timezone | Every wall‑clock ⇄ instant conversion now uses `settings.org_timezone` instead of the machine's clock, in the browser and on the server. The server's "today" was UTC, which would refuse to open today's draft before 04:00 Gulf time on a UTC host | `lib/scheduling/org-time.ts` |
@@ -94,11 +100,18 @@ No role or colour data is seeded. Roles already exist in production; colours are
 - Cancelled appointments, and appointments whose technician is not in `technician_reference`, are not imported.
 - Removing an imported appointment from a draft does not stick: the next re-read brings it back while FSM still has it booked.
 - FSM is re-read for a day at most every 5 minutes, when the day is loaded (the daily board reloads quietly every 5 minutes; the Display screen already polls). Each round is one search call plus one read per appointment on that day.
+- **No schema change in this round.** Nothing to run in the SQL Editor.
+- The day route makes three more small queries per load (org timezone, carried-over entries, latest unplaced list).
+- The import now **deletes** rows, within the limits in the table above. It is the only place that does so without a user action.
+- **All 104 technicians have `shift = 'morning'`.** Under the rules above the Night grid therefore has no rows, and the Morning grid widens to midnight on days with night jobs (28 of the 61 days checked). The team has to set the night technicians' shift in Technicians & Leave; FSM data points to three (over half their jobs start before 05:00). The team also asked for Morning 06:00 to 19:00 and Night 00:00 to 08:00, which they can now set from the board.
+- `scripts/fsm-schedule-audit.cjs` is the read-only check used for this: FSM appointments for a date range against the portal and the board's rules. Run with bun; about 900 FSM calls for two months.
 - New appointments are only added while the day is a draft or draft revision. On an approved day, statuses, times and crews still refresh, but new FSM bookings wait for a revision.
 
 ## 5. Quick check after deploying
 
-1. Open today on the daily board: FSM appointments appear, coloured by status, with a legend.
+1. Open today on the daily board: FSM appointments appear, coloured by status, with a legend. Appointments from 13:00 onward are there, and none from yesterday.
+1. Open 28 Sep: AP‑3869 runs 05:00 to 17:00 on each of its 31 technicians, in the Morning grid.
+1. Click the hours at the right of a shift heading: they can be changed and are saved for everyone.
 2. Open an entry: Work Order and Appointment are links that open FSM.
 3. Compare three appointment times with FSM: they match to the minute, whatever the viewer's timezone.
 4. Drag a bar to another technician, approve the day, confirm the change in FSM.

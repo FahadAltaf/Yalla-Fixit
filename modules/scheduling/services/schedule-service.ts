@@ -45,6 +45,9 @@ export interface ScheduleEntry {
   created_by_user?: { full_name: string | null; email: string } | { full_name: string | null; email: string }[] | null;
   updated_by_user?: { full_name: string | null; email: string } | { full_name: string | null; email: string }[] | null;
   schedule_entry_assignments?: ScheduleEntryAssignment[];
+  // Set by the day route on a job that belongs to an EARLIER day and is still
+  // running on the day being shown. It is drawn, but edited on its own day.
+  carried_over?: boolean;
 }
 
 export type ScheduleVersionStatus =
@@ -77,6 +80,8 @@ export interface ScheduleVersion {
 // were left out.
 export interface FsmImportSummary {
   imported: number;
+  // Entries taken off the day's list because they are not on that day.
+  movedOff?: number;
   skipped: number;
   scanned: number;
   reasons: {
@@ -87,12 +92,33 @@ export interface FsmImportSummary {
     noKnownTechnician: number;
   };
   unknownResourceIds?: string[];
+  // Appointments FSM has for the date that the board has no row for.
+  unplaced?: FsmUnplacedAppointment[];
   error?: string;
+}
+
+// An appointment booked in FSM for the date that cannot be drawn, because
+// nobody is assigned to it yet or nobody on it is in the technician list.
+export interface FsmUnplacedAppointment {
+  id: string;
+  name: string | null;
+  workOrderId: string | null;
+  workOrderName: string | null;
+  status: string | null;
+  startAt: string | null;
+  endAt: string | null;
+  reason: "no_technician" | "not_in_technician_list";
+  // Who FSM has on it, when they are not in the portal's technician list.
+  technicians: string[];
 }
 
 export interface DayScheduleResponse {
   version: ScheduleVersion | null;
   entries: ScheduleEntry[];
+  // Jobs from earlier days that are still running on this one.
+  carriedOver?: ScheduleEntry[];
+  // FSM appointments for this date that have no row to sit on.
+  unplaced?: FsmUnplacedAppointment[];
   // FR-4: how many appointments were just pulled in from FSM, if any.
   imported?: number;
   fsmImport?: FsmImportSummary | null;
@@ -157,6 +183,17 @@ export const scheduleService = {
 
   getConfig: async (): Promise<SchedulingConfig> => {
     return executeRESTBackend<SchedulingConfig>("/api/scheduling/config", { method: "GET" });
+  },
+
+  // The hours each shift's grid shows, changed from the board for everyone.
+  // Times are "HH:mm"; an end at or before the start runs past midnight.
+  updateConfig: async (
+    data: Partial<Pick<SchedulingConfig, "night_shift_start" | "night_shift_end" | "day_shift_start" | "day_shift_end">>,
+  ): Promise<SchedulingConfig> => {
+    return executeRESTBackend<SchedulingConfig>("/api/scheduling/config", {
+      method: "PUT",
+      body: data as unknown as Record<string, unknown>,
+    });
   },
 
   getDay: async (date: string): Promise<DayScheduleResponse> => {

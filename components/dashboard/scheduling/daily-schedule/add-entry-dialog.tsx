@@ -28,13 +28,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertTriangle, Loader2, Search } from "lucide-react";
-import TimeSelect, { formatTimeAmPm } from "@/components/ui/time-select";
+import TimeSelect from "@/components/ui/time-select";
 import { APPOINTMENT_STATE_LABELS, APPOINTMENT_STATE_STYLES } from "@/lib/scheduling/appointment-status";
 import {
   zonedTimeToUtc,
 } from "@/lib/scheduling/org-time";
 import {
-  resolveShift,
+  reachesOutsideUsualHours,
   shiftWindowLabel,
   shiftBoundsFor,
   APPOINTMENT_TYPES,
@@ -112,11 +112,11 @@ export default function AddEntryDialog({
   const creatingNew = mode === "fsm" && appointmentChoice === NEW_APPOINTMENT;
   const isAllDay = creatingNew && scheduleType === "All Day";
 
-  // Time-bound entries derive their shift from the start time (D-01). All-Day
-  // entries have no start time, so they stay on the shift being added to.
-  const resolvedShift = useMemo(() => resolveShift(startTime, config), [startTime, config]);
-  const effectiveShift: ShiftType = isAllDay ? shift : (resolvedShift ?? shift);
-  const shiftMoved = !isAllDay && resolvedShift !== null && resolvedShift !== shift;
+  // An entry is filed under the shift of the grid it is added from. Where it
+  // is drawn depends on its technicians' shifts, not on its time (2 Oct 2026).
+  const effectiveShift: ShiftType = shift;
+  const outsideUsualHours =
+    !isAllDay && endTime > startTime && reachesOutsideUsualHours(startTime, endTime, config);
 
   const onLeaveByTechnician = useMemo(() => {
     const startAt = zonedTimeToUtc(date, startTime).getTime();
@@ -376,11 +376,7 @@ export default function AddEntryDialog({
               }),
         });
       }
-      toast.success(
-        shiftMoved
-          ? `Entry added to the ${effectiveShift === "night" ? "Night" : "Morning"} shift (based on its start time)`
-          : "Entry added to the draft",
-      );
+      toast.success("Entry added to the draft");
       onAdded();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to add entry");
@@ -702,24 +698,12 @@ export default function AddEntryDialog({
               </div>
             )}
 
-            {shiftMoved && (
-              <div className="flex items-start gap-2 rounded-md border border-brand/40 bg-brand-50 px-3 py-2 text-xs text-brand">
+            {outsideUsualHours && (
+              <div className="text-muted-foreground flex items-start gap-2 rounded-md border px-3 py-2 text-xs">
                 <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
                 <span>
-                  {formatTimeAmPm(startTime)} falls in the{" "}
-                  <b>{effectiveShift === "night" ? "Night" : "Morning"} shift</b> ({shiftWindowLabel(effectiveShift, config)}
-                  ), so this entry will be placed there.
-                </span>
-              </div>
-            )}
-
-            {!isAllDay && resolvedShift === null && (
-              <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
-                <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-                <span>
-                  {formatTimeAmPm(startTime)} is outside both shift windows (Night {shiftWindowLabel("night", config)},
-                  Morning {shiftWindowLabel("day", config)}). It will be saved under the{" "}
-                  {shift === "night" ? "Night" : "Morning"} shift and flagged on the grid as out of window.
+                  Part of this is outside the usual {shift === "night" ? "Night" : "Morning"} Shift hours (
+                  {shiftWindowLabel(shift, config)}). That is fine: the grid widens to show all of it on this day.
                 </span>
               </div>
             )}

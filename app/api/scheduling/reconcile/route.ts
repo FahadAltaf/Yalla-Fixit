@@ -74,7 +74,9 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ data: { ...result.json, imported, fsmImport } });
+    return NextResponse.json({
+      data: { ...result.json, imported, fsmImport, unplaced: fsmImport?.unplaced ?? null },
+    });
   } catch (error) {
     console.error("Scheduling reconcile error:", error);
     return NextResponse.json({ error: "Failed to trigger reconciliation" }, { status: 500 });

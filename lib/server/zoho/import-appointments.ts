@@ -14,12 +14,8 @@
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { resolveAppointmentState } from "@/lib/scheduling/appointment-status";
 import { fsmFetch, fsmGetRecord, getFsmAccessToken } from "./fsm-client";
-import {
-  DEFAULT_ORG_TIMEZONE,
-  zoneOffsetMinutes,
-  zonedMinutesOfDay,
-  zonedTimeToUtc,
-} from "@/lib/scheduling/org-time";
+import { DEFAULT_ORG_TIMEZONE, zoneOffsetMinutes, zonedTimeToUtc } from "@/lib/scheduling/org-time";
+import { configuredWindows, entryRange, homeShift } from "@/lib/scheduling/board-layout";
 
 type Admin = Awaited<ReturnType<typeof createAdminServerClient>>;
 
@@ -29,6 +25,19 @@ const MAX_PAGES = 5;
 const PER_PAGE = 200;
 // How many full appointment records to read from FSM at once.
 const FSM_READ_CONCURRENCY = 8;
+// FSM does not read the timestamps of a date search as the instants they
+// are. It turns them into a wall clock in ITS OWN timezone (US Pacific on this
+// account) and compares that with the appointment's wall clock in the org's.
+// Measured on 29 Sep 2026: asking for 00:00 - 23:59 Gulf on the 29th returned
+// 13:00 on the 28th to 12:59 on the 29th, eleven hours early. Every afternoon
+// appointment was filed under the NEXT day and was missing from its own.
+//
+// The offset moves with daylight saving and is FSM's to change, so it is not
+// corrected for. The search asks for a window wide enough to contain the day
+// whatever the offset, and the day is cut out of the result by each
+// appointment's own start time, which carries its offset and can be trusted.
+const SEARCH_PAD_HOURS = 36;
+const HOUR_MS = 60 * 60 * 1000;
 
 type FsmAppointment = {
   id: string;
@@ -76,6 +85,34 @@ export function crewOf(appointment: {
   return [...new Set(ids)];
 }
 
+// The names FSM has on an appointment, for saying who is missing from the
+// portal's technician list.
+function crewNamesOf(appointment: {
+  Lead?: { id?: string; name?: string } | null;
+  $Service_Resources?: Array<{ id?: string; name?: string }> | null;
+  Service_Resources?: Array<{ id?: string; name?: string }> | null;
+}): string[] {
+  const names = [
+    appointment.Lead?.name,
+    ...(appointment.$Service_Resources ?? []).map((r) => r.name),
+    ...(appointment.Service_Resources ?? []).map((r) => r.name),
+  ].filter((name): name is string => Boolean(name));
+  return [...new Set(names)];
+}
+
+// An appointment FSM has for the date that the board has no row for.
+export type UnplacedAppointment = {
+  id: string;
+  name: string | null;
+  workOrderId: string | null;
+  workOrderName: string | null;
+  status: string | null;
+  startAt: string | null;
+  endAt: string | null;
+  reason: "no_technician" | "not_in_technician_list";
+  technicians: string[];
+};
+
 // Why appointments were left out, so an empty board can explain itself.
 export type ImportSkipReasons = {
   alreadyOnBoard: number;
@@ -87,31 +124,30 @@ export type ImportSkipReasons = {
 
 export type ImportResult = {
   imported: number;
+  // Entries taken off this day's list because they are not on this day.
+  movedOff?: number;
   skipped: number;
   scanned: number;
   reasons: ImportSkipReasons;
   // Resource ids FSM gave that the portal roster does not know.
   unknownResourceIds?: string[];
+  // Appointments with nobody assigned, or nobody the portal knows. They used
+  // to be dropped silently, which read as "the portal lost my appointment".
+  unplaced?: UnplacedAppointment[];
   error?: string;
 };
 
-function hhmmToMinutes(value: string) {
-  const [h, m] = value.split(":").map(Number);
-  return (h || 0) * 60 + (m || 0);
-}
-
-// Mirrors the board's resolveShift: the windows overlap and the morning shift
-// wins. A time in neither window falls back to the morning shift, where the
-// board pins it to the edge and flags it rather than hiding it.
-function shiftForStart(startIso: string, config: ShiftConfig, timeZone: string): "day" | "night" {
-  const minutes = zonedMinutesOfDay(new Date(startIso), timeZone);
-  const dayStart = hhmmToMinutes(config.day_shift_start);
-  const dayEnd = hhmmToMinutes(config.day_shift_end);
-  const nightStart = hhmmToMinutes(config.night_shift_start);
-  const nightEnd = hhmmToMinutes(config.night_shift_end);
-  if (minutes >= dayStart && minutes < dayEnd) return "day";
-  if (minutes >= nightStart && minutes < nightEnd) return "night";
-  return "day";
+// The shift an appointment is filed under: the one that covers most of it,
+// which is the board's own rule (lib/scheduling/board-layout.ts). Filing by
+// start time alone put a 05:00 - 17:00 job under Night (AP-3869).
+function shiftFor(
+  startIso: string,
+  endIso: string,
+  date: string,
+  config: ShiftConfig,
+  timeZone: string,
+): "day" | "night" {
+  return homeShift(entryRange({ start_at: startIso, end_at: endIso }, date, timeZone), configuredWindows(config));
 }
 
 function addressText(addr?: Record<string, unknown> | null): string {
@@ -178,6 +214,54 @@ async function fetchAppointmentsBetween(token: string, from: Date, to: Date, off
   throw new Error(lastError);
 }
 
+// The day's unplaced appointments are kept as an audit event, written only
+// when the list changes. The day route reads the latest one, so the board can
+// say why an appointment is missing on every load, not just on the load that
+// happened to re-read FSM.
+const UNPLACED_EVENT = "fsm_appointments_not_placed";
+
+function unplacedSignature(list: UnplacedAppointment[]) {
+  return list
+    .map((a) => `${a.id}:${a.reason}:${a.startAt ?? ""}:${a.endAt ?? ""}:${a.status ?? ""}`)
+    .sort()
+    .join("|");
+}
+
+export async function readUnplacedAppointments(admin: Admin, versionId: string): Promise<UnplacedAppointment[]> {
+  const { data, error } = await admin
+    .from("schedule_audit_events")
+    .select("after_value")
+    .eq("schedule_version_id", versionId)
+    .eq("event_type", UNPLACED_EVENT)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error || !data) return [];
+  const list = (data.after_value as { appointments?: UnplacedAppointment[] } | null)?.appointments;
+  return Array.isArray(list) ? list : [];
+}
+
+async function rememberUnplaced(
+  admin: Admin,
+  input: { date: string; versionId: string },
+  unplaced: UnplacedAppointment[],
+) {
+  try {
+    const previous = await readUnplacedAppointments(admin, input.versionId);
+    if (unplacedSignature(previous) === unplacedSignature(unplaced)) return;
+    await admin.from("schedule_audit_events").insert({
+      event_type: UNPLACED_EVENT,
+      origin: "fsm",
+      schedule_version_id: input.versionId,
+      schedule_date: input.date,
+      after_value: { count: unplaced.length, appointments: unplaced },
+    });
+  } catch (error) {
+    // A note for the board; never a reason to fail the import.
+    console.error("[zoho:rememberUnplaced]", error);
+  }
+}
+
 /**
  * Import the selected day's FSM appointments into its schedule version.
  *
@@ -209,18 +293,72 @@ export async function importFsmAppointmentsForDay(
     if (!config) return { ...empty, error: "Scheduling shift configuration is missing" };
     const timeZone = (config as ShiftConfig).org_timezone || DEFAULT_ORG_TIMEZONE;
 
-    // The day as the ORG sees it, converted to the instants FSM expects.
+    // The day as the ORG sees it.
     const from = zonedTimeToUtc(input.date, "00:00:00", timeZone);
-    const to = zonedTimeToUtc(input.date, "23:59:59", timeZone);
+    const dayStartMs = from.getTime();
+    const dayEndMs = zonedTimeToUtc(input.date, "23:59:59", timeZone).getTime() + 1000;
     const offsetMinutes = zoneOffsetMinutes(from, timeZone);
-    const { rows: appointments } = await fetchAppointmentsBetween(token, from, to, offsetMinutes);
+    const { rows: found } = await fetchAppointmentsBetween(
+      token,
+      new Date(dayStartMs - SEARCH_PAD_HOURS * HOUR_MS),
+      new Date(dayEndMs + SEARCH_PAD_HOURS * HOUR_MS),
+      offsetMinutes,
+    );
+    // Only what truly starts on the day (see SEARCH_PAD_HOURS).
+    const appointments = found.filter((a) => {
+      const startMs = a.Scheduled_Start_Date_Time ? Date.parse(a.Scheduled_Start_Date_Time) : NaN;
+      return Number.isFinite(startMs) && startMs >= dayStartMs && startMs < dayEndMs;
+    });
 
     const { data: existing } = await admin
       .from("schedule_entries")
-      .select("fsm_appointment_id")
+      .select("id, fsm_appointment_id, fsm_appointment_name, start_at, end_at, origin, needs_sync")
       .eq("schedule_version_id", input.versionId)
       .not("fsm_appointment_id", "is", null);
-    const alreadyOnBoard = new Set((existing ?? []).map((e) => e.fsm_appointment_id as string));
+
+    // Entries on this day's list that are not on this day at all: filed here
+    // by the old search window, or moved to another date in FSM since. They
+    // are FSM's appointments and nobody has edited them here, so the list is
+    // simply put right; each is picked up by the day it is really on. An entry
+    // created in the portal, or holding an edit that is not approved yet, is
+    // left alone and flagged on the board instead.
+    const misfiled = (existing ?? []).filter(
+      (e) =>
+        e.origin === "fsm" &&
+        e.needs_sync !== true &&
+        (Date.parse(e.end_at as string) <= dayStartMs || Date.parse(e.start_at as string) >= dayEndMs),
+    );
+    if (misfiled.length > 0) {
+      const { error: removeError } = await admin
+        .from("schedule_entries")
+        .delete()
+        .in(
+          "id",
+          misfiled.map((e) => e.id as string),
+        );
+      if (removeError) {
+        console.error("[zoho:importFsmAppointmentsForDay] could not take off-day entries off the list:", removeError.message);
+      } else {
+        await admin.from("schedule_audit_events").insert({
+          event_type: "fsm_entries_moved_to_their_own_day",
+          origin: "fsm",
+          schedule_version_id: input.versionId,
+          schedule_date: input.date,
+          before_value: {
+            entries: misfiled.map((e) => ({
+              appointment: e.fsm_appointment_name,
+              fsm_appointment_id: e.fsm_appointment_id,
+              start_at: e.start_at,
+              end_at: e.end_at,
+            })),
+          },
+        });
+      }
+    }
+    const removedIds = new Set(misfiled.map((e) => e.id as string));
+    const alreadyOnBoard = new Set(
+      (existing ?? []).filter((e) => !removedIds.has(e.id as string)).map((e) => e.fsm_appointment_id as string),
+    );
 
     const { data: technicians } = await admin
       .from("technician_reference")
@@ -233,11 +371,15 @@ export async function importFsmAppointmentsForDay(
       (a) => !alreadyOnBoard.has(a.id) && resolveAppointmentState(a.Status) !== "cancelled",
     );
     const crewByAppointment = new Map<string, string[]>();
+    const crewNamesByAppointment = new Map<string, string[]>();
     for (let i = 0; i < candidates.length; i += FSM_READ_CONCURRENCY) {
       await Promise.all(
         candidates.slice(i, i + FSM_READ_CONCURRENCY).map(async (a) => {
           const full = await fsmGetRecord<FsmAppointment>(token, "Service_Appointments", a.id);
-          if (full.ok && full.record) crewByAppointment.set(a.id, crewOf(full.record));
+          if (full.ok && full.record) {
+            crewByAppointment.set(a.id, crewOf(full.record));
+            crewNamesByAppointment.set(a.id, crewNamesOf(full.record));
+          }
         }),
       );
     }
@@ -245,6 +387,7 @@ export async function importFsmAppointmentsForDay(
     const rows: Record<string, unknown>[] = [];
     const assignmentsByAppointment = new Map<string, string[]>();
     const unknownResourceIds = new Set<string>();
+    const unplaced: UnplacedAppointment[] = [];
 
     for (const appointment of appointments) {
       const workOrderId = appointment.Work_Order?.id;
@@ -272,6 +415,17 @@ export async function importFsmAppointmentsForDay(
       if (technicianIds.length === 0) {
         skips.noKnownTechnician += 1;
         resources.forEach((resourceId) => unknownResourceIds.add(resourceId));
+        unplaced.push({
+          id: appointment.id,
+          name: appointment.Name ?? null,
+          workOrderId,
+          workOrderName: appointment.Work_Order?.name ?? null,
+          status: appointment.Status ?? null,
+          startAt,
+          endAt,
+          reason: resources.length === 0 ? "no_technician" : "not_in_technician_list",
+          technicians: crewNamesByAppointment.get(appointment.id) ?? crewNamesOf(appointment),
+        });
         continue;
       }
 
@@ -284,7 +438,7 @@ export async function importFsmAppointmentsForDay(
       rows.push({
         schedule_version_id: input.versionId,
         entry_type: "existing_appointment",
-        shift: shiftForStart(startAt, config as ShiftConfig, timeZone),
+        shift: shiftFor(start.toISOString(), safeEnd.toISOString(), input.date, config as ShiftConfig, timeZone),
         operating_date: input.date,
         start_at: start.toISOString(),
         end_at: safeEnd.toISOString(),
@@ -312,6 +466,9 @@ export async function importFsmAppointmentsForDay(
     const skipped = Object.values(skips).reduce((a, b) => a + b, 0);
 
 
+    unplaced.sort((a, b) => (a.startAt ?? "").localeCompare(b.startAt ?? ""));
+    await rememberUnplaced(admin, input, unplaced);
+
     if (rows.length === 0) {
       return {
         imported: 0,
@@ -319,6 +476,8 @@ export async function importFsmAppointmentsForDay(
         scanned: appointments.length,
         reasons: skips,
         unknownResourceIds: [...unknownResourceIds].slice(0, 5),
+        unplaced,
+        movedOff: misfiled.length,
       };
     }
 
@@ -367,6 +526,8 @@ export async function importFsmAppointmentsForDay(
       scanned: appointments.length,
       reasons: skips,
       unknownResourceIds: [...unknownResourceIds].slice(0, 5),
+      unplaced,
+      movedOff: misfiled.length,
     };
   } catch (error) {
     // Never block loading a day because FSM is unreachable or slow.

@@ -28,10 +28,29 @@ import {
   type TechnicianReference,
   type UpdateEntryInput,
   type FsmImportSummary,
+  type FsmUnplacedAppointment,
 } from "@/modules/scheduling";
 import type { LeaveRecord, TechnicianTag, TechnicianRole, TechnicianServiceType } from "@/types/types";
 import { orderTechnicians, type SortMode } from "./technician-order";
 import { exportSchedulePdf, type PdfBar, type PdfRow, type PdfSection } from "@/lib/scheduling/export-pdf";
+import {
+  DAY_MINUTES,
+  configuredWindows,
+  dayLimits,
+  entryRange,
+  fitGrid,
+  homeShift,
+  isOnDay,
+  minutesFromDayStart,
+  placeRange,
+  spanPercent,
+  type BarPlacement,
+  type Bounds,
+  type FittedBounds,
+  type MinuteRange,
+  type ShiftKey,
+  type ShiftWindows,
+} from "@/lib/scheduling/board-layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import StatusBadge from "@/components/ui/status-badge";
@@ -44,6 +63,8 @@ import {
   Ban,
   ChevronDown,
   ChevronUp,
+  ChevronsLeft,
+  ChevronsRight,
   CircleCheck,
   Clock,
   Eraser,
@@ -76,8 +97,6 @@ import {
   isoAtZonedMinutes,
   setOrgTimeZone,
   todayInZone,
-  zonedDateString,
-  zonedMinutesOfDay,
   zonedTimeToUtc,
 } from "@/lib/scheduling/org-time";
 import ScheduleBoardSkeleton from "./board-skeleton";
@@ -87,9 +106,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import AddEntryDialog from "./add-entry-dialog";
 import SubmitDialog from "./submit-dialog";
 import EntryDetailDialog from "./entry-detail-dialog";
+import { fsmRecordUrl } from "./shift-utils";
 import RejectDialog from "./reject-dialog";
 import HistoryDialog from "./history-dialog";
-import { formatTimeAmPm, TIME_STEP_MINUTES } from "@/components/ui/time-select";
+import TimeSelect, { formatTimeAmPm, TIME_STEP_MINUTES } from "@/components/ui/time-select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 type Props = {
   technicians: TechnicianReference[];
@@ -104,15 +125,6 @@ function todayIso() {
 
 function addDaysIso(dateStr: string, delta: number) {
   return addDaysToDateString(dateStr, delta);
-}
-
-function shiftToMinutes(hhmmss: string) {
-  const [h, m] = hhmmss.split(":").map(Number);
-  return h * 60 + m;
-}
-
-function timeOfDayMinutes(iso: string) {
-  return zonedMinutesOfDay(iso);
 }
 
 function minutesToHhmm(minutes: number) {
@@ -130,8 +142,50 @@ function formatHourLabel(minutes: number) {
   return `${h12} ${ampm}`;
 }
 
+// A clock time for minutes counted from the board's midnight. A value below
+// 0 or past 1440 is on the day before or after, and says so -- "4:00 AM next
+// day" -- rather than wrapping round to look like this morning.
+function clockLabel(minutes: number) {
+  if (minutes === DAY_MINUTES) return "midnight";
+  const dayOffset = Math.floor(minutes / DAY_MINUTES);
+  const ofDay = minutes - dayOffset * DAY_MINUTES;
+  const clock = formatTimeAmPm(
+    `${String(Math.floor(ofDay / 60)).padStart(2, "0")}:${String(ofDay % 60).padStart(2, "0")}`,
+  );
+  if (dayOffset === 0) return clock;
+  if (dayOffset === 1) return `${clock} next day`;
+  if (dayOffset === -1) return `${clock} the day before`;
+  return dayOffset > 0 ? `${clock} (+${dayOffset} days)` : `${clock} (${dayOffset} days)`;
+}
+
 function formatRange(startMin: number, endMin: number) {
-  return `${formatTimeAmPm(minutesToHhmm(startMin))} – ${formatTimeAmPm(minutesToHhmm(endMin))}`;
+  return `${clockLabel(startMin)} – ${clockLabel(endMin)}`;
+}
+
+// Whether any of an entry falls on this date. Zoho FSM may have moved it to
+// another day since it was listed here.
+function onThisDay(entry: ScheduleEntry, date: string, windows: ShiftWindows): boolean {
+  if (entry.fsm_schedule_type === "All Day") return !entry.carried_over;
+  return isOnDay(entryRange(entry, date), windows);
+}
+
+// The jobs a technician's row draws in one grid. A technician with a shift has
+// one row, in that shift's grid, and it draws every job of theirs that day.
+// A technician with no shift set has a row in both grids; each draws the jobs
+// whose times belong to it, so nothing is drawn twice.
+function entriesForGrid(
+  entries: ScheduleEntry[],
+  technicianShift: TechnicianReference["shift"],
+  grid: ShiftKey,
+  date: string,
+  windows: ShiftWindows,
+): ScheduleEntry[] {
+  const today = entries.filter((entry) => onThisDay(entry, date, windows));
+  if (technicianShift) return today;
+  return today.filter(
+    (entry) =>
+      (entry.fsm_schedule_type === "All Day" ? entry.shift : homeShift(entryRange(entry, date), windows)) === grid,
+  );
 }
 
 // A leave record overlaps the selected day if it touches any moment of it.
@@ -213,9 +267,16 @@ const SYNC_FAILED_STRIPES =
 function describeFsmImport(summary: FsmImportSummary | null | undefined): string | null {
   if (!summary) return null;
   if (summary.error) return `Couldn’t bring appointments in from Zoho FSM: ${summary.error}`;
+  const movedOff = summary.movedOff ?? 0;
+  const moved =
+    movedOff > 0
+      ? `${movedOff} appointment${movedOff === 1 ? "" : "s"} that ${movedOff === 1 ? "is" : "are"} on another date in Zoho FSM taken off this day`
+      : null;
   if (summary.imported > 0) {
-    return `${summary.imported} appointment${summary.imported === 1 ? "" : "s"} booked in Zoho FSM added to the board`;
+    const added = `${summary.imported} appointment${summary.imported === 1 ? "" : "s"} booked in Zoho FSM added to the board`;
+    return moved ? `${added}; ${moved}` : added;
   }
+  if (moved) return `${moved.charAt(0).toUpperCase()}${moved.slice(1)}.`;
   if (summary.scanned === 0) return "No appointments are booked in Zoho FSM for this date.";
   const r = summary.reasons;
   const parts = [
@@ -238,6 +299,11 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
   const [access, setAccess] = useState<SchedulingAccess | null>(null);
   const [version, setVersion] = useState<ScheduleVersion | null>(null);
   const [entries, setEntries] = useState<ScheduleEntry[]>([]);
+  // Jobs from earlier days that are still running on this one: drawn here,
+  // edited on their own day.
+  const [carriedOver, setCarriedOver] = useState<ScheduleEntry[]>([]);
+  // Appointments Zoho FSM has for this date that have no row to sit on.
+  const [unplaced, setUnplaced] = useState<FsmUnplacedAppointment[]>([]);
   const [tags, setTags] = useState<TechnicianTag[]>([]);
   const [roles, setRoles] = useState<TechnicianRole[]>([]);
   const [services, setServices] = useState<TechnicianServiceType[]>([]);
@@ -382,6 +448,8 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
     if (options?.reset) {
       setVersion(null);
       setEntries([]);
+      setCarriedOver([]);
+      setUnplaced([]);
     }
     try {
       const [result, leave] = await Promise.all([
@@ -392,13 +460,15 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
       if (requestId !== dayRequestRef.current) return;
       setVersion(result.version);
       setEntries(result.entries);
+      setCarriedOver(result.carriedOver ?? []);
+      setUnplaced(result.unplaced ?? []);
       setLeaveRecords(leave);
       // FR-4: appointments booked straight in FSM are pulled in when a day is
       // first opened.
       // The day is re-read from FSM every few minutes; only say so when it is
       // the first pull, something was added, or it failed.
       const pull = result.fsmImport;
-      if (pull && (result.fsmFirstPull || pull.imported > 0 || pull.error)) {
+      if (pull && (result.fsmFirstPull || pull.imported > 0 || (pull.movedOff ?? 0) > 0 || pull.error)) {
         const fsmMessage = describeFsmImport(pull);
         if (fsmMessage) toast.info(fsmMessage, { duration: 8000 });
       }
@@ -436,13 +506,14 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
 
   const zoom = ZOOM_STEPS[zoomIndex];
 
-  const shiftBounds = useMemo(() => {
-    if (!config) return null;
-    return {
-      night: { start: shiftToMinutes(config.night_shift_start), end: shiftToMinutes(config.night_shift_end) },
-      day: { start: shiftToMinutes(config.day_shift_start), end: shiftToMinutes(config.day_shift_end) },
-    };
-  }, [config]);
+  const windows = useMemo(() => (config ? configuredWindows(config) : null), [config]);
+
+  // Everything drawn on the board: the day's own entries, plus jobs from
+  // earlier days that are still running.
+  const boardEntries = useMemo(
+    () => (carriedOver.length > 0 ? [...carriedOver, ...entries] : entries),
+    [carriedOver, entries],
+  );
 
   // Leave affecting the currently-selected date, keyed by technician.
   const leaveByTechnician = useMemo(() => {
@@ -455,7 +526,7 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
 
   const entriesByTechnician = useMemo(() => {
     const map = new Map<string, ScheduleEntry[]>();
-    entries.forEach((entry) => {
+    boardEntries.forEach((entry) => {
       (entry.schedule_entry_assignments ?? []).forEach((a) => {
         const list = map.get(a.technician_fsm_id) ?? [];
         list.push(entry);
@@ -463,7 +534,7 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
       });
     });
     return map;
-  }, [entries]);
+  }, [boardEntries]);
 
   // FR-6: a technician's "site" is the address of their earliest appointment
   // that day; used by the "Site" grouping to cluster same-address crews.
@@ -482,11 +553,11 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
   // usual ones plus anything unusual that is actually present.
   const presentStates = useMemo(() => {
     const set = new Set<AppointmentState>();
-    entries.forEach((e) => {
+    boardEntries.forEach((e) => {
       if (e.entry_type !== "free_text" && e.fsm_appointment_id) set.add(resolveAppointmentState(e.fsm_status));
     });
     return set;
-  }, [entries]);
+  }, [boardEntries]);
 
   // FR-2: role id → highlight colour, so each technician's row is tinted by
   // their role (Driver / Technician-Driver = red by default; others as set).
@@ -508,7 +579,7 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
       list = list.filter(
         (t) =>
           t.display_name.toLowerCase().includes(q) ||
-          entries.some(
+          boardEntries.some(
             (e) =>
               e.schedule_entry_assignments?.some((a) => a.technician_fsm_id === t.fsm_resource_id) &&
               [e.title, e.fsm_work_order_name, e.fsm_appointment_name, e.client_name, e.address]
@@ -547,7 +618,7 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
   }, [
     technicians,
     search,
-    entries,
+    boardEntries,
     anyCategoryFilter,
     roleFilters,
     serviceFilters,
@@ -565,7 +636,109 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
     siteByTechnician,
   ]);
 
+  // A technician's row is in the grid of their own shift, whatever the hours
+  // of their jobs (team decision, 2 Oct 2026). A technician with no shift set
+  // is in both.
+  const sectionTechnicians = useMemo(() => {
+    const belongs = (t: TechnicianReference, key: ShiftKey) =>
+      !t.shift || t.shift === (key === "night" ? "night" : "morning");
+    const active = technicians.filter((t) => t.is_active);
+    return {
+      night: visibleTechnicians.filter((t) => belongs(t, "night")),
+      day: visibleTechnicians.filter((t) => belongs(t, "day")),
+      nightPick: active.filter((t) => belongs(t, "night")),
+      dayPick: active.filter((t) => belongs(t, "day")),
+    };
+  }, [visibleTechnicians, technicians]);
+
+  // Each grid's hours for the day (lib/scheduling/board-layout.ts): its usual
+  // hours, stretched to show every job on its rows in full. `gridEntryIds`
+  // is what each grid draws; `offDay` holds entries on this day's list that
+  // no longer fall on this date at all.
+  const layout = useMemo(() => {
+    if (!windows) return null;
+    const offDay = boardEntries.filter((entry) => !entry.carried_over && !onThisDay(entry, date, windows));
+    const gridOf = (key: ShiftKey, bounds: Bounds) => {
+      const ids = new Set<string>();
+      const ranges: MinuteRange[] = [];
+      sectionTechnicians[key].forEach((t) =>
+        entriesForGrid(entriesByTechnician.get(t.fsm_resource_id) ?? [], t.shift, key, date, windows).forEach(
+          (entry) => {
+            if (ids.has(entry.id)) return;
+            ids.add(entry.id);
+            if (entry.fsm_schedule_type !== "All Day") ranges.push(entryRange(entry, date));
+          },
+        ),
+      );
+      return { fitted: fitGrid(bounds, ranges, windows), ids };
+    };
+    const night = gridOf("night", windows.night);
+    const day = gridOf("day", windows.day);
+    return {
+      fitted: { night: night.fitted, day: day.fitted },
+      gridEntryIds: { night: night.ids, day: day.ids },
+      offDay,
+    };
+  }, [windows, boardEntries, entriesByTechnician, sectionTechnicians, date]);
+
+  // The grids' hours as objects that only change when the hours do, so the
+  // memoised rows are not re-rendered by every unrelated edit.
+  const nightStart = layout?.fitted.night.start ?? null;
+  const nightEnd = layout?.fitted.night.end ?? null;
+  const dayStart = layout?.fitted.day.start ?? null;
+  const dayEnd = layout?.fitted.day.end ?? null;
+  const nightBounds = useMemo<FittedBounds | null>(
+    () =>
+      windows && nightStart !== null && nightEnd !== null
+        ? {
+            start: nightStart,
+            end: nightEnd,
+            configured: windows.night,
+            stretched: nightStart !== windows.night.start || nightEnd !== windows.night.end,
+          }
+        : null,
+    [windows, nightStart, nightEnd],
+  );
+  const dayBounds = useMemo<FittedBounds | null>(
+    () =>
+      windows && dayStart !== null && dayEnd !== null
+        ? {
+            start: dayStart,
+            end: dayEnd,
+            configured: windows.day,
+            stretched: dayStart !== windows.day.start || dayEnd !== windows.day.end,
+          }
+        : null,
+    [windows, dayStart, dayEnd],
+  );
+
+  // The team sets each grid's usual hours on the board. Saved for everyone.
+  const saveShiftHours = async (shift: ShiftKey, start: string, end: string) => {
+    const updated = await scheduleService.updateConfig(
+      shift === "night" ? { night_shift_start: start, night_shift_end: end } : { day_shift_start: start, day_shift_end: end },
+    );
+    setConfig(updated);
+    toast.success(`${shift === "night" ? "Night" : "Morning"} shift hours saved for everyone`);
+  };
+
   const isEditable = version?.status === "draft" || version?.status === "draft_revision";
+
+  // A job carried over from an earlier day is changed on that day's board.
+  const openEntry = useCallback((entry: ScheduleEntry) => {
+    if (!entry.carried_over) {
+      setSelectedEntry(entry);
+      return;
+    }
+    const day = formatZonedDate(zonedTimeToUtc(entry.operating_date, "12:00"), {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+    });
+    toast.info(`${entryLabel(entry)} belongs to ${day} and runs on into this day. Change it on that day’s board.`, {
+      duration: 8000,
+      action: { label: `Open ${day}`, onClick: () => setDate(entry.operating_date) },
+    });
+  }, []);
 
   const hasCustomOrder = useMemo(() => technicians.some((t) => t.board_position != null), [technicians]);
   const defaultSortMode: SortMode = hasCustomOrder ? "custom" : "default";
@@ -607,7 +780,7 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
   // server so the board never shows a change that didn't happen.
   const saveEntryPlacement = async (
     entry: ScheduleEntry,
-    next: { startAt: string; endAt: string; technicianFsmIds: string[] },
+    next: { startAt: string; endAt: string; technicianFsmIds: string[]; shift?: ShiftType },
     message: string,
     allowUndo: boolean,
   ) => {
@@ -621,11 +794,15 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
       payload.endAt = next.endAt;
     }
     if (techsChanged) payload.technicianFsmIds = next.technicianFsmIds;
+    // Keep the shift it is filed under in step with where it now sits.
+    const shift = next.shift ?? entry.shift;
+    if (shift !== entry.shift && payload.startAt) payload.shift = shift;
 
     const updated: ScheduleEntry = {
       ...entry,
       start_at: next.startAt,
       end_at: next.endAt,
+      shift: payload.shift ?? entry.shift,
       schedule_entry_assignments: techsChanged
         ? next.technicianFsmIds.map(
             (techId) =>
@@ -651,7 +828,7 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
             onClick: () =>
               saveEntryPlacement(
                 updated,
-                { startAt: entry.start_at, endAt: entry.end_at, technicianFsmIds: currentIds },
+                { startAt: entry.start_at, endAt: entry.end_at, technicianFsmIds: currentIds, shift: entry.shift },
                 "Change undone",
                 false,
               ),
@@ -674,12 +851,17 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
     const technicianFsmIds = c.techChanged
       ? Array.from(new Set([...currentIds.map((id) => (id === c.sourceTech ? c.targetTech : id)), c.targetTech]))
       : currentIds;
-    const startAt = c.timeChanged ? isoAtMinutes(entry.start_at, c.startMin) : entry.start_at;
-    const endAt = c.timeChanged ? isoAtMinutes(entry.start_at, c.endMin) : entry.end_at;
+    // Minutes are counted from this board's midnight, so that is the day they
+    // are turned back into instants on. An end that did not move keeps its
+    // exact value.
+    const startAt = c.startMin !== c.origStartMin ? isoAtZonedMinutes(date, c.startMin) : entry.start_at;
+    const endAt = c.endMin !== c.origEndMin ? isoAtZonedMinutes(date, c.endMin) : entry.end_at;
+    const shift =
+      c.timeChanged && windows ? homeShift({ startMin: c.startMin, endMin: c.endMin }, windows) : entry.shift;
 
     const range = formatRange(c.startMin, c.endMin);
     const targetName = technicians.find((t) => t.fsm_resource_id === c.targetTech)?.display_name ?? "technician";
-    const resized = c.timeChanged && c.startMin === timeOfDayMinutes(entry.start_at);
+    const resized = c.timeChanged && c.startMin === c.origStartMin;
     const message = c.techChanged
       ? c.timeChanged
         ? `Reassigned to ${targetName} · ${range}`
@@ -688,7 +870,7 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
         ? `Now ${range} (${formatDuration(c.endMin - c.startMin)})`
         : `Moved to ${range}`;
 
-    saveEntryPlacement(entry, { startAt, endAt, technicianFsmIds }, message, true);
+    saveEntryPlacement(entry, { startAt, endAt, technicianFsmIds, shift }, message, true);
   };
 
   const toggleTagFilter = (tagId: string) => {
@@ -856,21 +1038,23 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
   // overlaps, leave, and the legend -- honouring the filters, field choices
   // and visible technicians, then download it.
   const handleExport = (which: ExportShift) => {
-    if (!shiftBounds) return;
+    if (!nightBounds || !dayBounds) return;
+    // The same rows and bars as the board: see placeRowEntries.
     const buildSection = (
-      entryShift: ShiftType,
-      techShiftKey: "night" | "morning",
+      shift: ShiftKey,
       title: string,
-      bounds: Bounds,
+      bounds: FittedBounds,
+      techs: TechnicianReference[],
     ): PdfSection => {
-      const span = bounds.end - bounds.start || 1;
-      const techs = visibleTechnicians.filter((t) => t.shift === techShiftKey || !t.shift);
       const rows: PdfRow[] = techs.map((t) => {
-        const rowEntries = (entriesByTechnician.get(t.fsm_resource_id) ?? []).filter((e) => e.shift === entryShift);
+        const placements = placeRowEntries(
+          entriesForGrid(entriesByTechnician.get(t.fsm_resource_id) ?? [], t.shift, shift, date, windows!),
+          bounds,
+          date,
+        );
         const leave = leaveByTechnician.get(t.fsm_resource_id);
-        const { laneOf, laneCount } = laneLayout(rowEntries);
-        const bars: PdfBar[] = rowEntries.map((e) => {
-          const placed = placeEntry(e, bounds, span);
+        const { laneOf, laneCount } = laneLayout(placements.map((p) => p.entry));
+        const bars: PdfBar[] = placements.map(({ entry: e, placed }) => {
           const isFreeText = e.entry_type === "free_text";
           const { primaryText, secondaryText } = entryText(e, fieldVis, placed.allDay);
           return {
@@ -878,7 +1062,8 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
             widthPct: placed.widthPct,
             lane: laneOf.get(e.id) ?? 0,
             allDay: placed.allDay,
-            outside: placed.outside,
+            continuesBefore: placed.clippedStart,
+            continuesAfter: placed.clippedEnd,
             primary: primaryText,
             secondary: secondaryText,
             timeLabel: placed.allDay ? "All Day" : formatRange(placed.startMin, placed.endMin),
@@ -898,12 +1083,20 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
           bars,
         };
       });
-      return { title, window: formatRange(bounds.start, bounds.end), bounds, rows };
+      return {
+        title,
+        window: formatRange(bounds.start, bounds.end),
+        bounds,
+        usualHours: bounds.stretched ? bounds.configured : null,
+        rows,
+      };
     };
 
     const sections: PdfSection[] = [];
-    if (which === "both" || which === "night") sections.push(buildSection("night", "night", "Night Shift", shiftBounds.night));
-    if (which === "both" || which === "day") sections.push(buildSection("day", "morning", "Morning Shift", shiftBounds.day));
+    if (which === "both" || which === "night")
+      sections.push(buildSection("night", "Night Shift", nightBounds, sectionTechnicians.night));
+    if (which === "both" || which === "day")
+      sections.push(buildSection("day", "Morning Shift", dayBounds, sectionTechnicians.day));
 
     exportSchedulePdf({
       date,
@@ -1215,7 +1408,7 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
         </div>
 
         {/* FR-3: bar colour = the job's FSM status (row tint = role). */}
-        {!loading && shiftBounds && (
+        {!loading && windows && (
           <div className="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] print:hidden">
             <span className="font-medium">Bar colour = FSM status:</span>
             {APPOINTMENT_STATE_ORDER.filter((state) => presentStates.has(state) || HEADLINE_STATES.has(state)).map((state) => (
@@ -1234,7 +1427,17 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
             </span>
           </div>
         )}
-        {loading || !shiftBounds ? (
+        {!loading && layout && (
+          <BoardNotices
+            date={date}
+            editable={isEditable}
+            unplaced={isEditable ? unplaced : []}
+            offDay={layout.offDay}
+            carriedOver={carriedOver}
+            onOpenEntry={openEntry}
+          />
+        )}
+        {loading || !windows || !layout || !nightBounds || !dayBounds ? (
           <ScheduleBoardSkeleton />
         ) : (
           // Both shifts stacked: Night Shift on top, Morning Shift underneath
@@ -1243,12 +1446,18 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
             <ShiftSection
               title="Night Shift"
               shift="night"
-              bounds={shiftBounds.night}
+              date={date}
+              windows={windows}
+              bounds={nightBounds}
+              gridEntryIds={layout.gridEntryIds.night}
+              canEditHours={Boolean(access?.canEdit)}
+              onSaveHours={(start, end) => saveShiftHours("night", start, end)}
               zoom={zoom}
               fieldVis={fieldVis}
-              // #10: only night-shift technicians (plus those with no shift set).
-              technicians={visibleTechnicians.filter((t) => t.shift === "night" || !t.shift)}
-              pickTechnicians={technicians.filter((t) => t.is_active && (t.shift === "night" || !t.shift))}
+              // Night-shift technicians, those with no shift set, and anyone
+              // with a night job today.
+              technicians={sectionTechnicians.night}
+              pickTechnicians={sectionTechnicians.nightPick}
               hiddenTechIds={hiddenTechIds}
               onToggleHidden={toggleHiddenTech}
               onSetTechsHidden={setTechsHidden}
@@ -1261,7 +1470,7 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
               roles={roles}
               onRoleChange={handleRoleChange}
               canEditRoles={Boolean(access?.canEdit)}
-              onEntryClick={setSelectedEntry}
+              onEntryClick={openEntry}
               onEntryCommit={commitEntryChange}
               canReorder={Boolean(access?.canEdit)}
               onReorder={handleReorder}
@@ -1269,11 +1478,16 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
             <ShiftSection
               title="Morning Shift"
               shift="day"
-              bounds={shiftBounds.day}
+              date={date}
+              windows={windows}
+              bounds={dayBounds}
+              gridEntryIds={layout.gridEntryIds.day}
+              canEditHours={Boolean(access?.canEdit)}
+              onSaveHours={(start, end) => saveShiftHours("day", start, end)}
               zoom={zoom}
               fieldVis={fieldVis}
-              technicians={visibleTechnicians.filter((t) => t.shift === "morning" || !t.shift)}
-              pickTechnicians={technicians.filter((t) => t.is_active && (t.shift === "morning" || !t.shift))}
+              technicians={sectionTechnicians.day}
+              pickTechnicians={sectionTechnicians.dayPick}
               hiddenTechIds={hiddenTechIds}
               onToggleHidden={toggleHiddenTech}
               onSetTechsHidden={setTechsHidden}
@@ -1286,7 +1500,7 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
               roles={roles}
               onRoleChange={handleRoleChange}
               canEditRoles={Boolean(access?.canEdit)}
-              onEntryClick={setSelectedEntry}
+              onEntryClick={openEntry}
               onEntryCommit={commitEntryChange}
               canReorder={Boolean(access?.canEdit)}
               onReorder={handleReorder}
@@ -1396,6 +1610,247 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
   );
 }
 
+// What the board cannot draw, said out loud. An appointment that is simply
+// absent reads as "the portal lost it"; these say which ones, and why.
+function BoardNotices({
+  date,
+  editable,
+  unplaced,
+  offDay,
+  carriedOver,
+  onOpenEntry,
+}: {
+  date: string;
+  // The day still takes changes (a draft or a draft revision).
+  editable: boolean;
+  unplaced: FsmUnplacedAppointment[];
+  offDay: ScheduleEntry[];
+  carriedOver: ScheduleEntry[];
+  onOpenEntry: (entry: ScheduleEntry) => void;
+}) {
+  const [open, setOpen] = useState(true);
+  if (unplaced.length === 0 && offDay.length === 0 && carriedOver.length === 0) return null;
+  const plural = (count: number, one: string, many: string) => (count === 1 ? one : many);
+  return (
+    <div className="flex flex-col gap-2 print:hidden">
+      {unplaced.length > 0 && (
+        <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            className="text-warning flex w-full items-center gap-2 text-left font-medium"
+          >
+            <AlertTriangle className="size-3.5 shrink-0" />
+            <span className="flex-1">
+              {unplaced.length} {plural(unplaced.length, "appointment", "appointments")} booked in Zoho FSM for this
+              date {plural(unplaced.length, "is", "are")} not on the board
+            </span>
+            <ChevronDown className={cn("size-3.5 shrink-0 transition-transform", !open && "-rotate-90")} />
+          </button>
+          {open && (
+            <>
+              <ul className="mt-1.5 flex flex-col gap-1">
+                {unplaced.map((a) => {
+                  const url = fsmRecordUrl("Service_Appointments", a.id);
+                  const label = [a.name, a.workOrderName].filter(Boolean).join(" · ") || "Appointment";
+                  const when =
+                    a.startAt && a.endAt
+                      ? formatRange(minutesFromDayStart(a.startAt, date), minutesFromDayStart(a.endAt, date))
+                      : null;
+                  const why =
+                    a.reason === "no_technician"
+                      ? "no technician assigned yet"
+                      : `assigned to ${a.technicians.length > 0 ? a.technicians.join(", ") : "someone"}, who ${plural(
+                          Math.max(1, a.technicians.length),
+                          "is",
+                          "are",
+                        )} not in the technician list`;
+                  return (
+                    <li key={a.id} className="flex flex-wrap items-baseline gap-x-2">
+                      {url ? (
+                        <a
+                          href={url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-foreground font-medium underline underline-offset-2"
+                        >
+                          {label}
+                        </a>
+                      ) : (
+                        <span className="text-foreground font-medium">{label}</span>
+                      )}
+                      {when && <span className="text-muted-foreground tabular-nums">{when}</span>}
+                      {a.status && <span className="text-muted-foreground">{a.status}</span>}
+                      <span className="text-foreground/80">— {why}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+              <p className="text-muted-foreground mt-1.5">
+                The board has no row to draw them on. Each appears here within about 5 minutes of a technician from
+                the technician list being assigned to it in FSM.
+              </p>
+            </>
+          )}
+        </div>
+      )}
+
+      {offDay.length > 0 && (
+        <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
+          <div className="text-warning flex items-center gap-2 font-medium">
+            <AlertTriangle className="size-3.5 shrink-0" />
+            {offDay.length} {plural(offDay.length, "entry", "entries")} on this day’s list{" "}
+            {plural(offDay.length, "is", "are")} timed on another date, so {plural(offDay.length, "it is", "they are")}{" "}
+            not drawn
+          </div>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {offDay.map((entry) => (
+              <button
+                key={entry.id}
+                type="button"
+                onClick={() => onOpenEntry(entry)}
+                className="bg-background hover:bg-muted rounded border px-1.5 py-0.5 text-left"
+              >
+                <span className="font-medium">{entryLabel(entry)}</span>{" "}
+                <span className="text-muted-foreground tabular-nums">{formatZonedDateTime(entry.start_at)}</span>
+              </button>
+            ))}
+          </div>
+          <p className="text-muted-foreground mt-1.5">
+            {editable
+              ? "An appointment from Zoho FSM that nobody has edited here is taken off this list by itself the next time the day is re-read (within about 5 minutes) and shows on its own date. Anything else stays until you open it and change its time or remove it."
+              : "They stay on this day’s list because the day is no longer a draft. Each shows on its own date."}
+          </p>
+        </div>
+      )}
+
+      {carriedOver.length > 0 && (
+        <div className="text-muted-foreground flex items-center gap-2 px-1 text-xs">
+          <ChevronsLeft className="size-3.5 shrink-0" />
+          {carriedOver.length} {plural(carriedOver.length, "job", "jobs")} from an earlier day{" "}
+          {plural(carriedOver.length, "is", "are")} still running on this one:{" "}
+          {carriedOver.map((entry) => entryLabel(entry)).join(", ")}. Drawn from the left edge; changed on the day{" "}
+          {plural(carriedOver.length, "it starts", "they start")}.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The hours a grid shows, and where the team changes its usual hours. A job
+// outside the usual hours still widens the grid for that day.
+function HoursControl({
+  title,
+  bounds,
+  canEdit,
+  onSave,
+}: {
+  title: string;
+  bounds: FittedBounds;
+  canEdit: boolean;
+  onSave: (start: string, end: string) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
+  const [saving, setSaving] = useState(false);
+  const usual = formatRange(bounds.configured.start, bounds.configured.end);
+  const shown = formatRange(bounds.start, bounds.end);
+
+  const openWith = (next: boolean) => {
+    if (next) {
+      // A shift that runs past midnight ends after 1440; show its clock time.
+      const clock = (minutes: number) => {
+        const m = ((minutes % DAY_MINUTES) + DAY_MINUTES) % DAY_MINUTES;
+        return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+      };
+      setStart(clock(bounds.configured.start));
+      setEnd(clock(bounds.configured.end));
+    }
+    setOpen(next);
+  };
+
+  const save = async () => {
+    if (!start || !end) return;
+    setSaving(true);
+    try {
+      await onSave(start, end);
+      setOpen(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn’t save the shift hours");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const label = (
+    <>
+      <Clock className="size-3.5 shrink-0" />
+      <span className="tabular-nums">{shown}</span>
+      {bounds.stretched && <span className="text-muted-foreground font-normal"> · widened for today’s jobs</span>}
+    </>
+  );
+
+  if (!canEdit) {
+    return (
+      <span
+        className="text-muted-foreground flex shrink-0 items-center gap-1.5 text-xs"
+        title={bounds.stretched ? `Usual hours ${usual}. Shown wider today so every job fits.` : `Usual hours ${usual}`}
+      >
+        {label}
+      </span>
+    );
+  }
+
+  return (
+    <Popover open={open} onOpenChange={openWith}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            "hover:bg-muted hover:text-foreground flex shrink-0 items-center gap-1.5 rounded px-1.5 py-0.5 text-xs",
+            bounds.stretched ? "text-foreground font-medium" : "text-muted-foreground",
+          )}
+          title={`Usual hours ${usual}. Click to change the hours this grid shows.`}
+        >
+          {label}
+          <ChevronDown className="size-3 shrink-0 opacity-70" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80">
+        <div className="text-sm font-medium">{title} hours</div>
+        <p className="text-muted-foreground text-xs">
+          The hours this grid shows every day, for everyone. A job outside them still widens the grid on its day.
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          <label className="flex flex-col gap-1 text-xs">
+            From
+            <TimeSelect value={start} onChange={setStart} aria-label={`${title} starts`} />
+          </label>
+          <label className="flex flex-col gap-1 text-xs">
+            To
+            <TimeSelect value={end} onChange={setEnd} aria-label={`${title} ends`} />
+          </label>
+        </div>
+        {start && end && end <= start && (
+          <p className="text-muted-foreground text-xs">
+            An end at or before the start means the shift runs past midnight.
+          </p>
+        )}
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={() => setOpen(false)} disabled={saving}>
+            Cancel
+          </Button>
+          <Button size="sm" onClick={save} disabled={saving || !start || !end}>
+            {saving ? "Saving…" : "Save for everyone"}
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 const TECH_COL_WIDTH = 224; // px — sticky first column, so it needs a fixed width
 // A press that moves less than this is a click, not a drag.
 const DRAG_THRESHOLD_PX = 4;
@@ -1408,20 +1863,17 @@ const AUTOSCROLL_MAX_PX = 18;
 const EMPTY_ENTRIES: ScheduleEntry[] = [];
 const EMPTY_TAGS: TechnicianTag[] = [];
 
-type HourCell = { start: number; end: number; leftPct: number; widthPct: number };
+// `extended`: an hour the grid only shows today because a job reaches into it.
+type HourCell = { start: number; end: number; leftPct: number; widthPct: number; extended: boolean };
 
 type SlotSelection = { startTime: string; endTime: string };
 
-type Bounds = { start: number; end: number };
+// How a job sits in one grid. Its times are minutes from the board's
+// midnight; `clippedStart` / `clippedEnd` say it runs on beyond what this
+// grid shows.
+type Placement = BarPlacement & { allDay: boolean };
 
-type Placement = {
-  startMin: number;
-  endMin: number;
-  outside: boolean;
-  allDay: boolean;
-  leftPct: number;
-  widthPct: number;
-};
+type PlacedEntry = { entry: ScheduleEntry; placed: Placement };
 
 // An appointment being moved (body) or stretched (right edge). Only snapped
 // values live here, so the board re-renders once per 30-minute step or row
@@ -1453,6 +1905,8 @@ type EntryDragCommit = {
   targetTech: string;
   startMin: number;
   endMin: number;
+  origStartMin: number;
+  origEndMin: number;
   timeChanged: boolean;
   techChanged: boolean;
 };
@@ -1464,42 +1918,48 @@ function formatDuration(minutes: number) {
   return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }
 
-// ISO timestamp for `minutes` after midnight on the entry's own day (values
-// past 1440 roll into the next day).
-function isoAtMinutes(dayIso: string, minutes: number) {
-  return isoAtZonedMinutes(zonedDateString(dayIso), minutes);
-}
-
 // Left/width percentages for a time range: never runs off the right edge and
 // keeps a clickable minimum width.
-function spanPct(startMin: number, endMin: number, bounds: Bounds, span: number) {
-  const leftPct = ((startMin - bounds.start) / span) * 100;
-  const rawWidth = ((endMin - startMin) / span) * 100;
-  const widthPct = Math.max(Math.min(rawWidth, 100 - leftPct), Math.min(6, 100 - leftPct));
-  return { leftPct, widthPct };
+function spanPct(startMin: number, endMin: number, bounds: Bounds) {
+  return spanPercent(startMin, endMin, bounds);
 }
 
-// An entry whose window does not intersect this shift at all used to be
-// positioned past 100% and disappeared off the right edge (D-01). Now it is
-// clamped to the nearest edge and flagged instead.
-function placeEntry(entry: ScheduleEntry, bounds: Bounds, span: number): Placement {
-  const startMin = timeOfDayMinutes(entry.start_at);
-  let endMin = timeOfDayMinutes(entry.end_at);
-  if (endMin <= startMin) endMin += 1440; // crosses midnight
-
-  // All-Day appointments have no time — they span the whole shift row.
+// How an entry sits in one grid, or null when none of it is in there.
+//
+// A row draws every job of its technician, in the grid of that technician's
+// shift; the grid's hours are fitted to them, so only midnight clips a bar.
+// The board used to draw only the jobs filed under the grid's own shift,
+// which is how a 05:00 - 17:00 job vanished: filed under Night by its start
+// time, and absent from the Morning grid where its technicians' rows were
+// (AP-3869).
+function placeEntry(entry: ScheduleEntry, bounds: Bounds, date: string): Placement | null {
+  const range = entryRange(entry, date);
+  // All-Day appointments have no time -- they span the whole row.
   if (entry.fsm_schedule_type === "All Day") {
-    return { startMin, endMin, outside: false, allDay: true, leftPct: 0, widthPct: 100 };
+    if (entry.carried_over) return null;
+    return {
+      ...range,
+      visibleStart: bounds.start,
+      visibleEnd: bounds.end,
+      clippedStart: false,
+      clippedEnd: false,
+      allDay: true,
+      leftPct: 0,
+      widthPct: 100,
+    };
   }
+  const placed = placeRange(range, bounds);
+  return placed ? { ...placed, allDay: false } : null;
+}
 
-  const visibleStart = Math.max(startMin, bounds.start);
-  const visibleEnd = Math.min(endMin, bounds.end);
-  const outside = visibleEnd <= visibleStart;
-  if (outside) {
-    const pinRight = startMin >= bounds.end;
-    return { startMin, endMin, outside, allDay: false, leftPct: pinRight ? 100 - 14 : 0, widthPct: 14 };
-  }
-  return { startMin, endMin, outside, allDay: false, ...spanPct(visibleStart, visibleEnd, bounds, span) };
+// A technician's bars in one grid.
+function placeRowEntries(entries: ScheduleEntry[], bounds: Bounds, date: string): PlacedEntry[] {
+  const out: PlacedEntry[] = [];
+  entries.forEach((entry) => {
+    const placed = placeEntry(entry, bounds, date);
+    if (placed) out.push({ entry, placed });
+  });
+  return out;
 }
 
 // Assign each of a technician's entries to a vertical lane so overlapping
@@ -1531,14 +1991,13 @@ function laneForRange(
   laneOf: Map<string, number>,
   laneCount: number,
   range: { startMin: number; endMin: number; ignoreId: string },
-  bounds: Bounds,
-  span: number,
+  date: string,
 ) {
   for (let lane = 0; lane < laneCount; lane += 1) {
     const clash = rowEntries.some((e) => {
       if (e.id === range.ignoreId || laneOf.get(e.id) !== lane) return false;
-      const p = placeEntry(e, bounds, span);
-      return p.startMin < range.endMin && p.endMin > range.startMin;
+      const taken = entryRange(e, date);
+      return taken.startMin < range.endMin && taken.endMin > range.startMin;
     });
     if (!clash) return lane;
   }
@@ -1561,7 +2020,12 @@ function entryText(entry: ScheduleEntry, fieldVis: FieldVis, allDay: boolean) {
 function ShiftSection({
   title,
   shift,
+  date,
+  windows,
   bounds,
+  gridEntryIds,
+  canEditHours,
+  onSaveHours,
   zoom,
   fieldVis,
   technicians,
@@ -1584,7 +2048,16 @@ function ShiftSection({
 }: {
   title: string;
   shift: ShiftType;
-  bounds: Bounds;
+  // The day on the board; every time in the grid is minutes from its midnight.
+  date: string;
+  windows: ShiftWindows;
+  // This grid's hours today: its usual hours, stretched to fit its rows' jobs.
+  bounds: FittedBounds;
+  // The jobs drawn in this grid: every job of its rows that is on this day.
+  gridEntryIds: Set<string>;
+  // The usual hours are set on the board, for everyone, by users who may edit.
+  canEditHours: boolean;
+  onSaveHours: (start: string, end: string) => Promise<void>;
   zoom: number;
   fieldVis: FieldVis;
   technicians: TechnicianReference[];
@@ -1632,11 +2105,11 @@ function ShiftSection({
     const ids = new Set<string>();
     technicians.forEach((t) =>
       (entriesByTechnician.get(t.fsm_resource_id) ?? []).forEach((e) => {
-        if (e.shift === shift) ids.add(e.id);
+        if (gridEntryIds.has(e.id)) ids.add(e.id);
       }),
     );
     return ids.size;
-  }, [technicians, entriesByTechnician, shift]);
+  }, [technicians, entriesByTechnician, gridEntryIds]);
 
   const paneRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef<HTMLDivElement>(null);
@@ -1649,6 +2122,7 @@ function ShiftSection({
   const latest = useRef({
     bounds,
     span,
+    date,
     isEditable,
     canReorder,
     technicians,
@@ -1663,6 +2137,7 @@ function ShiftSection({
     latest.current = {
       bounds,
       span,
+      date,
       isEditable,
       canReorder,
       technicians,
@@ -1688,6 +2163,7 @@ function ShiftSection({
         end,
         leftPct: ((start - bounds.start) / span) * 100,
         widthPct: ((end - start) / span) * 100,
+        extended: start < bounds.configured.start || start >= bounds.configured.end,
       });
     }
     return cells;
@@ -1703,18 +2179,6 @@ function ShiftSection({
   const MIN_HOUR_PX = 120;
   const trackMinPx = TECH_COL_WIDTH + hourCells.length * MIN_HOUR_PX * zoom;
   const laneHeight = Math.round((zoom < 1 ? 40 : 52) * (zoom < 1 ? zoom + 0.35 : 1 + (zoom - 1) * 0.3));
-
-  const outOfWindow = useMemo(() => {
-    const seen = new Map<string, ScheduleEntry>();
-    technicians.forEach((t) => {
-      (entriesByTechnician.get(t.fsm_resource_id) ?? [])
-        .filter((e) => e.shift === shift)
-        .forEach((e) => {
-          if (placeEntry(e, bounds, span).outside) seen.set(e.id, e);
-        });
-    });
-    return [...seen.values()];
-  }, [technicians, entriesByTechnician, shift, bounds, span]);
 
   // The floating label next to the cursor while dragging a bar. Positioned
   // straight on the DOM so following the pointer costs no re-render.
@@ -1764,10 +2228,14 @@ function ShiftSection({
   }, []);
 
   // FR-5: press on a bar to drag it. Sideways changes the time (30-minute
-  // snap, clamped inside the shift); up/down onto another row reassigns it;
+  // snap, clamped inside the grid); up/down onto another row reassigns it;
   // the right edge stretches the end time. A press that barely moves is a
   // click and opens the detail. On release the change is handed to the
   // dashboard, which updates the board at once and saves in the background.
+  //
+  // A bar is only dragged where it is drawn whole. One that runs on beyond
+  // this grid is moved in the grid that shows all of it, or from its detail;
+  // dragging the visible part would be guessing at the rest.
   const beginEntryDrag = useCallback(
     (
       e: ReactPointerEvent<HTMLElement>,
@@ -1778,7 +2246,12 @@ function ShiftSection({
     ) => {
       if (e.button !== 0) return;
       if (mode === "resize") e.stopPropagation(); // don't also start a move
-      const canDrag = latest.current.isEditable && !placed.allDay && !placed.outside;
+      const canDrag =
+        latest.current.isEditable &&
+        !placed.allDay &&
+        !entry.carried_over &&
+        !placed.clippedEnd &&
+        (mode === "resize" || !placed.clippedStart);
       const track = (e.currentTarget as HTMLElement).closest<HTMLElement>("[data-track]");
       const minPerPx = latest.current.span / (track?.clientWidth || 1);
       const startX = e.clientX;
@@ -1804,7 +2277,10 @@ function ShiftSection({
         const base = { entry, mode, sourceTech, origStartMin: placed.startMin, origEndMin: placed.endMin };
 
         if (mode === "resize") {
-          const endMin = Math.max(placed.startMin + TIME_STEP_MINUTES, Math.min(placed.endMin + delta, b.end));
+          const endMin = Math.max(
+            Math.max(placed.startMin, b.start) + TIME_STEP_MINUTES,
+            Math.min(placed.endMin + delta, b.end),
+          );
           return { ...base, targetTech: sourceTech, startMin: placed.startMin, endMin, blockedReason: null };
         }
 
@@ -1814,8 +2290,8 @@ function ShiftSection({
         let blockedReason: string | null = null;
         const leave = targetTech !== sourceTech ? leaveMap.get(targetTech) : undefined;
         if (leave) {
-          const s = new Date(isoAtMinutes(entry.start_at, startMin)).getTime();
-          const en = new Date(isoAtMinutes(entry.start_at, endMin)).getTime();
+          const s = new Date(isoAtZonedMinutes(latest.current.date, startMin)).getTime();
+          const en = new Date(isoAtZonedMinutes(latest.current.date, endMin)).getTime();
           if (new Date(leave.start_at).getTime() < en && new Date(leave.end_at).getTime() > s) {
             const name = techs.find((t) => t.fsm_resource_id === targetTech)?.display_name ?? "This technician";
             blockedReason = `${name} is on leave (${leave.leave_type}) at that time`;
@@ -1886,6 +2362,8 @@ function ShiftSection({
           targetTech: final.targetTech,
           startMin: final.startMin,
           endMin: final.endMin,
+          origStartMin: final.origStartMin,
+          origEndMin: final.origEndMin,
           timeChanged,
           techChanged,
         });
@@ -2087,7 +2565,7 @@ function ShiftSection({
     ? entryDrag.startMin !== entryDrag.origStartMin || entryDrag.endMin !== entryDrag.origEndMin
     : false;
   const dragTechChanged = entryDrag ? entryDrag.targetTech !== entryDrag.sourceTech : false;
-  const dragBand = entryDrag ? spanPct(entryDrag.startMin, entryDrag.endMin, bounds, span) : null;
+  const dragBand = entryDrag ? spanPct(entryDrag.startMin, entryDrag.endMin, bounds) : null;
   const rowDragTech = rowDrag ? (technicians.find((t) => t.fsm_resource_id === rowDrag.techId) ?? null) : null;
   const showInsertLine =
     rowDrag !== null && rowDrag.insertIndex !== rowDrag.fromIndex && rowDrag.insertIndex !== rowDrag.fromIndex + 1;
@@ -2125,25 +2603,9 @@ function ShiftSection({
                 .join(" · ")}
             </span>
           )}
-          <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
-            {formatRange(bounds.start, bounds.end)}
-          </span>
+          <HoursControl title={title} bounds={bounds} canEdit={canEditHours} onSave={onSaveHours} />
         </div>
       </div>
-
-      {!collapsed && outOfWindow.length > 0 && (
-        <div className="flex items-start gap-2 border-b bg-warning/10 px-3 py-2 text-xs text-warning">
-          <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-          <span>
-            {outOfWindow.length} entr{outOfWindow.length === 1 ? "y is" : "ies are"} outside the{" "}
-            {title.toLowerCase()} window ({formatRange(bounds.start, bounds.end)}):{" "}
-            {outOfWindow
-              .map((e) => `${entryLabel(e)} at ${formatRange(timeOfDayMinutes(e.start_at), timeOfDayMinutes(e.end_at))}`)
-              .join("; ")}
-            . They are pinned to the edge below — open one to correct its time or move it to the other shift.
-          </span>
-        </div>
-      )}
 
       {/* Scroll pane: the hour row is frozen at the top (Excel-style) and the
           technician column is frozen at the left, both inside this pane. */}
@@ -2171,8 +2633,13 @@ function ShiftSection({
                   // inset-y-0 + items-center so the hour sits on the same
                   // baseline as the "Technician" label in the frozen column;
                   // pinned to top-0 it rode ~9px high above it.
-                  className="text-muted-foreground absolute inset-y-0 flex items-center border-l px-1.5 text-[11px] tabular-nums"
+                  className={cn(
+                    "text-muted-foreground absolute inset-y-0 flex items-center border-l px-1.5 text-[11px] tabular-nums",
+                    // An hour outside the shift's usual window, shown for today's jobs.
+                    cell.extended && "bg-muted/70 italic",
+                  )}
                   style={{ left: `${cell.leftPct}%`, width: `${cell.widthPct}%` }}
+                  title={cell.extended ? `Outside the usual ${title.toLowerCase()} hours` : undefined}
                 >
                   {formatHourLabel(cell.start)}
                 </div>
@@ -2195,7 +2662,9 @@ function ShiftSection({
 
           {technicians.length === 0 ? (
             <div className="text-muted-foreground p-4 text-center text-sm">
-              No technicians match the current filters.
+              {pickTechnicians.length === 0
+                ? `No technician is on the ${title.toLowerCase()}. A technician's shift is set in Technicians & Leave.`
+                : "No technicians match the current filters."}
             </div>
           ) : (
             <div ref={rowsRef} className="relative">
@@ -2209,14 +2678,14 @@ function ShiftSection({
                     technician={technician}
                     entries={entriesByTechnician.get(id) ?? EMPTY_ENTRIES}
                     shift={shift}
-                    title={title}
+                    date={date}
+                    windows={windows}
                     leave={leaveByTechnician.get(id)}
                     tags={tagsByTechnician[id] ?? EMPTY_TAGS}
                     roleColor={technician.role_id ? (roleColors.get(technician.role_id) ?? null) : null}
                     fieldVis={fieldVis}
                     hourCells={hourCells}
                     bounds={bounds}
-                    span={span}
                     laneHeight={laneHeight}
                     isEditable={isEditable}
                     canEditRoles={canEditRoles}
@@ -2339,15 +2808,16 @@ type TechnicianRowProps = {
   technician: TechnicianReference;
   // All of this technician's entries for the day (any shift) — a stable array.
   entries: ScheduleEntry[];
+  // The grid this row is in.
   shift: ShiftType;
-  title: string;
+  date: string;
+  windows: ShiftWindows;
   leave: LeaveRecord | undefined;
   tags: TechnicianTag[];
   roleColor: string | null;
   fieldVis: FieldVis;
   hourCells: HourCell[];
   bounds: Bounds;
-  span: number;
   laneHeight: number;
   isEditable: boolean;
   canEditRoles: boolean;
@@ -2380,14 +2850,14 @@ const TechnicianRow = memo(function TechnicianRow({
   technician,
   entries,
   shift,
-  title,
+  date,
+  windows,
   leave,
   tags,
   roleColor,
   fieldVis,
   hourCells,
   bounds,
-  span,
   laneHeight,
   isEditable,
   canEditRoles,
@@ -2405,7 +2875,14 @@ const TechnicianRow = memo(function TechnicianRow({
   onRoleChange,
 }: TechnicianRowProps) {
   const id = technician.fsm_resource_id;
-  const rowEntries = useMemo(() => entries.filter((e) => e.shift === shift), [entries, shift]);
+  // Every job of theirs that day, in full (the grid's hours are fitted to them).
+  const technicianShift = technician.shift;
+  const placements = useMemo(
+    () => placeRowEntries(entriesForGrid(entries, technicianShift, shift, date, windows), bounds, date),
+    [entries, technicianShift, shift, bounds, date, windows],
+  );
+  const rowEntries = useMemo(() => placements.map((p) => p.entry), [placements]);
+  const dayEnd = dayLimits(windows).end;
 
   // L-2: flag entries that overlap another appointment for the same
   // technician (allowed, but shown so it's never silent).
@@ -2439,8 +2916,7 @@ const TechnicianRow = memo(function TechnicianRow({
         laneOf,
         laneCount,
         { startMin: ghost.startMin, endMin: ghost.endMin, ignoreId: ghost.entry.id },
-        bounds,
-        span,
+        date,
       )
     : -1;
   const rowHeight = Math.max(laneCount, ghostLane + 1) * laneHeight + 6;
@@ -2453,7 +2929,7 @@ const TechnicianRow = memo(function TechnicianRow({
 
   const ghostView = ghost
     ? {
-        ...spanPct(ghost.startMin, ghost.endMin, bounds, span),
+        ...spanPct(ghost.startMin, ghost.endMin, bounds),
         top: ghostLane * laneHeight + 2,
         text: entryText(ghost.entry, fieldVis, false).primaryText,
         freeText: ghost.entry.entry_type === "free_text",
@@ -2597,9 +3073,11 @@ const TechnicianRow = memo(function TechnicianRow({
                 endTime: minutesToHhmm(cell.end),
               })
             }
-            className={`border-border/40 absolute top-0 bottom-0 border-l ${
-              isEditable && !leave ? "hover:bg-primary/5 cursor-pointer" : "cursor-default"
-            }`}
+            className={cn(
+              "border-border/40 absolute top-0 bottom-0 border-l",
+              isEditable && !leave ? "hover:bg-primary/5 cursor-pointer" : "cursor-default",
+              cell.extended && "bg-muted/40",
+            )}
             style={{ left: `${cell.leftPct}%`, width: `${cell.widthPct}%` }}
             title={
               leave
@@ -2628,15 +3106,27 @@ const TechnicianRow = memo(function TechnicianRow({
           />
         )}
 
-        {rowEntries.map((entry) => {
-          const placed = placeEntry(entry, bounds, span);
-          const { startMin, endMin, outside, allDay } = placed;
+        {placements.map(({ entry, placed }) => {
+          const { startMin, endMin, allDay, clippedStart, clippedEnd } = placed;
+          const carried = Boolean(entry.carried_over);
           const beingDragged = drag !== null && drag.entry.id === entry.id && drag.sourceTech === id;
           const resizing = beingDragged && drag.mode === "resize";
           const movingAway = beingDragged && drag.mode === "move";
           const shownEnd = resizing ? drag.endMin : endMin;
-          const { leftPct, widthPct } = resizing ? spanPct(startMin, shownEnd, bounds, span) : placed;
+          const { leftPct, widthPct } = resizing ? spanPct(placed.visibleStart, shownEnd, bounds) : placed;
           const isFreeText = entry.entry_type === "free_text";
+
+          // The grid is fitted to its rows' jobs, so only midnight cuts a bar.
+          const runsOn: string[] = [];
+          if (carried) {
+            runsOn.push(
+              `Started ${formatZonedDate(entry.start_at, { weekday: "short", day: "numeric", month: "short" })} and runs on into this day. Open it to go to that day`,
+            );
+          } else if (startMin < 0) {
+            runsOn.push("Starts the day before");
+          }
+          if (endMin > dayEnd) runsOn.push("Runs on past midnight into the next day");
+          const runsOnNote = runsOn.length > 0 ? ` · ${runsOn.join(" · ")}` : "";
           const conflictsWithLeave = leave ? entryOverlapsLeave(entry, leave) : false;
           const label = entryLabel(entry);
           const timeLabel = allDay ? "All Day" : formatRange(startMin, shownEnd);
@@ -2662,27 +3152,22 @@ const TechnicianRow = memo(function TechnicianRow({
               ? "border border-dashed border-border bg-ink/40 text-white dark:bg-ink/25"
               : APPOINTMENT_STATE_STYLES[state ?? "scheduled"].bar;
 
-          // Rings only mark real, actionable states: an out-of-window time, or
-          // a leave conflict.
-          let ring = "";
-          if (outside) ring = "ring-2 ring-warning ring-offset-1";
-          else if (conflictsWithLeave) ring = "ring-2 ring-destructive";
+          // Rings only mark real, actionable states: a leave conflict.
+          const ring = conflictsWithLeave ? "ring-2 ring-destructive" : "";
 
           const tooltip = syncFailed
             ? `Sync failed: ${entry.last_sync_error || "Zoho FSM rejected the change"}. Open to retry.`
             : allDay
               ? `${stateLabel ? `${stateLabel} · ` : ""}${label} — All Day`
-              : outside
-                ? `Outside the ${title} window — scheduled ${timeLabel}. Open to change the time or move it to the other shift.`
-                : conflictsWithLeave
-                  ? `Conflict: ${technician.display_name} is on leave during this appointment (${timeLabel})`
-                  : `${stateLabel ? `${stateLabel} · ` : ""}${label} — ${timeLabel}${
-                      !isFreeText && entry.fsm_appointment_id && entry.sync_status === "synced"
-                        ? " · Synced to Zoho FSM"
-                        : entry.entry_type === "new_appointment" && !entry.fsm_appointment_id
-                          ? " · Will be created in FSM on approval"
-                          : ""
-                    }${overlaps ? " · Overlaps another appointment for this technician" : ""}${entry.origin === "fsm" ? " · Booked in Zoho FSM" : ""}`;
+              : conflictsWithLeave
+                ? `Conflict: ${technician.display_name} is on leave during this appointment (${timeLabel})${runsOnNote}`
+                : `${stateLabel ? `${stateLabel} · ` : ""}${label} — ${timeLabel}${
+                    !isFreeText && entry.fsm_appointment_id && entry.sync_status === "synced"
+                      ? " · Synced to Zoho FSM"
+                      : entry.entry_type === "new_appointment" && !entry.fsm_appointment_id
+                        ? " · Will be created in FSM on approval"
+                        : ""
+                  }${overlaps ? " · Overlaps another appointment for this technician" : ""}${entry.origin === "fsm" ? " · Booked in Zoho FSM" : ""}${runsOnNote}`;
 
           // N1: sync-status icon.
           const synced = !isFreeText && Boolean(entry.fsm_appointment_id) && entry.sync_status === "synced";
@@ -2693,7 +3178,9 @@ const TechnicianRow = memo(function TechnicianRow({
           const lane = laneOf.get(entry.id) ?? 0;
           const laneTop = lane * laneHeight + 2;
           const laneBoxHeight = laneHeight - 4;
-          const draggable = isEditable && !allDay && !outside;
+          // Moved only where it is drawn whole; stretched wherever its end is.
+          const resizable = isEditable && !allDay && !carried && !clippedEnd;
+          const draggable = resizable && !clippedStart;
           const { primaryText, secondaryText } = entryText(entry, fieldVis, allDay);
 
           return (
@@ -2715,6 +3202,9 @@ const TechnicianRow = memo(function TechnicianRow({
                     ? "ring-primary z-20 shadow-md ring-2 ring-offset-1"
                     : cn("z-10", ring),
                 draggable ? "cursor-grab hover:shadow-md hover:brightness-110 active:cursor-grabbing" : "cursor-pointer",
+                // A square, open edge where the job runs on beyond this grid.
+                clippedStart && "rounded-l-none border-l-2 border-dashed border-l-white/80",
+                clippedEnd && "rounded-r-none border-r-2 border-dashed border-r-white/80 pr-5",
               )}
               style={{
                 left: `${leftPct}%`,
@@ -2728,7 +3218,13 @@ const TechnicianRow = memo(function TechnicianRow({
               title={beingDragged ? undefined : tooltip}
             >
               <span className="flex items-center gap-1 truncate text-[11px] leading-tight font-medium">
-                {(outside || syncFailed) && <AlertTriangle className="size-3.5 shrink-0" />}
+                {clippedStart && (
+                  <ChevronsLeft
+                    className="-ml-1 size-3.5 shrink-0"
+                    aria-label={`Started earlier, at ${clockLabel(startMin)}`}
+                  />
+                )}
+                {syncFailed && <AlertTriangle className="size-3.5 shrink-0" />}
                 {synced && <CircleCheck className="size-3.5 shrink-0" aria-label="Synced to FSM" />}
                 {pendingCreate && <Clock className="size-3.5 shrink-0" aria-label="Pending creation in FSM" />}
                 {overlaps && <Layers className="size-3.5 shrink-0" aria-label="Overlaps another appointment" />}
@@ -2737,8 +3233,16 @@ const TechnicianRow = memo(function TechnicianRow({
               {secondaryText && (
                 <span className="truncate text-[10px] leading-tight opacity-85">{secondaryText}</span>
               )}
+              {clippedEnd && (
+                <span
+                  className="absolute inset-y-0 right-0 flex w-5 items-center justify-center"
+                  aria-label={`Runs on until ${clockLabel(endMin)}`}
+                >
+                  <ChevronsRight className="size-3.5" />
+                </span>
+              )}
               {/* Right edge: drag to change how long the appointment runs. */}
-              {draggable && !movingAway && (
+              {resizable && !movingAway && (
                 <span
                   onPointerDown={(e) => onBeginEntryDrag(e, entry, placed, id, "resize")}
                   className={cn(

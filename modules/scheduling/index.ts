@@ -17,6 +17,7 @@ export type {
   ScheduleVersionStatus,
   DayScheduleResponse,
   FsmImportSummary,
+  FsmUnplacedAppointment,
   CreateEntryInput,
   UpdateEntryInput,
   ShiftType,
