@@ -13,6 +13,7 @@ import type {
   AmcTotals,
   FrequencyRow,
 } from "./amc-types";
+import { contractTermMonths } from "./amc-date-utils";
 import { amountToWordsAed } from "./utils/amount-to-words";
 import { getAmcSettingsDefaults, servicesForProperty } from "./amc-settings";
 import type { AmcSettings } from "./amc-settings";
@@ -45,6 +46,10 @@ export function grandTotalOf(finalPriceExclVat: number): number {
 */
 export function computeServiceRowPrice(row: AmcServiceRow): number {
   if (!row.included) return 0;
+  // Included at no charge: no base price is asked for, so there is
+  // nothing to multiply. Kept here rather than at each call site so the
+  // table, the totals and the documents cannot disagree about it.
+  if (row.free) return 0;
   return (row.basePrice ?? 0) * row.units * row.frequency;
 }
 
@@ -58,13 +63,22 @@ export function calculateAmcTotals(data: AmcFormData): AmcTotals {
   const finalPrice = subtotal - discountAmount;
   const vatAmount = finalPrice * VAT_RATE;
   const grandTotal = finalPrice + vatAmount;
-  const monthlyPrice = finalPrice / 12;
+  /*
+    Divided by the term, not by twelve.
+
+    A six-month contract quoted a monthly figure half what the client
+    actually pays, because the fee is for the term and the divisor was
+    hard-coded to a year. The dates decide it.
+  */
+  const termMonths = contractTermMonths(data.startDate, data.endDate);
+  const monthlyPrice = finalPrice / termMonths;
 
   return {
     subtotal,
     discountPercent,
     discountAmount,
     finalPrice,
+    termMonths,
     monthlyPrice,
     annualSubtotal: finalPrice,
     vatAmount,
@@ -122,6 +136,14 @@ function buildFrequencyRows(data: AmcFormData, settings: AmcSettings): Frequency
         serviceId: service.id,
         scope: service.scope,
         units: row.units,
+        /*
+          A hotline has no units, and an hourly handyman allowance is
+          measured in hours rather than in things. The services that do
+          have a unit count are exactly the ones that print a scope of
+          work of their own: the AC, the pumps, the tanks, the ducts.
+        */
+        hasUnits:
+          service.hasScopeSection === true && service.frequencyType !== "handyman",
         frequency: formatFrequencyForPdf(service, row.frequency),
         price: computeServiceRowPrice(row),
         reference: service.reference,
@@ -184,9 +206,10 @@ export function syncServiceRowsForUnitType(
     }
     return {
       serviceId: service.id,
-      included: false,
+      included: service.includedFree === true,
       units: 1,
       frequency: getDefaultFrequencyForService(service.id),
+      free: service.includedFree === true,
       basePrice: undefined,
     };
   }).filter((row) => allowedIds.has(row.serviceId));

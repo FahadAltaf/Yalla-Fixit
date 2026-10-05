@@ -1,4 +1,10 @@
-import type { AmcFormData, AmcService, AmcServiceRow } from "./amc-types";
+import type {
+  AmcFormData,
+  AmcService,
+  AmcServiceRow,
+  PropertyCategory,
+  UnitType,
+} from "./amc-types";
 import { getDefaultEndDateFromStart } from "./amc-date-utils";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { ActionType, ResourceType } from "@/types/types";
@@ -13,6 +19,13 @@ export const AMC_SERVICES: AmcService[] = [
     scope: "24/7 Technical Support Hotline",
     reference: "Clause 1.1",
     frequencyType: "covered",
+    /*
+      No unit rate, and in every contract (Behrouz, Oct 2026). It is the
+      number on the front of the brochure, not a line item: the form used
+      to refuse to submit until somebody typed a price for it, and the
+      only honest price was 0.
+    */
+    includedFree: true,
     villaOnly: false,
     hasScopeSection: false,
   },
@@ -178,6 +191,33 @@ export const AMC_PROVIDER = {
   allocates it inside the INSERT instead.
 */
 
+/*
+  Which unit types belong to each property category (Behrouz, Oct 2026).
+
+  An office is commercial and a villa is not, but the picker offered all
+  three whatever the category -- and the pair prints as the document's own
+  banner, so "RESIDENTIAL - OFFICE" was one stray click from the client.
+
+  Kept here rather than in the step because the same pairing decides which
+  services are offered, and two lists of unit types would drift.
+*/
+export const UNIT_TYPES_BY_CATEGORY = {
+  residential: [
+    { value: "villa", label: "Villa" },
+    { value: "apartment", label: "Apartment" },
+  ],
+  commercial: [{ value: "office", label: "Office" }],
+} as const satisfies Record<
+  PropertyCategory,
+  ReadonlyArray<{ value: UnitType; label: string }>
+>;
+
+export function unitTypesForCategory(
+  category: PropertyCategory,
+): ReadonlyArray<{ value: UnitType; label: string }> {
+  return UNIT_TYPES_BY_CATEGORY[category] ?? UNIT_TYPES_BY_CATEGORY.residential;
+}
+
 export function getServicesForUnitType(unitType: string) {
   return AMC_SERVICES.filter(
     (service) => !service.villaOnly || unitType === "villa",
@@ -208,9 +248,15 @@ export function buildDefaultServiceRows(
 ): AmcServiceRow[] {
   return getServicesForUnitType(unitType).map((service) => ({
     serviceId: service.id,
-    included: false,
+    /*
+      A service that is free and in every contract starts ticked. The
+      24/7 hotline is the only one today; ticking it by hand on every
+      proposal was a step with no decision in it.
+    */
+    included: service.includedFree === true,
     units: 1,
     frequency: getDefaultFrequencyForService(service.id),
+    free: service.includedFree === true,
     // FR2.4: entered per proposal. Undefined rather than 0 -- the team
     // has to type a figure, and "free" has to be typed as 0 on purpose
     // (FR2.12), which an implicit 0 would hide.

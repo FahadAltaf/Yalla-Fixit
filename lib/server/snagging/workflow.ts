@@ -85,18 +85,23 @@ export function assertTransition(from: SnaggingTaskStatus, to: SnaggingTaskStatu
 /**
  * FR-3.08 / FR-6.01 — the manager gate on the approval chain.
  *
- * Review, approval, rejection and delivery are reserved for the job's
- * designated approval manager. Holding the `approve` permission is not
- * enough on its own, because the BRD makes the approval manager a named,
- * mandatory role per job ("no bypass"). Admins are the deliberate
- * operational override.
+ * Approval, rejection and delivery are reserved for the ONE person named
+ * as this job's approval manager. The BRD makes that a named, mandatory
+ * role per job ("no bypass"), and a bypass is what the admin override
+ * here had become: an administrator on no part of the job could sign off
+ * a report that reaches a client under the named manager's name, and the
+ * trail then recorded an approval without recording that the person
+ * accountable for it never made one.
+ *
+ * So there is no override. Who signs a job off is answered on the job,
+ * in Setup, by whoever assigns it — not by a role somebody happens to
+ * hold. An admin who should decide a particular job is named on it like
+ * anybody else: one dropdown, and it leaves a record.
  */
 export function isDesignatedApprovalManager(
   actorId: string,
   approvalManagerId: string | null | undefined,
-  isAdmin: boolean,
 ): boolean {
-  if (isAdmin) return true;
   return approvalManagerId != null && actorId === approvalManagerId;
 }
 
@@ -115,21 +120,24 @@ export function isReviewComplete(reviewedAt: string | null | undefined): boolean
 /**
  * Who may act as the reviewer on a job.
  *
- * The named reviewer, the named approval manager (a manager reviewing their
- * own queue is the smaller team's normal case, and they are already trusted
- * with the decision), or an admin. An inspector never qualifies -- they hold
- * no approve permission, which every review route checks first.
+ * The named reviewer and nobody else — or, where no reviewer is named,
+ * the approval manager, who then checks the evidence themselves before
+ * deciding on it. That fallback is what keeps a job with no reviewer
+ * moving rather than waiting on an assignment nobody made.
+ *
+ * Note what it is not. Where a reviewer IS named, the approval manager
+ * does not qualify: the two steps exist so that one person checks and a
+ * different person decides, and a manager who could do both halves of
+ * that is the single signature the chain was built to prevent. Nor is
+ * there an admin override, for the reason on
+ * isDesignatedApprovalManager above.
  */
 export function isDesignatedReviewer(
   actorId: string,
   reviewerId: string | null | undefined,
   approvalManagerId: string | null | undefined,
-  isAdmin: boolean,
 ): boolean {
-  if (isAdmin) return true;
   if (reviewerId) return actorId === reviewerId;
-  // Nobody named: the approval manager owns their own queue by default, so
-  // an unassigned job is never stuck waiting for an assignment nobody made.
   return approvalManagerId != null && actorId === approvalManagerId;
 }
 

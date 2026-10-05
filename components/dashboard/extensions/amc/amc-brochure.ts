@@ -90,7 +90,13 @@ export type AmcBrochure = {
     apart rather than joined into one line, because the page prints them
     as their own columns -- the contract's scope table, without a price.
   */
-  services: { label: string; units: number; frequency: string }[];
+  services: {
+    label: string;
+    units: number;
+    /** False leaves the UNITS cell empty; see FrequencyRow.hasUnits. */
+    hasUnits: boolean;
+    frequency: string;
+  }[];
 };
 
 const lines = (text: string) =>
@@ -174,6 +180,7 @@ export function buildAmcBrochure(data: AmcComputedData): AmcBrochure {
     services: buildProposalServiceRows(formData, frequencyRows, data.settings.services).map((row) => ({
       label: row.service,
       units: row.units,
+      hasUnits: row.hasUnits,
       frequency: row.frequency,
     })),
   };

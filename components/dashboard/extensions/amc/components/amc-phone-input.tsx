@@ -35,11 +35,29 @@ export function AmcPhoneInput({
   onChange: (value: string) => void;
   disabled?: boolean;
 }) {
+  const current = toInternationalPhone(value);
   return (
     <PhoneInput
       id={id}
-      value={toInternationalPhone(value)}
-      onChange={onChange}
+      value={current}
+      /*
+        A change the user actually made, not the control settling in.
+
+        react-international-phone normalises an empty box to the chosen
+        country's dial code when it mounts, and reports that through
+        onChange. React Hook Form counts it as the field being edited,
+        validates on the spot and finds it empty -- so a brand-new
+        proposal opened with "Customer phone is required" in red under two
+        fields nobody had so much as clicked.
+
+        Comparing against what we already hold drops exactly that: the
+        mount call hands back the same value it was given, and every real
+        keystroke differs from it.
+      */
+      onChange={(next) => {
+        if (next === current) return;
+        onChange(next);
+      }}
       disabled={disabled}
     />
   );

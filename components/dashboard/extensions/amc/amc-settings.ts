@@ -174,6 +174,29 @@ export const amcServiceSchema = z.object({
 
 export type AmcServiceDefinition = z.infer<typeof amcServiceSchema>;
 
+/**
+ * An account manager the team can be put on a proposal (Jonathan, Oct
+ * 2026).
+ *
+ * Clause 1.1 names one or two of them with a direct number, and both were
+ * typed out per proposal -- so the same colleague reached different
+ * clients under three spellings and, twice, under a number that was no
+ * longer theirs. They are kept here and picked from a list; the number
+ * comes with the name.
+ *
+ * Typing a name is still allowed on the proposal itself, for somebody who
+ * is not on the list yet: this fills the common case rather than closing
+ * the uncommon one.
+ */
+export const amcAccountManagerEntrySchema = z.object({
+  name: z.string(),
+  phone: z.string(),
+});
+
+export type AmcAccountManagerEntry = z.infer<
+  typeof amcAccountManagerEntrySchema
+>;
+
 export const amcSettingsSchema = z.object({
   /* FR6.3 — standard values. These are the last two §8.2 placeholders:
      they print on every contract and are the same on all of them. */
@@ -249,6 +272,8 @@ export const amcSettingsSchema = z.object({
   approval: z.object({
     approvers: z.array(z.string()),
   }),
+  /* The account managers a proposal can name; see the schema above. */
+  accountManagers: z.array(amcAccountManagerEntrySchema).default([]),
 });
 
 export type AmcSettings = z.infer<typeof amcSettingsSchema>;
@@ -271,6 +296,8 @@ export const amcSettingsOverridesSchema = z
     serviceScopes: z.record(z.string(), z.string()).optional(),
     brochure: amcBrochureSchema.partial().optional(),
     approval: amcSettingsSchema.shape.approval.partial().optional(),
+    /* The whole list, for the same reason the clauses are. */
+    accountManagers: z.array(amcAccountManagerEntrySchema).optional(),
   })
   .default({});
 
@@ -443,7 +470,7 @@ export function getAmcSettingsDefaults(): AmcSettings {
       bankDetails: joinLines(BANK_DETAILS.map((row) => `${row.label}: ${row.value}`)),
       invoiceTerms: joinLines(
         "All invoices should be settled within 7 working days from the date of submittal, via email or hardcopy. Failure of payments will be notified and may be grounds for temporary suspension of services or termination of contract.",
-        "The term of this contract shall commence for 1 year as stated in the contract details.",
+        "The term of this contract shall commence for {{term}} as stated in the contract details.",
       ),
       termination: joinLines(CLAUSE_8_TERMINATION.paragraphs),
       contractConfirmation: CLAUSE_8_TERMINATION.confirmation.replace(/\.?$/, "."),
@@ -470,6 +497,9 @@ export function getAmcSettingsDefaults(): AmcSettings {
     serviceScopes,
     brochure: getAmcBrochureDefaults(),
     approval: { approvers: [] },
+    /* Nobody until an admin adds them; the proposal still takes a typed
+       name, so an empty list changes nothing about how it works today. */
+    accountManagers: [],
     /* Set below, from the clauses just built -- one copy of the wording. */
     clauseList: [],
   };
@@ -591,6 +621,8 @@ export function mergeAmcSettings(
     approval: {
       approvers: overrides.approval?.approvers ?? defaults.approval.approvers,
     },
+    accountManagers:
+      overrides.accountManagers ?? defaults.accountManagers,
   };
 }
 

@@ -27,11 +27,12 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
-import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
+import { hasResourceAction } from "@/lib/role-permissions";
 import { snaggingService } from "@/modules/snagging";
 import { ActionType, ResourceType, type SnaggingTask } from "@/types/types";
 
 import { AdditionalVisitDialog } from "./additional-visit-dialog";
+import { SNAGGING_APPROVALS_CHANGED } from "./approval-notice";
 import { DesnagQuotationDialog } from "./desnag-quotation-dialog";
 import { OpenRoundDialog } from "./open-round-dialog";
 import { RejectInspectionDialog } from "./reject-inspection-dialog";
@@ -81,11 +82,6 @@ export function InspectionHeaderCard({
   const [rejectOpen, setRejectOpen] = useState(false);
   const [visitOpen, setVisitOpen] = useState(false);
 
-  const canApprove = hasResourceAction(
-    userProfile,
-    ResourceType.SNAGGING,
-    ActionType.APPROVE,
-  );
   const canCreate = hasResourceAction(
     userProfile,
     ResourceType.SNAGGING,
@@ -93,53 +89,72 @@ export function InspectionHeaderCard({
   );
 
   /*
-    Who may actually decide this inspection.
+    Who may act on this inspection: the two people named on it.
 
-    All four decision endpoints — review, approve, reject, deliver —
-    refuse anyone who is not this job's named approval manager, admins
-    aside: "the `approve` permission alone is not enough" (FR-6.01).
-    The buttons used to follow only the permission, so a colleague with
-    approve rights on other jobs saw Approve here, pressed it, and got a
-    403 that read like a fault rather than a rule. They now apply the
-    same test the server does, and the card names who it waits on.
+    FR-6.01 — the reviewer checks the evidence, the approval manager
+    decides. Both are named per job, on Setup, and neither a permission
+    nor the admin role stands in for being named. That is a change:
+    these gates used to admit anyone holding Snagging's `approve` grant
+    plus every admin, so an administrator who was on no part of a job
+    could sign off a report that goes to a client under the named
+    manager's name. The server now refuses exactly what is refused here
+    — the same two tests, in the same order — so a missing button is
+    always "not your step" rather than a 403 waiting to happen.
   */
   const isApprovalManager = Boolean(
     task.approval_manager_id && userProfile?.id === task.approval_manager_id,
   );
   /*
-    FR-6.01 — two roles, two gates.
-
-    The reviewer checks the evidence and hands it on; the approval manager
-    decides. Where no reviewer is named the manager owns their own queue, so
-    an unassigned job is never stuck. These mirror `isDesignatedReviewer` and
-    `isDesignatedApprovalManager` on the server exactly — the buttons must
-    not offer an action the API will refuse.
+    Where no reviewer is named the approval manager reviews it themselves,
+    which is what keeps a job with nobody on that dropdown moving. Where a
+    reviewer IS named the manager is not a stand-in for them: one person
+    checks and a different person decides, or the second signature means
+    nothing. Mirrors `isDesignatedReviewer` on the server exactly.
   */
   const isReviewer = task.reviewer_id
     ? userProfile?.id === task.reviewer_id
     : isApprovalManager;
-  const canReview =
-    canApprove && (isAdminUser(userProfile) || isReviewer || isApprovalManager);
-  const canDecide =
-    canApprove && (isAdminUser(userProfile) || isApprovalManager);
+  const canReview = isReviewer;
+  const canDecide = isApprovalManager;
   const managerName = task.manager?.full_name ?? task.manager?.email ?? null;
   /*
-    Whoever is reviewing is also the one who will decide.
-
-    canReview admits the approval manager, and on a small team that is
-    the same person as the reviewer — so the middle step was handing the
-    job to yourself and then being shown a button to approve what you had
-    just handed over. Where that is true the hand-off happens on the same
-    click as starting, and its button is not offered at all.
+    One person wearing both hats: no reviewer is named, so the approval
+    manager checks the work and then decides on it. For them the review
+    is finished on the same click that starts it, and Approve and Send
+    back appear straight away — handing a job to yourself and then being
+    shown a button to accept what you just handed over is a step that
+    exists only in the data model.
 
     Where the reviewer and the manager are DIFFERENT people the two steps
     stay, because the gap between them is the review (FR-6.01).
   */
-  const selfReview = canDecide;
+  const selfReview = isReviewer && isApprovalManager;
+  /*
+    Two ways to end up doing both halves, and they are not the same
+    sentence. Either the job names nobody to review it and the manager
+    picks that up by default, or the job names the manager themselves in
+    both seats. Telling the second person "no reviewer is named" is
+    simply false -- they are looking at their own name in the Reviewer
+    field on the next tab.
+  */
+  const namedToBoth = selfReview && Boolean(task.reviewer_id);
   const reviewerName = task.reviewer?.full_name ?? task.reviewer?.email ?? null;
   // The reviewer's hand-off. Until this is set the server refuses both
   // approve and reject, so neither button is offered.
   const reviewComplete = Boolean(task.reviewed_at);
+
+  const unitLabel = task.property?.unit_label ?? "this inspection";
+
+  /*
+    After a decision: re-read the job, then tell the module's "Waiting on
+    you" notice to re-read its queue. Without the second half the job
+    leaves this card and stays on the notice until the next poll, so the
+    reviewer who has just cleared it is still being told to do it.
+  */
+  const decided = async () => {
+    await onChanged();
+    window.dispatchEvent(new Event(SNAGGING_APPROVALS_CHANGED));
+  };
 
   const snags = useMemo(() => task.snags ?? [], [task]);
   const areas = task.areas ?? [];
@@ -217,10 +232,14 @@ export function InspectionHeaderCard({
   async function completeReview() {
     // Hands the inspection on; the reviewer cannot take it back after.
     const ok = await confirm({
-      title: "Complete the review?",
-      description: managerName
-        ? `${managerName} will be asked to approve or send back ${task.property?.unit_label ?? "this inspection"}.`
-        : "The approval manager will be asked to approve it or send it back.",
+      title: selfReview ? "Finish your review?" : "Complete your review?",
+      description: namedToBoth
+        ? `You are both the reviewer and the approval manager on ${unitLabel}. Approve and Send back appear once your review is done.`
+        : selfReview
+          ? `No reviewer is named on ${unitLabel}, so you review it as its approval manager. Approve and Send back appear once this is done.`
+          : managerName
+            ? `You are the reviewer on ${unitLabel}. Completing your review hands it to ${managerName} to approve or send back.`
+            : `You are the reviewer on ${unitLabel}. Completing your review hands it to its approval manager to approve or send back.`,
       confirmText: "Complete review",
       /*
         The dialog does the work and stays open until the page shows the
@@ -233,42 +252,7 @@ export function InspectionHeaderCard({
         setWorking(true);
         try {
           await snaggingService.completeReview(task.id);
-          await onChanged();
-        } finally {
-          setWorking(false);
-        }
-      },
-    });
-    if (!ok) return;
-
-    toast.success(
-      managerName
-        ? `Review complete. ${managerName} can now approve or send it back.`
-        : "Review complete. The approval manager can now decide.",
-    );
-  }
-
-  async function startReview() {
-    // Taking the inspection on names you as its reviewer.
-    const ok = await confirm({
-      title: "Start reviewing this inspection?",
-      description: selfReview
-        ? `You'll review ${task.property?.unit_label ?? "this inspection"} and can then approve it or send it back.`
-        : `You'll be recorded as the reviewer of ${task.property?.unit_label ?? "this inspection"}.${managerName ? ` When you're done it goes to ${managerName} to approve.` : ""}`,
-      confirmText: "Start review",
-      /*
-        Open, and undismissable, until the page shows Approve and Send
-        back. The dialog used to close the moment Confirm was pressed and
-        the card caught up a second or two later, so the click appeared to
-        do nothing at all.
-      */
-      action: async () => {
-        setWorking(true);
-        try {
-          // Reviewing a job you will also decide: started and completed in
-          // one request, so Approve and Send back appear straight away.
-          await snaggingService.reviewTask(task.id, undefined, { complete: selfReview });
-          await onChanged();
+          await decided();
         } finally {
           setWorking(false);
         }
@@ -278,10 +262,61 @@ export function InspectionHeaderCard({
 
     toast.success(
       selfReview
-        ? "Review started. Approve or send it back when you're done."
+        ? "Review complete. You can approve it or send it back now."
         : managerName
-          ? `Review started. Hand it to ${managerName} when you're done.`
-          : "Review started. Hand it on when you're done.",
+          ? `Review complete. ${managerName} can now approve it or send it back.`
+          : "Review complete. Its approval manager can now decide.",
+    );
+  }
+
+  /*
+    The reviewer's whole step, on one click.
+
+    It was two: Start review, then a second button to hand the job on.
+    Starting a review is not a decision anybody makes — nobody opens an
+    inspection meaning to claim it and stop — and with the reviewer named
+    on the job there is no queue to claim from either, so the first click
+    only ever recorded that the second one was coming. Reviewing the
+    evidence happens on the page, by reading it; this button is the
+    reviewer saying they are satisfied, which is what "Complete review"
+    means. The request still writes both stamps, so the audit trail keeps
+    its start and its finish.
+  */
+  async function reviewAndHandOn() {
+    const ok = await confirm({
+      title: selfReview ? "Finish your review?" : "Complete your review?",
+      description: namedToBoth
+        ? `You are both the reviewer and the approval manager on ${unitLabel}. Approve and Send back appear once your review is done.`
+        : selfReview
+          ? `No reviewer is named on ${unitLabel}, so you review it as its approval manager. Approve and Send back appear once this is done.`
+          : managerName
+            ? `You are the reviewer on ${unitLabel}. Completing your review hands it to ${managerName} to approve or send back.`
+            : `You are the reviewer on ${unitLabel}. Completing your review hands it to its approval manager to approve or send back.`,
+      confirmText: "Complete review",
+      /*
+        Open, and undismissable, until the page shows what comes next.
+        The dialog used to close the moment Confirm was pressed and the
+        card caught up a second or two later, so the click appeared to do
+        nothing at all.
+      */
+      action: async () => {
+        setWorking(true);
+        try {
+          await snaggingService.reviewTask(task.id, undefined, { complete: true });
+          await decided();
+        } finally {
+          setWorking(false);
+        }
+      },
+    });
+    if (!ok) return;
+
+    toast.success(
+      selfReview
+        ? "Review complete. You can approve it or send it back now."
+        : managerName
+          ? `Review complete. ${managerName} can now approve it or send it back.`
+          : "Review complete. Its approval manager can now decide.",
     );
   }
 
@@ -313,7 +348,7 @@ export function InspectionHeaderCard({
         setWorking(true);
         try {
           await snaggingService.approveTask(task.id);
-          await onChanged();
+          await decided();
         } finally {
           setWorking(false);
         }
@@ -465,36 +500,31 @@ export function InspectionHeaderCard({
             */}
             {awaitingDecision && task.status === "submitted" && canReview ? (
               <SubmitButton
-                onClick={() => void startReview()}
+                onClick={() => void reviewAndHandOn()}
                 pending={working}
-                pendingLabel="Starting…"
+                pendingLabel="Completing…"
                 icon={<ClipboardCheck className="size-4" />}
               >
-                Start review
+                Complete review
               </SubmitButton>
             ) : awaitingDecision &&
               task.status === "in_review" &&
               !reviewComplete &&
               canReview ? (
+              /*
+                A job already in review when it reached this card — one
+                started before the two clicks became one, or left open by
+                somebody else. Without this it would be stranded, so the
+                hand-off keeps its own button; it reads the same as the
+                one above because it does the same thing.
+              */
               <SubmitButton
                 onClick={() => void completeReview()}
                 pending={working}
-                pendingLabel="Sending…"
+                pendingLabel="Completing…"
                 icon={<ClipboardCheck className="size-4" />}
               >
-                {/*
-                  A self-reviewer normally never sees this: starting the
-                  review completes it. They can still land here on a job
-                  that was already in review — one started before this
-                  behaviour, or by somebody else — and without a way
-                  forward that job would be stranded on this card. So the
-                  button stays, saying what it actually does for them.
-                */}
-                {selfReview
-                  ? "Continue to approval"
-                  : managerName
-                    ? `Send to ${managerName}`
-                    : "Send to approval manager"}
+                Complete review
               </SubmitButton>
             ) : awaitingDecision && reviewComplete && canDecide ? (
               <>
@@ -525,18 +555,26 @@ export function InspectionHeaderCard({
                 wondering whether the page is broken or they simply are not
                 the person it is waiting on.
               */
+              /*
+                Waiting on somebody, named. Each line says which of the
+                two steps the job is at and who holds it, because with
+                the buttons gone that is the whole answer to "why can I
+                not do anything here". Where no reviewer is named the
+                approval manager is reviewing it, so they are the one
+                named — "the reviewer" would point at an empty seat.
+              */
               <span className="text-muted-foreground text-sm">
                 {task.status === "submitted"
-                  ? reviewerName
-                    ? `Awaiting review by ${reviewerName}`
-                    : "Awaiting review"
+                  ? (reviewerName ?? managerName)
+                    ? `Waiting for ${reviewerName ?? managerName} to review it`
+                    : "Nobody is named to review this. Assign a reviewer or an approval manager on Setup."
                   : !reviewComplete
-                    ? reviewerName
-                      ? `Under review by ${reviewerName}`
+                    ? (reviewerName ?? managerName)
+                      ? `${reviewerName ?? managerName} is reviewing it`
                       : "Under review"
                     : managerName
-                      ? `Awaiting sign-off by ${managerName}`
-                      : "Awaiting sign-off by this job's approval manager"}
+                      ? `Reviewed. Waiting for ${managerName} to approve it`
+                      : "Reviewed. No approval manager is named, so assign one on Setup."}
               </span>
             ) : null}
             {(task.status === "approved" || task.status === "delivered") &&
@@ -584,11 +622,26 @@ export function InspectionHeaderCard({
           </div>
         </div>
 
-        {task.status === "rejected" && task.rejection_reason ? (
+        {/*
+          While the send-back is still being answered, not only while the
+          job sits at `rejected`.
+
+          The inspector picking it up moves it to `in_progress`, and this
+          banner — the reason, the category and the fix-by clock — went
+          with it. Ops then had a job in progress with nothing on screen
+          saying why it had come back, which is the one question anybody
+          asks about a returned inspection. The reason stays on the record
+          after the fix is approved, so the statuses past these two are
+          what stops an approved job still wearing it.
+        */}
+        {(task.status === "rejected" || task.status === "in_progress") &&
+        task.rejection_reason ? (
           <div className="border-danger/30 bg-danger/5 border-t px-5 py-4">
             <div className="flex flex-wrap items-center gap-2">
               <p className="text-danger text-sm font-medium">
-                Sent back for correction
+                {task.status === "rejected"
+                  ? "Sent back for correction"
+                  : "Being corrected"}
               </p>
               {task.rejection_category ? (
                 <span className="bg-danger/10 text-danger rounded px-2 py-0.5 text-xs font-medium capitalize">
@@ -614,7 +667,17 @@ export function InspectionHeaderCard({
               {snagsWithPhoto === snags.length
                 ? "Every snag has at least one photo."
                 : `${snags.length - snagsWithPhoto} snag(s) have no photo yet.`}{" "}
-              Approving accepts the snag records; media keeps arriving after.
+              {/*
+                Said to whoever is reading it. This line is on the card
+                for everybody, and "approving accepts the records" is not
+                what a reviewer is about to do — nor what a coordinator
+                watching the job can do at all.
+              */}
+              {!reviewComplete && canReview
+                ? "Completing your review accepts the snag records; media keeps arriving after."
+                : canDecide
+                  ? "Approving accepts the snag records; media keeps arriving after."
+                  : "Whoever accepts it takes the snag records as they stand; media keeps arriving after."}
             </p>
           </div>
         ) : null}
@@ -723,7 +786,7 @@ export function InspectionHeaderCard({
         open={rejectOpen}
         onOpenChange={setRejectOpen}
         taskId={task.id}
-        onRejected={onChanged}
+        onRejected={decided}
       />
 
       <AdditionalVisitDialog

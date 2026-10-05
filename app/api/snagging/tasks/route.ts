@@ -132,6 +132,7 @@ export async function POST(req: NextRequest) {
           // Assignment + schedule (I1-I4).
           inspector_id: inspectorId,
           approval_manager_id: input.approval_manager_id ?? null,
+          reviewer_id: input.reviewer_id ?? null,
           appointment_at: appointmentAt,
           scheduled_date: scheduledDate,
           developer_contact_name: emptyToNull(input.developer_contact_name),

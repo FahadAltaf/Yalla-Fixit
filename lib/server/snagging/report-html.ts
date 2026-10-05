@@ -27,6 +27,22 @@ const FAINT = "#8b8f93";
 const LINE = "#e3dedb";
 const CARD = "#f7f5f4";
 
+/*
+  The colours the CHARTS draw with, which are not the badge colours below.
+
+  A badge is text on a tint and has to stay dark enough to read; a bar is
+  a block of colour judged on whether three of them can be told apart,
+  including by a reader who cannot separate red from green. The same
+  three the downloaded report uses, checked with the palette validator:
+  adjacent CVD separation 13.7 (deutan) against a 6-8 floor, normal
+  vision 17.8, all three at 3:1 or better on the card.
+*/
+const SEVERITY_BAR: Record<string, string> = {
+  high: "#c81e3a",
+  medium: "#d97706",
+  low: "#2255b3",
+};
+
 const SEVERITY_TONE: Record<string, { bg: string; fg: string; label: string }> = {
   high: { bg: "#fbeded", fg: "#a81d1d", label: "High" },
   medium: { bg: "#fbf1e4", fg: "#9a5108", label: "Medium" },
@@ -66,6 +82,23 @@ function visitLabel(data: ReportData): string {
   if (data.visitType === "desnag") return `De-snag round ${data.roundNumber}`;
   if (data.visitType === "additional") return "Additional visit";
   return "Initial inspection";
+}
+
+/**
+ * One row of a breakdown chart: a label, a bar the length of its share,
+ * and the count with that share beside it.
+ *
+ * The bar is the share, because the share is what the figure beside it
+ * says. Scaling to the largest bar instead would have the length and the
+ * number encoding two different quantities on the same row.
+ */
+function chartRow(label: string, value: number, total: number, color: string): string {
+  const share = Math.round((value / Math.max(1, total)) * 100);
+  return `<li class="chart__row">
+      <span class="chart__label">${esc(label)}</span>
+      <span class="bar"><span class="bar__fill" style="width:${Math.max(2, share)}%;background:${color}"></span></span>
+      <span class="chart__value">${value}<span class="rank__share">  ${share}%</span></span>
+    </li>`;
 }
 
 /** One severity figure, tinted only when it is not zero. */
@@ -330,6 +363,45 @@ function coverageSection(data: ReportData): string {
 function coverBlock(data: ReportData, version: number | null): string {
   const { cover } = data;
   const total = Math.max(1, cover.totalSnags);
+  /*
+    What was found: how serious, and what kind.
+
+    The downloaded report has carried these two charts for a while and
+    this one did not, so a client sent the link and the PDF of the same
+    inspection was reading two documents that answered different
+    questions. The figures above say how many defects there are; these
+    say what they are, which is the part a client acts on.
+  */
+  const severityChart = (["high", "medium", "low"] as const)
+    .filter((key) => cover.severity[key] > 0)
+    .map((key) =>
+      chartRow(SEVERITY_TONE[key].label, cover.severity[key], cover.totalSnags, SEVERITY_BAR[key]),
+    )
+    .join("");
+
+  /* One hue for every category bar. The LENGTH is the measure here;
+     eight categories in eight colours would add a second encoding that
+     says nothing the ranking does not, and is how a chart turns into a
+     rainbow. */
+  const categoryChart = cover.categories
+    .map((row) => chartRow(row.label, row.count, cover.totalSnags, "var(--brand)"))
+    .join("");
+
+  const found =
+    cover.totalSnags > 0 && (severityChart || categoryChart)
+      ? `<h2 class="section">What was found</h2>
+         <div class="found">
+           <section class="card chart">
+             <h3 class="chart__title">By severity</h3>
+             <ol class="chart__rows">${severityChart}</ol>
+           </section>
+           <section class="card chart">
+             <h3 class="chart__title">By category</h3>
+             <ol class="chart__rows">${categoryChart}</ol>
+           </section>
+         </div>`
+      : "";
+
   const affected = cover.mostAffectedSubCategories
     .map(
       (row, index) => `<li>
@@ -413,6 +485,8 @@ function coverBlock(data: ReportData, version: number | null): string {
       <span class="stat__label">Checklist</span>
     </div>
   </section>
+
+  ${found}
 
   ${
     affected
@@ -560,6 +634,20 @@ export function renderReportHtml(
   .rank__label { width: 38%; font-weight: 600; }
   .rank__count { width: 42px; text-align: right; font-weight: 700; }
   .rank__share { font-weight: 400; color: var(--sub); font-size: 0.85em; }
+  /* What was found: the two breakdowns, side by side.
+
+     Stretched, so the pair reads as one answer. They hold different
+     numbers of rows -- a unit with only medium defects has one row of
+     severity beside three of category -- and left to themselves they
+     end at different heights and look like two unrelated boxes. */
+  .found { display: grid; grid-template-columns: 1fr 1fr; gap: ${print ? "10px" : "16px"}; align-items: stretch; margin-bottom: ${print ? "12px" : "16px"}; }
+  .chart { padding: ${print ? "10px 12px" : "14px 16px"}; }
+  .chart__title { margin: 0 0 ${print ? "6px" : "10px"}; font-size: ${print ? "9px" : "12px"}; font-weight: 700; }
+  .chart__rows { list-style: none; margin: 0; padding: 0; }
+  .chart__row { display: flex; align-items: center; gap: 8px; padding: ${print ? "3px 0" : "5px 0"}; }
+  .chart__label { width: 38%; font-size: ${print ? "8.5px" : "12px"}; }
+  .chart__value { width: 54px; text-align: right; font-weight: 700; font-size: ${print ? "8.5px" : "12px"}; }
+
   /* The bar takes the width the label is not using: a 90px stub
      drew the same dash for two defects as for one, which left the
      ranking to the numbers beside it. Rounded where the value
@@ -647,6 +735,7 @@ export function renderReportHtml(
            .parties { grid-template-columns: 1fr; }
            .summary { grid-template-columns: repeat(2, 1fr); }
            .rank__label { width: 44%; }
+           .found { grid-template-columns: 1fr; }
          }`
   }
 </style>`;

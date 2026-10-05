@@ -165,6 +165,7 @@ type Draft = {
   areas: AreaChoice[];
   technician_ids: string[];
   approval_manager_id: string;
+  reviewer_id: string;
 };
 
 /** The draft with a saved property's fields laid over it; null returns to "new". */
@@ -399,6 +400,7 @@ export default function NewJobWizard({
     areas: [],
     technician_ids: [],
     approval_manager_id: "",
+    reviewer_id: "",
   });
 
   // Tracks whether the inspector list was hand-edited, so re-picking a
@@ -935,6 +937,7 @@ export default function NewJobWizard({
         // Assigned just below, through the same route the job page uses.
         technician_ids: [],
         approval_manager_id: draft.approval_manager_id || null,
+        reviewer_id: draft.reviewer_id || null,
         notes: draft.notes,
       });
 
@@ -2772,7 +2775,7 @@ function PlanAreasStep({
                     }}
                     disabled={options.every((o) => selected.has(o.name.toLowerCase()))}
                   >
-                    Tick all
+                    Select all
                   </Button>
                   <Button
                     type="button"
@@ -3331,7 +3334,7 @@ function AssignStep({
         </p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid gap-4 sm:grid-cols-3">
         <Field label="Approval manager">
           {usersError ? (
             <ErrorState
@@ -3346,9 +3349,57 @@ function AssignStep({
               onValueChange={(value) => set("approval_manager_id", value)}
               disabled={usersLoading}
             >
-              <SelectTrigger className="w-full">
+              {/*
+                h-auto min-h-[38px]: a SelectTrigger is h-8 (32px) and the
+                inspector picker beside it is min-h-[38px], so the two
+                controls in this row sat six pixels apart and every label
+                and hint under them was out of step down the column.
+              */}
+              <SelectTrigger className="h-auto min-h-[38px] w-full">
                 <SelectValue
                   placeholder={usersLoading ? "Loading people…" : "Who signs this off?"}
+                />
+              </SelectTrigger>
+              <SelectContent>
+                {users.map((user) => (
+                  <SelectItem key={user.id} value={user.id}>
+                    {user.full_name || user.email}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </Field>
+
+        {/*
+          Who checks the evidence before the manager decides (FR-6.01).
+
+          Asked here for the same reason the inspector is: a coordinator
+          setting a job up usually knows who will review it, and having to
+          create the job, open it and find the Setup tab to say so is three
+          steps for one fact. Optional, as it is on the job -- left empty
+          the approval manager reviews it themselves.
+        */}
+        <Field
+          label="Reviewer"
+          hint="Optional. Left empty, the approval manager reviews it themselves."
+        >
+          {usersError ? (
+            <ErrorState
+              title="Could not load the reviewer list"
+              message={usersError}
+              onRetry={retryUsers}
+              retrying={usersLoading}
+            />
+          ) : (
+            <Select
+              value={draft.reviewer_id}
+              onValueChange={(value) => set("reviewer_id", value)}
+              disabled={usersLoading}
+            >
+              <SelectTrigger className="h-auto min-h-[38px] w-full">
+                <SelectValue
+                  placeholder={usersLoading ? "Loading people…" : "Who checks this?"}
                 />
               </SelectTrigger>
               <SelectContent>
@@ -3383,9 +3434,7 @@ function AssignStep({
             placeholder="Assign inspectors (optional)"
           />
         </Field>
-      </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Appointment date">
           <Popover>
             <PopoverTrigger asChild>
@@ -3434,9 +3483,7 @@ function AssignStep({
             </p>
           ) : null}
         </Field>
-      </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Developer site contact">
           <Input
             value={draft.developer_contact_name}

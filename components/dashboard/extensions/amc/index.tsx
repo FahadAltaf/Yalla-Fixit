@@ -171,6 +171,19 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
   const form = useForm<AmcFormData>({
     resolver: zodResolver(amcFormSchema) as never,
     defaultValues,
+    /*
+      Live, so a message clears the moment it stops being true.
+
+      Worth saying why this is not "onSubmit": a field that has been
+      corrected has to stop complaining, and react-hook-form only
+      re-checks a field after a real submit. The wizard advances through
+      trigger() rather than handleSubmit, so the form is never "submitted"
+      in its sense and every error would have stuck until the next press
+      of Next.
+
+      An untouched form showing errors was a different fault, in the phone
+      control -- see AmcPhoneInput.
+    */
     mode: "onChange",
   });
 
@@ -561,7 +574,7 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
       case 1:
         return <PropertyCustomerStep form={form} />;
       case 2:
-        return <ServicesPricingStep form={form} />;
+        return <ServicesPricingStep form={form} settings={liveSettings} />;
       case 3:
         return (
           <ReviewStep form={form} computed={computed} />

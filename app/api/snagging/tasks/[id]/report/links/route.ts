@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
-import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
+import { hasResourceAction } from "@/lib/role-permissions";
+import { refuseUnlessApprovalManager } from "@/lib/server/snagging/decision-gate";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
 import { ActionType, ResourceType } from "@/types/types";
@@ -115,14 +116,7 @@ export async function DELETE(
     if (!profile || !accessUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    if (
-      !hasResourceAction(
-        accessUser,
-        ResourceType.SNAGGING,
-        ActionType.APPROVE,
-      ) &&
-      !isAdminUser(accessUser)
-    ) {
+    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.VIEW)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -131,6 +125,20 @@ export async function DELETE(
     const revokedAt = new Date().toISOString();
 
     const admin = await createAdminServerClient();
+
+    /*
+      Pulling a client's link is the other half of delivery, so it answers
+      to the same person delivery does: the manager named on the job, not
+      whoever happens to hold a permission.
+    */
+    const refusal = await refuseUnlessApprovalManager(
+      admin,
+      id,
+      profile.id,
+      "revoke its report link",
+    );
+    if (refusal) return NextResponse.json({ error: refusal }, { status: 403 });
+
     let query = admin
       .from("snagging_report_tokens")
       .update({ revoked_at: revokedAt })

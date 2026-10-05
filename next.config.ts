@@ -2,6 +2,9 @@ import type { NextConfig } from "next";
 import path from "path";
 
 const nextConfig: NextConfig = {
+  // A build can be sent to its own folder (NEXT_DIST_DIR=.next-check) so it
+  // does not fight the dev server for .next/lock. Unset, nothing changes.
+  ...(process.env.NEXT_DIST_DIR ? { distDir: process.env.NEXT_DIST_DIR } : {}),
   turbopack: {
     root: __dirname,
     // Pins CSS `@import "tailwindcss"` resolution to this project's own

@@ -1,6 +1,7 @@
 "use client";
 
 import { AlertTriangle, ListChecks, SlidersHorizontal, UserRound } from "lucide-react";
+import { useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -13,6 +14,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { AmcPhoneInput } from "../components/amc-phone-input";
+import { formatPhoneForDocument } from "../amc-phone";
 import { Switch } from "@/components/ui/switch";
 import {
   Table,
@@ -25,11 +27,29 @@ import {
 
 import { ServiceTable } from "../components/service-table";
 import { emptyPriceListRow } from "../amc-constants";
+import type { AmcSettings } from "../amc-settings";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type { AmcFormData, AmcPriceListRow } from "../amc-types";
 
 interface StepProps {
   form: UseFormReturn<AmcFormData>;
+  /*
+    The account managers an admin keeps in AMC Settings, so a proposal
+    picks one rather than retyping a name and a number. Undefined while
+    the settings are still loading, and empty on an install where nobody
+    has added any -- both fall back to the plain fields.
+  */
+  settings?: AmcSettings;
 }
+
+/** Marks the "someone else" option in the account manager picker. */
+const MANAGER_CUSTOM = "__custom__";
 
 /**
  * Step 2 — Services and Pricing (FR1.1, FR1.3, §5.1).
@@ -48,7 +68,10 @@ interface StepProps {
  * §5.1 also puts the optional sections and the placeholder fields on this
  * step, which is why they are below rather than on Review.
  */
-export function ServicesPricingStep({ form }: StepProps) {
+export function ServicesPricingStep({ form, settings }: StepProps) {
+  const savedManagers = (settings?.accountManagers ?? []).filter(
+    (manager) => manager.name.trim(),
+  );
   const unitType = form.watch("unitType");
   const showPriceList = form.watch("optionalSections.supplyInstallPriceList");
   const priceListRows = form.watch("priceListRows") ?? [];
@@ -98,8 +121,8 @@ export function ServicesPricingStep({ form }: StepProps) {
         </div>
       </section>
 
-      {/* FR4.4 / §8.2 — clause 1.1 named two account managers as
-          "05X XXX XXX – NAME". Entered here, per client. */}
+      {/* FR4.4 / §8.2 — clause 1.1 names one or two account managers with
+          a direct number. Chosen here, per client. */}
       <section className="space-y-4">
         <div>
           <h3 className="flex items-center gap-2 text-base font-semibold">
@@ -107,52 +130,27 @@ export function ServicesPricingStep({ form }: StepProps) {
             Account managers
           </h3>
           <p className="text-muted-foreground mt-0.5 text-sm">
-            The client&apos;s direct contacts on the contract. Leave the
-            second blank if there is only one.
+            Who the client calls, printed in clause 1.1. One is enough.
           </p>
         </div>
-        {/* One row per contact, name beside number -- no boxes inside
-            the section, as in the snagging forms. */}
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {/*
+          A box each, rather than four fields in a row.
+
+          The two managers were laid out as name, number, name, number
+          across one grid, so the second manager’s name sat beside the
+          first one’s number and nothing said which belonged to which.
+          Each is its own bordered block now, which also gives the
+          “this proposal only” fields somewhere to appear without
+          shifting the field beside them.
+        */}
+        <div className="grid items-start gap-4 lg:grid-cols-2">
           {([0, 1] as const).map((index) => (
-            <div key={index} className="contents">
-              <FormField
-                control={form.control}
-                name={`accountManagers.${index}.name` as const}
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>
-                      Account manager {index + 1}
-                      {index === 1 ? (
-                        <span className="text-muted-foreground font-normal"> (optional)</span>
-                      ) : null}
-                    </FormLabel>
-                    <FormControl>
-                      <Input placeholder="Full name" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name={`accountManagers.${index}.phone` as const}
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Direct number</FormLabel>
-                    <FormControl>
-                      <AmcPhoneInput
-                      id={field.name}
-                      value={field.value}
-                      onChange={field.onChange}
-                      disabled={field.disabled}
-                    />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
+            <AccountManagerField
+              key={index}
+              form={form}
+              index={index}
+              saved={savedManagers}
+            />
           ))}
         </div>
       </section>
@@ -293,6 +291,146 @@ export function ServicesPricingStep({ form }: StepProps) {
           />
         </div>
       </section>
+    </div>
+  );
+}
+/**
+ * One of the two account managers on a proposal.
+ *
+ * Three states, one box:
+ *
+ *   nobody chosen   the picker, and nothing else
+ *   from Settings   their number, read back, with no field to mistype
+ *   this job only   name and number, entered here and saved with the
+ *                   proposal rather than added to Settings
+ *
+ * The third exists because a proposal sometimes names somebody who is
+ * not a standing account manager — a colleague covering a holiday, a
+ * contact for one site — and putting them on the Settings list to get
+ * them onto one contract would offer them on every future one.
+ */
+function AccountManagerField({
+  form,
+  index,
+  saved,
+}: {
+  form: UseFormReturn<AmcFormData>;
+  index: 0 | 1;
+  saved: ReadonlyArray<{ name: string; phone: string }>;
+}) {
+  const nameField = `accountManagers.${index}.name` as const;
+  const phoneField = `accountManagers.${index}.phone` as const;
+  const name = form.watch(nameField);
+  const matched = saved.find((manager) => manager.name === name) ?? null;
+
+  /*
+    Switched to the one-off fields deliberately, OR holding a name that is
+    not on the list. The second covers a proposal written before somebody
+    was added to Settings, or after they were taken off it: it reopens
+    showing its own manager rather than quietly losing them.
+  */
+  const [chose, setChose] = useState(false);
+  const custom = chose || (!matched && Boolean(name));
+
+  const set = (value: { name: string; phone: string }) => {
+    form.setValue(nameField, value.name, { shouldValidate: true });
+    form.setValue(phoneField, value.phone, { shouldValidate: true });
+  };
+
+  return (
+    <div className="space-y-3 rounded-lg border p-4">
+      <div className="flex items-baseline justify-between gap-2">
+        <h4 className="text-sm font-medium">Account manager {index + 1}</h4>
+        {index === 1 ? (
+          <span className="text-muted-foreground text-xs">Optional</span>
+        ) : null}
+      </div>
+
+      {saved.length > 0 ? (
+        <Select
+          value={matched ? matched.name : custom ? MANAGER_CUSTOM : ""}
+          onValueChange={(value) => {
+            if (value === MANAGER_CUSTOM) {
+              setChose(true);
+              set({ name: "", phone: "" });
+              return;
+            }
+            const manager = saved.find((item) => item.name === value);
+            if (!manager) return;
+            setChose(false);
+            // The number comes with the name: that is what the list is for.
+            set(manager);
+          }}
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder="Choose a manager" />
+          </SelectTrigger>
+          <SelectContent>
+            {saved.map((manager) => (
+              <SelectItem key={manager.name} value={manager.name}>
+                {manager.name}
+              </SelectItem>
+            ))}
+            <SelectItem value={MANAGER_CUSTOM}>
+              Someone else, this proposal only
+            </SelectItem>
+          </SelectContent>
+        </Select>
+      ) : null}
+
+      {matched ? (
+        /*
+          Read back, not re-entered. The number is the one thing the
+          Settings list exists to keep right, so this is the one place it
+          must not be editable: a correction typed here would be invisible
+          to the next proposal that names the same person.
+        */
+        <div className="bg-muted/40 flex items-center justify-between gap-3 rounded-md px-3 py-2">
+          <span className="text-sm tabular-nums">
+            {formatPhoneForDocument(matched.phone) || "No number on file"}
+          </span>
+          <span className="text-muted-foreground text-xs">From AMC Settings</span>
+        </div>
+      ) : custom || saved.length === 0 ? (
+        <div className="space-y-3">
+          <FormField
+            control={form.control}
+            name={nameField}
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel className="text-xs">Name</FormLabel>
+                <FormControl>
+                  <Input placeholder="Full name" {...field} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name={phoneField}
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel className="text-xs">Direct number</FormLabel>
+                <FormControl>
+                  <AmcPhoneInput
+                    id={field.name}
+                    value={field.value}
+                    onChange={field.onChange}
+                    disabled={field.disabled}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <p className="text-muted-foreground text-xs">
+            {saved.length === 0
+              ? "Add the managers you use often under AMC Settings, and they become a list to pick from."
+              : "Saved with this proposal only, not added to AMC Settings."}
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }

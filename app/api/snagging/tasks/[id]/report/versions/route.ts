@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
-import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
+import { hasResourceAction } from "@/lib/role-permissions";
+import { refuseUnlessApprovalManager } from "@/lib/server/snagging/decision-gate";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { loadJobFamily, readOnRoot } from "@/lib/server/snagging/job-family";
 import { signPaths } from "@/lib/server/snagging/media";
@@ -129,16 +130,7 @@ export async function POST(
     if (!profile || !accessUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    // Issuing or reissuing a client document is a manager act, matching the
-    // gate on approval and delivery.
-    if (
-      !hasResourceAction(
-        accessUser,
-        ResourceType.SNAGGING,
-        ActionType.APPROVE,
-      ) &&
-      !isAdminUser(accessUser)
-    ) {
+    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.VIEW)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -150,6 +142,19 @@ export async function POST(
     const action = body.action ?? "retry";
 
     const admin = await createAdminServerClient();
+
+    /*
+      Issuing or reissuing a client document is a manager act, and it
+      answers to the same person approval and delivery do (FR-6.01): the
+      manager named on this job.
+    */
+    const refusal = await refuseUnlessApprovalManager(
+      admin,
+      id,
+      profile.id,
+      "issue or reissue its report",
+    );
+    if (refusal) return NextResponse.json({ error: refusal }, { status: 403 });
 
     if (action === "retry") {
       if (!body.versionId) {

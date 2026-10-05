@@ -119,6 +119,11 @@ export const createTaskSchema = z
     technician_ids: z.array(z.string().uuid()).default([]),
     supervisor_id: z.string().uuid().optional().nullable(),
     approval_manager_id: z.string().uuid().optional().nullable(),
+    /* FR-6.01 — who checks the work before the manager decides. It was
+       settable only after the job existed (updateTaskSchema), so a
+       coordinator who knew the reviewer had to create the job, open it
+       and go to Setup to say so. */
+    reviewer_id: z.string().uuid().optional().nullable(),
 
     // FR-1.03: which template seeds the area list. Defaults to the
     // property type's template when omitted.

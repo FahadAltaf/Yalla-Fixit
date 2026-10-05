@@ -75,11 +75,17 @@ export function submissionToFormData(submission: AmcDocumentSource): AmcFormData
     /* FR3.3: basePrice has to come back too, or reopening a submission
        silently blanks every price the team entered. */
     serviceRows: submission.services.map(
-      ({ serviceId, included, units, frequency, basePrice }) => ({
+      ({ serviceId, included, units, frequency, basePrice, free }) => ({
         serviceId,
         included,
         units,
         frequency,
+        /*
+          A submission saved before free rows existed has no flag, and a
+          priced row must not come back as a giveaway. False is the right
+          reading of its absence: everything saved then carried a price.
+        */
+        free: free === true,
         basePrice: basePrice ?? undefined,
       }),
     ),

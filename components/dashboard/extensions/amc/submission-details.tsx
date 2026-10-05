@@ -22,7 +22,6 @@ import {
   Mail,
   Send,
   Undo2,
-  UserRound,
   Users,
   XCircle,
 } from "lucide-react";
@@ -42,7 +41,6 @@ import {
   SectionCard,
   StatCard,
   StatCardGrid,
-  SubHeading,
   TabCount,
   timeAgo,
 } from "@/components/dashboard/shared/kaizen";
@@ -65,6 +63,7 @@ import {
   formatDisplayDate,
   formatPaymentTermsLabel,
 } from "./amc-pricing";
+import { IdentityCell } from "@/components/ui/entity-avatar";
 import { formatPhoneForDocument } from "./amc-phone";
 import { lastSentAt, sendableDocument } from "./amc-send-dialog";
 import { amcStatusTone } from "./amc-status";
@@ -258,9 +257,18 @@ function sentenceCase(value: string | null | undefined) {
 }
 
 /**
- * A group of contacts as cards: a person icon, the name in full, the
- * role, and the number as a link that dials. They were a cramped list in a
- * narrow box, which cut the names off.
+ * A group of contacts, as one list rather than a card each.
+ *
+ * It was a grid of bordered boxes, each holding a 40px circle with a
+ * generic person icon beside three lines of small text. Four people cost
+ * two rows of mostly empty cards, the heaviest thing on screen was an
+ * icon that said nothing (every one of them identical), and the numbers
+ * sat at four different x-positions, so comparing them meant hunting.
+ *
+ * One bordered list, rows divided: the name and role on the left in the
+ * shape every other list in the product uses (IdentityCell), the number
+ * on the right where the numbers line up under each other and can be
+ * read down. Denser, and the only thing with weight is the name.
  */
 function ContactGroup({
   title,
@@ -274,42 +282,48 @@ function ContactGroup({
   const listed = people.filter((person) => person.name?.trim() || person.phone?.trim());
   return (
     <div className="space-y-3">
-      <SubHeading count={listed.length}>{title}</SubHeading>
+      {/*
+        Its own label rather than SubHeading.
+
+        SubHeading sets small caps with a count beside it, which is right
+        for the lists it was built for and wrong for two groups of two:
+        the count repeats what you can see without counting, and the caps
+        shout a word that is only there to say which list is which. It is
+        a shared component used in other extensions, so the change is
+        here rather than in it.
+      */}
+      <p className="text-muted-foreground text-xs font-medium">{title}</p>
       {listed.length === 0 ? (
         <p className="text-muted-foreground rounded-lg border border-dashed px-4 py-3 text-sm">
           {empty}
         </p>
       ) : (
-        <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <ul className="divide-y rounded-lg border">
           {listed.map((person, index) => {
             const phone = formatPhoneForDocument(person.phone ?? "");
             return (
-              <li key={index} className="flex items-center gap-3 rounded-lg border p-3">
-                <span
-                  className="bg-brand-50 text-brand flex size-10 shrink-0 items-center justify-center rounded-full"
-                  aria-hidden
-                >
-                  <UserRound className="size-5" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium" title={person.name}>
-                    {person.name || "No name"}
-                  </p>
-                  {person.role ? (
-                    <p className="text-muted-foreground truncate text-xs">{person.role}</p>
-                  ) : null}
-                  {phone ? (
-                    <a
-                      href={`tel:${(person.phone ?? "").replace(/\s+/g, "")}`}
-                      className="text-muted-foreground hover:text-foreground mt-0.5 inline-flex items-center gap-1.5 text-xs tabular-nums"
-                    >
-                      <Phone className="size-3" aria-hidden />
-                      {phone}
-                    </a>
-                  ) : (
-                    <p className="text-muted-foreground mt-0.5 text-xs">No phone</p>
-                  )}
-                </div>
+              <li
+                key={index}
+                className="flex items-center justify-between gap-4 px-4 py-2.5 text-sm"
+              >
+                <IdentityCell
+                  title={person.name || "No name"}
+                  subtitle={person.role || null}
+                />
+                {phone ? (
+                  /* A number on a contact is there to be rung. */
+                  <a
+                    href={`tel:${(person.phone ?? "").replace(/\s+/g, "")}`}
+                    className="text-muted-foreground hover:text-foreground inline-flex shrink-0 items-center gap-1.5 tabular-nums"
+                  >
+                    <Phone className="size-3.5" aria-hidden />
+                    {phone}
+                  </a>
+                ) : (
+                  <span className="text-muted-foreground shrink-0 text-xs">
+                    No number
+                  </span>
+                )}
               </li>
             );
           })}
@@ -452,10 +466,6 @@ export function SubmissionDetails({
     () => (historyOrder === "asc" ? timeline : [...timeline].reverse()),
     [timeline, historyOrder],
   );
-
-  const contactCount =
-    form.coordinationContacts.filter((c) => c.name?.trim() || c.phone?.trim()).length +
-    (form.accountManagers ?? []).filter((m) => m.name?.trim() || m.phone?.trim()).length;
 
   /*
     Which tab is open, and the ones opened so far.
@@ -755,7 +765,13 @@ export function SubmissionDetails({
               <ReviewSection
                 icon={Users}
                 title="Contacts"
-                description={`${contactCount} ${contactCount === 1 ? "person" : "people"} named in the contract.`}
+                /*
+                  What the two lists are for, rather than how many rows
+                  are about to appear underneath. The count was already
+                  there to be seen, and said nothing about why a reader
+                  would want either group.
+                */
+                description="Who the team coordinates with on the client's side, and who the client calls on ours."
               >
                 {/*
                   The two groups sit directly on the card. They used to be

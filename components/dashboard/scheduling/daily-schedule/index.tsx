@@ -691,11 +691,11 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
     () =>
       windows && nightStart !== null && nightEnd !== null
         ? {
-            start: nightStart,
-            end: nightEnd,
-            configured: windows.night,
-            stretched: nightStart !== windows.night.start || nightEnd !== windows.night.end,
-          }
+          start: nightStart,
+          end: nightEnd,
+          configured: windows.night,
+          stretched: nightStart !== windows.night.start || nightEnd !== windows.night.end,
+        }
         : null,
     [windows, nightStart, nightEnd],
   );
@@ -703,11 +703,11 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
     () =>
       windows && dayStart !== null && dayEnd !== null
         ? {
-            start: dayStart,
-            end: dayEnd,
-            configured: windows.day,
-            stretched: dayStart !== windows.day.start || dayEnd !== windows.day.end,
-          }
+          start: dayStart,
+          end: dayEnd,
+          configured: windows.day,
+          stretched: dayStart !== windows.day.start || dayEnd !== windows.day.end,
+        }
         : null,
     [windows, dayStart, dayEnd],
   );
@@ -805,15 +805,15 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
       shift: payload.shift ?? entry.shift,
       schedule_entry_assignments: techsChanged
         ? next.technicianFsmIds.map(
-            (techId) =>
-              entry.schedule_entry_assignments?.find((a) => a.technician_fsm_id === techId) ?? {
-                id: `pending-${techId}`,
-                technician_fsm_id: techId,
-                technician_reference: {
-                  display_name: technicians.find((t) => t.fsm_resource_id === techId)?.display_name ?? techId,
-                },
+          (techId) =>
+            entry.schedule_entry_assignments?.find((a) => a.technician_fsm_id === techId) ?? {
+              id: `pending-${techId}`,
+              technician_fsm_id: techId,
+              technician_reference: {
+                display_name: technicians.find((t) => t.fsm_resource_id === techId)?.display_name ?? techId,
               },
-          )
+            },
+        )
         : entry.schedule_entry_assignments,
     };
     setEntries((list) => list.map((e) => (e.id === entry.id ? updated : e)));
@@ -940,7 +940,8 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
         );
       } else {
         toast.success("Schedule approved and published to FSM");
-      }
+      } ` `
+
       loadDay(date, { silent: true });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to approve");
@@ -1662,10 +1663,10 @@ function BoardNotices({
                     a.reason === "no_technician"
                       ? "no technician assigned yet"
                       : `assigned to ${a.technicians.length > 0 ? a.technicians.join(", ") : "someone"}, who ${plural(
-                          Math.max(1, a.technicians.length),
-                          "is",
-                          "are",
-                        )} not in the technician list`;
+                        Math.max(1, a.technicians.length),
+                        "is",
+                        "are",
+                      )} not in the technician list`;
                   return (
                     <li key={a.id} className="flex flex-wrap items-baseline gap-x-2">
                       {url ? (
@@ -2044,7 +2045,8 @@ function ShiftSection({
   roles,
   onRoleChange,
   canEditRoles,
-  canReorder,  onReorder,
+  canReorder,
+  onReorder,
 }: {
   title: string;
   shift: ShiftType;
@@ -2573,11 +2575,11 @@ function ShiftSection({
   return (
     <div className="rounded-md border">
       <div
-          className={cn(
-            "bg-muted/50 flex items-center justify-between gap-2 px-3 py-1.5",
-            collapsed ? "rounded-md" : "rounded-t-md border-b",
-          )}
-        >
+        className={cn(
+          "bg-muted/50 flex items-center justify-between gap-2 px-3 py-1.5",
+          collapsed ? "rounded-md" : "rounded-t-md border-b",
+        )}
+      >
         <button
           type="button"
           onClick={toggleCollapsed}
@@ -2861,7 +2863,8 @@ const TechnicianRow = memo(function TechnicianRow({
   laneHeight,
   isEditable,
   canEditRoles,
-  canReorder,  isEditingRole,
+  canReorder,
+  isEditingRole,
   roles,
   drag,
   isRowDragSource,
@@ -2912,12 +2915,12 @@ const TechnicianRow = memo(function TechnicianRow({
   const ghost = drag && drag.mode === "move" && drag.targetTech === id ? drag : null;
   const ghostLane = ghost
     ? laneForRange(
-        rowEntries,
-        laneOf,
-        laneCount,
-        { startMin: ghost.startMin, endMin: ghost.endMin, ignoreId: ghost.entry.id },
-        date,
-      )
+      rowEntries,
+      laneOf,
+      laneCount,
+      { startMin: ghost.startMin, endMin: ghost.endMin, ignoreId: ghost.entry.id },
+      date,
+    )
     : -1;
   const rowHeight = Math.max(laneCount, ghostLane + 1) * laneHeight + 6;
   const reassignTarget = Boolean(ghost && ghost.targetTech !== ghost.sourceTech);
@@ -2929,11 +2932,11 @@ const TechnicianRow = memo(function TechnicianRow({
 
   const ghostView = ghost
     ? {
-        ...spanPct(ghost.startMin, ghost.endMin, bounds),
-        top: ghostLane * laneHeight + 2,
-        text: entryText(ghost.entry, fieldVis, false).primaryText,
-        freeText: ghost.entry.entry_type === "free_text",
-      }
+      ...spanPct(ghost.startMin, ghost.endMin, bounds),
+      top: ghostLane * laneHeight + 2,
+      text: entryText(ghost.entry, fieldVis, false).primaryText,
+      freeText: ghost.entry.entry_type === "free_text",
+    }
     : null;
 
   return (
@@ -3161,13 +3164,12 @@ const TechnicianRow = memo(function TechnicianRow({
               ? `${stateLabel ? `${stateLabel} · ` : ""}${label} — All Day`
               : conflictsWithLeave
                 ? `Conflict: ${technician.display_name} is on leave during this appointment (${timeLabel})${runsOnNote}`
-                : `${stateLabel ? `${stateLabel} · ` : ""}${label} — ${timeLabel}${
-                    !isFreeText && entry.fsm_appointment_id && entry.sync_status === "synced"
-                      ? " · Synced to Zoho FSM"
-                      : entry.entry_type === "new_appointment" && !entry.fsm_appointment_id
-                        ? " · Will be created in FSM on approval"
-                        : ""
-                  }${overlaps ? " · Overlaps another appointment for this technician" : ""}${entry.origin === "fsm" ? " · Booked in Zoho FSM" : ""}${runsOnNote}`;
+                : `${stateLabel ? `${stateLabel} · ` : ""}${label} — ${timeLabel}${!isFreeText && entry.fsm_appointment_id && entry.sync_status === "synced"
+                  ? " · Synced to Zoho FSM"
+                  : entry.entry_type === "new_appointment" && !entry.fsm_appointment_id
+                    ? " · Will be created in FSM on approval"
+                    : ""
+                }${overlaps ? " · Overlaps another appointment for this technician" : ""}${entry.origin === "fsm" ? " · Booked in Zoho FSM" : ""}${runsOnNote}`;
 
           // N1: sync-status icon.
           const synced = !isFreeText && Boolean(entry.fsm_appointment_id) && entry.sync_status === "synced";

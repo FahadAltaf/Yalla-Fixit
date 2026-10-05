@@ -2,7 +2,7 @@ import { after, NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
-import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
+import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
 import { loadJobFamily } from "@/lib/server/snagging/job-family";
@@ -41,7 +41,16 @@ export async function POST(
     if (!profile || !accessUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.APPROVE)) {
+    /*
+      Access to the module, not a second permission to decide.
+
+      This asked for Snagging's `approve` grant on top of the job's own
+      assignment, so a coordinator named as a job's approval manager --
+      which is the portal's way of saying "you decide this one" -- was
+      refused by a role setting nobody had connected to that dropdown.
+      Who decides is settled below, by name, on the job.
+    */
+    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.VIEW)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -83,9 +92,12 @@ export async function POST(
     if (!job) return NextResponse.json({ error: "Job not found" }, { status: 404 });
 
     // The same person who signs off the inspection signs off its visits.
-    if (!isDesignatedApprovalManager(profile.id, job.approval_manager_id, isAdminUser(accessUser))) {
+    if (!isDesignatedApprovalManager(profile.id, job.approval_manager_id)) {
       return NextResponse.json(
-        { error: "Only this job's approval manager or an admin can review its visits." },
+        {
+          error:
+            "Only the approval manager named on this job can decide its visits.",
+        },
         { status: 403 },
       );
     }

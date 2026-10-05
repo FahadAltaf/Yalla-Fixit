@@ -1,12 +1,8 @@
 import React from "react";
 import { SidebarTrigger } from "../ui/sidebar";
 import { Separator } from "../ui/separator";
-import { Button } from "../ui/button";
 import { HomeIcon } from "lucide-react";
-import ProfileDropdown from "../shadcn-studio/blocks/dropdown-profile";
-import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
-import { useAuth } from "@/context/AuthContext";
-import { generateNameAvatar } from "@/utils/generateRandomAvatar";
+import { ThemeToggle } from "./theme-toggle";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -22,7 +18,6 @@ import {
 } from "./breadcrumb-labels";
 
 const DashboardHeader = () => {
-  const { userProfile } = useAuth();
   const pathname = usePathname();
 
   const segments = React.useMemo(
@@ -131,23 +126,10 @@ const DashboardHeader = () => {
               </Button>
             }
           /> */}
-          <ProfileDropdown
-            trigger={
-              <Button variant="ghost" size="icon" className="size-8">
-                <Avatar className="size-8 rounded-md">
-                  <AvatarImage
-                    src={
-                      userProfile?.profile_image ||
-                      generateNameAvatar(userProfile?.full_name || "")
-                    }
-                  />
-                  <AvatarFallback>
-                    {userProfile?.full_name?.split(" ")[0]?.charAt(0) || "U"}
-                  </AvatarFallback>
-                </Avatar>
-              </Button>
-            }
-          />
+          {/* The account moved to the foot of the sidebar, where it
+              can carry a name and an email. What is left here is the one
+              control that belongs to the view rather than the account. */}
+          <ThemeToggle />
         </div>
       </div>
     </header>

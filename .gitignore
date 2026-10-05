@@ -67,3 +67,4 @@ next-env.d.ts
 
 # Local debug output, never part of a commit.
 debug.log
+.next-check/

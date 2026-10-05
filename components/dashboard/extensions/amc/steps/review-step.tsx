@@ -9,6 +9,7 @@ import {
   TableBody,
   TableCell,
   TableHead,
+  TableFooter,
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
@@ -68,6 +69,17 @@ export function Fact({ label, children }: { label: string; children: React.React
   );
 }
 
+/*
+  How far the frequency column is indented, written once.
+
+  Seven cells share it: the header, every service row, and each line of
+  the sum underneath. They have to share it exactly, because the totals
+  are read as a continuation of the column above them -- a label one
+  notch out of line stops looking like the same column and starts looking
+  like a mistake. Changing this moves all seven.
+*/
+const FREQUENCY_INDENT = "pl-16";
+
 /**
  * The services and what they cost, in one card: the schedule
  * with each line's units, frequency and price, then the subtotal,
@@ -91,17 +103,19 @@ export function ServicesAndCost({
           They were left to size themselves, so the service name took
           most of the table and Units, Frequency and Price were crowded
           into what was left at three different widths. The name still
-          gets the room it needs for two lines; the three figures get a
-          column each of the same width, which is what makes a row read
-          straight across.
+          gets the room it needs for two lines. Units is narrow because a
+          unit count is one or two digits; frequency and price take what
+          their longest value needs.
         */}
         <Table className="table-fixed">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="h-10 w-[40%]">Service</TableHead>
-              <TableHead className="h-10 w-[20%] text-right">Units</TableHead>
-              <TableHead className="h-10 w-[20%] text-right">Frequency</TableHead>
-              <TableHead className="h-10 w-[20%] text-right">Price</TableHead>
+              <TableHead className="h-10 w-[44%]">Service</TableHead>
+              <TableHead className="h-10 w-[10%] text-right">Units</TableHead>
+              <TableHead className={`h-10 w-[22%] ${FREQUENCY_INDENT}`}>
+                Frequency
+              </TableHead>
+              <TableHead className="h-10 w-[24%] text-right">Price</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -131,7 +145,9 @@ export function ServicesAndCost({
                   <TableCell className="align-top text-right text-sm tabular-nums">
                     {row.units}
                   </TableCell>
-                  <TableCell className="text-muted-foreground align-top text-right text-sm whitespace-nowrap">
+                  <TableCell
+                    className={`text-muted-foreground align-top ${FREQUENCY_INDENT} text-sm whitespace-nowrap`}
+                  >
                     {row.frequency}
                   </TableCell>
                   <TableCell className="align-top text-right text-sm font-medium whitespace-nowrap tabular-nums">
@@ -141,10 +157,8 @@ export function ServicesAndCost({
               ))
             )}
           </TableBody>
-        </Table>
-      </div>
 
-      {/*
+          {/*
         The sum, under the column it sums.
 
         It ran the full width of the table, so on a wide screen "Subtotal"
@@ -153,47 +167,109 @@ export function ServicesAndCost({
         under the price column now: the figures stay beside their labels,
         and the total that matters is the one thing set apart.
       */}
-      <div className="bg-muted/20 border-t px-4 py-3">
-        <dl className="ml-auto w-full max-w-xs space-y-2 text-sm">
-          <div className="flex items-baseline justify-between gap-4">
-            <dt className="text-muted-foreground">Subtotal</dt>
-            <dd className="tabular-nums">
-              <Money value={totals.subtotal} />
-            </dd>
-          </div>
-          {totals.discountAmount > 0 ? (
-            <div className="flex items-baseline justify-between gap-4">
-              <dt className="text-muted-foreground">
-                Discount ({totals.discountPercent}%)
-              </dt>
-              <dd className="text-success inline-flex items-center gap-1 tabular-nums">
-                − <Money value={totals.discountAmount} />
-              </dd>
-            </div>
-          ) : null}
-          <div className="flex items-baseline justify-between gap-4">
-            <dt className="text-muted-foreground">Annual fee (excl. VAT)</dt>
-            <dd className="tabular-nums">
-              <Money value={totals.finalPrice} />
-            </dd>
-          </div>
-          <div className="flex items-baseline justify-between gap-4">
-            <dt className="text-muted-foreground">VAT (5%)</dt>
-            <dd className="tabular-nums">
-              <Money value={totals.vatAmount} />
-            </dd>
-          </div>
-          <div className="mt-1 flex items-baseline justify-between gap-4 border-t pt-2.5">
-            <dt className="font-semibold">Grand total</dt>
-            <dd className="text-brand text-lg font-semibold tabular-nums">
-              <Money value={totals.grandTotal} />
-            </dd>
-          </div>
-          {/* The figure written out, as the document prints it. */}
-          <p className="text-muted-foreground border-t pt-2 text-xs leading-relaxed">
-            {totals.amountInWords}
-          </p>
-        </dl>
+          {/*
+            The sum, in the table's own footer.
+
+            It was a block under the table, sized to look as though it sat
+            beneath the Price column. "Looks like" is the problem: the
+            labels started at an arbitrary x of their own, so "Subtotal"
+            and "2 per year" above it began in two different places and
+            the footer read as a separate box pushed up against the
+            table. In a tfoot the columns are the SAME columns, so every
+            figure lines up with the figures above it by construction
+            rather than by two widths being kept in step by hand.
+
+            The words take the two columns the figures do not need.
+          */}
+          {/*
+            No rules between the totals.
+
+            TableRow carries a border-b, so in a tfoot every line of the
+            sum drew a full-width rule and the five of them read as five
+            more rows of data rather than as one block summing the rows
+            above. The only rule that earns its place is the one over the
+            grand total, which is the figure being set apart. The rows are
+            tighter than data rows for the same reason: a sum is read down
+            in one go, not scanned line by line.
+          */}
+          <TableFooter className="bg-muted/20 [&_tr]:border-0 [&_td]:py-1.5">
+            <TableRow className="hover:bg-transparent">
+              {/*
+                Empty, and spanning, on purpose.
+
+                The amount in words used to fill these two columns. It
+                belongs on the contract -- it is there to settle a dispute
+                about a figure, which is why cheques carry it -- and this
+                is the team reading their own working before they submit
+                it. Two lines of capitals for a number printed in full
+                four rows up, under the one block on the page people
+                actually check.
+
+                The cell stays so the sum keeps its four columns: without
+                it the totals slide left under Service and Units.
+              */}
+              <TableCell
+                colSpan={2}
+                rowSpan={totals.discountAmount > 0 ? 5 : 4}
+                className="max-w-0"
+              />
+              <TableCell
+                className={`text-muted-foreground pt-3 ${FREQUENCY_INDENT} text-sm font-normal`}
+              >
+                Subtotal
+              </TableCell>
+              <TableCell className="pt-3 text-right text-sm font-normal tabular-nums">
+                <Money value={totals.subtotal} />
+              </TableCell>
+            </TableRow>
+
+            {totals.discountAmount > 0 ? (
+              <TableRow className="hover:bg-transparent">
+                <TableCell
+                  className={`text-muted-foreground ${FREQUENCY_INDENT} text-sm font-normal`}
+                >
+                  Discount ({totals.discountPercent}%)
+                </TableCell>
+                <TableCell className="text-success text-right text-sm font-normal tabular-nums">
+                  − <Money value={totals.discountAmount} />
+                </TableCell>
+              </TableRow>
+            ) : null}
+
+            <TableRow className="hover:bg-transparent">
+              <TableCell
+                className={`text-muted-foreground ${FREQUENCY_INDENT} text-sm font-normal`}
+              >
+                Annual fee (excl. VAT)
+              </TableCell>
+              <TableCell className="text-right text-sm font-normal tabular-nums">
+                <Money value={totals.finalPrice} />
+              </TableCell>
+            </TableRow>
+
+            <TableRow className="hover:bg-transparent">
+              <TableCell
+                className={`text-muted-foreground ${FREQUENCY_INDENT} text-sm font-normal`}
+              >
+                VAT (5%)
+              </TableCell>
+              <TableCell className="text-right text-sm font-normal tabular-nums">
+                <Money value={totals.vatAmount} />
+              </TableCell>
+            </TableRow>
+
+            <TableRow className="hover:bg-transparent">
+              <TableCell
+                className={`mt-1 pt-2.5 pb-3 ${FREQUENCY_INDENT} text-sm font-semibold`}
+              >
+                Grand total
+              </TableCell>
+              <TableCell className="text-brand pt-2.5 pb-3 text-right text-lg font-semibold tabular-nums">
+                <Money value={totals.grandTotal} />
+              </TableCell>
+            </TableRow>
+          </TableFooter>
+        </Table>
       </div>
     </div>
   );

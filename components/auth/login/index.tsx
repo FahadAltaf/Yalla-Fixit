@@ -57,15 +57,24 @@ const Login2 = () => {
       <div className="max-lg:hidden lg:col-span-3 xl:col-span-4">
         <div className="bg-muted relative z-1 flex h-full items-center justify-center px-6">
           <div className="outline-border relative shrink rounded-[20px] p-2.5 outline-2 -outline-offset-[2px]">
+            {/*
+              Shown in both themes.
+
+              This carried `dark:hidden`, which is the template's pairing
+              for two screenshots -- a light one and a dark one that takes
+              its place. There is only ever one image here, and it is a
+              cut-out photograph rather than a screenshot, so hiding it
+              left the panel empty in dark mode with nothing but the
+              decorative shape behind it.
+            */}
             <Image
-                src={LoginImage}
-              className="max-h-111 w-full rounded-lg object-contain dark:hidden h-auto"
+              src={LoginImage}
+              className="max-h-111 h-auto w-full rounded-lg object-contain"
               width={1000}
               height={1000}
               unoptimized
-              alt="Yalla Login Image"
+              alt="A Yalla Fix It technician"
             />
-           
 
             <BorderBeam duration={8} borderWidth={2} size={100} />
           </div>

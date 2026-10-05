@@ -16,7 +16,6 @@ import {
   Info,
   Loader2,
   PencilIcon,
-  Plus,
   ScrollText,
   Undo2,
   UserRound,
@@ -510,14 +509,6 @@ export function SubmissionsList() {
                   setPageSize(size);
                   setPage(0);
                 }}
-                primaryAction={
-                  <Button asChild>
-                    <Link href="/extensions/amc/new">
-                      <Plus className="size-4" />
-                      Create New
-                    </Link>
-                  </Button>
-                }
               />
             }
             emptyState={

@@ -35,6 +35,12 @@ const serviceRowSchema = z.object({
   /* FR2.4. Nullable: a draft row the team has not priced yet is saved
      unpriced, and must not come back as a free service. */
   basePrice: z.number().min(0).nullable().optional(),
+  /*
+    Included at no charge, so the row has no base price to save. Optional
+    with a default rather than required, because a draft saved before
+    this existed has no such field and must still load.
+  */
+  free: z.boolean().optional().default(false),
   price: z.number().min(0).optional(),
 });
 

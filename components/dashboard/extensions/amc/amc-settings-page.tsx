@@ -27,6 +27,7 @@ import {
 import { toast } from "sonner";
 
 import { PageHeading, PillTabs, SectionCard } from "@/components/dashboard/shared/kaizen";
+import { AmcPhoneInput } from "./components/amc-phone-input";
 import { useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import {
   Dialog,
@@ -339,14 +340,14 @@ const PROVIDER_TEXT_FIELDS: {
   type?: "email";
   wide?: boolean;
 }[] = [
-  { key: "poBox", label: "P.O. Box" },
-  { key: "email", label: "Company email", type: "email" },
-  { key: "contractType", label: "Contract type", hint: "Printed in the contract's customer details." },
-  { key: "address", label: "Company address", wide: true },
-  { key: "standardResponseTime", label: "Standard response time", hint: "Printed in the proposal's commercial offer." },
-  { key: "emergencyResponseTime", label: "Emergency response time", hint: "Printed in the proposal's commercial offer." },
-  { key: "proposalValidity", label: "Proposal validity", hint: "Printed in the proposal details." },
-];
+    { key: "poBox", label: "P.O. Box" },
+    { key: "email", label: "Company email", type: "email" },
+    { key: "contractType", label: "Contract type", hint: "Printed in the contract's customer details." },
+    { key: "address", label: "Company address", wide: true },
+    { key: "standardResponseTime", label: "Standard response time", hint: "Printed in the proposal's commercial offer." },
+    { key: "emergencyResponseTime", label: "Emergency response time", hint: "Printed in the proposal's commercial offer." },
+    { key: "proposalValidity", label: "Proposal validity", hint: "Printed in the proposal details." },
+  ];
 
 type View = "values" | "clauses" | "scopes" | "approvers" | "history";
 
@@ -593,7 +594,7 @@ export function AmcSettingsPage() {
       const providerChanged =
         current.provider.contactNo !== defaults.provider.contactNo ||
         current.provider.coordinationEmails.join("|") !==
-          defaults.provider.coordinationEmails.join("|") ||
+        defaults.provider.coordinationEmails.join("|") ||
         PROVIDER_TEXT_FIELDS.some(({ key }) => current.provider[key] !== defaults.provider[key]);
 
       /* The brochure field by field, like the clauses: only what was edited. */
@@ -619,6 +620,14 @@ export function AmcSettingsPage() {
          per-key edit either. */
       const servicesChanged =
         JSON.stringify(current.services) !== JSON.stringify(defaults.services);
+      /*
+        And the account managers, whole, for the same reason: a list has
+        no per-key edit to express. Ships empty, so anything at all here
+        is a change.
+      */
+      const managersChanged =
+        JSON.stringify(current.accountManagers) !==
+        JSON.stringify(defaults.accountManagers);
 
       return {
         ...(approvalChanged ? { approval: current.approval } : {}),
@@ -628,6 +637,7 @@ export function AmcSettingsPage() {
         ...(servicesChanged ? { services: current.services } : {}),
         ...(Object.keys(serviceScopes).length ? { serviceScopes } : {}),
         ...(Object.keys(brochure).length ? { brochure } : {}),
+        ...(managersChanged ? { accountManagers: current.accountManagers } : {}),
       };
     },
     [defaults],
@@ -837,6 +847,116 @@ export function AmcSettingsPage() {
                 {field.hint ? <p className="text-muted-foreground text-xs">{field.hint}</p> : null}
               </div>
             ))}
+          </div>
+
+          {/*
+            The account managers a proposal can name (Jonathan, Oct 2026).
+
+            Clause 1.1 names one or two of them with a direct number, and
+            both were typed out per proposal -- so the same colleague
+            reached different clients under three spellings and, twice,
+            under a number that was no longer theirs. Kept here, picked
+            there, and the number travels with the name.
+
+            Inside Standard values rather than on a tab of its own:
+            everything on this card is a value that prints on every
+            document, and this is one more of them.
+          */}
+          <div className="mt-6 border-t pt-5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-medium">Account managers</h3>
+                <p className="text-muted-foreground text-xs pt-1">
+                  Offered on every proposal. The direct number is filled in
+                  from here, so it is corrected in one place.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  patch({
+                    accountManagers: [
+                      ...settings.accountManagers,
+                      { name: "", phone: "" },
+                    ],
+                  })
+                }
+              >
+                <Plus className="size-4" />
+                Add manager
+              </Button>
+            </div>
+
+            {settings.accountManagers.length === 0 ? (
+              <p className="text-muted-foreground mt-4 text-xs">
+                None yet. Until one is added, a proposal asks for the name and
+                the number to be typed, as it does today.
+              </p>
+            ) : (
+              <div className="mt-4 space-y-3">
+                {settings.accountManagers.map((manager, index) => (
+                  <div
+                    key={index}
+                    className="grid items-end gap-3 sm:grid-cols-[1fr_1fr_auto]"
+                  >
+                    <div className="space-y-1.5">
+                      <Label htmlFor={`amc-manager-name-${index}`}>Name</Label>
+                      <Input
+                        id={`amc-manager-name-${index}`}
+                        value={manager.name}
+                        placeholder="Full name"
+                        onChange={(event) => {
+                          const next = [...settings.accountManagers];
+                          next[index] = { ...next[index], name: event.target.value };
+                          patch({ accountManagers: next });
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor={`amc-manager-phone-${index}`}>
+                        Direct number
+                      </Label>
+                      {/*
+                        The same control every other phone field in the
+                        product uses, storing the full international
+                        number. A plain text box let "03420285429" be
+                        saved as typed, and that number then travels on to
+                        every proposal that names this person -- which is
+                        the whole reason the list exists.
+                      */}
+                      <AmcPhoneInput
+                        id={`amc-manager-phone-${index}`}
+                        value={manager.phone}
+                        onChange={(phone) => {
+                          const next = [...settings.accountManagers];
+                          next[index] = { ...next[index], phone };
+                          patch({ accountManagers: next });
+                        }}
+                      />
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Remove ${manager.name || "this account manager"}`}
+                      onClick={() =>
+                        patch({
+                          accountManagers: settings.accountManagers.filter(
+                            (_, i) => i !== index,
+                          ),
+                        })
+                      }
+                    >
+                      <Trash2 className="size-4" />
+                    </Button>
+                  </div>
+                ))}
+                <p className="text-muted-foreground text-xs">
+                  Removing somebody here leaves the proposals that already
+                  name them untouched; it only stops them being offered.
+                </p>
+              </div>
+            )}
           </div>
         </SectionCard>
       ) : null}
@@ -1351,11 +1471,11 @@ function TextLibrary({
                         dragId === item.id && "opacity-40",
                         /* A line in the gap it would go into. */
                         overId === item.id &&
-                          dragId !== item.id &&
-                          "before:bg-brand before:absolute before:inset-x-2 before:h-0.5 before:rounded-full before:content-['']",
+                        dragId !== item.id &&
+                        "before:bg-brand before:absolute before:inset-x-2 before:h-0.5 before:rounded-full before:content-['']",
                         overId === item.id &&
-                          dragId !== item.id &&
-                          (overBelow ? "before:-bottom-px" : "before:-top-px"),
+                        dragId !== item.id &&
+                        (overBelow ? "before:-bottom-px" : "before:-top-px"),
                       )}
                     >
                       {draggable ? (
@@ -1405,17 +1525,17 @@ function TextLibrary({
                             </Button>
                           ) : null}
                           {onDelete ? (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="text-muted-foreground hover:text-destructive size-7"
-                            aria-label={`Remove ${item.label}`}
-                            title="Remove"
-                            onClick={() => void removeItem(item)}
-                          >
-                            <Trash2 className="size-3.5" />
-                          </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="text-muted-foreground hover:text-destructive size-7"
+                              aria-label={`Remove ${item.label}`}
+                              title="Remove"
+                              onClick={() => void removeItem(item)}
+                            >
+                              <Trash2 className="size-3.5" />
+                            </Button>
                           ) : null}
                         </span>
                       ) : null}

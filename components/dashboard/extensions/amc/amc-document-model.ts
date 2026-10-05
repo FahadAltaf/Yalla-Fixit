@@ -2,6 +2,7 @@ import { formatCurrencyAED } from "@/utils/format-currency";
 
 import { buildAmcBrochure, type AmcBrochure } from "./amc-brochure";
 import { AMC_PROVIDER } from "./amc-constants";
+import { contractTermLabel, contractTermPhrase } from "./amc-date-utils";
 import { formatPhoneForDocument } from "./amc-phone";
 import { servicesForProperty } from "./amc-settings";
 import {
@@ -188,6 +189,18 @@ function opening(data: AmcComputedData): Block[] {
 function contractBlocks(data: AmcComputedData): Block[] {
   const { formData, totals, frequencyRows, settings } = data;
   const fill = (value: string) => fillBlocks(value, data);
+  /*
+    How long this contract runs, from its own dates (Jonathan, Oct 2026).
+
+    Two places in the document asserted a year regardless: the Period of
+    Service row printed the fixed words "1 Year Only" two rows above the
+    dates it was describing, and clause 7 said the term "shall commence
+    for 1 year". Both read from the dates now. `termLabel` is the row
+    ("6 Months Only"); `termPhrase` goes in the middle of a sentence
+    ("6 months").
+  */
+  const termLabel = contractTermLabel(totals.termMonths);
+  const termPhrase = contractTermPhrase(totals.termMonths);
   const selectedIds = formData.serviceRows.filter((r) => r.included).map((r) => r.serviceId);
 
   /* Parties */
@@ -227,7 +240,11 @@ function contractBlocks(data: AmcComputedData): Block[] {
   const details = detailsTable([
     ["Property Detail", formData.propertyDetail || formData.propertyAddress || "—"],
     ["Property Type", data.propertyTypeLabel],
-    ["Period of Service", [t("1 Year Only", { bold: true, tone: "brand" })]],
+    /*
+      The period, read from the dates rather than asserted. A six-month
+      contract used to contradict itself inside one table.
+    */
+    ["Period of Service", [t(termLabel, { bold: true, tone: "brand" })]],
     [
       "Contract Term",
       [
@@ -377,7 +394,25 @@ function contractBlocks(data: AmcComputedData): Block[] {
   /* A reference to a clause that has been removed says so, rather than
      printing a number that is now somebody else's. */
   const refText = (value: string) =>
-    value.replace(/\{\{clause:([A-Za-z]+)\}\}/g, (_, role: string) => numberOf.get(role) ?? "—");
+    value
+      .replace(
+        /\{\{clause:([A-Za-z]+)\}\}/g,
+        (_, role: string) => numberOf.get(role) ?? "—",
+      )
+      /*
+        {{term}} is how a clause says how long the contract runs, for
+        anything written from here on.
+      */
+      .replace(/\{\{term\}\}/g, termPhrase)
+      /*
+        And the same sentence as it was written before that placeholder
+        existed. The wording lives in AMC Settings, so the text already
+        saved on this install -- and frozen into every proposal already
+        sent -- carries the literal year. Rewriting it here means a short
+        contract prints correctly without an admin having to hunt down the
+        clause, and on a one-year contract it changes nothing.
+      */
+      .replace(/\bfor\s+(?:1|one)\s+year\b/gi, `for ${termPhrase}`);
   const fillRef = (value: string) => fill(value).map(refText);
 
   /* 2 — the services, numbered under the scope clause they sit in. The
@@ -547,7 +582,8 @@ function contractBlocks(data: AmcComputedData): Block[] {
             rows: zebra(
               frequencyRows.map((row) => [
                 cell(row.scope),
-                cell(String(row.units), { align: "center" }),
+                // Blank, not "1": see FrequencyRow.hasUnits.
+                cell(row.hasUnits ? String(row.units) : "", { align: "center" }),
                 cell(row.frequency, { align: "center" }),
                 cell([[t(referenceFor(row), { tone: "muted" })]], { align: "center" }),
               ]),

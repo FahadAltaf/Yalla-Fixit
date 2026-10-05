@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
-import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
+import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAuditBatch } from "@/lib/server/snagging/audit";
 import { assertTransition, isDesignatedReviewer } from "@/lib/server/snagging/workflow";
@@ -27,7 +27,16 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     if (!profile || !accessUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.APPROVE)) {
+    /*
+      Access to the module, not a second permission to decide.
+
+      This asked for Snagging's `approve` grant on top of the job's own
+      assignment, so a coordinator named as a job's reviewer -- which is
+      the portal's way of saying "you check this one" -- was refused by a
+      role setting nobody had connected to that dropdown. Who reviews is
+      settled below, by name, on the job.
+    */
+    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.VIEW)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -109,9 +118,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       none and picking it up claims it.
 
       Nothing updated means the job is missing, not theirs, or no longer
-      submitted -- and an admin, who is allowed regardless of either
-      name, still has to be let through. All of those fall to the read
-      below, which is the only path that pays for a second trip.
+      submitted. Those fall to the read below, which is the only path
+      that pays for a second trip, and which tells the three apart.
     */
     const { data: claimedRows, error: claimError } = await admin
       .from("snagging_jobs")
@@ -144,16 +152,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     if (!job) return NextResponse.json({ error: "Inspection not found" }, { status: 404 });
 
     // FR-6.01 — the named reviewer, or the approval manager where none is named.
-    if (
-      !isDesignatedReviewer(
-        profile.id,
-        job.reviewer_id,
-        job.approval_manager_id,
-        isAdminUser(accessUser),
-      )
-    ) {
+    if (!isDesignatedReviewer(profile.id, job.reviewer_id, job.approval_manager_id)) {
       return NextResponse.json(
-        { error: "Only this inspection's reviewer or approval manager can start its review." },
+        {
+          error: job.reviewer_id
+            ? "Only the reviewer named on this inspection can review it."
+            : "No reviewer is named on this inspection, so only its approval manager can review it.",
+        },
         { status: 403 },
       );
     }

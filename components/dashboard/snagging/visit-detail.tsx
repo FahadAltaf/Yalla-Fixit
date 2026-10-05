@@ -111,7 +111,13 @@ const CHECK_LABEL: Record<string, string> = {
 export default function VisitDetail({ taskId, visitId }: { taskId: string; visitId: string }) {
   const { userProfile } = useAuth();
   const canEdit = hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.EDIT);
-  const canApprove = hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.APPROVE);
+  /*
+    Deciding a visit answers to the same person deciding the inspection
+    does: the one named as the job's approval manager (FR-6.01). It used
+    to follow Snagging's `approve` permission, so anybody holding that
+    saw the buttons on every visit in the company and the server refused
+    them with a 403.
+  */
 
   const [detail, setDetail] = useState<SnaggingVisitDetail | null>(null);
   /*
@@ -155,6 +161,11 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
   useEffect(() => {
     void load();
   }, [load]);
+
+  const isApprovalManager = Boolean(
+    task?.approval_manager_id && userProfile?.id === task.approval_manager_id,
+  );
+  const managerName = task?.manager?.full_name ?? task?.manager?.email ?? null;
 
   const visit = detail?.visit ?? null;
   const quote = detail?.quotation ?? null;
@@ -482,7 +493,7 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
                       note. The client&apos;s report is not touched.
                     </li>
                   </ul>
-                  {canEdit && canApprove ? (
+                  {canEdit && isApprovalManager ? (
                     <div className="flex flex-wrap items-center gap-2">
                       <SubmitButton
                         pending={pending === "approve"}
@@ -504,8 +515,9 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
                     </div>
                   ) : (
                     <span>
-                      You can read this visit, but approving or sending it back
-                      needs approval rights on Snagging.
+                      {managerName
+                        ? `You can read this visit. ${managerName} is this job's approval manager, so the decision is theirs.`
+                        : "You can read this visit. Deciding it is the job's approval manager's, and none is named yet."}
                     </span>
                   )}
                 </AlertDescription>

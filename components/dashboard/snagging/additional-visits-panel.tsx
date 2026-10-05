@@ -51,6 +51,9 @@ import { Label } from "@/components/ui/label";
 import { SectionCard } from "@/components/dashboard/shared/kaizen";
 import { cn } from "@/lib/utils";
 import { snaggingService } from "@/modules/snagging";
+import { useAuth } from "@/context/AuthContext";
+import { hasResourceAction } from "@/lib/role-permissions";
+import { ActionType, ResourceType } from "@/types/types";
 import type { SnaggingJobVisit, SnaggingTask } from "@/types/types";
 
 import {
@@ -131,6 +134,20 @@ export function AdditionalVisitsPanel({ task }: { task: SnaggingTask }) {
     refreshes the job and History for every other tab.
   */
   const { visits: visitsSlice, visitsChanged, refreshVisits } = useJobDetail();
+  /*
+    Raising a chargeable return trip is a create, and the API has always
+    said so. The button did not: it was offered to everybody who could
+    open this tab, so an inspector filled the whole dialog in -- reason,
+    date, who is going, how it is charged -- pressed Add visit and got
+    the word "Forbidden". The permission is checked where the button is
+    now, so the dialog is never opened by somebody it cannot help.
+  */
+  const { userProfile } = useAuth();
+  const canCreate = hasResourceAction(
+    userProfile,
+    ResourceType.SNAGGING,
+    ActionType.CREATE,
+  );
   const visits = (visitsSlice.data?.visits ?? []) as VisitRow[];
   /* Who is on the job now: what a new visit opens on. */
   const jobRosterIds = useMemo(
@@ -470,17 +487,23 @@ export function AdditionalVisitsPanel({ task }: { task: SnaggingTask }) {
         description="Chargeable return trips on this job. Every area stays available, and anything found joins this inspection's report."
         bodyClassName="border-t"
         action={
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
-            <Plus className="size-4" />
-            Add visit
-          </Button>
+          canCreate ? (
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              <Plus className="size-4" />
+              Add visit
+            </Button>
+          ) : null
         }
       >
         {visits.length === 0 ? (
           <EmptyState
             icon={<CalendarClock className="size-6" />}
             title="No additional visits"
-            description="Add one when an area could not be inspected and the client is paying for a return trip, by quotation or by payment link."
+            description={
+              canCreate
+                ? "Add one when an area could not be inspected and the client is paying for a return trip, by quotation or by payment link."
+                : "A return trip is raised by whoever books the work. None has been on this job."
+            }
           />
         ) : (
           <div className="overflow-x-auto">
