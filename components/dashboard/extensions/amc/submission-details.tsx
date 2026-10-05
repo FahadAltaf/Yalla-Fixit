@@ -154,15 +154,39 @@ function buildTimelineFromEvents(
       case "proposal_sent":
       case "contract_sent": {
         const doc = event.type === "proposal_sent" ? "Proposal" : "Contract";
+        /* Marked sent with a working link, but the email did not go. */
+        const notEmailed =
+          !viaLink &&
+          (payload.outcome === "no_recipient" ||
+            payload.outcome === "email_failed" ||
+            payload.emailed === false);
         steps.push({
           label: viaLink
             ? `${doc} link ${resend ? "created again" : "created"}${by(event)}`
-            : `${doc} ${resend ? "emailed again" : "emailed to the client"}${by(event)}`,
+            : notEmailed
+              ? `${doc} marked as sent, but the email was not delivered${by(event)}`
+              : `${doc} ${resend ? "emailed again" : "emailed to the client"}${by(event)}`,
           at: event.at,
-          note: !viaLink && to ? `To ${to}` : null,
+          note: notEmailed
+            ? payload.outcome === "no_recipient"
+              ? "No customer email on the proposal; the link can be copied instead"
+              : `${to ? `To ${to}. ` : ""}${typeof payload.error === "string" ? payload.error : "Delivery failed"}`
+            : !viaLink && to
+              ? `To ${to}`
+              : null,
+          tone: notEmailed ? "bad" : undefined,
         });
         break;
       }
+      case "proposal_send_refused":
+      case "contract_send_refused":
+        steps.push({
+          label: `${event.type === "proposal_send_refused" ? "Proposal" : "Contract"} not sent${by(event)}`,
+          at: event.at,
+          note: event.note,
+          tone: "bad",
+        });
+        break;
       case "proposal_approved_by_client":
         steps.push({
           label: `${event.actor || "The client"} approved the proposal`,

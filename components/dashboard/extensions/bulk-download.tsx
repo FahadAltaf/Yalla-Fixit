@@ -18,7 +18,6 @@ import {
   Loader2, Search, Download, FileArchive, CheckCircle2,
   AlertCircle, Paperclip, XCircle, FolderArchive, Briefcase,
 } from "lucide-react";
-import { useAuth } from "@/context/AuthContext";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dialog";
 import {
@@ -110,7 +109,6 @@ export function ExtensionsPageClient() {
   // ── Which search is showing (was the uncontrolled Tabs default) ──
   const [mode, setMode] = useState<"appointment" | "workorder">("appointment");
 
-  const { settings } = useAuth();
 
   const isDownloading = downloadState.status === "downloading" || downloadState.status === "zipping";
 
@@ -200,7 +198,7 @@ export function ExtensionsPageClient() {
 
           try {
             const fileId = attachment["$file_id"];
-            const url = `/api/zoho-file?file_id=${encodeURIComponent(fileId)}&token=${settings?.oauth_access_token}`;
+            const url = `/api/zoho-file?file_id=${encodeURIComponent(fileId)}`;
             const buffer = await fetchWithRetry(url);
             zip.file(zipPath, buffer);
             successCount++;
@@ -242,7 +240,7 @@ export function ExtensionsPageClient() {
       setDownloadState((p) => ({ ...p, status: "error" }));
       toast.error("Download failed. Please try again.");
     }
-  }, [settings]);
+  }, []);
 
   // ─── By Appointment: Search ────────────────────────────────────────────────
 

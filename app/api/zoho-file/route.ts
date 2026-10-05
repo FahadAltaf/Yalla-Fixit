@@ -1,22 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerClientForApi } from "@/lib/supabase/supabase-server-client";
+import { requireResourceAccess } from "@/lib/server/require-access";
+import { getFsmContext } from "@/lib/server/zoho/fsm-client";
+import { ActionType, ResourceType } from "@/types/types";
 
+/*
+  Streams one Zoho FSM file for Extensions -> Bulk download. It used to run
+  for anyone and read the Zoho token with the caller's own Supabase role;
+  now it needs a signed-in user who can open Extensions, and the token is
+  read server-side with the service role.
+*/
 export async function GET(req: NextRequest) {
+  const gate = await requireResourceAccess(ResourceType.EXTENSIONS, ActionType.VIEW);
+  if (!gate.ok) return gate.response;
+
   const { searchParams } = new URL(req.url);
   const fileId = searchParams.get("file_id");
 
-  const supabase = await createServerClientForApi();
-  const { data: settings, error: settingsError } = await supabase
-  .from("settings")
-  .select("oauth_access_token")
-  .eq("id", 1)
-  .single();
-
-  if (settingsError || !settings?.oauth_access_token) {
-    return new Response(
-      JSON.stringify({ error: "Failed to fetch access token", details: settingsError }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
-    );
+  let settings: { oauth_access_token: string };
+  try {
+    const { token } = await getFsmContext();
+    settings = { oauth_access_token: token };
+  } catch {
+    return NextResponse.json({ error: "Zoho FSM is not configured" }, { status: 503 });
   }
 
   if (!fileId) {

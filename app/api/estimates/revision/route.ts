@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { createServerClientForApi } from "@/lib/supabase/supabase-server-client";
+import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
+import { requireResourceAccess } from "@/lib/server/require-access";
+import { getFsmAccessToken } from "@/lib/server/zoho/fsm-client";
+import { ActionType, ResourceType } from "@/types/types";
 
 const GET_ESTIMATE_EDGE_URL = `${process.env.SUPABASE_URL}/functions/v1/get-estimate`;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY!;
@@ -46,19 +49,14 @@ function relationId(value: unknown): string | undefined {
   return undefined;
 }
 
+/* Server-only: the token never leaves the server, and is read with the
+   service role (browsers can no longer read it, 20261005160000). */
 async function getAccessToken(): Promise<string> {
-  const supabase = await createServerClientForApi();
-  const { data, error } = await supabase
-    .from("settings")
-    .select("oauth_access_token")
-    .eq("id", 1)
-    .single();
-
-  if (error || !data?.oauth_access_token) {
+  try {
+    return await getFsmAccessToken(await createAdminServerClient());
+  } catch {
     throw new Error("Failed to load Zoho access token.");
   }
-
-  return data.oauth_access_token as string;
 }
 
 function getEstimateId(estimate: Record<string, unknown>): string | undefined {
@@ -375,6 +373,11 @@ function buildRevisionPayload(
 }
 
 export async function POST(req: NextRequest) {
+  /* Creates a Zoho estimate as the company: signed-in Extensions users
+     only (Quotation Templates is under Extensions). */
+  const gate = await requireResourceAccess(ResourceType.EXTENSIONS, ActionType.VIEW);
+  if (!gate.ok) return gate.response;
+
   try {
     const rawBody = await req.json();
     console.log("[revision] POST request body:", JSON.stringify(rawBody));
@@ -467,7 +470,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const supabase = await createServerClientForApi();
+    /* Service role: browsers no longer reach these tables directly. */
+    const supabase = await createAdminServerClient();
 
     const { data: revisionRows, error: revisionRowsError } = await supabase
       .from("estimate_revisions")

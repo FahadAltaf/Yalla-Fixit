@@ -3,7 +3,7 @@
 import { UserRoles } from "@/types/types";
 import { emailService } from "../../lib/email-service";
 import crypto from "crypto";
-import { createAdminServerClient, createServerClientWithCookies } from "../../lib/supabase/supabase-helpers";
+import { createAdminServerClient } from "../../lib/supabase/supabase-helpers";
 
 /**
  * Delete a user from Supabase auth
@@ -98,7 +98,9 @@ export async function requestPasswordReset(email: string, type: string) {
   try {
     // 1. Find user by email
     let userId: string | null = null;
-    const supabase  = await createServerClientWithCookies()
+    /* Service role: this runs for signed-out users, and password_resets
+       is not reachable by browser roles (migration 20261005180000). */
+    const supabase = await createAdminServerClient();
     if (type === "user") {
       const { data, error } = await supabase
         .from("user_profile")
@@ -152,7 +154,9 @@ export async function resetPassword(
 ) {
   try {
     // 1. Find token in password_resets table
-    const supabase = await createServerClientWithCookies()
+    /* Service role: reading reset tokens and auth.admin both need it; the
+       anon client this used could not update a password at all. */
+    const supabase = await createAdminServerClient();
     const { data, error } = await supabase
       .from("password_resets")
       .select("id, user_id, expires_at, used_at")

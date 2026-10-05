@@ -16,7 +16,8 @@
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 import { NextRequest, NextResponse } from "next/server";
-import { createServerClientForApi } from "@/lib/supabase/supabase-server-client";
+import { requireResourceAccess } from "@/lib/server/require-access";
+import { getFsmContext } from "@/lib/server/zoho/fsm-client";
 
 const BASE_URL = "https://fsm.zoho.com/fsm/v1";
 
@@ -80,18 +81,10 @@ interface WorkOrderResult {
 
 // ─── TOKEN ────────────────────────────────────────────────────────────────────
 
+/* Server-side, service role: the token never comes from the caller's role. */
 async function getAccessToken(): Promise<string> {
-  const supabase = await createServerClientForApi();
-  const { data: settings, error } = await supabase
-    .from("settings")
-    .select("oauth_access_token")
-    .eq("id", 1)
-    .single();
-
-  if (error || !settings?.oauth_access_token) {
-    throw new Error(`Failed to fetch access token: ${error?.message ?? "token is empty"}`);
-  }
-  return settings.oauth_access_token as string;
+  const { token } = await getFsmContext();
+  return token;
 }
 
 // ─── BASE FETCH ───────────────────────────────────────────────────────────────
@@ -140,7 +133,14 @@ async function getAppointmentAttachments(apptId: string): Promise<ZohoAttachment
 
 // ─── MAIN HANDLER ─────────────────────────────────────────────────────────────
 
+/*
+  A Zoho FSM debug route with no callers in the app. It used to answer
+  anyone; it is now for signed-in admins only.
+*/
 export async function GET(request: NextRequest) {
+  const gate = await requireResourceAccess(null, null, { adminOnly: true });
+  if (!gate.ok) return gate.response;
+
   const { searchParams } = new URL(request.url);
   const name       = searchParams.get("name");
   const comparator = searchParams.get("comparator") ?? "contains";

@@ -16,6 +16,12 @@ import {
 } from "@/lib/amc/placeholders";
 import { MAX_ATTACHMENT_BYTES, looksLikePdf } from "@/lib/server/email-request-policy";
 import { STALE_CLIENT_DECISION_FIELDS, SEND_TO, canSend } from "@/lib/amc/workflow";
+import { priceSubmission } from "@/lib/server/amc/pricing";
+import { toFils } from "@/lib/amc/pricing";
+import {
+  getAmcSettingsDefaults,
+  mergeAmcSettings,
+} from "@/components/dashboard/extensions/amc/amc-settings";
 
 /**
  * Sending a document to the client (FR5.4, FR5.6).
@@ -60,7 +66,7 @@ const sendSchema = z.object({
 });
 
 const SELECT =
-  "id, owner_id, status, customer, property, proposal_number, final_price, services, document_options, settings_snapshot, contract_settings_snapshot";
+  "id, owner_id, status, customer, property, proposal_number, final_price, discount_percent, services, document_options, settings_snapshot, contract_settings_snapshot";
 
 /* What a failed or refused attempt records: never the request, the token
    or the provider's full response. */
@@ -256,11 +262,46 @@ export async function POST(req: NextRequest) {
         ? /* A re-sent contract matches the one the client already has. */
           existing.contract_settings_snapshot
         : await readAmcSettings(admin);
+  /*
+    The stored fee is what the email, the list and the client page quote;
+    the document recomputes it from the rows against these settings. They
+    must agree, so a service switched off in Settings after approval stops
+    the send instead of producing a PDF with a lower total.
+  */
+  const mergedSettings = mergeAmcSettings(
+    getAmcSettingsDefaults(),
+    effectiveSettings as Parameters<typeof mergeAmcSettings>[1],
+  );
+  const repriced = priceSubmission({
+    services: (existing.services ?? []) as Parameters<typeof priceSubmission>[0]["services"],
+    discountPercent: Number(existing.discount_percent ?? 0),
+    unitType: String((existing.property as { unitType?: string } | null)?.unitType ?? ""),
+    settings: mergedSettings,
+  });
+  /* One fil of slack: proposals priced by the old code could round a
+     half-fil discount the other way. New proposals match exactly. */
+  if (
+    !repriced.ok ||
+    Math.abs(toFils(repriced.final_price) - toFils(Number(existing.final_price ?? 0))) > 1
+  ) {
+    await auditRefusal("price no longer matches the settings in force", {
+      reason: repriced.ok ? "final price differs" : repriced.error,
+    });
+    return NextResponse.json(
+      {
+        error: repriced.ok
+          ? "The proposal's price no longer matches its services. Open it, save it again and resubmit it for approval."
+          : `${repriced.error} The proposal has to be revised and approved again before it can be sent.`,
+      },
+      { status: 409 },
+    );
+  }
+
   /* Only text this document will print, from the settings it will use
      and the proposal's own fields (lib/amc/placeholders.ts). */
   const placeholders = findPlaceholders(
     printedAmcText(
-      effectiveSettings as Parameters<typeof printedAmcText>[0],
+      mergedSettings,
       existing as Parameters<typeof printedAmcText>[1],
       document,
     ),

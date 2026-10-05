@@ -1,9 +1,5 @@
 import { executeGraphQLBackend } from "@/lib/graphql-server";
-import {
-  GET_SETTINGS_BY_ID,
-  INSERT_SETTINGS,
-  UPDATE_SETTINGS_BY_ID,
-} from "./setting-graphql";
+import { GET_SETTINGS_BY_ID, INSERT_SETTINGS } from "./setting-graphql";
 
 const settingsService = {
   getSettingsById: async (values: { type: string }) => {
@@ -12,12 +8,24 @@ const settingsService = {
     });
     return response?.settingsCollection?.edges[0]?.node || null;
   },
-  updateSettingsById: async (data: unknown, id: string) => {
-    const response = await executeGraphQLBackend(UPDATE_SETTINGS_BY_ID, {
-      data,
-      filter: { id: { eq: id } },
+  /*
+    Appearance (theme and colours) only. Browsers cannot write the settings
+    table any more (migration 20261005160000), so this goes through
+    /api/settings/appearance, which checks the caller. `id` is kept for the
+    existing callers' signature; the route updates the portal's own row.
+  */
+  updateSettingsById: async (data: unknown, _id?: string) => {
+    void _id;
+    const response = await fetch("/api/settings/appearance", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
     });
-    return response.updatesettingsCollection.records[0];
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(body?.error ?? "Could not save the settings");
+    }
+    return body.settings;
   },
   insertSettings: async (data: unknown) => {
     const response = await executeGraphQLBackend(INSERT_SETTINGS, { data });

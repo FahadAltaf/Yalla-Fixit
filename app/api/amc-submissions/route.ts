@@ -478,12 +478,15 @@ export async function POST(req: NextRequest) {
   const admin = await createAdminServerClient();
   const now = new Date().toISOString();
 
+  const settings = await readSettingsOr503(admin);
+  if ("error" in settings) return settings.error;
+
   /* The server prices the proposal; totals in the request are ignored. */
   const priced = priceSubmission({
     services: payload.services,
     discountPercent: payload.discount_percent,
     unitType: payload.property.unitType,
-    settings: await readAmcSettings(admin),
+    settings: settings.value,
   });
   if (!priced.ok) {
     return NextResponse.json({ error: priced.error }, { status: 400 });
@@ -602,13 +605,15 @@ export async function PUT(req: NextRequest) {
     updates.property !== undefined
   ) {
     const existingProperty = existingRow.property as { unitType?: string } | null;
+    const settings = await readSettingsOr503(admin);
+    if ("error" in settings) return settings.error;
     const priced = priceSubmission({
       services: (updates.services ?? existingRow.services ?? []) as Parameters<
         typeof priceSubmission
       >[0]["services"],
       discountPercent: updates.discount_percent ?? Number(existingRow.discount_percent ?? 0),
       unitType: updates.property?.unitType ?? existingProperty?.unitType ?? "",
-      settings: await readAmcSettings(admin),
+      settings: settings.value,
     });
     if (!priced.ok) {
       return NextResponse.json({ error: priced.error }, { status: 400 });
@@ -643,12 +648,42 @@ export async function PUT(req: NextRequest) {
     })
     .eq("id", id)
     .eq("owner_id", profile.id)
+    /* Re-asserted: an autosave that lands just after an approval must not
+       rewrite the approved proposal. */
+    .in("status", EDITABLE_STATUSES)
     .select("*")
-    .single();
+    .maybeSingle();
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+  if (!data) {
+    return NextResponse.json(
+      { error: "This proposal changed status a moment ago and can no longer be edited. Reload it." },
+      { status: 409 },
+    );
+  }
 
   return NextResponse.json(mapRow(data as AmcSubmissionRow));
+}
+
+/* What PUT may still write over (isAmcSubmissionEditable). */
+const EDITABLE_STATUSES = ["draft", "sent_back", "proposal_rejected"];
+
+/* AMC Settings decide what may be priced; if they cannot be read, say so
+   as JSON rather than failing with an HTML 500. */
+async function readSettingsOr503(
+  admin: Awaited<ReturnType<typeof createAdminServerClient>>,
+): Promise<{ value: Awaited<ReturnType<typeof readAmcSettings>> } | { error: NextResponse }> {
+  try {
+    return { value: await readAmcSettings(admin) };
+  } catch (error) {
+    console.error("AMC settings read failed:", error);
+    return {
+      error: NextResponse.json(
+        { error: "AMC Settings could not be loaded, so the proposal was not saved. Try again." },
+        { status: 503 },
+      ),
+    };
+  }
 }

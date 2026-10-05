@@ -5,6 +5,7 @@ import {
   MAX_HTML_CHARS,
   checkEmailRequest,
   companyDomains,
+  safePdfFilename,
 } from "@/lib/server/email-request-policy";
 import { internalRequestHeaders, verifyInternalRequest } from "@/lib/internal-signature";
 
@@ -71,8 +72,6 @@ test("malformed recipients and payloads are refused with 400", () => {
     { ...base, to: "a@example.com", subject: "" },
     { ...base, to: "a@example.com", html: "x".repeat(MAX_HTML_CHARS + 1) },
     { ...base, to: "a@example.com", from: "spoof@example.com" },
-    { ...base, to: "a@example.com", attachment: { filename: "a.exe", content: PDF, contentType: "application/pdf" } },
-    { ...base, to: "a@example.com", attachment: { filename: "../a.pdf", content: PDF, contentType: "application/pdf" } },
     { ...base, to: "a@example.com", attachment: { filename: "a.pdf", content: PDF, contentType: "text/html" } },
     { ...base, to: "a@example.com", attachment: { filename: "a.pdf", content: NOT_PDF, contentType: "application/pdf" } },
   ];
@@ -80,6 +79,26 @@ test("malformed recipients and payloads are refused with 400", () => {
     const r = checkEmailRequest(body, "trusted", DOMAINS);
     assert.equal(r.ok ? null : r.status, 400, JSON.stringify(body).slice(0, 120));
   }
+});
+
+test("attachment names are cleaned, not refused", () => {
+  assert.equal(safePdfFilename("Quotation_QT#12&3,4.pdf"), "Quotation_QT_12_3_4.pdf");
+  assert.equal(safePdfFilename("../../etc/passwd"), "passwd.pdf");
+  assert.equal(safePdfFilename("a.exe"), "a.exe.pdf");
+  assert.equal(safePdfFilename("عرض.pdf"), "_.pdf");
+  assert.equal(safePdfFilename(".pdf"), "document.pdf");
+  const r = checkEmailRequest(
+    { ...base, to: "c@example.com", attachment: { filename: "Quotation #7.pdf", content: PDF, contentType: "application/pdf" } },
+    "trusted",
+    DOMAINS,
+  );
+  assert.ok(r.ok);
+  if (r.ok) assert.equal(r.request.attachment?.filename, "Quotation _7.pdf");
+});
+
+test("anonymous notifications may reach a subdomain of a company domain", () => {
+  assert.ok(checkEmailRequest({ ...base, to: "owner@mail.yallafixit.ae" }, "anonymous", DOMAINS).ok);
+  assert.equal(checkEmailRequest({ ...base, to: "owner@notyallafixit.ae" }, "anonymous", DOMAINS).ok, false);
 });
 
 test("company domains come from the sender address", () => {

@@ -212,11 +212,11 @@ Pre-existing issues recorded, not fixed: the two `amc-pdf-utils.tsx` type errors
 
 ## 11. Production migrations NOT yet applied
 
-`20261005100000_amc_close_direct_writes.sql`, `20261005110000_amc_proposal_number_beyond_9999.sql`, `20261005150000_restrict_shared_allow_all_policies.sql`. Apply only after the migration-history reconciliation (`docs/database-migration-reconciliation.md` step 6(e)), one at a time, with each file's verification query.
+`20261005100000_amc_close_direct_writes.sql`, `20261005110000_amc_proposal_number_beyond_9999.sql`, `20261005150000_restrict_shared_allow_all_policies.sql`, and, added in the integration pass (§16), `20261005160000_settings_hide_zoho_token.sql`, `20261005170000_estimate_tables_server_only.sql`, `20261005180000_password_resets_server_only.sql`. Order and checks: `docs/amc-hardening-production-runbook.md` §7 (the last three only after the code is deployed).
 
 ## 12. Remaining risks
 
-1. **`public.settings` exposes the Zoho FSM OAuth token to the anon key** (outside AMC, critical). See `docs/security-followup-shared-rls.md` §0.
+1. **`role_access` (RLS off), `roles` and `user_profile` are writable with the anon key: anyone can grant themselves admin** (outside AMC, critical, found in §16; not fixed). `public.settings` (Zoho token) and `password_resets` (account takeover) are fixed in code with migrations pending (§16).
 2. Until migration `20261005100000` is applied, D1/D2 remain open in production.
 3. `estimate_revisions` and `estimate_service_items` remain open to anon (needed today by unauthenticated routes and edge functions); `/api/graphql` has no authentication.
 4. The emailed PDF is browser-built; the server cannot prove it matches the approved data (follow-up: server-side generation).
@@ -258,3 +258,164 @@ Pre-existing issues recorded, not fixed: the two `amc-pdf-utils.tsx` type errors
 - **Reuse:** client links (`lib/server/link-token.ts` and the lifecycle rule here), audit (`amc_audit_events` with a `contract` entity type), email (`lib/server/send-email.ts`), todos (`related_type = 'amc_contract'`) and the reminders cron for renewals, and the snagging server-side PDF pipeline for a stored signed-contract archive.
 - **Pricing:** any additional-service quote reuses `lib/amc/pricing.ts`.
 - **Before starting:** apply the hardening migrations, fix `public.settings`, reconcile migration history, and take decisions 9–12 above, which shape the data model.
+
+---
+
+## 16. Integration & deployment readiness (5 Oct 2026, second pass)
+
+### 16.1 Latest main integration
+
+- `origin/main` is still `db3dfc6`, the base of this branch. **There was nothing to merge.**
+- The work that could conflict is uncommitted on the main checkout: 52 changed files, staged and unstaged.
+  - Only `components/dashboard/extensions/amc/submissions-list.tsx` overlaps with this branch.
+  - Main removes the list's "Create New" button. This branch changes the Approve condition.
+  - The two edits are in different hunks, and git merges them cleanly. No product decision is needed.
+- **Integration preview:** that uncommitted work was applied on top of this branch on a throwaway local branch, then deleted; nothing was committed or pushed from it. Results:
+  - 53/53 tests passed;
+  - the AMC type-check was clean (2 pre-existing errors only);
+  - `next build --webpack` succeeded.
+- **Merge strategy:**
+  1. Commit the main work.
+  2. Merge `amc-hardening` into main, or main into it. Expect the one auto-merged file.
+  3. Re-run `npm test` and the build.
+  4. If main gains `20261002100000_inspector_role.sql`, apply it after the baseline (runbook §3, §7).
+
+### 16.2 Review of 5201b96: findings fixed
+
+An independent read-only review of the first commit found:
+
+| Ref | Finding | Fix |
+|---|---|---|
+| H1 | Client links for proposals sent before 28 Sep returned 500. Their snapshots have no `clauseList` or `services`, and the public DTO trimmed them raw. **All 5 sent proposals in production have such snapshots; 2 have live links.** | Snapshot merged over the defaults before trimming (`publicSettingsFor`); test added |
+| M1 | A draft could get stuck: when Settings loaded before the draft, rows weren't reconciled, and every autosave returned 400 | Sync also runs after a draft loads; Settings load failure falls back to the shipped catalogue |
+| M2 | The hidden-services notice was garbled (regex lost its backslashes) | Fixed |
+| M3 | The document total could differ from the stored total when a service was switched off after approval | The send route re-prices against the settings it will print with, and refuses on mismatch (1-fil tolerance for proposals priced by the old code) |
+| M4 | The history said "emailed" for sends that weren't | The timeline shows "marked as sent, but the email was not delivered", and refused sends |
+| M5 | The anonymous owner notification needed an exact domain match | Subdomains of company domains accepted |
+| L1 | A settings read failure gave an HTML 500 | JSON 503 |
+| L2 | Form and server limits differed | Form schema now carries the server limits |
+| L3 | An autosave racing an approval could rewrite an approved proposal | The update re-asserts an editable status, else 409 |
+| L5 | The quotation email failed on filenames with `#`, `&`, `,` or non-ASCII characters | Filenames are cleaned, not refused; the content must still be a PDF |
+| tests | The token route did not use `clientTransition` | It does now (one rule; action/link mismatch is 400 in both) |
+
+### 16.3 Email callers (Task 2)
+
+Every caller of `/api/send-email` and `emailService` was re-checked on the merged tree (§5 table): AMC, Snagging (escalation, deliver, reject, quotation emails), Quotation Templates, Todos (assign and reminders), auth (invite, password reset) and the public quotation review. No scheduling code sends email.
+
+- **One incompatibility found and fixed:** quotation attachment filenames (L5).
+- **No authentication was weakened.**
+
+### 16.4 Zoho token exposure (Task 3): fixed in code, migration pending
+
+Read-only checks of production on 5 Oct 2026:
+
+- **Edge functions:** all six read and write `settings` with `SUPABASE_SERVICE_ROLE_KEY`:
+  - `token-refresher` (cron `zoho-token-refresh`, every 15 minutes) and `refresh-token`;
+  - `get-estimate`;
+  - `zoho-fsm-estimate-transitions`;
+  - `zoho-fsm-work-orders`;
+  - `zoho-fsm-appointments`.
+- **Where the secrets live:** the Zoho refresh token, client ID and client secret are edge-function secrets, not table columns.
+- **The real leak:** the portal requested `oauth_access_token` from the browser on every page, as anon, through `/api/graphql`, and cached it in `localStorage`.
+
+Changes:
+
+- **Browser query:** the GraphQL settings documents no longer select the token.
+- **Appearance:** saved through the new `/api/settings/appearance` (signed-in Settings users, service role).
+- **Bulk download:** no longer puts the token in URLs.
+- **`/api/zoho-file`:** signed-in Extensions users only; token read server-side.
+- **Estimate revision:** token read server-side.
+- **`app/api/test`** (an FSM debug proxy): admin only.
+- **Migration `20261005160000`:** browser roles get SELECT on the 17 branding columns only, with no writes. The token, the timezone and the shift columns become service-role only.
+
+**Credentials to rotate after deploy** (runbook §11): the Zoho OAuth refresh token and the client secret.
+
+### 16.5 Shared RLS status
+
+| Table | Status |
+|---|---|
+| `schedule_audit_events` | Migration `20261005150000` reviewed; locally verified |
+| `estimate_revisions`, `estimate_service_items` | Code moved behind auth with the service role; migration `20261005170000` |
+| `password_resets` | **New, critical (account takeover).** Fixed in code and migration `20261005180000` |
+| `settings` | §16.4 |
+| `role_access` (RLS off), `roles`, `user_profile` | **New, critical (anyone can grant themselves admin). NOT fixed: security blocker.** Needs user/role management moved off anon GraphQL first |
+| Edge functions (`verify_jwt = false`, token logged) | **Not fixed** (outside the repo). Documented |
+
+### 16.6 Migrations (all NOT applied)
+
+| File | Locally verified (twice, role-by-role) |
+|---|---|
+| `20261005100000_amc_close_direct_writes.sql` | Yes |
+| `20261005110000_amc_proposal_number_beyond_9999.sql` | Yes (9998 → 10001, no collision) |
+| `20261005150000_restrict_shared_allow_all_policies.sql` | Yes |
+| `20261005160000_settings_hide_zoho_token.sql` | Yes (branding readable, token not, service role unaffected) |
+| `20261005170000_estimate_tables_server_only.sql` | Yes |
+| `20261005180000_password_resets_server_only.sql` | Yes |
+
+**How they were tested:** a throwaway local PostgreSQL 15 cluster (`scratchpad/pgtest`, outside the repo).
+
+- **Rebuilt there:**
+  - Supabase's roles and default privileges;
+  - the seven production AMC migrations;
+  - the production shape and live policy names of `settings`, the estimate tables, `schedule_audit_events` and `password_resets`.
+- **Run:** each new migration was applied twice, and then each role tried the forbidden reads and writes.
+
+**Limitations:**
+- Not run against a restore of the real production schema (runbook §2.5 asks for that).
+- pg_graphql behaviour with column grants was not exercised locally.
+- Sequences behind the estimate tables' ids keep their default grants (harmless).
+
+### 16.7 Runbook and smoke test
+
+- [`amc-hardening-production-runbook.md`](amc-hardening-production-runbook.md): 13 sections, each step labelled SAFE AUTOMATED / MANUAL DEVOPS / PRODUCTION CHANGE / CREDENTIAL ROTATION, with backup, history reconciliation, the never-replay list, apply order, RLS checks, deploy, rotation and rollback. **Prepared, not executed.**
+- [`amc-hardening-production-smoke-test.md`](amc-hardening-production-smoke-test.md): AMC end to end, 16 security checks, 8 existing-module checks. **Not yet run** (it runs after deployment).
+
+### 16.8 Verification (final code)
+
+| Check | Result |
+|---|---|
+| `npm test` | **57 passed, 0 failed** |
+| ESLint, every changed and added file | **0 problems** |
+| TypeScript over all changed areas (AMC, email, settings, estimates, auth, zoho-file) | **0 new errors.** 2 pre-existing errors in the untouched `amc-pdf-utils.tsx` (html2canvas types) |
+| `next build --webpack` | **Succeeded** (exit 0), on the final code; only warning: Next.js `middleware` deprecation (pre-existing) |
+| Local migration tests | **All 6 migrations, twice, all role checks passed** |
+
+**Pre-existing, not fixed:**
+- the two `amc-pdf-utils.tsx` type errors;
+- the default Turbopack build fails (webpack used);
+- build logs print "Dynamic server usage … used `cookies`" for dashboard routes (expected; they render on demand);
+- Next.js warns that `middleware` is deprecated in favour of `proxy`.
+
+**New failures introduced by this work:** none.
+
+### 16.9 Manual production steps
+
+1. Merge (§16.1).
+2. Backup.
+3. Reconcile the migration history (DevOps).
+4. Deploy the code.
+5. Apply the six migrations in runbook order.
+6. Verify the RLS.
+7. Run the smoke tests.
+8. Rotate the Zoho credentials.
+
+If the reconciliation cannot be scheduled quickly, use the runbook §3a emergency path for the Zoho token and password resets.
+
+### 16.10 Remaining business decisions
+
+Unchanged from §13: self-approval policy, layout sign-off, OI-5 / clause 6.3, 5% VAT, typed-name signature (and printing it), PPM and handyman default frequencies, client link validity, early signed rows as test data, linking to `snagging_clients` / `snagging_properties`, where entitlement usage lives, property assessment.
+
+### 16.11 Classification of this phase's tasks
+
+| Task | Status |
+|---|---|
+| 1 Review hardening | **COMPLETED** (11 findings fixed) |
+| 2 Email callers | **COMPLETED** |
+| 3 Zoho token | **COMPLETED** in repo · **PRODUCTION DEPLOYMENT ACTION** (deploy + migration) · **CREDENTIAL ROTATION REQUIRED** |
+| 4 Shared RLS | **COMPLETED** for estimates / schedule audit (+ password_resets) · **BLOCKED** for roles / role_access / user_profile (needs a code phase) |
+| 5 Main conflicts | **COMPLETED** (nothing to merge on origin; uncommitted main work verified compatible) |
+| 6 Reconciliation runbook | **COMPLETED** · **MANUAL DEVOPS ACTION** to execute |
+| 7 Migration validation | **COMPLETED** (local; limitations noted) |
+| 8 Smoke-test plan | **COMPLETED** · **PRODUCTION DEPLOYMENT ACTION** to run |
+| 9 Final verification | **COMPLETED** |
+| 10 Readiness report | **COMPLETED** |

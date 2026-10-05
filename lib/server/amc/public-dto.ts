@@ -1,6 +1,10 @@
 import { z } from "zod";
 
-import type { AmcSettings } from "@/components/dashboard/extensions/amc/amc-settings";
+import {
+  getAmcSettingsDefaults,
+  mergeAmcSettings,
+  type AmcSettings,
+} from "@/components/dashboard/extensions/amc/amc-settings";
 
 /**
  * What the client's link (app/api/amc/[token]) may return, built field by
@@ -109,6 +113,27 @@ export function toPublicSettings(
     brochure: { ...settings.brochure },
     approval: { approvers: [] },
   };
+}
+
+/**
+ * The public settings for a sent document: its snapshot merged over the
+ * shipped defaults (as the renderer does), or live settings when there is
+ * no snapshot, then trimmed. Snapshots taken before 28 Sep 2026 have no
+ * clauseList or services; trimming them raw threw, which broke the link.
+ */
+export function publicSettingsFor(
+  snapshot: Partial<AmcSettings> | null | undefined,
+  /** Live settings, read only when there is no snapshot. */
+  live: AmcSettings | null,
+  includedServiceIds: ReadonlyArray<string>,
+): AmcSettings {
+  const settings = snapshot
+    ? mergeAmcSettings(
+        getAmcSettingsDefaults(),
+        snapshot as Parameters<typeof mergeAmcSettings>[1],
+      )
+    : (live ?? getAmcSettingsDefaults());
+  return toPublicSettings(settings, includedServiceIds);
 }
 
 /* ------------------------------------------------------------------ */

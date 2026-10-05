@@ -1,6 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createServerClientForApi } from "@/lib/supabase/supabase-server-client";
+import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
+import { requireResourceAccess } from "@/lib/server/require-access";
+import { ActionType, ResourceType } from "@/types/types";
+
+/*
+  Images attached to quotation service items. Every method needs a
+  signed-in user who can open Extensions; table reads and writes use the
+  service role (browsers no longer reach estimate_service_items, migration
+  20261005170000). Storage still goes through the caller's session.
+*/
+async function gate() {
+  return requireResourceAccess(ResourceType.EXTENSIONS, ActionType.VIEW);
+}
 import { ServiceItemImage } from "@/components/dashboard/extensions/quotation-templates/quotation-templates";
 
 const querySchema = z.object({
@@ -36,6 +49,8 @@ function getStoragePathFromPublicUrl(
 }
 
 export async function GET(req: NextRequest) {
+  const access = await gate();
+  if (!access.ok) return access.response;
   try {
     const parsed = querySchema.safeParse({
       quotationId: req.nextUrl.searchParams.get("quotationId"),
@@ -48,8 +63,8 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const supabase = await createServerClientForApi();
-    let query = supabase
+    const db = await createAdminServerClient();
+    const query = db
       .from("estimate_service_items")
       .select("quotation_id,quotation_name,service_item_id,supabase_url")
       .eq("quotation_id", parsed.data.quotationId);
@@ -77,6 +92,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const access = await gate();
+  if (!access.ok) return access.response;
   try {
     const formData = await req.formData();
     const quotationId = formData.get("quotationId");
@@ -123,7 +140,8 @@ export async function POST(req: NextRequest) {
     }
 
     const supabase = await createServerClientForApi();
-    const { data: existingRows, error: existingError } = await supabase
+    const db = await createAdminServerClient();
+    const { data: existingRows, error: existingError } = await db
       .from("estimate_service_items")
       .select("id")
       .eq("quotation_id", parsed.data.quotationId)
@@ -184,7 +202,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const { data: inserted, error: insertError } = await supabase
+    const { data: inserted, error: insertError } = await db
       .from("estimate_service_items")
       .insert(uploadedRows)
       .select("quotation_id,quotation_name,service_item_id,supabase_url");
@@ -211,6 +229,8 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
+  const access = await gate();
+  if (!access.ok) return access.response;
   try {
     const parsed = deleteSchema.safeParse(await req.json());
     if (!parsed.success) {
@@ -221,7 +241,8 @@ export async function DELETE(req: NextRequest) {
     }
 
     const supabase = await createServerClientForApi();
-    const { error: deleteRowError } = await supabase
+    const db = await createAdminServerClient();
+    const { error: deleteRowError } = await db
       .from("estimate_service_items")
       .delete()
       .eq("quotation_id", parsed.data.quotationId)

@@ -160,6 +160,9 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
     text the client may never be sent.
   */
   const [liveSettings, setLiveSettings] = useState<AmcSettings | undefined>();
+  /* Bumped when a saved proposal is loaded into the form, so the service
+     rows are reconciled with Settings after the load as well as before. */
+  const [loadedTick, setLoadedTick] = useState(0);
   const { confirm, dialog: confirmDialog } = useConfirm();
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const activeSavesRef = useRef(0);
@@ -199,6 +202,10 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
         toast.error(
           "Couldn't load the latest AMC Settings, so the preview may show the default wording. Reload the page before you send anything.",
         );
+        /* Rows still have to follow some catalogue, or a ticked service the
+           server will refuse could never be unticked. The shipped list is
+           what the previews already fall back to. */
+        if (!cancelled) setLiveSettings((current) => current ?? getAmcSettingsDefaults());
       });
     return () => {
       cancelled = true;
@@ -211,6 +218,7 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
         const submission =
           await amcSubmissionsService.getSubmission(submissionId);
         form.reset(submissionToFormData(submission));
+        setLoadedTick((tick) => tick + 1);
         setSubmissionMeta({
           status: submission.status,
           sentBackReason: submission.sent_back_reason ?? null,
@@ -306,7 +314,7 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
         } on this kind of property any more.`,
       );
     }
-  }, [unitType, form, liveSettings]);
+  }, [unitType, form, liveSettings, loadedTick]);
 
   const persistDraft = useCallback(
     (generatedDocument?: AmcDocumentType) => {

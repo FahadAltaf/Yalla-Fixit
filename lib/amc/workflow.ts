@@ -55,7 +55,7 @@ const SUBMITTABLE = new Set(["draft", "sent_back", "proposal_rejected"]);
 
 export type TransitionCheck =
   | { ok: true; to: string }
-  | { ok: false; status: 403 | 409; error: string };
+  | { ok: false; status: 400 | 403 | 409; error: string };
 
 /**
  * Whether `action` may move a proposal from `from`, for this caller.
@@ -135,7 +135,7 @@ export function clientTransition(
   from: string,
 ): TransitionCheck {
   if ((action === "sign") !== (linkKind === "contract")) {
-    return { ok: false, status: 409, error: "That action does not apply to this link" };
+    return { ok: false, status: 400, error: "That action does not apply to this link" };
   }
   const expected = linkKind === "contract" ? "contract_sent" : "proposal_sent";
   if (from !== expected) {

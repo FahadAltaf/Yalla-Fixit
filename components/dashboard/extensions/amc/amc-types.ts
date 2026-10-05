@@ -49,8 +49,16 @@ export const amcAccountManagerSchema = z.object({
 export const amcServiceRowSchema = z.object({
   serviceId: z.string().min(1),
   included: z.boolean(),
-  units: z.coerce.number().int().min(1, "Units must be at least 1"),
-  frequency: z.coerce.number().int().min(1, "Frequency must be at least 1"),
+  units: z.coerce
+    .number()
+    .int()
+    .min(1, "Units must be at least 1")
+    .max(10_000, "Units can be at most 10,000"),
+  frequency: z.coerce
+    .number()
+    .int()
+    .min(1, "Frequency must be at least 1")
+    .max(1_000, "Frequency can be at most 1,000"),
   /*
     FR2.4: entered per proposal, replacing the unitRate constant. Optional
     here and enforced per row in superRefine, so an unchecked row is never
@@ -60,6 +68,7 @@ export const amcServiceRowSchema = z.object({
   basePrice: z.coerce
     .number()
     .min(0, "Base price cannot be negative")
+    .max(10_000_000, "Base price can be at most 10,000,000")
     .optional(),
   price: z.coerce.number().min(0).optional(),
 });

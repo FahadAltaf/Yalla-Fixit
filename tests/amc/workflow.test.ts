@@ -82,7 +82,8 @@ test("client answers: the right link, at the right stage", () => {
   assert.deepEqual(clientTransition("sign", "contract", "contract_sent"), { ok: true, to: "signed" });
 
   // A proposal link cannot sign; a contract link cannot approve.
-  assert.equal(clientTransition("sign", "proposal", "proposal_sent").ok, false);
+  const wrongLink = clientTransition("sign", "proposal", "proposal_sent");
+  assert.equal(wrongLink.ok ? null : wrongLink.status, 400);
   assert.equal(clientTransition("approve", "contract", "contract_sent").ok, false);
 
   // Answer once: a second answer is refused.

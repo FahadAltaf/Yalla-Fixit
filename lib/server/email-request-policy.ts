@@ -35,15 +35,24 @@ const email = z
 
 const recipients = z.union([email, z.array(email).min(1).max(MAX_RECIPIENTS)]);
 
+/**
+ * An attachment name made safe rather than refused: callers build it from
+ * quotation numbers that may hold any character. Path parts are dropped,
+ * anything outside letters, digits, space and . _ - ( ) becomes "_", and
+ * it always ends in .pdf (the content itself must be a PDF, checked below).
+ */
+export function safePdfFilename(name: string): string {
+  const base = (name.split(/[\\/]/).pop() ?? "").replace(/\.pdf$/i, "");
+  const stem = base
+    .replace(/[^\w ().-]+/g, "_")
+    .replace(/^[.\s]+/, "")
+    .slice(0, 140)
+    .trim();
+  return `${stem || "document"}.pdf`;
+}
+
 const attachment = z.object({
-  filename: z
-    .string()
-    .trim()
-    .min(1)
-    .max(150)
-    // Letters, digits, space and . _ - ( ), ending in .pdf: no paths, no
-    // header-breaking characters, no double extensions that hide a type.
-    .regex(/^[\w ().-]+\.pdf$/i, "Attachment must be a .pdf file"),
+  filename: z.string().trim().min(1).max(300).transform(safePdfFilename),
   content: z
     .string()
     .min(1)
@@ -100,6 +109,12 @@ function domainOf(address: string): string {
   return address.slice(address.lastIndexOf("@") + 1).toLowerCase();
 }
 
+/** The domain itself or a subdomain of it (mail.example.com for example.com). */
+function inCompanyDomain(address: string, domains: string[]): boolean {
+  const domain = domainOf(address);
+  return domains.some((d) => domain === d || domain.endsWith(`.${d}`));
+}
+
 export type EmailPolicyResult =
   | { ok: true; request: EmailRequest }
   | { ok: false; status: 400 | 403; error: string };
@@ -136,7 +151,7 @@ export function checkEmailRequest(
         error: "Not allowed without signing in",
       };
     }
-    if (!domains.length || !domains.includes(domainOf(to))) {
+    if (!domains.length || !inCompanyDomain(to, domains)) {
       return {
         ok: false,
         status: 403,

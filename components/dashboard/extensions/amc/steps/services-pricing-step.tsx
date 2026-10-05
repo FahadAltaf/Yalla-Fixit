@@ -59,7 +59,7 @@ export function ServicesPricingStep({ form, catalogue }: StepProps) {
   );
   const hiddenServices = catalogue
     .filter((service) => service.enabled !== false && !offeredIds.has(service.id))
-    .map((service) => service.label.replace(/s*(.*?)s*/g, " ").trim());
+    .map((service) => service.label.replace(/\s*\(.*?\)\s*/g, " ").trim());
   const showPriceList = form.watch("optionalSections.supplyInstallPriceList");
   const priceListRows = form.watch("priceListRows") ?? [];
 

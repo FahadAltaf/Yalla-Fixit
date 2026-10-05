@@ -1,4 +1,10 @@
 
+/*
+  Only the columns the browser may read (migration 20261005160000 grants
+  exactly these to anon/authenticated). The Zoho OAuth token used to be in
+  every one of these documents, which put it in every visitor's browser
+  and in localStorage; it is server-only now (lib/server/zoho/fsm-client).
+*/
 export const GET_SETTINGS_BY_ID = `
     query getSettingsById($filter: settingsFilter) {
         settingsCollection(filter: $filter) {
@@ -21,7 +27,6 @@ export const GET_SETTINGS_BY_ID = `
             logo_horizontal_url
             updated_at
             type
-            oauth_access_token
           
         }
       }
@@ -44,7 +49,6 @@ export const UPDATE_SETTINGS_BY_ID = `
         social_links
         created_at
         updated_at
-        oauth_access_token
         logo_url
         logo_horizontal_url
         favicon_url
@@ -68,7 +72,6 @@ export const INSERT_SETTINGS = `
         site_description
         meta_keywords
         contact_email
-        oauth_access_token
         logo_horizontal_url
         social_links
         created_at

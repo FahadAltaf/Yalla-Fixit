@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { toPublicSettings, toPublicStatus } from "@/lib/server/amc/public-dto";
+import { publicSettingsFor, toPublicSettings, toPublicStatus } from "@/lib/server/amc/public-dto";
 import { getAmcSettingsDefaults } from "@/components/dashboard/extensions/amc/amc-settings";
 
 function internalSettings() {
@@ -37,6 +37,30 @@ test("only this proposal's services and scopes are sent", () => {
   for (const id of Object.keys(dto.serviceScopes)) {
     assert.ok(["ac-ppm", "handyman"].includes(id), id);
   }
+});
+
+test("a snapshot from before 28 Sep (no clauseList, no services) still renders", () => {
+  // Shape of every sent proposal's snapshot in production on 5 Oct 2026.
+  const full = getAmcSettingsDefaults();
+  const old = {
+    provider: { ...full.provider, contactNo: "800-PERFECT" },
+    clauses: full.clauses,
+    serviceScopes: full.serviceScopes,
+    brochure: full.brochure,
+    approval: { approvers: ["behrouz@yallafixit.ae"] },
+  };
+  const dto = publicSettingsFor(old as never, null, ["ac-ppm"]);
+  assert.ok(dto.clauseList.length > 0, "clauses come back from the defaults");
+  assert.deepEqual(dto.services.map((s) => s.id), ["ac-ppm"]);
+  assert.equal(dto.provider.contactNo, "800-PERFECT", "the snapshot's own values win");
+  assert.deepEqual(dto.approval, { approvers: [] });
+});
+
+test("with no snapshot, live settings are used (trimmed)", () => {
+  const live = internalSettings();
+  const dto = publicSettingsFor(null, live, ["handyman"]);
+  assert.deepEqual(dto.services.map((s) => s.id), ["handyman"]);
+  assert.deepEqual(dto.approval, { approvers: [] });
 });
 
 test("an open link carries the document facts; a closed one only the outcome", () => {

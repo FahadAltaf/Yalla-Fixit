@@ -4,6 +4,19 @@ Branch `amc-hardening`, 5 Oct 2026. Nothing here is applied. The proposed
 migration, `supabase/migrations/20261005150000_restrict_shared_allow_all_policies.sql`,
 is marked "NOT APPLIED. Requires approval."
 
+## Status update, 5 Oct 2026 (integration phase)
+
+| Finding | Status on branch `amc-hardening` |
+|---|---|
+| `settings` exposes the Zoho token (§0) | **Fixed in code** (the browser no longer requests it; appearance is saved by `/api/settings/appearance`; zoho-file, estimate revision and the debug route read it server-side behind auth) **plus migration `20261005160000_settings_hide_zoho_token.sql`** (not applied). Rotation required after deploy (runbook §11). |
+| `estimate_revisions`, `estimate_service_items` open | **Fixed in code** (dashboard estimate routes need a signed-in Extensions user and use the service role) **plus migration `20261005170000_estimate_tables_server_only.sql`** (not applied). The get-estimate edge function reads revisions with the service role, so it is unaffected. |
+| `schedule_audit_events` open | Migration `20261005150000` (not applied), verified locally. |
+| `password_resets` open (**account takeover**) | Found 5 Oct 2026. **Fixed in code** (reset actions use the service role, which also repairs a reset flow that could not set a password) **plus migration `20261005180000_password_resets_server_only.sql`** (not applied). |
+| `role_access` (RLS off), `roles`, `user_profile` open (**privilege escalation to admin**) | Found 5 Oct 2026. **Not fixed: security blocker.** User and role management write these from the browser through `/api/graphql` as anon; they must move to authenticated server routes before the tables can be closed. |
+| Edge functions are public Zoho FSM proxies (`verify_jwt = false`); `zoho-fsm-estimate-transitions` logs the token | Found 5 Oct 2026 by reading the deployed source (read-only). **Not fixed** (deployed outside the repo). Each should require a valid user JWT or a server secret and stop logging `settings`. |
+
+All the migrations above were applied twice to a local Postgres 15 rebuilt with production's policies and grants for these tables, with role-by-role checks (hardening report §16).
+
 ## 0. Added after the analysis below: `public.settings` exposes the Zoho FSM token (CRITICAL)
 
 Found on 5 Oct 2026 while checking the `revision/route.ts` lead in §3, with

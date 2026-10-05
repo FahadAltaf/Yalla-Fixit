@@ -146,6 +146,9 @@ Areas: base 1, estimates 3, other 1, todos 4, scheduling 17, snagging 49, amc 7.
 |---|---|---|
 | `20261005100000` | amc_close_direct_writes | **Not applied anywhere.** Drops the three AMC write policies, revokes writes on `amc_submissions` and the AMC sequences from `anon`/`authenticated`. Rollback SQL is in its header (lines 49–59). Apply only at step 6(e). |
 | `20261005110000` | amc_proposal_number_beyond_9999 | **Not applied anywhere.** Adds `public.amc_next_proposal_number()` (one `nextval`, pads to at least four digits, never truncates) and points the `proposal_number` default at it. Changes no existing row and does not touch the sequence. Rollback in its header. Apply at step 6(e), after `20261005100000`. |
+| `20261005160000` | settings_hide_zoho_token | **Not applied anywhere.** Drops "Allow All on Settings", revokes browser roles, grants SELECT on the branding columns only; the Zoho token becomes service-role only. Apply after the code deploy. |
+| `20261005170000` | estimate_tables_server_only | **Not applied anywhere.** Drops the open policies on `estimate_revisions` and `estimate_service_items` (both live and repo policy names) and revokes browser roles. Apply after the code deploy. |
+| `20261005180000` | password_resets_server_only | **Not applied anywhere.** Drops "Allow All on Password Resets" and revokes browser roles. Apply after the code deploy. |
 | `20261005150000` | restrict_shared_allow_all_policies | **Not applied anywhere.** Drops "Allow All on schedule_audit_events" (created by `20260721090000:67-73`) and revokes all privileges on `schedule_audit_events` from `anon`/`authenticated` (lines 93, 102). Its header points to pre-apply checks in `docs/security-followup-shared-rls.md`. Apply only at step 6(e), as a separate push. |
 
 ### In progress on main, not on this branch
@@ -368,7 +371,7 @@ supabase migration repair --status reverted 20260924080610 --linked
 ### (e) Apply genuinely pending migrations, one at a time
 
 1. Confirm the remote history now looks as expected: `supabase migration list --linked` should show local and remote matching, with only the pending file(s) unapplied.
-2. Run `supabase db push --dry-run --linked`. The list it prints must be exactly the intended file(s): at the time of writing, `20261005100000_amc_close_direct_writes.sql`, `20261005110000_amc_proposal_number_beyond_9999.sql` and `20261005150000_restrict_shared_allow_all_policies.sql`. **If it lists anything else, stop.** To push one file at a time, temporarily move the later file out of the folder, or push each from a branch that contains only that file.
+2. Run `supabase db push --dry-run --linked`. The list it prints must be exactly the intended file(s): at the time of writing, `20261005100000`, `20261005110000`, `20261005150000`, `20261005160000`, `20261005170000` and `20261005180000` (the exact order and checks are in `amc-hardening-production-runbook.md` §7). **If it lists anything else, stop.** To push one file at a time, temporarily move the later file out of the folder, or push each from a branch that contains only that file.
 3. Run `supabase db push --linked`. This executes the file and inserts its history row in one transaction.
 4. Run the verification block at the end of `20261005100000` (pg_policies and grants), and queries 7.4, 7.5 and 7.9. Smoke-test the AMC flow in the portal: create, submit, approve, send, client decision.
 5. Repeat for any other pending file, such as `20261002100000_inspector_role.sql` once it is merged, as a separate push.

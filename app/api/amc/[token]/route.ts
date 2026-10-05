@@ -2,11 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { readAmcSettings } from "@/lib/server/amc/settings";
+import type { AmcSettings } from "@/components/dashboard/extensions/amc/amc-settings";
+import { clientTransition } from "@/lib/amc/workflow";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import {
   MAX_DECISION_BODY_BYTES,
   decisionSchema,
-  toPublicSettings,
+  publicSettingsFor,
   toPublicStatus,
 } from "@/lib/server/amc/public-dto";
 import { resolveLink, type LinkRow } from "@/lib/server/amc/link-resolution";
@@ -124,10 +126,17 @@ async function toPublicDocument(
   /* FR6.4: the text this document was sent with. A contract has its own
      copy; contracts sent before it did went out with the proposal's. The
      live fallback only covers rows sent before snapshots existed. */
-  const sentSettings =
-    ((kind === "contract" ? row.contract_settings_snapshot : null) ??
-      row.settings_snapshot ??
-      (await readAmcSettings(admin))) as Parameters<typeof toPublicSettings>[0];
+  const snapshot = ((kind === "contract" ? row.contract_settings_snapshot : null) ??
+    row.settings_snapshot ??
+    null) as Partial<AmcSettings> | null;
+  /* Merged over the defaults, then trimmed (publicSettingsFor). Snapshots
+     taken before 28 Sep 2026 -- every sent proposal in production on
+     5 Oct 2026 -- have no clauseList or services of their own. */
+  const settings = publicSettingsFor(
+    snapshot,
+    snapshot ? null : await readAmcSettings(admin),
+    includedIds,
+  );
   return {
     source: {
       property: row.property ?? {},
@@ -139,7 +148,7 @@ async function toPublicDocument(
     documentType: kind,
     /* Only what this document prints: no approver emails, no disabled
        clauses, no other services' scopes. */
-    settings: toPublicSettings(sentSettings, includedIds),
+    settings,
     sentAt:
       (kind === "contract" ? row.contract_sent_at : row.proposal_sent_at) ?? null,
   };
@@ -204,22 +213,19 @@ export async function POST(
     const body = parsed.data;
     const now = new Date().toISOString();
 
-    const isSigning = body.action === "sign";
-    if (isSigning !== (kind === "contract")) {
-      return NextResponse.json(
-        { error: "That action does not apply to this link" },
-        { status: 400 },
-      );
-    }
-
     /*
-      FR5.5 — "the answer and the time are recorded", once. The expected
-      status is re-asserted on the update, so a client who leaves the page
-      open and clicks twice, or forwards the link to a colleague who also
-      answers, cannot overwrite the first answer.
+      FR5.5 — "the answer and the time are recorded", once. The rule is
+      lib/amc/workflow.ts (clientTransition); the expected status is also
+      re-asserted on the update, so a client who leaves the page open and
+      clicks twice, or forwards the link to a colleague who also answers,
+      cannot overwrite the first answer.
     */
+    const check = clientTransition(body.action, kind, row.status);
     const expected = kind === "contract" ? "contract_sent" : "proposal_sent";
-    if (row.status !== expected) {
+    if (!check.ok && check.status === 400) {
+      return NextResponse.json({ error: check.error }, { status: 400 });
+    }
+    if (!check.ok) {
       return NextResponse.json(
         {
           error:
