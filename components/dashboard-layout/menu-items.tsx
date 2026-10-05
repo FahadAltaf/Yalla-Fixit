@@ -122,6 +122,12 @@ export const baseSectionsItems: MenuItem[] = [
         // AMC view or approve, which the resource filter cannot say.
         canSee: canUseAmc,
       },
+      {
+        /* Signed agreements in operation (Active AMC). Same access. */
+        title: "AMC contracts",
+        url: "/extensions/amc-contracts",
+        canSee: canUseAmc,
+      },
     ],
   },
   {

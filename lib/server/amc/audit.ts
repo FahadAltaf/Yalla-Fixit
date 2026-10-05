@@ -12,7 +12,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  */
 
 export type AmcAuditEntry = {
-  entityType: "submission" | "settings";
+  entityType: "submission" | "settings" | "contract";
   entityId?: string | null;
   eventType: string;
   actorId?: string | null;

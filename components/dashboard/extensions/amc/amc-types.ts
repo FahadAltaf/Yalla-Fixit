@@ -392,6 +392,10 @@ export interface AmcSubmission {
     come only with the whole list.
   */
   viewer_can_approve?: boolean;
+  /* The operational contract made from this proposal (Active AMC), on the
+     single-proposal read only. null: none yet; absent: not checked or the
+     contracts table does not exist yet. */
+  contract_id?: string | null;
 }
 
 /* One entry in a submission's history, from the audit trail (FR5.9). */

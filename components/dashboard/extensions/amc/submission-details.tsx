@@ -70,6 +70,7 @@ import { lastSentAt, sendableDocument } from "./amc-send-dialog";
 import { amcStatusTone } from "./amc-status";
 import { submissionToFormData } from "./amc-submission-mapper";
 import { canDecideProposal } from "@/lib/amc/workflow";
+import { SignedContractAction } from "@/components/dashboard/extensions/amc-contracts/signed-contract-action";
 import { Fact, ReviewSection, ServicesAndCost } from "./steps/review-step";
 import {
   AMC_STATUS_LABELS,
@@ -605,6 +606,7 @@ export function SubmissionDetails({
               </DropdownMenu>
             )}
 
+            <SignedContractAction submission={submission} />
             {canEdit && (
               <Button asChild>
                 <Link href={`/extensions/amc/${submission.id}/edit`}>

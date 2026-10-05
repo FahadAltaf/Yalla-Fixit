@@ -270,8 +270,21 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    /* Active AMC: the contract made from this proposal, if any. A
+       database without the contracts table reports nothing. */
+    let contractId: string | null | undefined;
+    if (row.status === "signed") {
+      const { data: contract, error: contractError } = await admin
+        .from("amc_contracts")
+        .select("id")
+        .eq("submission_id", row.id)
+        .maybeSingle<{ id: string }>();
+      contractId = contractError ? undefined : (contract?.id ?? null);
+    }
+
     return NextResponse.json({
       ...mapRow(row, { viewerId: profile.id, names }),
+      contract_id: contractId,
       /* One rule for the API and the buttons (lib/amc/workflow.ts),
          including whether a creator may approve their own proposal. */
       viewer_can_approve: canDecideProposal({

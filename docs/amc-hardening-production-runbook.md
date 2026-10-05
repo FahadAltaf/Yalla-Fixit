@@ -120,6 +120,7 @@ One at a time, in this order, each as its own push or SQL-editor transaction. Af
 | 7.4 | PRODUCTION CHANGE | D5 `20261005160000` | Column privileges for anon/authenticated: SELECT on the branding columns only; never `oauth_access_token` |
 | 7.5 | PRODUCTION CHANGE | D6 `20261005170000` | No policies and no anon/authenticated grants on both estimate tables |
 | 7.6 | PRODUCTION CHANGE | D8 `20261005180000` | No policies and no anon/authenticated grants on `password_resets` |
+| 7.7 | PRODUCTION CHANGE | Active AMC `20261006100000` (branch `active-amc`; only once that branch is merged and deployed) | `amc_contracts`, `amc_contract_entitlements`, `amc_entitlement_usage` exist with RLS on and no browser grants; `amc_audit_events_entity_type_check` includes `contract`. Do **not** activate the early signed rows without the business review (`active-amc-implementation-report.md` §18) |
 
 ## 8. Post-migration RLS verification (read-only)
 
