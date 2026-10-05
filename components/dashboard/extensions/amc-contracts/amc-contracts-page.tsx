@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { ShieldCheck } from "lucide-react";
+import Link from "next/link";
+import { ShieldCheck, Workflow } from "lucide-react";
 
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
 import { Button } from "@/components/ui/button";
@@ -27,10 +28,18 @@ export function AmcContractsPage() {
         title="AMC contracts"
         description="Activate signed AMC proposals, track what each contract covers and how much is used, and see what is expiring."
         actions={
-          <Button variant="outline" onClick={() => setChecking(true)}>
-            <ShieldCheck className="size-4" />
-            Check coverage
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button asChild variant="outline">
+              <Link href="/extensions/amc-contracts/fsm-services">
+                <Workflow className="size-4" />
+                FSM service mapping
+              </Link>
+            </Button>
+            <Button variant="outline" onClick={() => setChecking(true)}>
+              <ShieldCheck className="size-4" />
+              Check coverage
+            </Button>
+          </div>
         }
       />
       <ContractsSummary refreshKey={summaryKey} />

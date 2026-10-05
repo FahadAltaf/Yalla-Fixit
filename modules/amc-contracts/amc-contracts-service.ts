@@ -9,6 +9,13 @@ import type {
 import type { SlaDefinition } from "@/lib/amc/sla";
 import type { activationPreview } from "@/lib/server/amc/contracts";
 import type {
+  ContractFsmActivity,
+  FsmWorkOrderForAmc,
+  SyncOutcome,
+  fsmContextForWorkOrder,
+  serviceMappingOverview,
+} from "@/lib/server/amc/fsm-integration";
+import type {
   ContractsDashboard,
   ReminderPlan,
   RenewalOverview,
@@ -23,6 +30,9 @@ import type {
 
 export type { ContractsDashboard, ReminderPlan, RenewalOverview, UsageEntry };
 export type ActivationPreview = Awaited<ReturnType<typeof activationPreview>>;
+export type { ContractFsmActivity, FsmWorkOrderForAmc, SyncOutcome };
+export type FsmServiceMappingOverview = Awaited<ReturnType<typeof serviceMappingOverview>> & { canEdit?: boolean };
+export type FsmWorkOrderContext = Awaited<ReturnType<typeof fsmContextForWorkOrder>>;
 
 export type ContractListStatus =
   | "all"
@@ -245,6 +255,56 @@ export const amcContractsService = {
   },
   createReminders(id: string) {
     return request<{ reminders: ReminderPlan }>(`/api/amc-contracts/${id}/reminders`, { method: "POST" });
+  },
+  fsm(id: string) {
+    return request<{ fsm: ContractFsmActivity }>(`/api/amc-contracts/${id}/fsm`);
+  },
+  fsmWorkOrder(ref: string) {
+    return request<{ workOrder: FsmWorkOrderForAmc }>(`/api/amc-contracts/fsm/work-order?ref=${encodeURIComponent(ref)}`);
+  },
+  fsmContext(workOrderId: string, date?: string) {
+    const query = new URLSearchParams({ workOrderId });
+    if (date) query.set("date", date);
+    return request<{ context: FsmWorkOrderContext }>(`/api/amc-contracts/fsm/context?${query.toString()}`);
+  },
+  linkFsmCustomer(id: string, workOrderId: string) {
+    return request<{ customer: { fsmContactId: string; fsmContactName: string | null; fsmCustomerId: string | null; matchesProposalCustomerId: boolean | null } }>(
+      `/api/amc-contracts/${id}/fsm/customer`,
+      { method: "POST", body: JSON.stringify({ workOrderId }) },
+    );
+  },
+  linkFsmWork(
+    id: string,
+    input: { workOrderId: string; appointmentId?: string | null; serviceLineItemId?: string | null; entitlementId: string; requestedAt?: string | null },
+  ) {
+    return request<{ verdict: { verdict: string; headline: string; details: string[] } }>(`/api/amc-contracts/${id}/fsm/links`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+  unlinkFsmWork(id: string, linkId: string, reason: string) {
+    return request<{ ok: true }>(`/api/amc-contracts/${id}/fsm/links/${linkId}`, {
+      method: "DELETE",
+      body: JSON.stringify({ reason }),
+    });
+  },
+  checkFsm(id: string) {
+    return request<{ checked: number; outcomes: SyncOutcome[] }>(`/api/amc-contracts/${id}/fsm/check`, { method: "POST" });
+  },
+  syncFsmAppointment(id: string, appointmentId: string, input: { confirm?: boolean; quantity?: number | null } = {}) {
+    return request<{ outcome: SyncOutcome }>(`/api/amc-contracts/${id}/fsm/appointments/${encodeURIComponent(appointmentId)}`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+  fsmServices() {
+    return request<FsmServiceMappingOverview>("/api/amc-contracts/fsm/services");
+  },
+  saveFsmService(input: { amcServiceId: string; fsmServiceId: string | null; fsmServiceName?: string | null; active: boolean }) {
+    return request<FsmServiceMappingOverview>("/api/amc-contracts/fsm/services", {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
   },
   coverageCatalogue() {
     return request<{ catalogue: CoverageCatalogueItem[] }>("/api/amc-contracts/coverage?catalogue=1");

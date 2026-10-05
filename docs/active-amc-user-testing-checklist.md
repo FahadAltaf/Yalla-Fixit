@@ -105,3 +105,17 @@ Tick the box when the result matches. Note anything that doesn't, with the contr
 - [ ] List: tabs scroll, the toolbar stacks, the table scrolls sideways inside its card.
 - [ ] Contract page: header buttons wrap; cards stack; the coverage and history tables scroll inside their cards.
 - [ ] Every dialog fits and scrolls; its buttons stay reachable.
+
+## 12. Zoho FSM (needs migration 20261006120000 and a connected FSM)
+
+- [ ] FSM service mapping page: everyone with AMC access sees it; only approvers can edit. **Find from a work order** lists the work order's FSM services; saving maps one; the same FSM service cannot be mapped to two AMC services.
+- [ ] Contract → **Zoho FSM integration**: FSM customer Missing; **Link** with a real work order of this customer shows the FSM contact and its Customer ID, and warns if it differs from the proposal's Customer ID.
+- [ ] **Link FSM work**: a work order of another FSM customer is refused; a line mapped to another AMC service is refused; the coverage verdict is shown; linking the same appointment twice is refused.
+- [ ] The scheduling board's **Add entry**, after choosing a linked customer's work order, shows the AMC notice; for a customer without an AMC, nothing is shown.
+- [ ] **Check FSM**: completed linked visits show **Needs review**; nothing is consumed.
+- [ ] **Review** on a completed visit: Confirm records 1 visit; the usage history shows source **FSM (confirmed)** with the work order and read time. Confirming again (or **Check FSM** again) does not add a second entry.
+- [ ] A handyman visit asks for the hours and shows FSM's duration only as a reference.
+- [ ] An appointment recorded and later cancelled in FSM shows **Needs review**; Confirm adds an **FSM correction** referencing the original; the allowance returns.
+- [ ] Upcoming visits lists future appointments of linked work that are on the scheduling board, with technicians.
+- [ ] SLA column shows the target and **Unknown** with the reason.
+- [ ] **Unlink** needs a reason; usage already recorded stays.

@@ -72,10 +72,15 @@ export interface UsageEntry {
   correctedQuantity: number;
   /** For a consumption: what still counts after corrections. */
   netQuantity: number;
+  /** Taken from FSM: the work order, and when FSM was read. */
+  fsmWorkOrderId: string | null;
+  fsmSyncedAt: string | null;
 }
 
 const USAGE_COLUMNS =
   "id, entitlement_id, kind, quantity, occurred_at, source, external_type, external_reference, notes, created_at, corrects_usage_id, creator:user_profile!amc_entitlement_usage_created_by_fkey(full_name, email)";
+/* With migration 20261006120000: the FSM work order and read time. */
+const USAGE_COLUMNS_FSM = `${USAGE_COLUMNS}, fsm_work_order_id, fsm_synced_at`;
 /* Before migration 20261006110000 there is no corrects_usage_id. */
 const USAGE_COLUMNS_LEGACY = USAGE_COLUMNS.replace(", corrects_usage_id", "");
 
@@ -98,6 +103,8 @@ function mapUsage(r: Row, corrected: Map<string, number>): UsageEntry {
     correctsUsageId: (r.corrects_usage_id as string | null) ?? null,
     correctedQuantity,
     netQuantity: Math.round((quantity + correctedQuantity) * 100) / 100,
+    fsmWorkOrderId: (r.fsm_work_order_id as string | null) ?? null,
+    fsmSyncedAt: (r.fsm_synced_at as string | null) ?? null,
   };
 }
 
@@ -139,10 +146,10 @@ export async function loadUsagePage(
       .order("created_at", { ascending: false })
       .range(page * pageSize, page * pageSize + pageSize - 1);
   };
-  let result = await run(USAGE_COLUMNS);
-  if (result.error && (result.error.code === "42703" || result.error.code === "PGRST204")) {
-    result = await run(USAGE_COLUMNS_LEGACY);
-  }
+  const missingColumn = (e: { code?: string } | null) => e?.code === "42703" || e?.code === "PGRST204";
+  let result = await run(USAGE_COLUMNS_FSM);
+  if (result.error && missingColumn(result.error)) result = await run(USAGE_COLUMNS);
+  if (result.error && missingColumn(result.error)) result = await run(USAGE_COLUMNS_LEGACY);
   if (result.error) throw new ContractError(result.error.message, 400);
   const rows = (result.data ?? []) as unknown as Row[];
   const corrected = await correctionsFor(

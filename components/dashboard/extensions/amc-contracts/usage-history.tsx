@@ -21,6 +21,13 @@ import { externalRefLabel, formatContractDate, formatDateTime } from "./contract
 
 type Entitlement = ContractDetail["entitlements"][number];
 
+/* Where an entry came from: typed in, read from FSM (confirmed by a person or automatic), or an FSM reversal. */
+export function usageSourceLabel(u: Pick<UsageEntry, "source" | "kind" | "createdBy">): string {
+  if (u.source !== "fsm") return u.source === "system" ? "System" : "Manual";
+  if (u.kind === "correction") return "FSM correction";
+  return u.createdBy ? "FSM (confirmed)" : "FSM (automatic)";
+}
+
 const KIND_LABELS: Record<UsageEntry["kind"], string> = {
   consumption: "Used",
   correction: "Correction",
@@ -180,9 +187,17 @@ export function UsageHistory({
                           </div>
                         ) : null}
                       </TableCell>
-                      <TableCell className="align-top capitalize">{u.source}</TableCell>
+                      <TableCell className="align-top">
+                        <div>{usageSourceLabel(u)}</div>
+                        {u.fsmSyncedAt ? (
+                          <div className="text-muted-foreground text-xs">Read {formatDateTime(u.fsmSyncedAt)}</div>
+                        ) : null}
+                      </TableCell>
                       <TableCell className="align-top">
                         {u.externalReference ? `${externalRefLabel(u.externalType)} ${u.externalReference}` : "—"}
+                        {u.fsmWorkOrderId ? (
+                          <div className="text-muted-foreground text-xs">Work order {u.fsmWorkOrderId}</div>
+                        ) : null}
                       </TableCell>
                       <TableCell className="align-top">{u.createdBy ?? "—"}</TableCell>
                       <TableCell className="max-w-[240px] align-top">

@@ -13,6 +13,7 @@ import {
   type TechnicianReference,
 } from "@/modules/scheduling";
 import type { LeaveRecord, TechnicianTag } from "@/types/types";
+import { AmcWorkOrderNotice } from "@/components/dashboard/extensions/amc-contracts/amc-work-order-notice";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -507,6 +508,8 @@ export default function AddEntryDialog({
                         {[workOrder.contact_name, workOrder.address].filter(Boolean).join(" · ")}
                       </div>
                     )}
+                    {/* AMC coverage of this work, if its customer has an AMC (read-only). */}
+                    <AmcWorkOrderNotice workOrderId={workOrder.id} />
                     <div className="mt-1 flex flex-col gap-1">
                       <span className="text-muted-foreground text-xs font-medium">Appointment</span>
                       <RadioGroup

@@ -33,6 +33,7 @@ export interface FsmServiceLineItem {
   id: string;
   name: string;
   serviceName: string | null;
+  serviceId?: string | null;
   description: string | null;
   status: string | null;
   scheduled: boolean;
@@ -63,6 +64,8 @@ export interface FsmWorkOrderLines {
   workOrderId: string;
   workOrderName: string | null;
   workOrderType: string | null;
+  contactId?: string | null;
+  contactName?: string | null;
   serviceLineItems: FsmServiceLineItem[];
   serviceTaskLineItems: FsmServiceTaskLineItem[];
   appointments: FsmWorkOrderAppointmentSummary[];

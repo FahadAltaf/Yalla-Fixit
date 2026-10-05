@@ -36,7 +36,7 @@ type Admin = SupabaseClient;
 export class ContractError extends Error {
   constructor(
     message: string,
-    readonly status: 400 | 403 | 404 | 409 | 500 | 503 = 400,
+    readonly status: 400 | 403 | 404 | 409 | 500 | 502 | 503 = 400,
   ) {
     super(message);
     this.name = "ContractError";

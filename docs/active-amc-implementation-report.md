@@ -531,3 +531,23 @@ Configuration is now `{ enabled, discountPercent, eligibleServiceKeys, eligibleC
 | 23 | Docs | COMPLETED |
 | 24 | Verification | COMPLETED (§P14) |
 | 25 | Commit | COMPLETED (local commit on `active-amc`; push needs GitHub credentials, not merged to main) |
+
+---
+
+# Part 3: Zoho FSM integration
+
+Details: `docs/amc-fsm-integration-report.md`; evidence: `docs/amc-fsm-integration-analysis.md`. Migration `20261006120000` (not applied).
+
+| Link in the chain | Status |
+|---|---|
+| AMC contract → FSM customer | **Explicit link** (`fsm_contact_id`, from a real work order's contact). No identifier was shared before; the proposal's Customer ID is free text |
+| AMC service → FSM service | **Explicit mapping** (`amc_fsm_service_mappings`, approvers). None entered yet |
+| Entitlement → FSM work order / appointment | **Done** (`amc_fsm_links`, with the coverage answer at linking) |
+| Scheduling → AMC context | **Done**, read-only notice under the chosen work order |
+| FSM appointment → completed | **Observed, not confirmed:** "Completed" + actual end time |
+| Completed → AMC usage | **Engine built, automatic OFF.** Completed visits show "Needs review"; a person confirms. Idempotent per appointment |
+| Reversal | **Manual**, as a correction referencing the original |
+| Hours | **Manual.** FSM's duration is shown for reference only |
+| SLA | **Unavailable.** Request time can be entered on links; attendance and booking times are not mapped |
+
+Tests: 100 / 100 (13 new).

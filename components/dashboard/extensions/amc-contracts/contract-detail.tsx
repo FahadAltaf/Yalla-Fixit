@@ -41,6 +41,7 @@ import { amcContractsService, type ContractDetail as Detail } from "@/modules/am
 
 import { CancelContractDialog } from "./cancel-contract-dialog";
 import { ContractDocuments } from "./contract-documents";
+import { ContractFsm } from "./contract-fsm";
 import { ContractRenewal, RenewalReminders } from "./contract-renewal";
 import {
   AUDIT_LABELS,
@@ -306,6 +307,13 @@ export function ContractDetail({ id }: { id: string }) {
         canCorrect={permissions.canCorrect}
         refreshKey={usageVersion}
         onChanged={reloadAll}
+      />
+
+      <ContractFsm
+        contractId={contract.id}
+        entitlements={entitlements}
+        canManage={permissions.canCorrect}
+        onUsageChanged={reloadAll}
       />
 
       <div className="grid gap-6 lg:grid-cols-3">
