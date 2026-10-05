@@ -4,39 +4,50 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { ActionDialogContent } from "@/components/dashboard/shared/kaizen-states";
 import { amcContractsService } from "@/modules/amc-contracts/amc-contracts-service";
 
-/** Cancels an active contract. Approvers only; the reason is recorded. */
+/**
+ * Cancels an active contract. Approvers only (the server checks); the
+ * reason, who cancelled and when are recorded. The contract and its usage
+ * stay visible; new usage is refused and coverage reads "not covered".
+ */
 export function CancelContractDialog({
   open,
   onOpenChange,
   contractId,
   proposalNumber,
+  customerName,
   onCancelled,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   contractId: string;
   proposalNumber: string;
+  customerName: string;
   onCancelled: () => void;
 }) {
   const [reason, setReason] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
       setReason("");
+      setConfirmed(false);
       setError(null);
     }
   }, [open]);
 
+  const reasonOk = reason.trim().length >= 3;
+
   const submit = async () => {
-    if (reason.trim().length < 3) {
+    if (!reasonOk) {
       setError("Give a reason.");
       return;
     }
@@ -58,14 +69,17 @@ export function CancelContractDialog({
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <ActionDialogContent busy={busy} className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Cancel this contract?</DialogTitle>
-          <DialogDescription>
-            Coverage stops and no more usage can be recorded. The contract, its usage and its
-            history are kept. This cannot be undone.
-          </DialogDescription>
+          <DialogTitle>Cancel AMC {proposalNumber}?</DialogTitle>
+          <DialogDescription>{customerName || "This customer"}&apos;s contract.</DialogDescription>
         </DialogHeader>
+        <ul className="text-muted-foreground list-disc space-y-1 pl-5 text-sm">
+          <li>Coverage stops at once: coverage checks answer &ldquo;not covered&rdquo;.</li>
+          <li>No more usage can be recorded. Usage already recorded stays visible.</li>
+          <li>The contract, its documents and its history are kept.</li>
+          <li>This cannot be undone.</li>
+        </ul>
         <div className="grid gap-2">
-          <Label htmlFor="amc-cancel-reason">Reason</Label>
+          <Label htmlFor="amc-cancel-reason">Reason (recorded on the contract)</Label>
           <Textarea
             id="amc-cancel-reason"
             rows={3}
@@ -73,17 +87,26 @@ export function CancelContractDialog({
             value={reason}
             onChange={(event) => setReason(event.target.value)}
           />
-          {error ? (
-            <p className="text-destructive text-sm" role="alert">
-              {error}
-            </p>
-          ) : null}
         </div>
+        <label className="flex items-start gap-3 text-sm">
+          <Checkbox
+            checked={confirmed}
+            onCheckedChange={(value) => setConfirmed(value === true)}
+            className="mt-0.5"
+            aria-label="I understand this cannot be undone"
+          />
+          <span>I understand the contract stops covering this customer and this cannot be undone.</span>
+        </label>
+        {error ? (
+          <p className="text-destructive text-sm" role="alert">
+            {error}
+          </p>
+        ) : null}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             Keep contract
           </Button>
-          <Button variant="destructive" onClick={() => void submit()} disabled={busy}>
+          <Button variant="destructive" onClick={() => void submit()} disabled={busy || !reasonOk || !confirmed}>
             {busy ? "Cancelling…" : "Cancel contract"}
           </Button>
         </DialogFooter>

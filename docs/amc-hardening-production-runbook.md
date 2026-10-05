@@ -121,6 +121,7 @@ One at a time, in this order, each as its own push or SQL-editor transaction. Af
 | 7.5 | PRODUCTION CHANGE | D6 `20261005170000` | No policies and no anon/authenticated grants on both estimate tables |
 | 7.6 | PRODUCTION CHANGE | D8 `20261005180000` | No policies and no anon/authenticated grants on `password_resets` |
 | 7.7 | PRODUCTION CHANGE | Active AMC `20261006100000` (branch `active-amc`; only once that branch is merged and deployed) | `amc_contracts`, `amc_contract_entitlements`, `amc_entitlement_usage` exist with RLS on and no browser grants; `amc_audit_events_entity_type_check` includes `contract`. Do **not** activate the early signed rows without the business review (`active-amc-implementation-report.md` §18) |
+| 7.8 | PRODUCTION CHANGE | Active AMC operations `20261006110000` (branch `active-amc`; straight after 7.7). **First run the pre-check in the file header** (no contract may already have two renewal proposals) | `amc_entitlement_usage.corrects_usage_id` exists and kind allows `correction`; `amc_contracts.account_manager_names` exists and is filled for contracts with named managers; `todos_related_type_check` allows `amc_contract`; `amc_renewal_reminders` exists with RLS on and no browser grants; `idx_amc_submissions_one_renewal` exists. Renewal reminders stay switched off in code (`AMC_RENEWAL_REMINDERS_ENABLED = false`) until the schedule is approved |
 
 ## 8. Post-migration RLS verification (read-only)
 

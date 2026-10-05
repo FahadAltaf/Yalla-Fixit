@@ -4,17 +4,25 @@ import { z } from "zod";
 import {
   DEFAULT_EXPIRING_WINDOW_DAYS,
   daysRemaining,
+  expiryLabel,
+  shiftDays,
+  summarizeContract,
   todayInDubai,
+  type EntitlementType,
 } from "@/lib/amc/contracts";
 import { grandTotalFromFinal } from "@/lib/amc/pricing";
-import { canManage, requireContractAccess } from "@/lib/server/amc/contract-access";
+import {
+  canManage,
+  contractErrorResponse,
+  requireContractAccess,
+} from "@/lib/server/amc/contract-access";
 import {
   CONTRACT_COLUMNS,
-  ContractError,
   activateContract,
   isMissingTable,
   mapContract,
 } from "@/lib/server/amc/contracts";
+import { loadPendingActivations } from "@/lib/server/amc/contract-operations";
 import { likeTerm, pageParams } from "@/lib/server/snagging/search";
 
 /**
@@ -27,6 +35,10 @@ import { likeTerm, pageParams } from "@/lib/server/snagging/search";
  *   expiring            running, ending within the window
  *   expired             past the end date
  *   cancelled
+ *
+ * Query: status, search (customer, customer ID, contract number, property,
+ * account manager), manager, sort (contract | customer | property | start |
+ * end | value), dir (asc | desc), page, pageSize.
  */
 
 const LIST_STATUSES = [
@@ -40,15 +52,22 @@ const LIST_STATUSES = [
 ] as const;
 type ListStatus = (typeof LIST_STATUSES)[number];
 
+const SORT_COLUMNS = {
+  contract: "proposal_number",
+  customer: "customer_name",
+  property: "property_label",
+  start: "start_date",
+  end: "end_date",
+  value: "grand_total",
+} as const;
+type SortKey = keyof typeof SORT_COLUMNS;
+
 type Row = Record<string, unknown>;
 
-function accountManagerOf(row: Row, key: "account_managers" | "document_options"): string {
-  const list =
-    key === "account_managers"
-      ? row.account_managers
-      : (row.document_options as Row | null)?.accountManagers;
-  const first = (Array.isArray(list) ? list : []).find((m) => (m as Row)?.name) as Row | undefined;
-  return first ? String(first.name) : "";
+function managerNames(list: unknown): string[] {
+  return (Array.isArray(list) ? list : [])
+    .map((m) => String((m as Row)?.name ?? "").trim())
+    .filter(Boolean);
 }
 
 export async function GET(req: NextRequest) {
@@ -62,28 +81,35 @@ export async function GET(req: NextRequest) {
     ? (statusParam as ListStatus)
     : "all";
   const term = likeTerm(params.get("search"));
+  const manager = likeTerm(params.get("manager"));
+  const sortParam = params.get("sort") ?? "end";
+  const sort: SortKey = sortParam in SORT_COLUMNS ? (sortParam as SortKey) : "end";
+  const ascending = params.get("dir") !== "desc";
   const { page, pageSize, from, to } = pageParams(params, { defaultSize: 10 });
 
   const today = todayInDubai();
   /* Last day of the "expiring" window (same default as the detail page). */
   const windowEnd = shiftDays(today, DEFAULT_EXPIRING_WINDOW_DAYS);
 
-  /* Contracts query with the visibility rule and a derived-status filter. */
+  /* Contracts query with the visibility rule and a derived-status filter.
+     Two foreign keys join these tables (submission_id and
+     amc_submissions.renewal_of_contract_id), so every embed names its key. */
   const contractQuery = (forStatus: ListStatus, head = false) => {
     let q = admin
       .from("amc_contracts")
       .select(
         head
-          ? "id, amc_submissions!inner(owner_id)"
-          : `${CONTRACT_COLUMNS}, amc_submissions!inner(owner_id)`,
+          ? "id, amc_submissions!amc_contracts_submission_id_fkey!inner(owner_id)"
+          : `${CONTRACT_COLUMNS}, amc_submissions!amc_contracts_submission_id_fkey!inner(owner_id), amc_contract_entitlements(entitlement_type, included_quantity, used_quantity)`,
         head ? { count: "exact", head: true } : { count: "exact" },
       );
     if (!canApprove) q = q.eq("amc_submissions.owner_id", userId);
     if (term) {
       q = q.or(
-        `customer_name.ilike.${term},proposal_number.ilike.${term},property_label.ilike.${term},customer_ref.ilike.${term}`,
+        `customer_name.ilike.${term},proposal_number.ilike.${term},property_label.ilike.${term},customer_ref.ilike.${term},account_manager_names.ilike.${term}`,
       );
     }
+    if (manager) q = q.ilike("account_manager_names", manager);
     switch (forStatus) {
       case "cancelled":
         q = q.eq("status", "cancelled");
@@ -110,29 +136,19 @@ export async function GET(req: NextRequest) {
     return q;
   };
 
-  /* Signed proposals that have no contract yet. Few at any time, so they
-     are filtered here rather than with an anti-join. */
+  /* Signed proposals waiting for activation, filtered like the contracts. */
   const loadPending = async () => {
-    let q = admin
-      .from("amc_submissions")
-      .select("id, owner_id, proposal_number, customer, property, document_options, final_price, signed_at, amc_contracts(id)")
-      .eq("status", "signed")
-      .order("signed_at", { ascending: false })
-      .limit(500);
-    if (!canApprove) q = q.eq("owner_id", userId);
-    const { data, error } = await q;
-    if (error) throw error;
-    const rows = (data ?? []).filter((row) => {
-      const linked = (row as Row).amc_contracts;
-      return !(Array.isArray(linked) ? linked.length : linked);
-    }) as Row[];
+    const rows = await loadPendingActivations(admin, { userId, canApprove });
     const needle = term ? term.slice(1, -1).toLowerCase() : "";
+    const managerNeedle = manager ? manager.slice(1, -1).toLowerCase() : "";
     return rows
       .filter((row) => {
-        if (!needle) return true;
         const c = (row.customer ?? {}) as Row;
         const p = (row.property ?? {}) as Row;
-        return [c.customerName, c.customerId, row.proposal_number, p.propertyAddress, p.propertyDetail]
+        const managers = managerNames((row.document_options as Row | null)?.accountManagers);
+        if (managerNeedle && !managers.some((m) => m.toLowerCase().includes(managerNeedle))) return false;
+        if (!needle) return true;
+        return [c.customerName, c.customerId, row.proposal_number, p.propertyAddress, p.propertyDetail, ...managers]
           .some((v) => typeof v === "string" && v.toLowerCase().includes(needle));
       })
       .map((row) => {
@@ -147,21 +163,45 @@ export async function GET(req: NextRequest) {
           proposalNumber: String(row.proposal_number ?? ""),
           customerName: String(c.customerName ?? ""),
           propertyLabel: [p.propertyDetail, p.propertyAddress].filter(Boolean).join(" — "),
-          accountManager: accountManagerOf(row, "document_options"),
+          accountManagers: managerNames((row.document_options as Row | null)?.accountManagers),
           startDate: start,
           endDate: end,
           displayStatus: "pending_activation" as const,
+          expiryLabel: "Waiting for activation",
           grandTotal: grandTotalFromFinal(Number(row.final_price ?? 0)),
           daysRemaining: end ? daysRemaining(end, today) : null,
+          coverage: null,
           canActivate: canManage(gate, (row.owner_id as string | null) ?? null),
         };
       });
   };
 
+  /* Account managers on the visible contracts, for the filter. */
+  const loadManagers = async (): Promise<string[]> => {
+    let q = admin
+      .from("amc_contracts")
+      .select("account_manager_names, amc_submissions!amc_contracts_submission_id_fkey!inner(owner_id)")
+      .neq("account_manager_names", "")
+      .limit(2000);
+    if (!canApprove) q = q.eq("amc_submissions.owner_id", userId);
+    const { data, error } = await q;
+    if (error) return [];
+    const names = new Set<string>();
+    for (const row of (data ?? []) as Row[]) {
+      String(row.account_manager_names ?? "")
+        .split(",")
+        .map((n) => n.trim())
+        .filter(Boolean)
+        .forEach((n) => names.add(n));
+    }
+    return [...names].sort((a, b) => a.localeCompare(b));
+  };
+
   try {
     const countStatuses: ListStatus[] = ["not_started", "active", "expiring", "expired", "cancelled"];
-    const [pending, ...countResults] = await Promise.all([
+    const [pending, managers, ...countResults] = await Promise.all([
       loadPending(),
+      loadManagers(),
       contractQuery("all", true),
       ...countStatuses.map((s) => contractQuery(s, true)),
     ]);
@@ -172,32 +212,52 @@ export async function GET(req: NextRequest) {
         { status: 503 },
       );
     }
+    const failed = countResults.find((r) => r.error);
+    if (failed?.error) throw failed.error;
+    const contractTotal = countResults[0].count ?? 0;
     const counts: Record<string, number> = {
-      all: (countResults[0].count ?? 0) + pending.length,
+      all: contractTotal + pending.length,
       pending_activation: pending.length,
     };
     countStatuses.forEach((s, i) => {
       counts[s] = countResults[i + 1].count ?? 0;
     });
+    const base = { counts, managers, canApprove, page, pageSize };
 
     if (status === "pending_activation") {
-      return NextResponse.json({
-        rows: pending.slice(from, to + 1),
-        totalCount: pending.length,
-        counts,
-        canApprove,
-        page,
-        pageSize,
-      });
+      return NextResponse.json({ ...base, rows: pending.slice(from, to + 1), totalCount: pending.length });
     }
 
-    const { data, error, count } = await contractQuery(status)
-      .order("end_date", { ascending: true })
-      .range(from, to);
-    if (error) throw error;
-    /* The select string is built at runtime, so the client cannot type it. */
-    const rows = ((data ?? []) as unknown as Row[]).map((row) => {
+    /* "All" lists what is waiting for activation first, then contracts:
+       one continuous list, paged as a whole. */
+    const lead = status === "all" ? pending : [];
+    const leadRows = lead.slice(from, to + 1);
+    const contractFrom = Math.max(0, from - lead.length);
+    const contractTo = to - lead.length;
+
+    let contractRows: Row[] = [];
+    let contractCount = status === "all" ? contractTotal : 0;
+    if (contractTo >= 0) {
+      const { data, error, count } = await contractQuery(status)
+        .order(SORT_COLUMNS[sort], { ascending })
+        .order("end_date", { ascending: true })
+        .range(contractFrom, contractTo);
+      if (error) throw error;
+      /* The select string is built at runtime, so the client cannot type it. */
+      contractRows = (data ?? []) as unknown as Row[];
+      contractCount = count ?? 0;
+    } else if (status !== "all") {
+      contractCount = counts[status] ?? 0;
+    }
+
+    const rows = contractRows.map((row) => {
       const view = mapContract(row);
+      const ents = ((row.amc_contract_entitlements as Row[]) ?? []).map((e) => ({
+        entitlementType: e.entitlement_type as EntitlementType,
+        includedQuantity: e.included_quantity === null ? null : Number(e.included_quantity),
+        usedQuantity: Number(e.used_quantity ?? 0),
+      }));
+      const s = summarizeContract(ents);
       return {
         kind: "contract" as const,
         id: view.id,
@@ -205,24 +265,28 @@ export async function GET(req: NextRequest) {
         proposalNumber: view.proposalNumber,
         customerName: view.customerName,
         propertyLabel: view.propertyLabel,
-        accountManager: accountManagerOf(row, "account_managers"),
+        accountManagers: view.accountManagers.map((m) => m.name).filter(Boolean),
         startDate: view.startDate,
         endDate: view.endDate,
         displayStatus: view.displayStatus,
+        expiryLabel: expiryLabel(view, today),
         grandTotal: view.grandTotal,
         daysRemaining: view.daysRemaining,
+        coverage: {
+          totalServices: s.totalServices,
+          withRemaining: s.withRemaining,
+          exhausted: s.exhausted,
+          unlimited: s.unlimited,
+          informational: s.informational,
+        },
         canActivate: false,
       };
     });
-    /* "All" also lists what is waiting to be activated, first. */
-    const combined = status === "all" && page === 0 ? [...pending, ...rows] : rows;
+
     return NextResponse.json({
-      rows: combined,
-      totalCount: (count ?? 0) + (status === "all" ? pending.length : 0),
-      counts,
-      canApprove,
-      page,
-      pageSize,
+      ...base,
+      rows: [...leadRows, ...rows],
+      totalCount: lead.length + contractCount,
     });
   } catch (error) {
     console.error("AMC contracts list failed:", error);
@@ -230,17 +294,13 @@ export async function GET(req: NextRequest) {
   }
 }
 
-function shiftDays(isoDate: string, days: number): string {
-  const d = new Date(`${isoDate}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
-}
-
 const activateSchema = z
   .object({
     submissionId: z.string().uuid(),
     startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use a date"),
     endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use a date"),
+    /** The user ticked "I have checked these details". */
+    confirmed: z.literal(true, { message: "Confirm the details before activating." }),
   })
   .strict();
 
@@ -271,16 +331,14 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const contract = await activateContract(gate.admin, parsed.data, {
-      id: gate.userId,
-      label: gate.label,
-    });
+    const { submissionId, startDate, endDate } = parsed.data;
+    const contract = await activateContract(
+      gate.admin,
+      { submissionId, startDate, endDate },
+      { id: gate.userId, label: gate.label },
+    );
     return NextResponse.json({ contract }, { status: 201 });
   } catch (error) {
-    if (error instanceof ContractError) {
-      return NextResponse.json({ error: error.message }, { status: error.status });
-    }
-    console.error("AMC activation failed:", error);
-    return NextResponse.json({ error: "Could not activate the contract" }, { status: 500 });
+    return contractErrorResponse(error, "Could not activate the contract");
   }
 }

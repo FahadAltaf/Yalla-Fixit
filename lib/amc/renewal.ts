@@ -15,7 +15,7 @@
  * prices for the team to review. Whether renewals should start from a
  * standard rate card instead is open.
  */
-import { addMonths, termMonthsBetween, type ContractEntitlement } from "./contracts";
+import { addMonths, shiftDays, termMonthsBetween, type ContractEntitlement } from "./contracts";
 
 export interface RenewalSource {
   id: string;
@@ -54,7 +54,11 @@ export function buildRenewalDraft(
 ): RenewalDraft {
   const offered = new Set(offeredServiceIds);
   const term = Math.max(1, termMonthsBetween(source.startDate, source.endDate) ?? 12);
-  const startDate = source.endDate;
+  /* The day after the old contract ends: both ends of a period are
+     covered, so starting on the end date would overlap by a day. The new
+     period runs the same number of months, by the same convention as
+     activation (defaultEndDate: 2 Oct 2027 to 2 Oct 2028). */
+  const startDate = shiftDays(source.endDate, 1);
   const endDate = addMonths(startDate, term) ?? "";
 
   const services = source.entitlements
@@ -92,22 +96,52 @@ export function buildRenewalDraft(
   };
 }
 
+/**
+ * Why a renewal proposal cannot be started, or null when it can. One
+ * renewal proposal per contract (the database enforces it too).
+ */
+export function renewalBlockedReason(contract: {
+  status: "active" | "cancelled";
+  renewedByContractId: string | null;
+  hasRenewalProposal: boolean;
+}): string | null {
+  if (contract.status === "cancelled") return "A cancelled contract cannot be renewed.";
+  if (contract.renewedByContractId) return "This contract has already been renewed.";
+  if (contract.hasRenewalProposal) return "A renewal proposal already exists for this contract.";
+  return null;
+}
+
 /* ------------------------------------------------------------------ */
 /* Renewal reminders                                                   */
 /* ------------------------------------------------------------------ */
 
 /**
- * Days before the end date to remind the team. BUSINESS DECISION
- * REQUIRED: empty by default, so no reminder is ever created until the
- * schedule is approved (60/30/15 days are examples, not requirements).
+ * Days before the end date to remind the team: configuration DEFAULTS,
+ * not an approved business schedule (BUSINESS DECISION REQUIRED).
  */
-export const AMC_RENEWAL_REMINDER_DAYS: ReadonlyArray<number> = [];
+export const AMC_RENEWAL_REMINDER_DAYS: ReadonlyArray<number> = [60, 30, 15];
+
+/**
+ * Master switch. Off: reminders are only previewed, never created, so no
+ * production reminder email can be sent by accident. Turn on (with the
+ * approved thresholds) when the schedule is agreed.
+ */
+export const AMC_RENEWAL_REMINDERS_ENABLED = false;
 
 /**
  * The reminder dates still ahead for a contract ending on `endDate`,
  * earliest first. The reminders themselves would be Todos (the existing
  * reminders cron emails them); see the implementation report.
  */
+/** The planned reminders not already created for this contract. */
+export function newReminders(
+  planned: ReadonlyArray<{ daysBefore: number; remindOn: string }>,
+  existingThresholds: ReadonlyArray<number>,
+): Array<{ daysBefore: number; remindOn: string }> {
+  const existing = new Set(existingThresholds);
+  return planned.filter((reminder) => !existing.has(reminder.daysBefore));
+}
+
 export function planRenewalReminders(
   endDate: string,
   today: string,

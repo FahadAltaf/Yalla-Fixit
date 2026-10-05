@@ -1,20 +1,29 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { canManage, requireContractAccess } from "@/lib/server/amc/contract-access";
-import { ContractError, loadContract, recordUsage } from "@/lib/server/amc/contracts";
+import {
+  contractErrorResponse,
+  requireContractAccess,
+  requireManagedContract,
+} from "@/lib/server/amc/contract-access";
+import { recordUsage } from "@/lib/server/amc/contracts";
+import { loadUsagePage } from "@/lib/server/amc/contract-operations";
+import { pageParams } from "@/lib/server/snagging/search";
 
 /**
- * Records usage against one of the contract's services: a consumption
- * (something used) or an adjustment (a correction, with a reason). The
- * ledger is append-only and the database refuses anything that would
- * overuse an allowance or go below zero.
+ * A contract's usage ledger. GET lists it, newest first, a page at a time.
+ * POST records a consumption: something used against one of the services.
+ *
+ * The ledger is append-only: entries are never edited or deleted. A
+ * mistake is put right with a correction (POST .../usage/<id>/correction),
+ * which references the entry, carries a reason and cannot take usage below
+ * zero. The database refuses anything that would overuse an allowance.
  */
 const usageSchema = z
   .object({
     entitlementId: z.string().uuid(),
-    kind: z.enum(["consumption", "adjustment"]),
-    quantity: z.number().finite().min(-1000).max(1000),
+    kind: z.literal("consumption"),
+    quantity: z.number().finite().positive().max(1000),
     occurredAt: z.string().refine((v) => !Number.isNaN(Date.parse(v)), "Use a date"),
     externalType: z.enum(["fsm_work_order", "fsm_appointment", "schedule_entry"]).nullable().optional(),
     externalReference: z.string().trim().max(100).nullable().optional(),
@@ -22,10 +31,28 @@ const usageSchema = z
   })
   .strict();
 
-export async function POST(
-  req: NextRequest,
-  ctx: { params: Promise<{ id: string }> },
-) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const gate = await requireContractAccess();
+  if (!gate.ok) return gate.response;
+  const { id } = await ctx.params;
+  const params = req.nextUrl.searchParams;
+  const { page, pageSize } = pageParams(params, { defaultSize: 10 });
+  const entitlementId = params.get("entitlementId");
+  try {
+    const contract = await requireManagedContract(gate, id);
+    if (!contract.ok) return contract.response;
+    const result = await loadUsagePage(gate.admin, id, {
+      page,
+      pageSize,
+      entitlementId: entitlementId && /^[0-9a-f-]{36}$/i.test(entitlementId) ? entitlementId : null,
+    });
+    return NextResponse.json({ ...result, page, pageSize });
+  } catch (error) {
+    return contractErrorResponse(error, "Could not load the usage history");
+  }
+}
+
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const gate = await requireContractAccess();
   if (!gate.ok) return gate.response;
   const { id } = await ctx.params;
@@ -39,20 +66,14 @@ export async function POST(
   }
 
   try {
-    const { ownerId } = await loadContract(gate.admin, id);
-    if (!canManage(gate, ownerId)) {
-      return NextResponse.json({ error: "Contract not found." }, { status: 404 });
-    }
+    const contract = await requireManagedContract(gate, id);
+    if (!contract.ok) return contract.response;
     const entry = await recordUsage(gate.admin, id, parsed.data, {
       id: gate.userId,
       label: gate.label,
     });
     return NextResponse.json({ usage: entry }, { status: 201 });
   } catch (error) {
-    if (error instanceof ContractError) {
-      return NextResponse.json({ error: error.message }, { status: error.status });
-    }
-    console.error("AMC usage failed:", error);
-    return NextResponse.json({ error: "Could not record the usage" }, { status: 500 });
+    return contractErrorResponse(error, "Could not record the usage");
   }
 }

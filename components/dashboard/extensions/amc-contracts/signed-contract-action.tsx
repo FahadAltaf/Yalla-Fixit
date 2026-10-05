@@ -42,10 +42,6 @@ export function SignedContractAction({ submission }: { submission: AmcSubmission
         open={open}
         onOpenChange={setOpen}
         submissionId={submission.id}
-        proposalNumber={submission.customer.proposalNumber ?? ""}
-        customerName={submission.customer.customerName ?? ""}
-        proposedStart={submission.customer.startDate || null}
-        proposedEnd={submission.customer.endDate || null}
         onActivated={(contractId) => router.push(`/extensions/amc-contracts/${contractId}`)}
       />
     </>

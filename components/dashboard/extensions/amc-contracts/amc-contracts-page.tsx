@@ -1,9 +1,15 @@
 "use client";
 
+import { useState } from "react";
+import { ShieldCheck } from "lucide-react";
+
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
+import { Button } from "@/components/ui/button";
 import { PageHeading } from "@/components/dashboard/shared/kaizen";
 
 import { ContractsList } from "./contracts-list";
+import { ContractsSummary } from "./contracts-summary";
+import { CoverageCheckDialog } from "./coverage-check-dialog";
 
 /**
  * /extensions/amc-contracts -- signed AMC agreements in operation, and
@@ -12,14 +18,24 @@ import { ContractsList } from "./contracts-list";
  */
 export function AmcContractsPage() {
   useBreadcrumbLabel("amc-contracts", "AMC contracts");
+  const [checking, setChecking] = useState(false);
+  const [summaryKey, setSummaryKey] = useState(0);
   return (
     <div className="flex w-full flex-1 flex-col gap-6">
       <PageHeading
         eyebrow="Extensions"
         title="AMC contracts"
         description="Activate signed AMC proposals, track what each contract covers and how much is used, and see what is expiring."
+        actions={
+          <Button variant="outline" onClick={() => setChecking(true)}>
+            <ShieldCheck className="size-4" />
+            Check coverage
+          </Button>
+        }
       />
-      <ContractsList />
+      <ContractsSummary refreshKey={summaryKey} />
+      <ContractsList onRefresh={() => setSummaryKey((k) => k + 1)} />
+      <CoverageCheckDialog open={checking} onOpenChange={setChecking} />
     </div>
   );
 }

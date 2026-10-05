@@ -1,8 +1,10 @@
 # Active AMC: implementation report
 
 **Date:** 6 October 2026
-**Branch:** `active-amc` (from `amc-hardening` at `51c023b`, which is not yet pushed), worktree `_wt/amc-hardening`. Not committed or pushed.
+**Branch:** `active-amc` (from `amc-hardening` at `51c023b`), worktree `_wt/amc-hardening`. Two commits: the foundation (`cad560e`, Part 1) and contract operations (Part 2). Neither is pushed or merged.
 **Production:** not modified. No migration applied; no signed proposal converted.
+
+**Part 2, [Operations and contract management](#part-2-operations-and-contract-management), changes some Part 1 details:** usage corrections replace free adjustments in the UI and API; renewals start the day after the old end date; reminder thresholds have defaults but are switched off; the discount has a master switch. Part 1 sections note where they are superseded.
 
 The proposal workflow is unchanged: `draft → … → contract_sent → signed`. This phase adds what happens **after** `signed`: an operational contract, what it entitles the customer to, how usage is recorded, and the engines that scheduling and FSM flows can call later.
 
@@ -113,7 +115,7 @@ Mapping from the service's frequency type in the signed settings (`ENTITLEMENT_T
 
 `POST /api/amc-contracts/[id]/usage`, by the owner or an approver:
 
-- **Kinds:** `consumption` (positive) or `adjustment` (± with a reason).
+- **Kinds:** `consumption` (positive) or `adjustment` (± with a reason). *Superseded in Part 2: the API now accepts consumption only; mistakes are fixed with corrections that reference the entry (§P4).*
 - **Fields:** date, optional FSM work order or appointment reference, notes.
 - **Validation** (`checkUsage`, mirrored by the database):
   - visits are whole numbers;
@@ -141,7 +143,7 @@ Mapping from the service's frequency type in the signed settings (`ENTITLEMENT_T
 
 ## 8. Coverage engine
 
-`checkCoverage(contracts, { serviceId, date })` (pure) and `coverageFor(admin, { customerRef, serviceId, date })` (server). Exposed read-only at `GET /api/amc-contracts/coverage`.
+`checkCoverage(contracts, { serviceId, date })` (pure), with `coverageForCustomer` and `coverageForContract` on the server (Part 2, §P7). Exposed read-only at `GET /api/amc-contracts/coverage`.
 
 It answers: is an AMC in force on that date (the most recent start wins where renewals overlap), is the service on it, its type, included / used / remaining, whether it's unlimited, the call-out class, and an outcome:
 
@@ -181,14 +183,14 @@ It never consumes anything.
   - only one renewal proposal per contract, and a contract can be renewed at most once.
 - **Nothing is sent automatically.**
 - **BUSINESS DECISION REQUIRED:** there's no price list, so the draft starts from the old contract's base prices for review.
-- **Reminders:** `planRenewalReminders(endDate, today, thresholds)`, with **`AMC_RENEWAL_REMINDER_DAYS = []`** (none until approved). They would be created as Todos, so the existing reminders cron emails them. That needs `todos.related_type` to allow `'amc_contract'` (a one-line CHECK change, **not made**) and an approved schedule.
+- **Reminders:** *superseded in Part 2 (§P10):* default thresholds 60/30/15, switched off, with the Todo link and dedupe table in migration `20261006110000`.
 
 ## 12. Additional-service discount foundation
 
 `lib/amc/additional-service-discount.ts`:
 - **`discountedPrice(standard, percent)`:** rounded half up to the fil.
 - **`additionalServicePrice({ serviceKey, standardPrice, hasContractInForce, config })`:** checks eligibility (AMC in force, a configured rate, an eligible service) and returns the standard / discount / discounted figures.
-- **Off by default:** `discountPercent: null`, `eligibleServiceKeys: []`.
+- **Off by default:** `enabled: false`, `discountPercent: null`, no eligible services or categories (Part 2, §P12).
 - **The brochure's 25% isn't applied anywhere,** and no quotation flow calls this. **BUSINESS DECISION REQUIRED.**
 
 ## 13. UI implemented
@@ -309,7 +311,7 @@ The database rules were tested separately on local Postgres (§2).
 
 ---
 
-## Task classification
+## Task classification (Part 1)
 
 | # | Task | Status |
 |---|---|---|
@@ -336,3 +338,196 @@ The database rules were tested separately on local Postgres (§2).
 | 21 | Migration notes | COMPLETED |
 | 22 | Report | COMPLETED |
 | 23 | Final verification | COMPLETED (§17) |
+
+
+---
+
+# Part 2: Operations and contract management
+
+**Goal:** make Active AMC usable day to day (record and correct usage, check coverage, manage expiry and renewal) while keeping clean points for FSM to plug into later. No automatic FSM consumption, no reminders sent, no discount applied, no production change.
+
+## P1. Review of the foundation
+
+A review of commit `cad560e` found these, all fixed here:
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | **The list returned 500 on every tab.** The new `renewal_of_contract_id` gave `amc_contracts` and `amc_submissions` a second foreign key, so PostgREST refused the unnamed embeds (PGRST201) | Every embed names `amc_contracts_submission_id_fkey` |
+| 2 | Periods under a whole month (6 to 20 Oct) failed activation with a raw database error: `term_months` was 0 against a `> 0` CHECK | Stored as null |
+| 3 | Legacy proposals (rows with a price but no base price) got contracted prices of 0 and a subtotal of 0 against a real fee | `signedCommercials`: legacy rows keep their line price; subtotal = stored final + stored discount |
+| 4 | Pending activations were cut at 500 rows before filtering | Anti-join in the database (`amc_contracts=is.null`), re-checked in code |
+| 5 | Every check violation read "past its allowance"; every unique violation read "already activated" | Errors matched on the constraint or message (cancelled meanwhile, below zero, reference pair, renewal already used) |
+| 6 | A renewal started on the old end date, so both contracts covered that day | Starts the day after; same term by the activation convention |
+| 7 | Two quick clicks could create two renewal drafts | Unique index `idx_amc_submissions_one_renewal`; 23505 becomes a 409; the detail page hides the button once a renewal exists |
+| 8 | If the compensating delete after a failed entitlement insert also failed, it was silent | Checked; logged loudly; the user is told an administrator must remove it |
+| 9 | The coverage endpoint answered for any customer's contracts | Only contracts the caller can see (their own proposals', or all for approvers) |
+| 10 | A usage timestamp near midnight was checked against the UTC date | `usageDate` reads it in Dubai time |
+| 12 | The All tab paged wrongly (trailing empty pages) | One continuous list: pending rows first, then contracts, paged together |
+
+Not changed: #11 (allowances do not scale with the contract length; a business decision, below).
+
+## P2. Migration `20261006110000_active_amc_operations.sql` (NOT APPLIED)
+
+Apply after `20261006100000`. Verified on the throwaway Postgres 15 cluster, applied twice.
+
+| Change | Why |
+|---|---|
+| `amc_entitlement_usage.corrects_usage_id` + kind `correction` + CHECK `amc_usage_correction_shape` | A correction must reference an entry, be negative and carry a reason; other kinds may not reference one |
+| Trigger `amc_apply_entitlement_usage` replaced | A correction's original must be a consumption on the same service, and all corrections of an entry together can never exceed it |
+| `amc_contracts.account_manager_names` (text, backfilled) | Search and filter by account manager |
+| `todos_related_type_check` allows `amc_contract` | Renewal reminder Todos can point at a contract |
+| `amc_renewal_reminders` (unique per contract and threshold; RLS on, no browser grants) | A reminder is never created twice |
+| Unique index `idx_amc_submissions_one_renewal` | One renewal proposal per contract. **Pre-check** in the migration header must return no rows |
+
+Local checks passed: correction reduces usage; over-correction, a correction without a reason or original, a cross-service correction and a positive correction are refused; todos accept `amc_contract` and refuse unknown types; duplicate reminders and a second renewal proposal are refused; authenticated users cannot read reminders.
+
+## P3. Operational summary and coverage table
+
+The contract page opens with four cards:
+- **Status:** status pill, expiry label ("Expires in 24 days"), period and term.
+- **Contract value:** incl. VAT, and before VAT.
+- **Coverage:** total services, how many have allowance left, exhausted, unlimited, included.
+- **Usage:** entries, visits left of included and hours left of included (**always separately; visits and hours are never added**), last usage date.
+
+The **Coverage** table lists every service with type, included, used, remaining, frequency, call-out class and a state:
+
+| State | Rule |
+|---|---|
+| Available | Allowance left, more than a quarter |
+| Low remaining | A quarter or less left (`LOW_REMAINING_FRACTION = 0.25`, a configuration default) |
+| Exhausted | Nothing left |
+| Unlimited | Unlimited service; **no percentage** |
+| Included | Informational; not counted, **no percentage** |
+| Not started / Expired / Cancelled | The contract's own state overrides |
+
+## P4. Usage: record, history, corrections
+
+- **Record usage** (owner or approver, contract in force): service, quantity, date of the work, FSM work order or appointment reference, notes. Before saving it shows **Included / Already used / Recording / Remaining after**; for unlimited, "Unlimited". Used-up services are disabled; informational services are not offered.
+- **History:** paged (10/25/50), filterable by service, newest first. Columns: date (and when it was entered), service, quantity, source, FSM reference, recorded by, notes. **No editing or deleting.**
+- **Corrections:** a **Correct** action on any consumption that still counts. The dialog shows the entry, asks how much to take back (default: all that still counts) and a **mandatory reason**. It adds a `correction` row that references the original; the original is untouched. Corrections show amber with "Corrects the entry of …", and the corrected entry shows what still counts. Allowed whatever the contract state, since fixing the record is not new usage. Guarded three times: `checkCorrection` (form and server), the trigger, and the CHECKs. Audit: `entitlement_corrected` with the reason, actor and time.
+- The usage API now accepts **consumption only**. Free `adjustment` entries are no longer accepted (the kind remains in the database for future system use).
+
+## P5. Coverage check
+
+**Check coverage** on the contracts page (by Customer ID, or by searching for a contract) and on each contract page. Inputs: request type (planned service, emergency call-out, non-emergency call-out), service, date. Output:
+- **AMC status:** Active, Not started, Expired, Cancelled or None.
+- **Service:** Covered or Not covered.
+- **Entitlement:** included, used, remaining (or Unlimited, or Included not counted).
+- **Result:** **COVERED BY AMC**, **CHARGEABLE** or **NO ACTIVE AMC**, with the reason.
+- For call-outs, the SLA target, with the status stated as unknown.
+
+Read-only: it records nothing and creates no work orders.
+
+## P6. Activation
+
+The **Activate AMC** dialog now loads a preview first (`GET /api/amc-contracts/activation-preview`):
+- customer and Customer ID, property, value incl. and before VAT, signer and signing time, proposal number, account managers;
+- every service and the allowance it will get;
+- the dates, with where they came from ("Taken from the signed proposal's contract dates", or "Changed from the proposal's dates …").
+
+Activation needs the **"I have checked …" box** (the API also requires `confirmed: true`). A proposal that is already activated, not signed, or has no recorded signature shows why instead, with a link to the existing contract where there is one. After activation the page opens the contract.
+
+## P7. Cancellation
+
+Approvers only. The dialog states the consequences (coverage stops, no new usage, history kept, cannot be undone), needs a reason and a confirmation box. It records `cancelled_at`, `cancelled_by` and the reason, and writes `contract_cancelled`. Afterwards the contract stays viewable with a cancellation banner, usage stays visible and correctable, new usage is refused (UI, server and trigger), and coverage answers **NO ACTIVE AMC** (status Cancelled).
+
+## P8. Expiry
+
+Derived, never stored. `EXPIRING_SOON_DAYS = 30` is a **configuration default, not a business rule**. Labels: "Starts in 5 days", "Expires in 24 days", "Expires tomorrow", "Expires today", "Expired yesterday", "Expired 12 days ago", "Cancelled". Not-started and expired contracts get a banner on their page.
+
+## P9. List and dashboard
+
+- **Tabs:** All, Active, Expiring, Expired, Pending activation, Not started, Cancelled, with counts.
+- **Search:** customer, Customer ID, property, contract number, account manager.
+- **Filter:** account manager (from the visible contracts).
+- **Columns:** Contract, Customer, Property, Account manager, Start, End (with expiry label), Coverage (services, exhausted), Value, Status.
+- **Sorting** by contract, customer, property, start, end or value, done by the server.
+- **Dashboard cards** (counted from the contracts the viewer can see; each opens its filter): In force with the total value in force, Pending activation, Expiring soon, Expired, Allowance used up (in-force contracts with a visit or hour allowance at zero). **Recent usage** lists the latest six entries and the count over 30 days.
+
+## P10. Renewal and reminders
+
+- **Renewal card** on the contract page: a timeline **Previous contract → This contract → Renewal proposal → Renewed contract**, each linked when it exists.
+- **Create renewal proposal** opens a preview: the new period (the day after the old end date, same term), discount, current value against the value at today's settings, every service copied (units, frequency, base price), services no longer offered, and the pricing rule in words. Afterwards: **Open renewal proposal**. Duplicates are blocked by the shared rule `renewalBlockedReason` and the unique index.
+- **Reminders card:** the planned reminder dates (60, 30 and 15 days before the end date, **configuration defaults**) and which exist. `AMC_RENEWAL_REMINDERS_ENABLED = false`: nothing is created or emailed, and `POST /api/amc-contracts/[id]/reminders` answers 409. When switched on, each reminder inserts its `amc_renewal_reminders` row first (unique per contract and threshold), then the Todo (`related_type = 'amc_contract'`, owner = the proposal's owner, reminder 09:00 Dubai on the date, deadline the end date), so a rerun or a parallel run never duplicates.
+
+## P11. SLA, documents, account managers, audit
+
+- **Service levels card:** the target for each call-out class on the contract (emergency attendance 120 minutes, non-emergency scheduling 6 hours), status **unknown**, because the portal has no request or arrival times from FSM.
+- **Documents card:** view or download (PDF) the proposal with its brochure, and the contract, rebuilt from the signed proposal's saved data and the wording captured when each was sent. **There is no stored copy of the signed PDF**, and the card says so. A document never sent renders with today's settings.
+- **Account managers** from the signed snapshot, on the contract page, in the list, in search and in the filter.
+- **History timeline** with the actor, the time and the reason: Contract activated, Usage recorded, Usage corrected, Contract cancelled, Renewal proposal created, Renewal reminders created.
+
+## P12. Additional-service discount
+
+Configuration is now `{ enabled, discountPercent, eligibleServiceKeys, eligibleCategories }`; the default is off with nothing eligible. `additionalServicePrice` needs the switch on, a rate, and a matching service or category, and an AMC in force. **Nothing calls it**, quotations are unchanged, and the brochure's 25% is not applied.
+
+## P13. APIs added or changed
+
+| Method and path | Who | What |
+|---|---|---|
+| `GET /api/amc-contracts?status=&search=&manager=&sort=&dir=&page=&pageSize=` | AMC users (own); approvers (all) | List; adds sorting, manager filter, coverage summary, expiry label, managers list |
+| `POST /api/amc-contracts` | Owner or approver | Activate; now needs `confirmed: true` |
+| `GET /api/amc-contracts/activation-preview?submissionId=` | Owner or approver | What activation would create |
+| `GET /api/amc-contracts/summary` | AMC users | Dashboard figures |
+| `GET /api/amc-contracts/[id]` | Owner or approver | Adds summary, entitlement states, expiry label, SLA targets; usage moved to its own endpoint |
+| `GET /api/amc-contracts/[id]/usage?page=&pageSize=&entitlementId=` | Owner or approver | Paged history with corrected totals |
+| `POST /api/amc-contracts/[id]/usage` | Owner or approver | Consumption only |
+| `POST /api/amc-contracts/[id]/usage/[usageId]/correction` | Owner or approver | `{ amount, reason }` |
+| `GET /api/amc-contracts/[id]/renewal` | Owner or approver | Relationships and preview |
+| `GET` / `POST /api/amc-contracts/[id]/reminders` | Owner or approver | Plan; create (409 while switched off) |
+| `GET /api/amc-contracts/coverage?catalogue=1` / `?contractId=` / `?customerRef=` | AMC users, scoped | Catalogue; coverage, verdict, SLA target |
+
+## P14. Tests and verification
+
+`npm test`: **87 passed** (70 before + 17 new in `tests/amc/contract-operations.test.ts`; 3 Part 1 tests updated for the intended changes: renewal dates, reminder defaults, discount switch). New coverage: corrections (partial, full, repeated, over-correction, below zero, no reason, correcting a correction, bad amounts); over-consumption; unlimited; informational; cancelled, expired and not-started usage; Dubai usage date; usage preview; entitlement states; summary keeping visits and hours apart; coverage AMC status and verdicts; expiry labels; short periods; activation pricing for legacy rows; renewal non-overlap, same term and duplicate blocking; reminder dedupe; SLA unknown; discount switch and categories. Database rules: §P2.
+
+| Check | Result |
+|---|---|
+| `npm test` | 87 / 87 |
+| ESLint (all new and changed files) | 0 problems |
+| TypeScript (all AMC areas, incl. every new route) | 0 new errors; the 2 known `amc-pdf-utils.tsx` errors remain (pre-existing) |
+| `next build --webpack` | **Succeeded** (exit 0); all new routes and both pages compiled. Only the existing "Dynamic server usage … cookies" notices and the `middleware` deprecation |
+| Local migration test (both migrations, applied twice) | Passed |
+
+**Not verified in a browser.** The screens need a signed-in session and a database with both migrations; the portal's database is production, where neither is applied. Use the checklist in `docs/active-amc-user-testing-checklist.md` on staging or a local database.
+
+## P15. Business decisions still required (Part 2)
+
+1. The expiring window (30 days is a default) and the low-remaining threshold (25%).
+2. The renewal reminder schedule (60/30/15 are defaults), who receives the Todos, and switching reminders on.
+3. Whether allowances scale with units, and with contracts longer or shorter than a year (review #11).
+4. Renewal pricing: the old base prices (today) or a rate card.
+5. Additional-service discount: rate, services or categories, and per contract or per customer.
+6. Who may record and correct usage: today the proposal owner and approvers. Whether corrections should be approver-only.
+7. Whether the early signed proposals are real (to activate) or test data.
+
+## Task classification (Part 2)
+
+| # | Task | Status |
+|---|---|---|
+| 0 | Commit the foundation | COMPLETED (`cad560e`; push blocked: no GitHub credentials in this environment) |
+| 1 | Review and fix | COMPLETED (11 fixed; #11 is a business decision) |
+| 2 | Operational summary | COMPLETED |
+| 3 | Coverage table | COMPLETED |
+| 4 | Record usage UX | COMPLETED |
+| 5 | Usage history | COMPLETED |
+| 6 | Corrections | COMPLETED |
+| 7 | Coverage check UI | COMPLETED |
+| 8 | Activation UX | COMPLETED |
+| 9 | Cancellation UX | COMPLETED |
+| 10 | Expiry | COMPLETED · window: BUSINESS DECISION REQUIRED |
+| 11 | List improvements | COMPLETED |
+| 12 | Dashboard cards | COMPLETED |
+| 13 | Renewal UX | COMPLETED · pricing: BUSINESS DECISION REQUIRED |
+| 14 | Renewal relationships | COMPLETED |
+| 15 | Renewal reminders | COMPLETED (switched off) · schedule: BUSINESS DECISION REQUIRED |
+| 16 | SLA display | COMPLETED (targets; status unknown until FSM timestamps exist) |
+| 17 | Discount configuration | COMPLETED (not applied anywhere) · BUSINESS DECISION REQUIRED |
+| 18 | Document access | COMPLETED (rebuilt from the snapshot; no signed-PDF archive, stated) |
+| 19 | Account managers | COMPLETED |
+| 20 | Audit timeline | COMPLETED |
+| 21 | Responsive review | COMPLETED in code (tables scroll inside their cards, dialogs scroll, header actions wrap); browser check BLOCKED: needs sign-in and a migrated database |
+| 22 | Tests | COMPLETED |
+| 23 | Docs | COMPLETED |
+| 24 | Verification | COMPLETED (§P14) |
+| 25 | Commit | COMPLETED (local commit on `active-amc`; push needs GitHub credentials, not merged to main) |

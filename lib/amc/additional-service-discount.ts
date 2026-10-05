@@ -12,15 +12,22 @@
 import { filsToAed, percentToBasisPoints, toFils } from "./pricing";
 
 export interface AdditionalServiceDiscountConfig {
+  /** Master switch. */
+  enabled: boolean;
   /** Percent off the standard price, e.g. 25. Null: no discount. */
   discountPercent: number | null;
-  /** Service keys that qualify. Empty: none do. */
+  /** Service keys that qualify. */
   eligibleServiceKeys: ReadonlyArray<string>;
+  /** Or whole categories (e.g. "plumbing"). */
+  eligibleCategories: ReadonlyArray<string>;
 }
 
+/** Off, with no rate and nothing eligible, until the business decides. */
 export const DEFAULT_ADDITIONAL_SERVICE_DISCOUNT: AdditionalServiceDiscountConfig = {
+  enabled: false,
   discountPercent: null,
   eligibleServiceKeys: [],
+  eligibleCategories: [],
 };
 
 export interface AdditionalServicePrice {
@@ -42,11 +49,13 @@ export function discountedPrice(standardPrice: number, discountPercent: number):
 
 export function additionalServicePrice({
   serviceKey,
+  category,
   standardPrice,
   hasContractInForce,
   config = DEFAULT_ADDITIONAL_SERVICE_DISCOUNT,
 }: {
   serviceKey: string;
+  category?: string | null;
   standardPrice: number;
   /** From the coverage engine: an AMC in force on the work date. */
   hasContractInForce: boolean;
@@ -61,10 +70,13 @@ export function additionalServicePrice({
     reason,
   });
   if (!hasContractInForce) return none("No AMC in force.");
-  if (!config.discountPercent || config.discountPercent <= 0) {
+  if (!config.enabled || !config.discountPercent || config.discountPercent <= 0) {
     return none("No AMC discount is configured.");
   }
-  if (!config.eligibleServiceKeys.includes(serviceKey)) {
+  const eligible =
+    config.eligibleServiceKeys.includes(serviceKey) ||
+    (!!category && config.eligibleCategories.includes(category));
+  if (!eligible) {
     return none("This service is not eligible for the AMC discount.");
   }
   const after = discountedPrice(standardPrice, config.discountPercent);

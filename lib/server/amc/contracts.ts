@@ -3,20 +3,18 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   canCancelContract,
   checkActivation,
-  checkCoverage,
   checkUsage,
   contractDisplayStatus,
   daysRemaining,
   deriveEntitlements,
+  signedCommercials,
   termMonthsBetween,
-  todayInDubai,
   type ContractEntitlement,
   type ContractForRules,
-  type CoverageResult,
   type StoredContractStatus,
 } from "@/lib/amc/contracts";
-import { computeAmcPricing, grandTotalFromFinal, roundAed, vatOnFinal } from "@/lib/amc/pricing";
-import { buildRenewalDraft } from "@/lib/amc/renewal";
+import { grandTotalFromFinal, vatOnFinal } from "@/lib/amc/pricing";
+import { buildRenewalDraft, renewalBlockedReason } from "@/lib/amc/renewal";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { priceSubmission } from "@/lib/server/amc/pricing";
 import { readAmcSettings } from "@/lib/server/amc/settings";
@@ -38,7 +36,7 @@ type Admin = SupabaseClient;
 export class ContractError extends Error {
   constructor(
     message: string,
-    readonly status: 400 | 403 | 404 | 409 | 503 = 400,
+    readonly status: 400 | 403 | 404 | 409 | 500 | 503 = 400,
   ) {
     super(message);
     this.name = "ContractError";
@@ -52,7 +50,7 @@ export class ContractError extends Error {
 export const CONTRACT_COLUMNS =
   "id, submission_id, proposal_number, status, customer, property, account_managers, customer_name, customer_ref, property_label, unit_type, start_date, end_date, term_months, currency, subtotal, discount_percent, discount_amount, final_price, vat_amount, grand_total, signed_at, signed_by_name, renewed_from_contract_id, activated_by, activated_at, cancelled_at, cancelled_by, cancellation_reason, created_at, updated_at";
 
-const ENTITLEMENT_COLUMNS =
+export const ENTITLEMENT_COLUMNS =
   "id, contract_id, service_id, service_label, sort_order, frequency_type, entitlement_type, call_out_class, units, frequency, included_quantity, used_quantity, base_price, contracted_price";
 
 type Row = Record<string, unknown>;
@@ -183,15 +181,16 @@ const SUBMISSION_COLUMNS =
  * client signed: customer, property, account managers, commercial values,
  * contracted services (as entitlements) and the contract wording.
  */
-export async function activateContract(
-  admin: Admin,
-  input: { submissionId: string; startDate: string; endDate: string },
-  actor: { id: string; label: string | null },
-): Promise<ContractView> {
+/**
+ * Everything activation would create, worked out without writing: used by
+ * the activation preview and by activation itself, so the dialog shows
+ * exactly what the contract will hold.
+ */
+export async function prepareActivation(admin: Admin, submissionId: string) {
   const { data: submission, error } = await admin
     .from("amc_submissions")
     .select(SUBMISSION_COLUMNS)
-    .eq("id", input.submissionId)
+    .eq("id", submissionId)
     .maybeSingle<Row>();
   if (error) {
     /* Before the migration the renewal column does not exist yet. */
@@ -203,22 +202,12 @@ export async function activateContract(
   const { data: existing, error: existingError } = await admin
     .from("amc_contracts")
     .select("id")
-    .eq("submission_id", input.submissionId)
+    .eq("submission_id", submissionId)
     .maybeSingle<{ id: string }>();
   if (existingError) {
     if (isMissingTable(existingError)) throw notMigrated();
     throw new ContractError(existingError.message, 400);
   }
-
-  const check = checkActivation({
-    submissionStatus: String(submission.status),
-    alreadyActivated: Boolean(existing),
-    startDate: input.startDate,
-    endDate: input.endDate,
-    signedByName: submission.signed_by_name as string | null,
-    signedAt: submission.signed_at as string | null,
-  });
-  if (!check.ok) throw new ContractError(check.error, check.status);
 
   /* The wording the client signed: the contract's own copy, else the
      proposal's, merged over the shipped defaults as the renderer does. */
@@ -237,27 +226,99 @@ export async function activateContract(
     basePrice?: number | null;
     price?: number | null;
   }>;
-  /* Priced exactly as signed. The stored final price is what the client
-     was quoted; the breakdown is recomputed from the signed rows. */
-  const pricing = computeAmcPricing(rows, Number(submission.discount_percent ?? 0));
-  const finalPrice = roundAed(Number(submission.final_price ?? pricing.finalPrice));
+  /* Priced exactly as signed (see signedCommercials). */
+  const signed = signedCommercials(rows, {
+    discountPercent: submission.discount_percent as number | null,
+    discountAmount: submission.discount_amount as number | null,
+    finalPrice: submission.final_price as number | null,
+  });
+  const { finalPrice } = signed;
+  const commercial = {
+    subtotal: signed.subtotal,
+    discountPercent: signed.discountPercent,
+    discountAmount: signed.discountAmount,
+  };
   const entitlements = deriveEntitlements(
-    rows.map((row) => ({
-      ...row,
-      price: pricing.rows.find((p) => p.serviceId === row.serviceId)?.price ?? row.price ?? 0,
-    })),
+    rows.map((row) => ({ ...row, price: signed.linePrices.get(row.serviceId) ?? 0 })),
     signedSettings.services.map((s) => ({ id: s.id, label: s.label, frequencyType: s.frequencyType })),
   );
-  if (entitlements.length === 0) {
-    throw new ContractError("The signed proposal has no services to activate.", 409);
-  }
 
   const customer = (submission.customer ?? {}) as Row;
   const property = (submission.property ?? {}) as Row;
   const options = (submission.document_options ?? {}) as Row;
   const managers = (Array.isArray(options.accountManagers) ? options.accountManagers : []).filter(
     (m) => (m as Row)?.name || (m as Row)?.phone,
-  );
+  ) as Row[];
+
+  return {
+    submission,
+    existingContractId: existing?.id ?? null,
+    signedSettings,
+    commercial,
+    finalPrice,
+    entitlements,
+    customer,
+    property,
+    managers,
+  };
+}
+
+/** What the activation dialog shows before anyone confirms. */
+export async function activationPreview(admin: Admin, submissionId: string) {
+  const p = await prepareActivation(admin, submissionId);
+  const startDate = typeof p.customer.startDate === "string" ? p.customer.startDate : null;
+  const endDate = typeof p.customer.endDate === "string" ? p.customer.endDate : null;
+  return {
+    submissionId,
+    status: String(p.submission.status),
+    signed: p.submission.status === "signed",
+    existingContractId: p.existingContractId,
+    proposalNumber: String(p.submission.proposal_number ?? ""),
+    customerName: String(p.customer.customerName ?? ""),
+    customerRef: String(p.customer.customerId ?? "") || null,
+    propertyLabel: propertyLabelOf(p.property),
+    accountManagers: p.managers.map((m) => ({ name: String(m.name ?? ""), phone: String(m.phone ?? "") })),
+    signedAt: (p.submission.signed_at as string | null) ?? null,
+    signedByName: (p.submission.signed_by_name as string | null) ?? null,
+    /* Where the dates come from: the signed proposal's own date fields. */
+    proposedStartDate: startDate,
+    proposedEndDate: endDate,
+    finalPrice: p.finalPrice,
+    vatAmount: vatOnFinal(p.finalPrice),
+    grandTotal: grandTotalFromFinal(p.finalPrice),
+    entitlements: p.entitlements.map((e) => ({
+      serviceId: e.serviceId,
+      serviceLabel: e.serviceLabel,
+      entitlementType: e.entitlementType,
+      callOutClass: e.callOutClass,
+      units: e.units,
+      frequency: e.frequency,
+      includedQuantity: e.includedQuantity,
+      contractedPrice: e.contractedPrice,
+    })),
+  };
+}
+
+export async function activateContract(
+  admin: Admin,
+  input: { submissionId: string; startDate: string; endDate: string },
+  actor: { id: string; label: string | null },
+): Promise<ContractView> {
+  const { submission, existingContractId, signedSettings, commercial, finalPrice, entitlements, customer, property, managers } =
+    await prepareActivation(admin, input.submissionId);
+
+  const check = checkActivation({
+    submissionStatus: String(submission.status),
+    alreadyActivated: Boolean(existingContractId),
+    startDate: input.startDate,
+    endDate: input.endDate,
+    signedByName: submission.signed_by_name as string | null,
+    signedAt: submission.signed_at as string | null,
+  });
+  if (!check.ok) throw new ContractError(check.error, check.status);
+  if (entitlements.length === 0) {
+    throw new ContractError("The signed proposal has no services to activate.", 409);
+  }
 
   const { data: created, error: insertError } = await admin
     .from("amc_contracts")
@@ -268,16 +329,21 @@ export async function activateContract(
       customer,
       property,
       account_managers: managers,
+      account_manager_names: managers
+        .map((m) => String(m.name ?? "").trim())
+        .filter(Boolean)
+        .join(", "),
       customer_name: String(customer.customerName ?? "").trim(),
       customer_ref: String(customer.customerId ?? "").trim() || null,
       property_label: propertyLabelOf(property),
       unit_type: (property.unitType as string | undefined) ?? null,
       start_date: input.startDate,
       end_date: input.endDate,
-      term_months: termMonthsBetween(input.startDate, input.endDate),
-      subtotal: pricing.subtotal,
-      discount_percent: pricing.discountPercent,
-      discount_amount: pricing.discountAmount,
+      /* Under a whole month (6 to 20 Oct) has no term in months. */
+      term_months: termMonthsBetween(input.startDate, input.endDate) || null,
+      subtotal: commercial.subtotal,
+      discount_percent: commercial.discountPercent,
+      discount_amount: commercial.discountAmount,
       final_price: finalPrice,
       vat_amount: vatOnFinal(finalPrice),
       grand_total: grandTotalFromFinal(finalPrice),
@@ -290,8 +356,14 @@ export async function activateContract(
     .select(CONTRACT_COLUMNS)
     .single<Row>();
   if (insertError) {
+    if (insertError.code === "23505" && /renewed_from/.test(insertError.message)) {
+      throw new ContractError("The contract this proposal renews has already been renewed.", 409);
+    }
     if (insertError.code === "23505") {
       throw new ContractError("This proposal has already been activated.", 409);
+    }
+    if (insertError.code === "23514" && /period_valid/.test(insertError.message)) {
+      throw new ContractError("The end date must be after the start date.", 400);
     }
     if (isMissingTable(insertError)) throw notMigrated();
     throw new ContractError(insertError.message, 400);
@@ -317,7 +389,18 @@ export async function activateContract(
     /* Not one transaction over the REST API: undo the contract so the
        proposal can be activated again once the cause is fixed. Nothing
        else references it yet. */
-    await admin.from("amc_contracts").delete().eq("id", created.id);
+    const { error: undoError } = await admin.from("amc_contracts").delete().eq("id", created.id);
+    if (undoError) {
+      /* The contract now has no services and blocks re-activation: it
+         needs removing by hand. Say so loudly. */
+      console.error(
+        `AMC activation: contract ${created.id} was created without services and could not be removed (${undoError.message}). Delete it before activating proposal ${input.submissionId} again.`,
+      );
+      throw new ContractError(
+        "The contract was created without its services and could not be undone. Ask an administrator to remove it before trying again.",
+        500,
+      );
+    }
     throw new ContractError(`Could not create the contract's services: ${entError.message}`, 400);
   }
 
@@ -455,13 +538,7 @@ export async function recordUsage(
   if (error) {
     /* The database's own guards: someone else used the allowance first,
        or this FSM reference was already consumed. */
-    if (error.code === "23514") {
-      throw new ContractError("That would take this service past its allowance. Reload and try again.", 409);
-    }
-    if (error.code === "23505") {
-      throw new ContractError("That work order / appointment has already been recorded against this service.", 409);
-    }
-    throw new ContractError(error.message, 400);
+    throw usageError(error);
   }
 
   await recordAmcAudit(admin, {
@@ -484,31 +561,34 @@ export async function recordUsage(
   return data;
 }
 
-export async function loadUsage(admin: Admin, contractId: string) {
-  const { data, error } = await admin
-    .from("amc_entitlement_usage")
-    .select("id, entitlement_id, kind, quantity, occurred_at, source, external_type, external_reference, notes, created_at, created_by, creator:user_profile!amc_entitlement_usage_created_by_fkey(full_name, email)")
-    .eq("contract_id", contractId)
-    .order("occurred_at", { ascending: false })
-    .limit(500);
-  if (error) throw new ContractError(error.message, 400);
-  return (data ?? []).map((row) => {
-    const r = row as Row;
-    const who = r.creator as { full_name?: string | null; email?: string | null } | null;
-    return {
-      id: String(r.id),
-      entitlementId: String(r.entitlement_id),
-      kind: r.kind as "consumption" | "adjustment",
-      quantity: Number(r.quantity),
-      occurredAt: String(r.occurred_at),
-      source: String(r.source),
-      externalType: (r.external_type as string | null) ?? null,
-      externalReference: (r.external_reference as string | null) ?? null,
-      notes: (r.notes as string | null) ?? null,
-      createdAt: String(r.created_at),
-      createdBy: who?.full_name?.trim() || who?.email || null,
-    };
-  });
+/** The database's own guards, in words, matched on the constraint or message. */
+export function usageError(error: { code?: string; message: string }): ContractError {
+  const m = error.message;
+  if (error.code === "23505") {
+    return new ContractError("That work order / appointment has already been recorded against this service.", 409);
+  }
+  if (error.code === "23514") {
+    if (/not_overused/.test(m)) {
+      return new ContractError("That would take this service past its allowance. Reload and try again.", 409);
+    }
+    if (/used_nonnegative|used_quantity/.test(m)) {
+      return new ContractError("That would take usage below zero. Reload and try again.", 409);
+    }
+    if (/Contract is not active/.test(m)) {
+      return new ContractError("This contract was cancelled a moment ago. Reload it.", 409);
+    }
+    if (/external_pair/.test(m)) {
+      return new ContractError("Choose whether the reference is a work order or an appointment.", 400);
+    }
+    if (/cannot take back more|reference a usage entry/.test(m)) {
+      return new ContractError("That correction no longer fits this entry. Reload and try again.", 409);
+    }
+    if (/informational/i.test(m)) {
+      return new ContractError("Informational services cannot be consumed.", 409);
+    }
+    return new ContractError("The database refused that entry. Reload and try again.", 409);
+  }
+  return new ContractError(m, 400);
 }
 
 /* ------------------------------------------------------------------ */
@@ -567,24 +647,18 @@ export async function createRenewalProposal(
   actor: { id: string; label: string | null },
 ): Promise<{ submissionId: string; droppedServiceIds: string[] }> {
   const { contract, entitlements } = await loadContract(admin, contractId);
-  if (contract.status === "cancelled") {
-    throw new ContractError("A cancelled contract cannot be renewed.", 409);
-  }
-  if (contract.renewedByContractId) {
-    throw new ContractError("This contract has already been renewed.", 409);
-  }
   const { data: openRenewal } = await admin
     .from("amc_submissions")
     .select("id")
     .eq("renewal_of_contract_id", contractId)
     .limit(1)
     .maybeSingle<{ id: string }>();
-  if (openRenewal) {
-    throw new ContractError(
-      "A renewal proposal already exists for this contract. Open it from AMC proposals.",
-      409,
-    );
-  }
+  const blocked = renewalBlockedReason({
+    status: contract.status,
+    renewedByContractId: contract.renewedByContractId,
+    hasRenewalProposal: Boolean(openRenewal),
+  });
+  if (blocked) throw new ContractError(blocked, 409);
 
   const settings = await readAmcSettings(admin);
   const unitType = String(contract.property.unitType ?? contract.unitType ?? "");
@@ -649,7 +723,13 @@ export async function createRenewalProposal(
     })
     .select("id, proposal_number, customer")
     .single<{ id: string; proposal_number: string; customer: Row }>();
-  if (error) throw new ContractError(error.message, 400);
+  if (error) {
+    /* The one-renewal-per-contract index: another click got there first. */
+    if (error.code === "23505") {
+      throw new ContractError("A renewal proposal already exists for this contract. Open it from AMC proposals.", 409);
+    }
+    throw new ContractError(error.message, 400);
+  }
 
   /* Pin the JSON copy of the allocated number, as POST /api/amc-submissions does. */
   await admin
@@ -666,40 +746,4 @@ export async function createRenewalProposal(
     payload: { renewalSubmissionId: data.id, droppedServiceIds: draft.droppedServiceIds },
   });
   return { submissionId: data.id, droppedServiceIds: draft.droppedServiceIds };
-}
-
-/* ------------------------------------------------------------------ */
-/* Coverage                                                            */
-/* ------------------------------------------------------------------ */
-
-/**
- * Coverage for a customer (the proposal's Customer ID) on a date: loads
- * their active contracts and asks the pure engine. Future scheduling/FSM
- * flows call this; nothing consumes an entitlement from it.
- */
-export async function coverageFor(
-  admin: Admin,
-  { customerRef, serviceId, date = todayInDubai() }: { customerRef: string; serviceId: string; date?: string },
-): Promise<CoverageResult> {
-  const { data, error } = await admin
-    .from("amc_contracts")
-    .select(`id, status, start_date, end_date, customer_ref, amc_contract_entitlements(${ENTITLEMENT_COLUMNS})`)
-    .eq("customer_ref", customerRef)
-    .eq("status", "active");
-  if (error) {
-    if (isMissingTable(error)) throw notMigrated();
-    throw new ContractError(error.message, 400);
-  }
-  const contracts: ContractForRules[] = (data ?? []).map((row) => {
-    const r = row as Row;
-    return {
-      id: String(r.id),
-      status: r.status as StoredContractStatus,
-      startDate: String(r.start_date),
-      endDate: String(r.end_date),
-      customerRef: (r.customer_ref as string | null) ?? null,
-      entitlements: ((r.amc_contract_entitlements as Row[]) ?? []).map(mapEntitlement),
-    };
-  });
-  return checkCoverage(contracts, { serviceId, date });
 }

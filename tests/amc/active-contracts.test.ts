@@ -19,7 +19,12 @@ import {
   type ContractEntitlement,
   type ContractForRules,
 } from "@/lib/amc/contracts";
-import { AMC_RENEWAL_REMINDER_DAYS, buildRenewalDraft, planRenewalReminders } from "@/lib/amc/renewal";
+import {
+  AMC_RENEWAL_REMINDER_DAYS,
+  AMC_RENEWAL_REMINDERS_ENABLED,
+  buildRenewalDraft,
+  planRenewalReminders,
+} from "@/lib/amc/renewal";
 import { AMC_SLA_DEFAULTS, evaluateSla } from "@/lib/amc/sla";
 import {
   DEFAULT_ADDITIONAL_SERVICE_DISCOUNT,
@@ -238,8 +243,9 @@ test("renewal: pre-filled from the contract, current catalogue, old contract unc
   const frozen = JSON.stringify(source);
   const draft = buildRenewalDraft(source, ["ac-ppm", "handyman", "emergency"]);
   assert.equal(JSON.stringify(source), frozen, "the source is not modified");
-  assert.equal(draft.customer.startDate, "2027-10-01");
-  assert.equal(draft.customer.endDate, "2028-10-01");
+  /* The day after the old end date (no overlap), same 12-month term. */
+  assert.equal(draft.customer.startDate, "2027-10-02");
+  assert.equal(draft.customer.endDate, "2028-10-02");
   assert.equal(draft.customer.proposalNumber, "", "the new proposal gets its own number");
   assert.deepEqual(draft.services.map((s) => s.serviceId), ["ac-ppm", "handyman", "emergency"]);
   assert.deepEqual(draft.droppedServiceIds, ["helpdesk"], "services no longer offered are reported");
@@ -247,9 +253,14 @@ test("renewal: pre-filled from the contract, current catalogue, old contract unc
   assert.equal(draft.discountPercent, 5);
 });
 
-test("renewal reminders: none by default, configurable thresholds", () => {
-  assert.deepEqual([...AMC_RENEWAL_REMINDER_DAYS], [], "no reminder schedule is approved yet");
-  assert.deepEqual(planRenewalReminders("2027-10-01", "2027-01-01"), []);
+test("renewal reminders: configurable default thresholds, switched off", () => {
+  assert.deepEqual([...AMC_RENEWAL_REMINDER_DAYS], [60, 30, 15], "configuration defaults, not an approved schedule");
+  assert.equal(AMC_RENEWAL_REMINDERS_ENABLED, false, "nothing is created until the schedule is approved");
+  assert.deepEqual(planRenewalReminders("2027-10-01", "2027-01-01"), [
+    { daysBefore: 60, remindOn: "2027-08-02" },
+    { daysBefore: 30, remindOn: "2027-09-01" },
+    { daysBefore: 15, remindOn: "2027-09-16" },
+  ]);
   assert.deepEqual(planRenewalReminders("2027-10-01", "2027-08-15", [60, 30, 15]), [
     { daysBefore: 30, remindOn: "2027-09-01" },
     { daysBefore: 15, remindOn: "2027-09-16" },
@@ -282,11 +293,12 @@ test("SLA: emergency attendance and non-emergency scheduling", () => {
 /* ---------------------- additional-service discount --------------------- */
 
 test("additional-service discount: nothing applies until configured", () => {
+  assert.equal(DEFAULT_ADDITIONAL_SERVICE_DISCOUNT.enabled, false);
   assert.equal(DEFAULT_ADDITIONAL_SERVICE_DISCOUNT.discountPercent, null);
   const none = additionalServicePrice({ serviceKey: "painting", standardPrice: 400, hasContractInForce: true });
   assert.equal(none.eligible, false);
   assert.equal(none.discountedPrice, 400);
-  const config = { discountPercent: 25, eligibleServiceKeys: ["painting"] };
+  const config = { enabled: true, discountPercent: 25, eligibleServiceKeys: ["painting"], eligibleCategories: [] };
   const yes = additionalServicePrice({ serviceKey: "painting", standardPrice: 400, hasContractInForce: true, config });
   assert.equal(yes.eligible, true);
   assert.equal(yes.discountedPrice, 300);

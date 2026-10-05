@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
+import { ContractError, loadContract } from "@/lib/server/amc/contracts";
 import { readAmcSettings } from "@/lib/server/amc/settings";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
@@ -63,4 +64,27 @@ export async function requireContractAccess(): Promise<ContractGate> {
 /** Owner of the source proposal, or an approver. */
 export function canManage(gate: Extract<ContractGate, { ok: true }>, ownerId: string | null): boolean {
   return gate.canApprove || (!!ownerId && ownerId === gate.userId);
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Loads a contract for a route and checks the caller may work on it. Not
+ * theirs reads as "not found", as for proposals.
+ */
+export async function requireManagedContract(gate: Extract<ContractGate, { ok: true }>, id: string) {
+  const notFound = { ok: false as const, response: NextResponse.json({ error: "Contract not found." }, { status: 404 }) };
+  if (!UUID.test(id)) return notFound;
+  const loaded = await loadContract(gate.admin, id);
+  if (!canManage(gate, loaded.ownerId)) return notFound;
+  return { ok: true as const, ...loaded };
+}
+
+/** A ContractError becomes its own status; anything else is logged and a 500. */
+export function contractErrorResponse(error: unknown, fallback: string): NextResponse {
+  if (error instanceof ContractError) {
+    return NextResponse.json({ error: error.message }, { status: error.status });
+  }
+  console.error(`AMC contracts: ${fallback}:`, error);
+  return NextResponse.json({ error: fallback }, { status: 500 });
 }
