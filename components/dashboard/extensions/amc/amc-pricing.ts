@@ -1,9 +1,10 @@
 import { format } from "date-fns";
 
 import {
-  getDefaultFrequencyForService,
-  getServicesForUnitType,
-} from "./amc-constants";
+  computeAmcPricing,
+  grandTotalFromFinal,
+  rowPrice,
+} from "@/lib/amc/pricing";
 import type {
   AmcComputedData,
   AmcDocumentType,
@@ -15,9 +16,7 @@ import type {
 } from "./amc-types";
 import { amountToWordsAed } from "./utils/amount-to-words";
 import { getAmcSettingsDefaults, servicesForProperty } from "./amc-settings";
-import type { AmcSettings } from "./amc-settings";
-
-const VAT_RATE = 0.05;
+import type { AmcServiceDefinition, AmcSettings } from "./amc-settings";
 
 /**
  * The VAT-inclusive total, from the figure a submission stores.
@@ -30,7 +29,7 @@ const VAT_RATE = 0.05;
  * proposal came to read 3,500 in the list and 3,675 on its own page.
  */
 export function grandTotalOf(finalPriceExclVat: number): number {
-  return finalPriceExclVat * (1 + VAT_RATE);
+  return grandTotalFromFinal(finalPriceExclVat);
 }
 
 /*
@@ -44,32 +43,27 @@ export function grandTotalOf(finalPriceExclVat: number): number {
   every checked row has one.
 */
 export function computeServiceRowPrice(row: AmcServiceRow): number {
-  if (!row.included) return 0;
-  return (row.basePrice ?? 0) * row.units * row.frequency;
+  return rowPrice(row);
 }
 
+/*
+  Totals come from lib/amc/pricing.ts, the same code the API uses to set
+  final_price, so the wizard, the documents and the stored figure agree
+  to the fil. See that file for the rounding rule.
+*/
 export function calculateAmcTotals(data: AmcFormData): AmcTotals {
-  const subtotal = data.serviceRows.reduce(
-    (sum, row) => sum + computeServiceRowPrice(row),
-    0,
-  );
-  const discountPercent = data.discountPercent ?? 0;
-  const discountAmount = subtotal * (discountPercent / 100);
-  const finalPrice = subtotal - discountAmount;
-  const vatAmount = finalPrice * VAT_RATE;
-  const grandTotal = finalPrice + vatAmount;
-  const monthlyPrice = finalPrice / 12;
+  const pricing = computeAmcPricing(data.serviceRows, data.discountPercent ?? 0);
 
   return {
-    subtotal,
-    discountPercent,
-    discountAmount,
-    finalPrice,
-    monthlyPrice,
-    annualSubtotal: finalPrice,
-    vatAmount,
-    grandTotal,
-    amountInWords: amountToWordsAed(grandTotal),
+    subtotal: pricing.subtotal,
+    discountPercent: pricing.discountPercent,
+    discountAmount: pricing.discountAmount,
+    finalPrice: pricing.finalPrice,
+    monthlyPrice: pricing.monthlyPrice,
+    annualSubtotal: pricing.finalPrice,
+    vatAmount: pricing.vatAmount,
+    grandTotal: pricing.grandTotal,
+    amountInWords: amountToWordsAed(pricing.grandTotal),
   };
 }
 
@@ -130,6 +124,13 @@ function buildFrequencyRows(data: AmcFormData, settings: AmcSettings): Frequency
     .filter((row): row is FrequencyRow => Boolean(row));
 }
 
+function offeredRowsOnly(data: AmcFormData, settings: AmcSettings): AmcServiceRow[] {
+  const offered = new Set(
+    servicesForProperty(settings, data.unitType).map((service) => service.id),
+  );
+  return data.serviceRows.filter((row) => !row.included || offered.has(row.serviceId));
+}
+
 export function computeAmcData(
   data: AmcFormData,
   documentType: AmcDocumentType = "proposal",
@@ -156,7 +157,12 @@ export function computeAmcData(
       "dd/MM/yyyy",
     ),
     endDate,
-    totals: calculateAmcTotals(data),
+    /* Totals over the same rows the documents list: a ticked service the
+       settings in force do not offer is neither printed nor charged. */
+    totals: calculateAmcTotals({
+      ...data,
+      serviceRows: offeredRowsOnly(data, settings),
+    }),
     frequencyRows: buildFrequencyRows(data, settings),
     formData: data,
   };
@@ -169,27 +175,54 @@ export function computeAmcData(
   bug: a frequency edited to 5 was reset behind the team's back.
 */
 
+/*
+  The rows a proposal can have: one per service AMC Settings offers on
+  this kind of property, in Settings' order. Settings is the catalogue for
+  new and draft proposals; sent ones render from their snapshot instead.
+
+  A row the team already filled in is kept as it is. A service that is not
+  offered any more (switched off in Settings, or not offered on this kind
+  of property) has its row dropped, so it can no longer be charged; its
+  id is reported back so the wizard can say so. A new row starts at the
+  service's own default frequency from Settings.
+*/
 export function syncServiceRowsForUnitType(
   serviceRows: AmcServiceRow[],
   unitType: AmcFormData["unitType"],
-): AmcServiceRow[] {
-  const allowedServices = getServicesForUnitType(unitType);
-  const allowedIds = new Set(allowedServices.map((service) => service.id));
+  catalogue: ReadonlyArray<AmcServiceDefinition> = getAmcSettingsDefaults().services,
+): { rows: AmcServiceRow[]; removedIncluded: string[] } {
+  const offered = servicesForProperty({ services: [...catalogue] }, unitType);
+  const offeredIds = new Set(offered.map((service) => service.id));
   const existingById = new Map(serviceRows.map((row) => [row.serviceId, row]));
 
-  return allowedServices.map((service) => {
+  const rows = offered.map((service) => {
     const existing = existingById.get(service.id);
-    if (existing) {
-      return existing.included ? existing : { ...existing, included: false };
-    }
+    if (existing) return existing;
     return {
       serviceId: service.id,
       included: false,
       units: 1,
-      frequency: getDefaultFrequencyForService(service.id),
+      frequency: defaultFrequencyFor(service),
       basePrice: undefined,
     };
-  }).filter((row) => allowedIds.has(row.serviceId));
+  });
+
+  const removedIncluded = serviceRows
+    .filter((row) => row.included && !offeredIds.has(row.serviceId))
+    .map((row) => row.serviceId);
+
+  return { rows, removedIncluded };
+}
+
+/** Where a new row's frequency starts: the service's own figure, else 1. */
+export function defaultFrequencyFor(
+  service: Pick<AmcServiceDefinition, "frequencyType" | "frequencyPerYear">,
+): number {
+  if (service.frequencyType === "covered" || service.frequencyType === "unlimited") {
+    return 1;
+  }
+  const value = service.frequencyPerYear;
+  return value && Number.isInteger(value) && value >= 1 ? value : 1;
 }
 
 export function formatPaymentTermsLabel(

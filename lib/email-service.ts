@@ -1,5 +1,6 @@
 import { TODO_STATUS_LABELS, Todo } from "@/types/types";
 import { clientEmailHtml, escapeEmailHtml } from "@/lib/email-brand";
+import { internalRequestHeaders } from "@/lib/internal-signature";
 
 interface EmailOptions {
   to?: string | string[];
@@ -16,12 +17,20 @@ interface EmailOptions {
 export const emailService = {
   sendEmail: async ({ to, subject, html, cc, attachment }: EmailOptions) => {
     try {
+      /*
+        /api/send-email only serves signed-in users, our own server, and a
+        narrow public case. In the browser the call goes to the same origin
+        so the session cookie travels with it; on the server it carries a
+        signature instead, because there is no session to send.
+      */
+      const inBrowser = typeof window !== "undefined";
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_APP_URL}/api/send-email`,
+        inBrowser ? "/api/send-email" : `${process.env.NEXT_PUBLIC_APP_URL}/api/send-email`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            ...(inBrowser ? {} : await internalRequestHeaders("send-email")),
           },
           body: JSON.stringify({ to, subject, html, cc, attachment }),
         }

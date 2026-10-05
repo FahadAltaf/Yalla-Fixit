@@ -26,9 +26,12 @@ import {
 import { ServiceTable } from "../components/service-table";
 import { emptyPriceListRow } from "../amc-constants";
 import type { AmcFormData, AmcPriceListRow } from "../amc-types";
+import { servicesForProperty, type AmcServiceDefinition } from "../amc-settings";
 
 interface StepProps {
   form: UseFormReturn<AmcFormData>;
+  /** The services AMC Settings defines; the table offers these. */
+  catalogue: ReadonlyArray<AmcServiceDefinition>;
 }
 
 /**
@@ -48,8 +51,15 @@ interface StepProps {
  * §5.1 also puts the optional sections and the placeholder fields on this
  * step, which is why they are below rather than on Review.
  */
-export function ServicesPricingStep({ form }: StepProps) {
+export function ServicesPricingStep({ form, catalogue }: StepProps) {
   const unitType = form.watch("unitType");
+  /* Named, so an absence reads as a rule rather than as a missing row. */
+  const offeredIds = new Set(
+    servicesForProperty({ services: [...catalogue] }, unitType).map((s) => s.id),
+  );
+  const hiddenServices = catalogue
+    .filter((service) => service.enabled !== false && !offeredIds.has(service.id))
+    .map((service) => service.label.replace(/s*(.*?)s*/g, " ").trim());
   const showPriceList = form.watch("optionalSections.supplyInstallPriceList");
   const priceListRows = form.watch("priceListRows") ?? [];
 
@@ -81,20 +91,19 @@ export function ServicesPricingStep({ form }: StepProps) {
           {/* FR1.4 — villa-only services stay hidden for apartments and
               offices. Naming them, so an absence reads as a rule rather
               than as a missing row. */}
-          {unitType !== "villa" && (
+          {hiddenServices.length > 0 && (
             <Alert>
               <AlertTriangle className="size-4" />
               <AlertTitle className="text-xs font-medium">
-                Villa-only services hidden
+                Some services aren&apos;t offered on this kind of property
               </AlertTitle>
               <AlertDescription className="text-xs">
-                Water pump maintenance, roof drain cleaning and water tank
-                cleaning apply to villas only.
+                {hiddenServices.join(", ")}.
               </AlertDescription>
             </Alert>
           )}
 
-          <ServiceTable form={form} />
+          <ServiceTable form={form} catalogue={catalogue} />
         </div>
       </section>
 

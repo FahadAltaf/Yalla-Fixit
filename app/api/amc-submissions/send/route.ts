@@ -9,6 +9,13 @@ import { sendEmail } from "@/lib/server/send-email";
 import { clientEmailHtml, escapeEmailHtml } from "@/lib/email-brand";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
+import {
+  describePlaceholders,
+  findPlaceholders,
+  printedAmcText,
+} from "@/lib/amc/placeholders";
+import { MAX_ATTACHMENT_BYTES, looksLikePdf } from "@/lib/server/email-request-policy";
+import { STALE_CLIENT_DECISION_FIELDS, SEND_TO, canSend } from "@/lib/amc/workflow";
 
 /**
  * Sending a document to the client (FR5.4, FR5.6).
@@ -23,6 +30,15 @@ import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
  *
  * `deliver: "link"` mints the token and returns the URL without sending
  * anything, which is FR5.4's "copy the link to send over WhatsApp".
+ *
+ * Every attempt is audited, including ones refused before anything changes
+ * (placeholders, a bad attachment) and ones where the email then fails, so
+ * a send that did not reach the client can still be traced.
+ *
+ * The PDF attached to the email is still built in the browser. The server
+ * checks it is a PDF of sane size and names it itself, but cannot prove
+ * its pages match the approved data; generating it on the server belongs
+ * to the Signed Contract Archive phase (see the hardening report).
  */
 
 const sendSchema = z.object({
@@ -34,18 +50,27 @@ const sendSchema = z.object({
   to: z.string().trim().email().optional(),
   /* The document as a PDF, built in the browser like the snagging
      quotation, attached to the email. */
-  pdf_base64: z.string().optional(),
+  pdf_base64: z
+    .string()
+    .max(Math.ceil((MAX_ATTACHMENT_BYTES * 4) / 3) + 4, "The PDF is too large to email")
+    .regex(/^[A-Za-z0-9+/]+={0,2}$/, "The attachment is not valid base64")
+    .optional(),
+  /* Accepted for compatibility; the server names the file itself. */
   pdf_filename: z.string().max(200).optional(),
 });
 
-/** Which status a document may be sent from, and what it becomes. */
-const TRANSITIONS = {
-  proposal: { from: "approved", to: "proposal_sent" },
-  contract: { from: "proposal_approved", to: "contract_sent" },
-} as const;
-
 const SELECT =
-  "id, owner_id, status, customer, property, proposal_number, final_price, settings_snapshot, contract_settings_snapshot";
+  "id, owner_id, status, customer, property, proposal_number, final_price, services, document_options, settings_snapshot, contract_settings_snapshot";
+
+/* What a failed or refused attempt records: never the request, the token
+   or the provider's full response. */
+function safeSummary(message: unknown): string {
+  const text = message instanceof Error ? message.message : String(message ?? "");
+  return text
+    .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, "<email>")
+    .replace(/re_[A-Za-z0-9_]+/g, "<key>")
+    .slice(0, 200);
+}
 
 /* A column this route reads or writes is not in the database: a
    deployment gap the user cannot fix, so name the migrations instead of
@@ -145,10 +170,21 @@ export async function POST(req: NextRequest) {
     deliver,
     to: confirmedTo,
     pdf_base64: pdfBase64,
-    pdf_filename: pdfFilename,
   } = parsed.data;
-  const transition = TRANSITIONS[document];
   const admin = await createAdminServerClient();
+  const actorLabel = profile.full_name ?? profile.email ?? null;
+  /* An attempt that stops before the status changes, recorded so the
+     trail shows it was tried and why it did not go. */
+  const auditRefusal = (reason: string, detail?: Record<string, unknown>) =>
+    recordAmcAudit(admin, {
+      entityType: "submission",
+      entityId: id,
+      eventType: `${document}_send_refused`,
+      actorId: profile.id,
+      actorLabel,
+      justification: reason,
+      payload: { document, deliver, outcome: "refused", ...detail },
+    });
 
   const { data: existing, error: fetchError } = await admin
     .from("amc_submissions")
@@ -184,8 +220,9 @@ export async function POST(req: NextRequest) {
   }
   /* A document already sent can be sent again (a new email, or a fresh
      link to share). The status stays where it is. */
-  const isResend = existing.status === transition.to;
-  if (existing.status !== transition.from && !isResend) {
+  const sentStatus = SEND_TO[document];
+  const isResend = existing.status === sentStatus;
+  if (!canSend(document, existing.status)) {
     return NextResponse.json(
       {
         error:
@@ -219,14 +256,41 @@ export async function POST(req: NextRequest) {
         ? /* A re-sent contract matches the one the client already has. */
           existing.contract_settings_snapshot
         : await readAmcSettings(admin);
-  if (/XXX/.test(JSON.stringify(effectiveSettings))) {
+  /* Only text this document will print, from the settings it will use
+     and the proposal's own fields (lib/amc/placeholders.ts). */
+  const placeholders = findPlaceholders(
+    printedAmcText(
+      effectiveSettings as Parameters<typeof printedAmcText>[0],
+      existing as Parameters<typeof printedAmcText>[1],
+      document,
+    ),
+  );
+  if (placeholders.length > 0) {
+    await auditRefusal("placeholder text", {
+      locations: placeholders.map((hit) => hit.location).slice(0, 10),
+    });
     return NextResponse.json(
       {
-        error:
-          "AMC Settings still has placeholder values (XXX), usually the TPH contact numbers or coordination emails. An admin needs to fill them in under Extensions > AMC Settings before anything can be sent to a client.",
+        error: `This ${document} still contains placeholder text (XXX), so it can't be sent yet. Fix: ${describePlaceholders(
+          placeholders,
+        )}. AMC Settings is under Settings > AMC.`,
+        placeholders,
       },
       { status: 409 },
     );
+  }
+
+  /* The attachment is checked before anything changes, so a bad file
+     never leaves a document marked as sent. */
+  if (deliver === "email" && pdfBase64) {
+    if (!looksLikePdf(pdfBase64)) {
+      await auditRefusal("attachment is not a PDF");
+      return NextResponse.json({ error: "The attachment is not a PDF." }, { status: 400 });
+    }
+    if (Buffer.byteLength(pdfBase64, "base64") > MAX_ATTACHMENT_BYTES) {
+      await auditRefusal("attachment too large");
+      return NextResponse.json({ error: "The PDF is too large to email." }, { status: 400 });
+    }
   }
 
   const token = mintLinkToken();
@@ -237,7 +301,7 @@ export async function POST(req: NextRequest) {
   const { data, error } = await admin
     .from("amc_submissions")
     .update({
-      status: transition.to,
+      status: sentStatus,
       [`${prefix}_token_hash`]: token.hash,
       [`${prefix}_token_hint`]: token.hint,
       [`${prefix}_token_expires_at`]: expiresAt,
@@ -255,6 +319,9 @@ export async function POST(req: NextRequest) {
         : existing.settings_snapshot
           ? {}
           : { settings_snapshot: effectiveSettings }),
+      /* A proposal sent (or re-sent) is waiting for a fresh answer; an
+         answer to an earlier version must not still show against it. */
+      ...(document === "proposal" ? STALE_CLIENT_DECISION_FIELDS : {}),
       updated_at: now,
     })
     .eq("id", id)
@@ -285,10 +352,29 @@ export async function POST(req: NextRequest) {
   };
   const link = `${appUrl()}/amc/${token.raw}`;
 
+  const auditSent = (outcome: string, extra: Record<string, unknown> = {}) =>
+    recordAmcAudit(admin, {
+      entityType: "submission",
+      entityId: id,
+      eventType: document === "proposal" ? "proposal_sent" : "contract_sent",
+      actorId: profile.id,
+      actorLabel,
+      payload: {
+        document,
+        deliver,
+        outcome,
+        tokenHint: token.hint,
+        expiresAt,
+        resend: isResend,
+        ...extra,
+      },
+    });
+
   let emailed = false;
   if (deliver === "email") {
     const to = confirmedTo || customer.customerEmail?.trim();
     if (!to) {
+      await auditSent("no_recipient", { emailed: false, to: null });
       /*
         The status change and the token are already committed, so this is
         reported rather than rolled back: the link is valid and the team
@@ -327,9 +413,10 @@ export async function POST(req: NextRequest) {
         }),
         attachment: pdfBase64
           ? {
-              filename:
-                pdfFilename?.replace(/[^\w.\- ]+/g, "_") ||
-                `${document === "proposal" ? "Proposal" : "Contract"}-${existing.proposal_number ?? "AMC"}.pdf`,
+              /* Named here, never taken from the request. */
+              filename: `${document === "proposal" ? "Proposal" : "Contract"}-${String(
+                existing.proposal_number ?? "AMC",
+              ).replace(/[^\w-]+/g, "_")}.pdf`,
               content: pdfBase64,
               contentType: "application/pdf",
             }
@@ -337,7 +424,12 @@ export async function POST(req: NextRequest) {
       });
       emailed = true;
     } catch (mailError) {
-      console.error("AMC send email failed:", mailError);
+      console.error("AMC send email failed:", safeSummary(mailError));
+      await auditSent("email_failed", {
+        emailed: false,
+        to,
+        error: safeSummary(mailError),
+      });
       return NextResponse.json({
         submission: data,
         link,
@@ -350,24 +442,9 @@ export async function POST(req: NextRequest) {
 
   /* FR5.9 — the raw token is never audited; the hint identifies the link
      without being usable. */
-  await recordAmcAudit(admin, {
-    entityType: "submission",
-    entityId: id,
-    eventType: document === "proposal" ? "proposal_sent" : "contract_sent",
-    actorId: profile.id,
-    actorLabel: profile.full_name ?? profile.email ?? null,
-    payload: {
-      document,
-      deliver,
-      emailed,
-      tokenHint: token.hint,
-      expiresAt,
-      resend: isResend,
-      to:
-        deliver === "email"
-          ? confirmedTo || customer.customerEmail || null
-          : null,
-    },
+  await auditSent(deliver === "email" ? "emailed" : "link_created", {
+    emailed,
+    to: deliver === "email" ? confirmedTo || customer.customerEmail || null : null,
   });
 
   return NextResponse.json({ submission: data, link, emailed });

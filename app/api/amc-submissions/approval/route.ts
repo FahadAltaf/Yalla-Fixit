@@ -9,6 +9,11 @@ import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
 import { ActionType, ResourceType } from "@/types/types";
+import {
+  STALE_CLIENT_DECISION_FIELDS,
+  checkInternalTransition,
+} from "@/lib/amc/workflow";
+import { submittableProblem } from "@/lib/server/amc/pricing";
 
 /**
  * The internal half of the approval flow (FR5.1–FR5.3, FR5.9).
@@ -22,8 +27,12 @@ import { ActionType, ResourceType } from "@/types/types";
  * 'approved'.
  *
  * Two gates, deliberately different (FRD §4 vs FR5.3):
- *   - the email allowlist says who may touch the AMC module at all
- *   - role_access amc/approve says who may decide
+ *   - AMC view or approve permission says who may use the module at all
+ *   - the AMC Settings approver list, or role_access amc/approve when the
+ *     list is empty, says who may decide
+ *
+ * The transition rules, including whether a creator may approve their own
+ * proposal, live in lib/amc/workflow.ts.
  */
 
 const actionSchema = z.discriminatedUnion("action", [
@@ -43,6 +52,8 @@ const actionSchema = z.discriminatedUnion("action", [
 
 const SELECT =
   "id, owner_id, status, customer, final_price, submitted_at, decided_at, sent_back_reason";
+/* Submit also needs the rows, to check every ticked service is priced. */
+const SELECT_WITH_SERVICES = `${SELECT}, services`;
 
 export async function POST(req: NextRequest) {
   const access = await getAuthenticatedUserAccess();
@@ -68,9 +79,14 @@ export async function POST(req: NextRequest) {
 
   const { data: existing, error: fetchError } = await admin
     .from("amc_submissions")
-    .select(SELECT)
+    .select(body.action === "submit" ? SELECT_WITH_SERVICES : SELECT)
     .eq("id", body.id)
-    .maybeSingle();
+    .maybeSingle<{
+      id: string;
+      owner_id: string;
+      status: string;
+      services?: Array<{ serviceId: string; included: boolean; basePrice?: number | null }>;
+    }>();
 
   if (fetchError) {
     return NextResponse.json({ error: fetchError.message }, { status: 500 });
@@ -92,26 +108,23 @@ export async function POST(req: NextRequest) {
   let update: Record<string, unknown>;
   let eventType: string;
 
+  /* FR3.4, FR5.2, FR5.3: who may move it, and from where. */
+  const check = checkInternalTransition({
+    action: body.action,
+    from: existing.status,
+    isOwner,
+    canApprove,
+  });
+  if (!check.ok) {
+    return NextResponse.json({ error: check.error }, { status: check.status });
+  }
+
   if (body.action === "submit") {
-    if (!isOwner) {
-      return NextResponse.json(
-        { error: "Only the owner can submit this proposal" },
-        { status: 403 },
-      );
-    }
-    /* FR3.4 — resubmitting after a send-back is allowed; resubmitting
-       something already under review, or already sent, is not. */
-    if (
-      existing.status !== "draft" &&
-      existing.status !== "sent_back" &&
-      existing.status !== "proposal_rejected"
-    ) {
-      return NextResponse.json(
-        {
-          error: `A proposal that is ${existing.status.replace(/_/g, " ")} cannot be submitted for approval`,
-        },
-        { status: 409 },
-      );
+    /* FR2.12 on the server: the form checks this too, but a request can
+       skip the form. */
+    const problem = submittableProblem(existing.services ?? []);
+    if (problem) {
+      return NextResponse.json({ error: problem }, { status: 400 });
     }
     update = {
       status: "awaiting_approval",
@@ -134,6 +147,8 @@ export async function POST(req: NextRequest) {
             proposal_token_hint: null,
             proposal_token_expires_at: null,
             settings_snapshot: null,
+            /* The client's answer was to the old version. */
+            ...STALE_CLIENT_DECISION_FIELDS,
           }
         : {}),
     };
@@ -142,20 +157,6 @@ export async function POST(req: NextRequest) {
         ? "resubmitted_after_client_changes"
         : "submitted_for_approval";
   } else {
-    if (!canApprove) {
-      return NextResponse.json(
-        { error: "You do not have permission to approve AMC proposals" },
-        { status: 403 },
-      );
-    }
-    if (existing.status !== "awaiting_approval") {
-      return NextResponse.json(
-        {
-          error: `A proposal that is ${existing.status.replace(/_/g, " ")} is not awaiting approval`,
-        },
-        { status: 409 },
-      );
-    }
     update =
       body.action === "approve"
         ? {
@@ -211,5 +212,8 @@ export async function POST(req: NextRequest) {
     payload: { from: existing.status, to: update.status },
   });
 
-  return NextResponse.json({ submission: data });
+  /* The partial row selected above; services are internal to the check. */
+  const { services: _services, ...submission } = data as Record<string, unknown>;
+  void _services;
+  return NextResponse.json({ submission });
 }

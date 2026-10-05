@@ -22,25 +22,25 @@ import {
 } from "@/components/ui/table";
 import { formatCurrencyAED } from "@/utils/format-currency";
 
-import {
-  AMC_SERVICES,
-  getServicesForUnitType,
-  isFrequencyEditable,
-} from "../amc-constants";
+import { isFrequencyEditable } from "../amc-constants";
 import { calculateAmcTotals, computeServiceRowPrice } from "../amc-pricing";
+import { servicesForProperty, type AmcServiceDefinition } from "../amc-settings";
 import type { AmcFormData } from "../amc-types";
 
 interface ServiceTableProps {
   form: UseFormReturn<AmcFormData>;
+  /** The services AMC Settings defines (the catalogue for this proposal). */
+  catalogue: ReadonlyArray<AmcServiceDefinition>;
 }
 
-export function ServiceTable({ form }: ServiceTableProps) {
+export function ServiceTable({ form, catalogue }: ServiceTableProps) {
   const unitType = form.watch("unitType");
   const serviceRows = form.watch("serviceRows");
   const discountPercent = form.watch("discountPercent") ?? 0;
   const formValues = form.watch();
   const totals = calculateAmcTotals(formValues);
-  const availableServices = getServicesForUnitType(unitType);
+  const availableServices = servicesForProperty({ services: [...catalogue] }, unitType);
+  const enabledCount = catalogue.filter((service) => service.enabled !== false).length;
 
   const updateRow = (
     serviceId: string,
@@ -235,9 +235,9 @@ export function ServiceTable({ form }: ServiceTableProps) {
         </div>
       </div>
 
-      {availableServices.length !== AMC_SERVICES.length && (
+      {availableServices.length !== enabledCount && (
         <p className="text-xs text-muted-foreground">
-          Villa-only services are hidden for apartments and offices.
+          Services that AMC Settings doesn&apos;t offer on this kind of property are hidden.
         </p>
       )}
     </div>

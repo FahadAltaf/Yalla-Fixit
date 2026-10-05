@@ -69,6 +69,7 @@ import { formatPhoneForDocument } from "./amc-phone";
 import { lastSentAt, sendableDocument } from "./amc-send-dialog";
 import { amcStatusTone } from "./amc-status";
 import { submissionToFormData } from "./amc-submission-mapper";
+import { canDecideProposal } from "@/lib/amc/workflow";
 import { Fact, ReviewSection, ServicesAndCost } from "./steps/review-step";
 import {
   AMC_STATUS_LABELS,
@@ -430,6 +431,9 @@ export function SubmissionDetails({
   const title = submission.customer.customerName || "Unnamed customer";
   const awaiting = submission.status === "awaiting_approval";
   const canEdit = isAmcSubmissionEditable(submission.status) && submission.is_own !== false;
+  /* Approver rights, less the creator's own proposal when self-approval
+     is switched off (lib/amc/workflow.ts). */
+  const canDecide = canDecideProposal({ canApprove, isOwner: submission.is_own !== false });
   /*
     Sending is the owner's, as it is on the server.
 
@@ -503,8 +507,8 @@ export function SubmissionDetails({
         : awaiting
           ? {
             tone: "warn" as const,
-            title: canApprove ? "Waiting for your decision" : "Waiting for the approver",
-            body: canApprove
+            title: canDecide ? "Waiting for your decision" : "Waiting for the approver",
+            body: canDecide
               ? "Read it through, preview the documents, then approve it or send it back with a note."
               : "It is locked while it waits. Nothing goes to the client until it is approved.",
           }
@@ -605,7 +609,7 @@ export function SubmissionDetails({
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-            {canApprove && awaiting && (
+            {canDecide && awaiting && (
               <>
                 <Button variant="outline" disabled={deciding} onClick={() => onSendBack?.(submission)}>
                   <Undo2 className="size-4" /> Send back

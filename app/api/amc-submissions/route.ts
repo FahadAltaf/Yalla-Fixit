@@ -6,6 +6,12 @@ import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { canApproveAmc } from "@/components/dashboard/extensions/amc/amc-settings";
 import { readAmcSettings } from "@/lib/server/amc/settings";
+import { priceSubmission } from "@/lib/server/amc/pricing";
+import { canDecideProposal } from "@/lib/amc/workflow";
+import {
+  amcServiceRowsInputSchema,
+  discountPercentSchema,
+} from "@/lib/amc/pricing";
 import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
 import {
   AMC_STATUSES,
@@ -25,17 +31,6 @@ const coordinationContactSchema = z.object({
   name: z.string(),
   phone: z.string(),
   designation: z.enum(["owner", "tenant", "representative"]),
-});
-
-const serviceRowSchema = z.object({
-  serviceId: z.string(),
-  included: z.boolean(),
-  units: z.number().int().min(1),
-  frequency: z.number().int().min(1),
-  /* FR2.4. Nullable: a draft row the team has not priced yet is saved
-     unpriced, and must not come back as a free service. */
-  basePrice: z.number().min(0).nullable().optional(),
-  price: z.number().min(0).optional(),
 });
 
 const priceListRowSchema = z.object({
@@ -80,10 +75,15 @@ const submissionPayloadSchema = z.object({
       accountManagers: z.tuple([accountManagerSchema, accountManagerSchema]),
     })
     .optional(),
-  services: z.array(serviceRowSchema),
-  discount_percent: z.number().min(0).max(100),
-  discount_amount: z.number().min(0),
-  final_price: z.number().min(0),
+  /* FR2.4: rows as entered. basePrice is nullable -- a draft row the team
+     has not priced yet is saved unpriced, and must not come back as a
+     free service. Validation lives with the pricing (lib/amc/pricing.ts). */
+  services: amcServiceRowsInputSchema,
+  discount_percent: discountPercentSchema,
+  /* Sent by older clients; ignored. The server derives both from the
+     rows and the discount (lib/server/amc/pricing.ts). */
+  discount_amount: z.number().optional(),
+  final_price: z.number().optional(),
   generated_documents: z.array(z.enum(DOCUMENT_TYPES)).optional(),
 });
 
@@ -272,7 +272,12 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({
       ...mapRow(row, { viewerId: profile.id, names }),
-      viewer_can_approve: canApprove,
+      /* One rule for the API and the buttons (lib/amc/workflow.ts),
+         including whether a creator may approve their own proposal. */
+      viewer_can_approve: canDecideProposal({
+        canApprove,
+        isOwner: row.owner_id === profile.id,
+      }),
     });
   }
 
@@ -473,6 +478,17 @@ export async function POST(req: NextRequest) {
   const admin = await createAdminServerClient();
   const now = new Date().toISOString();
 
+  /* The server prices the proposal; totals in the request are ignored. */
+  const priced = priceSubmission({
+    services: payload.services,
+    discountPercent: payload.discount_percent,
+    unitType: payload.property.unitType,
+    settings: await readAmcSettings(admin),
+  });
+  if (!priced.ok) {
+    return NextResponse.json({ error: priced.error }, { status: 400 });
+  }
+
   const { data, error } = await admin
     .from("amc_submissions")
     .insert({
@@ -482,10 +498,10 @@ export async function POST(req: NextRequest) {
       property: payload.property,
       customer: payload.customer,
       document_options: payload.document_options,
-      services: payload.services,
-      discount_percent: payload.discount_percent,
-      discount_amount: payload.discount_amount,
-      final_price: payload.final_price,
+      services: priced.services,
+      discount_percent: priced.discount_percent,
+      discount_amount: priced.discount_amount,
+      final_price: priced.final_price,
       generated_documents: payload.generated_documents ?? [],
       updated_at: now,
     })
@@ -496,7 +512,24 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json(mapRow(data as AmcSubmissionRow), { status: 201 });
+  /*
+    The number is allocated by the INSERT, so the copy inside customer can
+    only be pinned afterwards. Without this it kept whatever the form sent
+    (usually "") until the first edit.
+  */
+  let row = data as AmcSubmissionRow;
+  const jsonNumber = (row.customer as { proposalNumber?: string } | null)?.proposalNumber;
+  if (jsonNumber !== row.proposal_number) {
+    const { data: pinned } = await admin
+      .from("amc_submissions")
+      .update({ customer: { ...(row.customer as object), proposalNumber: row.proposal_number } })
+      .eq("id", row.id)
+      .select("*")
+      .single();
+    if (pinned) row = pinned as AmcSubmissionRow;
+  }
+
+  return NextResponse.json(mapRow(row), { status: 201 });
 }
 
 export async function PUT(req: NextRequest) {
@@ -555,6 +588,42 @@ export async function PUT(req: NextRequest) {
       )
     : existingRow.generated_documents;
 
+  /*
+    Re-price whenever anything that affects the price arrives. Rows,
+    discount or property type missing from this request come from the
+    saved proposal, so a partial update cannot leave stale totals.
+  */
+  let pricedFields: Partial<
+    Pick<AmcSubmissionRow, "services" | "discount_percent" | "discount_amount" | "final_price">
+  > = {};
+  if (
+    updates.services !== undefined ||
+    updates.discount_percent !== undefined ||
+    updates.property !== undefined
+  ) {
+    const existingProperty = existingRow.property as { unitType?: string } | null;
+    const priced = priceSubmission({
+      services: (updates.services ?? existingRow.services ?? []) as Parameters<
+        typeof priceSubmission
+      >[0]["services"],
+      discountPercent: updates.discount_percent ?? Number(existingRow.discount_percent ?? 0),
+      unitType: updates.property?.unitType ?? existingProperty?.unitType ?? "",
+      settings: await readAmcSettings(admin),
+    });
+    if (!priced.ok) {
+      return NextResponse.json({ error: priced.error }, { status: 400 });
+    }
+    pricedFields = {
+      services: priced.services as AmcSubmissionRow["services"],
+      discount_percent: priced.discount_percent,
+      discount_amount: priced.discount_amount,
+      final_price: priced.final_price,
+    };
+  }
+  /* Never stored as sent: derived above, or left as saved. */
+  delete updates.discount_amount;
+  delete updates.final_price;
+
   /* Pin the JSONB copy to the allocated number, whatever the form sent,
      so the two cannot drift apart through an edit. */
   if (updates.customer) {
@@ -568,6 +637,7 @@ export async function PUT(req: NextRequest) {
     .from("amc_submissions")
     .update({
       ...updates,
+      ...pricedFields,
       generated_documents: mergedDocuments,
       updated_at: new Date().toISOString(),
     })

@@ -26,12 +26,19 @@ export function buildProposalServiceRows(
      fallback for a caller that has no settings to hand. */
   services: ReadonlyArray<{ id: string; label: string; scope: string }> = AMC_SERVICES,
 ): ProposalServiceRow[] {
-  const frequencyByScope = new Map(
-    frequencyRows.map((row) => [row.scope, row.frequency]),
+  /*
+    The proposal lists exactly the services the contract's table lists:
+    frequencyRows is already limited to services offered on this property
+    by the settings in force, so a service switched off in Settings cannot
+    print here while vanishing there. Matched by id; matching by scope text
+    gave two services with the same scope each other's frequency.
+  */
+  const frequencyById = new Map(
+    frequencyRows.map((row) => [row.serviceId, row.frequency]),
   );
 
   return data.serviceRows
-    .filter((row) => row.included)
+    .filter((row) => row.included && frequencyById.has(row.serviceId))
     .map((row) => {
       const service = services.find((item) => item.id === row.serviceId);
       if (!service) return null;
@@ -40,9 +47,7 @@ export function buildProposalServiceRows(
         serviceId: service.id,
         service: service.label.replace(/\s*\(.*?\)\s*/g, " ").trim(),
         units: row.units,
-        frequency:
-          frequencyByScope.get(service.scope) ??
-          `${row.frequency} per year`,
+        frequency: frequencyById.get(row.serviceId) ?? `${row.frequency} per year`,
         price: computeServiceRowPrice(row),
       };
     })
@@ -71,10 +76,16 @@ export function getProposalPropertyLabel(data: AmcFormData): string {
     .join(" — ") || "—";
 }
 
+/*
+  Whole dirhams print as they always did (3,500); a fee with fils keeps
+  them (3,500.50) instead of rounding to 3,501, which disagreed with the
+  contract's figure for the same proposal.
+*/
 export function formatProposalFee(amount: number): string {
+  const hasFils = Math.round(amount * 100) % 100 !== 0;
   return new Intl.NumberFormat("en-AE", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
+    minimumFractionDigits: hasFils ? 2 : 0,
+    maximumFractionDigits: 2,
   }).format(amount);
 }
 

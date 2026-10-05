@@ -31,7 +31,7 @@ import {
   type AmcFormData,
   type AmcSubmissionStatus,
 } from "./amc-types";
-import type { AmcSettings } from "./amc-settings";
+import { getAmcSettingsDefaults, type AmcSettings } from "./amc-settings";
 import { amcSettingsService } from "@/modules/amc-submissions";
 import { PropertyCustomerStep } from "./steps/property-customer-step";
 import { ServicesPricingStep } from "./steps/services-pricing-step";
@@ -278,15 +278,35 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
     });
   }, [currentStep]);
 
+  /*
+    Rows follow AMC Settings' services for this kind of property. Waits for
+    Settings to load: syncing against the shipped defaults first would drop
+    a row for a service that exists only in Settings, and its price with
+    it. A ticked service that Settings no longer offers is removed and the
+    team is told, so it cannot stay on the bill unseen.
+  */
   useEffect(() => {
+    if (!liveSettings) return;
     const currentRows = form.getValues("serviceRows");
-    const synced = syncServiceRowsForUnitType(currentRows, unitType);
-    const currentJson = JSON.stringify(currentRows);
-    const syncedJson = JSON.stringify(synced);
-    if (currentJson !== syncedJson) {
+    const { rows: synced, removedIncluded } = syncServiceRowsForUnitType(
+      currentRows,
+      unitType,
+      liveSettings.services,
+    );
+    if (JSON.stringify(currentRows) !== JSON.stringify(synced)) {
       form.setValue("serviceRows", synced, { shouldValidate: true });
     }
-  }, [unitType, form]);
+    if (removedIncluded.length > 0) {
+      const labels = removedIncluded.map(
+        (id) => liveSettings.services.find((s) => s.id === id)?.label ?? id,
+      );
+      toast.warning(
+        `Removed ${labels.join(", ")}: AMC Settings doesn't offer ${
+          labels.length === 1 ? "it" : "them"
+        } on this kind of property any more.`,
+      );
+    }
+  }, [unitType, form, liveSettings]);
 
   const persistDraft = useCallback(
     (generatedDocument?: AmcDocumentType) => {
@@ -561,7 +581,12 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
       case 1:
         return <PropertyCustomerStep form={form} />;
       case 2:
-        return <ServicesPricingStep form={form} />;
+        return (
+          <ServicesPricingStep
+            form={form}
+            catalogue={(liveSettings ?? getAmcSettingsDefaults()).services}
+          />
+        );
       case 3:
         return (
           <ReviewStep form={form} computed={computed} />

@@ -4,7 +4,17 @@ How to test the v2 build end to end before it goes to production. Every test
 maps to an acceptance criterion in §13 of the FRD, so a completed run of this
 guide is also the sign-off record.
 
-Allow **about 90 minutes** for a first full pass.
+Allow **about 2 hours** for a first full pass (90 minutes for §1–§4, plus
+the hardening checks in §3J–§3O and §4.6–§4.13).
+
+> **Updated 5 Oct 2026** for the production-hardening phase (branch
+> `amc-hardening`, report in
+> [`amc-proposals-v2-hardening-report.md`](amc-proposals-v2-hardening-report.md)).
+> **No box in this guide has been ticked by a real run.** A tick means a
+> person ran the step and saw the expected result; record who and when next
+> to it. The automated tests (`npm test`) cover the pricing, workflow,
+> token, payload and validation rules, but not the screens, the database
+> policies or email delivery, which is what this guide is for.
 
 ---
 
@@ -13,11 +23,12 @@ Allow **about 90 minutes** for a first full pass.
 The database in `.env` (`sxzpigyphjotuubxpooj`) is **production**. Do not run
 this guide against it.
 
-Five migrations are untested against real data, and two of them rewrite
-existing rows — one remaps every submission's status, one renumbers
-proposals. The repo already has the rule for this in
-[`LOCAL-SUPABASE.md`](LOCAL-SUPABASE.md): *test migrations locally before
-applying them to production.* This guide follows it.
+The seven v2 AMC migrations are already reflected in production (checked
+read-only on 5 Oct 2026), but production's migration history does not record
+them, and two new hardening migrations are **not applied anywhere yet**
+(§1.2). The repo's rule is in [`LOCAL-SUPABASE.md`](LOCAL-SUPABASE.md):
+*test migrations locally before applying them to production.* This guide
+follows it.
 
 > **Email is the one thing that is not local.** AMC mail goes out through
 > **Resend**, not Supabase, so the local inbox at `http://127.0.0.1:54324`
@@ -59,19 +70,31 @@ open in your own browser. It must change before production (§5).
 npm run supabase:reset
 ```
 
-This rebuilds the database from `supabase/migrations/` in filename order,
-including the five AMC v2 migrations:
+This rebuilds the database from `supabase/migrations/` in filename order.
+The AMC migrations, in order:
 
-| Order | File | Phase |
-|---|---|---|
-| 1 | `20260915120000_amc_harden_submissions.sql` | 0 — row-level security |
-| 2 | `20260915130000_amc_settings_and_audit.sql` | 3 — settings and audit trail |
-| 3 | `20260916100000_amc_approval_flow.sql` | 4 — nine statuses, approver policy |
-| 4 | `20260916105000_amc_proposal_numbers.sql` | 1.7 — server-allocated numbers |
-| 5 | `20260916110000_amc_client_links.sql` | 5 — tokens, decisions, signature |
+| Order | File | What it does | In production? |
+|---|---|---|---|
+| 1 | `20260721120000_create_amc_submissions.sql` | The table | Yes |
+| 2 | `20260915120000_amc_harden_submissions.sql` | Row-level security | Yes |
+| 3 | `20260915130000_amc_settings_and_audit.sql` | Settings and audit trail | Yes |
+| 4 | `20260916100000_amc_approval_flow.sql` | Nine statuses, approver policy | Yes |
+| 5 | `20260916105000_amc_proposal_numbers.sql` | Server-allocated numbers | Yes |
+| 6 | `20260916110000_amc_client_links.sql` | Tokens, decisions, signature | Yes |
+| 7 | `20260922130000_amc_contract_settings_snapshot.sql` | The contract's own settings copy | Yes |
+| 8 | `20261005100000_amc_close_direct_writes.sql` | No direct writes from browser sessions (hardening) | **No** |
+| 9 | `20261005110000_amc_proposal_number_beyond_9999.sql` | Numbers past 9999 (hardening) | **No** |
 
 **Stop here if the reset prints any error.** A migration that fails locally
 will fail in production too.
+
+> **Known problem with a full local reset.** No tracked migration creates
+> `snagging_clients` or renames `snagging_tasks` to `snagging_jobs` (both
+> were done in production by hand), so a reset from scratch is expected to
+> stop at the snagging migrations, before it reaches the AMC ones. See
+> [`database-migration-reconciliation.md`](database-migration-reconciliation.md).
+> Until that is fixed, test against a local copy restored from a production
+> schema dump, then apply files 8 and 9 to it by hand.
 
 ### 1.3 Run the app
 
@@ -94,16 +117,18 @@ from the one who writes the proposal (see finding **K1** in §6).
 
 ### 1.5 Let them into the AMC module
 
-Access to the module is an email allowlist held in code (FRD §4 keeps it out
-of scope). Add both test addresses **locally only — do not commit this**:
+Access is by role permission; there is no email allowlist in the code any
+more. A user can open the module with **AMC Proposals → View** (or
+**Approve**); admins pass every check. §1.6 grants these.
 
-`components/dashboard/extensions/amc/amc-constants.ts` →
-`AMC_CONTRACTS_ALLOWED_EMAILS`
+Who may **approve** is decided in two places:
 
-```ts
-  "amc.writer@test.local",
-  "amc.approver@test.local",
-```
+- **AMC Settings → Approvers** (Settings → AMC). If this list has any
+  emails, only those people can approve or send back, admins included.
+- If the list is empty, the role permission **AMC Proposals → Approve**
+  decides (and admins can always approve).
+
+Section §3J tests both.
 
 ### 1.6 Give them roles
 
@@ -242,7 +267,7 @@ a new tab.
 | C6 | Leave **Supply and installation price list** off, preview contract | Clause 6.2 does not appear at all | ☐ 7 |
 | C7 | Switch it on, fill **one** of the three rows, preview | Clause 6.2 appears with **only that one row** | ☐ |
 | C8 | Search the contract PDF for **"XXX"** | See **C9** — this fails until Settings are filled | ☐ 6 |
-| C9 | As admin: **Extensions → AMC Settings**, replace the contact numbers and both coordination emails with real values, save. Preview again | No **"XXX"** anywhere | ☐ 6 |
+| C9 | As admin: **Settings → AMC**, replace the contact numbers and both coordination emails with real values, save. Preview again | No **"XXX"** anywhere | ☐ 6 |
 | C10 | Preview both documents | The proposal's *Services included* table and the contract's *6.1 Scope of work* table both have **Units** and **Price (AED)** columns. AC PPM at 100 × 2 units × 4 visits reads **800.00** | ☐ 5 |
 | C11 | Tick **Free Handyman Service**, frequency **12**. Preview the contract | Clause 2.9 reads *"Up to **12 hours per year** of handyman service…"* — no mention of a package | ☐ |
 | C12 | Tick **Non-Emergency Call-out**, frequency **6**. Preview the contract | Clause 3.2 ends *"(**6 free non-emergency visits per year** are included.)"* and clause 1.1 reads *"**6 free non-emergency call-outs per year**…"*. *(Non-emergency is now a counted service — its frequency box is editable.)* | ☐ |
@@ -268,7 +293,7 @@ incognito window** — that is what "without an account" means.
 
 | # | Steps | Expected | §13 |
 |---|---|---|---|
-| E0 | **Before** filling in AMC Settings (C9): on an Approved row, **Copy proposal link** | Refused: *"AMC Settings still has placeholder values (XXX)…"*. Status stays **Approved** — nothing with XXX can reach a client | ☐ 6 |
+| E0 | **Before** filling in AMC Settings (C9): on an Approved row, **Copy proposal link** | Refused: *"This proposal still contains placeholder text (XXX)… Fix: AMC Settings > Provider > contactNo …"* naming where each placeholder is. Status stays **Approved** — nothing with XXX can reach a client. History shows a *send refused* entry | ☐ 6 |
 | E1 | Writer: on the Approved row, **Copy proposal link** | Toast confirms it copied. Status **Proposal sent** | ☐ |
 | E2 | Open the link in a private window | The proposal shows, with no login prompt and no dashboard | ☐ 10 |
 | E2a | Look below the action bar | The whole proposal is shown on the page, laid out as in the Review & Submit preview and dated the day it was **sent**. **Download PDF** saves the same document as a PDF | ☐ |
@@ -276,7 +301,7 @@ incognito window** — that is what "without an account" means.
 | E2c | **Approve proposal** | Asks **Who is responding?** first, then **Confirm approval** — the same two steps as a snagging quotation | ☐ |
 | E3 | **Request changes**, try to submit with name or reason blank | Blocked until both are filled | ☐ |
 | E4 | Instead: enter a name, **Approve proposal** | *"Proposal approved — thank you"*. Status **Proposal approved** | ☐ 10 |
-| E5 | Reload the same link and try again | Shows the outcome. There is no way to answer twice | ☐ |
+| E5 | Reload the same link and try again | Shows the outcome only (*Proposal approved*), with **no document** below it and no buttons. There is no way to answer twice | ☐ |
 | E6 | Writer: **Copy contract link**, open it privately | The whole contract is shown below **Sign contract**; signing asks for a full name, then **Confirm and sign** | ☐ |
 | E7 | Type a name, **Sign the contract** | *"Signed — thank you"*. Status **Signed** | ☐ 10 |
 | E8 | Open `http://localhost:3032/amc/not-a-real-token` | *"This link is not available"* — no document, no error details | ☐ |
@@ -307,7 +332,7 @@ to get wrong. Follow the steps exactly.
 | G5 | Open the **sent** submission → **View contract** | Still reads **TEST-ONE** — a sent document keeps its text | ☐ 12 |
 | G6 | Start another new draft → preview the contract | Reads **TEST-TWO** — new proposals use the new text | ☐ 12 |
 | G7 | Admin: **Reset** clause 8 | Back to the shipped wording, **Customised** badge gone | ☐ |
-| G8 | Sign in as **amc.approver** (not an admin) | **AMC Settings** is not in the Extensions menu | ☐ |
+| G8 | Sign in as **amc.approver** (not an admin) | **AMC** is not under **Settings**, and opening `/settings/amc` directly shows no settings | ☐ |
 | G9 | Admin: after G1 and G4, look at **Recent changes** at the bottom of AMC Settings | Two entries, newest first, each with your name, the time and a **Clause 8 — Termination** tag (FR6.5) | ☐ |
 | G10 | Admin: **Clause 1.3 — Working hours**, change 6:00 PM to 7:00 PM, save; preview a new contract | Clause 1.3 prints 7:00 PM. Reset it afterwards | ☐ |
 | G11 | New draft with **Emergency** unticked → preview the contract | Clause 1.1 has no “Unlimited emergency call-outs” line; tick it and the line returns | ☐ |
@@ -332,6 +357,63 @@ to get wrong. Follow the steps exactly.
 | I4 | AMC Settings: change **Clause 8 — Termination**, then preview a new contract as PDF and Word | Both show the new wording | ☐ |
 | I5 | My AMC Submissions → **View contract** on a sent proposal | **Download PDF** and **Download Word** both offered | ☐ |
 | I6 | Client link → **Download** | Menu offers **PDF document** and **Word document** | ☐ |
+
+### J. Who may approve (Settings approver list)
+
+| # | Steps | Expected |
+|---|---|---|
+| J1 | Admin: Settings → AMC → **Approvers**: leave empty. Approver (role has AMC Approve) opens an awaiting proposal | **Approve** and **Send back** offered |
+| J2 | Admin: add only `amc.writer@test.local` to Approvers, save. Approver reloads | Approve / Send back gone; a direct `POST /api/amc-submissions/approval` returns **403** |
+| J3 | Same list: writer (admin, on the list) opens someone else's awaiting proposal | Approve / Send back offered |
+| J4 | Clear the list again | J1 behaviour returns |
+
+### K. Resubmitting after the client asks for changes
+
+| # | Steps | Expected |
+|---|---|---|
+| K1 | Send a proposal (Copy link). In a private window: **Request changes** with a reason | Status **Proposal rejected**; the link now shows *Changes requested* and **no document** |
+| K2 | Writer: edit the proposal (change a price), **Submit** | Status **Awaiting approval**. The old link still shows only the outcome card, never the edited prices |
+| K3 | Approve, then **Copy link** again | A **new** link. The old one now says *This link is not available* |
+| K4 | Open the submission's history / record | The previous *changes requested* answer is not shown as the current client decision; the new link waits for a fresh answer |
+
+### L. Services come from AMC Settings
+
+| # | Steps | Expected |
+|---|---|---|
+| L1 | Admin: Settings → AMC → Services: **add a service** offered on apartments, default frequency 4. New apartment draft | The new service is a row in step 2, frequency **4** |
+| L2 | Tick it, price it, save, reopen | It is still there with its price |
+| L3 | Admin: **switch it off**. Reopen the draft | A warning says it was removed; it is no longer ticked or charged; totals drop accordingly |
+| L4 | A proposal already **sent** that included a service later switched off: open **View contract** | Still lists it (the sent document keeps its snapshot) |
+| L5 | Apartment draft | The hidden-services notice names the villa-only services by their Settings labels |
+
+### M. Pricing: server is the authority, and the fils agree
+
+| # | Steps | Expected |
+|---|---|---|
+| M1 | Base 100, units 2, frequency 4 | Row price **800.00** |
+| M2 | Rows totalling **513.00**, discount **10%** | Discount 51.30, final **461.70**, VAT **23.09**, total **484.79** in the wizard, the list, the approval notice, the contract and the client page — the same figure everywhere |
+| M3 | Base price **3,500.50**, no discount → proposal (brochure) | Annual fee prints **3,500.50** (not 3,501); monthly **291.71** |
+| M4 | Contract with total **525.53** | Words read *… FIVE HUNDRED TWENTY FIVE DIRHAMS AND FIFTY THREE FILS ONLY (VAT INCLUDED)* |
+| M5 | DevTools: `PUT /api/amc-submissions` on your draft with `final_price: 1` and a row `price: 1` | Saved row's `final_price` equals base × units × frequency less discount, **not 1** |
+| M6 | Same, with a ticked service id Settings does not offer on this property | **400** naming the service |
+
+### N. When an email fails
+
+| # | Steps | Expected |
+|---|---|---|
+| N1 | Approved proposal with **no customer email**, choose **Email proposal** | Warning: link created, nothing sent. Status **Proposal sent**. History shows *proposal sent* with outcome **no recipient** |
+| N2 | (Local only) temporarily blank `NEXT_PUBLIC_RESEND_API_KEY`, email a proposal | Warning that delivery failed; link valid; history shows outcome **email failed** with a short reason and no key or full provider response |
+| N3 | Proposal whose account manager phone is `05X XXX XXXX` | Send refused naming *Proposal > Account manager 1 phone*; history shows *send refused* |
+
+### O. Link lifecycle
+
+| # | Steps | Expected |
+|---|---|---|
+| O1 | Approve the proposal from a link, then open the same link | Outcome card only, no document |
+| O2 | Send the contract, open the **proposal** link | Outcome card only; it cannot sign |
+| O3 | Sign the contract, open the contract link | *Contract signed* card, no document |
+| O4 | Studio: set a sent proposal's `proposal_token_expires_at` to yesterday, open its link | *This link has expired* (410) |
+| O5 | **Send again** a proposal, open the previous link | *This link is not available* |
 
 ## 4. Security tests
 
@@ -390,29 +472,87 @@ Expect a **permission-denied error or `[]`** — never a list of customers.
 **draft** belonging to the writer must **not** appear in their list — only
 submissions sent for review do. ☐ **§13 criterion 14.**
 
+**4.6 A signed-in user cannot write AMC rows directly** (after migration
+`20261005100000`). Take your own access token from the session cookie
+(DevTools → Application → Cookies, the `sb-…-auth-token` value's
+`access_token`), then in PowerShell:
+
+```powershell
+curl.exe -X PATCH "http://127.0.0.1:54321/rest/v1/amc_submissions?id=eq.<your draft id>" `
+  -H "apikey: <local anon key>" -H "Authorization: Bearer <your access token>" `
+  -H "Content-Type: application/json" -d '{"status":"approved"}'
+```
+Expect **permission denied** (401/403), and the row unchanged. Before the
+migration this succeeded. ☐
+
+**4.7 The email endpoint is not an open relay.** From a private window (not
+signed in):
+
+```js
+await fetch("/api/send-email", { method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ to: "someone@example.com", subject: "x", html: "<p>x</p>" }) }).then(r => r.status);
+```
+Expect **401**. ☐ The same request signed in returns 200 (sends a real
+email; use your own inbox). ☐
+
+**4.8 The public quotation review page can still notify the owner.** On
+`/quotations/review?id=<estimate>`, approve as the customer: the owner's
+company mailbox receives the notification. ☐
+
+**4.9 The client link does not leak internal data.** Open a sent proposal's
+link, then in DevTools → Network inspect `/api/amc/<token>`:
+- no `approvers` emails anywhere in the response ☐
+- no switched-off clause text ☐
+- no `owner_id`, token hashes or `customerId` ☐
+
+**4.10 Oversized or malformed answers are refused.**
+
+```js
+await fetch(location.pathname.replace("/amc/", "/api/amc/"), { method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ action: "sign", name: "x".repeat(500) }) }).then(r => r.status);
+```
+Expect **400**; with a 20 KB body expect **413**. ☐
+
+**4.11 Submit is checked on the server.** Untick every service on a draft
+via `PUT`, then `POST /api/amc-submissions/approval` with
+`{ "action": "submit" }`: expect **400** *Tick at least one service*. ☐
+
+**4.12 Self-approval follows the policy.** Today
+`AMC_SELF_APPROVAL_ALLOWED = true` (`lib/amc/workflow.ts`), so an approver
+can approve their own proposal. If the business decides otherwise and the
+switch is set to `false`: own proposals show no Approve / Send back, and
+the API returns **403**. ☐
+
+**4.13 Re-check after any change:** run `npm test` — all tests pass. ☐
+
 ---
 
 ## 5. Going to production
 
 Only once every box above is ticked.
 
-1. **Commit** — the proposal-number and settings fixes of 21 Sep are not yet
-   committed, and the version already merged to `main` is missing them.
-   Without them, sending a document fails outright.
+Status on 5 Oct 2026: the v2 migrations (1–7 in §1.2) are in production,
+AMC Settings holds real values, and approvals and client links are in use.
+What remains for the hardening release:
+
+1. **Merge** branch `amc-hardening` after review.
 2. **Take a database backup** of the production project.
-3. **Apply the five migrations** in the order in §1.2, one at a time, and
-   run the matching check from §2 after each.
-4. **Grant approval.** Permissions → **AMC Proposals** → **Approve** for the
-   approver's role (Behrouz, per §9.1 of the FRD).
-5. **Fill AMC Settings** with the real TPH contact numbers and coordination
-   emails. Until then every contract prints `XXX`.
-6. **Set `NEXT_PUBLIC_APP_URL`** to the real domain. It is currently
-   `http://localhost:3032`, so every client link would point at localhost
-   and fail on the customer's phone.
-7. **Remove the test addresses** added to the allowlist in §1.5, if any were
-   committed.
-8. **Smoke test in production:** one proposal through to Signed, using
-   **Copy link** and your own details as the customer.
+3. **Reconcile the migration history first** — a DevOps-approved step, see
+   [`database-migration-reconciliation.md`](database-migration-reconciliation.md).
+   Do **not** run `supabase db push` against production before that.
+4. **Apply** `20261005100000_amc_close_direct_writes.sql` and
+   `20261005110000_amc_proposal_number_beyond_9999.sql`, one at a time, and
+   run each file's verification query.
+5. **Deploy the code at the same time as step 4 or after it.** The code works
+   with or without the migrations; the migrations remove database paths the
+   code never used.
+6. **Check `NEXT_PUBLIC_APP_URL`** in the production environment is the real
+   domain (the local `.env` still says localhost; client links are built
+   from it).
+7. **Smoke test in production:** one proposal through to Signed, using
+   **Copy link** and your own details as the customer; then 4.6, 4.7 and 4.9
+   against production with your own account.
 
 ---
 
@@ -422,6 +562,8 @@ What the testing above will surface, and is expected:
 
 | Ref | Behaviour | Status |
 |---|---|---|
-| **K1** | Anyone with approve rights — and every admin — can approve **their own** proposal. §9.1 intends a second person to review. | Open. A one-line check would block it; see the delivery report |
-| **K2** | Previews print `XXX` until AMC Settings are filled (C8/C9). Sending is blocked until then (E0) | Expected. A data task, not a code task |
-| **K3** | Document layout is unchanged | FR4.8 — waiting on Sharon's sign-off |
+| **K1** | Anyone with approve rights — and every admin — can approve **their own** proposal. §9.1 intends a second person to review. | **Business decision required.** One switch, `AMC_SELF_APPROVAL_ALLOWED` in `lib/amc/workflow.ts`, changes the API and the buttons together |
+| **K2** | Previews print `XXX` while AMC Settings or the proposal still hold placeholders. Sending is blocked and says where (E0, N3) | Expected |
+| **K3** | The new document layout is built and in use, but no sign-off is recorded | FR4.8 — **business decision required** (Sharon) |
+| **K4** | The PDF attached to the client email is built in the browser; the server checks it is a PDF of sane size but cannot prove it matches the approved data | Follow-up: server-side generation in the Signed Contract Archive phase |
+| **K5** | A signed contract still prints blank signature lines; the typed name and time are recorded but not printed | **Business decision required** |

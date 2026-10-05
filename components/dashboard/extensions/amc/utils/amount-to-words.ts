@@ -1,3 +1,5 @@
+import { toFils } from "@/lib/amc/pricing";
+
 const ONES = [
   "",
   "ONE",
@@ -34,7 +36,7 @@ const TENS = [
   "NINETY",
 ];
 
-const SCALES = ["", "THOUSAND", "MILLION", "BILLION"];
+const SCALES = ["", "THOUSAND", "MILLION", "BILLION", "TRILLION"];
 
 function chunkToWords(n: number): string {
   if (n === 0) return "";
@@ -73,10 +75,16 @@ function integerToWords(n: number): string {
   return parts.join(" ").replace(/\s+/g, " ").trim();
 }
 
+/*
+  Read from whole fils, the same integer the printed figure is formatted
+  from (lib/amc/pricing.ts). Splitting the float instead could give a fil
+  value of 100 ("ONE HUNDRED FILS" next to "1.00") or one fil off the
+  figure beside it.
+*/
 export function amountToWordsAed(amount: number): string {
-  const safeAmount = Math.max(0, amount);
-  const dirhams = Math.floor(safeAmount);
-  const fils = Math.round((safeAmount - dirhams) * 100);
+  const totalFils = Number.isFinite(amount) ? Math.max(0, toFils(amount)) : 0;
+  const dirhams = Math.floor(totalFils / 100);
+  const fils = totalFils % 100;
 
   const dirhamWords = integerToWords(dirhams);
   const filsWords = fils > 0 ? ` AND ${integerToWords(fils)} FILS` : "";

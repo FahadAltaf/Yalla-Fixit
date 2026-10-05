@@ -49,6 +49,7 @@ import { useDebounce } from "@/hooks/use-debounce";
 import { amcSubmissionsService } from "@/modules/amc-submissions";
 
 import { grandTotalOf } from "./amc-pricing";
+import { canDecideProposal } from "@/lib/amc/workflow";
 
 import { AMC_APPROVALS_CHANGED } from "./amc-approval-notice";
 import { amcStatusTone } from "./amc-status";
@@ -394,7 +395,8 @@ export function SubmissionsList() {
 
               {/* FR5.2 — the approver's two decisions, on the queue rows
                   only. */}
-              {canApprove && submission.status === "awaiting_approval" && (
+              {submission.status === "awaiting_approval" &&
+                canDecideProposal({ canApprove, isOwner: submission.is_own !== false }) && (
                 <>
                   <DropdownMenuItem
                     onClick={() => actions.approve(submission)}
