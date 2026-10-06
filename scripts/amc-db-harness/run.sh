@@ -37,6 +37,6 @@ for pass in 1 2; do
 done
 
 echo "== extra checks"
-for f in "$HERE"/9[0-7]_*.sql; do
+for f in "$HERE"/9[0-7]*_*.sql; do
   echo "   $(basename "$f")"; "${PSQL[@]}" -f "$f"
 done

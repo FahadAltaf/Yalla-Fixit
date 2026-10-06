@@ -23,6 +23,7 @@ import {
   renewalBlockedReason,
 } from "@/lib/amc/renewal";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
+import { readNotificationSettings } from "@/lib/server/amc/notifications";
 import { fetchAllRows, fetchAllRowsById } from "@/lib/server/amc/paging";
 import {
   ContractError,
@@ -635,9 +636,12 @@ async function existingReminders(admin: Admin, contractId: string) {
 export async function reminderPlan(admin: Admin, contractId: string): Promise<ReminderPlan> {
   const { contract } = await loadContract(admin, contractId);
   const existing = await existingReminders(admin, contractId);
+  const settings = await readNotificationSettings(admin);
   const made = new Map((existing ?? []).map((r) => [Number(r.threshold_days), r]));
   const planned =
-    contract.status === "cancelled" ? [] : planRenewalReminders(contract.endDate, todayInDubai());
+    contract.status === "cancelled"
+      ? []
+      : planRenewalReminders(contract.endDate, todayInDubai(), settings.reminderThresholds);
   /* Created ones stay listed even once their date has passed. */
   const rows = new Map<number, ReminderPlan["reminders"][number]>();
   for (const p of planned) {
@@ -647,9 +651,10 @@ export async function reminderPlan(admin: Admin, contractId: string): Promise<Re
     if (!rows.has(days)) rows.set(days, { daysBefore: days, remindOn: r.remind_on, created: true, todoId: r.todo_id });
   }
   return {
-    enabled: AMC_RENEWAL_REMINDERS_ENABLED,
+    /* The code default (off) until the settings row says otherwise. */
+    enabled: AMC_RENEWAL_REMINDERS_ENABLED || settings.reminderAutoEnabled,
     migrated: existing !== null,
-    thresholds: [...AMC_RENEWAL_REMINDER_DAYS],
+    thresholds: settings.reminderThresholds.length ? settings.reminderThresholds : [...AMC_RENEWAL_REMINDER_DAYS],
     reminders: [...rows.values()].sort((a, b) => a.remindOn.localeCompare(b.remindOn)),
   };
 }
@@ -666,7 +671,8 @@ export async function createReminders(
   contractId: string,
   actor: Actor,
 ): Promise<ReminderPlan> {
-  if (!AMC_RENEWAL_REMINDERS_ENABLED) {
+  const settings = await readNotificationSettings(admin);
+  if (!AMC_RENEWAL_REMINDERS_ENABLED && !settings.reminderAutoEnabled) {
     throw new ContractError(
       "Renewal reminders are switched off until the reminder schedule is approved.",
       409,
@@ -679,7 +685,7 @@ export async function createReminders(
   const existing = await existingReminders(admin, contractId);
   if (existing === null) throw new ContractError(OPERATIONS_NOT_MIGRATED, 503);
   const toCreate = newReminders(
-    planRenewalReminders(contract.endDate, todayInDubai()),
+    planRenewalReminders(contract.endDate, todayInDubai(), settings.reminderThresholds),
     existing.map((r) => Number(r.threshold_days)),
   );
 

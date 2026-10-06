@@ -16,6 +16,7 @@ import {
 import { grandTotalFromFinal, vatOnFinal } from "@/lib/amc/pricing";
 import { buildRenewalDraft, renewalBlockedReason } from "@/lib/amc/renewal";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
+import { notifyContractEvent, notifyEntitlementState } from "@/lib/server/amc/notifications";
 import { priceSubmission } from "@/lib/server/amc/pricing";
 import { readAmcSettings } from "@/lib/server/amc/settings";
 import {
@@ -454,6 +455,11 @@ export async function activateContract(
     actorLabel: actor.label,
     payload: { contractId: created.id },
   });
+  await notifyContractEvent(admin, {
+    event: "contract_activated",
+    contractId: String(created.id),
+    actor,
+  });
 
   return mapContract(created);
 }
@@ -580,6 +586,8 @@ export async function recordUsage(
       externalReference: input.externalReference ?? null,
     },
   });
+  /* A visits/hours allowance that has just run low or out tells the owner. */
+  await notifyEntitlementState(admin, contractId, input.entitlementId, actor);
   return data;
 }
 
@@ -768,5 +776,6 @@ export async function createRenewalProposal(
     actorLabel: actor.label,
     payload: { renewalSubmissionId: data.id, droppedServiceIds: draft.droppedServiceIds },
   });
+  await notifyContractEvent(admin, { event: "renewal_created", contractId, actor });
   return { submissionId: data.id, droppedServiceIds: draft.droppedServiceIds };
 }

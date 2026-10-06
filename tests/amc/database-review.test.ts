@@ -121,13 +121,14 @@ const code = (f: string) =>
     .filter((l) => !l.trim().startsWith("--"))
     .join("\n");
 
-test("the AMC migrations of this branch are the five expected, in order", () => {
+test("the AMC migrations of this branch are the six expected, in order", () => {
   assert.deepEqual(NEW_AMC, [
     "20261006100000_active_amc_contracts.sql",
     "20261006110000_active_amc_operations.sql",
     "20261006120000_amc_fsm_integration.sql",
     "20261006130000_amc_business_operations.sql",
     "20261006140000_amc_atomic_activation_and_dashboard.sql",
+    "20261006150000_amc_business_completion.sql",
   ]);
 });
 
@@ -160,7 +161,7 @@ test("dollar quoting is balanced in every new migration", () => {
   }
 });
 
-test("no history is deleted by cascade, except a draft assessment's items", () => {
+test("no history is deleted by cascade, except a draft assessment's items and photos", () => {
   for (const f of NEW_AMC) {
     for (const line of code(f).split("\n").filter((l) => /ON DELETE CASCADE/.test(l))) {
       assert.match(line, /assessment_id uuid NOT NULL REFERENCES public\.amc_assessments\(id\) ON DELETE CASCADE/, `${f}: ${line.trim()}`);

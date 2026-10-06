@@ -115,3 +115,15 @@ export const discountConfigSchema = z
   .strict();
 
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** AMC notification settings (amc_notification_settings). */
+export const notificationSettingsSchema = z.object({
+  workflowEmailEnabled: z.boolean(),
+  entitlementEmailEnabled: z.boolean(),
+  reminderAutoEnabled: z.boolean(),
+  reminderThresholds: z.array(z.number().int().min(1).max(365)).max(6),
+  reminderRecipients: z.array(z.enum(["owner", "approvers"])).max(2),
+  reminderChannels: z.array(z.enum(["in_app", "email"])).max(2),
+  reminderExtraEmails: z.array(z.string().trim().email()).max(10),
+});
+

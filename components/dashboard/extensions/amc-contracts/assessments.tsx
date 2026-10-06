@@ -24,6 +24,7 @@ import { useDebounce } from "@/hooks/use-debounce";
 import { amcContractsService, type AssessmentRecord, type CustomerRecord } from "@/modules/amc-contracts/amc-contracts-service";
 
 import { AmcSectionNav } from "./amc-section-nav";
+import { AssessmentPhotos } from "./assessment-photos";
 import { CustomerSearch, PropertySelect, UNIT_TYPE_LABELS } from "./customer-pickers";
 import { PropertyDialog } from "./customer-property-views";
 import { formatContractDate } from "./contract-status";
@@ -566,6 +567,8 @@ export function AssessmentDetail({ id }: { id: string }) {
           ) : null}
         </SectionCard>
       </div>
+
+      <AssessmentPhotos assessmentId={a.id} editable={editable} completed={a.status === "completed"} />
     </div>
   );
 }

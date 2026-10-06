@@ -25,7 +25,13 @@ The AMC system in `amc-hardening` covers the whole commercial and operational li
 - Automatic FSM usage waits on Zoho FSM confirmations (§8).
 - Security issues in shared platform tables must be closed before release (§9).
 
-The remaining code gaps are notifications, a stored signed-contract PDF, assessment photos, creating FSM estimates from the portal, and the final document layout (§4, §11).
+Since the business-completion phase (6 Oct 2026) the system also:
+- notifies approvers, owners and the team at each workflow step, in the portal and by email;
+- archives every signed contract privately, exactly as signed;
+- keeps assessment photos privately;
+- has an expiry-reminder engine, which stays switched off until the schedule is approved.
+
+What remains in code is creating FSM estimates from the portal (blocked on FSM fields) and the final document layout, which waits for Sharon's sign-off (§4, §11).
 
 ## 2. Architecture
 
@@ -70,6 +76,11 @@ Proposal (wizard: property/customer → services & pricing → review)
 | **Reporting** | Portfolio figures (customers and properties counted once). Expiry buckets. Renewal pipeline. Account-manager portfolio. Service analytics (units never mixed). CSV/Excel exports |
 | **Testing** | 128 unit tests. A local PostgreSQL harness for every AMC migration (applied twice, behavioural and schema-invariant checks), a main-compatibility replay, a ~10k-contract scale test with query plans, and two-session race tests |
 | **Database review (6 Oct 2026)** | No table merged or removed (each kept for a constraint, key or lifecycle; review in the architecture doc). Fixed: assessment/quote numbers truncating past 9,999; a redundant index; 3 missing indexes; contract activation now one transaction; dashboard counted in the database (was wrong above the row cap); reports and lists page instead of stopping at 1,000–5,000 rows; assessments searchable and paged on the server; FSM sync-log race; cancellation-vs-usage race; the usage ledger now refuses edits loudly |
+| **Notifications (6 Oct 2026)** | One AMC notification log (`amc_notifications`) over the portal's existing delivery: an in-app bell on the AMC screens, and email through Resend. Events: proposal submitted, approved, sent back (with reason), sent; client approved or rejected (with reason); contract sent, signed (number, customer, property, typed name, time); contract activated; allowance low or used up; contract expiring; renewal started. Recipients come from the workflow (approvers by the same rule as the approval route, the proposal owner). A unique dedupe key per event, recipient and channel makes retries and double clicks harmless. Workflow emails are on; allowance and reminder emails are off until confirmed (`amc_notification_settings`, editable by approvers) |
+| **Signed-contract archive** | At signing, the contract is rebuilt from the signed row and the wording frozen when it was sent (never today's settings). It is stored in the private `amc-documents` bucket as a PDF printed by headless Chrome, the Snagging report path, or as HTML when no browser is available. Its content hash and file hash are recorded in the immutable `amc_signed_documents`. An electronic acceptance record shows signed by, typed name, signed date and time, and says plainly that this is not a cryptographic signature. The contract and proposal pages show it apart from the generated documents. Older signed contracts can be archived by hand, marked "archived after signing" |
+| **Assessment photos** | Up to 20 JPEG/PNG/WebP photos per assessment in the private bucket (type checked from the file bytes; SVG refused). Shown through 10-minute signed links. Removable while a draft, kept unchanged once completed (database trigger) |
+| **Expiry reminders** | A reminder sweep: the nearest due threshold per contract (60/30/15 days by default), to configured recipients (owner, approvers, extra addresses) and channels. Idempotent. Run by an approver, or by a signed scheduled call only when automatic reminders are switched on (off by default). The existing reminder Todos use the same settings |
+| **Customer-facing consistency** | The contract page shows the support line and response times **as signed** (from the contract's frozen wording), with compliance "Not measured". Findings in §7 (6 h vs 48 h) |
 | **Hardening** | Direct table writes closed. Server-side pricing. Proposal numbers beyond 9,999. Zoho token hidden from browsers. Estimate, password-reset and audit tables made server-only (migrations written; §5) |
 
 ## 4. Requirement matrix
@@ -90,7 +101,7 @@ Proposal (wizard: property/customer → services & pricing → review)
 | 5 | §6.3 totals: subtotal → discount → final; VAT | IMPLEMENTED | as row 2 | **5% VAT** confirmation (§7 C) |
 | 6 | FR3.2 visibility; FR3.4 edit lock | IMPLEMENTED | `lib/amc/workflow.ts`, submissions API | — |
 | 7 | FR4.1–4.7: documents from the data, optional sections, price list, placeholders | IMPLEMENTED | `amc-document-model.ts`, `amc-proposal-content.ts`, PDF/DOCX | OI-5 / clause 6.3 meaning (§7 A) |
-| 8 | FR4.8: final document layout | PARTIAL | Brochure-style proposal built (28 Sep) | **Layout sign-off (Sharon)**: BUSINESS DECISION |
+| 8 | FR4.8: final document layout | BUSINESS DECISION | Brochure-style proposal built (28 Sep) | **Layout sign-off (Sharon)**: BUSINESS DECISION |
 | 9 | FR5.1–5.3: internal approval, send back, role-based approver | IMPLEMENTED | `app/api/amc-submissions/[id]/decision`, `amc-approval-notice.tsx` | Self-approval policy (§7 C) |
 | 10 | FR5.4–5.7: tokenised client links, approve/reject once, contract, signature, email/link | IMPLEMENTED | `app/amc/[token]`, `app/api/amc/[token]`, `send/route.ts` | Typed-name signature, 30-day validity (§7 C) |
 | 11 | FR5.8 status machine; FR5.9 audit | IMPLEMENTED | `lib/amc/workflow.ts`, `amc_audit_events` | — |
@@ -98,29 +109,38 @@ Proposal (wizard: property/customer → services & pricing → review)
 | 13 | Client change: saved account managers | IMPLEMENTED | `settings.accountManagers`, services step | — |
 | 14 | NFR4 / §7: unguessable links; no open table access | IMPLEMENTED in code | hashed tokens; hardening migrations | Migrations **not applied** (§5, §10) |
 | 15 | Notifications: proposal and contract emails | IMPLEMENTED | `lib/server/send-email.ts` via send route | — |
-| 16 | Notifications: approver told when a proposal awaits approval; team told of client decisions/signature | NOT IMPLEMENTED | approver queue on screen only | Goal 2 |
+| 16 | Notifications: approver told when a proposal awaits approval; team told of client decisions/signature | IMPLEMENTED | `lib/server/amc/notifications.ts` + hooks in the approval, send, client and activation paths; bell on AMC screens | Recipients are the workflow's own; confirm workflow emails stay on (§7 C) |
 | 17 | Brochure: dedicated account manager | IMPLEMENTED | managers on proposal/contract, saved list, reports | — |
 | 18 | Brochure: unlimited emergency call-outs; non-emergency per package | IMPLEMENTED | entitlement types unlimited/visits | Allowance scaling rules (§7 A) |
-| 19 | Brochure: emergency attended in 120 min, non-emergency scheduled in 6 h | PARTIAL | SLA targets and evaluation (`lib/amc/sla.ts`, `fsm-sync.ts`) | **BLOCKED:** FSM request/arrival/booking times; status shows UNKNOWN |
-| 20 | Brochure: discounts on additional services | PARTIAL | eligibility, configurable discount, frozen quotes | **Rate/eligible services** (§7 A); FSM estimate created by hand |
-| 21 | Brochure: free property assessment | PARTIAL | assessments + checklist + proposal from assessment | Photos (needs private storage: DEFERRED SECURITY) |
+| 19 | Brochure: emergency attended in 120 min, non-emergency scheduled in 6 h | BLOCKED | Targets shown as signed (`lib/amc/commitments.ts`); evaluation ready (`lib/amc/sla.ts`) | **BLOCKED:** FSM request/arrival/booking times (compliance UNKNOWN). **BUSINESS DECISION:** brochure says 6 h, contract and proposal say 48 h (§7 A) |
+| 20 | Brochure: discounts on additional services | BUSINESS DECISION | eligibility, configurable discount, frozen quotes | **Rate/eligible services** (§7 A); FSM estimate created by hand |
+| 21 | Brochure: free property assessment | IMPLEMENTED | assessments, checklist, notes, recommended services, private photos, completion lock, proposal from assessment | Assessment rules (§7 A7) |
 | 22 | Activation and contract lifecycle | IMPLEMENTED | `lib/server/amc/contracts.ts`, contracts UI | Early signed/test rows (§7 C) |
 | 23 | Entitlements, usage, corrections, coverage | IMPLEMENTED | ledger + triggers, usage UI, coverage check | Usage/correction permissions (§7 A) |
 | 24 | Expiry management | IMPLEMENTED | derived status, labels, expiry report | Expiring window (default 30 days) (§7 B) |
 | 25 | Renewal proposals, relationships, pipeline | IMPLEMENTED | renewal API/UI, derived pipeline | Renewal pricing basis (§7 A) |
-| 26 | Renewal reminders | PARTIAL | Todo reminders built, switched off | **Schedule + recipients** (§7 A) |
-| 27 | Expiry / usage / exhausted-allowance operational notifications | NOT IMPLEMENTED | — | Goal 2 |
-| 28 | FSM customer and service mapping | PARTIAL | explicit links + mapping screen | **Data entry** + confirmation of `Customer_Id__C` (§8) |
-| 29 | FSM completed visit → usage | PARTIAL | review/confirm, idempotent; automation off | **BLOCKED:** meaning of "Completed", reopening, hours (§8) |
-| 30 | Shared customers/properties | PARTIAL | AMC uses them; Snagging not yet | **Ownership** (§7 A) |
-| 31 | Additional-service quotation into FSM | PARTIAL | record + link to FSM estimate | Creating the estimate from the portal (FSM fields) (§8) |
+| 26 | Renewal reminders | IMPLEMENTED (off) | reminder sweep + Todos, configurable thresholds/recipients/channels, idempotent | Automatic delivery off until **schedule + recipients** are confirmed (§7 A2) |
+| 27 | Expiry / usage / exhausted-allowance operational notifications | IMPLEMENTED | low (25%) and used-up alerts on each usage write, state-based; expiry reminders via the sweep | Allowance emails off until recipients confirmed |
+| 28 | FSM customer and service mapping | BLOCKED | explicit links + mapping screen | **Data entry** + confirmation of `Customer_Id__C` (§8) |
+| 29 | FSM completed visit → usage | BLOCKED | review/confirm, idempotent; automation off | **BLOCKED:** meaning of "Completed", reopening, hours (§8) |
+| 30 | Shared customers/properties | BUSINESS DECISION | AMC uses them; Snagging not yet | **Ownership** (§7 A) |
+| 31 | Additional-service quotation into FSM | BLOCKED | quote record (service, standard price, AMC discount, final price, frozen calculation) + link to the FSM estimate | Creating the estimate from the portal needs the FSM fields (§8). Clause 6.3 "additional fixed-price services": BUSINESS DECISION REQUIRED (§7 A8); the quote record already holds what it would need |
 | 32 | Reporting, dashboards, exports | IMPLEMENTED | `amc-reports.tsx`, `contracts-summary.tsx` | — |
-| 33 | Signed-contract archive (stored signed PDF) | NOT IMPLEMENTED | documents re-rendered from snapshots | Needs private storage (DEFERRED SECURITY) → Goal 2 |
+| 33 | Signed-contract archive (stored signed PDF) | IMPLEMENTED | `lib/server/amc/signed-archive.ts`, private `amc-documents` bucket, immutable `amc_signed_documents` | A Chrome binary on the production host for PDF (else HTML) (§8) |
 | 34 | Production deployment of all of the above | NOT IMPLEMENTED | runbook + smoke test written | Goal 4 |
 
-**Estimate:**
-- **About 85%** of the original requirements are implemented in code: 21 of 34 rows fully, 10 partly, 3 not at all.
-- The FRD proposal requirements themselves are **about 95%** complete; FR4.8 waits for the layout sign-off.
+**Counted from the rows above (6 Oct 2026, after business completion):**
+
+| Status | Rows | Which |
+|---|---|---|
+| IMPLEMENTED | **26** | 1–7, 9–18, 21–27, 32, 33 |
+| BUSINESS DECISION REQUIRED | 3 | 8 (layout sign-off), 20 (discount rate), 30 (customer ownership) |
+| BLOCKED (external) | 4 | 19, 28, 29, 31 (Zoho FSM data and confirmations) |
+| PARTIAL (development pending) | 0 | — |
+| NOT IMPLEMENTED | 1 | 34 (production deployment) |
+
+- **AMC business requirements: 26 of 34 implemented in code (76%).** Counting a blocked or decision-pending row as half done, as the previous estimate did, gives **87%**. No row is waiting on development that can be done without a decision or an FSM answer.
+- **Proposal workflow (FRD rows 1–14): 13 of 14 implemented (93%)**, 96% with FR4.8 counted as half. FR4.8 waits for the layout sign-off.
 - **0% is in production.**
 
 ## 5. Database changes
@@ -141,13 +161,14 @@ All AMC migrations apply in this order. **NOT APPLIED TO PRODUCTION** means prod
 | 9 | `20261006120000_amc_fsm_integration.sql` | FSM customer link, service mapping, work links, sync log | **NOT APPLIED** |
 | 10 | `20261006130000_amc_business_operations.sql` | Customers/properties, assessments, discount config, additional quotes | **NOT APPLIED** |
 | 11 | `20261006140000_amc_atomic_activation_and_dashboard.sql` | Atomic contract activation; dashboard figures counted in the database (functions only) | **NOT APPLIED** |
+| 12 | `20261006150000_amc_business_completion.sql` | Notifications and their settings, signed-contract archive, private `amc-documents` bucket, assessment photos | **NOT APPLIED** |
 
 **Checks:**
 - No duplicate timestamps, and no `main` migration supersedes an AMC one.
 - Each AMC migration depends only on earlier ones.
 - Production's migration history must be reconciled first (`docs/database-migration-reconciliation.md`).
 - Then apply via the runbook (`docs/amc-hardening-production-runbook.md` 7.x). Never `db push --include-all`.
-- **While today's `main` is live: PARTIALLY.** Migrations 1–3 and 7–11 are compatible with the live `main` (main's AMC queries replayed after each one; all pass). Migrations 4–6 break today's `main` (settings via graphql and the estimate and password-reset paths) and must follow the code deploy. No migration drops, renames or narrows anything `main` uses; no backfill is needed. Details: `docs/amc-migration-safety-report.md`.
+- **While today's `main` is live: PARTIALLY.** Migrations 1–3 and 7–12 are compatible with the live `main` (main's AMC queries replayed after each one; all pass). Migrations 4–6 break today's `main` (settings via graphql and the estimate and password-reset paths) and must follow the code deploy. No migration drops, renames or narrows anything `main` uses; no backfill is needed. Details: `docs/amc-migration-safety-report.md`.
 
 ## 6. Automated verification
 
@@ -155,15 +176,15 @@ On `amc-hardening` after the main merge:
 
 | Check | Result |
 |---|---|
-| Unit tests (`npm test`) | **128 / 128** (114 before + 14 for the database review) |
+| Unit tests (`npm test`) | **154 / 154** (114 before + 14 database review + 26 business completion) |
 | Full-project typecheck (`tsc --noEmit`, whole repo) | **PASS, 0 errors.** The 3 earlier test-only errors in `tests/amc/tokens.test.ts` are fixed |
 | Lint (all 142 AMC-changed TypeScript files) | **PASS** |
 | Production build (`next build --webpack`) | **PASS** |
-| Local migration harness (PostgreSQL 15, every AMC migration applied twice + behavioural checks) | **PASS** (all 8 check suites, including the schema invariants) |
-| Main compatibility harness (main's AMC schema from `origin/main`, each new migration in turn, main's queries replayed) | **PASS** for all 23 AMC queries at every step; the 3 expected non-AMC breaks from migrations 4–6 |
+| Local migration harness (PostgreSQL 15, every AMC migration applied twice + behavioural checks) | **PASS** (all 9 check suites, including the schema invariants and the business-completion checks) |
+| Main compatibility harness (main's AMC schema from `origin/main`, each new migration in turn, main's queries replayed) | **PASS** for all 23 AMC queries at every step, migration 12 included; the 3 expected non-AMC breaks from migrations 4–6 |
 | Synthetic scale (~10k contracts, 146k usage rows) and `EXPLAIN ANALYZE` | Interactive queries under 20 ms; approver dashboard 135–161 ms |
 | Two-session concurrency tests | **7 / 7** (last visit, double activation, corrections, cancellation vs usage, sync log, renewal, reminder) |
-| Browser / UAT | **Not done.** Needs a signed-in session and a migrated database (`docs/active-amc-user-testing-checklist.md`) |
+| Browser / UAT | **Not done.** Needs a signed-in session and a migrated database (`docs/active-amc-user-testing-checklist.md`). The dev server points at production, which has none of these migrations |
 
 ## 7. Business decisions remaining
 
@@ -178,7 +199,10 @@ Old defaults are listed as defaults, not as approved decisions.
 6. **Customer/property ownership:** which module owns the shared records, who edits them, when Snagging adopts them.
 7. **Assessments:** who may perform/complete; must every item be answered (today yes); are photos required.
 8. **OI-5 / clause 6.3:** what "additional fixed-price services" means (FRD §12 missing).
-9. **Notifications:** who is told when a proposal awaits approval, when a client answers or signs, when a contract nears expiry or an allowance is used up.
+9. **Notifications:** built. Approvers, owners and the team are told at each workflow step (in-app and email). To confirm: who receives expiry reminders and allowance alerts by email, and whether reminders run automatically (both off).
+10. **Non-emergency response time:** the brochure promises non-emergency visits "scheduled within 6 hours", but the contract clause and the proposal's "standard response time" say 48 hours. The documents print what the settings say; the contract page shows what was signed. One wording must be chosen (Sharon / legal).
+11. **Signature on the generated contract:** the archived signed contract shows the typed name, date and time. Whether the regenerated contract's signature block should print them too (`lib/amc/signature.ts`).
+12. **Provider contact number:** the shipped default `contactNo` is "800-PERFECT / 05X XXX XX / 05X XXX XX" (placeholders). Check that production AMC Settings holds the real numbers before any contract is sent (the production read failed on 6 Oct, so this is unverified).
 
 **B. Can stay configurable**
 1. Expiring window (default 30 days) and low-remaining threshold (25%).
@@ -212,6 +236,7 @@ Old defaults are listed as defaults, not as approved decisions.
 | FSM estimate required fields and catalogue prices | Zoho FSM admin | Creating estimates from the portal | Yes (manual estimate + link) |
 | Private file storage decision | Platform owner (security goal) | Assessment photos, signed-PDF archive | Partly (both deferred) |
 | Production migration-history reconciliation; a staging database | Platform owner | Any deployment, browser UAT | No, for release |
+| Chrome/Chromium on the production host (`PUPPETEER_EXECUTABLE_PATH`), as Snagging reports already need | Platform owner | Signed contracts archived as PDF (without it they are archived as HTML, same content) | Yes |
 | GitHub credentials in this environment | Developer | Pushing from automation (manual push works) | Yes |
 
 ## 9. Security backlog
@@ -225,7 +250,7 @@ To be fixed in the security goal. Several fixes already exist as unapplied migra
 | `amc_submissions` direct writes | Proposal tampering | **CRITICAL before production** (fixed by migration 1, not applied) |
 | Zoho Edge Functions callable with the anon key; one logs the token | FSM data exposure/abuse | **HIGH before production** |
 | `/api/graphql` without authentication | Data exposure | **HIGH before production** |
-| Public `uploads` storage bucket | Exposure of uploaded files; blocks photos/archive | **HIGH before production** |
+| Public `uploads` storage bucket | Exposure of files uploaded by other modules. AMC no longer depends on it: signed contracts and assessment photos use the private `amc-documents` bucket (no storage policy, signed links only) | **HIGH before production** |
 | `password_resets`, estimate tables browser-accessible | Account / quote exposure | **HIGH before production** (fixed by migrations 5–6, not applied) |
 | FSM work-order lookup open to every AMC user | Over-broad customer data access | **MEDIUM** |
 | Shared customers visible/editable by every AMC user | Over-broad access | **MEDIUM** |
@@ -239,43 +264,38 @@ These prevent release today:
 2. The critical/high security items in §9.
 3. No browser/UAT pass on a migrated staging database.
 4. Category C decisions (§7) not confirmed.
-5. Notifications (§4 rows 16, 27) not built, if they are required at go-live.
+5. The non-emergency response wording (§7 A10) and the provider contact number (§7 A12) checked before contracts go out.
 6. `amc-hardening` not merged to `main` (by instruction).
 
 ## 11. Remaining development
 
 These follow from §4 rows marked PARTIAL or NOT IMPLEMENTED and the security backlog:
 1. **Security and permissions** (§9): role tables, Edge Functions, GraphQL, private storage, data visibility; apply the existing fixes.
-2. **AMC business completion:**
-   - notifications (rows 16, 27, 26 once decided);
-   - signed-contract archive and assessment photos on private storage (rows 21, 33);
-   - decision-driven rules: allowance scaling, renewal pricing, permissions, discount (rows 18, 20, 23, 25);
+2. **Decision-driven changes** (no new systems needed):
+   - switch on the reminder schedule and the allowance/reminder emails once confirmed;
+   - allowance scaling, renewal pricing, usage permissions, discount rate (rows 18, 20, 23, 25);
    - FR4.8 layout once signed off (row 8).
 3. **FSM automation and estimates** (rows 19, 28, 29, 31), once §8 confirmations arrive.
 4. **Release readiness:** reconciliation, staging, UAT, production migration and deployment, data cleanup, merge to main with approval.
 
 ## 12. Recommended prompt plan
 
-**TOTAL MAJOR PROMPTS REMAINING: 4**
+**TOTAL MAJOR PROMPTS REMAINING: 3**, plus small decision-driven changes as answers arrive.
 
 1. **Security and permissions hardening.** Can run now.
    - Close role-table writes; secure Edge Functions and `/api/graphql`.
-   - Private storage bucket.
+   - The public `uploads` bucket for the other modules (AMC already uses private storage).
    - Customer/FSM-lookup visibility.
    - AMC permission model (including an operations role if decided).
    - Re-verify the hardening migrations.
-2. **AMC business completion.** Can start now; some parts need §7 A answers first.
-   - Notifications (approval requests, client decisions, signature, expiry, exhausted allowances, renewal reminders).
-   - Signed-PDF archive and assessment photos (needs prompt 1's private storage).
-   - Allowance scaling, renewal pricing, usage permissions, discount configuration per the decisions.
-   - FR4.8 layout if signed off.
+2. ~~AMC business completion~~: done on 6 Oct 2026. What is left of it are the decisions in §7 A and C (switching on reminders, rates, layout), each a small change.
 3. **FSM automation activation.** Needs §8 answers.
    - Switch on automatic visit usage, with a scheduled check.
    - Automatic reversal if reopening is confirmed.
    - SLA attendance mapping.
    - FSM estimate creation from additional-service quotes.
    - Bulk entry tools for mappings and customer links.
-4. **Release readiness.** Needs prompts 1–2 and the §7 C decisions.
+4. **Release readiness.** Needs prompt 1 and the §7 C decisions.
    - Migration-history reconciliation; staging database.
    - Full UAT against the checklist and fixes.
    - Production migrations in runbook order; deployment; smoke test.

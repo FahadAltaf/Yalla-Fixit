@@ -28,6 +28,7 @@ import {
 import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { ContractError, isMissingTable, loadContract, toRulesContract } from "@/lib/server/amc/contracts";
 import { fetchAllRowsById } from "@/lib/server/amc/paging";
+import { removeDraftPhotoFiles } from "@/lib/server/amc/assessment-photos";
 import { priceSubmission } from "@/lib/server/amc/pricing";
 import { readAmcSettings } from "@/lib/server/amc/settings";
 import { fsmFetch, getFsmAccessToken, FsmConfigError } from "@/lib/server/zoho/fsm-client";
@@ -923,6 +924,8 @@ export async function deleteDraftAssessment(admin: Admin, who: Visibility, id: s
   const a = await getAssessment(admin, id);
   if (a.status !== "draft") throw new ContractError("A completed assessment is kept as history.", 409);
   if (!canEditAssessment(who, a)) throw new ContractError("Only its assessor or an AMC approver can delete this draft.", 403);
+  /* A draft's photos go with it: the files here, the rows by cascade. */
+  await removeDraftPhotoFiles(admin, id);
   const { error } = await admin.from("amc_assessments").delete().eq("id", id).eq("status", "draft");
   if (error) throw fail(error);
   await recordAmcAudit(admin, { entityType: "assessment", entityId: id, eventType: "assessment_draft_deleted", actorId: actor.id, actorLabel: actor.label });

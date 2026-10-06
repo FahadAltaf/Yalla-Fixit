@@ -7,6 +7,12 @@ import type {
   EntitlementState,
 } from "@/lib/amc/contracts";
 import type { SlaDefinition } from "@/lib/amc/sla";
+import type { SignedCommitments } from "@/lib/amc/commitments";
+import type { AmcNotificationSettings } from "@/lib/amc/notifications";
+import type { InAppNotification } from "@/lib/server/amc/notifications";
+import type { SignedArchiveRecord } from "@/lib/server/amc/signed-archive";
+import type { AssessmentPhoto } from "@/lib/server/amc/assessment-photos";
+import type { SweepResult } from "@/lib/server/amc/reminders";
 import type { activationPreview } from "@/lib/server/amc/contracts";
 import type {
   ContractFsmActivity,
@@ -41,6 +47,7 @@ import type {
  */
 
 export type { ContractsDashboard, ReminderPlan, RenewalOverview, UsageEntry };
+export type { AmcNotificationSettings, AssessmentPhoto, InAppNotification, SignedArchiveRecord, SweepResult };
 export type ActivationPreview = Awaited<ReturnType<typeof activationPreview>>;
 export type { ContractFsmActivity, FsmWorkOrderForAmc, SyncOutcome };
 export type {
@@ -171,6 +178,8 @@ export interface ContractDetail {
     }
   >;
   sla: SlaTarget[];
+  /** Present once the API serves it; older responses lack it. */
+  commitments?: SignedCommitments;
   audit: Array<{
     id: string;
     type: string;
@@ -469,5 +478,53 @@ export const amcContractsService = {
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) if (value) query.set(key, value);
     return request<CoverageCheckResponse>(`/api/amc-contracts/coverage?${query.toString()}`);
+  },
+  /* Notifications (in-app) */
+  notifications() {
+    return request<{ notifications: InAppNotification[]; unread: number; migrated: boolean }>("/api/amc-notifications");
+  },
+  markNotificationsRead(input: { all: true } | { ids: string[] }) {
+    return request<{ ok: true }>("/api/amc-notifications", { method: "POST", body: JSON.stringify(input) });
+  },
+  notificationSettings() {
+    return request<{ settings: AmcNotificationSettings; canEdit: boolean }>("/api/amc-contracts/settings/notifications");
+  },
+  saveNotificationSettings(input: AmcNotificationSettings) {
+    return request<{ settings: AmcNotificationSettings; canEdit: boolean }>("/api/amc-contracts/settings/notifications", {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+  },
+  runReminders() {
+    return request<SweepResult>("/api/amc-contracts/reminders", { method: "POST", body: "{}" });
+  },
+  /* The archived signed contract */
+  signedDocument(submissionId: string, open = false) {
+    return request<{ archive: SignedArchiveRecord | null; url: string | null; signed: boolean }>(
+      `/api/amc-submissions/signed-document?id=${encodeURIComponent(submissionId)}${open ? "&open=1" : ""}`,
+    );
+  },
+  archiveSignedDocument(submissionId: string) {
+    return request<{ archive: SignedArchiveRecord }>("/api/amc-submissions/signed-document", {
+      method: "POST",
+      body: JSON.stringify({ id: submissionId }),
+    });
+  },
+  /* Assessment photos */
+  assessmentPhotos(assessmentId: string) {
+    return request<{ photos: AssessmentPhoto[]; migrated: boolean }>(`/api/amc-contracts/assessments/${assessmentId}/photos`);
+  },
+  async addAssessmentPhoto(assessmentId: string, file: File, caption?: string) {
+    const form = new FormData();
+    form.append("file", file);
+    if (caption) form.append("caption", caption);
+    /* Not request(): the browser sets the multipart boundary itself. */
+    const response = await fetch(`/api/amc-contracts/assessments/${assessmentId}/photos`, { method: "POST", body: form });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(typeof body?.error === "string" ? body.error : "Could not add the photo");
+    return body as { photo: AssessmentPhoto };
+  },
+  removeAssessmentPhoto(assessmentId: string, photoId: string) {
+    return request<{ ok: true }>(`/api/amc-contracts/assessments/${assessmentId}/photos/${photoId}`, { method: "DELETE" });
   },
 };

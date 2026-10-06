@@ -28,6 +28,7 @@ import {
 } from "@/lib/amc/fsm-sync";
 import { APPOINTMENT_STATE_LABELS } from "@/lib/scheduling/appointment-status";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
+import { notifyEntitlementState } from "@/lib/server/amc/notifications";
 import {
   ContractError,
   ENTITLEMENT_COLUMNS,
@@ -919,6 +920,10 @@ export async function syncFsmAppointment(
       automatic: plan.autoAllowed && !options.confirm,
       warnings: plan.warnings,
     },
+  });
+  await notifyEntitlementState(admin, contractId, String(entitlement.id), {
+    id: options.actor.id ?? null,
+    label: options.actor.label ?? null,
   });
   return { ...base, status: "recorded", code: "completed", reason: plan.reason, usageId: data.id };
 }

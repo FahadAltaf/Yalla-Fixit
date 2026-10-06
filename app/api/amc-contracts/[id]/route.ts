@@ -10,6 +10,7 @@ import {
   todayInDubai,
   usagePercent,
 } from "@/lib/amc/contracts";
+import { signedCommitments } from "@/lib/amc/commitments";
 import { AMC_SLA_DEFAULTS } from "@/lib/amc/sla";
 import {
   contractErrorResponse,
@@ -35,7 +36,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     const { contract, entitlements } = loaded;
     const today = todayInDubai();
 
-    const [stats, auditResult, sourceResult, renewalResult] = await Promise.all([
+    const [stats, auditResult, sourceResult, renewalResult, snapshotResult] = await Promise.all([
       usageStats(gate.admin, id),
       gate.admin
         .from("amc_audit_events")
@@ -55,9 +56,17 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
         .eq("renewal_of_contract_id", id)
         .limit(1)
         .maybeSingle<{ id: string }>(),
+      gate.admin.from("amc_contracts").select("contract_settings_snapshot").eq("id", id).maybeSingle(),
     ]);
 
     const summary = { ...summarizeContract(entitlements), ...stats };
+    /* What the signed wording promises (support line, response times), from
+       the contract's own frozen settings, never from today's AMC Settings. */
+    const commitments = signedCommitments(
+      (snapshotResult.data as { contract_settings_snapshot?: Parameters<typeof signedCommitments>[0] } | null)
+        ?.contract_settings_snapshot,
+      entitlements.map((e) => e.serviceId),
+    );
     /* Service levels for the call-out services on this contract: the target
        only. Whether a call-out met it is unknown until FSM sends request
        and arrival times. */
@@ -80,6 +89,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
         state: entitlementState(e, contract.displayStatus),
       })),
       sla,
+      commitments,
       audit: (auditResult.data ?? []).map((row) => ({
         id: String(row.id),
         type: String(row.event_type),

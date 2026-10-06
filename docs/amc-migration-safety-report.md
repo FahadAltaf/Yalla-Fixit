@@ -8,12 +8,12 @@
 
 > **CAN THESE MIGRATIONS BE APPLIED WHILE CURRENT MAIN IS LIVE? PARTIALLY.**
 
-- **YES, 8 of 11:**
+- **YES, 9 of 12:**
   - `20261005100000`, `20261005110000`, `20261005150000`;
-  - all five AMC migrations, `20261006100000` to `20261006140000`.
+  - all six AMC migrations, `20261006100000` to `20261006150000`.
 
   They were applied one by one on a copy of main's AMC schema. After each one, main's real AMC queries were replayed with the roles main uses, and **all 23 AMC checks passed every time**, as did main's two service-role scheduling and Zoho token checks (§4).
-- **NO, 3 of 11, until the `amc-hardening` code is deployed first:** `20261005160000`, `20261005170000` and `20261005180000`. They remove browser-role access that **current main still uses**:
+- **NO, 3 of 12, until the `amc-hardening` code is deployed first:** `20261005160000`, `20261005170000` and `20261005180000`. They remove browser-role access that **current main still uses**:
 
 | Migration | What in live main breaks | Proven by |
 |---|---|---|
@@ -80,6 +80,7 @@ A fresh read on 6 Oct failed with a connector authorisation error, so the counts
 | 9 | `20261006120000_amc_fsm_integration` | FSM links, mappings, sync log | **YES** (additive) |
 | 10 | `20261006130000_amc_business_operations` | Customers, properties, assessments, discount, quotes | **YES** (additive; widens a CHECK) |
 | 11 | `20261006140000_amc_atomic_activation_and_dashboard` | **New in this review.** Two functions | **YES** (functions only) |
+| 12 | `20261006150000_amc_business_completion` | Notifications and their settings, signed-contract archive, assessment photos, and a private storage bucket `amc-documents` with no storage policy | **YES** (additive; one new bucket row) |
 
 **Changes made to the unapplied files in this review** (allowed because none is applied anywhere):
 - **`20261006100000`:**
@@ -113,7 +114,8 @@ The schema they produce was improved in place, and they always apply together (�
 | `settings` column-level grant, no token, no browser writes (#4) | **REQUIRES COORDINATED DEPLOYMENT** | Main's graphql (anon) and session reads use it |
 | Estimate tables server-only (#5) | **REQUIRES COORDINATED DEPLOYMENT** | Main's estimate routes use the session |
 | `password_resets` server-only (#6) | **REQUIRES COORDINATED DEPLOYMENT** | Main's reset actions use the anon key |
-| New tables, functions, sequences (#7–#11) | **SAFE** | Main does not know them; RLS on, no browser grants |
+| New tables, functions, sequences (#7–#12) | **SAFE** | Main does not know them; RLS on, no browser grants |
+| New storage bucket `amc-documents` (#12) | **SAFE** | Private, no policy on `storage.objects`, so it adds no access for anyone; the existing `uploads` and `snagging` buckets are untouched |
 | DROP / RENAME / ALTER TYPE / SET NOT NULL on anything main uses | **None** | Checked by test `nothing in the new AMC migrations drops, renames or narrows what main uses` |
 
 Nothing is **UNSAFE** in the sense of losing or corrupting data. The three coordinated ones fail closed: they deny access and never destroy anything.
@@ -135,7 +137,7 @@ Pass counts by step:
 | +`20261005160000` | 31 | 3 | settings token (session), settings via graphql (anon) read and write |
 | +`20261005170000` | 28 | 6 | estimate tables (session) |
 | +`20261005180000` | 26 | 8 | password resets (anon) |
-| +`20261006100000` … `140000` | 26 | 8 | **none** |
+| +`20261006100000` … `150000` | 26 | 8 | **none** |
 | all re-applied | 26 | 8 | **none** |
 
 **All 23 AMC checks and both service-role checks pass at every step.** The 8 failures are exactly the three coordinated migrations' intended effect on non-AMC paths. **Old main works after all the new AMC migrations**, provided `160000`–`180000` wait for the code.
@@ -201,16 +203,16 @@ Every statement takes its lock for milliseconds at today's sizes (28 proposals, 
    These three close the proposal-tampering and audit-log holes without any code change. The runbook lists `100000` after D1. The harness shows current main does not need it to wait, so it may go earlier; following the runbook order is also fine.
 3. **Deploy the `amc-hardening` code (D1).** It works with or without every migration below: the AMC pages answer "not set up yet" (503) until the tables exist.
 4. **Straight after D1:** `20261005160000`, `20261005170000`, `20261005180000`. Then rotate the Zoho credential (runbook §11).
-5. **The AMC set, together and in order:** `20261006100000` → `110000` → `120000` → `130000` → `140000`.
+5. **The AMC set, together and in order:** `20261006100000` → `110000` → `120000` → `130000` → `140000` → `150000`.
    - These can technically go before D1 (they are additive), but nothing uses them until D1.
-   - Apply all five in one window: the D1 code expects all five, and the dashboard falls back to slower counting only if `140000` alone is missing.
+   - Apply all six in one window: the D1 code expects all six. Without `150000` the code keeps working; notifications, the signed archive and photos are simply not recorded (they degrade silently). Without `140000` the dashboard falls back to slower counting.
 
 ## 10. Rollback and recovery strategy
 
 - **Before the window:** a point-in-time restore point or an on-demand backup (runbook §1).
 - **Hardening migrations (#1–#6):** each file ends with an exact rollback block restoring the previous grants and policies. These are safe at any time and lose no data. Rolling #4–#6 back re-opens the exposure, so prefer rolling the code forward.
 - **AMC migrations (#7–#11):**
-  - **While no contract, link, customer, assessment or quote has been created:** run each file's rollback block in reverse order (`140000` → `100000`). They drop only the new objects and the new nullable columns.
+  - **While no contract, link, customer, assessment, quote, notification, archive or photo has been created:** run each file's rollback block in reverse order (`150000` → `100000`). They drop only the new objects and the new nullable columns. The `amc-documents` bucket is removed only when it is empty.
   - **Once data exists:** do not drop it. Roll the code back (D1's previous deployment). The schema can stay, because it is additive and main ignores it. Fix forward.
 - `20261006140000` can be dropped at any time. The code then counts the dashboard in the server (slower, still correct) and **activation fails with "not set up"**, so drop it only together with a code rollback.
 

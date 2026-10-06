@@ -11,15 +11,16 @@ import { useAmcActions } from "@/components/dashboard/extensions/amc/use-amc-act
 import { amcSubmissionsService } from "@/modules/amc-submissions";
 
 import { formatDateTime } from "./contract-status";
+import { SignedArchiveRow } from "./signed-archive-row";
 
 /**
  * The contract's documents: the proposal (the client's brochure with
  * their plan) and the contract, rebuilt from the signed proposal's saved
  * data and the wording captured when each was sent.
  *
- * There is no stored copy of the signed PDF: the portal keeps the signed
- * data, the signature and the wording snapshot, and renders the document
- * from them. A document never sent renders with today's settings.
+ * These are GENERATED documents, rebuilt on request. The ARCHIVED SIGNED
+ * DOCUMENT (stored when the client signed) is shown separately above them
+ * and is the signed artifact; a generated contract never claims to be.
  */
 export function ContractDocuments({
   submissionId,
@@ -62,10 +63,13 @@ export function ContractDocuments({
   return (
     <SectionCard title="Documents" icon={<FileText />} bodyClassName="px-5 pb-5 space-y-3">
       {actions.dialogs}
+      <SignedArchiveRow submissionId={submissionId} />
       {docs.map((doc) => (
         <div key={doc.type} className="flex flex-wrap items-center justify-between gap-2">
           <div className="min-w-0">
-            <div className="text-sm font-medium">{doc.label}</div>
+            <div className="text-sm font-medium">
+              {doc.label} <span className="text-muted-foreground text-xs font-normal">· generated</span>
+            </div>
             <div className="text-muted-foreground text-xs">
               {doc.sentAt ? `Wording as sent ${formatDateTime(doc.sentAt)}` : "Not sent: renders with today's settings"}
             </div>
@@ -93,8 +97,8 @@ export function ContractDocuments({
         </div>
       ))}
       <p className="text-muted-foreground text-xs">
-        Rebuilt from the signed proposal&apos;s saved data and wording. A stored copy of the signed
-        PDF is not kept.
+        Generated documents are rebuilt now from the signed proposal&apos;s saved data and wording. They
+        are not the archived signed file.
       </p>
     </SectionCard>
   );

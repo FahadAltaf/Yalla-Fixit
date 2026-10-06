@@ -1,6 +1,8 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 
 import { recordAmcAudit } from "@/lib/server/amc/audit";
+import { notifyProposalEvent } from "@/lib/server/amc/notifications";
+import { archiveSignedContract } from "@/lib/server/amc/signed-archive";
 import { readAmcSettings } from "@/lib/server/amc/settings";
 import type { AmcSettings } from "@/components/dashboard/extensions/amc/amc-settings";
 import { clientTransition } from "@/lib/amc/workflow";
@@ -290,6 +292,37 @@ export async function POST(
       origin: "client",
       justification: body.action === "reject" ? body.reason : null,
       payload: { from: expected, to: update.status },
+    });
+
+    /*
+      After the client has their answer: tell the team, and for a
+      signature archive the contract exactly as signed. Both run once,
+      because only the request whose conditional update matched gets here
+      (a retry is answered 409 above), and both are idempotent anyway.
+    */
+    const submissionId = row.id;
+    after(async () => {
+      if (body.action === "sign") {
+        try {
+          await archiveSignedContract(admin, submissionId, { when: "at_signing", actor: null });
+        } catch (archiveError) {
+          console.error(
+            "AMC signed contract not archived (staff can archive it from the contract page):",
+            archiveError instanceof Error ? archiveError.message : archiveError,
+          );
+        }
+      }
+      await notifyProposalEvent(admin, {
+        event: body.action === "sign" ? "contract_signed" : body.action === "approve" ? "client_approved" : "client_rejected",
+        submissionId,
+        actor: null,
+        at: now,
+        facts: {
+          signedByName: body.name,
+          signedAt: body.action === "sign" ? now : null,
+          reason: body.action === "reject" ? body.reason : null,
+        },
+      });
     });
 
     return NextResponse.json(

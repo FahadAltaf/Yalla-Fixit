@@ -14,6 +14,7 @@ import {
   checkInternalTransition,
 } from "@/lib/amc/workflow";
 import { submittableProblem } from "@/lib/server/amc/pricing";
+import { notifyProposalEvent } from "@/lib/server/amc/notifications";
 
 /**
  * The internal half of the approval flow (FR5.1–FR5.3, FR5.9).
@@ -210,6 +211,21 @@ export async function POST(req: NextRequest) {
     actorLabel,
     justification: body.action === "send_back" ? body.reason : null,
     payload: { from: existing.status, to: update.status },
+  });
+
+  /* Approvers hear about a submission; the owner about the decision, with
+     the reason when it was sent back. Best effort: never fails the step. */
+  await notifyProposalEvent(admin, {
+    event:
+      body.action === "submit"
+        ? "proposal_submitted"
+        : body.action === "approve"
+          ? "proposal_approved"
+          : "proposal_sent_back",
+    submissionId: body.id,
+    actor: { id: profile.id, label: actorLabel },
+    at: now,
+    facts: body.action === "send_back" ? { reason: body.reason } : {},
   });
 
   /* The partial row selected above; services are internal to the check. */

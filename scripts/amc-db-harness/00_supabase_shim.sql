@@ -102,3 +102,13 @@ CREATE TABLE public.snagging_properties (
   client_id uuid REFERENCES public.snagging_clients(id) ON DELETE SET NULL,
   unit_label text
 );
+
+-- Supabase storage, as far as the AMC migrations touch it.
+CREATE SCHEMA storage;
+CREATE TABLE storage.buckets (
+  id text PRIMARY KEY, name text NOT NULL, public boolean DEFAULT false,
+  file_size_limit bigint, allowed_mime_types text[]
+);
+CREATE TABLE storage.objects (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), bucket_id text, name text);
+ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+INSERT INTO storage.buckets (id, name, public) VALUES ('uploads', 'uploads', true), ('snagging', 'snagging', false);

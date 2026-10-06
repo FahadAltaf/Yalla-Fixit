@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { recordAmcAudit } from "@/lib/server/amc/audit";
+import { notifyProposalEvent } from "@/lib/server/amc/notifications";
 import { readAmcSettings } from "@/lib/server/amc/settings";
 import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
 import { linkTokenExpiry, mintLinkToken } from "@/lib/server/link-token";
@@ -386,6 +387,15 @@ export async function POST(req: NextRequest) {
       { status: 409 },
     );
   }
+
+  /* Recorded for the owner when someone else sent it (only the owner can
+     today, so this writes nothing yet). No client link in it. */
+  await notifyProposalEvent(admin, {
+    event: document === "proposal" ? "proposal_sent" : "contract_sent",
+    submissionId: id,
+    actor: { id: profile.id, label: actorLabel },
+    at: now,
+  });
 
   const customer = (existing.customer ?? {}) as {
     customerName?: string;

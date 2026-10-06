@@ -36,7 +36,7 @@ BEGIN
      WHERE contype = 'f' AND confdeltype = 'c'
        AND (conrelid::regclass::text LIKE 'amc\_%' OR conrelid::regclass::text IN ('customers', 'customer_properties'))
   LOOP
-    IF NOT (r.tbl = 'amc_assessment_items' OR (r.tbl = 'amc_submissions' AND r.conname = 'amc_submissions_owner_id_fkey')) THEN
+    IF NOT (r.tbl IN ('amc_assessment_items', 'amc_assessment_photos') OR (r.tbl = 'amc_submissions' AND r.conname = 'amc_submissions_owner_id_fkey')) THEN
       RAISE EXCEPTION 'unexpected CASCADE: %.%', r.tbl, r.conname;
     END IF;
   END LOOP;
@@ -150,7 +150,7 @@ BEGIN
   IF q1 !~ '-9999$' OR q2 !~ '-10000$' THEN RAISE EXCEPTION 'quote numbers: % %', q1, q2; END IF;
   -- (proposal numbers past 9999: 90_verify.sql)
 END $$;
-SELECT setval('public.amc_assessment_number_seq', 1, false);
+SELECT setval('public.amc_assessment_number_seq', 20000);
 
 -- ------------------------------------------------------------------
 -- C. amc_activate_contract: all or nothing

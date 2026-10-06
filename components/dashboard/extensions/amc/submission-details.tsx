@@ -70,6 +70,7 @@ import { amcStatusTone } from "./amc-status";
 import { submissionToFormData } from "./amc-submission-mapper";
 import { canDecideProposal } from "@/lib/amc/workflow";
 import { SignedContractAction } from "@/components/dashboard/extensions/amc-contracts/signed-contract-action";
+import { SignedArchiveRow } from "@/components/dashboard/extensions/amc-contracts/signed-archive-row";
 import { Fact, ReviewSection, ServicesAndCost } from "./steps/review-step";
 import {
   AMC_STATUS_LABELS,
@@ -717,6 +718,9 @@ export function SubmissionDetails({
               the cost and contact tabs they repeated what was already in
               front of you.
             */}
+            {/* Signed: the archived signed contract, apart from the
+                generated documents in the Documents menu. */}
+            {submission.status === "signed" ? <SignedArchiveRow submissionId={submission.id} /> : null}
             <StatCardGrid columns={4}>
               <StatCard
                 label="Grand total"

@@ -120,7 +120,7 @@ export function ContractDetail({ id }: { id: string }) {
     );
   }
 
-  const { contract, entitlements, summary, audit, source, permissions, sla } = data;
+  const { contract, entitlements, summary, audit, source, permissions, sla, commitments } = data;
   const canRecord = permissions.canRecordUsage && entitlements.some((e) => e.consumable);
   const counted = summary.withRemaining + summary.exhausted;
 
@@ -346,7 +346,26 @@ export function ContractDetail({ id }: { id: string }) {
         </SectionCard>
 
         <SectionCard title="Service levels" icon={<Gauge />} bodyClassName="px-5 pb-5 space-y-3">
-          {sla.length === 0 ? (
+          {commitments?.fromSnapshot ? (
+            <>
+              {/* As the client signed them: from this contract's frozen wording. */}
+              {commitments.emergencyResponse ? (
+                <DataRow title="Emergency response (as signed)" subtitle={commitments.emergencyResponse} trailing={<Badge variant="secondary" className="font-normal">Not measured</Badge>} />
+              ) : null}
+              {commitments.standardResponse ? (
+                <DataRow title="Standard response (as signed)" subtitle={commitments.standardResponse} trailing={<Badge variant="secondary" className="font-normal">Not measured</Badge>} />
+              ) : null}
+              <DataRow
+                title="24/7 technical support line"
+                subtitle={commitments.helpdeskIncluded ? "Included in this contract" : "Not one of this contract's services"}
+              />
+              {commitments.supportContact ? <DataRow title="Support contact (as signed)" subtitle={commitments.supportContact} /> : null}
+              <p className="text-muted-foreground text-xs">
+                Read from the wording frozen with this contract, so later settings changes do not alter it.
+              </p>
+            </>
+          ) : null}
+          {commitments?.fromSnapshot ? null : sla.length === 0 ? (
             <p className="text-muted-foreground text-sm">No call-out services on this contract, so no response targets.</p>
           ) : (
             sla.map((s) => (
