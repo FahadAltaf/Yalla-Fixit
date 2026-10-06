@@ -27,6 +27,7 @@ import {
 } from "@/lib/amc/contracts";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { ContractError, isMissingTable, loadContract, toRulesContract } from "@/lib/server/amc/contracts";
+import { fetchAllRowsById } from "@/lib/server/amc/paging";
 import { priceSubmission } from "@/lib/server/amc/pricing";
 import { readAmcSettings } from "@/lib/server/amc/settings";
 import { fsmFetch, getFsmAccessToken, FsmConfigError } from "@/lib/server/zoho/fsm-client";
@@ -390,20 +391,24 @@ export async function loadContractRows(
   who: Visibility,
   scope: { customerId?: string; propertyId?: string } = {},
 ): Promise<ContractRow[]> {
-  const run = (columns: string) => {
-    let q = admin.from("amc_contracts").select(columns).limit(5000);
-    if (!who.canApprove) q = q.eq("amc_submissions.owner_id", who.userId);
-    if (scope.customerId) q = q.eq("customer_id", scope.customerId);
-    if (scope.propertyId) q = q.eq("property_id", scope.propertyId);
-    return q;
-  };
+  /* Every row, a page at a time: a report must never stop at a row cap. */
+  const run = (columns: string) =>
+    fetchAllRowsById<Row>((afterId, size) => {
+      let q = admin.from("amc_contracts").select(columns).order("id").limit(size);
+      if (afterId) q = q.gt("id", afterId);
+      if (!who.canApprove) q = q.eq("amc_submissions.owner_id", who.userId);
+      if (scope.customerId) q = q.eq("customer_id", scope.customerId);
+      if (scope.propertyId) q = q.eq("property_id", scope.propertyId);
+      return q as unknown as PromiseLike<{ data: Row[] | null; error: { code?: string; message: string } | null }>;
+    });
   let res = await run(REPORT_COLUMNS);
   if (res.error && notMigrated(res.error) && !scope.customerId && !scope.propertyId) res = await run(REPORT_COLUMNS_LEGACY);
   if (res.error) {
     if (isMissingTable(res.error)) throw new ContractError("AMC contracts are not set up on this database yet.", 503);
     throw fail(res.error);
   }
-  const raw = (res.data ?? []) as unknown as Row[];
+  if (res.truncated) console.error("AMC reports: more contracts than the safety stop; the report is incomplete.");
+  const raw = res.data;
   const ids = raw.map((r) => String(r.id));
   const renewedBy = new Map<string, string>();
   for (const r of raw) if (r.renewed_from_contract_id) renewedBy.set(String(r.renewed_from_contract_id), String(r.id));
@@ -715,27 +720,52 @@ function mapAssessment(r: Row, items: Row[] = []): AssessmentRecord {
   };
 }
 
-export async function listAssessments(admin: Admin, filter: { status?: string | null; q?: string | null } = {}) {
-  let q = admin.from("amc_assessments").select(ASSESSMENT_COLUMNS).order("created_at", { ascending: false }).limit(200);
+/**
+ * One page of assessments, newest first. The search runs in the database
+ * (number, assessor, customer name or reference, property label), so an
+ * old assessment is found however many newer ones there are.
+ */
+export async function listAssessments(
+  admin: Admin,
+  filter: { status?: string | null; q?: string | null; from?: number; to?: number } = {},
+): Promise<{ assessments: AssessmentRecord[]; total: number }> {
+  const from = filter.from ?? 0;
+  const to = filter.to ?? from + 24;
+  let q = admin
+    .from("amc_assessments")
+    .select(ASSESSMENT_COLUMNS, { count: "exact" })
+    .order("created_at", { ascending: false })
+    .order("id")
+    .range(from, to);
   if (filter.status === "draft" || filter.status === "completed") q = q.eq("status", filter.status);
-  const { data, error } = await q;
-  if (error) throw fail(error);
-  let rows = ((data ?? []) as Row[]).map((r) => mapAssessment(r));
-  const term = safeTerm(filter.q ?? "").toLowerCase();
+  const term = safeTerm(filter.q ?? "");
   if (term) {
-    rows = rows.filter((a) =>
-      [a.assessmentNumber, a.customer?.name, a.customer?.customerRef, a.property?.label, a.assessorName].some(
-        (v) => typeof v === "string" && v.toLowerCase().includes(term),
-      ),
-    );
+    const like = `%${term}%`;
+    /* Customers and properties matching the term, by id (bounded: a search
+       this broad is refined by typing more, not by paging 200 customers). */
+    const [{ data: customers }, { data: properties }] = await Promise.all([
+      admin.from("customers").select("id").or(`name.ilike.${like},customer_ref.ilike.${like}`).limit(200),
+      admin.from("customer_properties").select("id").ilike("label", like).limit(200),
+    ]);
+    const clauses = [`assessment_number.ilike.${like}`, `assessor_name.ilike.${like}`];
+    const customerIds = ((customers ?? []) as Row[]).map((r) => String(r.id));
+    const propertyIds = ((properties ?? []) as Row[]).map((r) => String(r.id));
+    if (customerIds.length) clauses.push(`customer_id.in.(${customerIds.join(",")})`);
+    if (propertyIds.length) clauses.push(`property_id.in.(${propertyIds.join(",")})`);
+    q = q.or(clauses.join(","));
   }
-  return rows;
+  const { data, error, count } = await q;
+  if (error) throw fail(error);
+  return { assessments: ((data ?? []) as Row[]).map((r) => mapAssessment(r)), total: count ?? 0 };
 }
 
 export async function getAssessment(admin: Admin, id: string): Promise<AssessmentRecord> {
   const [{ data, error }, { data: items, error: itemsError }] = await Promise.all([
     admin.from("amc_assessments").select(ASSESSMENT_COLUMNS).eq("id", id).maybeSingle<Row>(),
-    admin.from("amc_assessment_items").select("*").eq("assessment_id", id),
+    admin
+      .from("amc_assessment_items")
+      .select("item_key, category_key, category_label, label, sort_order, result, notes")
+      .eq("assessment_id", id),
   ]);
   if (error) throw fail(error);
   if (itemsError) throw fail(itemsError);

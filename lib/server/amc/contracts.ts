@@ -162,9 +162,14 @@ export function isMissingTable(error: { code?: string } | null | undefined): boo
   return error?.code === "42P01" || error?.code === "PGRST205";
 }
 
+/** PostgREST: the function is not in its schema cache (migration not applied). */
+export function isMissingFunction(error: { code?: string } | null | undefined): boolean {
+  return error?.code === "PGRST202" || error?.code === "42883";
+}
+
 function notMigrated(): ContractError {
   return new ContractError(
-    "AMC contracts are not set up on this database yet (migration 20261006100000 has not been applied).",
+    "AMC contracts are not set up on this database yet (migrations 20261006100000 to 20261006140000 have not all been applied).",
     503,
   );
 }
@@ -348,9 +353,11 @@ export async function activateContract(
 
   /* The proposal's live customer/property (e.g. from an assessment) carries over. */
   const links = await loadLiveLinks(admin, "amc_submissions", input.submissionId);
-  const { data: created, error: insertError } = await admin
-    .from("amc_contracts")
-    .insert({
+  /* Contract and entitlements in one database transaction
+     (amc_activate_contract, 20261006140000): either both exist or neither,
+     so a failure can never leave a contract without its services. */
+  const { data: newId, error: insertError } = await admin.rpc("amc_activate_contract", {
+    p_contract: {
       ...liveLinkColumns(links),
       submission_id: input.submissionId,
       proposal_number: submission.proposal_number,
@@ -381,26 +388,8 @@ export async function activateContract(
       contract_settings_snapshot: signedSettings,
       renewed_from_contract_id: (submission.renewal_of_contract_id as string | null) ?? null,
       activated_by: actor.id,
-    })
-    .select(CONTRACT_COLUMNS)
-    .single<Row>();
-  if (insertError) {
-    if (insertError.code === "23505" && /renewed_from/.test(insertError.message)) {
-      throw new ContractError("The contract this proposal renews has already been renewed.", 409);
-    }
-    if (insertError.code === "23505") {
-      throw new ContractError("This proposal has already been activated.", 409);
-    }
-    if (insertError.code === "23514" && /period_valid/.test(insertError.message)) {
-      throw new ContractError("The end date must be after the start date.", 400);
-    }
-    if (isMissingTable(insertError)) throw notMigrated();
-    throw new ContractError(insertError.message, 400);
-  }
-
-  const { error: entError } = await admin.from("amc_contract_entitlements").insert(
-    entitlements.map((e) => ({
-      contract_id: created.id,
+    },
+    p_entitlements: entitlements.map((e) => ({
       service_id: e.serviceId,
       service_label: e.serviceLabel,
       sort_order: e.sortOrder ?? 0,
@@ -413,25 +402,29 @@ export async function activateContract(
       base_price: e.basePrice,
       contracted_price: e.contractedPrice,
     })),
-  );
-  if (entError) {
-    /* Not one transaction over the REST API: undo the contract so the
-       proposal can be activated again once the cause is fixed. Nothing
-       else references it yet. */
-    const { error: undoError } = await admin.from("amc_contracts").delete().eq("id", created.id);
-    if (undoError) {
-      /* The contract now has no services and blocks re-activation: it
-         needs removing by hand. Say so loudly. */
-      console.error(
-        `AMC activation: contract ${created.id} was created without services and could not be removed (${undoError.message}). Delete it before activating proposal ${input.submissionId} again.`,
-      );
-      throw new ContractError(
-        "The contract was created without its services and could not be undone. Ask an administrator to remove it before trying again.",
-        500,
-      );
+  });
+  if (insertError) {
+    if (insertError.code === "23505" && /renewed_from/.test(insertError.message)) {
+      throw new ContractError("The contract this proposal renews has already been renewed.", 409);
     }
-    throw new ContractError(`Could not create the contract's services: ${entError.message}`, 400);
+    if (insertError.code === "23505" && /service_id/.test(insertError.message)) {
+      throw new ContractError("The signed proposal lists the same service twice.", 409);
+    }
+    if (insertError.code === "23505") {
+      throw new ContractError("This proposal has already been activated.", 409);
+    }
+    if (insertError.code === "23514" && /period_valid/.test(insertError.message)) {
+      throw new ContractError("The end date must be after the start date.", 400);
+    }
+    if (isMissingTable(insertError) || isMissingFunction(insertError)) throw notMigrated();
+    throw new ContractError(`Could not create the contract: ${insertError.message}`, 400);
   }
+  const { data: created, error: readError } = await admin
+    .from("amc_contracts")
+    .select(CONTRACT_COLUMNS)
+    .eq("id", String(newId))
+    .single<Row>();
+  if (readError || !created) throw new ContractError(readError?.message ?? "The new contract could not be read.", 500);
 
   await recordAmcAudit(admin, {
     entityType: "contract",

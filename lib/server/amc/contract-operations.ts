@@ -23,9 +23,11 @@ import {
   renewalBlockedReason,
 } from "@/lib/amc/renewal";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
+import { fetchAllRows, fetchAllRowsById } from "@/lib/server/amc/paging";
 import {
   ContractError,
   ENTITLEMENT_COLUMNS,
+  isMissingFunction,
   isMissingTable,
   loadContract,
   mapEntitlement,
@@ -286,19 +288,22 @@ export async function recordCorrection(
  * proposals never fall off a row limit; the rows are re-checked here too.
  */
 export async function loadPendingActivations(admin: Admin, who: Visibility): Promise<Row[]> {
-  let q = admin
-    .from("amc_submissions")
-    .select(
-      "id, owner_id, proposal_number, customer, property, document_options, final_price, signed_at, amc_contracts!amc_contracts_submission_id_fkey(id)",
-    )
-    .eq("status", "signed")
-    .is("amc_contracts", null)
-    .order("signed_at", { ascending: false })
-    .limit(2000);
-  if (!who.canApprove) q = q.eq("owner_id", who.userId);
-  const { data, error } = await q;
+  const { data, error } = await fetchAllRows<Row>((from, to) => {
+    let q = admin
+      .from("amc_submissions")
+      .select(
+        "id, owner_id, proposal_number, customer, property, document_options, final_price, signed_at, amc_contracts!amc_contracts_submission_id_fkey(id)",
+      )
+      .eq("status", "signed")
+      .is("amc_contracts", null)
+      .order("signed_at", { ascending: false })
+      .order("id")
+      .range(from, to);
+    if (!who.canApprove) q = q.eq("owner_id", who.userId);
+    return q;
+  });
   if (error) throw error;
-  return ((data ?? []) as Row[]).filter((row) => {
+  return data.filter((row) => {
     const linked = row.amc_contracts;
     return !(Array.isArray(linked) ? linked.length : linked);
   });
@@ -336,25 +341,78 @@ export interface ContractsDashboard {
 
 /**
  * The figures on the contracts page, for the contracts the caller can see.
- * Every number is counted from rows, none estimated.
+ * Every number is counted from rows, none estimated. Counted in the
+ * database (amc_contracts_dashboard, 20261006140000), so the cost does not
+ * grow with the number of contracts sent to the server.
  */
 export async function contractsDashboard(admin: Admin, who: Visibility): Promise<ContractsDashboard> {
   const today = todayInDubai();
-  let q = admin
-    .from("amc_contracts")
-    .select(
-      "id, status, start_date, end_date, grand_total, proposal_number, customer_name, amc_submissions!amc_contracts_submission_id_fkey!inner(owner_id), amc_contract_entitlements(entitlement_type, included_quantity, used_quantity)",
-    )
-    .limit(5000);
-  if (!who.canApprove) q = q.eq("amc_submissions.owner_id", who.userId);
-  const { data, error } = await q;
+  const { data, error } = await admin.rpc("amc_contracts_dashboard", {
+    p_owner_id: who.canApprove ? null : who.userId,
+    p_today: today,
+    p_window_days: DEFAULT_EXPIRING_WINDOW_DAYS,
+    p_since: `${shiftDays(today, -30)}T00:00:00+04:00`,
+  });
+  if (error) {
+    /* Function not installed yet: count from the rows instead. */
+    if (isMissingFunction(error)) return contractsDashboardFromRows(admin, who);
+    if (isMissingTable(error)) {
+      throw new ContractError("AMC contracts are not set up on this database yet (migration 20261006100000).", 503);
+    }
+    throw error;
+  }
+  return dashboardFromFigures(data as Row);
+}
+
+/** Maps amc_contracts_dashboard's JSON onto the page's figures. */
+export function dashboardFromFigures(figures: Row): ContractsDashboard {
+  const n = (v: unknown) => Number(v ?? 0);
+  return {
+    inForce: n(figures.inForce),
+    pendingActivation: n(figures.pendingActivation),
+    expiringSoon: n(figures.expiringSoon),
+    expired: n(figures.expired),
+    notStarted: n(figures.notStarted),
+    cancelled: n(figures.cancelled),
+    inForceValue: n(figures.inForceValueFils) / 100,
+    withExhaustedEntitlements: n(figures.withExhaustedEntitlements),
+    usageLast30Days: n(figures.usageLast30Days),
+    recentUsage: ((figures.recentUsage as Row[] | null) ?? []).map((u) => ({
+      id: String(u.id),
+      contractId: String(u.contractId),
+      proposalNumber: String(u.proposalNumber ?? ""),
+      customerName: String(u.customerName ?? ""),
+      serviceLabel: String(u.serviceLabel ?? ""),
+      kind: String(u.kind),
+      quantity: Number(u.quantity),
+      occurredAt: String(u.occurredAt),
+    })),
+    expiringWindowDays: DEFAULT_EXPIRING_WINDOW_DAYS,
+  };
+}
+
+/** The same figures counted in the server, for a database without 20261006140000. */
+async function contractsDashboardFromRows(admin: Admin, who: Visibility): Promise<ContractsDashboard> {
+  const today = todayInDubai();
+  const { data, error } = await fetchAllRowsById<Row>((afterId, size) => {
+    let q = admin
+      .from("amc_contracts")
+      .select(
+        "id, status, start_date, end_date, grand_total, proposal_number, customer_name, amc_submissions!amc_contracts_submission_id_fkey!inner(owner_id), amc_contract_entitlements(entitlement_type, included_quantity, used_quantity)",
+      )
+      .order("id")
+      .limit(size);
+    if (afterId) q = q.gt("id", afterId);
+    if (!who.canApprove) q = q.eq("amc_submissions.owner_id", who.userId);
+    return q;
+  });
   if (error) {
     if (isMissingTable(error)) {
       throw new ContractError("AMC contracts are not set up on this database yet (migration 20261006100000).", 503);
     }
     throw error;
   }
-  const contracts = (data ?? []) as Row[];
+  const contracts = data;
   const pending = await loadPendingActivations(admin, who);
 
   const out: ContractsDashboard = {

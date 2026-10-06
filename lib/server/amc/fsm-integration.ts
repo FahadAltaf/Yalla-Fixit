@@ -684,7 +684,7 @@ async function logSyncEvent(
     snapshot: FsmAppointmentSnapshot | null;
     usageId?: string | null;
   },
-) {
+): Promise<{ changed: boolean }> {
   const now = new Date().toISOString();
   const { data: prior } = await admin
     .from("amc_fsm_sync_events")
@@ -716,7 +716,11 @@ async function logSyncEvent(
     if (prior.status === "recorded" && values.status === "skipped") delete (row as Partial<typeof row>).usage_id;
     await admin.from("amc_fsm_sync_events").update(row).eq("id", prior.id);
   } else {
-    await admin.from("amc_fsm_sync_events").insert(row);
+    const { error } = await admin.from("amc_fsm_sync_events").insert(row);
+    /* Two checks of the same appointment at once: the other inserted first
+       (UNIQUE fsm_appointment_id, action). Record this attempt on its row;
+       the second call finds it, so this recurses at most once. */
+    if (error?.code === "23505") return logSyncEvent(admin, values);
   }
   return { changed: !prior || prior.status !== values.status || prior.reason !== values.reason };
 }
@@ -1046,7 +1050,12 @@ export async function contractFsmActivity(admin: Admin, contractId: string) {
   const techName = new Map(((techRows ?? []) as Row[]).map((t) => [String(t.fsm_resource_id), String(t.display_name ?? "")]));
 
   const [{ data: syncRows }, { data: usageRows }] = await Promise.all([
-    admin.from("amc_fsm_sync_events").select("*").eq("contract_id", contractId).order("last_attempt_at", { ascending: false }),
+    admin
+      .from("amc_fsm_sync_events")
+      .select(
+        "fsm_appointment_id, action, status, reason, attempts, last_attempt_at, fsm_status, fsm_work_order_id, fsm_appointment_name, fsm_scheduled_start_at, fsm_actual_start_at, fsm_actual_end_at",
+      )
+      .eq("contract_id", contractId).order("last_attempt_at", { ascending: false }),
     admin
       .from("amc_entitlement_usage")
       .select("id, entitlement_id, kind, quantity, occurred_at, source, external_type, external_reference, fsm_work_order_id, created_at")

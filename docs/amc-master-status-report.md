@@ -50,7 +50,7 @@ Proposal (wizard: property/customer → services & pricing → review)
 - **APIs:** `app/api/amc-submissions`, `app/api/amc/[token]`, `app/api/amc-contracts/**`.
 - **UI:** `components/dashboard/extensions/amc` (proposals), `components/dashboard/extensions/amc-contracts` (contracts, customers, assessments, reports, settings).
 
-**Data:** `amc_submissions`, `amc_settings` and `amc_audit_events`, plus the tables in §5. All AMC tables have RLS on and no browser grants: the browser goes through the API.
+**Data:** `amc_submissions`, `amc_settings` and `amc_audit_events`, plus the 14 tables in §5 (17 in all). All AMC tables have RLS on and no browser grants: the browser goes through the API. Design, ER diagram and merge review: `docs/amc-database-architecture.md`. Whether each migration can run while today's `main` is live: `docs/amc-migration-safety-report.md`.
 
 ## 3. Completed work
 
@@ -68,7 +68,8 @@ Proposal (wizard: property/customer → services & pricing → review)
 | **Additional services** | Eligibility (included / AMC discount / standard / not configured). Configurable discount (off, no rate assumed). Quotes with a frozen calculation, linked to an FSM estimate looked up by number |
 | **Renewals** | Renewal proposal with a preview: the next day after the end date, same term. One per contract. Relationship timeline. Pipeline stages derived from proposal status. Reminder Todos built, **switched off** |
 | **Reporting** | Portfolio figures (customers and properties counted once). Expiry buckets. Renewal pipeline. Account-manager portfolio. Service analytics (units never mixed). CSV/Excel exports |
-| **Testing** | 114 unit tests. A local PostgreSQL harness for every AMC migration (applied twice, behavioural checks) |
+| **Testing** | 128 unit tests. A local PostgreSQL harness for every AMC migration (applied twice, behavioural and schema-invariant checks), a main-compatibility replay, a ~10k-contract scale test with query plans, and two-session race tests |
+| **Database review (6 Oct 2026)** | No table merged or removed (each kept for a constraint, key or lifecycle; review in the architecture doc). Fixed: assessment/quote numbers truncating past 9,999; a redundant index; 3 missing indexes; contract activation now one transaction; dashboard counted in the database (was wrong above the row cap); reports and lists page instead of stopping at 1,000–5,000 rows; assessments searchable and paged on the server; FSM sync-log race; cancellation-vs-usage race; the usage ledger now refuses edits loudly |
 | **Hardening** | Direct table writes closed. Server-side pricing. Proposal numbers beyond 9,999. Zoho token hidden from browsers. Estimate, password-reset and audit tables made server-only (migrations written; §5) |
 
 ## 4. Requirement matrix
@@ -139,12 +140,14 @@ All AMC migrations apply in this order. **NOT APPLIED TO PRODUCTION** means prod
 | 8 | `20261006110000_active_amc_operations.sql` | Corrections, manager names, reminder Todos, one renewal per contract (has a pre-check) | **NOT APPLIED** |
 | 9 | `20261006120000_amc_fsm_integration.sql` | FSM customer link, service mapping, work links, sync log | **NOT APPLIED** |
 | 10 | `20261006130000_amc_business_operations.sql` | Customers/properties, assessments, discount config, additional quotes | **NOT APPLIED** |
+| 11 | `20261006140000_amc_atomic_activation_and_dashboard.sql` | Atomic contract activation; dashboard figures counted in the database (functions only) | **NOT APPLIED** |
 
 **Checks:**
 - No duplicate timestamps, and no `main` migration supersedes an AMC one.
 - Each AMC migration depends only on earlier ones.
 - Production's migration history must be reconciled first (`docs/database-migration-reconciliation.md`).
 - Then apply via the runbook (`docs/amc-hardening-production-runbook.md` 7.x). Never `db push --include-all`.
+- **While today's `main` is live: PARTIALLY.** Migrations 1–3 and 7–11 are compatible with the live `main` (main's AMC queries replayed after each one; all pass). Migrations 4–6 break today's `main` (settings via graphql and the estimate and password-reset paths) and must follow the code deploy. No migration drops, renames or narrows anything `main` uses; no backfill is needed. Details: `docs/amc-migration-safety-report.md`.
 
 ## 6. Automated verification
 
@@ -152,11 +155,14 @@ On `amc-hardening` after the main merge:
 
 | Check | Result |
 |---|---|
-| Unit tests (`npm test`) | **114 / 114** (110 before + 4 for the client pricing changes) |
+| Unit tests (`npm test`) | **128 / 128** (114 before + 14 for the database review) |
 | Full-project typecheck (`tsc --noEmit`, whole repo) | **PASS, 0 errors.** The 3 earlier test-only errors in `tests/amc/tokens.test.ts` are fixed |
 | Lint (all 142 AMC-changed TypeScript files) | **PASS** |
 | Production build (`next build --webpack`) | **PASS** |
-| Local migration harness (PostgreSQL 15, every AMC migration applied twice + behavioural checks) | **PASS** (all 7 check suites) |
+| Local migration harness (PostgreSQL 15, every AMC migration applied twice + behavioural checks) | **PASS** (all 8 check suites, including the schema invariants) |
+| Main compatibility harness (main's AMC schema from `origin/main`, each new migration in turn, main's queries replayed) | **PASS** for all 23 AMC queries at every step; the 3 expected non-AMC breaks from migrations 4–6 |
+| Synthetic scale (~10k contracts, 146k usage rows) and `EXPLAIN ANALYZE` | Interactive queries under 20 ms; approver dashboard 135–161 ms |
+| Two-session concurrency tests | **7 / 7** (last visit, double activation, corrections, cancellation vs usage, sync log, renewal, reminder) |
 | Browser / UAT | **Not done.** Needs a signed-in session and a migrated database (`docs/active-amc-user-testing-checklist.md`) |
 
 ## 7. Business decisions remaining
@@ -224,6 +230,7 @@ To be fixed in the security goal. Several fixes already exist as unapplied migra
 | FSM work-order lookup open to every AMC user | Over-broad customer data access | **MEDIUM** |
 | Shared customers visible/editable by every AMC user | Over-broad access | **MEDIUM** |
 | Active AMC permission model (owner/approver only; no operations role) | Process fit, least privilege | **FOLLOW-UP** |
+| `amc_submissions.owner_id` deletes a user's proposals on user deletion (`ON DELETE CASCADE`, from main); once contracts exist, deleting such a user fails instead (contracts are `RESTRICT`) | Lost proposal history, or a confusing error on user deletion | **MEDIUM**: deactivate rather than delete; consider `SET NULL` (`amc-migration-safety-report.md` §6) |
 
 ## 10. Production readiness
 

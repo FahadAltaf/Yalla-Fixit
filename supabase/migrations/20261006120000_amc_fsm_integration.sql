@@ -106,6 +106,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_amc_fsm_links_work_order
   WHERE fsm_appointment_id IS NULL AND unlinked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_amc_fsm_links_contract
   ON public.amc_fsm_links (contract_id, linked_at DESC);
+/* Every live link of a work order, appointment-level ones included (the
+   FSM check looks links up by work order; the unique index above only
+   holds whole-work-order links). */
+CREATE INDEX IF NOT EXISTS idx_amc_fsm_links_work_order_live
+  ON public.amc_fsm_links (fsm_work_order_id)
+  WHERE unlinked_at IS NULL;
 
 /* The entitlement must belong to the contract. */
 CREATE OR REPLACE FUNCTION public.amc_fsm_links_check()

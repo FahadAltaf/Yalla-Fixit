@@ -406,11 +406,15 @@ export const amcContractsService = {
     });
   },
   /* Assessments */
-  assessments(params: { status?: string; q?: string } = {}) {
+  assessments(params: { status?: string; q?: string; page?: number; pageSize?: number } = {}) {
     const query = new URLSearchParams();
     if (params.status) query.set("status", params.status);
     if (params.q) query.set("q", params.q);
-    return request<{ assessments: AssessmentRecord[] }>(`/api/amc-contracts/assessments?${query.toString()}`);
+    if (params.page) query.set("page", String(params.page));
+    if (params.pageSize) query.set("pageSize", String(params.pageSize));
+    return request<{ assessments: AssessmentRecord[]; total: number; page: number; pageSize: number }>(
+      `/api/amc-contracts/assessments?${query.toString()}`,
+    );
   },
   assessment(id: string) {
     return request<{ assessment: AssessmentRecord; canEdit: boolean }>(`/api/amc-contracts/assessments/${id}`);

@@ -29,6 +29,8 @@ import { PropertyDialog } from "./customer-property-views";
 import { formatContractDate } from "./contract-status";
 import { useAmcData } from "./use-amc-data";
 
+const ASSESSMENTS_PAGE_SIZE = 25;
+
 const RESULT_LABELS: Record<AssessmentResult, string> = { ok: "OK", attention: "Attention required", not_applicable: "Not applicable" };
 const RESULT_TONES: Record<AssessmentResult, string> = {
   ok: "bg-green-600/10 text-green-700 dark:bg-green-400/10 dark:text-green-400",
@@ -45,11 +47,21 @@ export function AssessmentsPage() {
   const router = useRouter();
   const [status, setStatus] = useState<"all" | "draft" | "completed">("all");
   const [q, setQ] = useState("");
+  const [page, setPage] = useState(0);
   const term = useDebounce(q.trim(), 250);
   const { data, error, loading, reload } = useAmcData(
-    () => amcContractsService.assessments({ status: status === "all" ? undefined : status, q: term || undefined }),
-    `${status}|${term}`,
+    () =>
+      amcContractsService.assessments({
+        status: status === "all" ? undefined : status,
+        q: term || undefined,
+        page,
+        pageSize: ASSESSMENTS_PAGE_SIZE,
+      }),
+    `${status}|${term}|${page}`,
   );
+  const total = data?.total ?? 0;
+  const firstShown = total === 0 ? 0 : page * ASSESSMENTS_PAGE_SIZE + 1;
+  const lastShown = Math.min(total, (page + 1) * ASSESSMENTS_PAGE_SIZE);
   const [starting, setStarting] = useState(false);
 
   return (
@@ -73,13 +85,16 @@ export function AssessmentsPage() {
           { value: "completed", label: "Completed" },
         ]}
         value={status}
-        onChange={(v) => setStatus(v as typeof status)}
+        onChange={(v) => {
+          setStatus(v as typeof status);
+          setPage(0);
+        }}
       />
       <SectionCard
         title="Assessments"
         icon={<ClipboardCheck />}
         bodyClassName="pb-2"
-        action={<Input className="h-8 w-56" placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search assessments" />}
+        action={<Input className="h-8 w-56" placeholder="Search" value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }} aria-label="Search assessments" />}
       >
         {error ? (
           <div className="px-5 pb-4">
@@ -123,6 +138,21 @@ export function AssessmentsPage() {
                 ))}
               </TableBody>
             </Table>
+            {total > ASSESSMENTS_PAGE_SIZE ? (
+              <div className="text-muted-foreground flex items-center justify-between gap-3 px-5 py-3 text-sm">
+                <span className="tabular-nums">
+                  Showing {firstShown} to {lastShown} of {total}
+                </span>
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
+                    Previous
+                  </Button>
+                  <Button variant="outline" size="sm" disabled={lastShown >= total} onClick={() => setPage((p) => p + 1)}>
+                    Next
+                  </Button>
+                </div>
+              </div>
+            ) : null}
           </div>
         )}
       </SectionCard>

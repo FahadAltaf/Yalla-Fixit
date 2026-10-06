@@ -19,7 +19,10 @@
 -- 4. One renewal proposal per contract. The app checked this before
 --    inserting, but two quick clicks could both pass the check; the unique
 --    index makes the second insert fail instead. To start over, delete the
---    draft renewal first.
+--    draft renewal first. Since the schema review of 6 Oct 2026 the index
+--    is created in 20261006100000 together with the column; this section
+--    is a no-op there, and only drops the older non-unique duplicate on a
+--    test database where an earlier draft of 20261006100000 was applied.
 --
 -- PRE-CHECK before applying (must return no rows):
 --   SELECT renewal_of_contract_id, count(*) FROM public.amc_submissions
@@ -80,7 +83,9 @@ BEGIN
   IF ent.entitlement_type = 'informational' THEN
     RAISE EXCEPTION 'Informational services cannot be consumed' USING ERRCODE = 'check_violation';
   END IF;
-  SELECT status INTO contract_status FROM public.amc_contracts WHERE id = NEW.contract_id;
+  /* FOR SHARE: a cancellation committing at the same moment is waited for
+     and then seen, so no consumption lands on a just-cancelled contract. */
+  SELECT status INTO contract_status FROM public.amc_contracts WHERE id = NEW.contract_id FOR SHARE;
   IF contract_status <> 'active' AND NEW.kind = 'consumption' THEN
     RAISE EXCEPTION 'Contract is not active' USING ERRCODE = 'check_violation';
   END IF;
@@ -162,11 +167,11 @@ REVOKE ALL ON public.amc_renewal_reminders FROM anon, authenticated;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_amc_submissions_one_renewal
   ON public.amc_submissions (renewal_of_contract_id)
   WHERE renewal_of_contract_id IS NOT NULL;
+DROP INDEX IF EXISTS public.idx_amc_submissions_renewal_of;
 
 -- ---------------------------------------------------------------------
 -- Rollback (before any correction or reminder exists)
 -- ---------------------------------------------------------------------
---   DROP INDEX IF EXISTS public.idx_amc_submissions_one_renewal;
 --   DROP TABLE IF EXISTS public.amc_renewal_reminders;
 --   ALTER TABLE public.todos DROP CONSTRAINT todos_related_type_check;
 --   ALTER TABLE public.todos ADD CONSTRAINT todos_related_type_check CHECK

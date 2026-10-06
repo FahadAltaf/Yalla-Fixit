@@ -194,6 +194,13 @@ CREATE INDEX IF NOT EXISTS idx_amc_usage_entitlement
   ON public.amc_entitlement_usage (entitlement_id, occurred_at DESC);
 CREATE INDEX IF NOT EXISTS idx_amc_usage_contract
   ON public.amc_entitlement_usage (contract_id, occurred_at DESC);
+/* The dashboard's "recent usage" (newest entries first) and its
+   "consumption in the last 30 days" count. */
+CREATE INDEX IF NOT EXISTS idx_amc_usage_created
+  ON public.amc_entitlement_usage (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_amc_usage_consumption_occurred
+  ON public.amc_entitlement_usage (occurred_at)
+  WHERE kind = 'consumption';
 /* The same FSM appointment / work order can be consumed only once per
    entitlement, so a retried sync cannot double-count. */
 CREATE UNIQUE INDEX IF NOT EXISTS idx_amc_usage_external_once
@@ -224,7 +231,9 @@ BEGIN
   IF ent.entitlement_type = 'informational' THEN
     RAISE EXCEPTION 'Informational services cannot be consumed' USING ERRCODE = 'check_violation';
   END IF;
-  SELECT status INTO contract_status FROM public.amc_contracts WHERE id = NEW.contract_id;
+  /* FOR SHARE: a cancellation committing at the same moment is waited for
+     and then seen, so no consumption lands on a just-cancelled contract. */
+  SELECT status INTO contract_status FROM public.amc_contracts WHERE id = NEW.contract_id FOR SHARE;
   IF contract_status <> 'active' AND NEW.kind = 'consumption' THEN
     RAISE EXCEPTION 'Contract is not active' USING ERRCODE = 'check_violation';
   END IF;
@@ -241,11 +250,30 @@ CREATE TRIGGER trg_amc_apply_entitlement_usage
   BEFORE INSERT ON public.amc_entitlement_usage
   FOR EACH ROW EXECUTE FUNCTION public.amc_apply_entitlement_usage();
 
-/* History is never rewritten: corrections are new adjustment rows. */
-CREATE OR REPLACE RULE amc_entitlement_usage_no_update AS
-  ON UPDATE TO public.amc_entitlement_usage DO INSTEAD NOTHING;
-CREATE OR REPLACE RULE amc_entitlement_usage_no_delete AS
-  ON DELETE TO public.amc_entitlement_usage DO INSTEAD NOTHING;
+/* History is never rewritten: corrections are new adjustment rows. An
+   UPDATE, DELETE or TRUNCATE fails loudly (a rule that silently did
+   nothing would let a buggy caller believe it had changed the ledger). */
+DROP RULE IF EXISTS amc_entitlement_usage_no_update ON public.amc_entitlement_usage;
+DROP RULE IF EXISTS amc_entitlement_usage_no_delete ON public.amc_entitlement_usage;
+CREATE OR REPLACE FUNCTION public.amc_entitlement_usage_append_only()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  RAISE EXCEPTION 'AMC usage entries cannot be changed or removed; record a correction instead'
+    USING ERRCODE = 'check_violation';
+END;
+$$;
+DROP TRIGGER IF EXISTS amc_entitlement_usage_append_only ON public.amc_entitlement_usage;
+CREATE TRIGGER amc_entitlement_usage_append_only
+  BEFORE UPDATE OR DELETE ON public.amc_entitlement_usage
+  FOR EACH ROW EXECUTE FUNCTION public.amc_entitlement_usage_append_only();
+DROP TRIGGER IF EXISTS amc_entitlement_usage_no_truncate ON public.amc_entitlement_usage;
+CREATE TRIGGER amc_entitlement_usage_no_truncate
+  BEFORE TRUNCATE ON public.amc_entitlement_usage
+  FOR EACH STATEMENT EXECUTE FUNCTION public.amc_entitlement_usage_append_only();
+REVOKE ALL ON FUNCTION public.amc_entitlement_usage_append_only() FROM PUBLIC, anon, authenticated;
 
 -- ---------------------------------------------------------------------
 -- 4. Renewal link on proposals
@@ -256,7 +284,11 @@ CREATE OR REPLACE RULE amc_entitlement_usage_no_delete AS
 ALTER TABLE public.amc_submissions
   ADD COLUMN IF NOT EXISTS renewal_of_contract_id uuid
     REFERENCES public.amc_contracts(id) ON DELETE RESTRICT;
-CREATE INDEX IF NOT EXISTS idx_amc_submissions_renewal_of
+/* One renewal proposal per contract. Unique from the start: the column is
+   new, so no existing proposal can collide. It is also the index the
+   renewal lookups and the FK use (a separate non-unique index on the same
+   column would be redundant). */
+CREATE UNIQUE INDEX IF NOT EXISTS idx_amc_submissions_one_renewal
   ON public.amc_submissions (renewal_of_contract_id)
   WHERE renewal_of_contract_id IS NOT NULL;
 
@@ -289,5 +321,6 @@ REVOKE ALL ON FUNCTION public.amc_apply_entitlement_usage() FROM PUBLIC, anon, a
 --   ALTER TABLE public.amc_submissions DROP COLUMN IF EXISTS renewal_of_contract_id;
 --   DROP TABLE IF EXISTS public.amc_entitlement_usage;
 --   DROP FUNCTION IF EXISTS public.amc_apply_entitlement_usage();
+--   DROP FUNCTION IF EXISTS public.amc_entitlement_usage_append_only();
 --   DROP TABLE IF EXISTS public.amc_contract_entitlements;
 --   DROP TABLE IF EXISTS public.amc_contracts;

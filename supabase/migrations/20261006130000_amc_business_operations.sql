@@ -122,10 +122,26 @@ INSERT INTO public.amc_assessment_checklist (item_key, category_key, category_la
 ON CONFLICT (item_key) DO NOTHING;
 
 CREATE SEQUENCE IF NOT EXISTS public.amc_assessment_number_seq;
+/* ASM-<Dubai year>-<at least 4 digits>. lpad(x, 4) alone would cut 10000
+   to "1000" and collide with the UNIQUE key (the bug 20261005110000 fixed
+   for proposal numbers). */
+CREATE OR REPLACE FUNCTION public.amc_next_assessment_number()
+RETURNS text
+LANGUAGE plpgsql
+VOLATILE
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  digits text := nextval('public.amc_assessment_number_seq')::text;
+BEGIN
+  RETURN 'ASM-' || to_char(now() AT TIME ZONE 'Asia/Dubai', 'YYYY') || '-' || lpad(digits, greatest(4, length(digits)), '0');
+END;
+$$;
+REVOKE ALL ON FUNCTION public.amc_next_assessment_number() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.amc_next_assessment_number() TO service_role;
 CREATE TABLE IF NOT EXISTS public.amc_assessments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  assessment_number text NOT NULL UNIQUE
-    DEFAULT ('ASM-' || to_char(now() AT TIME ZONE 'Asia/Dubai', 'YYYY') || '-' || lpad(nextval('public.amc_assessment_number_seq')::text, 4, '0')),
+  assessment_number text NOT NULL UNIQUE DEFAULT public.amc_next_assessment_number(),
   status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'completed')),
   customer_id uuid REFERENCES public.customers(id) ON DELETE RESTRICT,
   property_id uuid REFERENCES public.customer_properties(id) ON DELETE RESTRICT,
@@ -253,10 +269,24 @@ INSERT INTO public.amc_additional_service_discount (id) VALUES (1) ON CONFLICT (
 -- 5. Additional-service quotes
 -- ---------------------------------------------------------------------
 CREATE SEQUENCE IF NOT EXISTS public.amc_additional_quote_number_seq;
+/* AQ-<Dubai year>-<at least 4 digits>; never truncates (see above). */
+CREATE OR REPLACE FUNCTION public.amc_next_additional_quote_number()
+RETURNS text
+LANGUAGE plpgsql
+VOLATILE
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  digits text := nextval('public.amc_additional_quote_number_seq')::text;
+BEGIN
+  RETURN 'AQ-' || to_char(now() AT TIME ZONE 'Asia/Dubai', 'YYYY') || '-' || lpad(digits, greatest(4, length(digits)), '0');
+END;
+$$;
+REVOKE ALL ON FUNCTION public.amc_next_additional_quote_number() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.amc_next_additional_quote_number() TO service_role;
 CREATE TABLE IF NOT EXISTS public.amc_additional_quotes (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  quote_number text NOT NULL UNIQUE
-    DEFAULT ('AQ-' || to_char(now() AT TIME ZONE 'Asia/Dubai', 'YYYY') || '-' || lpad(nextval('public.amc_additional_quote_number_seq')::text, 4, '0')),
+  quote_number text NOT NULL UNIQUE DEFAULT public.amc_next_additional_quote_number(),
   contract_id uuid NOT NULL REFERENCES public.amc_contracts(id) ON DELETE RESTRICT,
   customer_id uuid REFERENCES public.customers(id) ON DELETE SET NULL,
   property_id uuid REFERENCES public.customer_properties(id) ON DELETE SET NULL,
@@ -358,4 +388,5 @@ REVOKE ALL ON SEQUENCE public.amc_assessment_number_seq, public.amc_additional_q
 --   DROP TABLE IF EXISTS public.customer_properties;
 --   DROP TABLE IF EXISTS public.customers;
 --   DROP FUNCTION IF EXISTS public.amc_assessment_items_locked(), public.amc_assessments_locked(),
---     public.amc_additional_quotes_frozen();
+--     public.amc_additional_quotes_frozen(), public.amc_next_assessment_number(),
+--     public.amc_next_additional_quote_number();

@@ -3,14 +3,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { contractErrorResponse, requireContractAccess } from "@/lib/server/amc/contract-access";
 import { createAssessment, listAssessments } from "@/lib/server/amc/business";
 import { createAssessmentSchema } from "@/lib/server/amc/business-schemas";
+import { pageParams } from "@/lib/server/snagging/search";
 
-/** AMC property assessments: list (status, search) and start one. */
+/** AMC property assessments: list (status, search, page) and start one. */
 export async function GET(req: NextRequest) {
   const gate = await requireContractAccess();
   if (!gate.ok) return gate.response;
   const params = req.nextUrl.searchParams;
+  const { page, pageSize, from, to } = pageParams(params, { defaultSize: 25 });
   try {
-    return NextResponse.json({ assessments: await listAssessments(gate.admin, { status: params.get("status"), q: params.get("q") }) });
+    const { assessments, total } = await listAssessments(gate.admin, { status: params.get("status"), q: params.get("q"), from, to });
+    return NextResponse.json({ assessments, total, page, pageSize });
   } catch (error) {
     return contractErrorResponse(error, "Could not load assessments");
   }

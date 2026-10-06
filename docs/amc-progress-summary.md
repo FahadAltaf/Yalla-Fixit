@@ -22,7 +22,7 @@
 - **Additional services:** a check for whether a request is covered or discounted, and a quote record with the price breakdown.
 - **Zoho FSM connection:** FSM work can be linked to a contract, and completed visits are reviewed and recorded as usage.
 - **Reports:** expiring contracts, the renewal pipeline, account-manager portfolios and service usage, all exportable to Excel/CSV.
-- **Quality:** 114 automated tests and database checks; all checks pass.
+- **Quality:** 128 automated tests and database checks; all pass. The database design was reviewed for speed and safety at about 10,000 contracts, and the database changes were tested against the live system's own queries.
 
 ## What is in progress
 

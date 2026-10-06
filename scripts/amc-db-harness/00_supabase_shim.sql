@@ -1,0 +1,104 @@
+-- Minimal stand-in for the parts of a Supabase project the AMC and
+-- hardening migrations touch. Local throwaway cluster only.
+\set ON_ERROR_STOP on
+
+CREATE ROLE anon NOLOGIN;
+CREATE ROLE authenticated NOLOGIN;
+CREATE ROLE service_role NOLOGIN BYPASSRLS;
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+
+-- Supabase's default privileges: every new table/sequence/function in
+-- public is granted to the API roles. This is what made the "Allow All"
+-- policies reachable in the first place.
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
+
+CREATE SCHEMA auth;
+GRANT USAGE ON SCHEMA auth TO anon, authenticated, service_role;
+CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$
+  SELECT nullif(current_setting('request.jwt.claim.sub', true), '')::uuid
+$$;
+GRANT EXECUTE ON FUNCTION auth.uid() TO anon, authenticated, service_role;
+
+CREATE TABLE public.roles (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name text UNIQUE);
+CREATE TABLE public.user_profile (
+  id uuid PRIMARY KEY,
+  email text,
+  full_name text,
+  role_id uuid REFERENCES public.roles(id)
+);
+CREATE TABLE public.role_access (
+  role_id uuid REFERENCES public.roles(id),
+  resource text,
+  action text,
+  enabled boolean DEFAULT true,
+  UNIQUE (role_id, resource, action)
+);
+
+-- schedule_audit_events as production has it (shape trimmed to what the
+-- policy test needs) with its "Allow All" policy.
+CREATE TABLE public.schedule_audit_events (
+  id bigserial PRIMARY KEY,
+  action text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE public.schedule_audit_events ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow All on schedule_audit_events" ON public.schedule_audit_events
+  FOR ALL TO public USING (true) WITH CHECK (true);
+
+-- settings as production has it (column set from information_schema,
+-- 5 Oct 2026), with its "Allow All on Settings" policy.
+CREATE TABLE public.settings (
+  id bigint PRIMARY KEY,
+  site_name text, site_image text, appearance_theme text, primary_color text,
+  secondary_color text, logo_url text, favicon_url text, site_description text,
+  meta_keywords text, contact_email text, social_links jsonb,
+  created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now(),
+  logo_setting text, logo_horizontal_url text, type text,
+  oauth_access_token text, oauth_token_refreshed_at timestamptz,
+  org_timezone text, night_shift_start time, night_shift_end time,
+  day_shift_start time, day_shift_end time
+);
+ALTER TABLE public.settings ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow All on Settings" ON public.settings FOR ALL TO public USING (true) WITH CHECK (true);
+INSERT INTO public.settings (id, type, site_name, primary_color, oauth_access_token, org_timezone)
+VALUES (1, 'admin', 'Yalla Fix It', '#8c1d24', 'SECRET-ZOHO-TOKEN', 'Asia/Dubai');
+
+-- estimate tables, with the live policy names.
+CREATE TABLE public.estimate_revisions (id bigserial PRIMARY KEY, root_quotation_number text);
+ALTER TABLE public.estimate_revisions ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow All on estimate_revisions" ON public.estimate_revisions FOR ALL TO public USING (true) WITH CHECK (true);
+CREATE TABLE public.estimate_service_items (id bigserial PRIMARY KEY, quotation_id text);
+ALTER TABLE public.estimate_service_items ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow All on quotation_service_item_images" ON public.estimate_service_items FOR ALL TO public USING (true) WITH CHECK (true);
+
+CREATE TABLE public.password_resets (
+  id bigserial PRIMARY KEY, user_id uuid, email text, token text,
+  expires_at timestamptz, used_at timestamptz, created_at timestamptz DEFAULT now()
+);
+ALTER TABLE public.password_resets ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow All on Password Resets" ON public.password_resets FOR ALL TO public USING (true) WITH CHECK (true);
+INSERT INTO public.password_resets (email, token, expires_at) VALUES ('admin@test.local', 'RESET-TOKEN', now() + interval '1 hour');
+
+-- todos as created by 20260520_create_todos_module.sql (inline CHECK).
+CREATE TABLE public.todos (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_id uuid NOT NULL REFERENCES public.user_profile(id) ON DELETE CASCADE,
+  description text NOT NULL,
+  related_type text CHECK (related_type IS NULL OR related_type IN ('work_order', 'quotation', 'appointment')),
+  related_id text,
+  deadline_at timestamptz NOT NULL,
+  reminder_at timestamptz
+);
+
+-- snagging_clients / snagging_properties as in production (columns the AMC migrations reference).
+CREATE TABLE public.snagging_clients (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text, email text, phone text, company text, crm_contact_id text
+);
+CREATE TABLE public.snagging_properties (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id uuid REFERENCES public.snagging_clients(id) ON DELETE SET NULL,
+  unit_label text
+);

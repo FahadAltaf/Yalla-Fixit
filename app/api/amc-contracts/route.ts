@@ -23,6 +23,7 @@ import {
   mapContract,
 } from "@/lib/server/amc/contracts";
 import { loadPendingActivations } from "@/lib/server/amc/contract-operations";
+import { fetchAllRowsById } from "@/lib/server/amc/paging";
 import { likeTerm, pageParams } from "@/lib/server/snagging/search";
 
 /**
@@ -178,16 +179,20 @@ export async function GET(req: NextRequest) {
 
   /* Account managers on the visible contracts, for the filter. */
   const loadManagers = async (): Promise<string[]> => {
-    let q = admin
-      .from("amc_contracts")
-      .select("account_manager_names, amc_submissions!amc_contracts_submission_id_fkey!inner(owner_id)")
-      .neq("account_manager_names", "")
-      .limit(2000);
-    if (!canApprove) q = q.eq("amc_submissions.owner_id", userId);
-    const { data, error } = await q;
+    const { data, error } = await fetchAllRowsById<Row>((afterId, size) => {
+      let q = admin
+        .from("amc_contracts")
+        .select("id, account_manager_names, amc_submissions!amc_contracts_submission_id_fkey!inner(owner_id)")
+        .neq("account_manager_names", "")
+        .order("id")
+        .limit(size);
+      if (afterId) q = q.gt("id", afterId);
+      if (!canApprove) q = q.eq("amc_submissions.owner_id", userId);
+      return q;
+    });
     if (error) return [];
     const names = new Set<string>();
-    for (const row of (data ?? []) as Row[]) {
+    for (const row of data) {
       String(row.account_manager_names ?? "")
         .split(",")
         .map((n) => n.trim())
