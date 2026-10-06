@@ -3,13 +3,13 @@
 **Date:** 6 October 2026
 **Branch:** `amc-hardening`. It contains every AMC phase, plus `main` up to `a40fe4f`. Not merged to main.
 **Production:** not changed by this work. **None of the AMC migrations in §5 are applied to production.**
-**This report** is the authoritative status. It supersedes the "remaining work" sections of the earlier phase reports.
+**Scope and completion are now measured against BRD v0.3** (*AMC Generation and Tracking BRD*, 23 Sep 2026) in `docs/amc-brd-v0.3-gap-analysis.md`, which is the authoritative implementation checklist. Against it: **0 of 14 deliverable groups complete; 78 of 524 in-scope requirements implemented (14.9%)**, 130 partial, 315 not implemented. This report keeps the build, database, security and deployment status. Its §4 matrix measured the older proposals FRD and is kept for history only.
 
 ---
 
 ## 1. Executive summary
 
-The AMC system in `amc-hardening` covers the whole commercial and operational life of an Annual Maintenance Contract:
+The AMC system in `amc-hardening` covers the proposal-to-contract path and the first operational layer of an Annual Maintenance Contract. It does **not** yet cover most of BRD v0.3: there is no enquiry pipeline, rate card, proposal versioning, approval ladder, payments, PPM schedule, visit confirmation, call-out record, client report or profitability (`docs/amc-brd-v0.3-gap-analysis.md`). What exists:
 
 - **Selling:** a proposal is priced from per-service base prices, VAT and discount, with services the client gets free (such as the 24/7 helpdesk) marked as such. It is approved internally, sent to the client by a secure link, approved or rejected by the client, turned into a contract, and signed. Every step is audited. The text the client saw is frozen at sending.
 - **Running:** a signed proposal is activated into a contract. The contract has fixed dates, an immutable snapshot of what was signed, and per-service entitlements (visits, hours, unlimited, included). Staff record usage and correct mistakes; the history is never edited. Coverage can be checked for any request. Contracts expire, can be cancelled, and can be renewed through a normal proposal.
@@ -19,7 +19,7 @@ The AMC system in `amc-hardening` covers the whole commercial and operational li
   - Additional-service quotes apply a configurable AMC discount.
   - Reports cover expiry, the renewal pipeline, account managers and services, with CSV/Excel export.
 
-**What it cannot do yet** is mostly not code:
+**What it cannot do yet** is mostly code (six major goals, §12), plus:
 - Nothing is deployed: the database changes are not applied.
 - Several business rules await confirmation (§7).
 - Automatic FSM usage waits on Zoho FSM confirmations (§8).
@@ -31,7 +31,7 @@ Since the business-completion phase (6 Oct 2026) the system also:
 - keeps assessment photos privately;
 - has an expiry-reminder engine, which stays switched off until the schedule is approved.
 
-What remains in code is creating FSM estimates from the portal (blocked on FSM fields) and the final document layout, which waits for Sharon's sign-off (§4, §11).
+Most of BRD v0.3 remains to be built (§11, §12).
 
 ## 2. Architecture
 
@@ -74,7 +74,7 @@ Proposal (wizard: property/customer → services & pricing → review)
 | **Additional services** | Eligibility (included / AMC discount / standard / not configured). Configurable discount (off, no rate assumed). Quotes with a frozen calculation, linked to an FSM estimate looked up by number |
 | **Renewals** | Renewal proposal with a preview: the next day after the end date, same term. One per contract. Relationship timeline. Pipeline stages derived from proposal status. Reminder Todos built, **switched off** |
 | **Reporting** | Portfolio figures (customers and properties counted once). Expiry buckets. Renewal pipeline. Account-manager portfolio. Service analytics (units never mixed). CSV/Excel exports |
-| **Testing** | 128 unit tests. A local PostgreSQL harness for every AMC migration (applied twice, behavioural and schema-invariant checks), a main-compatibility replay, a ~10k-contract scale test with query plans, and two-session race tests |
+| **Testing** | 179 unit tests (Oct 2026, incl. 25 security). A local PostgreSQL harness for every AMC migration (applied twice, behavioural and schema-invariant checks), a main-compatibility replay, a ~10k-contract scale test with query plans, and two-session race tests |
 | **Database review (6 Oct 2026)** | No table merged or removed (each kept for a constraint, key or lifecycle; review in the architecture doc). Fixed: assessment/quote numbers truncating past 9,999; a redundant index; 3 missing indexes; contract activation now one transaction; dashboard counted in the database (was wrong above the row cap); reports and lists page instead of stopping at 1,000–5,000 rows; assessments searchable and paged on the server; FSM sync-log race; cancellation-vs-usage race; the usage ledger now refuses edits loudly |
 | **Notifications (6 Oct 2026)** | One AMC notification log (`amc_notifications`) over the portal's existing delivery: an in-app bell on the AMC screens, and email through Resend. Events: proposal submitted, approved, sent back (with reason), sent; client approved or rejected (with reason); contract sent, signed (number, customer, property, typed name, time); contract activated; allowance low or used up; contract expiring; renewal started. Recipients come from the workflow (approvers by the same rule as the approval route, the proposal owner). A unique dedupe key per event, recipient and channel makes retries and double clicks harmless. Workflow emails are on; allowance and reminder emails are off until confirmed (`amc_notification_settings`, editable by approvers) |
 | **Signed-contract archive** | At signing, the contract is rebuilt from the signed row and the wording frozen when it was sent (never today's settings). It is stored in the private `amc-documents` bucket as a PDF printed by headless Chrome, the Snagging report path, or as HTML when no browser is available. Its content hash and file hash are recorded in the immutable `amc_signed_documents`. An electronic acceptance record shows signed by, typed name, signed date and time, and says plainly that this is not a cryptographic signature. The contract and proposal pages show it apart from the generated documents. Older signed contracts can be archived by hand, marked "archived after signing" |
@@ -83,7 +83,9 @@ Proposal (wizard: property/customer → services & pricing → review)
 | **Customer-facing consistency** | The contract page shows the support line and response times **as signed** (from the contract's frozen wording), with compliance "Not measured". Findings in §7 (6 h vs 48 h) |
 | **Hardening** | Direct table writes closed. Server-side pricing. Proposal numbers beyond 9,999. Zoho token hidden from browsers. Estimate, password-reset and audit tables made server-only (migrations written; §5) |
 
-## 4. Requirement matrix
+## 4. Requirement matrix (proposals FRD, superseded by the BRD v0.3 gap analysis)
+
+> **Superseded.** This matrix measured the proposals-extension FRD, the brochure and internal goals. Rows marked IMPLEMENTED here are often only partly implemented against BRD v0.3: rows 9, 10, 15, 16, 18, 21, 22, 23, 25, 26, 27 and 32. The corrections are listed in `docs/amc-brd-v0.3-gap-analysis.md` ("Comparison with the master report"). Row 9: self-approval is forbidden by the BRD and still enabled, so it is NOT IMPLEMENTED.
 
 **Sources:**
 - The FRD (*YFI AMC Proposals Extension FRD v2*, as mapped in `docs/amc-proposals-v2-implementation-plan.md`).
@@ -139,8 +141,8 @@ Proposal (wizard: property/customer → services & pricing → review)
 | PARTIAL (development pending) | 0 | — |
 | NOT IMPLEMENTED | 1 | 34 (production deployment) |
 
-- **AMC business requirements: 26 of 34 implemented in code (76%).** Counting a blocked or decision-pending row as half done, as the previous estimate did, gives **87%**. No row is waiting on development that can be done without a decision or an FSM answer.
-- **Proposal workflow (FRD rows 1–14): 13 of 14 implemented (93%)**, 96% with FR4.8 counted as half. FR4.8 waits for the layout sign-off.
+- Against this old matrix: 26 of 34 rows. **This figure is withdrawn as a measure of AMC completion.** Against BRD v0.3: 0 of 14 deliverables, 78 of 524 requirements (14.9%), and the proposal sections 5.4–5.6 have 11 of 48 implemented (23%).
+- The earlier statement that no row waits on development without a decision or FSM answer was wrong. Most BRD gaps (enquiries, rate card, versions, approval ladder, payments, PPM schedule, call-outs, client report) need development and have no blocker.
 - **0% is in production.**
 
 ## 5. Database changes
@@ -205,7 +207,7 @@ Old defaults are listed as defaults, not as approved decisions.
 7. **Assessments:** who may perform/complete; must every item be answered (today yes); are photos required.
 8. **OI-5 / clause 6.3:** what "additional fixed-price services" means (FRD §12 missing).
 9. **Notifications:** built. Approvers, owners and the team are told at each workflow step (in-app and email). To confirm: who receives expiry reminders and allowance alerts by email, and whether reminders run automatically (both off).
-10. **Non-emergency response time:** the brochure promises non-emergency visits "scheduled within 6 hours", but the contract clause and the proposal's "standard response time" say 48 hours. The documents print what the settings say; the contract page shows what was signed. One wording must be chosen (Sharon / legal).
+10. **Non-emergency response time** (BRD v0.3 §5.13 now sets scheduling within **48 hours**; the code's 6 h SLA must change; brochure wording to align): the brochure promises non-emergency visits "scheduled within 6 hours", but the contract clause and the proposal's "standard response time" say 48 hours. The documents print what the settings say; the contract page shows what was signed. One wording must be chosen (Sharon / legal).
 11. **Signature on the generated contract:** the archived signed contract shows the typed name, date and time. Whether the regenerated contract's signature block should print them too (`lib/amc/signature.ts`).
 12. **Provider contact number:** the shipped default `contactNo` is "800-PERFECT / 05X XXX XX / 05X XXX XX" (placeholders). Check that production AMC Settings holds the real numbers before any contract is sent (the production read failed on 6 Oct, so this is unverified).
 
@@ -218,7 +220,7 @@ Old defaults are listed as defaults, not as approved decisions.
 
 **C. Must decide before production**
 1. **5% VAT** stays as printed.
-2. **Self-approval** (on today, pending decision).
+2. ~~Self-approval~~: **decided by BRD v0.3 (5.5, 6.7): nobody approves their own proposal.** Still enabled in code (`AMC_SELF_APPROVAL_ALLOWED = true`); first change of the next goal.
 3. **Typed-name signature** is acceptable (and whether it prints).
 4. **Client link validity** (30 days).
 5. **Existing signed rows** AMC-2026-6886/6890/6891: real (activate) or test data.
@@ -277,42 +279,25 @@ These prevent release today:
 
 ## 11. Remaining development
 
-These follow from §4 rows marked PARTIAL or NOT IMPLEMENTED and the security backlog:
-1. ~~Security and permissions~~: done in code on 6 Oct 2026; deployment steps in the hardening report §12. Open: self-registration, self-approval (BRD), `uploads` public read.
-2. **Decision-driven changes** (no new systems needed):
-   - switch on the reminder schedule and the allowance/reminder emails once confirmed;
-   - allowance scaling, renewal pricing, usage permissions, discount rate (rows 18, 20, 23, 25);
-   - FR4.8 layout once signed off (row 8).
-3. **FSM automation and estimates** (rows 19, 28, 29, 31), once §8 confirmations arrive.
-4. **Release readiness:** reconciliation, staging, UAT, production migration and deployment, data cleanup, merge to main with approval.
+From the BRD v0.3 gap analysis (`docs/amc-brd-v0.3-gap-analysis.md`): 315 requirements not implemented and 130 partial, across every BRD section. Deliverables: 9 partial, 5 not started (rate card, payments, PPM schedule, confirmation/assignment, job execution and closure), 0 complete.
 
 ## 12. Recommended prompt plan
 
-**TOTAL MAJOR PROMPTS REMAINING: 2** (FSM automation, release readiness), plus small decision-driven changes as answers arrive.
+**TOTAL MAJOR GOALS REMAINING: 6** (from the gap analysis; replaces the earlier count of 2).
 
-1. ~~Security and permissions hardening~~: done on 6 Oct 2026 (code and unapplied migrations).
-   - Close role-table writes; secure Edge Functions and `/api/graphql`.
-   - The public `uploads` bucket for the other modules (AMC already uses private storage).
-   - Customer/FSM-lookup visibility.
-   - AMC permission model (including an operations role if decided).
-   - Re-verify the hardening migrations.
-2. ~~AMC business completion~~: done on 6 Oct 2026. What is left of it are the decisions in §7 A and C (switching on reminders, rates, layout), each a small change.
-3. **FSM automation activation.** Needs §8 answers.
-   - Switch on automatic visit usage, with a scheduled check.
-   - Automatic reversal if reopening is confirmed.
-   - SLA attendance mapping.
-   - FSM estimate creation from additional-service quotes.
-   - Bulk entry tools for mappings and customer links.
-4. **Release readiness.** Needs prompt 1 and the §7 C decisions.
-   - Migration-history reconciliation; staging database.
-   - Full UAT against the checklist and fixes.
-   - Production migrations in runbook order; deployment; smoke test.
-   - Test-data cleanup; approved merge to `main`.
+1. **G1 Client, property and asset foundation** (5.2, 5.9).
+2. **G2 Lead-to-contract commercial engine** (5.1, 5.3–5.7; Emails 1–2). Its first change removes self-approval.
+3. **G3 Payments and Finance** (5.8). Needs the Zoho Finance integration and PayTabs/NomuPay.
+4. **G4 PPM schedule, confirmation and assignment** (5.10, 5.11).
+5. **G5 Execution, call outs, additional work and allowances** (5.12–5.14; Email 3). Needs FSM configuration and timestamps.
+6. **G6 Reporting, renewals and release** (5.15, 5.16, metrics; staging, UAT, deployment, approved merge).
+
+Dependency order G1 → G6. If management confirms the operational-first order of BRD 5.17: G1 → G4 → G5 → G2 → G3 → G6. Deploying what already exists (including the security fixes) can be brought forward at any point. Done already: security hardening (6 Oct 2026, code and unapplied migrations) and business completion (6 Oct 2026).
 
 ## 13. Final definition of done
 
 AMC is complete when all of these hold:
-1. Every row in §4 is IMPLEMENTED, or explicitly accepted as out of scope by the business.
+1. Every requirement in `docs/amc-brd-v0.3-gap-analysis.md` is IMPLEMENTED, provided by FSM, or explicitly accepted as out of scope by the business; all 14 BRD 6.10 deliverables are complete.
 2. Every §7 A and C decision is recorded, and the code follows it.
 3. Every CRITICAL and HIGH item in §9 is closed in production.
 4. All AMC migrations are applied to production in order, verified by the runbook checks and the smoke test.

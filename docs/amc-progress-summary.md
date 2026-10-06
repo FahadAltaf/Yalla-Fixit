@@ -4,8 +4,9 @@
 
 ## Where we are
 
-- **26 of the 34 AMC requirements are built.** The other 8 wait on a business decision (3), on information from Zoho FSM (4), or on going live (1).
-- **The proposal process is 13 of 14 done.** The last item is the final document layout, which waits for Sharon's sign-off.
+- **Measured against the BRD v0.3 (23 Sep 2026), AMC is not functionally complete.** None of its 14 deliverable groups is complete: 9 are partly built and 5 are not started (rate card, payments, PPM schedule, visit confirmation and assignment, job closure). Of 524 individual requirements in our scope, 78 are built (15%) and 130 partly built. Details: `docs/amc-brd-v0.3-gap-analysis.md`.
+- The earlier figures ("26 of 34 requirements", "proposal process 13 of 14") measured the older proposals specification, not the BRD, and are withdrawn.
+- **Six major development goals remain** (master report §12). What is built today covers proposals, approval, client links and signing, contract activation, allowances and usage, renewal drafts, customers, assessments and reports.
 - **Nothing is live yet.** The database changes are prepared and tested, but they have not been installed on the live system.
 
 ## What is done
@@ -35,7 +36,7 @@
 - **Additional services:** a check for whether a request is covered or discounted, and a quote record with the price breakdown.
 - **Zoho FSM connection:** FSM work can be linked to a contract, and completed visits are reviewed and recorded as usage.
 - **Reports:** expiring contracts, the renewal pipeline, account-manager portfolios and service usage, all exportable to Excel/CSV.
-- **Quality:** 154 automated tests and all database checks pass. The database design was checked for speed at about 10,000 contracts, and the database changes were tested against the live system's own behaviour.
+- **Quality:** 179 automated tests (including 25 security tests) and all database checks pass. The database design was checked for speed at about 10,000 contracts, and the database changes were tested against the live system's own behaviour.
 
 ## What is blocked
 
@@ -45,7 +46,7 @@
 
 ## What needs business confirmation
 
-1. **Non-emergency response time:** the brochure says 6 hours, but the contract says 48 hours. One must be chosen.
+1. **Non-emergency response time:** the BRD v0.3 now says scheduling within 48 hours, as the contract does. The brochure's 6 hours needs aligning.
 2. Who receives contract-expiry reminders and allowance alerts by email, and whether reminders go out automatically.
 3. Whether allowances grow with the number of units and with contracts longer or shorter than a year.
 4. Renewal pricing: last year's prices or a rate card.
@@ -53,14 +54,18 @@
 6. Who may record and correct usage, and who owns customer and property records.
 7. Assessment rules, and whether photos are required.
 8. The meaning of "additional fixed-price services" (clause 6.3).
-9. 5% VAT, self-approval, typed-name signature, the 30-day link validity, and the final document layout.
+9. 5% VAT, typed-name signature, the 30-day link validity, and the final document layout.
 10. Whether the three early signed proposals are real or test data.
 11. That the support phone numbers in AMC Settings are the real ones before contracts go out.
 
-## What remains before release
+## What remains
 
-1. Security tightening of shared parts of the platform (about one development cycle).
-2. A test round on a staging copy, then installing the database changes and releasing.
-3. Automatic FSM visit counting, once FSM confirmations arrive.
+The BRD v0.3 sets out much more than is built. Six major development goals remain, in dependency order:
+1. Client, property and asset records: asset register, access rules, client profile and documents.
+2. Lead-to-contract: enquiry pipeline, rate card, proposal versions, approval ladder (nobody approves their own proposal), sharing, and contract signing and statuses.
+3. Payments and Finance: instalments, cheques, the first-payment gate, and Zoho Finance invoices and receipts.
+4. PPM schedule: visits with service windows, client confirmation and technician assignment.
+5. Visit execution and closure, call-outs with SLAs, additional work and allowance reservations.
+6. Client and management reports, renewals, then a staging test round and release.
 
-**Three major development steps remain**, plus small changes as the decisions above are made. Step 1 can start now.
+The security tightening is done in code (6 October). It goes live with the first release. The AMC team suggested building the operational core first (goals 1, 4, 5); management to confirm the order.
