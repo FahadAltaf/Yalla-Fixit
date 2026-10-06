@@ -12,7 +12,6 @@ import {
   ReceiptText,
   RefreshCw,
   ShieldCheck,
-  UserRound,
 } from "lucide-react";
 
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
@@ -27,7 +26,6 @@ import {
   SectionCard,
   StatCard,
   StatCardGrid,
-  SubHeading,
 } from "@/components/dashboard/shared/kaizen";
 import {
   ErrorState,
@@ -40,6 +38,8 @@ import { AMC_VAT_PERCENT } from "@/lib/amc/pricing";
 import { amcContractsService, type ContractDetail as Detail } from "@/modules/amc-contracts/amc-contracts-service";
 
 import { CancelContractDialog } from "./cancel-contract-dialog";
+import { ContractCommercial } from "./contract-commercial";
+import { ContractCustomer } from "./contract-customer";
 import { ContractDocuments } from "./contract-documents";
 import { ContractFsm } from "./contract-fsm";
 import { ContractRenewal, RenewalReminders } from "./contract-renewal";
@@ -121,7 +121,6 @@ export function ContractDetail({ id }: { id: string }) {
   }
 
   const { contract, entitlements, summary, audit, source, permissions, sla } = data;
-  const customer = contract.customer as Record<string, string | undefined>;
   const canRecord = permissions.canRecordUsage && entitlements.some((e) => e.consumable);
   const counted = summary.withRemaining + summary.exhausted;
 
@@ -317,22 +316,7 @@ export function ContractDetail({ id }: { id: string }) {
       />
 
       <div className="grid gap-6 lg:grid-cols-3">
-        <SectionCard title="Customer and property" icon={<UserRound />} bodyClassName="px-5 pb-5 space-y-3">
-          <DataRow title={contract.customerName || "—"} subtitle={contract.customerRef ? `Customer ID ${contract.customerRef}` : "Customer"} />
-          {customer.customerPhone || customer.customerEmail ? (
-            <DataRow title={customer.customerPhone || "—"} subtitle={customer.customerEmail || "Contact"} />
-          ) : null}
-          <DataRow title={contract.propertyLabel || "—"} subtitle="Property" />
-          <SubHeading>Account managers</SubHeading>
-          {contract.accountManagers.length ? (
-            contract.accountManagers.map((m, i) => (
-              <DataRow key={`${m.name}-${i}`} title={m.name || "—"} subtitle={m.phone || undefined} />
-            ))
-          ) : (
-            <p className="text-muted-foreground text-sm">None named on the signed proposal.</p>
-          )}
-          <p className="text-muted-foreground text-xs">As named on the signed proposal.</p>
-        </SectionCard>
+        <ContractCustomer contract={contract} canManage={permissions.canCorrect} />
 
         <SectionCard title="Commercial" icon={<ReceiptText />} bodyClassName="px-5 pb-5">
           <dl className="space-y-2 text-sm">
@@ -398,6 +382,8 @@ export function ContractDetail({ id }: { id: string }) {
           proposalSentAt={source?.proposal_sent_at ?? null}
           contractSentAt={source?.contract_sent_at ?? null}
         />
+
+        <ContractCommercial contract={contract} entitlements={entitlements} canManage={permissions.canCorrect} />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">

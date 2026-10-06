@@ -16,6 +16,18 @@ import type {
   serviceMappingOverview,
 } from "@/lib/server/amc/fsm-integration";
 import type {
+  AmcReports,
+  AssessmentRecord,
+  ChecklistItem,
+  CommercialHistory,
+  CustomerOverview,
+  CustomerRecord,
+  PropertyOverview,
+  PropertyRecord,
+  QuoteRecord,
+} from "@/lib/server/amc/business";
+import type { AdditionalServiceEligibility, DiscountConfig } from "@/lib/amc/business";
+import type {
   ContractsDashboard,
   ReminderPlan,
   RenewalOverview,
@@ -31,6 +43,40 @@ import type {
 export type { ContractsDashboard, ReminderPlan, RenewalOverview, UsageEntry };
 export type ActivationPreview = Awaited<ReturnType<typeof activationPreview>>;
 export type { ContractFsmActivity, FsmWorkOrderForAmc, SyncOutcome };
+export type {
+  AmcReports,
+  AssessmentRecord,
+  ChecklistItem,
+  CommercialHistory,
+  CustomerOverview,
+  CustomerRecord,
+  PropertyOverview,
+  PropertyRecord,
+  QuoteRecord,
+  AdditionalServiceEligibility,
+  DiscountConfig,
+};
+export type LiveLinks = { migrated: boolean; customer: CustomerRecord | null; property: PropertyRecord | null };
+export type CustomerInput = { name: string; customerRef?: string | null; company?: string | null; email?: string | null; phone?: string | null; notes?: string | null };
+export type PropertyInput = {
+  label: string;
+  address?: string | null;
+  community?: string | null;
+  propertyCategory?: "residential" | "commercial" | null;
+  unitType?: "villa" | "apartment" | "townhouse" | "office" | "other" | null;
+  bedrooms?: number | null;
+  sizeSqft?: number | null;
+  notes?: string | null;
+};
+export type AdditionalServiceRequest = {
+  serviceKey: string;
+  serviceLabel: string;
+  amcServiceId?: string | null;
+  category?: string | null;
+  date: string;
+  standardPrice: number | null;
+  notes?: string | null;
+};
 export type FsmServiceMappingOverview = Awaited<ReturnType<typeof serviceMappingOverview>> & { canEdit?: boolean };
 export type FsmWorkOrderContext = Awaited<ReturnType<typeof fsmContextForWorkOrder>>;
 
@@ -305,6 +351,112 @@ export const amcContractsService = {
       method: "PUT",
       body: JSON.stringify(input),
     });
+  },
+  /* Customers and properties */
+  customers(q = "") {
+    return request<{ customers: CustomerRecord[] }>(`/api/amc-contracts/customers?q=${encodeURIComponent(q)}`);
+  },
+  createCustomer(input: CustomerInput) {
+    return request<{ customer: CustomerRecord }>("/api/amc-contracts/customers", { method: "POST", body: JSON.stringify(input) });
+  },
+  updateCustomer(id: string, input: CustomerInput) {
+    return request<{ customer: CustomerRecord }>(`/api/amc-contracts/customers/${id}`, { method: "PATCH", body: JSON.stringify(input) });
+  },
+  customer(id: string) {
+    return request<{ overview: CustomerOverview }>(`/api/amc-contracts/customers/${id}`);
+  },
+  customerProperties(id: string) {
+    return request<{ properties: PropertyRecord[] }>(`/api/amc-contracts/customers/${id}/properties`);
+  },
+  createProperty(customerId: string, input: PropertyInput) {
+    return request<{ property: PropertyRecord }>(`/api/amc-contracts/customers/${customerId}/properties`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+  updateProperty(id: string, input: PropertyInput) {
+    return request<{ property: PropertyRecord }>(`/api/amc-contracts/properties/${id}`, { method: "PATCH", body: JSON.stringify(input) });
+  },
+  property(id: string) {
+    return request<{ overview: PropertyOverview }>(`/api/amc-contracts/properties/${id}`);
+  },
+  links(contractId: string) {
+    return request<{ links: LiveLinks }>(`/api/amc-contracts/${contractId}/links`);
+  },
+  setLink(contractId: string, input: { kind: "customer" | "property"; id?: string | null; createFromSnapshot?: boolean }) {
+    return request<{ links: LiveLinks }>(`/api/amc-contracts/${contractId}/links`, { method: "PUT", body: JSON.stringify(input) });
+  },
+  /* Commercial */
+  commercial(contractId: string) {
+    return request<{ commercial: CommercialHistory }>(`/api/amc-contracts/${contractId}/commercial`);
+  },
+  checkAdditionalService(contractId: string, input: AdditionalServiceRequest) {
+    return request<{ eligibility: AdditionalServiceEligibility }>(`/api/amc-contracts/${contractId}/additional-services`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+  createQuote(contractId: string, input: AdditionalServiceRequest) {
+    return request<{ quote: QuoteRecord }>(`/api/amc-contracts/${contractId}/quotes`, { method: "POST", body: JSON.stringify(input) });
+  },
+  updateQuote(contractId: string, quoteId: string, input: { action: "link_estimate"; estimateNumber: string } | { action: "cancel"; reason: string }) {
+    return request<{ quote: QuoteRecord }>(`/api/amc-contracts/${contractId}/quotes/${quoteId}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    });
+  },
+  /* Assessments */
+  assessments(params: { status?: string; q?: string } = {}) {
+    const query = new URLSearchParams();
+    if (params.status) query.set("status", params.status);
+    if (params.q) query.set("q", params.q);
+    return request<{ assessments: AssessmentRecord[] }>(`/api/amc-contracts/assessments?${query.toString()}`);
+  },
+  assessment(id: string) {
+    return request<{ assessment: AssessmentRecord; canEdit: boolean }>(`/api/amc-contracts/assessments/${id}`);
+  },
+  createAssessment(input: { customerId: string | null; propertyId: string | null; contractId?: string | null }) {
+    return request<{ assessment: AssessmentRecord }>("/api/amc-contracts/assessments", { method: "POST", body: JSON.stringify(input) });
+  },
+  updateAssessment(id: string, patch: Record<string, unknown>) {
+    return request<{ assessment: AssessmentRecord }>(`/api/amc-contracts/assessments/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
+  },
+  deleteAssessment(id: string) {
+    return request<{ ok: true }>(`/api/amc-contracts/assessments/${id}`, { method: "DELETE" });
+  },
+  completeAssessment(id: string) {
+    return request<{ assessment: AssessmentRecord }>(`/api/amc-contracts/assessments/${id}/complete`, { method: "POST" });
+  },
+  proposalFromAssessment(id: string) {
+    return request<{ submissionId: string; proposalNumber: string; droppedServiceIds: string[] }>(
+      `/api/amc-contracts/assessments/${id}/proposal`,
+      { method: "POST" },
+    );
+  },
+  /* Settings */
+  checklist() {
+    return request<{ items: ChecklistItem[]; canEdit: boolean }>("/api/amc-contracts/settings/checklist");
+  },
+  saveChecklistItem(input: { itemKey?: string | null; categoryLabel: string; label: string; sortOrder?: number; active: boolean }) {
+    return request<{ items: ChecklistItem[]; canEdit: boolean }>("/api/amc-contracts/settings/checklist", {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+  },
+  discountConfig() {
+    return request<{ config: DiscountConfig & { migrated: boolean }; canEdit: boolean }>("/api/amc-contracts/settings/discount");
+  },
+  saveDiscountConfig(input: DiscountConfig) {
+    return request<{ config: DiscountConfig & { migrated: boolean }; canEdit: boolean }>("/api/amc-contracts/settings/discount", {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+  },
+  /* Reports */
+  reports(filters: { manager?: string; customer?: string; property?: string } = {}) {
+    const query = new URLSearchParams();
+    for (const [k, v] of Object.entries(filters)) if (v) query.set(k, v);
+    return request<{ reports: AmcReports }>(`/api/amc-contracts/reports?${query.toString()}`);
   },
   coverageCatalogue() {
     return request<{ catalogue: CoverageCatalogueItem[] }>("/api/amc-contracts/coverage?catalogue=1");

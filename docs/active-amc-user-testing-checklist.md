@@ -119,3 +119,54 @@ Tick the box when the result matches. Note anything that doesn't, with the contr
 - [ ] Upcoming visits lists future appointments of linked work that are on the scheduling board, with technicians.
 - [ ] SLA column shows the target and **Unknown** with the reason.
 - [ ] **Unlink** needs a reason; usage already recorded stays.
+
+
+## 13. Customers and properties (needs migration 20261006130000)
+
+- [ ] **Customers** (section bar) lists shared customer records; search finds them by name, Customer ID, phone and email; **New customer** creates one; a duplicate Customer ID (any case) is refused.
+- [ ] Contract → **Customer and property**: "As signed" shows the snapshot; "Today" shows **Link**. **Create from the signed customer** makes a record from the snapshot and links it.
+- [ ] Link the property the same way (pick one of the customer's properties, or create from the signed property). A property of another customer is refused.
+- [ ] Edit the customer's phone on the customer page: the contract's "As signed" section is unchanged; "Today" shows the new phone.
+- [ ] **Unlink** removes the live link only; the contract is otherwise unchanged.
+
+## 14. Customer and property views
+
+- [ ] Customer page: cards (contracts in force, active properties, current AMC value, quotes), every contract listed separately with property, dates, status, account manager, coverage and renewal stage; properties; assessments; quotes. Each links onward.
+- [ ] A customer with two contracts on two properties shows both, and counts the customer once on Reports.
+- [ ] Property page: current AMC with services and usage; previous contracts (a renewed contract stays listed); assessments; quotes; a link back to the customer.
+
+## 15. Assessments
+
+- [ ] **Assessments → New assessment**: pick a customer, then a property (or add one); the assessment opens with the checklist copied from Settings.
+- [ ] Draft: change answers (OK / Attention required / Not applicable), notes, details and recommended services; **Save** keeps them.
+- [ ] **Complete** stays disabled until the date, the property and every item are answered; after completing, nothing can be edited and **Delete draft** is gone.
+- [ ] Editing a checklist item in Settings does not change a completed assessment's wording.
+- [ ] Assessment history shows on the customer and property pages with date, assessor, status, summary and the proposal created from it.
+
+## 16. Assessment → proposal
+
+- [ ] **Create AMC proposal** on a completed assessment opens the proposal wizard with the customer, property and recommended services ticked; prices and dates are empty; the proposal goes through the normal approval.
+- [ ] A second **Create AMC proposal** is not offered; the assessment links to the proposal.
+- [ ] A property with unit type Townhouse or Other is refused with a message to set villa, apartment or office.
+- [ ] When the proposal is signed and activated, the contract's "Today" links point at the same customer and property.
+
+## 17. Additional services and discount
+
+- [ ] Settings → **Additional-service discount** is Off with no rate; only approvers can change it; switching On without a rate is refused.
+- [ ] Contract → **Additional service** with the discount off: **Check** shows "No discount configured" and the standard price as final.
+- [ ] Choose a service that is on the AMC with allowance left: "Included in AMC", **Save quote** is disabled ("record it as usage").
+- [ ] Turn the discount on (e.g. 20%, key `painting`): a "painting" request at AED 1,000 shows Standard AED 1,000 · 20% · saves AED 200 · Final AED 800; **Save quote** records it.
+- [ ] A service not on the list: "Standard charge". An expired or cancelled contract: "Standard charge" with the reason.
+- [ ] **Link FSM estimate** with a number that does not exist in FSM is refused; a real one links; the same estimate cannot be linked to two quotes.
+- [ ] **Cancel** keeps the quote listed as cancelled; the commercial history counts discounts only for quotes with a linked estimate.
+- [ ] The contract's **Commercial history** shows the original proposal, value, renewal proposal and quotes.
+
+## 18. Reports, exports, navigation
+
+- [ ] **Reports** cards match the contracts list; customers and properties count once each, with unlinked contracts shown apart; cancelled contracts are not counted.
+- [ ] **Expiry**: contracts appear in the right bucket (Expired, 0–30, 31–60, 61–90, 90+); filters by account manager, customer and property narrow every tab.
+- [ ] **Renewal pipeline**: a contract within 90 days shows Upcoming; after **Create renewal proposal** it shows Renewal proposal created; each proposal status moves the stage; a renewed contract shows Renewed.
+- [ ] **Account managers** and **Services** tabs: hours and visits are on separate rows; unlimited shows use only.
+- [ ] **Export** (CSV and Excel) on each tab and **Active contracts** downloads exactly the rows on screen.
+- [ ] The section bar (Contracts, Customers, Assessments, Reports, Settings, FSM mapping, AMC proposals) is on every page; customer ↔ property ↔ contract ↔ assessment ↔ proposal ↔ quote links work both ways; no page shows a database id where a number or name exists.
+- [ ] Phone width: tables scroll inside their cards; dialogs scroll; the section bar scrolls sideways.

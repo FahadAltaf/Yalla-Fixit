@@ -551,3 +551,22 @@ Details: `docs/amc-fsm-integration-report.md`; evidence: `docs/amc-fsm-integrati
 | SLA | **Unavailable.** Request time can be entered on links; attendance and booking times are not mapped |
 
 Tests: 100 / 100 (13 new).
+
+---
+
+# Part 4: Customers, properties, assessments, additional services and reporting
+
+Details: `docs/amc-business-operations-report.md`. Migration `20261006130000` (not applied).
+
+| Area | Status |
+|---|---|
+| Customers | Shared `customers` table (not Snagging-owned), with an optional link to the Snagging client. Contracts keep their signed snapshot and gain a live `customer_id` |
+| Properties | Shared `customer_properties`, same model; contracts gain `property_id`; history is never moved |
+| Customer / property views | Contracts (each separately), properties, assessments, quotes, summary |
+| Assessments | Draft → completed, configurable checklist (approvers), recommended services; completed ones are locked. Photos deferred (public upload bucket) |
+| Assessment → proposal | Draft proposal with customer, property and recommended services, unpriced; normal wizard and approval |
+| Additional services | Eligibility (included / AMC discount / standard / not configured) and a frozen quote record; the FSM estimate is created in FSM and linked (checked) |
+| Discount | Configurable, off, no rate assumed |
+| Reports | Portfolio figures, expiry buckets, derived renewal pipeline, account managers, services (units kept apart), CSV/Excel exports |
+
+Tests: 110 / 110 (10 new).

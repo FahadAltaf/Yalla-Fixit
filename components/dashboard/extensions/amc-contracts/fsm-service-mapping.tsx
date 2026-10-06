@@ -6,6 +6,7 @@ import Link from "next/link";
 import { toast } from "sonner";
 
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
+import { AmcSectionNav } from "./amc-section-nav";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -74,6 +75,7 @@ export function FsmServiceMapping() {
           </Button>
         }
       />
+      <AmcSectionNav current="fsm-services" />
       {error ? (
         <ErrorState title="Could not load the mapping" message={error} onRetry={() => void load()} />
       ) : !data ? (

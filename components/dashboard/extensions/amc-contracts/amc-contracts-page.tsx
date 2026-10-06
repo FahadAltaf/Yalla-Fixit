@@ -1,13 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
-import { ShieldCheck, Workflow } from "lucide-react";
+import { ShieldCheck } from "lucide-react";
 
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
 import { Button } from "@/components/ui/button";
 import { PageHeading } from "@/components/dashboard/shared/kaizen";
 
+import { AmcSectionNav } from "./amc-section-nav";
 import { ContractsList } from "./contracts-list";
 import { ContractsSummary } from "./contracts-summary";
 import { CoverageCheckDialog } from "./coverage-check-dialog";
@@ -29,12 +29,6 @@ export function AmcContractsPage() {
         description="Activate signed AMC proposals, track what each contract covers and how much is used, and see what is expiring."
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <Button asChild variant="outline">
-              <Link href="/extensions/amc-contracts/fsm-services">
-                <Workflow className="size-4" />
-                FSM service mapping
-              </Link>
-            </Button>
             <Button variant="outline" onClick={() => setChecking(true)}>
               <ShieldCheck className="size-4" />
               Check coverage
@@ -42,6 +36,7 @@ export function AmcContractsPage() {
           </div>
         }
       />
+      <AmcSectionNav current="contracts" />
       <ContractsSummary refreshKey={summaryKey} />
       <ContractsList onRefresh={() => setSummaryKey((k) => k + 1)} />
       <CoverageCheckDialog open={checking} onOpenChange={setChecking} />

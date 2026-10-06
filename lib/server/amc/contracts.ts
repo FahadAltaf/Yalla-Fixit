@@ -169,6 +169,32 @@ function notMigrated(): ContractError {
   );
 }
 
+/**
+ * The live customer and property a proposal or contract is linked to
+ * (who they are today; the signed snapshots never follow them). Null when
+ * migration 20261006130000 is not applied.
+ */
+export async function loadLiveLinks(
+  admin: Admin,
+  table: "amc_contracts" | "amc_submissions",
+  id: string,
+): Promise<{ customerId: string | null; propertyId: string | null } | null> {
+  const { data, error } = await admin.from(table).select("customer_id, property_id").eq("id", id).maybeSingle<Row>();
+  if (error || !data) return null;
+  return {
+    customerId: (data.customer_id as string | null) ?? null,
+    propertyId: (data.property_id as string | null) ?? null,
+  };
+}
+
+/** Columns to write only when there is a link (older databases lack them). */
+function liveLinkColumns(links: { customerId: string | null; propertyId: string | null } | null) {
+  return {
+    ...(links?.customerId ? { customer_id: links.customerId } : {}),
+    ...(links?.propertyId ? { property_id: links.propertyId } : {}),
+  };
+}
+
 /* ------------------------------------------------------------------ */
 /* Activation                                                          */
 /* ------------------------------------------------------------------ */
@@ -320,9 +346,12 @@ export async function activateContract(
     throw new ContractError("The signed proposal has no services to activate.", 409);
   }
 
+  /* The proposal's live customer/property (e.g. from an assessment) carries over. */
+  const links = await loadLiveLinks(admin, "amc_submissions", input.submissionId);
   const { data: created, error: insertError } = await admin
     .from("amc_contracts")
     .insert({
+      ...liveLinkColumns(links),
       submission_id: input.submissionId,
       proposal_number: submission.proposal_number,
       status: "active",
@@ -719,6 +748,7 @@ export async function createRenewalProposal(
       final_price: priced.final_price,
       generated_documents: [],
       renewal_of_contract_id: contractId,
+      ...liveLinkColumns(await loadLiveLinks(admin, "amc_contracts", contractId)),
       updated_at: new Date().toISOString(),
     })
     .select("id, proposal_number, customer")
