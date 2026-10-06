@@ -49,6 +49,18 @@ export type ReportCover = {
   severity: { high: number; medium: number; low: number };
   /** FR-7.02 — worst first, ties broken by label so the order is stable. */
   mostAffectedSubCategories: SubCategoryTally[];
+  /**
+   * What kind of thing kept going wrong, worst first.
+   *
+   * The level above `mostAffectedSubCategories`, and the same
+   * breakdown the downloaded report charts. It is counted here so the
+   * two documents cannot disagree: a client who is sent the link and
+   * the PDF is holding one inspection, and it should read as one.
+   *
+   * Folded at eight, as the downloaded report folds it: past that the
+   * rows are one or two defects each and the chart ranks nothing.
+   */
+  categories: { label: string; count: number }[];
 };
 
 export type ReportSnag = {
@@ -57,6 +69,8 @@ export type ReportSnag = {
   areaId: string | null;
   /** From the controlled catalogue, never the inspector's free text. */
   catalogueCode: string | null;
+  /** Top level of the catalogue: Category -> Sub-category -> Defect. */
+  category: string | null;
   subCategory: string | null;
   defect: string | null;
   description: string | null;
@@ -241,6 +255,10 @@ function toReportSnag(
     code: typeof snag.snag_code === "string" ? snag.snag_code : null,
     areaId: typeof snag.area_id === "string" ? snag.area_id : null,
     catalogueCode: typeof snag.catalogue_code === "string" ? snag.catalogue_code : null,
+    category:
+      typeof snag.category_label === "string" && snag.category_label.trim()
+        ? snag.category_label.trim()
+        : null,
     subCategory: subCategoryOf(snag),
     defect: typeof snag.defect_label === "string" ? snag.defect_label : null,
     description: describe(snag, guidance),
@@ -602,6 +620,32 @@ export async function buildReportData(
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
     .slice(0, 5);
 
+  /*
+    The same walk one level up. A snag with no category falls back to its
+    sub-category rather than being dropped: the chart's percentages are
+    of the whole inspection, so a bar that quietly left defects out would
+    not add up to what the cover says was found.
+  */
+  const CATEGORY_LIMIT = 8;
+  const categoryCounts = new Map<string, number>();
+  for (const snag of snags) {
+    const key = snag.category ?? snag.subCategory ?? "Uncategorised";
+    categoryCounts.set(key, (categoryCounts.get(key) ?? 0) + 1);
+  }
+  const rankedCategories = [...categoryCounts.entries()].sort(
+    (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
+  );
+  const categories = rankedCategories
+    .slice(0, CATEGORY_LIMIT)
+    .map(([label, count]) => ({ label, count }));
+  const foldedCategories = rankedCategories.slice(CATEGORY_LIMIT);
+  if (foldedCategories.length > 0) {
+    categories.push({
+      label: `Other (${foldedCategories.length})`,
+      count: foldedCategories.reduce((sum, [, n]) => sum + n, 0),
+    });
+  }
+
   const client = firstOf(job.client as ClientRow | ClientRow[] | null);
 
   const signatureUrl = shownSignaturePath
@@ -658,6 +702,7 @@ export async function buildReportData(
       totalSnags: snags.length,
       severity,
       mostAffectedSubCategories,
+      categories,
     },
     areas,
     plans,

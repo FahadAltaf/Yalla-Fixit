@@ -258,6 +258,20 @@ export function JobSetupPanel({
     task.status !== "draft" ||
     !(task.quotation_status === "sent" || task.quotation_status === "rejected");
   const canAssign = canEdit && quotationApproved && !task.locked;
+  /*
+    Who reviews and who approves, changeable for longer than the rest.
+
+    Those two names are the only things that can act on a submitted job
+    (FR-6.01), and the job locks the moment it is submitted — so with
+    them frozen too, a manager on leave left a report nobody could sign
+    off. They stay editable while the job is in the chain, and stop with
+    everything else once it is approved. The API allows exactly this and
+    no more: a change to these two fields alone, on a job at submitted or
+    in_review (app/api/snagging/tasks/[id]/route.ts).
+  */
+  const inApprovalChain =
+    task.status === "submitted" || task.status === "in_review";
+  const canRoute = canEdit && quotationApproved && (canAssign || inApprovalChain);
 
   async function saveAppointment() {
     setSaving("appt");
@@ -300,6 +314,35 @@ export function JobSetupPanel({
   async function saveAssignment() {
     if (inspectorIds.length > 0 && managerId === UNASSIGNED) {
       toast.error("Select an approval manager before assigning an inspector");
+      return;
+    }
+
+    /*
+      On a submitted job this press is only ever the two routing fields,
+      and it has to send only those: the API lets a locked job through
+      for `approval_manager_id` and `reviewer_id` alone, so including an
+      unchanged technician_ids would have it refused as a locked edit.
+    */
+    if (!canAssign) {
+      setSaving("assign");
+      try {
+        await snaggingService.updateTask(task.id, {
+          approval_manager_id: managerId === UNASSIGNED ? null : managerId,
+          reviewer_id: reviewerId === UNASSIGNED ? null : reviewerId,
+        });
+        await onChanged();
+        toast.success(
+          reviewerId === UNASSIGNED
+            ? "Saved. Its approval manager reviews it and signs it off."
+            : "Saved. The reviewer checks it, then the approval manager decides.",
+        );
+      } catch (e) {
+        toast.error(
+          e instanceof Error ? e.message : "Could not save who handles this",
+        );
+      } finally {
+        setSaving(null);
+      }
       return;
     }
 
@@ -1171,8 +1214,8 @@ export function JobSetupPanel({
             being cut off at the border.
           */
           className="overflow-visible"
-          title="Inspector assignment"
-          description="Who walks the unit, and who signs the report off."
+          title="Who handles this job"
+          description="The three names the job runs on: who walks the unit, who checks the work, and who signs it off."
         >
           {!quotationApproved ? (
             <Alert>
@@ -1198,7 +1241,17 @@ export function JobSetupPanel({
                 <FieldsSkeleton fields={2} columns={2} className="p-0" />
               }
             >
-              <div className="grid gap-4 sm:grid-cols-2">
+              {/*
+                Three columns, in the order the work moves.
+
+                These are three steps of one chain and there are three of
+                them, so a two-column grid put the last one alone on a new
+                row with a hole beside it -- and because only the middle
+                field carried a hint, the first row came out ragged as
+                well. `items-start` keeps each field its own height
+                instead of stretching the short one to match.
+              */}
+              <div className="grid items-start gap-x-6 gap-y-5 lg:grid-cols-3">
                 <Field label="Inspectors" htmlFor="assign-inspector">
                   {/*
                   A disabled control renders its value in placeholder grey,
@@ -1263,6 +1316,15 @@ export function JobSetupPanel({
                       empty="No inspector assigned"
                     />
                   )}
+                  {/*
+                    What this seat does, said here rather than through
+                    Field's `hint`: the hint renders last, and this field
+                    ends with the availability line, so the role would
+                    have read underneath it.
+                  */}
+                  <p className="text-muted-foreground text-xs">
+                    Walk the unit and record what they find.
+                  </p>
                   {canAssign ? (
                     availabilityError ? (
                       <p className="text-destructive mt-1 flex flex-wrap items-center gap-1.5 text-xs">
@@ -1290,16 +1352,26 @@ export function JobSetupPanel({
                 </Field>
                 <Field
                   label="Reviewer"
-                  hint="Checks the evidence before the manager decides. Left empty, the approval manager reviews it themselves."
+                  hint="Checks the work and accepts it, and is the only one who can. Left empty, the approval manager does this too."
                   htmlFor="assign-reviewer"
                 >
-                  {canAssign ? (
+                  {canRoute ? (
                     <Select
                       value={reviewerId}
                       onValueChange={setReviewerId}
-                      disabled={!canAssign}
+                      disabled={!canRoute}
                     >
-                      <SelectTrigger id="assign-reviewer" className="w-full">
+                      {/*
+                          h-auto min-h-[38px]: a SelectTrigger is h-8
+                          (32px) and the inspector picker beside it is
+                          min-h-[38px], so the two controls in this row
+                          sat six pixels apart and the availability line
+                          under one did not meet the hint under the other.
+                        */}
+                      <SelectTrigger
+                        id="assign-reviewer"
+                        className="h-auto min-h-[38px] w-full"
+                      >
                         <SelectValue placeholder="Who checks this?" />
                       </SelectTrigger>
                       <SelectContent>
@@ -1323,16 +1395,19 @@ export function JobSetupPanel({
                 </Field>
                 <Field
                   label="Approval manager"
-                  hint="Required before an inspector can be assigned."
+                  hint="Approves it, sends it back, and sends the report to the client. Needed before an inspector can be assigned."
                   htmlFor="assign-manager"
                 >
-                  {canAssign ? (
+                  {canRoute ? (
                     <Select
                       value={managerId}
                       onValueChange={setManagerId}
-                      disabled={!canAssign}
+                      disabled={!canRoute}
                     >
-                      <SelectTrigger id="assign-manager" className="w-full">
+                      <SelectTrigger
+                        id="assign-manager"
+                        className="h-auto min-h-[38px] w-full"
+                      >
                         <SelectValue placeholder="Who signs this off?" />
                       </SelectTrigger>
                       <SelectContent>
@@ -1353,8 +1428,38 @@ export function JobSetupPanel({
                   )}
                 </Field>
               </div>
-              {canAssign ? (
-                <div className="flex justify-end">
+              {/*
+                Tinted grey rather than left on the card's own white: this
+                sits directly under the assignment fields, and on the same
+                surface a read-only notice looked like one more thing to
+                fill in. Not red — being locked is a settled state, not a
+                fault.
+
+                What it says follows the status rather than assuming the
+                worst case. `locked` is set at SUBMISSION, not at
+                approval, so a submitted job was being told its report had
+                been approved while its own badge still read Submitted.
+              */}
+              {task.locked ? (
+                <Alert className="bg-muted/60 text-muted-foreground mt-4 border-transparent">
+                  <Lock className="size-4" />
+                  <AlertTitle className="text-foreground">
+                    {inApprovalChain
+                      ? "The inspectors are fixed"
+                      : "This inspection is locked"}
+                  </AlertTitle>
+                  <AlertDescription className="text-muted-foreground">
+                    {inApprovalChain
+                      ? "It has been submitted, so who walked it can no longer change. Who reviews and who approves it still can — send it back to the inspector to change anything else."
+                      : "The report has been approved, so the assignment can no longer be changed."}
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+
+              {canAssign || canRoute ? (
+                // Clear of the fields, and of the lock notice when there is
+                // one -- it sat hard against the alert's bottom border.
+                <div className="mt-5 flex justify-end">
                   <SubmitButton
                     // size="sm"
                     variant={"outline"}
@@ -1364,29 +1469,14 @@ export function JobSetupPanel({
                     pendingLabel="Saving…"
                     icon={<UserCog className="size-4" />}
                   >
-                    {task.inspector_id
-                      ? "Update assignment"
-                      : "Assign inspector"}
+                    {/* Says what this press will actually save. */}
+                    {!canAssign
+                      ? "Update reviewer and manager"
+                      : task.inspector_id
+                        ? "Update assignment"
+                        : "Assign inspector"}
                   </SubmitButton>
                 </div>
-              ) : task.locked ? (
-                /*
-                Tinted grey rather than left on the card's own white: this
-                sat directly under the assignment fields wearing the same
-                surface, so a read-only notice looked like one more thing
-                to fill in. Not red — being locked is a settled state, not
-                a fault.
-              */
-                <Alert className="bg-muted/60 text-muted-foreground mt-4 border-transparent">
-                  <Lock className="size-4" />
-                  <AlertTitle className="text-foreground">
-                    This inspection is locked
-                  </AlertTitle>
-                  <AlertDescription className="text-muted-foreground">
-                    The report has been approved, so the assignment can no
-                    longer be changed.
-                  </AlertDescription>
-                </Alert>
               ) : null}
             </DataState>
           )}

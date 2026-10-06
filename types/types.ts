@@ -850,6 +850,28 @@ export interface SnaggingChecklistItem {
   visit_id?: string | null;
 }
 
+/**
+ * One job waiting on the signed-in person, for the notice at the top of
+ * Snagging (/api/snagging/approvals/pending). `step` is what they owe on
+ * it, which is the whole point of the list: a reviewer and an approval
+ * manager both see jobs here, and they are not being asked to do the
+ * same thing with them.
+ */
+export type SnaggingPendingStep = "review" | "approve";
+
+export interface SnaggingPendingApproval {
+  id: string;
+  code: string | null;
+  unitLabel: string | null;
+  buildingName: string | null;
+  clientName: string | null;
+  step: SnaggingPendingStep;
+  submittedAt: string | null;
+  reviewedAt: string | null;
+  /** FR-6.07 — past the 48h approval SLA. */
+  overdue: boolean;
+}
+
 /** Row shape of the snagging_task_summaries view. */
 export interface SnaggingTaskSummary {
   id: string;

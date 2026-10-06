@@ -524,7 +524,11 @@ export function AmcBrochurePage({ brochure, pdf = false }: { brochure: AmcBrochu
                       <td style={{ ...planCell, textAlign: "left", fontWeight: 700 }}>
                         {service.label}
                       </td>
-                      <td style={planCell}>{service.units}</td>
+                      {/* Blank where a unit count says nothing; see
+                          FrequencyRow.hasUnits. */}
+                      <td style={planCell}>
+                        {service.hasUnits ? service.units : ""}
+                      </td>
                       <td style={planCell}>{service.frequency}</td>
                       <td style={planCell}>
                         <img

@@ -66,7 +66,8 @@ export function ServiceTable({ form, catalogue }: ServiceTableProps) {
                     <TableHead className="w-10" />
                     <TableHead>Service</TableHead>
                     <TableHead className="w-[100px]">Units</TableHead>
-                    <TableHead className="w-[100px]">Frequency</TableHead>
+                    <TableHead className="w-[120px]">Frequency</TableHead>
+                    <TableHead className="w-[70px] text-left">Free</TableHead>
                     <TableHead className="w-[120px]">Base price</TableHead>
                     <TableHead className="w-[120px] text-right">Price</TableHead>
                   </TableRow>
@@ -118,22 +119,82 @@ export function ServiceTable({ form, catalogue }: ServiceTableProps) {
                           />
                         </TableCell>
                         <TableCell>
-                          <Input
-                            type="number"
-                            min={1}
-                            step={1}
-                            className="h-8 text-xs"
-                            placeholder="e.g. 2"
-                            disabled={!row.included || !frequencyEditable}
-                            value={row.frequency}
-                            onChange={(event) =>
+                          {/*
+                            Unlimited and covered are not numbers, so they
+                            are not offered as one.
+
+                            An emergency call-out is unlimited by
+                            definition, and the table showed it as a
+                            greyed-out box reading 1 -- which says the
+                            client gets one of them, and reads as a field
+                            somebody forgot to switch on. The word that
+                            will print on the contract is shown instead.
+                          */}
+                          {frequencyEditable ? (
+                            <Input
+                              type="number"
+                              min={1}
+                              step={1}
+                              className="h-8 text-xs"
+                              placeholder="e.g. 2"
+                              disabled={!row.included}
+                              aria-label={`Frequency for ${service.label}`}
+                              value={row.frequency}
+                              onChange={(event) =>
+                                updateRow(service.id, {
+                                  frequency: Math.max(
+                                    1,
+                                    Number.parseInt(event.target.value, 10) || 1,
+                                  ),
+                                })
+                              }
+                            />
+                          ) : (
+                            <span className="text-muted-foreground text-xs">
+                              {service.frequencyType === "unlimited"
+                                ? "Unlimited"
+                                : "Covered"}
+                            </span>
+                          )}
+                        </TableCell>
+
+                        {/*
+                          Free, and so not priced. Thrown in on one
+                          contract and charged on the next, which is why
+                          it is a tick here rather than a fact about the
+                          service.
+                        */}
+                        {/*
+                          pr-2 put back deliberately.
+
+                          TableCell ships `[&:has([role=checkbox])]:pr-0`,
+                          which is right for a selection column flush
+                          against the table edge and wrong here: with the
+                          right padding gone the cell centres its checkbox
+                          over a box 8px wider on that side, so the tick
+                          sat 4px right of the Free heading above it
+                          (measured). Restoring the padding puts both
+                          centres on the same x.
+                        */}
+                        <TableCell className="text-center [&:has([role=checkbox])]:pr-2">
+                          <Checkbox
+                            checked={row.free === true}
+                            disabled={!row.included}
+                            onCheckedChange={(checked) =>
                               updateRow(service.id, {
-                                frequency: Math.max(
-                                  1,
-                                  Number.parseInt(event.target.value, 10) || 1,
-                                ),
+                                free: checked === true,
+                                /*
+                                  The price goes with the tick. Left
+                                  behind under Included it comes back the
+                                  moment the tick does, and nobody
+                                  expects a figure they cannot see.
+                                */
+                                ...(checked === true
+                                  ? { basePrice: undefined }
+                                  : {}),
                               })
                             }
+                            aria-label={`Include ${service.label} free of charge`}
                           />
                         </TableCell>
                         <TableCell>
@@ -145,27 +206,33 @@ export function ServiceTable({ form, catalogue }: ServiceTableProps) {
                             an erased value goes back to undefined rather than
                             collapsing to 0.
                           */}
-                          <Input
-                            type="number"
-                            min={0}
-                            step="0.01"
-                            className="h-8 text-xs"
-                            placeholder="0.00"
-                            disabled={!row.included}
-                            aria-label={`Base price for ${service.label}`}
-                            value={row.basePrice ?? ""}
-                            onChange={(event) =>
-                              updateRow(service.id, {
-                                basePrice:
-                                  event.target.value === ""
-                                    ? undefined
-                                    : Math.max(0, Number(event.target.value)),
-                              })
-                            }
-                          />
+                          {row.free ? (
+                            <span className="text-muted-foreground text-xs">
+                              Included
+                            </span>
+                          ) : (
+                            <Input
+                              type="number"
+                              min={0}
+                              step="0.01"
+                              className="h-8 text-xs"
+                              placeholder="0.00"
+                              disabled={!row.included}
+                              aria-label={`Base price for ${service.label}`}
+                              value={row.basePrice ?? ""}
+                              onChange={(event) =>
+                                updateRow(service.id, {
+                                  basePrice:
+                                    event.target.value === ""
+                                      ? undefined
+                                      : Math.max(0, Number(event.target.value)),
+                                })
+                              }
+                            />
+                          )}
                         </TableCell>
                         <TableCell className="text-right text-xs font-medium tabular-nums">
-                          {row.included && row.basePrice === undefined ? (
+                          {row.included && !row.free && row.basePrice === undefined ? (
                             <span className="text-muted-foreground">—</span>
                           ) : (
                             formatCurrencyAED(price)

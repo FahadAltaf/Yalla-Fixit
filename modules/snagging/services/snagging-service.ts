@@ -19,6 +19,7 @@ import type {
   CatalogueSubcategory,
   SnaggingCatalogueEntry,
   SnaggingChecklistLibraryItem,
+  SnaggingPendingApproval,
   SnaggingTask,
   SnaggingTaskSummary,
 } from "@/types/types";
@@ -901,6 +902,18 @@ export const snaggingService = {
       method: "POST",
       body: { comment: comment ?? "" },
     }),
+
+  /**
+   * What is waiting on the signed-in person: the jobs they are the named
+   * reviewer or approval manager of, and the step each one owes. Polled
+   * by the notice at the top of the module, so it never throws for
+   * somebody with nothing to do — it simply comes back empty.
+   */
+  listPendingApprovals: async () =>
+    executeRESTBackend<{ items: SnaggingPendingApproval[] }>(
+      "/api/snagging/approvals/pending",
+      { method: "GET" },
+    ),
 
   approveTask: async (id: string, comment?: string) =>
     executeRESTBackend(`/api/snagging/tasks/${id}/approve`, {

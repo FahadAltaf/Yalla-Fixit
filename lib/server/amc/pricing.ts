@@ -77,6 +77,7 @@ export function priceSubmission({
       units: row.units,
       frequency: row.frequency,
       basePrice: row.basePrice,
+      free: row.free,
       price: row.price,
     })),
     discount_percent: pricing.discountPercent,
@@ -90,12 +91,13 @@ export function priceSubmission({
  * ticked row has a base price (0 is a price; blank is not).
  */
 export function submittableProblem(
-  services: ReadonlyArray<Pick<AmcServiceRowInput, "serviceId" | "included" | "basePrice">>,
+  services: ReadonlyArray<Pick<AmcServiceRowInput, "serviceId" | "included" | "basePrice"> & { free?: boolean | null }>,
 ): string | null {
   const ticked = services.filter((row) => row.included);
   if (ticked.length === 0) return "Tick at least one service before submitting.";
+  /* A row included at no charge has no base price to ask for. */
   const unpriced = ticked.filter(
-    (row) => row.basePrice === undefined || row.basePrice === null,
+    (row) => !row.free && (row.basePrice === undefined || row.basePrice === null),
   );
   if (unpriced.length > 0) {
     return `Enter a base price for every ticked service before submitting (missing: ${unpriced

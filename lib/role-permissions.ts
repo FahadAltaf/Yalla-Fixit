@@ -26,12 +26,43 @@ export function getResourceAccessEntries(
   return getRoleAccessEntries(user).filter((entry) => entry.resource === resource);
 }
 
+/**
+ * The actions an admin does NOT get for free.
+ *
+ * Every other check short-circuits for an admin, which is what makes the
+ * role usable: without it an admin could lock themselves out of Roles and
+ * Permissions and have no way back in through the UI.
+ *
+ * Signing off an inspection is different. It is a named person putting
+ * their name to a report that goes to a client, so it never falls to
+ * somebody for holding a role.
+ *
+ * Note where the real gate lives now: snagging's review, approval,
+ * rejection and delivery routes ask who is NAMED on the job, on its
+ * Setup tab, and no permission at all substitutes for that (see
+ * lib/server/snagging/workflow.ts). This entry is the belt to that
+ * braces -- it keeps the admin short-circuit off SNAGGING + APPROVE so
+ * that a check added here later cannot quietly reopen the bypass.
+ * Everything else in snagging -- View especially, which is what the
+ * inspector app's sign-in is gated on -- is untouched.
+ */
+const NOT_INHERITED_BY_ADMIN: ReadonlyArray<{
+  resource: ResourceType;
+  action: ActionType;
+}> = [{ resource: ResourceType.SNAGGING, action: ActionType.APPROVE }];
+
+function adminInherits(resource: ResourceType, action: ActionType): boolean {
+  return !NOT_INHERITED_BY_ADMIN.some(
+    (entry) => entry.resource === resource && entry.action === action
+  );
+}
+
 export function hasResourceAction(
   user: User | null | undefined,
   resource: ResourceType,
   action: ActionType
 ): boolean {
-  if (isAdminUser(user)) return true;
+  if (isAdminUser(user) && adminInherits(resource, action)) return true;
 
   return getResourceAccessEntries(user, resource).some(
     (entry) => entry.action === action && entry.enabled !== false

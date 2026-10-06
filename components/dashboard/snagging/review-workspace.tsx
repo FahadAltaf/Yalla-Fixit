@@ -36,7 +36,14 @@ function holderOf(row: {
   reviewer?: { full_name?: string | null; email?: string | null } | null;
   manager?: { full_name?: string | null; email?: string | null } | null;
 }): string | null {
-  const holder = row.reviewed_at ? row.manager : row.reviewer;
+  /*
+    Before the hand-off it is the reviewer's, after it the manager's --
+    except on a job with no reviewer named, where the manager reviews it
+    themselves and so holds it throughout. That last case used to leave
+    the row with no name at all, which read as "nobody has this", when
+    in fact one person has both halves of it.
+  */
+  const holder = row.reviewed_at ? row.manager : (row.reviewer ?? row.manager);
   return holder?.full_name ?? holder?.email ?? null;
 }
 
@@ -238,10 +245,10 @@ export default function ReviewWorkspace() {
                           <span aria-hidden>·</span>
                           <span>
                             {row.status === "submitted"
-                              ? "Awaiting review"
+                              ? "To review"
                               : row.reviewed_at
-                                ? "Awaiting sign-off"
-                                : "Under review"}
+                                ? "To approve"
+                                : "Being reviewed"}
                           </span>
                           {holderOf(row) ? (
                             <>

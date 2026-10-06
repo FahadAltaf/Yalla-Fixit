@@ -1,7 +1,7 @@
 import { after, NextRequest, NextResponse } from "next/server";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
-import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
+import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { emailService } from "@/lib/email-service";
 import { recordAudit } from "@/lib/server/snagging/audit";
@@ -25,7 +25,16 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     if (!profile || !accessUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.APPROVE)) {
+    /*
+      Access to the module, not a second permission to decide.
+
+      This asked for Snagging's `approve` grant on top of the job's own
+      assignment, so a coordinator named as a job's approval manager --
+      which is the portal's way of saying "you decide this one" -- was
+      refused by a role setting nobody had connected to that dropdown.
+      Who decides is settled below, by name, on the job.
+    */
+    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.VIEW)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -50,11 +59,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     if (loadError) throw new Error(loadError.message);
     if (!job) return NextResponse.json({ error: "Inspection not found" }, { status: 404 });
 
-    // FR-6.01 — rejection is a manager act, reserved for the job's designated
-    // approval manager (or an admin).
-    if (!isDesignatedApprovalManager(profile.id, job.approval_manager_id, isAdminUser(accessUser))) {
+    // FR-6.01 — sending an inspection back is a manager act, reserved for
+    // the person named as this job's approval manager.
+    if (!isDesignatedApprovalManager(profile.id, job.approval_manager_id)) {
       return NextResponse.json(
-        { error: "Only this inspection's approval manager can reject it." },
+        {
+          error:
+            "Only the approval manager named on this inspection can send it back.",
+        },
         { status: 403 },
       );
     }

@@ -36,9 +36,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
 import { useAuth } from "@/context/AuthContext";
-import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { snaggingService, type SnaggingQuotation } from "@/modules/snagging";
-import { ActionType, ResourceType, type SnaggingTask } from "@/types/types";
+import { type SnaggingTask } from "@/types/types";
 
 import { InspectionReport } from "./inspection-report";
 import { ActionDialogContent, ErrorState, SubmitButton } from "./shared";
@@ -109,17 +108,14 @@ export function ReportView({ taskId }: { taskId: string }) {
   }, [load]);
 
   /*
-    Delivering runs through the same guard as approving: only this job's
-    named approval manager, or an admin. Following the permission alone
-    would offer a button the server answers with a 403.
+    Delivering runs through the same guard as approving: the one person
+    named as this job's approval manager, with no permission and no role
+    standing in for being named (FR-6.01). Offering it on the permission
+    alone put a button in front of people the server answers with a 403.
   */
-  const canDeliver =
-    hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.APPROVE) &&
-    (isAdminUser(userProfile) ||
-      Boolean(
-        task?.approval_manager_id &&
-        userProfile?.id === task.approval_manager_id,
-      ));
+  const canDeliver = Boolean(
+    task?.approval_manager_id && userProfile?.id === task.approval_manager_id,
+  );
 
   async function download(format: "pdf" | "docx") {
     if (!task) return;

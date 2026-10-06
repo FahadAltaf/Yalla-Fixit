@@ -14,6 +14,7 @@ import type {
   AmcTotals,
   FrequencyRow,
 } from "./amc-types";
+import { contractTermMonths } from "./amc-date-utils";
 import { amountToWordsAed } from "./utils/amount-to-words";
 import { getAmcSettingsDefaults, servicesForProperty } from "./amc-settings";
 import type { AmcServiceDefinition, AmcSettings } from "./amc-settings";
@@ -43,6 +44,8 @@ export function grandTotalOf(finalPriceExclVat: number): number {
   every checked row has one.
 */
 export function computeServiceRowPrice(row: AmcServiceRow): number {
+  // Unticked and "included at no charge" rows are 0 (rowPrice handles
+  // both), so the table, the totals and the documents cannot disagree.
   return rowPrice(row);
 }
 
@@ -52,13 +55,20 @@ export function computeServiceRowPrice(row: AmcServiceRow): number {
   to the fil. See that file for the rounding rule.
 */
 export function calculateAmcTotals(data: AmcFormData): AmcTotals {
-  const pricing = computeAmcPricing(data.serviceRows, data.discountPercent ?? 0);
+  /*
+    Monthly is divided by the term, not by twelve (client, Oct 2026): a
+    six-month contract quoted a monthly figure half what the client pays,
+    because the divisor was hard-coded to a year. The dates decide it.
+  */
+  const termMonths = contractTermMonths(data.startDate, data.endDate);
+  const pricing = computeAmcPricing(data.serviceRows, data.discountPercent ?? 0, termMonths);
 
   return {
     subtotal: pricing.subtotal,
     discountPercent: pricing.discountPercent,
     discountAmount: pricing.discountAmount,
     finalPrice: pricing.finalPrice,
+    termMonths,
     monthlyPrice: pricing.monthlyPrice,
     annualSubtotal: pricing.finalPrice,
     vatAmount: pricing.vatAmount,
@@ -116,6 +126,14 @@ function buildFrequencyRows(data: AmcFormData, settings: AmcSettings): Frequency
         serviceId: service.id,
         scope: service.scope,
         units: row.units,
+        /*
+          A hotline has no units, and an hourly handyman allowance is
+          measured in hours rather than in things. The services that do
+          have a unit count are exactly the ones that print a scope of
+          work of their own: the AC, the pumps, the tanks, the ducts.
+        */
+        hasUnits:
+          service.hasScopeSection === true && service.frequencyType !== "handyman",
         frequency: formatFrequencyForPdf(service, row.frequency),
         price: computeServiceRowPrice(row),
         reference: service.reference,
@@ -200,9 +218,10 @@ export function syncServiceRowsForUnitType(
     if (existing) return existing;
     return {
       serviceId: service.id,
-      included: false,
+      included: service.includedFree === true,
       units: 1,
       frequency: defaultFrequencyFor(service),
+      free: service.includedFree === true,
       basePrice: undefined,
     };
   });

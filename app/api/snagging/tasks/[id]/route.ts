@@ -99,7 +99,31 @@ export async function PATCH(
         { status: 404 },
       );
 
-    if (existing.locked) {
+    /*
+      Locked at submission — with one way through, for routing.
+
+      Who reviews a job and who approves it are now the only things that
+      can act on it (FR-6.01, lib/server/snagging/workflow.ts), and both
+      are named here, on a job that locks the moment the inspector
+      submits it. Held shut for those two fields as well, a manager on
+      leave meant a report nobody could sign off and no way to hand it to
+      anybody, short of sending the whole inspection back to the phone.
+
+      So a change to those two alone is let through while the job is
+      still in the chain. Everything else stays locked, and once the job
+      is approved its routing is history and is locked too. Each change
+      is audited below, by name, from and to.
+    */
+    const ROUTING_ONLY = new Set(["approval_manager_id", "reviewer_id"]);
+    const touched = Object.entries(input)
+      .filter(([, value]) => value !== undefined)
+      .map(([key]) => key);
+    const rerouting =
+      touched.length > 0 &&
+      touched.every((key) => ROUTING_ONLY.has(key)) &&
+      (existing.status === "submitted" || existing.status === "in_review");
+
+    if (existing.locked && !rerouting) {
       return NextResponse.json(
         {
           error:

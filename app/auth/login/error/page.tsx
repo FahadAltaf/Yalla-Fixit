@@ -33,7 +33,7 @@ function ErrorContent() {
           <div className='outline-border relative shrink rounded-[20px] p-2.5 outline-2 -outline-offset-2'>
             <img
               src='https://cdn.shadcnstudio.com/ss-assets/blocks/marketing/auth/image-1.png'
-              className='max-h-111 w-full rounded-lg object-contain dark:hidden'
+              className='max-h-111 w-full rounded-lg object-contain'
               alt='Dashboards'
             />
             <img

@@ -4,6 +4,7 @@
   The old proposal template's commercial terms went with it.
 */
 import { AMC_SERVICES } from "./amc-constants";
+import { contractTermMonths } from "./amc-date-utils";
 import {
   computeServiceRowPrice,
   formatDisplayDate,
@@ -15,6 +16,8 @@ export interface ProposalServiceRow {
   service: string;
   /* FR4.1 — "each with the units, frequency and price entered". */
   units: number;
+  /** False leaves the UNITS cell empty; see FrequencyRow.hasUnits. */
+  hasUnits: boolean;
   frequency: string;
   price: number;
 }
@@ -43,10 +46,20 @@ export function buildProposalServiceRows(
       const service = services.find((item) => item.id === row.serviceId);
       if (!service) return null;
 
+      const fromContract = frequencyRows.find(
+        (item) => item.serviceId === service.id,
+      );
       return {
         serviceId: service.id,
         service: service.label.replace(/\s*\(.*?\)\s*/g, " ").trim(),
         units: row.units,
+        /*
+          Taken from the contract's own row so the two documents agree
+          about which services have a unit count at all. A caller with no
+          matching row (an older snapshot) falls back to showing it,
+          which is what the table did for everything before this.
+        */
+        hasUnits: fromContract ? fromContract.hasUnits : true,
         frequency: frequencyById.get(row.serviceId) ?? `${row.frequency} per year`,
         price: computeServiceRowPrice(row),
       };
@@ -54,18 +67,16 @@ export function buildProposalServiceRows(
     .filter((row): row is ProposalServiceRow => Boolean(row));
 }
 
+/*
+  How long the proposal covers, from the one place that answers it.
+
+  This counted calendar months itself, and so disagreed with the contract
+  on the common case of a year written as 1 Jan to 31 Dec: this said 11
+  months, the contract said one year. Both read contractTermMonths now.
+*/
 export function getProposalCoverageMonths(data: AmcFormData): number {
   if (!data.startDate || !data.endDate) return 12;
-  const start = new Date(data.startDate);
-  const end = new Date(data.endDate);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 12;
-
-  const months =
-    (end.getFullYear() - start.getFullYear()) * 12 +
-    (end.getMonth() - start.getMonth()) +
-    (end.getDate() >= start.getDate() ? 0 : -1);
-
-  return Math.max(1, months || 12);
+  return contractTermMonths(data.startDate, data.endDate);
 }
 
 

@@ -75,7 +75,13 @@ export async function POST(
     if (
       !hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.CREATE)
     ) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      return NextResponse.json(
+        {
+          error:
+            "You do not have permission to raise a return trip on a job. Ask whoever books the work, or have Create on Snagging added to your role.",
+        },
+        { status: 403 },
+      );
     }
 
     const { id } = await ctx.params;

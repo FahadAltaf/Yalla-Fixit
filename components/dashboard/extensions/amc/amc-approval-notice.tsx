@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatDistanceToNow } from "date-fns";
-import { ClipboardCheck, X } from "lucide-react";
+import { ArrowRight, ClipboardCheck, X } from "lucide-react";
 import { toast } from "sonner";
 
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DataRow, SectionCard } from "@/components/dashboard/shared/kaizen";
 import { amcSubmissionsService } from "@/modules/amc-submissions";
 import { formatCurrencyAED } from "@/utils/format-currency";
 
@@ -29,8 +30,14 @@ import type { AmcPendingApproval } from "./amc-types";
 export const AMC_APPROVALS_CHANGED = "amc-approvals-changed";
 
 const POLL_MS = 60_000;
-/* Rows shown before "Show all"; the rest are one click away on the list. */
-const SHOWN = 3;
+/*
+  Rows shown before folding; the rest are one click away on the list.
+
+  Five rather than three. Three was chosen when the queue was a
+  footnote; an approver with four waiting had one of them hidden
+  behind a link, which is the one case the notice exists for.
+*/
+const SHOWN = 5;
 
 /* The proposal's own page, where the approver reads it and decides. */
 export function reviewLink(id: string) {
@@ -109,76 +116,99 @@ export function AmcApprovalNotice({
     dismissedIds !== null && items.every((item) => dismissedIds.has(item.id));
   if (!canApprove || items.length === 0 || hidden) return null;
 
+  const waiting = items.length;
+
   return (
-    <Alert className="border-primary/25 bg-primary/5 px-4 py-3">
-      <ClipboardCheck className="text-primary size-4" />
-      <AlertTitle className="text-primary pr-8">
-        {items.length === 1
-          ? "1 proposal waiting for your approval"
-          : `${items.length} proposals waiting for your approval`}
-      </AlertTitle>
-      <AlertDescription className="text-foreground/80">
-        <ul className="mt-1 w-full divide-y">
-          {items.slice(0, SHOWN).map((item) => (
-            <li
-              key={item.id}
-              className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2"
-            >
-              <div className="min-w-0 flex-1">
-                <p className="text-foreground truncate font-medium">
-                  {item.customerName}
-                  {item.proposalNumber ? (
-                    <span className="text-muted-foreground font-normal">
-                      {" "}
-                      ({item.proposalNumber})
+    /*
+      The queue, as a card rather than an alert.
+
+      It was an Alert: a tinted strip with a title and a list crammed into
+      its description slot, so four proposals read as one long warning
+      instead of four things to do. A queue is a list of work, and the
+      product already has a shape for that -- the same card and the same
+      row the job page and the home page use -- so an approver reads it
+      the way they read every other list in the portal.
+    */
+    <SectionCard
+      icon={<ClipboardCheck />}
+      title="Waiting for your approval"
+      description={
+        waiting === 1
+          ? "One proposal is with you."
+          : `${waiting} proposals are with you, oldest first.`
+      }
+      className="border-brand/30"
+      bodyClassName="border-t"
+      action={
+        <div className="flex items-center gap-2">
+          <Badge variant="secondary" className="bg-brand/10 text-brand tabular-nums">
+            {waiting}
+          </Badge>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-8"
+            aria-label="Hide for now"
+            onClick={() => setDismissedIds(new Set(items.map((item) => item.id)))}
+          >
+            <X className="size-4" />
+          </Button>
+        </div>
+      }
+    >
+      <ol className="divide-y">
+        {items.slice(0, SHOWN).map((item) => (
+          <li key={item.id}>
+            <DataRow
+              icon={<ClipboardCheck aria-hidden />}
+              title={item.customerName || "Unnamed customer"}
+              subtitle={
+                <>
+                  {item.proposalNumber || "No number"}
+                  {item.ownerName ? <span> · from {item.ownerName}</span> : null}
+                  {item.submittedAt ? (
+                    <span>
+                      {" · "}
+                      {formatDistanceToNow(new Date(item.submittedAt), {
+                        addSuffix: true,
+                      })}
                     </span>
                   ) : null}
-                </p>
-                <p className="text-muted-foreground text-xs">
-                  {[
-                    item.ownerName ? `From ${item.ownerName}` : null,
-                    formatCurrencyAED(grandTotalOf(item.finalPrice)),
-                    item.submittedAt
-                      ? formatDistanceToNow(new Date(item.submittedAt), {
-                          addSuffix: true,
-                        })
-                      : null,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </p>
-              </div>
-              <Button
-                size="sm"
-                variant="outline"
-                className="shrink-0"
-                onClick={() => router.push(reviewLink(item.id))}
-              >
-                Review
-              </Button>
-            </li>
-          ))}
-        </ul>
-        {items.length > SHOWN ? (
-          <Button
-            variant="link"
-            size="sm"
-            className="h-auto px-0"
-            onClick={onShowAll}
-          >
-            Show all {items.length}
+                </>
+              }
+              trailing={
+                /* The figure and the action together: an approver decides
+                   on the amount, so it belongs beside the button rather
+                   than buried in the line underneath. */
+                <div className="flex items-center gap-3">
+                  <span className="text-sm font-medium tabular-nums">
+                    {formatCurrencyAED(grandTotalOf(item.finalPrice))}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      router.push(reviewLink(item.id));
+                    }}
+                  >
+                    Review
+                  </Button>
+                </div>
+              }
+              onClick={() => router.push(reviewLink(item.id))}
+            />
+          </li>
+        ))}
+      </ol>
+      {waiting > SHOWN ? (
+        <div className="border-t px-5 py-3">
+          <Button variant="ghost" size="sm" onClick={onShowAll}>
+            See the other {waiting - SHOWN}
+            <ArrowRight className="size-3.5" />
           </Button>
-        ) : null}
-      </AlertDescription>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="absolute top-2 right-2 size-7"
-        aria-label="Hide for now"
-        onClick={() => setDismissedIds(new Set(items.map((item) => item.id)))}
-      >
-        <X className="size-4" />
-      </Button>
-    </Alert>
+        </div>
+      ) : null}
+    </SectionCard>
   );
 }

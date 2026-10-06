@@ -15,6 +15,21 @@ export const coordinationContactSchema = z.object({
 });
 
 /*
+  The second coordination contact, which is optional (Jonathan, Oct 2026).
+
+  Most clients give one person. Asking for two made the form refuse to
+  move on until a second name and number were invented, and invented
+  contacts print on the contract. Blank is allowed here; superRefine
+  below still insists on a number once a name is given, so a
+  half-finished second contact cannot reach the document.
+*/
+export const optionalCoordinationContactSchema = z.object({
+  name: z.string(),
+  phone: z.string(),
+  designation: designationSchema,
+});
+
+/*
   FR4.5 / §8.3 — sections the team switches on per proposal. The other
   three optional sections in §8.3 (24/7 hotline, water pump, free
   handyman) are already service rows, so their own checkbox decides
@@ -70,6 +85,21 @@ export const amcServiceRowSchema = z.object({
     .min(0, "Base price cannot be negative")
     .max(10_000_000, "Base price can be at most 10,000,000")
     .optional(),
+  /*
+    Included at no charge (Jonathan, Oct 2026).
+
+    Several services are free by their own wording -- the 24/7 hotline,
+    the emergency call-out -- and the form still demanded a base price
+    for each of them before it would submit. Typing 0 works, but it reads
+    as "priced at nothing" rather than "not priced at all", and nobody
+    guessed it. A free row needs no price, prices at 0, and says
+    Included where the figure would be.
+
+    Defaults from the service (`includedFree` in settings) and can be
+    turned on or off per proposal, because what is thrown in free is a
+    commercial decision taken one contract at a time.
+  */
+  free: z.boolean().default(false),
   price: z.coerce.number().min(0).optional(),
 });
 
@@ -95,7 +125,7 @@ export const amcFormSchema = z
     customerEmail: z.string().email("Invalid email address"),
     coordinationContacts: z.tuple([
       coordinationContactSchema,
-      coordinationContactSchema,
+      optionalCoordinationContactSchema,
     ]),
     startDate: z.string().min(1, "Start date is required"),
     endDate: z.string().min(1, "End date is required"),
@@ -121,6 +151,8 @@ export const amcFormSchema = z
         Checked explicitly against undefined -- 0 is a valid price (a
         service given free), and a falsy test would reject it.
       */
+      // A free row is never asked for one; that is what free means.
+      if (row.free) continue;
       if (row.basePrice === undefined || Number.isNaN(row.basePrice)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -165,6 +197,28 @@ export const amcFormSchema = z
       }
     }
 
+    /*
+      The optional second contact, all or nothing.
+
+      A name with no number is worse than no contact at all: it prints on
+      the contract as somebody the engineer cannot reach.
+    */
+    const second = data.coordinationContacts[1];
+    if (second.name.trim() && !second.phone.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Add a number for the second contact, or clear their name",
+        path: ["coordinationContacts", 1, "phone"],
+      });
+    }
+    if (second.phone.trim() && !second.name.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Add a name for the second contact, or clear their number",
+        path: ["coordinationContacts", 1, "name"],
+      });
+    }
+
     if (
       data.startDate &&
       data.endDate &&
@@ -183,6 +237,9 @@ export type UnitType = z.infer<typeof unitTypeSchema>;
 export type PaymentTerms = z.infer<typeof paymentTermsSchema>;
 export type Designation = z.infer<typeof designationSchema>;
 export type CoordinationContact = z.infer<typeof coordinationContactSchema>;
+export type OptionalCoordinationContact = z.infer<
+  typeof optionalCoordinationContactSchema
+>;
 export type AmcServiceRow = z.infer<typeof amcServiceRowSchema>;
 export type AmcOptionalSections = z.infer<typeof amcOptionalSectionsSchema>;
 export type AmcPriceListRow = z.infer<typeof amcPriceListRowSchema>;
@@ -200,6 +257,13 @@ export interface AmcService {
   scope: string;
   reference: string;
   frequencyType: AmcServiceFrequencyType;
+  /**
+   * Included at no charge by default, so a new proposal never asks for a
+   * base price for it (point 9: the 24/7 hotline has no unit rate and is
+   * in every contract). Still a per-proposal choice -- this only decides
+   * where the row starts.
+   */
+  includedFree?: boolean;
   /* The default the table starts at (FR2.3). No unitRate any more: price
      comes from the base price entered per proposal (FR2.4). */
   frequencyPerYear?: number;
@@ -215,6 +279,16 @@ export interface FrequencyRow {
   scope: string;
   /* FR4.1 — "each with the units, frequency and price entered". */
   units: number;
+  /**
+   * Whether a unit count means anything for this service (Behrouz, Oct
+   * 2026: "units only where they apply, such as AC").
+   *
+   * Every row printed a number, so the 24/7 hotline and the emergency
+   * call-out read "1 Unit" — which says the client gets one call. True
+   * for the services that are performed on a countable thing, which is
+   * the same set that prints a scope of work of its own.
+   */
+  hasUnits: boolean;
   frequency: string;
   price: number;
   reference: string;
@@ -225,6 +299,8 @@ export interface AmcTotals {
   discountPercent: number;
   discountAmount: number;
   finalPrice: number;
+  /** How many whole months the contract runs, from its own dates. */
+  termMonths: number;
   monthlyPrice: number;
   annualSubtotal: number;
   vatAmount: number;
@@ -317,7 +393,7 @@ export interface AmcSubmissionCustomer {
   customerId?: string;
   customerPhone: string;
   customerEmail: string;
-  coordinationContacts: [CoordinationContact, CoordinationContact];
+  coordinationContacts: [CoordinationContact, OptionalCoordinationContact];
   startDate: string;
   endDate: string;
   paymentTerms: PaymentTerms;

@@ -17,6 +17,7 @@ import { hasResourceAction } from "@/lib/role-permissions";
 import { snaggingService, type SnaggingTaskFilters } from "@/modules/snagging";
 import { ActionType, ResourceType, type SnaggingTaskSummary } from "@/types/types";
 
+import { SnaggingApprovalNotice } from "./approval-notice";
 import { ErrorState, PageHeading } from "./shared";
 import {
   JOB_FILTERS,
@@ -185,6 +186,13 @@ export default function JobsTable({
           ) : null
         }
       />
+
+      {/*
+        Above the table, because it is the thing on this page that has a
+        deadline on it. It renders nothing for anybody with no job
+        waiting on them, which is most people most of the time.
+      */}
+      <SnaggingApprovalNotice />
 
       {error ? (
         <ErrorState

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
-import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
+import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
 import { isDesignatedReviewer } from "@/lib/server/snagging/workflow";
@@ -27,7 +27,16 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     if (!profile || !accessUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.APPROVE)) {
+    /*
+      Access to the module, not a second permission to decide.
+
+      This asked for Snagging's `approve` grant on top of the job's own
+      assignment, so a coordinator named as a job's approval manager --
+      which is the portal's way of saying "you decide this one" -- was
+      refused by a role setting nobody had connected to that dropdown.
+      Who decides is settled below, by name, on the job.
+    */
+    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.VIEW)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -47,16 +56,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     if (loadError) throw new Error(loadError.message);
     if (!job) return NextResponse.json({ error: "Inspection not found" }, { status: 404 });
 
-    if (
-      !isDesignatedReviewer(
-        profile.id,
-        job.reviewer_id,
-        job.approval_manager_id,
-        isAdminUser(accessUser),
-      )
-    ) {
+    if (!isDesignatedReviewer(profile.id, job.reviewer_id, job.approval_manager_id)) {
       return NextResponse.json(
-        { error: "Only this inspection's reviewer can complete its review." },
+        {
+          error: job.reviewer_id
+            ? "Only the reviewer named on this inspection can complete its review."
+            : "No reviewer is named on this inspection, so only its approval manager can complete the review.",
+        },
         { status: 403 },
       );
     }

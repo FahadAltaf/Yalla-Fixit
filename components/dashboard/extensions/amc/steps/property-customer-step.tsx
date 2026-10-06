@@ -1,10 +1,12 @@
 "use client";
 
+import { useEffect } from "react";
 import { Building2, UserRound, Users } from "lucide-react";
 import type { UseFormReturn } from "react-hook-form";
 
 import {
   FormControl,
+  FormDescription,
   FormField,
   FormItem,
   FormLabel,
@@ -21,10 +23,30 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-import { getDefaultEndDate } from "../amc-constants";
+import { getDefaultEndDate, unitTypesForCategory } from "../amc-constants";
 import { isEndDateBeforeStartDate } from "../amc-date-utils";
 import { DatePickerField } from "../components/date-picker-field";
 import type { AmcFormData } from "../amc-types";
+
+/**
+ * What the wizard means by a required field.
+ *
+ * The form told nobody which fields it would refuse to move on without:
+ * every label looked the same, and the first anyone heard of it was a row
+ * of red under the ones they had skipped. Same mark and same colour as
+ * the snagging wizard, so one convention covers the product.
+ *
+ * Only on fields that can actually be left blank. A select that opens
+ * with a value is required too, and marking it would make the mark mean
+ * nothing.
+ */
+function RequiredMark() {
+  return (
+    <span className="text-brand" aria-hidden>
+      {" *"}
+    </span>
+  );
+}
 
 interface StepProps {
   form: UseFormReturn<AmcFormData>;
@@ -32,6 +54,27 @@ interface StepProps {
 
 export function PropertyCustomerStep({ form }: StepProps) {
   const startDate = form.watch("startDate");
+  /*
+    Which unit types this category has (Behrouz, Oct 2026): an office is
+    commercial, a villa and an apartment are not. The list used to offer
+    all three whatever the category, so "Residential - OFFICE" was one
+    stray click away and prints as the document's own banner.
+  */
+  const propertyCategory = form.watch("propertyCategory");
+  const unitType = form.watch("unitType");
+  const unitTypes = unitTypesForCategory(propertyCategory);
+
+  /*
+    Changing the category can leave the unit type behind. Moved to the
+    first type the new category offers rather than cleared, because the
+    field is required and an empty required field right after a change
+    the user did not make reads as an error they caused.
+  */
+  useEffect(() => {
+    if (!unitTypes.some((type) => type.value === unitType)) {
+      form.setValue("unitType", unitTypes[0].value, { shouldValidate: true });
+    }
+  }, [form, unitType, unitTypes]);
 
   return (
     <div className="space-y-8">
@@ -65,6 +108,10 @@ export function PropertyCustomerStep({ form }: StepProps) {
                       <SelectItem value="commercial">Commercial</SelectItem>
                     </SelectContent>
                   </Select>
+                  <FormDescription>
+                    Sets which unit types are offered, and prints in the
+                    document&apos;s banner.
+                  </FormDescription>
                   <FormMessage />
                 </FormItem>
               )}
@@ -84,11 +131,17 @@ export function PropertyCustomerStep({ form }: StepProps) {
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      <SelectItem value="villa">Villa</SelectItem>
-                      <SelectItem value="apartment">Apartment</SelectItem>
-                      <SelectItem value="office">Office</SelectItem>
+                      {unitTypes.map((type) => (
+                        <SelectItem key={type.value} value={type.value}>
+                          {type.label}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
+                  <FormDescription>
+                    Decides which services the next step offers: water pump,
+                    roof drain and water tank work are villas only.
+                  </FormDescription>
                   <FormMessage />
                 </FormItem>
               )}
@@ -101,10 +154,23 @@ export function PropertyCustomerStep({ form }: StepProps) {
               name="propertyDetail"
               render={({ field }) => (
                 <FormItem className="sm:col-span-2 xl:col-span-1">
-                  <FormLabel>Property detail</FormLabel>
+                  <FormLabel>
+                    Property name
+                    <RequiredMark />
+                  </FormLabel>
                   <FormControl>
-                    <Input placeholder="e.g. Villa 12, Al Barsha, Dubai" {...field} />
+                    <Input placeholder="e.g. Villa 12, Al Barsha" {...field} />
                   </FormControl>
+                  {/*
+                    Both fields are an address of a kind, and the old
+                    labels -- "Property detail" and "Property address" --
+                    did not say which was which or where either one
+                    surfaced. Each now names the line it prints as.
+                  */}
+                  <FormDescription>
+                    The short name, printed as Property Detail in the
+                    contract&apos;s details table.
+                  </FormDescription>
                   <FormMessage />
                 </FormItem>
               )}
@@ -115,14 +181,21 @@ export function PropertyCustomerStep({ form }: StepProps) {
               name="propertyAddress"
               render={({ field }) => (
                 <FormItem className="sm:col-span-2 xl:col-span-3">
-                  <FormLabel>Property address</FormLabel>
+                  <FormLabel>
+                    Customer address
+                    <RequiredMark />
+                  </FormLabel>
                   <FormControl>
                     <Textarea
                       rows={2}
-                      placeholder="Full property address"
+                      placeholder="Full address, as it should read on the contract"
                       {...field}
                     />
                   </FormControl>
+                  <FormDescription>
+                    The full address, printed as Customer Address on the
+                    contract.
+                  </FormDescription>
                   <FormMessage />
                 </FormItem>
               )}
@@ -149,7 +222,10 @@ export function PropertyCustomerStep({ form }: StepProps) {
               render={({ field }) => (
                 <FormItem className="flex flex-col">
 
-                  <FormLabel>Customer name</FormLabel>
+                  <FormLabel>
+                    Customer name
+                    <RequiredMark />
+                  </FormLabel>
                   <FormControl>
                     <Input placeholder="e.g. Mr. Ahmed Khan" {...field} />
                   </FormControl>
@@ -163,7 +239,10 @@ export function PropertyCustomerStep({ form }: StepProps) {
               name="customerId"
               render={({ field }) => (
                 <FormItem className="flex flex-col">
-                  <FormLabel>Customer ID</FormLabel>
+                  <FormLabel>
+                    Customer ID
+                    <RequiredMark />
+                  </FormLabel>
                   <FormControl className="">
                     <Input placeholder="e.g. YFI1806" {...field} />
                   </FormControl>
@@ -178,7 +257,10 @@ export function PropertyCustomerStep({ form }: StepProps) {
               render={({ field }) => (
                 <FormItem className="flex flex-col">
 
-                  <FormLabel>Phone</FormLabel>
+                  <FormLabel>
+                    Phone
+                    <RequiredMark />
+                  </FormLabel>
                   <FormControl>
                     <AmcPhoneInput
                       id={field.name}
@@ -198,7 +280,10 @@ export function PropertyCustomerStep({ form }: StepProps) {
               render={({ field }) => (
                 <FormItem className="flex flex-col">
 
-                  <FormLabel>Email</FormLabel>
+                  <FormLabel>
+                    Email
+                    <RequiredMark />
+                  </FormLabel>
                   <FormControl>
                     <Input
                       type="email"
@@ -216,7 +301,10 @@ export function PropertyCustomerStep({ form }: StepProps) {
               name="startDate"
               render={({ field }) => (
                 <FormItem className="flex flex-col">
-                  <FormLabel>Contract start date</FormLabel>
+                  <FormLabel>
+                    Contract start date
+                    <RequiredMark />
+                  </FormLabel>
                   <FormControl>
                     <DatePickerField
                       value={field.value}
@@ -254,7 +342,10 @@ export function PropertyCustomerStep({ form }: StepProps) {
               name="endDate"
               render={({ field }) => (
                 <FormItem className="flex flex-col">
-                  <FormLabel>Contract end date</FormLabel>
+                  <FormLabel>
+                    Contract end date
+                    <RequiredMark />
+                  </FormLabel>
                   <FormControl>
                     <DatePickerField
                       value={field.value}
@@ -330,7 +421,8 @@ export function PropertyCustomerStep({ form }: StepProps) {
             <Users className="text-brand size-4" />
             Coordination contacts
           </h3>          <p className="text-muted-foreground mt-0.5 text-sm">
-            The two people the team coordinates with day to day.
+            Who the team coordinates with day to day. One is enough; add a
+            second only if the client has one.
           </p>
         </div>
         <div className="space-y-6">
@@ -345,7 +437,10 @@ export function PropertyCustomerStep({ form }: StepProps) {
                 render={({ field }) => (
                   <FormItem className="flex flex-col">
 
-                    <FormLabel>Name</FormLabel>
+                    <FormLabel>
+                      Name
+                      <RequiredMark />
+                    </FormLabel>
                     <FormControl>
                       <Input placeholder="Contact person name" {...field} />
                     </FormControl>
@@ -359,7 +454,10 @@ export function PropertyCustomerStep({ form }: StepProps) {
                 render={({ field }) => (
                   <FormItem className="flex flex-col">
 
-                    <FormLabel>Phone</FormLabel>
+                    <FormLabel>
+                      Phone
+                      <RequiredMark />
+                    </FormLabel>
                     <FormControl>
                       <AmcPhoneInput
                       id={field.name}
@@ -402,7 +500,8 @@ export function PropertyCustomerStep({ form }: StepProps) {
 
           <div className="space-y-4">
             <h4 className="text-sm font-medium text-muted-foreground">
-              Contact Person 2
+              Contact Person 2{" "}
+              <span className="font-normal">(optional)</span>
             </h4>
             <div className="grid gap-4 sm:grid-cols-3">
               <FormField

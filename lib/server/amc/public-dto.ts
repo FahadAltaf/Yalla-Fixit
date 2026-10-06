@@ -112,6 +112,8 @@ export function toPublicSettings(
     ),
     brochure: { ...settings.brochure },
     approval: { approvers: [] },
+    /* Staff contacts are internal; the proposal carries its own managers. */
+    accountManagers: [],
   };
 }
 

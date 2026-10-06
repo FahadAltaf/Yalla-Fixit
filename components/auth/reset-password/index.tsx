@@ -23,7 +23,7 @@ const ResetPasswordContent = () => {
           <div className="outline-border relative shrink rounded-[20px] p-2.5 outline-2 -outline-offset-[2px]">
           <Image
                 src={LoginImage}
-              className="max-h-111 w-full rounded-lg object-contain dark:hidden h-auto"
+              className="max-h-111 h-auto w-full rounded-lg object-contain"
               width={1000}
               height={1000}
               unoptimized

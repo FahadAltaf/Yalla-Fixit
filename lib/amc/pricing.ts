@@ -77,6 +77,11 @@ export interface AmcPricingRowInput {
   frequency: number;
   /** Undefined or null: not priced yet; counts as 0 until it is. */
   basePrice?: number | null;
+  /**
+   * Included at no charge (client, Oct 2026: e.g. the 24/7 helpdesk): no
+   * base price is asked for and the row costs 0.
+   */
+  free?: boolean | null;
 }
 
 export interface AmcPricedRow {
@@ -85,7 +90,8 @@ export interface AmcPricedRow {
   units: number;
   frequency: number;
   basePrice: number | null;
-  /** basePrice x units x frequency; 0 when not ticked. */
+  free: boolean;
+  /** basePrice x units x frequency; 0 when not ticked or free. */
   price: number;
   priceFils: number;
 }
@@ -112,6 +118,7 @@ export interface AmcPricing {
 
 export function rowPriceFils(row: AmcPricingRowInput): number {
   if (!row.included) return 0;
+  if (row.free) return 0;
   const baseFils = toFils(row.basePrice ?? 0);
   return baseFils * Math.trunc(row.units) * Math.trunc(row.frequency);
 }
@@ -123,6 +130,8 @@ export function rowPrice(row: AmcPricingRowInput): number {
 export function computeAmcPricing(
   rows: ReadonlyArray<AmcPricingRowInput>,
   discountPercent: number | null | undefined = 0,
+  /** The contract term the monthly figure is spread over (client, Oct 2026: not always 12). */
+  termMonths = 12,
 ): AmcPricing {
   const priced: AmcPricedRow[] = rows.map((row) => {
     const priceFils = rowPriceFils(row);
@@ -135,6 +144,7 @@ export function computeAmcPricing(
         row.basePrice === undefined || row.basePrice === null
           ? null
           : roundAed(row.basePrice),
+      free: row.free === true,
       price: filsToAed(priceFils),
       priceFils,
     };
@@ -155,7 +165,7 @@ export function computeAmcPricing(
     finalPrice: filsToAed(finalFils),
     vatAmount: filsToAed(vatFils),
     grandTotal: filsToAed(grandFils),
-    monthlyPrice: filsToAed(Math.floor((finalFils + 6) / 12)),
+    monthlyPrice: filsToAed(Math.round(finalFils / Math.max(1, Math.trunc(termMonths) || 12))),
     fils: {
       subtotal: subtotalFils,
       discount: discountFils,
@@ -195,6 +205,12 @@ export const amcServiceRowInputSchema = z.object({
   units: z.number().int().min(1).max(MAX_UNITS),
   frequency: z.number().int().min(1).max(MAX_FREQUENCY),
   basePrice: z.number().finite().min(0).max(MAX_BASE_PRICE).nullable().optional(),
+  /*
+    Included at no charge, so the row has no base price to save. Optional
+    with a default, because a draft saved before this existed has no such
+    field and must still load.
+  */
+  free: z.boolean().optional().default(false),
   /** Accepted for compatibility, never trusted. */
   price: z.number().optional(),
 });
@@ -209,4 +225,5 @@ export const amcServiceRowsInputSchema = z
 
 export const discountPercentSchema = z.number().finite().min(0).max(100);
 
-export type AmcServiceRowInput = z.infer<typeof amcServiceRowInputSchema>;
+/* What callers pass in (free is optional and defaults to false). */
+export type AmcServiceRowInput = z.input<typeof amcServiceRowInputSchema>;

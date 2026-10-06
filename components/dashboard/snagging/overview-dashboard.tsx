@@ -27,6 +27,7 @@ import { QuotationAnalytics } from "./overview/quotation-analytics";
 import { OverviewRange, RANGES, rangeLabel } from "./overview/range";
 import { UpcomingInspections } from "./overview/upcoming-inspections";
 import { lastFetchedAt, refreshAll } from "./overview/use-section";
+import { SnaggingApprovalNotice } from "./approval-notice";
 import { PageHeading } from "./shared";
 
 /**
@@ -121,6 +122,12 @@ export default function SnaggingOverviewDashboard() {
           </div>
         }
       />
+
+      {/*
+        Before the figures, because it is the only thing on the page
+        somebody is waiting on. Renders nothing when nothing is.
+      */}
+      <SnaggingApprovalNotice />
 
       <OverviewRange days={days}>
         <KpiRow />

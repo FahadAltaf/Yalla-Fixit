@@ -9,6 +9,8 @@ import React, {
   ReactNode,
   startTransition,
 } from "react";
+import { usePathname } from "next/navigation";
+
 import { useAuth } from "./AuthContext";
 
 export type Theme = "light" | "dark" | "system";
@@ -29,11 +31,52 @@ type ThemeContextType = {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
+/**
+ * The pages a client opens from a link, which are always light.
+ *
+ * A quotation, an AMC proposal and an inspection report are printed
+ * documents on white paper, and their shells say so in fixed colours
+ * (ClientDocumentShell: bg-slate-100, a white header). The buttons on
+ * them are ordinary app buttons, which follow the theme -- so in dark
+ * mode the outline ones came out white-on-white and simply vanished.
+ * Reject and Download were both invisible on a quotation; Approve
+ * survived only because it is filled in brand red.
+ *
+ * Nobody signed in is reading these, so there is no preference to
+ * honour. Pinning them to light is what makes the shell's fixed colours
+ * and the buttons' theme colours agree.
+ */
+const CLIENT_DOCUMENT_ROUTES = ["/quote/", "/amc/", "/report/"];
+
+function isClientDocumentPath(pathname: string): boolean {
+  return CLIENT_DOCUMENT_ROUTES.some((route) => pathname.startsWith(route));
+}
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const { settings } = useAuth();
+  const pathname = usePathname();
+  const clientDocument = isClientDocumentPath(pathname ?? "");
+  /*
+    The theme, and whose decision it was.
+
+    `appearance_theme` in settings is the ORGANISATION's default, and it
+    used to be applied every time settings loaded -- so a reader who
+    switched to dark was put back into light a moment later, on every
+    page, for as long as the admin's default said light. The two are
+    different claims: the organisation says what a new browser starts
+    on, and the reader says what THIS browser shows.
+
+    So a choice made here is marked as the reader's (`theme:chosen`) and
+    from then on the organisation default is only a fallback on this
+    device. Clearing site data puts them back on it.
+  */
   const [theme, setThemeState] = useState<Theme>(() => {
-    return (localStorage.getItem("theme") as Theme) || "light";
+    if (typeof window === "undefined") return "light";
+    return (window.localStorage.getItem("theme") as Theme) || "light";
   });
+  const chosenByUser = useRef(
+    typeof window !== "undefined" && window.localStorage.getItem("theme:chosen") === "1",
+  );
 
   // Kaizen brand red. This is the design system's primary and the value
   // the app falls back to before settings load, or when no primary has
@@ -62,7 +105,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     if (settings) {
       // Batch state updates to prevent cascading renders
       startTransition(() => {
-        setThemeState(settings.appearance_theme as Theme);
+        /* Only when this reader has not chosen for themselves. */
+        if (!chosenByUser.current) {
+          setThemeState(settings.appearance_theme as Theme);
+        }
         setPrimaryColorState((settings.primary_color as string) || "#8C1D24");
         setSecondaryColorState(settings.secondary_color as string);
         setSiteTitleState(settings.site_name as string);
@@ -75,8 +121,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     const root = document.documentElement;
     root.classList.remove("light", "dark");
 
-    const effectiveTheme =
-      theme === "system"
+    const effectiveTheme = clientDocument
+      ? "light"
+      : theme === "system"
         ? window.matchMedia("(prefers-color-scheme: dark)").matches
           ? "dark"
           : "light"
@@ -90,7 +137,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     // System theme listener
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
     const handleSystemThemeChange = () => {
-      if (theme === "system") {
+      if (theme === "system" && !clientDocument) {
         const newTheme = mediaQuery.matches ? "dark" : "light";
         root.classList.remove("light", "dark");
         root.classList.add(newTheme);
@@ -107,7 +154,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
         mediaQuery.removeEventListener("change", handleSystemThemeChange);
       }
     };
-  }, [theme]);
+    // `clientDocument` is a dependency: moving between a client
+    // document and the app has to re-decide which class is on the root.
+  }, [theme, clientDocument]);
 
   // Runs after the theme effect above (effects run in declaration
   // order), so the html element already carries the new light/dark class
@@ -147,6 +196,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [favicon]);
 
   const toggleTheme = () => {
+    chosenByUser.current = true;
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("theme:chosen", "1");
+    }
     setThemeState((prevTheme) => {
       switch (prevTheme) {
         case "light":
@@ -161,6 +214,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   };
 
   const setTheme = (newTheme: Theme) => {
+    chosenByUser.current = true;
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("theme:chosen", "1");
+    }
     setThemeState(newTheme);
   };
 

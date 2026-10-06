@@ -7,6 +7,7 @@ import { ChevronRightIcon, SearchIcon } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { MenuItem, MenuSection, User } from "@/types/types";
 import { getNavData } from "./menu-items";
+import { SidebarProfile } from "./sidebar-profile";
 import { cn } from "@/lib/utils";
 import Image from "next/image";
 import { Input } from "@/components/ui/input";
@@ -243,7 +244,10 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
               <SidebarGroupedMenuItems key={section.title} section={section} />
             ))}
           </SidebarContent>
-          <SidebarFooter className="[[data-state=collapsed]_&]:hidden"></SidebarFooter>
+          {/* Who is signed in, where a sidebar says it. */}
+          <SidebarFooter className="[[data-state=collapsed]_&]:hidden">
+            <SidebarProfile />
+          </SidebarFooter>
         </Sidebar>
         {/*
           min-w-0 stops this column being sized by its widest child. A
