@@ -24,6 +24,8 @@ export interface StoredServiceRow {
   units: number;
   frequency: number;
   basePrice: number | null;
+  /** Included at no charge: kept with the row so it reopens as free. */
+  free: boolean;
   price: number;
 }
 

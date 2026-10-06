@@ -1,6 +1,6 @@
 # AMC business operations: report
 
-**Date:** 6 October 2026. **Branch:** `active-amc` (fourth commit, after `cad560e`, `2fc3159`, `8ea3775`). Not pushed or merged.
+**Date:** 6 October 2026. **Branch:** `amc-hardening` (commit `514f232`, after `cad560e`, `2fc3159`, `8ea3775`; developed on the former `active-amc` branch, now consolidated). Not merged to main.
 **Production:** not modified. Migration `20261006130000` is created, not applied. I ran read-only SELECTs only (row counts of `snagging_clients`, `snagging_properties`, `amc_submissions`).
 
 This phase adds the AMC business management that does not depend on the open Zoho FSM questions:

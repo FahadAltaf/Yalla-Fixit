@@ -2,7 +2,7 @@
 -- Shared customers and properties; AMC assessments, additional-service
 -- quotes and the additional-service discount configuration
 --
--- NOT APPLIED. Branch active-amc (6 Oct 2026). Apply after
+-- NOT APPLIED. Branch amc-hardening (created 6 Oct 2026). Apply after
 -- 20261006120000_amc_fsm_integration.sql. See
 -- docs/amc-business-operations-report.md.
 --

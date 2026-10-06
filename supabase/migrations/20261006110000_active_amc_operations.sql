@@ -2,7 +2,7 @@
 -- Active AMC operations: corrections, account-manager search, renewal
 -- reminders
 --
--- NOT APPLIED. Branch active-amc (6 Oct 2026). Apply after
+-- NOT APPLIED. Branch amc-hardening (created 6 Oct 2026). Apply after
 -- 20261006100000_active_amc_contracts.sql.
 --
 -- 1. Usage corrections. A mistaken usage entry is never edited or deleted

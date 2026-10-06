@@ -1,7 +1,7 @@
 -- =====================================================================
 -- Active AMC: operational contracts, entitlements and usage
 --
--- NOT APPLIED. Created on branch active-amc (6 Oct 2026). Apply only
+-- NOT APPLIED. Branch amc-hardening (created 6 Oct 2026). Apply only
 -- after the hardening migrations (20261005100000..20261005180000) and as
 -- part of the reviewed deployment (docs/active-amc-implementation-report.md
 -- section 18). Nothing here converts existing signed proposals.

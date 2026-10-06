@@ -29,7 +29,8 @@ test("a valid proposal link waiting for an answer is open", async () => {
   const t = mintLinkToken();
   const r = await resolveLink(t.raw, fakeTable([rowWith("proposal_sent", t.raw)]), NOW);
   assert.equal(r.state, "open");
-  assert.equal(r.state !== "not_found" && r.kind, "proposal");
+  /* assert.equal above narrows r to an open link, so its kind is there to check. */
+  assert.equal(r.kind, "proposal");
 });
 
 test("only the hash is stored, and it is SHA-256 hex", () => {
@@ -74,10 +75,10 @@ test("a proposal link does not work as a contract link once the contract is out"
   const table = fakeTable([rowWith("contract_sent", proposal.raw, contract.raw)]);
   const p = await resolveLink(proposal.raw, table, NOW);
   assert.equal(p.state, "closed");
-  assert.equal(p.state !== "not_found" && p.kind, "proposal");
+  assert.equal(p.kind, "proposal");
   const c = await resolveLink(contract.raw, table, NOW);
   assert.equal(c.state, "open");
-  assert.equal(c.state !== "not_found" && c.kind, "contract");
+  assert.equal(c.kind, "contract");
 });
 
 test("a contract link is closed after signature", async () => {

@@ -154,7 +154,7 @@ Residual: an anonymous caller can still send arbitrary HTML to a company mailbox
 ## 6. Pricing changes
 
 - **One implementation:** `lib/amc/pricing.ts`, used by the API, wizard, documents, list, approval notice, brochure and amount in words.
-- **Money rule:** amounts are held in whole fils and rounded once, half up, at the step that creates them: row = base × units × frequency (exact); discount = subtotal × % (half up); final = subtotal − discount; VAT = final × 5% (half up); total = final + VAT; monthly = final / 12 (half up).
+- **Money rule:** amounts are held in whole fils and rounded once, half up, at the step that creates them: row = base × units × frequency (exact); discount = subtotal × % (half up); final = subtotal − discount; VAT = final × 5% (half up); total = final + VAT; monthly = final / the contract term in months (half up; 12 when there are no dates; client change, Oct 2026, merged from main). A row "included at no charge" (e.g. the 24/7 helpdesk) costs 0 and needs no base price.
 - **Server authority:** POST/PUT accept rows (`serviceId`, `included`, `units`, `frequency`, `basePrice`) and `discount_percent`; `final_price`, `discount_amount` and row `price` sent by the client are ignored and recalculated. Rows are validated (integers, ranges, unique ids); base prices are normalised to two decimals.
 - **Catalogue check:** a ticked service that AMC Settings does not offer on the property type is refused with 400.
 - **Consistency:** list and approval totals (`grandTotalFromFinal`) equal document totals to the fil; the brochure keeps fils (3,500.50, not 3,501).

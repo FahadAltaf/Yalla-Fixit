@@ -1,7 +1,7 @@
 -- =====================================================================
 -- Active AMC <-> Zoho FSM: explicit links, service mapping, sync log
 --
--- NOT APPLIED. Branch active-amc (6 Oct 2026). Apply after
+-- NOT APPLIED. Branch amc-hardening (created 6 Oct 2026). Apply after
 -- 20261006110000_active_amc_operations.sql. See
 -- docs/amc-fsm-integration-report.md.
 --

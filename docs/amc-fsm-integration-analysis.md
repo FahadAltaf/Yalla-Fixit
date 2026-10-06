@@ -1,6 +1,6 @@
 # Zoho FSM in the portal: what exists today
 
-**Date:** 6 October 2026. **Branch:** `active-amc`.
+**Date:** 6 October 2026. **Branch:** `amc-hardening` (written on the former `active-amc` branch, now consolidated).
 **Method:** I read the repository and ran read-only SELECTs on the production database (`schedule_entries`, `schedule_audit_events`, `amc_submissions`, `snagging_clients`, `cron.job`). I made no Zoho API calls with the production token and changed nothing.
 
 Everything below is either in the code or seen in the data. Where neither says, the section says **not established**.

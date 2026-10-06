@@ -1,6 +1,6 @@
 # Active AMC ↔ Zoho FSM: integration report
 
-**Date:** 6 October 2026. **Branch:** `active-amc` (third commit, after `cad560e` and `2fc3159`). Not pushed or merged.
+**Date:** 6 October 2026. **Branch:** `amc-hardening` (commit `8ea3775`, after `cad560e` and `2fc3159`; developed on the former `active-amc` branch, now consolidated). Not merged to main.
 **Production:** not modified. Migration `20261006120000` is created, not applied. Read-only SELECTs only; no Zoho API calls were made with the production token.
 **Evidence:** `docs/amc-fsm-integration-analysis.md`.
 

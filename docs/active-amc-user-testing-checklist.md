@@ -1,6 +1,6 @@
 # Active AMC: user-testing checklist
 
-Run on **staging or a local database**, never production, with migrations `20261006100000` and `20261006110000` applied and the `active-amc` branch deployed. Use two accounts: an **AMC user** (owns some proposals, not an approver) and an **AMC approver**. Check each item at desktop width and at phone width (about 375 px).
+Run on **staging or a local database**, never production, with the AMC migrations through `20261006130000` applied (runbook 7.1–7.10) and the `amc-hardening` branch deployed. Use two accounts: an **AMC user** (owns some proposals, not an approver) and an **AMC approver**. Check each item at desktop width and at phone width (about 375 px).
 
 Tick the box when the result matches. Note anything that doesn't, with the contract number.
 

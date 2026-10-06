@@ -1,7 +1,7 @@
 # Active AMC: implementation report
 
 **Date:** 6 October 2026
-**Branch:** `active-amc` (from `amc-hardening` at `51c023b`), worktree `_wt/amc-hardening`. Two commits: the foundation (`cad560e`, Part 1) and contract operations (Part 2). Neither is pushed or merged.
+**Branch:** `amc-hardening`. Developed on the former `active-amc` branch (from `51c023b`) and consolidated into `amc-hardening` on 6 Oct 2026: foundation `cad560e` (Part 1), operations `2fc3159` (Part 2), FSM `8ea3775` (Part 3), business operations `514f232` (Part 4). Not merged to main.
 **Production:** not modified. No migration applied; no signed proposal converted.
 
 **Part 2, [Operations and contract management](#part-2-operations-and-contract-management), changes some Part 1 details:** usage corrections replace free adjustments in the UI and API; renewals start the day after the old end date; reminder thresholds have defaults but are switched off; the discount has a master switch. Part 1 sections note where they are superseded.
@@ -530,7 +530,7 @@ Configuration is now `{ enabled, discountPercent, eligibleServiceKeys, eligibleC
 | 22 | Tests | COMPLETED |
 | 23 | Docs | COMPLETED |
 | 24 | Verification | COMPLETED (§P14) |
-| 25 | Commit | COMPLETED (local commit on `active-amc`; push needs GitHub credentials, not merged to main) |
+| 25 | Commit | COMPLETED (commit `2fc3159`, now on `amc-hardening`; not merged to main) |
 
 ---
 
