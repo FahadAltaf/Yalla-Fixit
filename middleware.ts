@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { crossSiteRejected } from "@/lib/server/request-origin";
+
 /**
  * CORS for the snagging API.
  *
@@ -31,6 +33,18 @@ function corsHeaders(origin: string | null): Record<string, string> {
 export function middleware(req: NextRequest) {
   const origin = req.headers.get("origin");
 
+  /*
+    Every other API route is the portal's own, authenticated by the session
+    cookie: a state-changing request from another site is refused here
+    (lib/server/request-origin.ts).
+  */
+  if (!req.nextUrl.pathname.startsWith("/api/snagging/")) {
+    if (crossSiteRejected({ method: req.method, origin, host: req.headers.get("host"), appUrl: process.env.NEXT_PUBLIC_APP_URL })) {
+      return NextResponse.json({ error: "Cross-site request refused" }, { status: 403 });
+    }
+    return NextResponse.next();
+  }
+
   if (req.method === "OPTIONS") {
     return new NextResponse(null, { status: 204, headers: corsHeaders(origin) });
   }
@@ -43,5 +57,5 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/api/snagging/:path*"],
+  matcher: ["/api/:path*"],
 };

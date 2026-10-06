@@ -116,6 +116,11 @@ export enum ResourceType {
      change without a code change. Separate from the email allowlist, which
      still decides who can open the extension at all (FRD §4). */
   AMC = "amc",
+  /* AMC operations staff who are neither the proposal owner nor an AMC
+     approver: View = every contract, Create = activate, Edit = record usage,
+     FSM links, customers and assessments, Approve = correct usage. Adds to
+     the owner/approver rules; it never takes anything away. */
+  AMC_OPERATIONS = "amc_operations",
   // Scheduling
   SCHEDULING = "scheduling",
   // Property Care / Snagging

@@ -112,7 +112,9 @@ test("a function missing from the PostgREST schema cache is recognised", () => {
 
 const DIR = path.join(process.cwd(), "supabase", "migrations");
 const NEW_AMC = readdirSync(DIR)
-  .filter((f) => /^20261006\d{6}_.*\.sql$/.test(f))
+  /* The AMC feature migrations; the security ones (20261006160000+) touch
+     shared tables on purpose and are pinned in security.test.ts. */
+  .filter((f) => /^20261006(1[0-5])\d{4}_.*\.sql$/.test(f))
   .sort();
 const sql = (f: string) => readFileSync(path.join(DIR, f), "utf8");
 const code = (f: string) =>

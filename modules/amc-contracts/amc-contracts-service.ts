@@ -314,8 +314,10 @@ export const amcContractsService = {
   fsm(id: string) {
     return request<{ fsm: ContractFsmActivity }>(`/api/amc-contracts/${id}/fsm`);
   },
-  fsmWorkOrder(ref: string) {
-    return request<{ workOrder: FsmWorkOrderForAmc }>(`/api/amc-contracts/fsm/work-order?ref=${encodeURIComponent(ref)}`);
+  fsmWorkOrder(ref: string, contractId?: string) {
+    const query = new URLSearchParams({ ref });
+    if (contractId) query.set("contractId", contractId);
+    return request<{ workOrder: FsmWorkOrderForAmc }>(`/api/amc-contracts/fsm/work-order?${query.toString()}`);
   },
   fsmContext(workOrderId: string, date?: string) {
     const query = new URLSearchParams({ workOrderId });

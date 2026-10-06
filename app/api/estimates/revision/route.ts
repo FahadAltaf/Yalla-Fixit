@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { zohoEdgeHeaders } from "@/lib/server/zoho/edge-auth";
 import { z } from "zod";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { requireResourceAccess } from "@/lib/server/require-access";
@@ -6,7 +7,6 @@ import { getFsmAccessToken } from "@/lib/server/zoho/fsm-client";
 import { ActionType, ResourceType } from "@/types/types";
 
 const GET_ESTIMATE_EDGE_URL = `${process.env.SUPABASE_URL}/functions/v1/get-estimate`;
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY!;
 const ZOHO_BASE_URL = "https://fsm.zoho.com/fsm/v1";
 
 const createRevisionSchema = z.object({
@@ -412,11 +412,7 @@ export async function POST(req: NextRequest) {
 
     const sourceEstimateRes = await fetch(GET_ESTIMATE_EDGE_URL, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-        apikey: SUPABASE_ANON_KEY,
-        "Content-Type": "application/json",
-      },
+      headers: zohoEdgeHeaders("get-estimate"),
       body: JSON.stringify({
         id: estimateId,
         type: "estimate_only",
@@ -567,11 +563,7 @@ export async function POST(req: NextRequest) {
     if (!createdEstimateNumber) {
       const createdEstimateLookupRes = await fetch(GET_ESTIMATE_EDGE_URL, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-          apikey: SUPABASE_ANON_KEY,
-          "Content-Type": "application/json",
-        },
+        headers: zohoEdgeHeaders("get-estimate"),
         body: JSON.stringify({
           id: createdEstimateId,
           type: "estimate_only",

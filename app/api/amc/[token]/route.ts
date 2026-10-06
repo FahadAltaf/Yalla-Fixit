@@ -1,4 +1,5 @@
 import { after, NextRequest, NextResponse } from "next/server";
+import { clientAddress, rateLimited } from "@/lib/server/request-origin";
 
 import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { notifyProposalEvent } from "@/lib/server/amc/notifications";
@@ -157,9 +158,13 @@ async function toPublicDocument(
 }
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ token: string }> },
 ) {
+  /* Per-address throttle against link guessing (lib/server/request-origin.ts). */
+  if (rateLimited(`amc-link:get:${clientAddress(req.headers)}`, 120, 10 * 60_000)) {
+    return NextResponse.json({ error: "Too many requests. Try again later." }, { status: 429 });
+  }
   try {
     const { token } = await ctx.params;
     const found = await findByToken(token);
@@ -188,6 +193,9 @@ export async function POST(
   req: NextRequest,
   ctx: { params: Promise<{ token: string }> },
 ) {
+  if (rateLimited(`amc-link:post:${clientAddress(req.headers)}`, 20, 10 * 60_000)) {
+    return NextResponse.json({ error: "Too many requests. Try again later." }, { status: 429 });
+  }
   try {
     const { token } = await ctx.params;
     const found = await findByToken(token);

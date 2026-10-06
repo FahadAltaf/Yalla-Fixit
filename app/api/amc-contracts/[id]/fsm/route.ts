@@ -18,7 +18,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   if (!gate.ok) return gate.response;
   const { id } = await ctx.params;
   try {
-    const contract = await requireManagedContract(gate, id);
+    const contract = await requireManagedContract(gate, id, "read");
     if (!contract.ok) return contract.response;
     return NextResponse.json({ fsm: await contractFsmActivity(gate.admin, id) });
   } catch (error) {

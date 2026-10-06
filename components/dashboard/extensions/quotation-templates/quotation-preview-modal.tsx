@@ -159,8 +159,23 @@ export function QuotationPreviewModal({
       const appUrl =
         process.env.NEXT_PUBLIC_APP_URL || "https://yourwebsite.com";
       const estimateId = encodeURIComponent(data.zohoEstimateId ?? "");
-      const approveUrl = `${appUrl}/quotations/review?id=${estimateId}&intent=approve&mode=${discountMode}`;
-      const rejectUrl = `${appUrl}/quotations/review?id=${estimateId}&intent=reject&mode=${discountMode}`;
+      /* The review page answers only links the portal signed. */
+      const reviewSig = data.zohoEstimateId
+        ? await fetch("/api/estimates/review-link", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ estimateId: data.zohoEstimateId }),
+          })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((j: { sig?: string } | null) => j?.sig ?? "")
+            .catch(() => "")
+        : "";
+      if (data.zohoEstimateId && !reviewSig) {
+        throw new Error("Could not create the customer's review link. Try again.");
+      }
+      const sigParam = reviewSig ? `&sig=${reviewSig}` : "";
+      const approveUrl = `${appUrl}/quotations/review?id=${estimateId}&intent=approve&mode=${discountMode}${sigParam}`;
+      const rejectUrl = `${appUrl}/quotations/review?id=${estimateId}&intent=reject&mode=${discountMode}${sigParam}`;
 
       const htmlForCustomer = buildQuotationEmailHtml({
         data,
@@ -201,8 +216,9 @@ export function QuotationPreviewModal({
       setSendStatus("sent");
 
       if (shouldMarkAsSent && data.zohoEstimateId) {
-        fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/estimates/transition`, {
+        fetch("/api/estimates/transition", {
           method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             record_id: data.zohoEstimateId,
             action: "mark_as_sent",

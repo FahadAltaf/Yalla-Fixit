@@ -11,7 +11,7 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ assessm
   const { assessmentId, photoId } = await ctx.params;
   if (!UUID.test(assessmentId) || !UUID.test(photoId)) return NextResponse.json({ error: "Photo not found." }, { status: 404 });
   try {
-    await removeAssessmentPhoto(gate.admin, { userId: gate.userId, canApprove: gate.canApprove }, assessmentId, photoId, {
+    await removeAssessmentPhoto(gate.admin, { userId: gate.userId, canApprove: gate.canApprove || gate.actor.ops.edit }, assessmentId, photoId, {
       id: gate.userId,
       label: gate.label,
     });

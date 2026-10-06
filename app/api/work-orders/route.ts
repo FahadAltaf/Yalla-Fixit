@@ -4,6 +4,7 @@
 // Returns JSON work order info — frontend handles file downloads directly.
 
 import { NextRequest, NextResponse } from "next/server";
+import { zohoEdgeHeaders } from "@/lib/server/zoho/edge-auth";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
 import { ActionType, ResourceType } from "@/types/types";
@@ -36,10 +37,8 @@ export async function POST(request: NextRequest) {
 
     const edgeRes = await fetch(EDGE_FUNCTION_URL, {
       method: "POST",
-      headers: {
-        "Content-Type":  "application/json",
-        "Authorization": `Bearer ${process.env.SUPABASE_ANON_KEY}`,
-      },
+      /* Signed: the function serves only this server. */
+      headers: zohoEdgeHeaders("zoho-fsm-work-orders"),
       body: JSON.stringify({
         name:       body.name.trim(),
         comparator: body.comparator ?? "equal",

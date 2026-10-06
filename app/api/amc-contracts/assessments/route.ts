@@ -12,7 +12,13 @@ export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
   const { page, pageSize, from, to } = pageParams(params, { defaultSize: 25 });
   try {
-    const { assessments, total } = await listAssessments(gate.admin, { status: params.get("status"), q: params.get("q"), from, to });
+    const { assessments, total } = await listAssessments(gate.admin, {
+      status: params.get("status"),
+      q: params.get("q"),
+      from,
+      to,
+      createdBy: gate.seesAll ? null : gate.userId,
+    });
     return NextResponse.json({ assessments, total, page, pageSize });
   } catch (error) {
     return contractErrorResponse(error, "Could not load assessments");

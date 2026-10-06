@@ -127,6 +127,9 @@ $q$);
 SELECT pg_temp.chk('sched.audit_insert_service_role', $q$
   INSERT INTO public.schedule_audit_events (action) VALUES ('compat')
 $q$);
+SELECT pg_temp.chk('todos.service_role_rw', $q$
+  SELECT count(*) FROM public.todos
+$q$);
 SELECT pg_temp.chk('zoho.token_read_service_role', $q$
   SELECT 1 / count(oauth_access_token)::int FROM public.settings WHERE id = 1
 $q$);
@@ -165,5 +168,21 @@ SELECT pg_temp.chk('auth.password_reset_insert_anon', $q$
 $q$);
 SELECT pg_temp.chk('auth.password_reset_read_anon', $q$
   SELECT 1 / count(*)::int FROM public.password_resets WHERE token = 'RESET-TOKEN'
+$q$);
+-- Main's browser GraphQL (anon key): users, roles, permission rows.
+SELECT pg_temp.chk('graphql.users_read_anon', $q$
+  SELECT id, email, full_name FROM public.user_profile LIMIT 5
+$q$);
+SELECT pg_temp.chk('graphql.role_access_write_anon', $q$
+  INSERT INTO public.role_access (role_id, resource, action) SELECT id, 'amc', 'approve' FROM public.roles LIMIT 1
+$q$);
+SELECT pg_temp.chk('graphql.user_update_anon', $q$
+  UPDATE public.user_profile SET full_name = full_name WHERE id = '00000000-0000-0000-0000-0000000000a1'
+$q$);
+RESET ROLE;
+-- Main's file uploads (saveFile) run with a signed-in session.
+SET ROLE authenticated;
+SELECT pg_temp.chk('uploads.insert_authenticated', $q$
+  INSERT INTO storage.objects (bucket_id, name, owner) VALUES ('uploads', 'public/compat.png', '00000000-0000-0000-0000-0000000000a1')
 $q$);
 RESET ROLE;

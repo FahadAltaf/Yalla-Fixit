@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { canReadAssessment } from "@/lib/amc/access";
 
 import { AMC_PHOTO_MAX_BYTES } from "@/lib/amc/photos";
 import { addAssessmentPhoto, listAssessmentPhotos } from "@/lib/server/amc/assessment-photos";
@@ -15,6 +16,11 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ assessment
   const { assessmentId } = await ctx.params;
   if (!UUID.test(assessmentId)) return NextResponse.json({ error: "Assessment not found." }, { status: 404 });
   try {
+    /* Only an assessment the caller may read (lib/amc/access.ts). */
+    const { data: scope } = await gate.admin.from("amc_assessments").select("created_by").eq("id", assessmentId).maybeSingle<{ created_by: string | null }>();
+    if (!scope || !canReadAssessment(gate.actor, scope.created_by)) {
+      return NextResponse.json({ error: "Assessment not found." }, { status: 404 });
+    }
     return NextResponse.json(await listAssessmentPhotos(gate.admin, assessmentId), { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return contractErrorResponse(error, "Could not load the photos");
@@ -38,7 +44,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ assessment
   try {
     const photo = await addAssessmentPhoto(
       gate.admin,
-      { userId: gate.userId, canApprove: gate.canApprove },
+      { userId: gate.userId, canApprove: gate.canApprove || gate.actor.ops.edit },
       assessmentId,
       { bytes: new Uint8Array(await file.arrayBuffer()), caption: typeof caption === "string" ? caption : null },
       { id: gate.userId, label: gate.label },

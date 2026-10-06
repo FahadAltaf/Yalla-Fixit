@@ -13,7 +13,7 @@ export async function GET() {
   if (!gate.ok) return gate.response;
   try {
     return NextResponse.json({
-      summary: await contractsDashboard(gate.admin, { userId: gate.userId, canApprove: gate.canApprove }),
+      summary: await contractsDashboard(gate.admin, { userId: gate.userId, canApprove: gate.seesAll }),
     });
   } catch (error) {
     return contractErrorResponse(error, "Could not load the contract summary");

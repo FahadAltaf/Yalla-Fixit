@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { canCorrectUsage } from "@/lib/amc/access";
 import { z } from "zod";
 
 import {
@@ -38,8 +39,15 @@ export async function POST(
   }
 
   try {
-    const contract = await requireManagedContract(gate, id);
+    /* Reading the contract is enough to reach it; correcting is its own
+       privilege (lib/amc/access.ts canCorrectUsage): an approver, AMC
+       Operations (Approve), or the owner while corrections are not
+       approver-only. */
+    const contract = await requireManagedContract(gate, id, "read");
     if (!contract.ok) return contract.response;
+    if (!canCorrectUsage(gate.actor, contract.ownerId)) {
+      return NextResponse.json({ error: "You cannot correct usage on this contract." }, { status: 403 });
+    }
     const correction = await recordCorrection(gate.admin, id, usageId, parsed.data, {
       id: gate.userId,
       label: gate.label,

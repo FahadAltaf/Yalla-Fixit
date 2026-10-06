@@ -8,6 +8,7 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
 import { canApproveAmc } from "@/components/dashboard/extensions/amc/amc-settings";
 import { ActionType, ResourceType } from "@/types/types";
+import { canOperateContract, canReadContract, seesAllContracts, type AmcActor } from "@/lib/amc/access";
 
 /**
  * Who may do what with AMC contracts. The same people as AMC proposals:
@@ -29,7 +30,12 @@ export type ContractGate =
       admin: Awaited<ReturnType<typeof createAdminServerClient>>;
       userId: string;
       label: string | null;
+      /** AMC approver (Settings list or AMC Approve). */
       canApprove: boolean;
+      /** The caller as lib/amc/access.ts rules need them. */
+      actor: AmcActor;
+      /** Lists and reports show every contract (approver or AMC Operations). */
+      seesAll: boolean;
     }
   | { ok: false; response: NextResponse };
 
@@ -52,18 +58,26 @@ export async function requireContractAccess(): Promise<ContractGate> {
   } catch {
     canApprove = false;
   }
+  const has = (action: ActionType) => hasResourceAction(access.accessUser, ResourceType.AMC_OPERATIONS, action);
+  const actor: AmcActor = {
+    userId: access.profile.id,
+    canApprove,
+    ops: { view: has(ActionType.VIEW), create: has(ActionType.CREATE), edit: has(ActionType.EDIT), approve: has(ActionType.APPROVE) },
+  };
   return {
     ok: true,
     admin,
     userId: access.profile.id,
     label: access.profile.full_name ?? access.profile.email ?? null,
     canApprove,
+    actor,
+    seesAll: seesAllContracts(actor),
   };
 }
 
-/** Owner of the source proposal, or an approver. */
+/** Owner of the source proposal, an approver, or AMC Operations (Edit). */
 export function canManage(gate: Extract<ContractGate, { ok: true }>, ownerId: string | null): boolean {
-  return gate.canApprove || (!!ownerId && ownerId === gate.userId);
+  return canOperateContract(gate.actor, ownerId);
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -72,11 +86,17 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  * Loads a contract for a route and checks the caller may work on it. Not
  * theirs reads as "not found", as for proposals.
  */
-export async function requireManagedContract(gate: Extract<ContractGate, { ok: true }>, id: string) {
+export async function requireManagedContract(
+  gate: Extract<ContractGate, { ok: true }>,
+  id: string,
+  /* "read" lets AMC Operations (View) open it; anything that changes it is "write". */
+  mode: "read" | "write" = "write",
+) {
   const notFound = { ok: false as const, response: NextResponse.json({ error: "Contract not found." }, { status: 404 }) };
   if (!UUID.test(id)) return notFound;
   const loaded = await loadContract(gate.admin, id);
-  if (!canManage(gate, loaded.ownerId)) return notFound;
+  const allowed = mode === "read" ? canReadContract(gate.actor, loaded.ownerId) : canOperateContract(gate.actor, loaded.ownerId);
+  if (!allowed) return notFound;
   return { ok: true as const, ...loaded };
 }
 

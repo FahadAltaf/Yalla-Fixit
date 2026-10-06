@@ -64,7 +64,7 @@ export async function GET(req: NextRequest) {
     } else {
       coverage = await coverageForCustomer(
         gate.admin,
-        { userId: gate.userId, canApprove: gate.canApprove },
+        { userId: gate.userId, canApprove: gate.seesAll },
         { customerRef: customerRef!, serviceId, date },
       );
     }

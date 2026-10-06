@@ -2,12 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 
+import { canOperateContract, canReadContract } from "@/lib/amc/access";
 import { contractErrorResponse, requireContractAccess } from "@/lib/server/amc/contract-access";
 import { UUID } from "@/lib/server/amc/business-schemas";
 import {
   ArchiveError,
   archiveSignedContract,
-  canAccessSignedArchive,
   signedArchiveFor,
   signedArchiveUrl,
 } from "@/lib/server/amc/signed-archive";
@@ -20,7 +20,8 @@ import {
  * POST { id }                   archives it now if it was not archived at
  *                               signing (marked "archived after signing")
  *
- * Owner and AMC approvers only; anyone else gets "not found". The file is
+ * Read: whoever may read the contract (owner, approvers, AMC Operations);
+ * archive now: whoever may operate it. Anyone else gets "not found". The file is
  * never public: the link is minted per request after this check.
  */
 
@@ -41,7 +42,7 @@ export async function GET(req: NextRequest) {
   if (!UUID.test(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
   try {
     const submission = await ownerOf(gate.admin, id);
-    if (!submission || !canAccessSignedArchive(gate, submission.owner_id)) {
+    if (!submission || !canReadContract(gate.actor, submission.owner_id)) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
     const archive = await signedArchiveFor(gate.admin, id);
@@ -64,7 +65,7 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   try {
     const submission = await ownerOf(gate.admin, parsed.data.id);
-    if (!submission || !canAccessSignedArchive(gate, submission.owner_id)) {
+    if (!submission || !canOperateContract(gate.actor, submission.owner_id)) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
     const archive = await archiveSignedContract(gate.admin, parsed.data.id, {

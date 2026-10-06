@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { canActivateContract } from "@/lib/amc/access";
 import { z } from "zod";
 
-import { canManage, contractErrorResponse, requireContractAccess } from "@/lib/server/amc/contract-access";
+import { contractErrorResponse, requireContractAccess } from "@/lib/server/amc/contract-access";
 import { activationPreview } from "@/lib/server/amc/contracts";
 
 /**
@@ -26,7 +27,7 @@ export async function GET(req: NextRequest) {
     .select("owner_id")
     .eq("id", parsed.data.submissionId)
     .maybeSingle<{ owner_id: string }>();
-  if (!owner || !canManage(gate, owner.owner_id)) {
+  if (!owner || !canActivateContract(gate.actor, owner.owner_id)) {
     return NextResponse.json({ error: "Proposal not found." }, { status: 404 });
   }
 

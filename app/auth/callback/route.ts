@@ -1,4 +1,5 @@
-import { rolesService, usersService } from "@/modules";
+import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
+import { provisionDefaultProfile } from "@/lib/server/admin/users-roles";
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/supabase-server-client";
@@ -22,24 +23,23 @@ export async function GET(request: Request) {
       } = await supabase.auth.getUser();
 
       if (user) {
-        // Check if the user has a profile
-        const userProfile = await usersService.getUserById(user.id);
+        /*
+          First sign-in: a profile with the default "user" role, written
+          with the service role. This used pg_graphql with the anon key,
+          which is closed to browsers by migration 20261006160000.
+        */
+        const admin = await createAdminServerClient();
+        const { data: userProfile } = await admin.from("user_profile").select("id").eq("id", user.id).maybeSingle();
 
         if (!userProfile) {
-          // Get the default user role using GraphQL
-          const roleId = await rolesService.getRoleByName();
-          const payload = {
-            id: user?.id,
-            email: user?.email,
-            role_id: roleId,
-            first_name: user?.user_metadata.first_name || null,
-            last_name: user?.user_metadata.last_name || null,
-            full_name: user?.user_metadata.full_name || null,
-            is_active: true,
-          };
-
-          const result = await usersService.insertUser(payload);
-          if (result && typeof result === 'string') {
+          const result = await provisionDefaultProfile(admin, {
+            id: user.id,
+            email: user.email,
+            first_name: user.user_metadata?.first_name || null,
+            last_name: user.user_metadata?.last_name || null,
+            full_name: user.user_metadata?.full_name || null,
+          });
+          if (!result.ok) {
             return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/auth/login/error?type=auth_callback_error`);
           }
 

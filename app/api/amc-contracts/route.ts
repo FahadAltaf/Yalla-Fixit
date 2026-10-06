@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { canActivateContract } from "@/lib/amc/access";
 import { z } from "zod";
 
 import {
@@ -12,7 +13,6 @@ import {
 } from "@/lib/amc/contracts";
 import { grandTotalFromFinal } from "@/lib/amc/pricing";
 import {
-  canManage,
   contractErrorResponse,
   requireContractAccess,
 } from "@/lib/server/amc/contract-access";
@@ -74,7 +74,9 @@ function managerNames(list: unknown): string[] {
 export async function GET(req: NextRequest) {
   const gate = await requireContractAccess();
   if (!gate.ok) return gate.response;
-  const { admin, userId, canApprove } = gate;
+  const { admin, userId } = gate;
+  /* Every contract for approvers and AMC Operations; otherwise your own. */
+  const canApprove = gate.seesAll;
 
   const params = req.nextUrl.searchParams;
   const statusParam = params.get("status") ?? "all";
@@ -172,7 +174,7 @@ export async function GET(req: NextRequest) {
           grandTotal: grandTotalFromFinal(Number(row.final_price ?? 0)),
           daysRemaining: end ? daysRemaining(end, today) : null,
           coverage: null,
-          canActivate: canManage(gate, (row.owner_id as string | null) ?? null),
+          canActivate: canActivateContract(gate.actor, (row.owner_id as string | null) ?? null),
         };
       });
   };
@@ -227,7 +229,7 @@ export async function GET(req: NextRequest) {
     countStatuses.forEach((s, i) => {
       counts[s] = countResults[i + 1].count ?? 0;
     });
-    const base = { counts, managers, canApprove, page, pageSize };
+    const base = { counts, managers, canApprove: gate.canApprove, page, pageSize };
 
     if (status === "pending_activation") {
       return NextResponse.json({ ...base, rows: pending.slice(from, to + 1), totalCount: pending.length });
@@ -328,9 +330,9 @@ export async function POST(req: NextRequest) {
     .eq("id", parsed.data.submissionId)
     .maybeSingle<{ owner_id: string }>();
   if (!owner) return NextResponse.json({ error: "Proposal not found." }, { status: 404 });
-  if (!canManage(gate, owner.owner_id)) {
+  if (!canActivateContract(gate.actor, owner.owner_id)) {
     return NextResponse.json(
-      { error: "Only the proposal's owner or an approver can activate it." },
+      { error: "Only the proposal's owner, an approver or AMC Operations (Create) can activate it." },
       { status: 403 },
     );
   }

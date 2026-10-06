@@ -26,8 +26,9 @@ import {
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 
-const SEARCH_ENDPOINT =
-  "https://sxzpigyphjotuubxpooj.supabase.co/functions/v1/zoho-fsm-appointments";
+/* Through the portal, which checks the signed-in user and signs the call;
+   the Edge Function no longer answers browsers. */
+const SEARCH_ENDPOINT = "/api/appointments";
 
 const CONCURRENT_DOWNLOADS = 6;
 

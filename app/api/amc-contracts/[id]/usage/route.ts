@@ -39,7 +39,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   const { page, pageSize } = pageParams(params, { defaultSize: 10 });
   const entitlementId = params.get("entitlementId");
   try {
-    const contract = await requireManagedContract(gate, id);
+    const contract = await requireManagedContract(gate, id, "read");
     if (!contract.ok) return contract.response;
     const result = await loadUsagePage(gate.admin, id, {
       page,

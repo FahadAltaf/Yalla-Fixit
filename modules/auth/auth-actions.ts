@@ -1,6 +1,9 @@
 "use server";
 
-import { UserRoles } from "@/types/types";
+import { ActionType, ResourceType, UserRoles } from "@/types/types";
+import { requireActionCaller, targetIsAdmin } from "@/lib/server/action-guard";
+import { hashResetToken } from "@/lib/server/password-reset-token";
+import { rateLimited } from "@/lib/server/request-origin";
 import { emailService } from "../../lib/email-service";
 import crypto from "crypto";
 import { createAdminServerClient } from "../../lib/supabase/supabase-helpers";
@@ -11,7 +14,14 @@ import { createAdminServerClient } from "../../lib/supabase/supabase-helpers";
  */
 export async function deleteAuthUser(userId: string, type: string) {
   try {
+    /* A public endpoint: only a user manager, never on themselves, and only
+       an admin on an admin. */
+    const caller = await requireActionCaller(ResourceType.USERS, ActionType.DELETE);
+    if (userId === caller.id) return { success: false, error: "You cannot delete your own account." };
     const supabaseAdmin = await createAdminServerClient()
+    if (!caller.isAdmin && (await targetIsAdmin(supabaseAdmin, userId))) {
+      return { success: false, error: "Only an admin can delete an admin." };
+    }
     let error: Error | null = null;
     let data: unknown | null = null;
     // First check if user exists in auth
@@ -58,6 +68,8 @@ export async function createAuthUser(
   type: string
 ) {
   try {
+    /* A public endpoint: only a user manager may create accounts. */
+    await requireActionCaller(ResourceType.USERS, ActionType.CREATE);
     const supabaseAdmin = await createAdminServerClient()
     let error: Error | null = null;
     let data: unknown | null = null;
@@ -95,6 +107,12 @@ export async function createAuthUser(
  * Request a password reset: generates a token, stores it, and sends an email
  */
 export async function requestPasswordReset(email: string, type: string) {
+  /*
+    The same answer whether or not the address has an account, so the form
+    cannot be used to find out who works here. Throttled per address.
+  */
+  const normalised = String(email ?? "").trim().toLowerCase();
+  if (rateLimited(`password-reset:${normalised}`, 3, 15 * 60_000)) return { success: true };
   try {
     // 1. Find user by email
     let userId: string | null = null;
@@ -107,23 +125,22 @@ export async function requestPasswordReset(email: string, type: string) {
         .select("id")
         .eq("email", email)
         .single();
-      if (error) throw new Error(error.message);
-      if (!data) throw new Error("User not found"); // Don't reveal
+      if (error || !data) return { success: true }; // Don't reveal
       userId = data.id;
     }
-    if (!userId) throw new Error("User not found");
+    if (!userId) return { success: true };
 
     // 2. Generate secure token
     const token = crypto.randomBytes(32).toString("hex");
     const expiresAt = new Date(Date.now() + 1000 * 60 * 60); // 1 hour
 
-    // 3. Store token in password_resets table
+    // 3. Store only the token's hash: whoever reads the table cannot use it.
     const { error: insertError } = await supabase
       .from("password_resets")
       .insert({
         user_id: userId,
         email,
-        token,
+        token: hashResetToken(token),
         expires_at: expiresAt.toISOString(),
       });
     if (insertError) throw new Error(insertError.message);
@@ -139,7 +156,7 @@ export async function requestPasswordReset(email: string, type: string) {
     if (res.error) throw new Error(res.error.message);
     return { success: true };
   } catch (error) {
-    console.log("🚀 ~ requestPasswordReset ~ error:", error);
+    console.error("requestPasswordReset failed:", error instanceof Error ? error.message : "unknown");
     throw new Error("Something went wrong, so please try again later.");
   }
 }
@@ -156,31 +173,31 @@ export async function resetPassword(
     // 1. Find token in password_resets table
     /* Service role: reading reset tokens and auth.admin both need it; the
        anon client this used could not update a password at all. */
+    if (type !== "user") throw new Error("Only user type supported");
+    if (typeof newPassword !== "string" || newPassword.length < 8) throw new Error("Choose a password of at least 8 characters");
+    if (typeof token !== "string" || !/^[0-9a-f]{64}$/.test(token)) throw new Error("Invalid or expired token");
     const supabase = await createAdminServerClient();
+    /*
+      Claimed first, in one statement: unused, unexpired, matched by hash.
+      Two requests with the same link cannot both get here.
+    */
+    const now = new Date().toISOString();
     const { data, error } = await supabase
       .from("password_resets")
-      .select("id, user_id, expires_at, used_at")
-      .eq("token", token)
+      .update({ used_at: now })
+      .eq("token", hashResetToken(token))
+      .is("used_at", null)
+      .gt("expires_at", now)
+      .select("id, user_id")
       .maybeSingle();
-    if (error) throw new Error(error.message);
-    if (!data) throw new Error("Invalid or expired token");
-    if (data.used_at) throw new Error("Token already used");
-    if (new Date(data.expires_at) < new Date())
-      throw new Error("Token expired");
+    if (error || !data) throw new Error("Invalid or expired token");
 
     // 2. Update password using Supabase() admin
-    if (type !== "user") throw new Error("Only user type supported");
     const { error: updateError } = await supabase.auth.admin.updateUserById(
       data.user_id,
       { password: newPassword }
     );
     if (updateError) throw new Error(updateError.message);
-
-    // 3. Mark token as used
-    await supabase
-      .from("password_resets")
-      .update({ used_at: new Date().toISOString() })
-      .eq("id", data.id);
   } catch (error) {
     throw new Error(error instanceof Error ? error.message : "Unknown error");
   }
@@ -192,7 +209,23 @@ export async function resetPassword(
  */
 export async function updateUserPassword(userId: string, newPassword: string) {
   try {
+    /*
+      A public endpoint. Your own password, or someone else's with Users:
+      Edit (an admin's only by an admin). It used to set any user's password
+      for anyone who called it.
+    */
+    const caller = await requireActionCaller();
+    if (typeof newPassword !== "string" || newPassword.length < 8) {
+      return { success: false, error: "Choose a password of at least 8 characters" };
+    }
     const supabaseAdmin = await createAdminServerClient()
+    if (userId !== caller.id) {
+      const manager = await requireActionCaller(ResourceType.USERS, ActionType.EDIT).catch(() => null);
+      if (!manager) return { success: false, error: "You can only change your own password." };
+      if (!manager.isAdmin && (await targetIsAdmin(supabaseAdmin, userId))) {
+        return { success: false, error: "Only an admin can change an admin's password." };
+      }
+    }
     const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, {
       password: newPassword,
     });
@@ -218,7 +251,12 @@ export async function updateUserPassword(userId: string, newPassword: string) {
 
 export async function deleteAuthUserById(id: string) {
   try {
+    const caller = await requireActionCaller(ResourceType.USERS, ActionType.DELETE);
+    if (id === caller.id) return { success: false, error: "You cannot delete your own account." };
     const supabaseAdmin = await createAdminServerClient();
+    if (!caller.isAdmin && (await targetIsAdmin(supabaseAdmin, id))) {
+      return { success: false, error: "Only an admin can delete an admin." };
+    }
     const { error } = await supabaseAdmin.auth.admin.deleteUser(id);
     if (error) {
       throw new Error(error.message);

@@ -16,7 +16,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       reports: await amcReports(
         gate.admin,
-        { userId: gate.userId, canApprove: gate.canApprove },
+        { userId: gate.userId, canApprove: gate.seesAll },
         { manager: p.get("manager"), customer: p.get("customer"), property: p.get("property") },
       ),
     });

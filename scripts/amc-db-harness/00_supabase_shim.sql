@@ -28,6 +28,7 @@ CREATE TABLE public.user_profile (
   full_name text,
   role_id uuid REFERENCES public.roles(id)
 );
+-- Production (6 Oct 2026): roles and user_profile "Allow All", role_access RLS off.
 CREATE TABLE public.role_access (
   role_id uuid REFERENCES public.roles(id),
   resource text,
@@ -109,6 +110,20 @@ CREATE TABLE storage.buckets (
   id text PRIMARY KEY, name text NOT NULL, public boolean DEFAULT false,
   file_size_limit bigint, allowed_mime_types text[]
 );
-CREATE TABLE storage.objects (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), bucket_id text, name text);
+CREATE TABLE storage.objects (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), bucket_id text, name text, owner uuid);
 ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+GRANT USAGE ON SCHEMA storage TO anon, authenticated, service_role;
+GRANT ALL ON storage.objects TO anon, authenticated, service_role;
+-- The live uploads policies (production, 6 Oct 2026).
+CREATE POLICY "Allow public read access to uploads bucket" ON storage.objects FOR SELECT TO public USING (bucket_id = 'uploads');
+CREATE POLICY "Allow authenticated users to upload files" ON storage.objects FOR INSERT TO public WITH CHECK (bucket_id = 'uploads');
+CREATE POLICY "Allow users to update their own uploads" ON storage.objects FOR UPDATE TO public USING (true) WITH CHECK (bucket_id = 'uploads');
 INSERT INTO storage.buckets (id, name, public) VALUES ('uploads', 'uploads', true), ('snagging', 'snagging', false);
+
+ALTER TABLE public.roles ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow All on Roles" ON public.roles FOR ALL TO public USING (true) WITH CHECK (true);
+ALTER TABLE public.user_profile ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow All on User Profile" ON public.user_profile FOR ALL TO public USING (true) WITH CHECK (true);
+ALTER TABLE public.role_access ADD COLUMN IF NOT EXISTS id uuid DEFAULT gen_random_uuid();
+ALTER TABLE public.todos ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow All on todos" ON public.todos FOR ALL TO public USING (true) WITH CHECK (true);

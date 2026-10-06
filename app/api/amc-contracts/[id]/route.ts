@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { canCorrectUsage, canOperateContract, canRecordUsage } from "@/lib/amc/access";
 
 import {
   describeUsage,
@@ -31,7 +32,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   const { id } = await ctx.params;
 
   try {
-    const loaded = await requireManagedContract(gate, id);
+    const loaded = await requireManagedContract(gate, id, "read");
     if (!loaded.ok) return loaded.response;
     const { contract, entitlements } = loaded;
     const today = todayInDubai();
@@ -102,11 +103,11 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
       permissions: {
         /* Usage can be recorded only while the contract is in force; the
            server also checks the usage date against the period. */
-        canRecordUsage: contract.status === "active" && inForce,
-        /* Correcting the record is allowed whatever the state. */
-        canCorrect: true,
+        canRecordUsage: contract.status === "active" && inForce && canRecordUsage(gate.actor, loaded.ownerId),
+        /* Correcting the record is allowed whatever the state, to whoever may correct. */
+        canCorrect: canCorrectUsage(gate.actor, loaded.ownerId),
         canCancel: gate.canApprove && contract.status === "active",
-        canRenew: contract.status !== "cancelled" && !contract.renewedByContractId && !renewalResult.data,
+        canRenew: canOperateContract(gate.actor, loaded.ownerId) && contract.status !== "cancelled" && !contract.renewedByContractId && !renewalResult.data,
       },
     });
   } catch (error) {

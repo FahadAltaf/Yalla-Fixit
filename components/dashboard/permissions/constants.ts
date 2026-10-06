@@ -45,6 +45,10 @@ RESOURCE_ACTIONS[ResourceType.TODOS] = CRUD_MODULE_ACTIONS;
    editing a proposal is gated by the email allowlist instead, which FRD
    §4 keeps out of scope. */
 RESOURCE_ACTIONS[ResourceType.AMC] = [ActionType.VIEW, ActionType.APPROVE];
+/* AMC operations (contracts after signature): View every contract,
+   Create = activate, Edit = record usage / FSM links / customers and
+   assessments, Approve = correct usage. */
+RESOURCE_ACTIONS[ResourceType.AMC_OPERATIONS] = [ActionType.VIEW, ActionType.CREATE, ActionType.EDIT, ActionType.APPROVE];
 // Scheduling is a full CRUD module plus an Approve permission (#2): the holder
 // can approve/reject a submitted day and receives the submission email.
 RESOURCE_ACTIONS[ResourceType.SCHEDULING] = [...CRUD_MODULE_ACTIONS, ActionType.APPROVE];
@@ -76,6 +80,7 @@ const resourceDisplayNameMap: Partial<Record<ResourceType, string>> =
 
 const EXTRA_RESOURCE_NAMES: Partial<Record<ResourceType, string>> = {
   [ResourceType.AMC]: "AMC Proposals",
+  [ResourceType.AMC_OPERATIONS]: "AMC Operations",
 };
 
 export const getResourceDisplayName = (resource: ResourceType): string => {

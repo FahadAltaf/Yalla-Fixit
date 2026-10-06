@@ -13,7 +13,7 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ assessmen
   try {
     const assessment = await completeAssessment(
       gate.admin,
-      { userId: gate.userId, canApprove: gate.canApprove },
+      { userId: gate.userId, canApprove: gate.canApprove || gate.actor.ops.edit },
       assessmentId,
       { id: gate.userId, label: gate.label },
     );

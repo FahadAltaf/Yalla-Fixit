@@ -325,6 +325,9 @@ export function getDefaultSelectedServices() {
 export function canUseAmc(user: Parameters<typeof hasResourceAction>[0]): boolean {
   return (
     hasResourceAction(user, ResourceType.AMC, ActionType.VIEW) ||
-    hasResourceAction(user, ResourceType.AMC, ActionType.APPROVE)
+    hasResourceAction(user, ResourceType.AMC, ActionType.APPROVE) ||
+    /* AMC operations staff reach the contract screens too. */
+    hasResourceAction(user, ResourceType.AMC_OPERATIONS, ActionType.VIEW) ||
+    hasResourceAction(user, ResourceType.AMC_OPERATIONS, ActionType.EDIT)
   );
 }

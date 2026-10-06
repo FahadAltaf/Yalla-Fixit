@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       context: await fsmContextForWorkOrder(
         gate.admin,
-        { userId: gate.userId, canApprove: gate.canApprove },
+        { userId: gate.userId, canApprove: gate.seesAll },
         parsed.data.workOrderId,
         parsed.data.date,
       ),

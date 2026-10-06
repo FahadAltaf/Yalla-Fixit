@@ -1,15 +1,15 @@
 "use server";
 
 import { emailService } from "@/lib/email-service";
+import { ActionType, ResourceType } from "@/types/types";
+import { requireActionCaller } from "@/lib/server/action-guard";
 import {
   createServerClientWithCookies,
   createAdminServerClient,
   getAppUrl,
 } from "@/lib/supabase/supabase-helpers";
 
-import { rolesService } from "@/modules/roles";
-import { usersService } from "@/modules/users";
-import { User } from "@/types/types";
+import { emailInUse, provisionDefaultProfile } from "@/lib/server/admin/users-roles";
 import { AuthChangeEvent, Session } from "@supabase/supabase-js";
 
 export interface AuthSignupData {
@@ -40,15 +40,14 @@ export async function signUp({
   lastName,
   role_id = "",
 }: AuthSignupData): Promise<AuthServiceError | unknown> {
+  /* Never trusted: a public form could send the admin role's id. */
+  void role_id;
   try {
     const supabase = await createServerClientWithCookies();
+    const admin = await createAdminServerClient();
 
     // Check if user exists
-    const existingUser = await usersService.getUserByEmail({
-      email: { ilike: email },
-    });
-
-    if (existingUser) {
+    if (await emailInUse(admin, email)) {
       return createError("User already registered with this email");
     }
 
@@ -66,20 +65,15 @@ export async function signUp({
 
     if (data?.user) {
       try {
-        const roleId = await rolesService.getRoleByName();
-        const payload = {
+        const result = await provisionDefaultProfile(admin, {
           id: data.user.id,
           email: data.user.email,
-          role_id: role_id || roleId,
           first_name: firstName || null,
           last_name: lastName || null,
           full_name: `${firstName ?? ""} ${lastName ?? ""}`.trim() || null,
-          is_active: true,
-        };
-
-        const result = await usersService.insertUser(payload as User);
-        if (result && typeof result === "string") {
-          return createError(result);
+        });
+        if (!result.ok) {
+          return createError(result.error);
         }
       } catch (profileError) {
         console.error("Error in user profile creation:", profileError);
@@ -136,6 +130,8 @@ export async function signOut() {
 
 export async function sendInvites(emails: string[]) {
   try {
+    /* A public endpoint: only a user manager may invite. */
+    await requireActionCaller(ResourceType.USERS, ActionType.CREATE);
     const supabaseAdmin = await createAdminServerClient();
     const appUrl = getAppUrl();
 
@@ -159,17 +155,8 @@ export async function sendInvites(emails: string[]) {
       if (data?.user) {
         await delay(2000);
         try {
-          const roleId = await rolesService.getRoleByName();
-          const payload = {
-            id: data.user.id,
-            email: data.user.email,
-            role_id: roleId,
-            first_name: null,
-            last_name: null,
-            is_active: true,
-          };
-
-          await usersService.insertUser(payload as User);
+          const result = await provisionDefaultProfile(supabaseAdmin, { id: data.user.id, email: data.user.email });
+          if (!result.ok) throw new Error(result.error);
         } catch (profileError) {
           console.error("Error in profile creation:", profileError);
           return createError("Failed to create user profile for invite");
@@ -217,30 +204,15 @@ export async function resendVerificationEmail(email: string) {
 }
 
 export async function acceptInvite(token: string, password: string) {
-  try {
-    const supabaseAdmin = await createAdminServerClient();
-
-    const { data: sessionData, error: sessionError } =
-      await supabaseAdmin.auth.admin.updateUserById(token, {
-        password: password,
-        email_confirm: true,
-      });
-
-    if (sessionError) {
-      return createError("Invalid or expired invite token");
-    }
-
-    if (!sessionData?.user) {
-      return createError("No user found for this token");
-    }
-
-    return sessionData;
-  } catch (error) {
-    console.error("Error in acceptInvite:", error);
-    return createError(
-      error instanceof Error ? error.message : "Failed to accept invite"
-    );
-  }
+  /*
+    Switched off. The invite "token" was the user's id, which many screens
+    show, so this set the password of any account for anyone who called it.
+    Nothing in the portal calls it; invites stay off until a signed,
+    single-use invite token replaces it.
+  */
+  void token;
+  void password;
+  return createError("Invites are not available. Ask an administrator to create your account.");
 }
 
 export async function deleteUser(id: string) {

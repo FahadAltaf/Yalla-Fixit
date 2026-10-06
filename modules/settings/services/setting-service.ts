@@ -1,5 +1,5 @@
 import { executeGraphQLBackend } from "@/lib/graphql-server";
-import { GET_SETTINGS_BY_ID, INSERT_SETTINGS } from "./setting-graphql";
+import { GET_SETTINGS_BY_ID } from "./setting-graphql";
 
 const settingsService = {
   getSettingsById: async (values: { type: string }) => {
@@ -26,10 +26,6 @@ const settingsService = {
       throw new Error(body?.error ?? "Could not save the settings");
     }
     return body.settings;
-  },
-  insertSettings: async (data: unknown) => {
-    const response = await executeGraphQLBackend(INSERT_SETTINGS, { data });
-    return response.insertIntosettingsCollection.records[0];
   },
 };
 

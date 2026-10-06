@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { verifyQuotationReview } from "@/lib/server/quotation-review-token";
+import { zohoEdgeHeaders } from "@/lib/server/zoho/edge-auth";
 import {
   QuotationData,
   QuotationLineItem,
@@ -11,7 +13,6 @@ import { ActionType, ResourceType } from "@/types/types";
 const SUPABASE_FUNCTION_URL = `${process.env.SUPABASE_URL}/functions/v1/get-estimate`;
 
 // NOTE: This is a publishable key provided explicitly in the spec.
-const SUPABASE_PUBLISHABLE_KEY = process.env.SUPABASE_ANON_KEY!;
 
 function buildIdNameValue(id: string, name: string): string {
   return `${id}_${name}`;
@@ -219,6 +220,13 @@ export async function POST(req: NextRequest) {
     if (fetchMode === "dashboard") {
       const gate = await requireResourceAccess(ResourceType.EXTENSIONS, ActionType.VIEW);
       if (!gate.ok) return gate.response;
+    } else if (!verifyQuotationReview(String(id ?? ""), body?.sig)) {
+      /*
+        The customer's review page: only with the signature its emailed link
+        carries. Zoho estimate ids are sequential, so an id alone served any
+        quotation to anyone (lib/server/quotation-review-token.ts).
+      */
+      return NextResponse.json({ success: false, error: "This link is not valid." }, { status: 404 });
     }
 
     if (!name && !id) {
@@ -248,11 +256,8 @@ export async function POST(req: NextRequest) {
 
     const res = await fetch(SUPABASE_FUNCTION_URL, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${SUPABASE_PUBLISHABLE_KEY}`,
-        apikey: SUPABASE_PUBLISHABLE_KEY,
-        "Content-Type": "application/json",
-      },
+      /* Signed: the function serves only this server. */
+      headers: zohoEdgeHeaders("get-estimate"),
       body: JSON.stringify(reqPayload),
     });
 

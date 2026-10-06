@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { zohoEdgeHeaders } from "@/lib/server/zoho/edge-auth";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
 import { ActionType, ResourceType } from "@/types/types";
@@ -17,7 +18,11 @@ export async function POST(request: NextRequest) {
     if (!profile || !accessUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    if (!hasResourceAction(accessUser, ResourceType.SCHEDULING, ActionType.VIEW)) {
+    /* Scheduling (appointment lookup) and Extensions -> Bulk download. */
+    if (
+      !hasResourceAction(accessUser, ResourceType.SCHEDULING, ActionType.VIEW) &&
+      !hasResourceAction(accessUser, ResourceType.EXTENSIONS, ActionType.VIEW)
+    ) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -42,11 +47,8 @@ export async function POST(request: NextRequest) {
       `${supabaseUrl}/functions/v1/zoho-fsm-appointments`,
       {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${anonKey}`,
-          apikey: anonKey,
-          "Content-Type": "application/json",
-        },
+        /* Signed: the function serves only this server. */
+        headers: zohoEdgeHeaders("zoho-fsm-appointments"),
         body: JSON.stringify({ name }),
       },
     );

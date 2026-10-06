@@ -728,7 +728,7 @@ function mapAssessment(r: Row, items: Row[] = []): AssessmentRecord {
  */
 export async function listAssessments(
   admin: Admin,
-  filter: { status?: string | null; q?: string | null; from?: number; to?: number } = {},
+  filter: { status?: string | null; q?: string | null; from?: number; to?: number; createdBy?: string | null } = {},
 ): Promise<{ assessments: AssessmentRecord[]; total: number }> {
   const from = filter.from ?? 0;
   const to = filter.to ?? from + 24;
@@ -739,6 +739,8 @@ export async function listAssessments(
     .order("id")
     .range(from, to);
   if (filter.status === "draft" || filter.status === "completed") q = q.eq("status", filter.status);
+  /* Only the caller's own, unless they see all (lib/amc/access.ts). */
+  if (filter.createdBy) q = q.eq("created_by", filter.createdBy);
   const term = safeTerm(filter.q ?? "");
   if (term) {
     const like = `%${term}%`;

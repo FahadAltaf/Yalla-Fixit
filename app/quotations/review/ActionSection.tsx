@@ -24,6 +24,8 @@ type Action = "approve" | "reject";
 
 interface Props {
   estimateId?: string;
+  /** The review link's signature, required by /api/estimates/transition. */
+  sig?: string;
   quotationNumber: string;
   currentStatus: string | null;
   setCurrentStatus: (status: string) => void;
@@ -36,6 +38,7 @@ interface Props {
 
 export function ActionSection({
   estimateId,
+  sig,
   quotationNumber,
   ownerEmail,
   customerName,
@@ -109,6 +112,7 @@ export function ActionSection({
         body: JSON.stringify({
           record_id: estimateId,
           action,
+          sig,
           notes: note,
         }),
       });

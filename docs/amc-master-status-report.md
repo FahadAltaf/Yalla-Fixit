@@ -162,13 +162,17 @@ All AMC migrations apply in this order. **NOT APPLIED TO PRODUCTION** means prod
 | 10 | `20261006130000_amc_business_operations.sql` | Customers/properties, assessments, discount config, additional quotes | **NOT APPLIED** |
 | 11 | `20261006140000_amc_atomic_activation_and_dashboard.sql` | Atomic contract activation; dashboard figures counted in the database (functions only) | **NOT APPLIED** |
 | 12 | `20261006150000_amc_business_completion.sql` | Notifications and their settings, signed-contract archive, private `amc-documents` bucket, assessment photos | **NOT APPLIED** |
+| 13 | `20261006160000_role_tables_server_only.sql` | `roles`, `role_access`, `user_profile`: browser read-only, no anon access (security phase) | **NOT APPLIED** |
+| 14 | `20261006161000_todos_and_uploads_tightened.sql` | `todos` server-only; `uploads` writes by signed-in owners only | **NOT APPLIED** |
+| 15 | `20261006162000_amc_history_survives_user_deletion.sql` | Proposal owner FK `RESTRICT`, so deleting a user cannot remove AMC history | **NOT APPLIED** |
+| 16 | `20261006163000_shared_tables_server_only.sql` | 12 scheduling, lookup, FSM snapshot and todo child tables closed to the anon key | **NOT APPLIED** |
 
 **Checks:**
 - No duplicate timestamps, and no `main` migration supersedes an AMC one.
 - Each AMC migration depends only on earlier ones.
 - Production's migration history must be reconciled first (`docs/database-migration-reconciliation.md`).
 - Then apply via the runbook (`docs/amc-hardening-production-runbook.md` 7.x). Never `db push --include-all`.
-- **While today's `main` is live: PARTIALLY.** Migrations 1–3 and 7–12 are compatible with the live `main` (main's AMC queries replayed after each one; all pass). Migrations 4–6 break today's `main` (settings via graphql and the estimate and password-reset paths) and must follow the code deploy. No migration drops, renames or narrows anything `main` uses; no backfill is needed. Details: `docs/amc-migration-safety-report.md`.
+- **While today's `main` is live: PARTIALLY.** Migrations 1–3, 7–12 and 14–16 are compatible with the live `main` (SAFE BEFORE CODE DEPLOY; main's AMC queries replayed after each one; all pass). Migrations 4–6 and 13 break today's `main` (settings, users, roles and permissions via graphql, and the estimate and password-reset paths) and must follow the code deploy (REQUIRES NEW CODE FIRST). Details: `docs/amc-security-hardening-report.md` §12. No migration drops, renames or narrows anything `main` uses; no backfill is needed. Details: `docs/amc-migration-safety-report.md`.
 
 ## 6. Automated verification
 
@@ -176,12 +180,13 @@ On `amc-hardening` after the main merge:
 
 | Check | Result |
 |---|---|
-| Unit tests (`npm test`) | **154 / 154** (114 before + 14 database review + 26 business completion) |
+| Unit tests (`npm test`) | **179 / 179** (154 before + 25 security) |
+| Security tests (`tests/amc/security.test.ts`) | **25 / 25**: object-level access, role escalation, GraphQL allowlist, email relay, Edge signatures, review links, client links, reset tokens, server actions, CSRF, rate limits, notifications |
 | Full-project typecheck (`tsc --noEmit`, whole repo) | **PASS, 0 errors.** The 3 earlier test-only errors in `tests/amc/tokens.test.ts` are fixed |
-| Lint (all 142 AMC-changed TypeScript files) | **PASS** |
+| Lint (AMC and security-changed TypeScript files) | **PASS** (0 errors; 1 pre-existing warning) |
 | Production build (`next build --webpack`) | **PASS** |
-| Local migration harness (PostgreSQL 15, every AMC migration applied twice + behavioural checks) | **PASS** (all 9 check suites, including the schema invariants and the business-completion checks) |
-| Main compatibility harness (main's AMC schema from `origin/main`, each new migration in turn, main's queries replayed) | **PASS** for all 23 AMC queries at every step, migration 12 included; the 3 expected non-AMC breaks from migrations 4–6 |
+| Local migration harness (PostgreSQL 15, every AMC migration applied twice + behavioural checks) | **PASS** (all check suites, including the schema invariants, the business-completion checks and the security checks `97c_verify_security.sql`) |
+| Main compatibility harness (main's AMC schema from `origin/main`, each new migration in turn, main's queries replayed) | **PASS** for all 23 AMC queries at every step, migrations 13–16 included; the expected non-AMC breaks come only from migrations 4–6 and 13 |
 | Synthetic scale (~10k contracts, 146k usage rows) and `EXPLAIN ANALYZE` | Interactive queries under 20 ms; approver dashboard 135–161 ms |
 | Two-session concurrency tests | **7 / 7** (last visit, double activation, corrections, cancellation vs usage, sync log, renewal, reminder) |
 | Browser / UAT | **Not done.** Needs a signed-in session and a migrated database (`docs/active-amc-user-testing-checklist.md`). The dev server points at production, which has none of these migrations |
@@ -241,27 +246,30 @@ Old defaults are listed as defaults, not as approved decisions.
 
 ## 9. Security backlog
 
-To be fixed in the security goal. Several fixes already exist as unapplied migrations.
+The security goal (6 Oct 2026) fixed every item below **in code and unapplied migrations**. Nothing is fixed in production until the code is deployed, the migrations are applied and the Edge Functions redeployed (`docs/amc-security-hardening-report.md` §12). Model: `docs/amc-security-model.md`.
 
-| Item | Risk | Priority |
+| Item | Risk | Status on the branch |
 |---|---|---|
-| `roles`, `role_access`, `user_profile` writable with the public anon key | Anyone could grant themselves AMC approval or admin rights; all AMC permissions rest on these tables | **CRITICAL before production** |
-| `settings.oauth_access_token` (Zoho) readable with the anon key | Zoho FSM account takeover | **CRITICAL before production** (fixed by migration 4, not applied) |
-| `amc_submissions` direct writes | Proposal tampering | **CRITICAL before production** (fixed by migration 1, not applied) |
-| Zoho Edge Functions callable with the anon key; one logs the token | FSM data exposure/abuse | **HIGH before production** |
-| `/api/graphql` without authentication | Data exposure | **HIGH before production** |
-| Public `uploads` storage bucket | Exposure of files uploaded by other modules. AMC no longer depends on it: signed contracts and assessment photos use the private `amc-documents` bucket (no storage policy, signed links only) | **HIGH before production** |
-| `password_resets`, estimate tables browser-accessible | Account / quote exposure | **HIGH before production** (fixed by migrations 5–6, not applied) |
-| FSM work-order lookup open to every AMC user | Over-broad customer data access | **MEDIUM** |
-| Shared customers visible/editable by every AMC user | Over-broad access | **MEDIUM** |
-| Active AMC permission model (owner/approver only; no operations role) | Process fit, least privilege | **FOLLOW-UP** |
-| `amc_submissions.owner_id` deletes a user's proposals on user deletion (`ON DELETE CASCADE`, from main); once contracts exist, deleting such a user fails instead (contracts are `RESTRICT`) | Lost proposal history, or a confusing error on user deletion | **MEDIUM**: deactivate rather than delete; consider `SET NULL` (`amc-migration-safety-report.md` §6) |
+| `roles`, `role_access`, `user_profile` writable with the anon key | Self-granted approval or admin | Fixed: migration 13 + `/api/users`, `/api/roles`, `/api/role-access` with escalation rules |
+| Zoho token readable with the anon key | FSM account takeover | Fixed: migration 4; token server-only. **Rotate at deployment** |
+| `amc_submissions` direct writes | Proposal tampering | Fixed: migration 1 |
+| Zoho Edge Functions open; one logged the token | FSM data exposure | Fixed in `supabase/functions/` (signed calls, cron secret, no token logs). **Manual redeploy needed** |
+| `/api/graphql` passing any query | Data exposure and writes | Fixed: one allowlisted read |
+| Generic email relay | Phishing from the company domain | Fixed: limited and rate-limited |
+| `password_resets`, estimate tables, todos, scheduling tables open | Account and data exposure | Fixed: migrations 5, 6, 14, 16; reset tokens hashed |
+| FSM work-order lookup and customers open to every AMC user | Over-broad access | Fixed: object-level rules in `lib/amc/access.ts` |
+| No operations permission | Least privilege | Fixed: `amc_operations` (View, Create, Edit, Approve) |
+| User deletion removes proposals | Lost history | Fixed: migration 15 (`RESTRICT`); deactivate instead |
+| Public `uploads` bucket | Exposure of other modules' files | **Open (MEDIUM)**: writes tightened; public read kept for avatars/logos (strategy in the hardening report §7) |
+| Open self-registration | Unvetted accounts | **Open (HIGH)**: disable sign-ups or keep the "user" role empty |
+| Self-approval allowed by setting | BRD v0.3 §6.7 forbids it | **Open (HIGH, business rule)**: next AMC goal |
+| Per-instance rate limits | Weaker throttling | **Open (MEDIUM)** |
 
 ## 10. Production readiness
 
 These prevent release today:
 1. Production migration history not reconciled; AMC migrations not applied.
-2. The critical/high security items in §9.
+2. The security fixes in §9 deployed (code, migrations 4–6 and 13–16, Edge Functions, secrets) and the Zoho and Resend credentials rotated.
 3. No browser/UAT pass on a migrated staging database.
 4. Category C decisions (§7) not confirmed.
 5. The non-emergency response wording (§7 A10) and the provider contact number (§7 A12) checked before contracts go out.
@@ -270,7 +278,7 @@ These prevent release today:
 ## 11. Remaining development
 
 These follow from §4 rows marked PARTIAL or NOT IMPLEMENTED and the security backlog:
-1. **Security and permissions** (§9): role tables, Edge Functions, GraphQL, private storage, data visibility; apply the existing fixes.
+1. ~~Security and permissions~~: done in code on 6 Oct 2026; deployment steps in the hardening report §12. Open: self-registration, self-approval (BRD), `uploads` public read.
 2. **Decision-driven changes** (no new systems needed):
    - switch on the reminder schedule and the allowance/reminder emails once confirmed;
    - allowance scaling, renewal pricing, usage permissions, discount rate (rows 18, 20, 23, 25);
@@ -280,9 +288,9 @@ These follow from §4 rows marked PARTIAL or NOT IMPLEMENTED and the security ba
 
 ## 12. Recommended prompt plan
 
-**TOTAL MAJOR PROMPTS REMAINING: 3**, plus small decision-driven changes as answers arrive.
+**TOTAL MAJOR PROMPTS REMAINING: 2** (FSM automation, release readiness), plus small decision-driven changes as answers arrive.
 
-1. **Security and permissions hardening.** Can run now.
+1. ~~Security and permissions hardening~~: done on 6 Oct 2026 (code and unapplied migrations).
    - Close role-table writes; secure Edge Functions and `/api/graphql`.
    - The public `uploads` bucket for the other modules (AMC already uses private storage).
    - Customer/FSM-lookup visibility.

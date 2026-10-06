@@ -460,7 +460,8 @@ function VisitTable({
 /* Dialogs                                                             */
 /* ------------------------------------------------------------------ */
 
-function useWorkOrderLookup() {
+/* From a contract: the server allows the lookup to whoever may operate it. */
+function useWorkOrderLookup(contractId: string) {
   const [ref, setRef] = useState("");
   const [workOrder, setWorkOrder] = useState<FsmWorkOrderForAmc | null>(null);
   const [looking, setLooking] = useState(false);
@@ -470,7 +471,7 @@ function useWorkOrderLookup() {
     setError(null);
     setWorkOrder(null);
     try {
-      setWorkOrder((await amcContractsService.fsmWorkOrder(ref.trim())).workOrder);
+      setWorkOrder((await amcContractsService.fsmWorkOrder(ref.trim(), contractId)).workOrder);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not find the work order.");
     } finally {
@@ -522,7 +523,7 @@ function LinkCustomerDialog({
   contractId: string;
   onLinked: () => void;
 }) {
-  const lookup = useWorkOrderLookup();
+  const lookup = useWorkOrderLookup(contractId);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ name: string | null; customerId: string | null; matches: boolean | null } | null>(null);
@@ -627,7 +628,7 @@ function LinkWorkDialog({
   entitlements: Entitlement[];
   onLinked: () => void;
 }) {
-  const lookup = useWorkOrderLookup();
+  const lookup = useWorkOrderLookup(contractId);
   const linkable = entitlements.filter((e) => e.entitlementType !== "informational");
   const [appointmentId, setAppointmentId] = useState(ALL);
   const [lineId, setLineId] = useState(NONE);
