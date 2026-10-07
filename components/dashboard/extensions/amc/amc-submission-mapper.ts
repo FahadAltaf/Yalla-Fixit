@@ -33,6 +33,7 @@ export function formDataToSubmissionPayload(
     unitType: data.unitType,
     propertyAddress: data.propertyAddress,
     propertyDetail: data.propertyDetail,
+    ...(data.propertyType ? { propertyType: data.propertyType } : {}),
   };
 
   const customer: AmcSubmissionCustomer = {
@@ -63,6 +64,9 @@ export function formDataToSubmissionPayload(
     discount_amount: totals.discountAmount,
     final_price: totals.finalPrice,
     generated_documents: generatedDocuments,
+    ...(data.paymentPlan
+      ? { payment_plan: data.paymentPlan, payment_plan_custom: data.paymentPlan === "custom" ? (data.paymentPlanCustom ?? null) : null }
+      : {}),
   };
 }
 
@@ -72,14 +76,21 @@ export function submissionToFormData(submission: AmcDocumentSource): AmcFormData
     unitType: submission.property.unitType,
     propertyAddress: submission.property.propertyAddress,
     propertyDetail: submission.property.propertyDetail,
+    propertyType: submission.property.propertyType,
     /* FR3.3: basePrice has to come back too, or reopening a submission
        silently blanks every price the team entered. */
     serviceRows: submission.services.map(
-      ({ serviceId, included, units, frequency, basePrice, free }) => ({
+      ({ serviceId, included, units, frequency, basePrice, free, rateItemId, standardRate, floorRate, promotionId, promotionPercent, belowFloor }) => ({
         serviceId,
         included,
         units,
         frequency,
+        rateItemId,
+        standardRate,
+        floorRate,
+        promotionId,
+        promotionPercent,
+        belowFloor,
         /*
           A submission saved before free rows existed has no flag, and a
           priced row must not come back as a giveaway. False is the right
@@ -117,6 +128,8 @@ export function submissionToFormData(submission: AmcDocumentSource): AmcFormData
       submission.customer.endDate ??
       getDefaultEndDate(submission.customer.startDate),
     paymentTerms: submission.customer.paymentTerms,
+    paymentPlan: submission.payment_plan ?? undefined,
+    paymentPlanCustom: submission.payment_plan_custom ?? null,
     proposalNumber: submission.customer.proposalNumber,
     submissionId: submission.id ?? "",
   };

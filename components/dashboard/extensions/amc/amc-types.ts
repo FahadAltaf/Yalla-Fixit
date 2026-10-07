@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+import { UNIT_TYPES } from "@/lib/amc/client-profile";
+import { PAYMENT_PLANS, customPlanSchema, type CustomPlan, type PaymentPlan, type VersionReason } from "@/lib/amc/proposal-rules";
+
 import { isEndDateBeforeStartDate } from "./amc-date-utils";
 import type { AmcSettings } from "./amc-settings";
 
@@ -101,12 +104,22 @@ export const amcServiceRowSchema = z.object({
   */
   free: z.boolean().default(false),
   price: z.coerce.number().min(0).optional(),
+  /* From the rate card (BRD 5.3), shown read-only; the server sets them again. */
+  rateItemId: z.string().nullable().optional(),
+  standardRate: z.number().nullable().optional(),
+  floorRate: z.number().nullable().optional(),
+  promotionId: z.string().nullable().optional(),
+  promotionPercent: z.number().nullable().optional(),
+  belowFloor: z.boolean().optional(),
 });
 
 export const amcFormSchema = z
   .object({
     propertyCategory: propertyCategorySchema,
+    /* The rate model (villa, apartment, office): what prices the proposal. */
     unitType: unitTypeSchema,
+    /* BRD 5.2's full property type (Phase 4); optional for proposals saved before it. */
+    propertyType: z.enum(UNIT_TYPES).optional(),
     propertyAddress: z.string().min(1, "Property address is required"),
     propertyDetail: z.string().min(1, "Property detail is required"),
     serviceRows: z.array(amcServiceRowSchema),
@@ -130,6 +143,9 @@ export const amcFormSchema = z
     startDate: z.string().min(1, "Start date is required"),
     endDate: z.string().min(1, "End date is required"),
     paymentTerms: paymentTermsSchema,
+    /* DEV-366: the payment plan; paymentTerms above is kept as its legacy reading. */
+    paymentPlan: z.enum(PAYMENT_PLANS).optional(),
+    paymentPlanCustom: customPlanSchema.nullable().optional(),
     /* Allocated by the server on first save (step 1.7), so the user is
        never asked for it and cannot collide it. Empty until then. */
     proposalNumber: z.string(),
@@ -216,6 +232,14 @@ export const amcFormSchema = z
         code: z.ZodIssueCode.custom,
         message: "Add a name for the second contact, or clear their number",
         path: ["coordinationContacts", 1, "name"],
+      });
+    }
+
+    if (data.paymentPlan === "custom" && !data.paymentPlanCustom?.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Set the instalments of the custom payment plan",
+        path: ["paymentPlanCustom"],
       });
     }
 
@@ -367,12 +391,13 @@ export const AMC_STATUS_LABELS: Record<AmcSubmissionStatus, string> = {
   or one the client asked to change. The last two go back through internal
   approval before anything reaches the client again.
 */
+/*
+  BRD 5.4 (DEV-367): once the client has seen a proposal, a change is a new
+  version, so a rejected proposal is revised (V2 opens as a draft) rather
+  than edited in place.
+*/
 export function isAmcSubmissionEditable(status: AmcSubmissionStatus): boolean {
-  return (
-    status === "draft" ||
-    status === "sent_back" ||
-    status === "proposal_rejected"
-  );
+  return status === "draft" || status === "sent_back";
 }
 
 export interface AmcSubmissionProperty {
@@ -380,6 +405,8 @@ export interface AmcSubmissionProperty {
   unitType: UnitType;
   propertyAddress: string;
   propertyDetail: string;
+  /* Phase 4: the full property type; absent on older proposals. */
+  propertyType?: (typeof UNIT_TYPES)[number];
 }
 
 export interface AmcSubmissionDocumentOptions {
@@ -472,6 +499,21 @@ export interface AmcSubmission {
      single-proposal read only. null: none yet; absent: not checked or the
      contracts table does not exist yet. */
   contract_id?: string | null;
+  /* Phase 4 (20261007140000). */
+  property_type?: string | null;
+  payment_plan?: PaymentPlan | null;
+  payment_plan_custom?: CustomPlan | null;
+  valid_until?: string | null;
+  /* V1, V2, … (the row is always the active version). */
+  current_version?: number;
+  version_reason?: VersionReason | null;
+  version_summary?: string | null;
+  version_started_at?: string | null;
+  enquiry_id?: string | null;
+  below_floor?: boolean;
+  rate_card_version_id?: string | null;
+  /* Ticked lines the rate card cannot price as they stand (on save replies). */
+  rate_problems?: string[];
 }
 
 /* One entry in a submission's history, from the audit trail (FR5.9). */
@@ -504,7 +546,7 @@ export interface AmcPendingApprovalsResponse {
    submission; the client page (FR5.5, FR5.7) has only these fields. */
 export type AmcDocumentSource = Pick<
   AmcSubmission,
-  "property" | "customer" | "document_options" | "services" | "discount_percent"
+  "property" | "customer" | "document_options" | "services" | "discount_percent" | "payment_plan" | "payment_plan_custom"
 > & { id?: string };
 
 export interface AmcSubmissionListResponse {

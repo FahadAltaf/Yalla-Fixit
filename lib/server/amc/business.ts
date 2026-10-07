@@ -27,6 +27,10 @@ import {
 } from "@/lib/amc/contracts";
 import { cleanAssetCounts } from "@/lib/amc/enquiries";
 import { MAX_UNITS } from "@/lib/amc/pricing";
+import { UNIT_TYPES } from "@/lib/amc/client-profile";
+import { defaultPaymentPlan, legacyTermsForPlan, rateModelFor } from "@/lib/amc/proposal-rules";
+import { readAmcConfig } from "@/lib/server/amc/config";
+import { rateCardInForce } from "@/lib/server/amc/rate-card";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { ContractError, isMissingTable, loadContract, toRulesContract } from "@/lib/server/amc/contracts";
 import { fetchAllRowsById } from "@/lib/server/amc/paging";
@@ -1146,39 +1150,62 @@ export async function deleteDraftAssessment(admin: Admin, who: Visibility, id: s
  */
 export async function createProposalFromAssessment(admin: Admin, id: string, actor: Actor) {
   const a = await getAssessment(admin, id);
-  const [customer, property, settings] = await Promise.all([
+  const [customer, property, settings, card, config] = await Promise.all([
     a.customer ? getCustomer(admin, a.customer.id) : Promise.resolve(null),
     a.property ? getProperty(admin, a.property.id) : Promise.resolve(null),
     readAmcSettings(admin),
+    rateCardInForce(admin),
+    readAmcConfig(admin),
   ]);
-  const unitType = property?.unitType ?? a.unitType ?? "";
-  const offered = servicesForProperty(settings, unitType);
+  /* Phase 4: the full property type, priced on its rate model (a clinic as an office). */
+  const propertyType = property?.unitType ?? a.unitType ?? null;
+  const category = property?.propertyCategory ?? a.propertyCategory;
+  const model = rateModelFor(propertyType, category);
+  const offered = servicesForProperty(settings, model);
   const prefill = proposalPrefillFromAssessment(
     {
       status: a.status,
       submissionId: a.proposal?.id ?? null,
       recommendedServiceIds: a.recommendedServiceIds,
-      unitType: a.unitType,
+      unitType: model,
       propertyCategory: a.propertyCategory,
       assetCounts: a.assetCounts,
     },
     customer ? { name: customer.name, customerRef: customer.customerRef, email: customer.email, phone: customer.phone } : null,
     property
-      ? { label: property.label, address: property.address, unitType: property.unitType, propertyCategory: property.propertyCategory }
+      ? { label: property.label, address: property.address, unitType: model, propertyCategory: property.propertyCategory }
       : null,
     offered.map((s) => ({ id: s.id, frequencyPerYear: s.frequencyPerYear ?? null })),
   );
   if (!prefill.ok) throw new ContractError(prefill.error, prefill.status);
-  const priced = priceSubmission({ services: prefill.services, discountPercent: 0, unitType: prefill.property.unitType, settings });
+  const priced = priceSubmission({
+    services: prefill.services,
+    discountPercent: 0,
+    unitType: prefill.property.unitType,
+    settings,
+    rateCard: card ? { id: card.id, card: card.card } : null,
+    day: todayInDubai(),
+  });
   if (!priced.ok) throw new ContractError(priced.error, 409);
+  const plan = defaultPaymentPlan(config.payments, priced.final_price);
 
-  const { data, error } = await admin
+  const phase4: Row = {
+    ...(propertyType && (UNIT_TYPES as readonly string[]).includes(propertyType) ? { property_type: propertyType } : {}),
+    enquiry_id: a.enquiryId,
+    payment_plan: plan,
+    version_started_at: new Date().toISOString(),
+    version_started_by: actor.id,
+    ...(card ? { rate_card_version_id: priced.rate_card_version_id, below_floor: priced.below_floor } : {}),
+  };
+  const insertWith = (extra: Row) =>
+    admin
     .from("amc_submissions")
     .insert({
+      ...extra,
       owner_id: actor.id,
       status: "draft",
-      property: prefill.property,
-      customer: prefill.customer,
+      property: propertyType ? { ...prefill.property, propertyType } : prefill.property,
+      customer: { ...prefill.customer, paymentTerms: legacyTermsForPlan(plan) },
       document_options: {
         optionalSections: { supplyInstallPriceList: false, additionalFixedPriceServices: false },
         priceListRows: [],
@@ -1199,7 +1226,10 @@ export async function createProposalFromAssessment(admin: Admin, id: string, act
     })
     .select("id, proposal_number, customer")
     .single<{ id: string; proposal_number: string; customer: Row }>();
-  if (error) throw fail(error);
+  /* Before 20261007140000 the Phase 4 columns are left out. */
+  let { data, error } = await insertWith(phase4);
+  if (error && missingColumn(error)) ({ data, error } = await insertWith({}));
+  if (error || !data) throw fail(error ?? { message: "The proposal was not created." });
   /* Pin the JSON copy of the allocated number, as POST /api/amc-submissions does. */
   await admin
     .from("amc_submissions")

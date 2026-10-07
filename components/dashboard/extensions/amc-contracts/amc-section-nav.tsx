@@ -24,6 +24,11 @@ const SECTIONS = [
     href: "/extensions/amc-contracts/assessments",
   },
   {
+    key: "rate-card",
+    label: "Rate card",
+    href: "/extensions/amc-contracts/rate-card",
+  },
+  {
     key: "reports",
     label: "Reports",
     href: "/extensions/amc-contracts/reports",

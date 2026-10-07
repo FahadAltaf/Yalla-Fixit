@@ -4,6 +4,8 @@ import { z } from "zod";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { notifyProposalEvent } from "@/lib/server/amc/notifications";
 import { readAmcSettings } from "@/lib/server/amc/settings";
+import { readAmcConfig } from "@/lib/server/amc/config";
+import { proposalValidUntil } from "@/lib/amc/proposal-rules";
 import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
 import { linkTokenExpiry, mintLinkToken } from "@/lib/server/link-token";
 import { sendEmail } from "@/lib/server/send-email";
@@ -386,6 +388,20 @@ export async function POST(req: NextRequest) {
       },
       { status: 409 },
     );
+  }
+
+  /*
+    Valid for the configured days from this send (DEV-366). A separate,
+    best-effort write: on a database without 20261007140000 the send above
+    must still succeed.
+  */
+  if (document === "proposal") {
+    try {
+      const config = await readAmcConfig(admin);
+      await admin.from("amc_submissions").update({ valid_until: proposalValidUntil(now, config.proposals.validityDays) }).eq("id", id);
+    } catch (validityError) {
+      console.warn("[amc:send] validity date not set:", validityError instanceof Error ? validityError.message : validityError);
+    }
   }
 
   /* Recorded for the owner when someone else sent it (only the owner can

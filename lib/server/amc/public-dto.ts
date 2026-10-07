@@ -1,3 +1,4 @@
+import { PAYMENT_PLANS, paymentPlanLabel, type CustomPlan, type PaymentPlan } from "@/lib/amc/proposal-rules";
 import { z } from "zod";
 
 import {
@@ -61,7 +62,12 @@ export function toPublicStatus(row: PublicRow, kind: LinkKind): PublicStatus {
     customerName: open ? str(customer.customerName) : null,
     startDate: open ? str(customer.startDate) : null,
     endDate: open ? str(customer.endDate) : null,
-    paymentTerms: open ? str(customer.paymentTerms) : null,
+    /* The plan when the proposal has one (Phase 4), else its legacy terms. */
+    paymentTerms: open
+      ? PAYMENT_PLANS.includes(row.payment_plan as PaymentPlan)
+        ? paymentPlanLabel(row.payment_plan as PaymentPlan, (row.payment_plan_custom as CustomPlan | null) ?? null)
+        : str(customer.paymentTerms)
+      : null,
     property:
       open && property
         ? { propertyAddress: str(property.propertyAddress) ?? undefined }

@@ -16,7 +16,7 @@ import {
 import {
   formatDesignationLabel,
   formatDisplayDate,
-  formatPaymentTermsLabel,
+  formatPaymentLabel,
 } from "./amc-pricing";
 import type { AmcComputedData } from "./amc-types";
 
@@ -264,7 +264,7 @@ function contractBlocks(data: AmcComputedData): Block[] {
       ],
     ],
     ["Amount in Words", totals.amountInWords],
-    ["Terms of Payment", [t(formatPaymentTermsLabel(formData.paymentTerms), { bold: true, tone: "brand" })]],
+    ["Terms of Payment", [t(formatPaymentLabel(formData), { bold: true, tone: "brand" })]],
   ]);
 
   const contacts = formData.coordinationContacts.filter((c) => c.name?.trim() || c.phone?.trim());

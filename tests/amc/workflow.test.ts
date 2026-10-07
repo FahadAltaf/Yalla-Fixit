@@ -21,10 +21,10 @@ const STATUSES = [
   "signed",
 ];
 
-test("submit: only the owner, only from draft, sent back or client-rejected", () => {
+test("submit: only the owner, only from draft or sent back (a client-rejected proposal is revised first, BRD 5.4)", () => {
   for (const from of STATUSES) {
     const owner = checkInternalTransition({ action: "submit", from, isOwner: true, canApprove: false });
-    const allowed = ["draft", "sent_back", "proposal_rejected"].includes(from);
+    const allowed = ["draft", "sent_back"].includes(from);
     assert.equal(owner.ok, allowed, from);
     if (owner.ok) assert.equal(owner.to, "awaiting_approval");
     else assert.equal(owner.status, 409);

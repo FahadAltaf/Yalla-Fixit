@@ -388,3 +388,50 @@ Expected:
 - three checks: Lost needs a reason, the contact has a phone, email or WhatsApp, and a completed assessment was attended (or has no attendance).
 
 **Live check:** open AMC Proposals in the live portal. The list and one proposal open as before.
+
+## 9. Phase 4 migration: `20261007140000_amc_rate_card_and_proposal_versions.sql`
+
+Apply after section 8, the same way. **It touches a live table**, so read this first:
+- `amc_submissions` (live `main` reads and writes it) only gains columns: nullable ones, or ones with a constant default (`current_version` = 1, `below_floor` = false). On Postgres 11+ adding these is a quick catalogue change, with no table rewrite;
+- three foreign keys and three partial indexes are added on it. The table is small, but **apply it outside working hours** so the short lock goes unnoticed;
+- live `main` is unaffected: it selects `*` and keeps only the fields it knows, inserts without the new columns (so the defaults apply), and updates only its own fields. The main-compatibility check (`compat.sh`) is unchanged at 28/11 with this file applied;
+- two new server-only tables (rate card versions, locked proposal versions), both append-only, plus the function that locks a version.
+
+**Pre-check** (read-only):
+```sql
+select to_regclass('public.amc_rate_card_versions') as rate_card, to_regclass('public.amc_submission_versions') as versions,
+       to_regclass('public.amc_enquiries') as enquiries;
+select column_name from information_schema.columns
+ where table_schema = 'public' and table_name = 'amc_submissions'
+   and column_name in ('enquiry_id', 'property_type', 'payment_plan', 'payment_plan_custom', 'valid_until', 'current_version',
+                       'version_reason', 'version_summary', 'version_started_at', 'version_started_by', 'rate_card_version_id', 'below_floor');
+select count(*) as proposals from public.amc_submissions;
+```
+Expected:
+- `rate_card` and `versions` are `null`;
+- `enquiries` is present. If it is `null`, apply section 8 first;
+- the columns query returns **no rows**;
+- note the proposal count, to compare after.
+
+**If the columns query returns any row, stop and send me the output.**
+
+**Post-check** (read-only):
+```sql
+select count(*) as proposals, count(*) filter (where current_version = 1) as at_v1, count(*) filter (where below_floor) as below_floor
+  from public.amc_submissions;
+select c.relname, c.relrowsecurity as rls_on from pg_class c join pg_namespace n on n.oid = c.relnamespace
+ where n.nspname = 'public' and c.relname in ('amc_rate_card_versions', 'amc_submission_versions');
+select table_name, grantee from information_schema.role_table_grants
+ where table_schema = 'public' and table_name in ('amc_rate_card_versions', 'amc_submission_versions')
+   and grantee in ('anon', 'authenticated');
+select has_function_privilege('anon', 'public.amc_lock_proposal_version(uuid, integer, text, text, uuid, jsonb, text, text, text, integer, text)', 'EXECUTE') as anon_can_lock;
+select tgname from pg_trigger where not tgisinternal and tgname in ('amc_rate_card_versions_locked', 'amc_submission_versions_locked');
+```
+Expected:
+- the same proposal count as before, all `at_v1`, `below_floor = 0`;
+- two tables, `rls_on = true`;
+- the grants query returns **no rows**;
+- `anon_can_lock = false`;
+- both triggers listed.
+
+**Live check:** in the live portal, open AMC Proposals, open one proposal, and (as its owner) save one draft. All three work as before.

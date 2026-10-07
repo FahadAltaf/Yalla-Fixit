@@ -84,10 +84,11 @@ async function findByToken(token: string) {
         .select(columns)
         .or(`proposal_token_hash.eq.${hash},contract_token_hash.eq.${hash}`)
         .maybeSingle();
-    let { data, error } = await query(`${PUBLIC_SELECT}, contract_settings_snapshot`);
-    if (error && (error.code === "42703" || error.code === "PGRST204")) {
-      ({ data, error } = await query(PUBLIC_SELECT));
-    }
+    const missing = (e: { code?: string } | null) => !!e && (e.code === "42703" || e.code === "PGRST204");
+    /* The payment plan and property type (Phase 4) first, then without them, then without the contract copy. */
+    let { data, error } = await query(`${PUBLIC_SELECT}, contract_settings_snapshot, payment_plan, payment_plan_custom, property_type`);
+    if (missing(error)) ({ data, error } = await query(`${PUBLIC_SELECT}, contract_settings_snapshot`));
+    if (missing(error)) ({ data, error } = await query(PUBLIC_SELECT));
     if (error) throw new Error(error.message);
     return (data as unknown as Row | null) ?? null;
   };

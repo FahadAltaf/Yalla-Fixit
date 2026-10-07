@@ -2,7 +2,7 @@
  * The AMC proposal workflow, as rules the server enforces and the UI
  * reads. No imports: usable from route handlers, components and tests.
  *
- *   draft | sent_back | proposal_rejected --submit (owner)--> awaiting_approval
+ *   draft | sent_back --submit (owner)--------------------> awaiting_approval
  *   awaiting_approval --approve (approver)--------------> approved
  *   awaiting_approval --send_back (approver, reason)----> sent_back
  *   approved | proposal_sent --send proposal (owner)----> proposal_sent
@@ -12,6 +12,11 @@
  *   contract_sent --client signs-------------------------> signed
  *
  * `signed` is final. There is no delete, cancel or withdraw.
+ *
+ * A proposal the client has seen (proposal_sent, proposal_rejected,
+ * proposal_approved) is changed by revising it (BRD 5.4, DEV-367): the
+ * shared version is locked and V(n+1) opens as a draft, which is then
+ * submitted like any draft.
  */
 
 export type AmcInternalAction = "submit" | "approve" | "send_back";
@@ -48,7 +53,7 @@ export function canDecideProposal({
 /* Internal transitions                                                */
 /* ------------------------------------------------------------------ */
 
-const SUBMITTABLE = new Set(["draft", "sent_back", "proposal_rejected"]);
+const SUBMITTABLE = new Set(["draft", "sent_back"]);
 
 export type TransitionCheck =
   | { ok: true; to: string }

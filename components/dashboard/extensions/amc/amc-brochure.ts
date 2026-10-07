@@ -1,5 +1,5 @@
 import { getAmcBrochureDefaults, type AmcBrochureKey } from "./amc-brochure-copy";
-import { formatPaymentTermsLabel } from "./amc-pricing";
+import { formatPaymentLabel } from "./amc-pricing";
 import { formatPhoneForDocument } from "./amc-phone";
 import {
   buildProposalServiceRows,
@@ -176,7 +176,7 @@ export function buildAmcBrochure(data: AmcComputedData): AmcBrochure {
     startLabel: getProposalStartLabel(formData),
     annualFee: totals.finalPrice,
     monthlyFee: totals.monthlyPrice,
-    paymentTerms: formatPaymentTermsLabel(formData.paymentTerms),
+    paymentTerms: formatPaymentLabel(formData),
     services: buildProposalServiceRows(formData, frequencyRows, data.settings.services).map((row) => ({
       label: row.service,
       units: row.units,

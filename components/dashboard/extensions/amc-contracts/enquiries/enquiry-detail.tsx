@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ArrowRight, Building2, CalendarPlus, ClipboardCheck, History, Inbox, MessageSquarePlus, Pencil, UserRound } from "lucide-react";
+import { ArrowRight, Building2, CalendarPlus, ClipboardCheck, FileSignature, History, Inbox, Loader2, MessageSquarePlus, Pencil, UserRound } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
@@ -15,6 +16,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CHANNEL_LABELS, LIFECYCLE_LABELS, UNIT_TYPE_LABELS } from "@/lib/amc/client-profile";
 import { ATTENDANCE_LABELS, CLOSED_STAGES, ENQUIRY_STAGE, FOLLOW_UP_CHANNEL_LABELS, type FollowUpChannel, type SiteVisitAttendance } from "@/lib/amc/enquiries";
 import { enquiriesService, type EnquiryDetailResponse, type EnquiryMeta } from "@/modules/amc-contracts/enquiries-service";
+import { proposalRulesService } from "@/modules/amc-submissions";
 
 import { AmcSectionNav } from "../amc-section-nav";
 import { formatContractDate, formatDateTime } from "../contract-status";
@@ -35,6 +37,8 @@ export function EnquiryDetail({ id }: { id: string }) {
   useBreadcrumbLabel(id, data?.enquiry.enquiryNumber ?? "Enquiry");
   const { tab, setTab, isOpened } = useUrlTab(TABS, "overview");
   const [dialog, setDialog] = useState<Dialog>(null);
+  const router = useRouter();
+  const [starting, setStarting] = useState(false);
 
   if (loading || meta.loading) {
     if (error || meta.error) return <ErrorState title="Could not load this enquiry" message={error ?? meta.error} onRetry={reload} />;
@@ -55,6 +59,19 @@ export function EnquiryDetail({ id }: { id: string }) {
   const stageIndex = m.stages.indexOf(e.stage);
   const nextStage = !closed && e.stage !== ENQUIRY_STAGE.onHold && stageIndex >= 0 ? m.stages[stageIndex + 1] : undefined;
   const suggestNext = nextStage && !CLOSED_STAGES.includes(nextStage) && nextStage !== ENQUIRY_STAGE.onHold ? nextStage : undefined;
+  /* DEV-365: the proposal, prefilled from the enquiry, its property and its site visit. */
+  const startProposal = async () => {
+    setStarting(true);
+    try {
+      const result = await proposalRulesService.proposalFromEnquiry(e.id);
+      for (const w of result.warnings) toast.warning(w);
+      toast.success(`Proposal ${result.proposalNumber} started from ${result.source === "site_visit" ? "the site visit" : result.source === "scope" ? "the property's scope" : "the enquiry"}.`);
+      router.push(`/extensions/amc/${result.submissionId}/edit`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not start the proposal.");
+      setStarting(false);
+    }
+  };
   const after = (message: string) => (result?: { warning: string | null }) => {
     setDialog(null);
     if (result?.warning) toast.warning(result.warning);
@@ -96,7 +113,18 @@ export function EnquiryDetail({ id }: { id: string }) {
                   <MessageSquarePlus className="size-4" />
                   Log follow-up
                 </Button>
+                {!closed && !e.proposal ? (
+                  <Button variant="outline" onClick={() => void startProposal()} disabled={starting || !e.property} title={e.property ? undefined : "Link the property first"}>
+                    {starting ? <Loader2 className="size-4 animate-spin" /> : <FileSignature className="size-4" />}
+                    Create proposal
+                  </Button>
+                ) : null}
               </>
+            ) : null}
+            {e.proposal ? (
+              <Button asChild variant="outline">
+                <Link href={`/extensions/amc/${e.proposal.id}`}>Proposal {e.proposal.proposalNumber}</Link>
+              </Button>
             ) : null}
           </div>
         }

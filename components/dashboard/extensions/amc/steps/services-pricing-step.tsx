@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, ListChecks, SlidersHorizontal, UserRound } from "lucide-react";
+import { AlertTriangle, BadgePercent, ListChecks, Plus, SlidersHorizontal, Trash2, UserRound, Wallet } from "lucide-react";
 import { useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
@@ -37,6 +37,21 @@ import {
 } from "@/components/ui/select";
 import type { AmcFormData, AmcPriceListRow } from "../amc-types";
 import { servicesForProperty, type AmcServiceDefinition } from "../amc-settings";
+import { calculateAmcTotals } from "../amc-pricing";
+import { Button } from "@/components/ui/button";
+import { applyPackage, packagesFor } from "@/lib/amc/rate-card";
+import {
+  PAYMENT_PLAN_LABELS,
+  allowedPaymentPlans,
+  approvalLevelName,
+  discountApprovalLevel,
+  isNonStandardPlan,
+  legacyTermsForPlan,
+  type CustomPlan,
+  type PaymentPlan,
+} from "@/lib/amc/proposal-rules";
+import { formatCurrencyAED } from "@/utils/format-currency";
+import type { ProposalRules } from "@/modules/amc-submissions";
 
 interface StepProps {
   form: UseFormReturn<AmcFormData>;
@@ -49,6 +64,8 @@ interface StepProps {
     has added any -- both fall back to the plain fields.
   */
   settings?: AmcSettings;
+  /* Phase 4: the rate card in force, payment bands and discount thresholds; undefined while loading. */
+  rules?: ProposalRules | null;
 }
 
 /** Marks the "someone else" option in the account manager picker. */
@@ -71,7 +88,12 @@ const MANAGER_CUSTOM = "__custom__";
  * §5.1 also puts the optional sections and the placeholder fields on this
  * step, which is why they are below rather than on Review.
  */
-export function ServicesPricingStep({ form, catalogue, settings }: StepProps) {
+export function ServicesPricingStep({ form, catalogue, settings, rules }: StepProps) {
+  const card = rules?.rateCard ?? null;
+  const packages = card ? packagesFor(card.card, form.watch("unitType")) : [];
+  const discount = form.watch("discountPercent") ?? 0;
+  const level = rules ? discountApprovalLevel(rules.approvals, discount) : 0;
+  const belowFloor = (form.watch("serviceRows") ?? []).some((row) => row.included && row.belowFloor);
   const savedManagers = (settings?.accountManagers ?? []).filter(
     (manager) => manager.name.trim(),
   );
@@ -105,11 +127,38 @@ export function ServicesPricingStep({ form, catalogue, settings }: StepProps) {
             Contract services
           </h3>
           <p className="text-sm text-muted-foreground">
-            Tick each service this AMC covers, then set its units, visits per
-            year and base price. The price is base price × units × frequency,
-            and it updates as you type.
+            {card
+              ? "Tick each service this AMC covers and set its units and visits per year. Rates come from the rate card and cannot be changed here; the price is rate × units × frequency."
+              : "Tick each service this AMC covers, then set its units, visits per year and base price. The price is base price × units × frequency, and it updates as you type."}
           </p>
         </div>
+        {card ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/30 px-3 py-2 text-xs">
+            <span className="text-muted-foreground">
+              Rate card V{card.versionNo}, in force since {card.effectiveFrom.split("-").reverse().join("/")}. Promotions in date are applied.
+            </span>
+            {packages.length ? (
+              <Select
+                value=""
+                onValueChange={(id) => {
+                  const pkg = packages.find((p) => p.id === id);
+                  if (pkg) form.setValue("serviceRows", applyPackage(form.getValues("serviceRows"), pkg), { shouldValidate: true });
+                }}
+              >
+                <SelectTrigger size="sm" className="w-[200px]" aria-label="Apply a package">
+                  <SelectValue placeholder="Apply a package" />
+                </SelectTrigger>
+                <SelectContent>
+                  {packages.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : null}
+          </div>
+        ) : null}
         <div className="space-y-4">
           {/* FR1.4 — villa-only services stay hidden for apartments and
               offices. Naming them, so an absence reads as a rule rather
@@ -126,9 +175,27 @@ export function ServicesPricingStep({ form, catalogue, settings }: StepProps) {
             </Alert>
           )}
 
-          <ServiceTable form={form} catalogue={catalogue} />
+          <ServiceTable
+            form={form}
+            catalogue={catalogue}
+            rateCard={!!card}
+            discountNote={
+              rules ? (
+                <p className={`flex items-center gap-1.5 text-xs ${level ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground"}`}>
+                  <BadgePercent className="size-3.5" />
+                  {level
+                    ? `A ${discount}% discount needs ${approvalLevelName(rules.approvals, level)} approval.`
+                    : "This discount is within the standard authority."}
+                  {belowFloor ? " One or more lines fall below their floor rate, which also needs approval." : ""}
+                </p>
+              ) : null
+            }
+          />
         </div>
       </section>
+
+      {/* DEV-366: the plan replaces monthly / quarterly / annual. */}
+      <PaymentPlanSection form={form} rules={rules} />
 
       {/* FR4.4 / §8.2 — clause 1.1 names one or two account managers with
           a direct number. Chosen here, per client. */}
@@ -441,5 +508,120 @@ function AccountManagerField({
         </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * How the client pays (BRD 5.8, DEV-366): one payment below the value band;
+ * above it the configured plans, plus a custom plan when allowed. A plan
+ * outside the band is kept but marked, because it needs approval.
+ */
+function PaymentPlanSection({ form, rules }: { form: UseFormReturn<AmcFormData>; rules?: ProposalRules | null }) {
+  const values = form.watch();
+  const finalPrice = calculateAmcTotals(values).finalPrice;
+  const plan: PaymentPlan = values.paymentPlan ?? "single";
+  const custom: CustomPlan = values.paymentPlanCustom ?? [];
+  const allowed = rules ? allowedPaymentPlans(rules.payments, finalPrice) : (["single", "fifty_fifty", "quarterly", "monthly", "custom"] as PaymentPlan[]);
+  const options = allowed.includes(plan) ? allowed : [plan, ...allowed];
+  const nonStandard = rules ? isNonStandardPlan(rules.payments, finalPrice, plan) : false;
+  const total = custom.reduce((sum, row) => sum + (Number(row.percent) || 0), 0);
+
+  const setPlan = (next: PaymentPlan) => {
+    form.setValue("paymentPlan", next, { shouldValidate: true, shouldDirty: true });
+    /* The legacy reading live main prints (lib/amc/proposal-rules.ts). */
+    form.setValue("paymentTerms", legacyTermsForPlan(next), { shouldValidate: true });
+    if (next === "custom" && custom.length === 0) {
+      form.setValue("paymentPlanCustom", [{ label: "On signing", percent: 50 }, { label: "After six months", percent: 50 }], { shouldValidate: true });
+    }
+  };
+  const setCustom = (rows: CustomPlan) => form.setValue("paymentPlanCustom", rows, { shouldValidate: true, shouldDirty: true });
+
+  return (
+    <section className="space-y-4">
+      <div>
+        <h3 className="flex items-center gap-2 text-base font-semibold">
+          <Wallet className="text-brand size-4" />
+          Payment plan
+        </h3>
+        <p className="text-muted-foreground mt-0.5 text-sm">
+          {rules
+            ? finalPrice < rules.payments.singlePaymentBelowAed
+              ? `Below ${formatCurrencyAED(rules.payments.singlePaymentBelowAed)} a year the AMC is paid in one payment.`
+              : `From ${formatCurrencyAED(rules.payments.singlePaymentBelowAed)} a year the client can pay in instalments.`
+            : "How the client pays the annual fee."}
+        </p>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Select value={plan} onValueChange={(value) => setPlan(value as PaymentPlan)}>
+          <SelectTrigger className="w-full" aria-label="Payment plan">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {options.map((option) => (
+              <SelectItem key={option} value={option}>
+                {PAYMENT_PLAN_LABELS[option]}
+                {!allowed.includes(option) ? " (outside the band)" : ""}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {nonStandard ? (
+          <p className="text-xs text-amber-700 dark:text-amber-400">
+            {plan === "custom" ? "A custom plan" : "This plan is outside the standard plans for this value and"} needs approval.
+          </p>
+        ) : null}
+      </div>
+      {plan === "custom" ? (
+        <div className="space-y-2 rounded-md border p-3">
+          {custom.map((row, index) => (
+            <div key={index} className="flex items-center gap-2">
+              <Input
+                className="h-8 flex-1 text-xs"
+                value={row.label}
+                placeholder="When (e.g. On signing)"
+                aria-label={`Instalment ${index + 1} name`}
+                onChange={(event) => setCustom(custom.map((r, i) => (i === index ? { ...r, label: event.target.value } : r)))}
+              />
+              <Input
+                className="h-8 w-24 text-xs"
+                type="number"
+                min={1}
+                max={100}
+                value={row.percent}
+                aria-label={`Instalment ${index + 1} percent`}
+                onChange={(event) => setCustom(custom.map((r, i) => (i === index ? { ...r, percent: Number(event.target.value) || 0 } : r)))}
+              />
+              <span className="text-muted-foreground text-xs">%</span>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="size-8"
+                disabled={custom.length <= 2}
+                aria-label={`Remove instalment ${index + 1}`}
+                onClick={() => setCustom(custom.filter((_, i) => i !== index))}
+              >
+                <Trash2 className="size-4" />
+              </Button>
+            </div>
+          ))}
+          <div className="flex items-center justify-between">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={custom.length >= 12}
+              onClick={() => setCustom([...custom, { label: "", percent: 0 }])}
+            >
+              <Plus className="size-4" />
+              Add instalment
+            </Button>
+            <span className={`text-xs tabular-nums ${Math.abs(total - 100) < 0.01 ? "text-muted-foreground" : "text-destructive"}`}>
+              {total}% of 100%
+            </span>
+          </div>
+        </div>
+      ) : null}
+    </section>
   );
 }

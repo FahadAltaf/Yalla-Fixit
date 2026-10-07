@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { Building2, UserRound, Users } from "lucide-react";
 import type { UseFormReturn } from "react-hook-form";
 
@@ -23,7 +23,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-import { getDefaultEndDate, unitTypesForCategory } from "../amc-constants";
+import { getDefaultEndDate } from "../amc-constants";
+import { UNIT_TYPES, UNIT_TYPE_CATEGORY, UNIT_TYPE_LABELS } from "@/lib/amc/client-profile";
+import { rateModelFor } from "@/lib/amc/proposal-rules";
+import { MODEL_LABELS } from "@/lib/amc/rate-card";
 import { isEndDateBeforeStartDate } from "../amc-date-utils";
 import { DatePickerField } from "../components/date-picker-field";
 import type { AmcFormData } from "../amc-types";
@@ -55,14 +58,22 @@ interface StepProps {
 export function PropertyCustomerStep({ form }: StepProps) {
   const startDate = form.watch("startDate");
   /*
-    Which unit types this category has (Behrouz, Oct 2026): an office is
-    commercial, a villa and an apartment are not. The list used to offer
-    all three whatever the category, so "Residential - OFFICE" was one
-    stray click away and prints as the document's own banner.
+    Which property types this category has (Behrouz, Oct 2026; the full
+    BRD 5.2 list since Phase 4): the pair prints as the document's banner,
+    so "Residential - OFFICE" must not be one stray click away. Each type is
+    priced on a rate model (villa, apartment or office), kept in unitType.
   */
   const propertyCategory = form.watch("propertyCategory");
   const unitType = form.watch("unitType");
-  const unitTypes = unitTypesForCategory(propertyCategory);
+  const propertyType = form.watch("propertyType");
+  /* BRD 5.2's types for this category ("Other" in both). */
+  const propertyTypes = useMemo(() => UNIT_TYPES.filter((t) => UNIT_TYPE_CATEGORY[t] === propertyCategory || t === "other"), [propertyCategory]);
+  /* An older proposal has only its model; it reads as that type. */
+  const shownType = propertyType ?? unitType;
+  const setPropertyType = (type: (typeof UNIT_TYPES)[number]) => {
+    form.setValue("propertyType", type, { shouldValidate: true, shouldDirty: true });
+    form.setValue("unitType", rateModelFor(type, propertyCategory), { shouldValidate: true, shouldDirty: true });
+  };
 
   /*
     Changing the category can leave the unit type behind. Moved to the
@@ -71,10 +82,12 @@ export function PropertyCustomerStep({ form }: StepProps) {
     the user did not make reads as an error they caused.
   */
   useEffect(() => {
-    if (!unitTypes.some((type) => type.value === unitType)) {
-      form.setValue("unitType", unitTypes[0].value, { shouldValidate: true });
+    if (!(propertyTypes as readonly string[]).includes(shownType)) {
+      const first = propertyTypes[0];
+      form.setValue("propertyType", first, { shouldValidate: true });
+      form.setValue("unitType", rateModelFor(first, propertyCategory), { shouldValidate: true });
     }
-  }, [form, unitType, unitTypes]);
+  }, [form, shownType, propertyTypes, propertyCategory]);
 
   return (
     <div className="space-y-8">
@@ -120,27 +133,25 @@ export function PropertyCustomerStep({ form }: StepProps) {
             <FormField
               control={form.control}
               name="unitType"
-              render={({ field }) => (
+              render={() => (
                 <FormItem className="flex flex-col">
-
-                  <FormLabel>Unit type</FormLabel>
-                  <Select onValueChange={field.onChange} value={field.value}>
+                  <FormLabel>Property type</FormLabel>
+                  <Select onValueChange={(value) => setPropertyType(value as (typeof UNIT_TYPES)[number])} value={shownType}>
                     <FormControl className="w-full">
                       <SelectTrigger className="w-full">
-                        <SelectValue placeholder="Select unit type" />
+                        <SelectValue placeholder="Select property type" />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      {unitTypes.map((type) => (
-                        <SelectItem key={type.value} value={type.value}>
-                          {type.label}
+                      {propertyTypes.map((type) => (
+                        <SelectItem key={type} value={type}>
+                          {UNIT_TYPE_LABELS[type]}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                   <FormDescription>
-                    Decides which services the next step offers: water pump,
-                    roof drain and water tank work are villas only.
+                    Priced on the {MODEL_LABELS[unitType]} rates, which also decide the services offered.
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -364,30 +375,7 @@ export function PropertyCustomerStep({ form }: StepProps) {
               )}
             />
 
-            <FormField
-              control={form.control}
-              name="paymentTerms"
-              render={({ field }) => (
-                <FormItem className="flex flex-col">
-
-                  <FormLabel>Payment terms</FormLabel>
-                  <Select onValueChange={field.onChange} value={field.value}>
-                    <FormControl className="w-full">
-                      <SelectTrigger className="w-full">
-                        <SelectValue placeholder="Select payment terms" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      <SelectItem value="monthly">Monthly</SelectItem>
-                      <SelectItem value="quarterly">Quarterly</SelectItem>
-                      <SelectItem value="annual">Annual</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
+            {/* The payment plan is chosen with the price, on the next step (DEV-366). */}
             <FormField
               control={form.control}
               name="proposalNumber"

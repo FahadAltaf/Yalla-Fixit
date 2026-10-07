@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/table";
 
 import type { AmcComputedData, AmcFormData } from "../amc-types";
-import { formatDisplayDate } from "../amc-pricing";
+import { formatDisplayDate, formatPaymentLabel } from "../amc-pricing";
 
 interface StepProps {
   form: UseFormReturn<AmcFormData>;
@@ -309,9 +309,7 @@ export function ReviewStep({ form, computed }: StepProps) {
               {formatDisplayDate(values.startDate)} → {formatDisplayDate(values.endDate)}
             </span>
           </Fact>
-          <Fact label="Payment terms">
-            <span className="capitalize">{values.paymentTerms}</span>
-          </Fact>
+          <Fact label="Payment plan">{formatPaymentLabel(values)}</Fact>
         </dl>
       </ReviewSection>
 

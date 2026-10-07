@@ -14,6 +14,7 @@ import {
   checkInternalTransition,
 } from "@/lib/amc/workflow";
 import { submittableProblem } from "@/lib/server/amc/pricing";
+import { submissionRateProblem } from "@/lib/server/amc/rate-card";
 import { notifyProposalEvent } from "@/lib/server/amc/notifications";
 
 /**
@@ -123,7 +124,8 @@ export async function POST(req: NextRequest) {
   if (body.action === "submit") {
     /* FR2.12 on the server: the form checks this too, but a request can
        skip the form. */
-    const problem = submittableProblem(existing.services ?? []);
+    /* And, when the rate card priced it, every ticked line has a rate at an allowed frequency (BRD 5.3). */
+    const problem = submittableProblem(existing.services ?? []) ?? (await submissionRateProblem(admin, existing.id));
     if (problem) {
       return NextResponse.json({ error: problem }, { status: 400 });
     }

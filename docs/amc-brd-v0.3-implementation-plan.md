@@ -429,6 +429,18 @@ Each phase lists its Jira subtasks (in the order I will do them), the work, the 
 **Migration:** `…_amc_rate_card_and_proposal_versions.sql` (SAFE).
 **Done when:** a proposal created from a prospect is priced from the rate card, and a revision produces V2 while V1 stays locked with its PDF.
 
+**Status (7 Oct 2026):** done in code, migration `20261007140000` not applied (log row 17, checks §9; it adds columns to the live `amc_submissions`, so apply out of hours). 235 tests, typecheck, lint, harness (`97h`, which runs the version lock end to end) and main-compatibility (28/11, unchanged) all pass.
+- Rate card (AMC → Rate card): rates per service and property model (villa, apartment, office or any) with unit, basis, standard and floor rate, allowed frequencies, retire; packages; promotions with dates. Changes are made on a working copy and published as a version effective today or later, with a reason. History shows who, when, the effective date, and each old and new value. View needs AMC Rate Card View; publish needs Edit (department head, Finance).
+- Pricing: with a card in force, the server sets every line's rate from it (whatever the browser sent) and records the rate, floor and promotion on the line and the card version on the proposal. A discount that takes a line under its floor sets `below_floor`; a promotion alone never does. Submitting is refused while a ticked line has no rate or a frequency the card does not allow. With no card published, proposals are priced as entered, as before.
+- Wizard: property type from the full BRD list, priced on its rate model (a clinic on the office rates); rates read-only with promotion and below-floor marks; package picker; the approval level the discount needs; payment plan (single, 50/50, quarterly, monthly, custom instalments) offered by value band, with non-standard plans marked.
+- Versions: Revise (owner, on a proposal the client has seen) locks the active version with its wording snapshot and a server-printed document, and opens V(n+1) as a draft that goes through approval again; the client's link stops working. The proposal page lists the versions, opens their documents, and compares prices side by side. A rejected proposal is now revised, not edited in place (issue #2).
+- Create proposal from an enquiry: client, contact, property and type prefilled; lines and units from the completed site visit, else from the property's scope; priced on the card; the enquiry links to it and moves to Proposal Preparation. The assessment route prices on the card too.
+- Validity: set to the send date plus the configured days when a proposal is sent. Team visibility: approvers and AMC Operations (View) see the team's proposals; others see their own.
+- Live `main` keeps working on the same rows: `property.unitType` stays the rate model, and `customer.paymentTerms` keeps a value main can print (50/50 and custom read as annual there). The plan and full type are in new columns that the portal and the client link page read.
+- Moved: the approval steps table goes to Phase 5 with the ladder that uses it; renewals priced on the card go to Phase 13.
+- Note: the locked version's file is printed by headless Chrome, as the signed-contract archive is. On a host without a browser it is kept as self-contained HTML, and the version still locks.
+- Assumptions added: rates are set per property model (villa, apartment, office) and commercial types use the office rates; a card can't be back-dated; legacy annual terms read as a single payment.
+
 ### Phase 5: Approval ladder, sharing and decisions
 
 | Jira | Work | Size |

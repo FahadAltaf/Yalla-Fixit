@@ -61,7 +61,7 @@ import {
   computeAmcData,
   formatDesignationLabel,
   formatDisplayDate,
-  formatPaymentTermsLabel,
+  formatPaymentLabel,
 } from "./amc-pricing";
 import { IdentityCell } from "@/components/ui/entity-avatar";
 import { formatPhoneForDocument } from "./amc-phone";
@@ -72,6 +72,7 @@ import { canDecideProposal } from "@/lib/amc/workflow";
 import { SignedContractAction } from "@/components/dashboard/extensions/amc-contracts/signed-contract-action";
 import { SignedArchiveRow } from "@/components/dashboard/extensions/amc-contracts/signed-archive-row";
 import { Fact, ReviewSection, ServicesAndCost } from "./steps/review-step";
+import { ProposalVersionsPanel, ReviseProposalButton } from "./proposal-versions-panel";
 import {
   AMC_STATUS_LABELS,
   isAmcSubmissionEditable,
@@ -394,7 +395,7 @@ function termMonths(start?: string, end?: string): number | null {
  * (useAmcActions).
  */
 /** The tabs this page has, and the only values ?tab= may carry. */
-const TABS = new Set(["record", "services", "history"]);
+const TABS = new Set(["record", "services", "versions", "history"]);
 
 export function SubmissionDetails({
   submission,
@@ -540,6 +541,12 @@ export function SubmissionDetails({
           title: `The client asked for changes${submission.client_decided_by_name ? ` (${submission.client_decided_by_name})` : ""}`,
           body: submission.client_rejected_reason,
         }
+        : submission.below_floor && (submission.status === "draft" || submission.status === "sent_back" || awaiting)
+          ? {
+            tone: "warn" as const,
+            title: "Priced below the floor rate",
+            body: "After the discount, one or more lines are under the rate card's floor. The approver sees this when deciding.",
+          }
         : awaiting
           ? {
             tone: "warn" as const,
@@ -618,6 +625,8 @@ export function SubmissionDetails({
             )}
 
             <SignedContractAction submission={submission} />
+            {/* BRD 5.4: a shared proposal is changed through a new version. */}
+            <ReviseProposalButton submission={submission} />
             {canEdit && (
               <Button asChild>
                 <Link href={`/extensions/amc/${submission.id}/edit`}>
@@ -702,6 +711,10 @@ export function SubmissionDetails({
             Services &amp; cost
             <TabCount value={data.frequencyRows.length} />
           </TabsTrigger>
+          <TabsTrigger value="versions">
+            Versions
+            <TabCount value={submission.current_version ?? 1} />
+          </TabsTrigger>
           <TabsTrigger value="history">
             History
             <TabCount value={timeline.length} />
@@ -742,7 +755,7 @@ export function SubmissionDetails({
                 label="Contract term"
                 value={months !== null ? `${months} ${months === 1 ? "month" : "months"}` : "—"}
                 headline={`${formatDisplayDate(form.startDate) || "—"} to ${data.endDate || "—"}`}
-                caption={`Paid ${formatPaymentTermsLabel(form.paymentTerms).toLowerCase()}`}
+                caption={`Paid ${formatPaymentLabel(form).toLowerCase()}`}
               />
               <StatCard
                 label="Stage"
@@ -778,8 +791,21 @@ export function SubmissionDetails({
                       {formatDisplayDate(form.startDate)} → {data.endDate || "—"}
                     </span>
                   </Fact>
-                  <Fact label="Payment terms">{formatPaymentTermsLabel(form.paymentTerms)}</Fact>
-                  <Fact label="Proposal number">{submission.customer.proposalNumber}</Fact>
+                  <Fact label="Payment terms">{formatPaymentLabel(form)}</Fact>
+                  <Fact label="Proposal number">
+                    {submission.customer.proposalNumber}
+                    {(submission.current_version ?? 1) > 1 ? ` · V${submission.current_version}` : ""}
+                  </Fact>
+                  <Fact label="Valid until">
+                    {submission.valid_until ? formatDisplayDate(submission.valid_until) : "Set when the proposal is sent"}
+                  </Fact>
+                  {submission.enquiry_id ? (
+                    <Fact label="Enquiry">
+                      <Link href={`/extensions/amc-contracts/enquiries/${submission.enquiry_id}`} className="hover:underline">
+                        Open the enquiry
+                      </Link>
+                    </Fact>
+                  ) : null}
                   <Fact label="Property type">{sentenceCase(data.propertyTypeLabel)}</Fact>
                 </dl>
               </ReviewSection>
@@ -852,6 +878,8 @@ export function SubmissionDetails({
             </ReviewSection>
           </Card>,
         )}
+
+        {panel("versions", <ProposalVersionsPanel submission={submission} />)}
 
         {panel(
           "history",

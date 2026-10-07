@@ -32,7 +32,9 @@ import {
   type AmcSubmissionStatus,
 } from "./amc-types";
 import { getAmcSettingsDefaults, type AmcSettings } from "./amc-settings";
-import { amcSettingsService } from "@/modules/amc-submissions";
+import { amcSettingsService, proposalRulesService, type ProposalRules } from "@/modules/amc-submissions";
+import { applyRateCard } from "@/lib/amc/rate-card";
+import { planFromLegacyTerms } from "@/lib/amc/proposal-rules";
 import { PropertyCustomerStep } from "./steps/property-customer-step";
 import { ServicesPricingStep } from "./steps/services-pricing-step";
 import { ReviewStep } from "./steps/review-step";
@@ -192,6 +194,45 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
 
   const unitType = form.watch("unitType");
   const watchedValues = form.watch();
+
+  /*
+    Phase 4: the rate card in force, the payment bands and the discount
+    thresholds. Undefined while loading; null when they cannot be read, in
+    which case the wizard prices as entered and the server decides anyway.
+  */
+  const [rules, setRules] = useState<ProposalRules | null | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    proposalRulesService.rules().then(
+      (loaded) => !cancelled && setRules(loaded),
+      () => !cancelled && setRules(null),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /*
+    With a card in force, each line's rate is the card's for this property
+    model (BRD 5.3): set here as the lines, the model or the discount change,
+    so the table and totals show what the server will store. The server
+    prices again from the card on every save, so nothing here is trusted.
+  */
+  const cardInputs = JSON.stringify([
+    unitType,
+    watchedValues.discountPercent ?? 0,
+    (watchedValues.serviceRows ?? []).map((row) => [row.serviceId, row.included, row.units, row.frequency, row.free]),
+  ]);
+  useEffect(() => {
+    const card = rules?.rateCard;
+    if (!card) return;
+    const rows = form.getValues("serviceRows");
+    const { rows: carded } = applyRateCard(rows, card.card, form.getValues("unitType"), rules.today, Number(form.getValues("discountPercent")) || 0);
+    const next = carded.map((row) => ({ ...row, basePrice: row.basePrice ?? undefined }));
+    if (JSON.stringify(next) !== JSON.stringify(rows)) {
+      form.setValue("serviceRows", next as AmcFormData["serviceRows"], { shouldValidate: true });
+    }
+  }, [rules, cardInputs, form, loadedTick]);
   const computed = useMemo(
     () => computeAmcData(watchedValues, "proposal", liveSettings),
     [watchedValues, liveSettings],
@@ -253,6 +294,13 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
     },
     [form],
   );
+
+  /* An older proposal (or a new one) without a plan reads its legacy terms as one (issue #8). */
+  useEffect(() => {
+    if (!form.getValues("paymentPlan")) {
+      form.setValue("paymentPlan", planFromLegacyTerms(form.getValues("paymentTerms")), { shouldDirty: false });
+    }
+  }, [form, loadedTick]);
 
   // Open the proposal the address names, on the step it names.
   useEffect(() => {
@@ -607,6 +655,7 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
             form={form}
             catalogue={(liveSettings ?? getAmcSettingsDefaults()).services}
             settings={liveSettings}
+            rules={rules}
           />
         );
       case 3:

@@ -2,6 +2,7 @@
 
 import type { UseFormReturn } from "react-hook-form";
 
+import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   FormControl,
@@ -31,9 +32,17 @@ interface ServiceTableProps {
   form: UseFormReturn<AmcFormData>;
   /** The services AMC Settings defines (the catalogue for this proposal). */
   catalogue: ReadonlyArray<AmcServiceDefinition>;
+  /**
+   * A rate card is in force (BRD 5.3): base prices are the card's, shown
+   * read-only, with promotions and below-floor lines marked. Without one
+   * they are entered per proposal, as before.
+   */
+  rateCard?: boolean;
+  /** Shown under the discount: the approval its size needs. */
+  discountNote?: React.ReactNode;
 }
 
-export function ServiceTable({ form, catalogue }: ServiceTableProps) {
+export function ServiceTable({ form, catalogue, rateCard = false, discountNote }: ServiceTableProps) {
   const unitType = form.watch("unitType");
   const serviceRows = form.watch("serviceRows");
   const discountPercent = form.watch("discountPercent") ?? 0;
@@ -68,7 +77,7 @@ export function ServiceTable({ form, catalogue }: ServiceTableProps) {
                     <TableHead className="w-[100px]">Units</TableHead>
                     <TableHead className="w-[120px]">Frequency</TableHead>
                     <TableHead className="w-[70px] text-left">Free</TableHead>
-                    <TableHead className="w-[120px]">Base price</TableHead>
+                    <TableHead className="w-[120px]">{rateCard ? "Rate" : "Base price"}</TableHead>
                     <TableHead className="w-[120px] text-right">Price</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -210,6 +219,20 @@ export function ServiceTable({ form, catalogue }: ServiceTableProps) {
                             <span className="text-muted-foreground text-xs">
                               Included
                             </span>
+                          ) : rateCard ? (
+                            /* From the rate card: read-only (BRD 5.3). */
+                            <div className="grid gap-0.5 text-xs">
+                              {row.basePrice === undefined ? (
+                                <span className={row.included ? "text-destructive" : "text-muted-foreground"}>No rate on the card</span>
+                              ) : (
+                                <span className="tabular-nums">{formatCurrencyAED(row.basePrice)}</span>
+                              )}
+                              {row.promotionPercent ? (
+                                <Badge variant="secondary" className="w-fit border-none bg-emerald-500/10 px-1.5 py-0 text-[10px] font-normal text-emerald-700 dark:text-emerald-400">
+                                  Promotion −{row.promotionPercent}%
+                                </Badge>
+                              ) : null}
+                            </div>
                           ) : (
                             <Input
                               type="number"
@@ -237,6 +260,11 @@ export function ServiceTable({ form, catalogue }: ServiceTableProps) {
                           ) : (
                             formatCurrencyAED(price)
                           )}
+                          {row.included && row.belowFloor ? (
+                            <div className="text-[10px] font-normal text-amber-700 dark:text-amber-400" title={row.floorRate != null ? `Floor rate ${formatCurrencyAED(row.floorRate)}` : undefined}>
+                              Below floor after discount
+                            </div>
+                          ) : null}
                         </TableCell>
                       </TableRow>
                     );
@@ -293,6 +321,7 @@ export function ServiceTable({ form, catalogue }: ServiceTableProps) {
             </span>
           </div>
         </div>
+        {discountNote}
 
         <Separator />
 

@@ -199,17 +199,14 @@ function blockHtml(b: Block): string {
 }
 
 /**
- * The archived contract as one self-contained HTML page (no external
- * assets, so the file reads the same in ten years). The acceptance record
- * states what the signature is, and only that.
+ * An AMC document (proposal or contract) as one self-contained HTML page:
+ * no external assets, so the file reads the same in ten years. `tail` is
+ * HTML placed after the document (an acceptance record, an archive note).
+ * Used for the signed-contract archive and the locked proposal versions.
  */
-export function renderSignedContractHtml(content: SignedContractContent, contentSha256: string): string {
-  const s = content.signature;
-  const signedAt = new Date(s.signedAt);
-  const date = signedAt.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Dubai" });
-  const time = signedAt.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: "Asia/Dubai" });
+export function renderAmcDocumentHtml(title: string, model: AmcDocumentModel, tail: string): string {
   return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Signed AMC contract ${esc(content.proposalNumber)}</title>
+<html lang="en"><head><meta charset="utf-8"><title>${esc(title)}</title>
 <style>
   @page { size: A4; margin: 18mm 16mm; }
   body { font-family: Arial, Helvetica, sans-serif; color: #222; font-size: 10pt; line-height: 1.4; margin: 0; }
@@ -231,8 +228,24 @@ export function renderSignedContractHtml(content: SignedContractContent, content
   .archive { margin-top: 16px; font-size: 8pt; color: ${MUTED}; word-break: break-all; }
 </style></head>
 <body>
-${content.model.blocks.map(blockHtml).join("\n")}
-<section class="record">
+${model.blocks.map(blockHtml).join("\n")}
+${tail}
+</body></html>`;
+}
+
+/**
+ * The archived contract as one self-contained HTML page. The acceptance
+ * record states what the signature is, and only that.
+ */
+export function renderSignedContractHtml(content: SignedContractContent, contentSha256: string): string {
+  const s = content.signature;
+  const signedAt = new Date(s.signedAt);
+  const date = signedAt.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Dubai" });
+  const time = signedAt.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: "Asia/Dubai" });
+  return renderAmcDocumentHtml(
+    `Signed AMC contract ${content.proposalNumber}`,
+    content.model,
+    `<section class="record">
   <h2>Electronic acceptance record</h2>
   <table style="width:100%">
     <tr><td style="width:30%"><b>Signed by</b></td><td>The client, online, through the Yalla Fix It client portal</td></tr>
@@ -245,8 +258,8 @@ ${content.model.blocks.map(blockHtml).join("\n")}
 </section>
 <p class="archive">Archived copy of the contract as signed. Wording: ${
     content.settingsSource === "contract_settings_snapshot" ? "as sent with the contract" : "as sent with the proposal"
-  }${content.contractSentAt ? ` (${esc(new Date(content.contractSentAt).toISOString())})` : ""}. Content SHA-256: ${esc(contentSha256)}</p>
-</body></html>`;
+  }${content.contractSentAt ? ` (${esc(new Date(content.contractSentAt).toISOString())})` : ""}. Content SHA-256: ${esc(contentSha256)}</p>`,
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -290,7 +303,7 @@ export async function signedArchiveFor(admin: Admin, submissionId: string): Prom
 }
 
 /** Renders the PDF, or null when this host has no browser to print with. */
-async function renderPdf(html: string): Promise<Uint8Array | null> {
+export async function renderPdf(html: string): Promise<Uint8Array | null> {
   try {
     const { renderPdfFromHtml } = await import("@/lib/server/snagging/report-pdf-headless");
     const { pdf } = await renderPdfFromHtml(html);

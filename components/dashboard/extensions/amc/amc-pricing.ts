@@ -14,6 +14,9 @@ import type {
   AmcTotals,
   FrequencyRow,
 } from "./amc-types";
+import { UNIT_TYPE_LABELS } from "@/lib/amc/client-profile";
+import { paymentPlanLabel } from "@/lib/amc/proposal-rules";
+
 import { contractTermMonths } from "./amc-date-utils";
 import { amountToWordsAed } from "./utils/amount-to-words";
 import { getAmcSettingsDefaults, servicesForProperty } from "./amc-settings";
@@ -80,6 +83,8 @@ export function calculateAmcTotals(data: AmcFormData): AmcTotals {
 function formatPropertyTypeLabel(data: AmcFormData): string {
   const category =
     data.propertyCategory === "residential" ? "RESIDENTIAL" : "COMMERCIAL";
+  /* The full property type when the proposal has one (Phase 4). */
+  if (data.propertyType) return `${category} - ${UNIT_TYPE_LABELS[data.propertyType].toUpperCase()}`;
   const unit =
     data.unitType === "villa"
       ? "VILLA"
@@ -242,6 +247,11 @@ export function defaultFrequencyFor(
   }
   const value = service.frequencyPerYear;
   return value && Number.isInteger(value) && value >= 1 ? value : 1;
+}
+
+/** How the proposal is paid, as the documents print it: the plan when it has one, else its legacy terms. */
+export function formatPaymentLabel(data: Pick<AmcFormData, "paymentTerms" | "paymentPlan" | "paymentPlanCustom">): string {
+  return data.paymentPlan ? paymentPlanLabel(data.paymentPlan, data.paymentPlanCustom ?? null) : formatPaymentTermsLabel(data.paymentTerms);
 }
 
 export function formatPaymentTermsLabel(
