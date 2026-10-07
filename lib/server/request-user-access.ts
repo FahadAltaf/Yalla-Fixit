@@ -54,7 +54,21 @@ async function resolveFromToken(token: string): Promise<RequestUserAccess> {
   // keys, locally -- a forged or stale token resolves to no user. (With a
   // legacy HS256 token getClaims asks Supabase Auth instead, as getUser
   // did.) See user-access.ts for the trade-off.
-  const { data, error } = await admin.auth.getClaims(token);
+  //
+  // getClaims THROWS on an expired or malformed token ("JWT has expired")
+  // rather than returning an error. Uncaught, that reached each route's
+  // catch and came back as a 500, which the app retries as a server fault
+  // with the same dead token -- it only renews its session on a 401. So an
+  // inspector whose token lapsed never synced again, and worked from a stale
+  // copy whose signed image links had long expired. Any failure here is
+  // "not signed in".
+  let claims;
+  try {
+    claims = await admin.auth.getClaims(token);
+  } catch {
+    return UNAUTHENTICATED;
+  }
+  const { data, error } = claims;
   const userId = typeof data?.claims?.sub === "string" ? data.claims.sub : null;
 
   if (error || !userId) return UNAUTHENTICATED;

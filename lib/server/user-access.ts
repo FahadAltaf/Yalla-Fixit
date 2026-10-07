@@ -134,8 +134,18 @@ export async function getAuthenticatedUserAccess(): Promise<{
     Like any JWT check, this accepts a token until it expires even after
     the session is signed out elsewhere. getUser did not, because it asked
     the server.
+
+    It also THROWS, rather than returning an error, on a token it cannot
+    verify (expired, malformed). That is a caller who is not signed in --
+    a 401 -- not a server fault to be reported as a 500.
   */
-  const { data, error } = await sessionClient.auth.getClaims();
+  let claims;
+  try {
+    claims = await sessionClient.auth.getClaims();
+  } catch {
+    return { authUserId: null, profile: null, accessUser: null };
+  }
+  const { data, error } = claims;
   const userId = typeof data?.claims?.sub === "string" ? data.claims.sub : null;
 
   if (error || !userId) {
