@@ -89,18 +89,22 @@ export type AssessmentCompletionCheck = { ok: true } | { ok: false; errors: stri
 
 /**
  * May the assessment be completed? It needs a date, a property, and an
- * answer for every checklist item (Not applicable counts as an answer).
+ * answer for every checklist item (Not applicable counts as an answer). A
+ * site visit the client missed or that was cancelled is not completed as
+ * if it happened (DEV-362); attendance is optional for walk-in assessments.
  */
 export function checkAssessmentCompletion(input: {
   status: "draft" | "completed";
   assessedOn: string | null;
   propertyId: string | null;
   items: ReadonlyArray<Pick<AssessmentItemState, "result">>;
+  attendance?: string | null;
 }): AssessmentCompletionCheck {
   if (input.status === "completed") return { ok: false, errors: ["This assessment is already completed."] };
   const errors: string[] = [];
   if (!input.assessedOn) errors.push("Enter the assessment date.");
   if (!input.propertyId) errors.push("Choose the property.");
+  if (input.attendance && input.attendance !== "attended") errors.push("The visit did not take place: record it as attended, or book a new visit.");
   const unanswered = input.items.filter((i) => i.result === null).length;
   if (input.items.length === 0) errors.push("The checklist is empty.");
   else if (unanswered > 0) errors.push(`${unanswered} checklist item${unanswered === 1 ? " is" : "s are"} not answered.`);
@@ -113,6 +117,8 @@ export interface AssessmentForProposal {
   recommendedServiceIds: ReadonlyArray<string>;
   unitType: string | null;
   propertyCategory: string | null;
+  /** Units counted on site per service (site visit, DEV-362); a ticked service without a count is 1 unit. */
+  assetCounts?: Readonly<Record<string, number>>;
 }
 
 export interface CustomerForProposal {
@@ -170,7 +176,7 @@ export function proposalPrefillFromAssessment(
   const services = offered.map((s) => ({
     serviceId: s.id,
     included: recommended.includes(s.id),
-    units: 1,
+    units: recommended.includes(s.id) ? Math.max(1, Math.trunc(assessment.assetCounts?.[s.id] ?? 1)) : 1,
     frequency: s.frequencyPerYear && s.frequencyPerYear >= 1 ? Math.trunc(s.frequencyPerYear) : 1,
     basePrice: null as null,
     price: 0 as const,

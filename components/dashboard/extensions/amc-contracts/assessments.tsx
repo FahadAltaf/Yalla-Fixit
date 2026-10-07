@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CheckCircle2, ClipboardCheck, FileSignature, Plus, Save, Trash2 } from "lucide-react";
+import { CalendarClock, CheckCircle2, ClipboardCheck, FileSignature, Plus, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
@@ -20,6 +20,7 @@ import { PageHeading, PillTabs, SectionCard } from "@/components/dashboard/share
 import { ActionDialogContent, ErrorState, HeadingSkeleton, ListSkeleton, SectionSkeleton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { DatePickerField } from "@/components/dashboard/extensions/amc/components/date-picker-field";
 import { assessmentSummary, checkAssessmentCompletion, type AssessmentResult } from "@/lib/amc/business";
+import { ATTENDANCE_LABELS, SITE_VISIT_ATTENDANCE } from "@/lib/amc/enquiries";
 import { useDebounce } from "@/hooks/use-debounce";
 import { amcContractsService, type AssessmentRecord, type CustomerRecord } from "@/modules/amc-contracts/amc-contracts-service";
 
@@ -27,7 +28,8 @@ import { AmcSectionNav } from "./amc-section-nav";
 import { AssessmentPhotos } from "./assessment-photos";
 import { CustomerSearch, PropertySelect, UNIT_TYPE_LABELS } from "./customer-pickers";
 import { PropertyDialog } from "./customer-property-views";
-import { formatContractDate } from "./contract-status";
+import { formatContractDate, formatDateTime } from "./contract-status";
+import { fromLocalInput, toLocalInput } from "./enquiries/enquiry-ui";
 import { useAmcData } from "./use-amc-data";
 
 const ASSESSMENTS_PAGE_SIZE = 25;
@@ -261,7 +263,9 @@ export function AssessmentDetail({ id }: { id: string }) {
   const [baseVersion, setBaseVersion] = useState<string | null>(null);
 
   /* Take the loaded record as the editable draft (again after each save). */
-  const loadedKey = data ? `${data.assessment.id}|${data.assessment.status}|${data.assessment.createdAt}|${JSON.stringify(data.assessment.items.map((i) => i.result))}` : null;
+  const loadedKey = data
+    ? `${data.assessment.id}|${data.assessment.status}|${data.assessment.createdAt}|${JSON.stringify(data.assessment.items.map((i) => i.result))}|${data.assessment.attendance}|${data.assessment.scheduledAt}|${JSON.stringify(data.assessment.assetCounts)}`
+    : null;
   if (data && loadedKey !== baseVersion) {
     setBaseVersion(loadedKey);
     setDraft(toDraft(data.assessment));
@@ -280,7 +284,13 @@ export function AssessmentDetail({ id }: { id: string }) {
   }
   const a = data!.assessment;
   const editable = data!.canEdit;
-  const completion = checkAssessmentCompletion({ status: a.status, assessedOn: draft.assessedOn, propertyId: draft.propertyId, items: draft.items });
+  const completion = checkAssessmentCompletion({
+    status: a.status,
+    assessedOn: draft.assessedOn,
+    propertyId: draft.propertyId,
+    items: draft.items,
+    attendance: draft.attendance,
+  });
 
   const save = async (quiet = false) => {
     setBusy(true);
@@ -297,6 +307,11 @@ export function AssessmentDetail({ id }: { id: string }) {
         findings: draft.findings,
         notes: draft.notes,
         recommendedServiceIds: draft.recommendedServiceIds,
+        scheduledAt: draft.scheduledAt,
+        attendance: draft.attendance,
+        assetCounts: draft.assetCounts,
+        accessNotes: draft.accessNotes,
+        exclusions: draft.exclusions,
         items: draft.items.map((i) => ({ itemKey: i.itemKey, result: i.result, notes: i.notes })),
       });
       if (!quiet) toast.success("Assessment saved");
@@ -400,6 +415,42 @@ export function AssessmentDetail({ id }: { id: string }) {
       {editable && !completion.ok ? (
         <p className="text-muted-foreground text-sm">To complete: {completion.errors.join(" ")}</p>
       ) : null}
+
+      <SectionCard
+        title="Site visit"
+        description={
+          a.enquiryId
+            ? "Booked from an enquiry. Record whether it took place, how to get in, and what is left out."
+            : "When the visit is, whether it took place, how to get in, and what is left out."
+        }
+        icon={<CalendarClock />}
+        bodyClassName="px-5 pb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
+        action={
+          a.enquiryId ? (
+            <Button asChild size="sm" variant="outline">
+              <Link href={`/extensions/amc-contracts/enquiries/${a.enquiryId}`}>Open the enquiry</Link>
+            </Button>
+          ) : null
+        }
+      >
+        <div className="grid gap-1.5">
+          <Label htmlFor="as-visit-at">Visit date and time</Label>
+          {editable ? (
+            <Input id="as-visit-at" type="datetime-local" value={toLocalInput(draft.scheduledAt)} onChange={(e) => setDraft({ ...draft, scheduledAt: fromLocalInput(e.target.value) })} />
+          ) : (
+            <p className="text-sm">{a.scheduledAt ? formatDateTime(a.scheduledAt) : "—"}</p>
+          )}
+        </div>
+        <SelectField
+          label="Attendance"
+          editable={editable}
+          value={draft.attendance}
+          options={SITE_VISIT_ATTENDANCE.map((v) => [v, ATTENDANCE_LABELS[v]])}
+          onChange={(v) => setDraft({ ...draft, attendance: v })}
+        />
+        <Area label="Access notes" editable={editable} value={draft.accessNotes ?? ""} onChange={(v) => setDraft({ ...draft, accessNotes: v })} rows={2} />
+        <Area label="Exclusions" editable={editable} value={draft.exclusions ?? ""} onChange={(v) => setDraft({ ...draft, exclusions: v })} rows={2} />
+      </SectionCard>
 
       <div className="grid gap-6 lg:grid-cols-3">
         <SectionCard title="Details" icon={<ClipboardCheck />} bodyClassName="px-5 pb-5 grid gap-3">
@@ -524,13 +575,18 @@ export function AssessmentDetail({ id }: { id: string }) {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <SectionCard title="Recommended services" description="Ticked here, they are ticked on the proposal it starts. Prices are entered in the proposal." icon={<FileSignature />} bodyClassName="px-5 pb-5">
+        <SectionCard
+          title="Recommended services"
+          description="Ticked here, they are ticked on the proposal it starts, with the units counted on site. Prices are entered in the proposal."
+          icon={<FileSignature />}
+          bodyClassName="px-5 pb-5"
+        >
           {services.length === 0 ? (
             <ListSkeleton rows={3} />
           ) : (
             <ul className="grid gap-2 sm:grid-cols-2">
               {services.map((s) => (
-                <li key={s.id}>
+                <li key={s.id} className="flex items-center justify-between gap-2">
                   <label className="flex items-center gap-2 text-sm">
                     <Checkbox
                       checked={draft.recommendedServiceIds.includes(s.id)}
@@ -545,6 +601,28 @@ export function AssessmentDetail({ id }: { id: string }) {
                     />
                     {s.label}
                   </label>
+                  {draft.recommendedServiceIds.includes(s.id) ? (
+                    editable ? (
+                      <Input
+                        type="number"
+                        min={1}
+                        max={10000}
+                        className="h-7 w-20"
+                        placeholder="Units"
+                        value={draft.assetCounts[s.id] ?? ""}
+                        onChange={(e) => {
+                          const next = { ...draft.assetCounts };
+                          const n = Math.trunc(Number(e.target.value));
+                          if (e.target.value === "" || !Number.isFinite(n) || n < 1) delete next[s.id];
+                          else next[s.id] = Math.min(n, 10000);
+                          setDraft({ ...draft, assetCounts: next });
+                        }}
+                        aria-label={`Units counted for ${s.label}`}
+                      />
+                    ) : (
+                      <span className="text-muted-foreground text-xs tabular-nums">{draft.assetCounts[s.id] ?? 1} unit(s)</span>
+                    )
+                  ) : null}
                 </li>
               ))}
             </ul>

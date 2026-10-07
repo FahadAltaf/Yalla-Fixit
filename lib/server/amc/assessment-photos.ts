@@ -32,15 +32,17 @@ const missing = (error: { code?: string } | null | undefined) => error?.code ===
 async function assessmentState(admin: Admin, assessmentId: string) {
   const { data, error } = await admin
     .from("amc_assessments")
-    .select("id, status, created_by")
+    .select("id, status, created_by, assessor_id")
     .eq("id", assessmentId)
     .maybeSingle<Row>();
   if (error) throw new ContractError(error.message, 400);
   if (!data) throw new ContractError("Assessment not found.", 404);
-  return { status: String(data.status), createdBy: (data.created_by as string | null) ?? null };
+  return { status: String(data.status), createdBy: (data.created_by as string | null) ?? null, assessorId: (data.assessor_id as string | null) ?? null };
 }
 
-const canEdit = (who: Who, createdBy: string | null) => who.canApprove || (!!createdBy && createdBy === who.userId);
+/* Its creator, the assessor sent on it (site visit), or an approver. */
+const canEdit = (who: Who, state: { createdBy: string | null; assessorId: string | null }) =>
+  who.canApprove || (!!state.createdBy && state.createdBy === who.userId) || (!!state.assessorId && state.assessorId === who.userId);
 
 /** The photos of an assessment, each with a link valid for ten minutes. */
 export async function listAssessmentPhotos(admin: Admin, assessmentId: string): Promise<{ photos: AssessmentPhoto[]; migrated: boolean }> {
@@ -85,7 +87,7 @@ export async function addAssessmentPhoto(
   const { count } = await admin.from(TABLE).select("id", { count: "exact", head: true }).eq("assessment_id", assessmentId);
   const check = checkPhotoUpload({
     assessmentStatus: state.status,
-    canEdit: canEdit(who, state.createdBy),
+    canEdit: canEdit(who, state),
     existingCount: count ?? 0,
     bytes: file.bytes,
   });
@@ -138,7 +140,7 @@ export async function addAssessmentPhoto(
 
 export async function removeAssessmentPhoto(admin: Admin, who: Who, assessmentId: string, photoId: string, actor: Actor): Promise<void> {
   const state = await assessmentState(admin, assessmentId);
-  const check = checkPhotoRemoval({ assessmentStatus: state.status, canEdit: canEdit(who, state.createdBy) });
+  const check = checkPhotoRemoval({ assessmentStatus: state.status, canEdit: canEdit(who, state) });
   if (!check.ok) throw new ContractError(check.error, check.status);
   const { data, error } = await admin
     .from(TABLE)

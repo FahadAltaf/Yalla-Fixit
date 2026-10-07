@@ -25,6 +25,8 @@ import {
   type EntitlementType,
   type StoredContractStatus,
 } from "@/lib/amc/contracts";
+import { cleanAssetCounts } from "@/lib/amc/enquiries";
+import { MAX_UNITS } from "@/lib/amc/pricing";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { ContractError, isMissingTable, loadContract, toRulesContract } from "@/lib/server/amc/contracts";
 import { fetchAllRowsById } from "@/lib/server/amc/paging";
@@ -800,7 +802,15 @@ export interface AssessmentRecord {
   contractId: string | null;
   proposal: { id: string; proposalNumber: string; status: string } | null;
   assessedOn: string | null;
+  assessorId: string | null;
   assessorName: string | null;
+  /* Site visit (Phase 3, DEV-362); empty before 20261007130000. */
+  enquiryId: string | null;
+  scheduledAt: string | null;
+  attendance: string | null;
+  assetCounts: Record<string, number>;
+  accessNotes: string | null;
+  exclusions: string | null;
   propertyCategory: string | null;
   unitType: string | null;
   bedrooms: number | null;
@@ -823,8 +833,12 @@ export interface AssessmentRecord {
   }>;
 }
 
-const ASSESSMENT_COLUMNS =
-  "id, assessment_number, status, customer_id, property_id, contract_id, submission_id, assessed_on, assessor_name, property_category, unit_type, bedrooms, size_sqft, occupancy, summary, findings, notes, recommended_service_ids, completed_at, created_by, created_at, customer:customers(id, name, customer_ref), property:customer_properties(id, label), submission:amc_submissions!amc_assessments_submission_id_fkey(id, proposal_number, status)";
+const ASSESSMENT_JOINS =
+  "customer:customers(id, name, customer_ref), property:customer_properties(id, label), submission:amc_submissions!amc_assessments_submission_id_fkey(id, proposal_number, status)";
+const ASSESSMENT_COLUMNS_V1 = `id, assessment_number, status, customer_id, property_id, contract_id, submission_id, assessed_on, assessor_id, assessor_name, property_category, unit_type, bedrooms, size_sqft, occupancy, summary, findings, notes, recommended_service_ids, completed_at, created_by, created_at, ${ASSESSMENT_JOINS}`;
+/* The site-visit columns (20261007130000). */
+const SITE_VISIT_COLUMNS = ["enquiry_id", "scheduled_at", "attendance", "asset_counts", "access_notes", "exclusions"] as const;
+const ASSESSMENT_COLUMNS = `${ASSESSMENT_COLUMNS_V1}, ${SITE_VISIT_COLUMNS.join(", ")}`;
 
 function mapAssessment(r: Row, items: Row[] = []): AssessmentRecord {
   const c = r.customer as Row | null;
@@ -839,7 +853,14 @@ function mapAssessment(r: Row, items: Row[] = []): AssessmentRecord {
     contractId: str(r.contract_id),
     proposal: s ? { id: String(s.id), proposalNumber: String(s.proposal_number ?? ""), status: String(s.status) } : null,
     assessedOn: str(r.assessed_on),
+    assessorId: str(r.assessor_id),
     assessorName: str(r.assessor_name),
+    enquiryId: str(r.enquiry_id),
+    scheduledAt: str(r.scheduled_at),
+    attendance: str(r.attendance),
+    assetCounts: r.asset_counts && typeof r.asset_counts === "object" ? (r.asset_counts as Record<string, number>) : {},
+    accessNotes: str(r.access_notes),
+    exclusions: str(r.exclusions),
     propertyCategory: str(r.property_category),
     unitType: str(r.unit_type),
     bedrooms: num(r.bedrooms),
@@ -872,19 +893,14 @@ function mapAssessment(r: Row, items: Row[] = []): AssessmentRecord {
  */
 export async function listAssessments(
   admin: Admin,
-  filter: { status?: string | null; q?: string | null; from?: number; to?: number; createdBy?: string | null } = {},
+  filter: { status?: string | null; q?: string | null; from?: number; to?: number; visibleTo?: string | null } = {},
 ): Promise<{ assessments: AssessmentRecord[]; total: number }> {
   const from = filter.from ?? 0;
   const to = filter.to ?? from + 24;
-  let q = admin
-    .from("amc_assessments")
-    .select(ASSESSMENT_COLUMNS, { count: "exact" })
-    .order("created_at", { ascending: false })
-    .order("id")
-    .range(from, to);
-  if (filter.status === "draft" || filter.status === "completed") q = q.eq("status", filter.status);
-  /* Only the caller's own, unless they see all (lib/amc/access.ts). */
-  if (filter.createdBy) q = q.eq("created_by", filter.createdBy);
+  /* Only the caller's own (created by them, or the visits they are sent on),
+     unless they see all (lib/amc/access.ts). */
+  const mine = filter.visibleTo ? `created_by.eq.${filter.visibleTo},assessor_id.eq.${filter.visibleTo}` : null;
+  let search: string | null = null;
   const term = safeTerm(filter.q ?? "");
   if (term) {
     const like = `%${term}%`;
@@ -899,16 +915,31 @@ export async function listAssessments(
     const propertyIds = ((properties ?? []) as Row[]).map((r) => String(r.id));
     if (customerIds.length) clauses.push(`customer_id.in.(${customerIds.join(",")})`);
     if (propertyIds.length) clauses.push(`property_id.in.(${propertyIds.join(",")})`);
-    q = q.or(clauses.join(","));
+    search = clauses.join(",");
   }
-  const { data, error, count } = await q;
+  const run = (columns: string) => {
+    let q = admin
+      .from("amc_assessments")
+      .select(columns, { count: "exact" })
+      .order("created_at", { ascending: false })
+      .order("id")
+      .range(from, to);
+    if (filter.status === "draft" || filter.status === "completed") q = q.eq("status", filter.status);
+    /* Both conditions in one filter: and(or(mine), or(search)). */
+    if (mine && search) q = q.or(`and(or(${mine}),or(${search}))`);
+    else if (mine || search) q = q.or((mine ?? search)!);
+    return q;
+  };
+  let result = await run(ASSESSMENT_COLUMNS);
+  if (result.error && missingColumn(result.error)) result = await run(ASSESSMENT_COLUMNS_V1);
+  const { data, error, count } = result;
   if (error) throw fail(error);
-  return { assessments: ((data ?? []) as Row[]).map((r) => mapAssessment(r)), total: count ?? 0 };
+  return { assessments: ((data ?? []) as unknown as Row[]).map((r) => mapAssessment(r)), total: count ?? 0 };
 }
 
 export async function getAssessment(admin: Admin, id: string): Promise<AssessmentRecord> {
   const [{ data, error }, { data: items, error: itemsError }] = await Promise.all([
-    admin.from("amc_assessments").select(ASSESSMENT_COLUMNS).eq("id", id).maybeSingle<Row>(),
+    withColumns<Row>((columns) => admin.from("amc_assessments").select(columns).eq("id", id).maybeSingle<Row>(), ASSESSMENT_COLUMNS, ASSESSMENT_COLUMNS_V1),
     admin
       .from("amc_assessment_items")
       .select("item_key, category_key, category_label, label, sort_order, result, notes")
@@ -920,9 +951,9 @@ export async function getAssessment(admin: Admin, id: string): Promise<Assessmen
   return mapAssessment(data, (items ?? []) as Row[]);
 }
 
-/** Who may edit a draft: whoever created it, or an AMC approver. */
+/** Who may edit a draft: whoever created it, the assessor sent on it, or an AMC approver. */
 function canEditAssessment(who: Visibility, a: AssessmentRecord) {
-  return who.canApprove || a.createdBy === who.userId;
+  return who.canApprove || a.createdBy === who.userId || (!!a.assessorId && a.assessorId === who.userId);
 }
 
 export async function createAssessment(
@@ -984,6 +1015,13 @@ export interface AssessmentPatch {
   propertyId?: string | null;
   assessedOn?: string | null;
   assessorName?: string | null;
+  /* Site visit (DEV-362). */
+  assessorId?: string | null;
+  scheduledAt?: string | null;
+  attendance?: string | null;
+  assetCounts?: Record<string, number>;
+  accessNotes?: string | null;
+  exclusions?: string | null;
   propertyCategory?: string | null;
   unitType?: string | null;
   bedrooms?: number | null;
@@ -1030,7 +1068,30 @@ export async function updateAssessment(admin: Admin, who: Visibility, id: string
     ["recommendedServiceIds", "recommended_service_ids"],
   ];
   for (const [key, column] of map) if (patch[key] !== undefined) row[column] = patch[key];
-  const { error } = await admin.from("amc_assessments").update(row).eq("id", id).eq("status", "draft");
+  if (patch.assessorId !== undefined) {
+    row.assessor_id = patch.assessorId;
+    if (patch.assessorId) {
+      const { data: person } = await admin.from("user_profile").select("full_name, email, is_active").eq("id", patch.assessorId).maybeSingle<Row>();
+      if (!person || person.is_active === false) throw new ContractError("The assessor must be an active portal user.", 400);
+      row.assessor_name = str(person.full_name) ?? str(person.email);
+    }
+  }
+  if (patch.scheduledAt !== undefined) row.scheduled_at = patch.scheduledAt;
+  if (patch.attendance !== undefined) row.attendance = patch.attendance;
+  if (patch.accessNotes !== undefined) row.access_notes = patch.accessNotes?.trim() || null;
+  if (patch.exclusions !== undefined) row.exclusions = patch.exclusions?.trim() || null;
+  if (patch.assetCounts !== undefined) {
+    row.asset_counts = cleanAssetCounts(patch.assetCounts, patch.recommendedServiceIds ?? current.recommendedServiceIds, MAX_UNITS);
+  }
+  let { error } = await admin.from("amc_assessments").update(row).eq("id", id).eq("status", "draft");
+  /* Before 20261007130000: save the rest when no site-visit field carries a value. */
+  if (error && missingColumn(error)) {
+    const empty = (v: unknown) => v === null || v === undefined || v === "" || (typeof v === "object" && Object.keys(v as object).length === 0);
+    if (SITE_VISIT_COLUMNS.every((c) => empty(row[c]))) {
+      for (const c of SITE_VISIT_COLUMNS) delete row[c];
+      ({ error } = await admin.from("amc_assessments").update(row).eq("id", id).eq("status", "draft"));
+    }
+  }
   if (error) throw fail(error);
   for (const item of patch.items ?? []) {
     const { error: itemError } = await admin
@@ -1046,7 +1107,7 @@ export async function updateAssessment(admin: Admin, who: Visibility, id: string
 export async function completeAssessment(admin: Admin, who: Visibility, id: string, actor: Actor): Promise<AssessmentRecord> {
   const a = await getAssessment(admin, id);
   if (!canEditAssessment(who, a)) throw new ContractError("Only its assessor or an AMC approver can complete this assessment.", 403);
-  const check = checkAssessmentCompletion({ status: a.status, assessedOn: a.assessedOn, propertyId: a.property?.id ?? null, items: a.items });
+  const check = checkAssessmentCompletion({ status: a.status, assessedOn: a.assessedOn, propertyId: a.property?.id ?? null, items: a.items, attendance: a.attendance });
   if (!check.ok) throw new ContractError(check.errors.join(" "), 409);
   const { error } = await admin
     .from("amc_assessments")
@@ -1099,6 +1160,7 @@ export async function createProposalFromAssessment(admin: Admin, id: string, act
       recommendedServiceIds: a.recommendedServiceIds,
       unitType: a.unitType,
       propertyCategory: a.propertyCategory,
+      assetCounts: a.assetCounts,
     },
     customer ? { name: customer.name, customerRef: customer.customerRef, email: customer.email, phone: customer.phone } : null,
     property
@@ -1162,7 +1224,7 @@ export async function createProposalFromAssessment(admin: Admin, id: string, act
     actorLabel: actor.label,
     payload: { assessmentId: a.id, assessmentNumber: a.assessmentNumber },
   });
-  return { submissionId: data.id, proposalNumber: data.proposal_number, droppedServiceIds: prefill.droppedServiceIds };
+  return { submissionId: data.id, proposalNumber: data.proposal_number, droppedServiceIds: prefill.droppedServiceIds, enquiryId: a.enquiryId };
 }
 
 /* ------------------------------------------------------------------ */

@@ -73,9 +73,9 @@ export function canEditCustomer(a: AmcActor, createdBy: string | null | undefine
   return a.canApprove || a.ops.edit || (!!createdBy && createdBy === a.userId);
 }
 
-/** Read an assessment, or see it in the list. */
-export function canReadAssessment(a: AmcActor, createdBy: string | null | undefined): boolean {
-  return seesAllContracts(a) || (!!createdBy && createdBy === a.userId);
+/** Read an assessment, or see it in the list: its creator, the assessor sent on it (site visit), or someone who sees all. */
+export function canReadAssessment(a: AmcActor, createdBy: string | null | undefined, assessorId?: string | null): boolean {
+  return seesAllContracts(a) || (!!createdBy && createdBy === a.userId) || (!!assessorId && assessorId === a.userId);
 }
 
 /**

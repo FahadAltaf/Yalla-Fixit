@@ -13,10 +13,12 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ assessment
   if (!UUID.test(assessmentId)) return NextResponse.json({ error: "Assessment not found." }, { status: 404 });
   try {
     const assessment = await getAssessment(gate.admin, assessmentId);
-    if (!canReadAssessment(gate.actor, assessment.createdBy)) return NextResponse.json({ error: "Assessment not found." }, { status: 404 });
+    if (!canReadAssessment(gate.actor, assessment.createdBy, assessment.assessorId)) return NextResponse.json({ error: "Assessment not found." }, { status: 404 });
     return NextResponse.json({
       assessment,
-      canEdit: assessment.status === "draft" && (gate.canApprove || gate.actor.ops.edit || assessment.createdBy === gate.userId),
+      canEdit:
+        assessment.status === "draft" &&
+        (gate.canApprove || gate.actor.ops.edit || assessment.createdBy === gate.userId || assessment.assessorId === gate.userId),
     });
   } catch (error) {
     return contractErrorResponse(error, "Could not load the assessment");

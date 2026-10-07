@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { AmcConfig } from "@/lib/amc/config";
 import { readAmcConfig } from "@/lib/server/amc/config";
+import { runEnquiryFollowUpSweep, runEnquiryIdleSweep } from "@/lib/server/amc/enquiries";
 import { runExpiryReminderSweep } from "@/lib/server/amc/reminders";
 import { escalateDueAmcTodos } from "@/lib/server/amc/todos";
 
@@ -36,6 +37,16 @@ export const AMC_JOBS: AmcJob[] = [
     key: "todo_escalations",
     label: "Escalate overdue AMC to-dos",
     run: async ({ admin, config, now }) => ({ ...(await escalateDueAmcTodos(admin, config, now)) }),
+  },
+  {
+    key: "enquiry_follow_ups",
+    label: "Tell owners about enquiry follow-ups that are due",
+    run: async ({ admin, now }) => ({ ...(await runEnquiryFollowUpSweep(admin, now)) }),
+  },
+  {
+    key: "enquiry_idle",
+    label: "Flag idle enquiries; escalate to management after the escalation days",
+    run: async ({ admin, config, now }) => ({ ...(await runEnquiryIdleSweep(admin, config, now)) }),
   },
   {
     key: "expiry_reminders",

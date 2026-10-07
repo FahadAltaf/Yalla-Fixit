@@ -349,3 +349,42 @@ Expected:
 - the bucket is still `public = false` and now lists the .docx and .xlsx types.
 
 **Live check:** open AMC Proposals in the live portal. The list and one proposal open as before.
+
+## 8. Phase 3 migration: `20261007130000_amc_enquiries_and_site_visits.sql`
+
+Apply after section 7, the same way. It is **live-safe**:
+- two new tables (enquiries and their follow-ups), server-only, plus the enquiry-number sequence and function;
+- `amc_assessments` (Group A file 7) and `amc_communication_log` (section 7) gain nullable columns, or columns with a default; live `main` reads neither;
+- one new check on `amc_assessments`: a completed assessment's attendance is empty or "attended". Every existing row passes, because attendance is new and empty.
+
+**Pre-check** (read-only):
+```sql
+select to_regclass('public.amc_enquiries') as enquiries, to_regclass('public.amc_enquiry_follow_ups') as follow_ups,
+       to_regclass('public.amc_communication_log') as comms;
+select column_name from information_schema.columns
+ where table_schema = 'public' and table_name = 'amc_assessments'
+   and column_name in ('enquiry_id', 'scheduled_at', 'attendance', 'asset_counts', 'access_notes', 'exclusions');
+```
+Expected:
+- `enquiries` and `follow_ups` are `null`;
+- `comms` is present. If it is `null`, apply section 7 first;
+- the columns query returns **no rows**.
+
+**Post-check** (read-only):
+```sql
+select c.relname, c.relrowsecurity as rls_on from pg_class c join pg_namespace n on n.oid = c.relnamespace
+ where n.nspname = 'public' and c.relname in ('amc_enquiries', 'amc_enquiry_follow_ups');
+select table_name, grantee from information_schema.role_table_grants
+ where table_schema = 'public' and table_name in ('amc_enquiries', 'amc_enquiry_follow_ups')
+   and grantee in ('anon', 'authenticated');
+select has_function_privilege('anon', 'public.amc_next_enquiry_number()', 'EXECUTE') as anon_can_number;
+select conname, pg_get_constraintdef(oid) from pg_constraint
+ where conname in ('amc_enquiries_lost_reason', 'amc_enquiries_reachable', 'amc_assessments_completed_attended');
+```
+Expected:
+- two tables, `rls_on = true`;
+- the grants query returns **no rows**;
+- `anon_can_number = false`;
+- three checks: Lost needs a reason, the contact has a phone, email or WhatsApp, and a completed assessment was attended (or has no attendance).
+
+**Live check:** open AMC Proposals in the live portal. The list and one proposal open as before.

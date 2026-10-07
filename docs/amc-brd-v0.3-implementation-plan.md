@@ -403,6 +403,16 @@ Each phase lists its Jira subtasks (in the order I will do them), the work, the 
 **Migration:** `…_amc_enquiries_and_site_visits.sql` (SAFE).
 **Done when:** an enquiry goes New → Contacted → Qualified → Details Captured → Site Visit Scheduled, with follow-ups logged, an idle flag shown and a site visit recorded.
 
+**Status (7 Oct 2026):** done in code, migration `20261007130000` not applied (log row 16, checks §8). 224 tests, typecheck, lint, harness (`97g`) and main-compatibility (28/11, unchanged) all pass.
+- Enquiries page (AMC → Enquiries): tiles for open, overdue, today and idle; views Open, Mine, Follow-ups overdue, Idle, All; filters by stage, source, owner and follow-up; search; export (AMC Enquiries Export).
+- Logging an enquiry creates a prospect (lifecycle "prospect", with the contact as primary contact) or links an existing client. Required: source (and referrer for a referral), contact name, a phone, WhatsApp or email, and the need.
+- Enquiry page: details, client, property and scope (links to the Phase 2 property pages), site visits, follow-ups, stage history. Change stage enforces Lost reasons and reopening reasons, and flags (or blocks, if configured) Proposal Preparation and later without a completed site visit for commercial.
+- Follow-ups reset the idle clock, set the next date, copy into the client's communication log, and can move the stage.
+- Site visit: books an assessment for the property, dated and assigned; the assessor is notified and can open and edit it. The assessment records visit time, attendance (a missed or cancelled visit cannot be completed), access notes, exclusions and units counted per service; those units become the proposal's line units. A proposal started from an enquiry's visit links back and moves the enquiry to Proposal Preparation.
+- Sweeps in `/api/amc-jobs/run`: follow-ups due (owner), idle after 5 days (owner), escalation after 10 days (management level 2 and owner). In-app notifications: enquiry assigned, follow-up due, idle, escalated, site visit assigned.
+- Configuration now refuses an enquiry stage list without Won and Lost.
+- Assumptions added (answer later with Q1-Q26): the pipeline is one team board (View sees every enquiry); owner and assessor pickers list all active portal users; idle days are calendar days; the assessor can be changed only by booking a new visit.
+
 ### Phase 4: Rate card and proposals
 
 | Jira | Work | Size |

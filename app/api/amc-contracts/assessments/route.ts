@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
       q: params.get("q"),
       from,
       to,
-      createdBy: gate.seesAll ? null : gate.userId,
+      visibleTo: gate.seesAll ? null : gate.userId,
     });
     return NextResponse.json({ assessments, total, page, pageSize });
   } catch (error) {

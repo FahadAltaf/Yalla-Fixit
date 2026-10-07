@@ -32,6 +32,7 @@ import { DocumentsPanel } from "./profile/documents-panel";
 import { IdentityCard, LIFECYCLE_TONE } from "./profile/identity-card";
 import { AccessRulesPanel, AssetsPanel, ScopePanel } from "./profile/property-panels";
 import { useUrlTab } from "./profile/use-url-tab";
+import { ClientEnquiriesCard } from "./enquiries/client-enquiries-card";
 
 type ContractItem = CustomerOverview["contracts"][number];
 type AssessmentItem = CustomerOverview["assessments"][number];
@@ -267,6 +268,8 @@ export function CustomerDetail({ id }: { id: string }) {
             <SectionCard title="Contracts" description="Each contract separately; a customer can have several." icon={<ScrollText />} bodyClassName="pb-2">
               <ContractsTable contracts={contracts} />
             </SectionCard>
+
+            <ClientEnquiriesCard customerId={customer.id} />
 
             <div className="grid gap-6 lg:grid-cols-3">
               <SectionCard

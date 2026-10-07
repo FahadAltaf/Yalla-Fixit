@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { UNIT_TYPES, customerProfileFields, propertyExtraFields } from "@/lib/amc/client-profile";
+import { SITE_VISIT_ATTENDANCE } from "@/lib/amc/enquiries";
 
 /** Request bodies for the AMC business-operations routes. */
 
@@ -80,6 +81,13 @@ export const updateAssessmentSchema = z
     propertyId: z.string().uuid().nullable().optional(),
     assessedOn: isoDate.nullable().optional(),
     assessorName: optionalText(200),
+    /* Site visit (DEV-362). */
+    assessorId: z.string().uuid().nullable().optional(),
+    scheduledAt: z.string().datetime({ offset: true }).nullable().optional(),
+    attendance: z.enum(SITE_VISIT_ATTENDANCE).nullable().optional(),
+    assetCounts: z.record(z.string().min(1).max(100), z.number().int().min(0).max(10_000)).optional(),
+    accessNotes: optionalText(2000),
+    exclusions: optionalText(2000),
     propertyCategory: z.enum(["residential", "commercial"]).nullable().optional(),
     unitType: z.enum(UNIT_TYPES).nullable().optional(),
     bedrooms: z.number().int().min(0).max(100).nullable().optional(),

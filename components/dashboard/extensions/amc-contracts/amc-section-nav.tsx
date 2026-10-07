@@ -9,6 +9,11 @@ import { AmcNotificationsBell } from "./amc-notifications-bell";
 const SECTIONS = [
   { key: "contracts", label: "Contracts", href: "/extensions/amc-contracts" },
   {
+    key: "enquiries",
+    label: "Enquiries",
+    href: "/extensions/amc-contracts/enquiries",
+  },
+  {
     key: "customers",
     label: "Customers",
     href: "/extensions/amc-contracts/customers",

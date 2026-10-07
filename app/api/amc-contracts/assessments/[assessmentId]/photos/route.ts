@@ -17,8 +17,12 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ assessment
   if (!UUID.test(assessmentId)) return NextResponse.json({ error: "Assessment not found." }, { status: 404 });
   try {
     /* Only an assessment the caller may read (lib/amc/access.ts). */
-    const { data: scope } = await gate.admin.from("amc_assessments").select("created_by").eq("id", assessmentId).maybeSingle<{ created_by: string | null }>();
-    if (!scope || !canReadAssessment(gate.actor, scope.created_by)) {
+    const { data: scope } = await gate.admin
+      .from("amc_assessments")
+      .select("created_by, assessor_id")
+      .eq("id", assessmentId)
+      .maybeSingle<{ created_by: string | null; assessor_id: string | null }>();
+    if (!scope || !canReadAssessment(gate.actor, scope.created_by, scope.assessor_id)) {
       return NextResponse.json({ error: "Assessment not found." }, { status: 404 });
     }
     return NextResponse.json(await listAssessmentPhotos(gate.admin, assessmentId), { headers: { "Cache-Control": "no-store" } });

@@ -92,6 +92,11 @@ const enquiriesSchema = z
   .refine((v) => v.managementEscalationDays >= v.idleDays, {
     message: "Management escalation must come on or after the idle flag",
     path: ["managementEscalationDays"],
+  })
+  /* The pipeline closes enquiries with these two (lib/amc/enquiries.ts). */
+  .refine((v) => v.stages.includes("Won") && v.stages.includes("Lost"), {
+    message: 'Keep the stages "Won" and "Lost": enquiries are closed with them',
+    path: ["stages"],
   });
 
 const contractsSchema = z
