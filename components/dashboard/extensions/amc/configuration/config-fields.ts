@@ -125,6 +125,17 @@ export const SECTION_DEFS: SectionDef[] = [
       { key: "minimumTermMonths", label: "Minimum term", kind: "number", unit: "months", min: 1, max: 120 },
       { key: "unsignedReminderDays", label: "Remind every", kind: "number", unit: "days", min: 1, max: 60 },
       { key: "unsignedReminderMax", label: "Stop after", kind: "number", unit: "reminders", min: 0, max: 20 },
+      { key: "internalSignatoryIds", label: "Internal signatories (in order)", kind: "users", hint: "Who signs for Yalla Fix It. Leave empty if only the client signs." },
+      {
+        key: "signingOrder",
+        label: "Who signs first",
+        kind: "select",
+        options: [
+          { value: "client_first", label: "The client, then Yalla Fix It" },
+          { value: "internal_first", label: "Yalla Fix It, then the client" },
+        ],
+      },
+      { key: "financeCcEmails", label: "Finance copy (Email 2)", kind: "list", hint: "Email addresses copied on every contract sent for signature." },
     ],
   },
   {

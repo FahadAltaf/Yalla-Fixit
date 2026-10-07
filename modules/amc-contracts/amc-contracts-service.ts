@@ -1,3 +1,5 @@
+import type { ContractView } from "@/lib/server/amc/contracts";
+import type { SignatoryRecord } from "@/lib/server/amc/contract-lifecycle";
 import type {
   ContractDisplayStatus,
   ContractEntitlement,
@@ -165,7 +167,7 @@ export interface ContractDetail {
     id: string;
     submissionId: string;
     proposalNumber: string;
-    status: "active" | "cancelled";
+    status: ContractView["status"];
     displayStatus: Exclude<ContractDisplayStatus, "pending_activation">;
     daysRemaining: number | null;
     customerName: string;
@@ -184,13 +186,15 @@ export interface ContractDetail {
     finalPrice: number;
     vatAmount: number;
     grandTotal: number;
-    signedAt: string;
+    signedAt: string | null;
     signedByName: string;
     renewedFromContractId: string | null;
     renewedByContractId: string | null;
     activatedAt: string;
     cancelledAt: string | null;
     cancellationReason: string | null;
+    /* Phase 6. */
+    lifecycle?: ContractView["lifecycle"];
   };
   expiryLabel: string;
   summary: ContractSummary;
@@ -224,7 +228,21 @@ export interface ContractDetail {
     proposal_sent_at: string | null;
     contract_sent_at: string | null;
   } | null;
-  permissions: { canRecordUsage: boolean; canCorrect: boolean; canCancel: boolean; canRenew: boolean };
+  /* Phase 6: the signatories, in order (empty before 20261007160000). */
+  signatories?: SignatoryRecord[];
+  permissions: {
+    canRecordUsage: boolean;
+    canCorrect: boolean;
+    canCancel: boolean;
+    canRenew: boolean;
+    canSign?: boolean;
+    canRecordScan?: boolean;
+    canActivate?: boolean;
+    canEditTerms?: boolean;
+    canHold?: boolean;
+    canTerminate?: boolean;
+    canCallOff?: boolean;
+  };
 }
 
 export interface CoverageCheckResponse {

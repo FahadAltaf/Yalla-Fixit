@@ -18,9 +18,8 @@ import { ActivateContractDialog } from "./activate-contract-dialog";
 export function SignedContractAction({ submission }: { submission: AmcSubmission }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  if (submission.status !== "signed") return null;
-
-  if (submission.contract_id) {
+  /* Phase 6: the contract exists from the client's approval, so it opens before signing too. */
+  if (submission.contract_id && ["proposal_approved", "contract_sent", "signed"].includes(submission.status)) {
     return (
       <Button asChild variant="outline">
         <Link href={`/extensions/amc-contracts/${submission.contract_id}`}>
@@ -29,6 +28,7 @@ export function SignedContractAction({ submission }: { submission: AmcSubmission
       </Button>
     );
   }
+  if (submission.status !== "signed") return null;
   /* Older databases (migration not applied) report null, not undefined. */
   if (submission.contract_id === undefined) return null;
   if (submission.is_own === false && !submission.viewer_can_approve) return null;

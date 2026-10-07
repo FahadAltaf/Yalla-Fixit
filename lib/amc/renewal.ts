@@ -101,7 +101,7 @@ export function buildRenewalDraft(
  * renewal proposal per contract (the database enforces it too).
  */
 export function renewalBlockedReason(contract: {
-  status: "active" | "cancelled";
+  status: import("./contract-lifecycle").ContractStatus;
   renewedByContractId: string | null;
   hasRenewalProposal: boolean;
 }): string | null {

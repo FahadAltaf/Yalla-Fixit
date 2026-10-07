@@ -5,6 +5,8 @@ import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { ContractError } from "@/lib/server/amc/contracts";
 import { notifyProposalEvent } from "@/lib/server/amc/notifications";
 import { recordStatusChange } from "@/lib/server/amc/status-history";
+import { readAmcConfig } from "@/lib/server/amc/config";
+import { createContractFromApproval } from "@/lib/server/amc/contract-lifecycle";
 
 /**
  * The client's answer given outside the link (BRD 5.6, DEV-371): the
@@ -85,5 +87,7 @@ export async function recordClientDecision(
     at: now,
     facts: { signedByName: input.clientName.trim(), reason: approved ? null : note },
   });
+  /* Phase 6: the contract record from the client's approval. */
+  if (approved) await createContractFromApproval(admin, input.id, actor, await readAmcConfig(admin));
   return { status };
 }

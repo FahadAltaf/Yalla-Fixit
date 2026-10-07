@@ -474,3 +474,44 @@ Expected:
 - the one-open-level index is listed.
 
 **Live check:** in the live portal, open AMC Proposals, open one proposal, and approve one waiting proposal if there is one. All work as before.
+
+## 11. Phase 6 migration: `20261007160000_amc_contract_lifecycle.sql`
+
+Apply after section 10, the same way. It is **live-safe**: live `main` does not use `amc_contracts`, its entitlements or the dashboard function (all from Group A files 4 to 9). What it changes:
+- every existing contract gets a contract number (AMC-C-YYYY-NNNN) and keeps its status (active or cancelled);
+- the status check widens to the 11 BRD statuses;
+- the signature fields become nullable, but a signed (or later) contract must still have them;
+- entitlements gain their terms (labour, materials, value limit, exclusions), with defaults;
+- a new server-only signatories table;
+- the dashboard function is replaced so it counts the new statuses.
+
+**Pre-check** (read-only):
+```sql
+select to_regclass('public.amc_contracts') as contracts, to_regclass('public.amc_contract_signatories') as signatories,
+       to_regclass('public.amc_documents') as documents, to_regclass('public.amc_enquiries') as enquiries;
+select status, count(*) from public.amc_contracts group by status;
+select column_name from information_schema.columns
+ where table_schema = 'public' and table_name = 'amc_contracts' and column_name in ('contract_number', 'template', 'status_reason');
+```
+Expected:
+- `contracts`, `documents` and `enquiries` are present; `signatories` is `null`;
+- contract statuses are only `active` and `cancelled`; note the counts;
+- the columns query returns **no rows**.
+
+**Post-check** (read-only):
+```sql
+select status, count(*), count(*) filter (where contract_number is null) as without_number from public.amc_contracts group by status;
+select pg_get_constraintdef(oid) from pg_constraint where conname = 'amc_contracts_status_check';
+select c.relrowsecurity as rls_on from pg_class c where c.oid = 'public.amc_contract_signatories'::regclass;
+select table_name, grantee from information_schema.role_table_grants
+ where table_schema = 'public' and table_name = 'amc_contract_signatories' and grantee in ('anon', 'authenticated');
+```
+Expected:
+- the same counts per status as before, and `without_number = 0`;
+- the status check lists the 11 statuses;
+- `rls_on = true`;
+- the grants query returns **no rows**.
+
+**Live check:** open AMC Proposals in the live portal; it works as before. In the demo portal, open AMC → Contracts: existing contracts show with their numbers.
+
+**After applying, in AMC configuration → Contracts and signing:** name the internal signatories, choose who signs first, and add the Finance email to copy on Email 2.

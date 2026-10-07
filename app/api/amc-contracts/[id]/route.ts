@@ -19,6 +19,8 @@ import {
   requireManagedContract,
 } from "@/lib/server/amc/contract-access";
 import { usageStats } from "@/lib/server/amc/contract-operations";
+import { listSignatories } from "@/lib/server/amc/contract-lifecycle";
+import { AWAITING_SIGNATURE, PRE_ACTIVATION, canSignInternally, type ContractStatus } from "@/lib/amc/contract-lifecycle";
 
 /**
  * One AMC contract: summary, coverage, commercial values, account
@@ -37,7 +39,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     const { contract, entitlements } = loaded;
     const today = todayInDubai();
 
-    const [stats, auditResult, sourceResult, renewalResult, snapshotResult] = await Promise.all([
+    const [stats, auditResult, sourceResult, renewalResult, snapshotResult, signing] = await Promise.all([
       usageStats(gate.admin, id),
       gate.admin
         .from("amc_audit_events")
@@ -58,6 +60,8 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
         .limit(1)
         .maybeSingle<{ id: string }>(),
       gate.admin.from("amc_contracts").select("contract_settings_snapshot").eq("id", id).maybeSingle(),
+      /* Phase 6: the signatories, in order. */
+      listSignatories(gate.admin, id).catch(() => ({ signatories: [], migrated: false })),
     ]);
 
     const summary = { ...summarizeContract(entitlements), ...stats };
@@ -100,7 +104,21 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
         at: String(row.created_at),
       })),
       source: sourceResult.data ?? null,
+      signatories: signing.signatories,
       permissions: {
+        /* Phase 6 lifecycle (lib/amc/contract-lifecycle.ts). */
+        canSign:
+          AWAITING_SIGNATURE.includes(contract.status as ContractStatus) &&
+          !!canSignInternally(
+            signing.signatories.map((s) => ({ id: s.id, party: s.party, sign_order: s.signOrder, status: s.status, user_id: s.userId })),
+            gate.userId,
+          ),
+        canRecordScan: AWAITING_SIGNATURE.includes(contract.status as ContractStatus) && canOperateContract(gate.actor, loaded.ownerId),
+        canActivate: (contract.status === "signed" || contract.status === "pending_initial_payment") && canOperateContract(gate.actor, loaded.ownerId),
+        canEditTerms: PRE_ACTIVATION.includes(contract.status as ContractStatus) && canOperateContract(gate.actor, loaded.ownerId),
+        canHold: (contract.status === "active" || contract.status === "on_hold") && canOperateContract(gate.actor, loaded.ownerId),
+        canTerminate: gate.canApprove && (contract.status === "active" || contract.status === "on_hold"),
+        canCallOff: gate.canApprove && PRE_ACTIVATION.includes(contract.status as ContractStatus),
         /* Usage can be recorded only while the contract is in force; the
            server also checks the usage date against the period. */
         canRecordUsage: contract.status === "active" && inForce && canRecordUsage(gate.actor, loaded.ownerId),

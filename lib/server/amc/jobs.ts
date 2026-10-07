@@ -4,6 +4,7 @@ import type { AmcConfig } from "@/lib/amc/config";
 import { readAmcConfig } from "@/lib/server/amc/config";
 import { runEnquiryFollowUpSweep, runEnquiryIdleSweep } from "@/lib/server/amc/enquiries";
 import { runProposalValiditySweep } from "@/lib/server/amc/proposal-share";
+import { runContractExpirySweep, runUnsignedContractSweep } from "@/lib/server/amc/contract-lifecycle";
 import { runExpiryReminderSweep } from "@/lib/server/amc/reminders";
 import { escalateDueAmcTodos } from "@/lib/server/amc/todos";
 
@@ -53,6 +54,16 @@ export const AMC_JOBS: AmcJob[] = [
     key: "proposal_validity",
     label: "Tell owners when a proposal with the client is about to lapse",
     run: async ({ admin, now }) => ({ ...(await runProposalValiditySweep(admin, now)) }),
+  },
+  {
+    key: "unsigned_contracts",
+    label: "Remind clients about unsigned contracts; open the follow-up to-do",
+    run: async ({ admin, config, now }) => ({ ...(await runUnsignedContractSweep(admin, config, now)) }),
+  },
+  {
+    key: "contract_expiry_status",
+    label: "Mark active contracts past their end date as expired",
+    run: async ({ admin, now }) => ({ ...(await runContractExpirySweep(admin, now)) }),
   },
   {
     key: "expiry_reminders",

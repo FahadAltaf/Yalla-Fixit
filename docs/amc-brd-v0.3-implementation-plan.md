@@ -494,6 +494,35 @@ Each phase lists its Jira subtasks (in the order I will do them), the work, the 
 **Migration:** `…_amc_contract_lifecycle.sql` (SAFE: live `main` does not use the contract tables).
 **Done when:** demo story step 7 works.
 
+**Status (7 Oct 2026):** done in code, migration `20261007160000` not applied (log row 19, checks §11). 253 tests, typecheck, lint, harness (`97j`) and main-compatibility (28/11, unchanged) all pass.
+- **On client approval** (on the link or recorded by the coordinator), the contract record is created as a draft. It has its own number (AMC-C-YYYY-NNNN), the approved version's values and entitlements, the wording, the template by category, the enquiry and version links, and the signatories (the client and the internal signatories from configuration, in the configured order).
+- **Sending the contract:** Email 2 per BRD 6.1 (contract number, period, value incl. VAT, plan, first instalment, signing link), copying the coordinator and Finance. A WhatsApp "contract ready" message is also offered. The contract moves to Pending client or Pending internal signature.
+- **Signatures:**
+  - the client signs on the link;
+  - internal signatories sign in the portal, each only in their turn, and the next one is notified;
+  - or a signed scan (uploaded to the contract's documents, with its date) records every open signature and marks the proposal signed.
+  Each signature is tracked with method, name and time.
+- **Unsigned reminder sweep:** after the configured days it opens a "Contract follow-up" to-do for the owner, re-sends Email 2 with a fresh link (up to the configured number), logs the send and notifies the owner.
+- **Activate:** commencement date (separate from signing) and a term of at least the configured months set the expiry. Activating a renewal marks its predecessor Renewed.
+- **After activation:**
+  - On hold and Resume, with a reason;
+  - Terminate, by an approver, with a reason;
+  - Call off before start, by an approver;
+  - Expired is set by sweep.
+  Every change goes into the status history.
+- **Entitlement terms** (labour, materials, value limit, exclusions) per service are editable until activation and shown on the contract page.
+- **Prospect to client:** the prospect becomes a client on signing; Phase 7 moves this to the first payment. Linking an existing FSM customer was already on the contract page.
+- **Older contracts:** existing contracts keep working, and signed proposals from before this change still use "Activate AMC".
+- **Not yet:**
+  - the entitlement terms are not printed in the contract PDF's table yet (the document is unchanged);
+  - the residential and commercial templates use the same wording until the commercial text is supplied;
+  - contract amendments (versioned with a reason) move to Phase 13 with renewals and terminations;
+  - Zoho Sign is Phase 15.
+- **Assumptions added:**
+  - a signed scan records every open signature;
+  - the expiry is the day before the same date after the term;
+  - the client signature on the link is recorded even if an internal signatory was due first.
+
 ### Phase 7: Payments (without external integrations)
 
 | Jira | Work | Size |

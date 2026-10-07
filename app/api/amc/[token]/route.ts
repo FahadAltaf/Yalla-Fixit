@@ -15,6 +15,8 @@ import {
   toPublicStatus,
 } from "@/lib/server/amc/public-dto";
 import { resolveLink, type LinkRow } from "@/lib/server/amc/link-resolution";
+import { clientSignedOnLink, createContractFromApproval } from "@/lib/server/amc/contract-lifecycle";
+import { readAmcConfig } from "@/lib/server/amc/config";
 
 /**
  * The client's page (FR5.5, FR5.7, NFR4).
@@ -327,6 +329,13 @@ export async function POST(
     */
     const submissionId = row.id;
     after(async () => {
+      /* Phase 6: the contract exists from the client's approval; a signature on the link is recorded on it. */
+      if (body.action === "approve") {
+        await createContractFromApproval(admin, submissionId, { id: null, label: body.name }, await readAmcConfig(admin));
+      }
+      if (body.action === "sign") {
+        await clientSignedOnLink(admin, submissionId, body.name, now);
+      }
       if (body.action === "sign") {
         try {
           await archiveSignedContract(admin, submissionId, { when: "at_signing", actor: null });

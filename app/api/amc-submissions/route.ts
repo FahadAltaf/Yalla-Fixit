@@ -367,7 +367,8 @@ export async function GET(req: NextRequest) {
     /* Active AMC: the contract made from this proposal, if any. A
        database without the contracts table reports nothing. */
     let contractId: string | null | undefined;
-    if (row.status === "signed") {
+    /* Phase 6: the contract exists from the client's approval. */
+    if (row.status === "signed" || row.status === "proposal_approved" || row.status === "contract_sent") {
       const { data: contract, error: contractError } = await admin
         .from("amc_contracts")
         .select("id")

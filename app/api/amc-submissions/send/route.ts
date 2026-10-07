@@ -6,7 +6,8 @@ import { notifyProposalEvent } from "@/lib/server/amc/notifications";
 import { readAmcSettings } from "@/lib/server/amc/settings";
 import { readAmcConfig } from "@/lib/server/amc/config";
 import { proposalValidUntil } from "@/lib/amc/proposal-rules";
-import { proposalShareTexts, recordSend, whatsappMessages } from "@/lib/server/amc/proposal-share";
+import { contractShareTexts, proposalShareTexts, recordSend, whatsappMessages } from "@/lib/server/amc/proposal-share";
+import { contractSent } from "@/lib/server/amc/contract-lifecycle";
 import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
 import { linkTokenExpiry, mintLinkToken } from "@/lib/server/link-token";
 import { sendEmail } from "@/lib/server/send-email";
@@ -463,11 +464,12 @@ export async function POST(req: NextRequest) {
   const shareRow = { ...(existing as Record<string, unknown>), ...(extra ?? {}) };
   const ownerName = profile.full_name?.trim() || profile.email || "Yalla Fix It";
   const ownerPhone = ((profile as { phone?: string | null }).phone ?? null) || null;
+  const config = await readAmcConfig(admin);
   const texts =
     document === "proposal"
       ? await proposalShareTexts(admin, shareRow, {
           settings: mergedSettings,
-          config: await readAmcConfig(admin),
+          config,
           link,
           validUntil: (extra?.valid_until as string | null) ?? null,
           versionNo,
@@ -476,7 +478,13 @@ export async function POST(req: NextRequest) {
           console.error("[amc:send] share texts not built:", textError instanceof Error ? textError.message : textError);
           return null;
         })
-      : null;
+      : /* Email 2 and the "contract ready" message (Phase 6, BRD 6.1). */
+        await contractShareTexts(admin, shareRow, { config, link, owner: { name: ownerName } }).catch((textError) => {
+          console.error("[amc:send] contract texts not built:", textError instanceof Error ? textError.message : textError);
+          return null;
+        });
+  /* The contract record follows: sent for signature (Phase 6). */
+  if (document === "contract") await contractSent(admin, id, { id: profile.id, label: actorLabel });
   const log = (channel: "email" | "whatsapp" | "link", recipients: Array<{ name: string; address: string }>, outcome: Parameters<typeof recordSend>[1]["outcome"], extraLog: { cc?: string[]; detail?: string | null } = {}) =>
     recordSend(admin, { submissionId: id, versionNo, document, channel, recipients, outcome, tokenHint: token.hint, sentBy: profile.id, ...extraLog });
 
@@ -495,7 +503,13 @@ export async function POST(req: NextRequest) {
     const fallback = confirmedTo || customer.customerEmail?.trim();
     const people = chosen?.length ? chosen : fallback ? [{ name: customer.customerName ?? "", address: fallback }] : [];
     const to = people.map((p) => p.address);
-    const cc = ccOwner && profile.email && !to.includes(profile.email) ? [profile.email] : [];
+    /* Email 1 copies the coordinator; Email 2 the coordinator and Finance (BRD 6.1). */
+    const cc = [
+      ...new Set([
+        ...(ccOwner && profile.email ? [profile.email] : []),
+        ...(document === "contract" ? config.contracts.financeCcEmails : []),
+      ]),
+    ].filter((address) => !to.includes(address));
     if (to.length === 0) {
       await auditSent("no_recipient", { emailed: false, to: null });
       await log("email", [], "no_recipient");
@@ -530,13 +544,13 @@ export async function POST(req: NextRequest) {
         html: texts
           ? /* Email 1, as AMC configuration words it (BRD 6.1). */
             clientEmailHtml({
-              eyebrow: "AMC proposal",
-              heading: `Proposal ${existing.proposal_number ?? ""} V${versionNo}`.trim(),
+              eyebrow: document === "proposal" ? "AMC proposal" : "AMC contract",
+              heading: document === "proposal" ? `Proposal ${existing.proposal_number ?? ""} V${versionNo}`.trim() : "Your contract is ready to sign",
               greeting: escapeEmailHtml(blocks[0] ?? ""),
               paragraphs: blocks.slice(1).map((b) => escapeEmailHtml(b).replace(/\n/g, "<br>")),
               details: [],
-              cta: { label: "Review the proposal", url: link },
-              footnote: `This link is personal to you and works until ${new Date(expiresAt).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}. The proposal is also attached as a PDF.`,
+              cta: { label: document === "proposal" ? "Review the proposal" : "Review and sign", url: link },
+              footnote: `This link is personal to you and works until ${new Date(expiresAt).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}. The ${document} is also attached as a PDF.`,
             })
           : amcEmailHtml({
               document,

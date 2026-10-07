@@ -661,12 +661,10 @@ export function SubmissionDetails({
                       Share ({submission.property.propertyCategory === "commercial" ? "email" : "WhatsApp"})
                     </DropdownMenuItem>
                   ) : null}
-                  {sendable === "proposal" ? (
-                    <DropdownMenuItem onClick={() => onSend(submission, sendable, "whatsapp")}>
-                      <MessageCircle className="size-4" />
-                      WhatsApp
-                    </DropdownMenuItem>
-                  ) : null}
+                  <DropdownMenuItem onClick={() => onSend(submission, sendable, "whatsapp")}>
+                    <MessageCircle className="size-4" />
+                    WhatsApp
+                  </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => onSend(submission, sendable, "email")}>
                     <Mail className="size-4" />
                     Email to client

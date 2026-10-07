@@ -11,6 +11,15 @@ export const CONTRACT_STATUS_LABELS: Record<ContractDisplayStatus, string> = {
   expiring: "Expiring",
   expired: "Expired",
   cancelled: "Cancelled",
+  /* Phase 6 lifecycle. */
+  draft: "Draft",
+  pending_client_signature: "Pending client signature",
+  pending_internal_signature: "Pending internal signature",
+  signed: "Signed",
+  pending_initial_payment: "Pending initial payment",
+  on_hold: "On hold",
+  renewed: "Renewed",
+  terminated: "Terminated",
 };
 
 export function contractStatusTone(status: ContractDisplayStatus): string {
@@ -19,10 +28,20 @@ export function contractStatusTone(status: ContractDisplayStatus): string {
       return "bg-green-600/10 text-green-700 dark:bg-green-400/10 dark:text-green-400";
     case "expiring":
     case "pending_activation":
+    case "pending_client_signature":
+    case "pending_internal_signature":
+    case "pending_initial_payment":
+    case "on_hold":
       return "bg-amber-600/10 text-amber-700 dark:bg-amber-400/10 dark:text-amber-400";
     case "expired":
     case "cancelled":
+    case "terminated":
       return "bg-destructive/10 text-destructive";
+    case "renewed":
+    case "draft":
+      return "bg-muted text-muted-foreground";
+    case "signed":
+      return "bg-green-600/10 text-green-700 dark:bg-green-400/10 dark:text-green-400";
     case "not_started":
     default:
       return "bg-sky-600/10 text-sky-700 dark:bg-sky-400/10 dark:text-sky-400";

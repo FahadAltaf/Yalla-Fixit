@@ -54,6 +54,11 @@ export const CONTRACT_COLUMNS =
 export const ENTITLEMENT_COLUMNS =
   "id, contract_id, service_id, service_label, sort_order, frequency_type, entitlement_type, call_out_class, units, frequency, included_quantity, used_quantity, base_price, contracted_price";
 
+/* Phase 6 (20261007160000): the lifecycle and the entitlements' terms. Read first, with the columns above as the fallback. */
+export const CONTRACT_LIFECYCLE_COLUMNS =
+  "contract_number, enquiry_id, approved_version_no, client_approved_at, template, signature_route, signed_scan_date, reminder_count, last_reminder_at, status_changed_at, status_reason";
+export const ENTITLEMENT_TERMS_COLUMNS = "labour_covered, material_coverage, value_limit_aed, exclusions";
+
 type Row = Record<string, unknown>;
 
 export function mapEntitlement(row: Row): ContractEntitlement {
@@ -71,6 +76,14 @@ export function mapEntitlement(row: Row): ContractEntitlement {
     contractedPrice: Number(row.contracted_price ?? 0),
     frequencyType: (row.frequency_type as string | null) ?? null,
     sortOrder: Number(row.sort_order ?? 0),
+    ...(row.material_coverage !== undefined
+      ? {
+          labourCovered: row.labour_covered !== false,
+          materialCoverage: row.material_coverage as ContractEntitlement["materialCoverage"],
+          valueLimitAed: row.value_limit_aed === null || row.value_limit_aed === undefined ? null : Number(row.value_limit_aed),
+          exclusions: (row.exclusions as string | null) ?? null,
+        }
+      : {}),
   };
 }
 
@@ -98,13 +111,28 @@ export interface ContractView {
   finalPrice: number;
   vatAmount: number;
   grandTotal: number;
-  signedAt: string;
+  /* Null until it is signed (Phase 6: a contract exists from the client's approval). */
+  signedAt: string | null;
   signedByName: string;
   renewedFromContractId: string | null;
   renewedByContractId: string | null;
   activatedAt: string;
   cancelledAt: string | null;
   cancellationReason: string | null;
+  /* Phase 6 lifecycle; absent before 20261007160000. */
+  lifecycle?: {
+    contractNumber: string | null;
+    enquiryId: string | null;
+    approvedVersionNo: number | null;
+    clientApprovedAt: string | null;
+    template: "residential" | "commercial" | null;
+    signatureRoute: "link" | "scan" | "zoho_sign" | null;
+    signedScanDate: string | null;
+    reminderCount: number;
+    lastReminderAt: string | null;
+    statusChangedAt: string | null;
+    statusReason: string | null;
+  };
 }
 
 export function mapContract(row: Row, extra: { renewedByContractId?: string | null } = {}): ContractView {
@@ -141,13 +169,30 @@ export function mapContract(row: Row, extra: { renewedByContractId?: string | nu
     finalPrice: Number(row.final_price ?? 0),
     vatAmount: Number(row.vat_amount ?? 0),
     grandTotal: Number(row.grand_total ?? 0),
-    signedAt: String(row.signed_at),
+    signedAt: row.signed_at ? String(row.signed_at) : null,
     signedByName: String(row.signed_by_name ?? ""),
     renewedFromContractId: (row.renewed_from_contract_id as string | null) ?? null,
     renewedByContractId: extra.renewedByContractId ?? null,
     activatedAt: String(row.activated_at),
     cancelledAt: (row.cancelled_at as string | null) ?? null,
     cancellationReason: (row.cancellation_reason as string | null) ?? null,
+    ...(row.contract_number !== undefined
+      ? {
+          lifecycle: {
+            contractNumber: (row.contract_number as string | null) ?? null,
+            enquiryId: (row.enquiry_id as string | null) ?? null,
+            approvedVersionNo: row.approved_version_no === null || row.approved_version_no === undefined ? null : Number(row.approved_version_no),
+            clientApprovedAt: (row.client_approved_at as string | null) ?? null,
+            template: (row.template as "residential" | "commercial" | null) ?? null,
+            signatureRoute: (row.signature_route as "link" | "scan" | "zoho_sign" | null) ?? null,
+            signedScanDate: (row.signed_scan_date as string | null) ?? null,
+            reminderCount: Number(row.reminder_count ?? 0),
+            lastReminderAt: (row.last_reminder_at as string | null) ?? null,
+            statusChangedAt: (row.status_changed_at as string | null) ?? null,
+            statusReason: (row.status_reason as string | null) ?? null,
+          },
+        }
+      : {}),
   };
 }
 
@@ -472,31 +517,35 @@ export async function loadContract(
   admin: Admin,
   id: string,
 ): Promise<{ contract: ContractView; entitlements: ContractEntitlement[]; ownerId: string | null }> {
-  const { data, error } = await admin
-    .from("amc_contracts")
-    .select(`${CONTRACT_COLUMNS}, amc_submissions!amc_contracts_submission_id_fkey(owner_id)`)
-    .eq("id", id)
-    .maybeSingle<Row>();
+  const missingColumn = (e: { code?: string } | null) => e?.code === "42703" || e?.code === "PGRST204";
+  const read = (columns: string) =>
+    admin
+      .from("amc_contracts")
+      .select(`${columns}, amc_submissions!amc_contracts_submission_id_fkey(owner_id)`)
+      .eq("id", id)
+      .maybeSingle<Row>();
+  let { data, error } = await read(`${CONTRACT_COLUMNS}, ${CONTRACT_LIFECYCLE_COLUMNS}`);
+  if (error && missingColumn(error)) ({ data, error } = await read(CONTRACT_COLUMNS));
   if (error) {
     if (isMissingTable(error)) throw notMigrated();
     throw new ContractError(error.message, 400);
   }
   if (!data) throw new ContractError("Contract not found.", 404);
 
-  const [{ data: ents, error: entError }, { data: successor }] = await Promise.all([
-    admin
-      .from("amc_contract_entitlements")
-      .select(ENTITLEMENT_COLUMNS)
-      .eq("contract_id", id)
-      .order("sort_order", { ascending: true }),
+  const readEnts = (columns: string) =>
+    admin.from("amc_contract_entitlements").select(columns).eq("contract_id", id).order("sort_order", { ascending: true });
+  const [entsFirst, { data: successor }] = await Promise.all([
+    readEnts(`${ENTITLEMENT_COLUMNS}, ${ENTITLEMENT_TERMS_COLUMNS}`),
     admin.from("amc_contracts").select("id").eq("renewed_from_contract_id", id).maybeSingle<{ id: string }>(),
   ]);
+  let { data: ents, error: entError } = entsFirst;
+  if (entError && missingColumn(entError)) ({ data: ents, error: entError } = await readEnts(ENTITLEMENT_COLUMNS));
   if (entError) throw new ContractError(entError.message, 400);
 
   const submission = data.amc_submissions as { owner_id?: string } | null;
   return {
     contract: mapContract(data, { renewedByContractId: successor?.id ?? null }),
-    entitlements: (ents ?? []).map((row) => mapEntitlement(row as Row)),
+    entitlements: ((ents ?? []) as unknown as Row[]).map((row) => mapEntitlement(row)),
     ownerId: submission?.owner_id ?? null,
   };
 }

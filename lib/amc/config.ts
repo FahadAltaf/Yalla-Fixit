@@ -104,6 +104,12 @@ const contractsSchema = z
     minimumTermMonths: int(1, 120),
     unsignedReminderDays: int(1, 60),
     unsignedReminderMax: int(0, 20),
+    /* Phase 6 (DEV-374): who signs for Yalla Fix It, and in which order with the client.
+       Defaults, so a section saved before them still validates. */
+    internalSignatoryIds: uuidList.default([]),
+    signingOrder: z.enum(["client_first", "internal_first"]).default("client_first"),
+    /* Email 2 copies the coordinator and Finance (BRD 6.1). */
+    financeCcEmails: z.array(z.string().trim().email().max(200)).max(10).default([]),
   })
   .strict();
 
@@ -272,6 +278,9 @@ export const AMC_CONFIG_DEFAULTS: AmcConfig = {
     minimumTermMonths: 12,
     unsignedReminderDays: 3,
     unsignedReminderMax: 3,
+    internalSignatoryIds: [],
+    signingOrder: "client_first",
+    financeCcEmails: [],
   },
   calendar: {
     weekendDays: [0],

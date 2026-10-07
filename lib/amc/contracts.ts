@@ -17,6 +17,7 @@
  * plus "renewed" when a later contract renews it, and
  * "pending_activation" for a signed proposal with no contract yet.
  */
+import type { ContractStatus } from "./contract-lifecycle";
 import { computeAmcPricing, filsToAed, roundAed, toFils } from "./pricing";
 
 /* ------------------------------------------------------------------ */
@@ -25,17 +26,31 @@ import { computeAmcPricing, filsToAed, roundAed, toFils } from "./pricing";
 
 export type EntitlementType = "visits" | "hours" | "unlimited" | "informational";
 export type CallOutClass = "emergency" | "non_emergency";
-export type StoredContractStatus = "active" | "cancelled";
+/* The 11 BRD statuses (Phase 6, lib/amc/contract-lifecycle.ts); contracts activated before it are active or cancelled. */
+export type StoredContractStatus = ContractStatus;
 export type ContractDisplayStatus =
   | "pending_activation"
   | "not_started"
   | "active"
   | "expiring"
   | "expired"
-  | "cancelled";
+  | "cancelled"
+  | "draft"
+  | "pending_client_signature"
+  | "pending_internal_signature"
+  | "signed"
+  | "pending_initial_payment"
+  | "on_hold"
+  | "renewed"
+  | "terminated";
 
 export interface ContractEntitlement {
   id?: string;
+  /* Phase 6 (DEV-373): what the service covers besides its visits; absent before 20261007160000. */
+  labourCovered?: boolean;
+  materialCoverage?: "none" | "consumables" | "parts_within_limit" | "all";
+  valueLimitAed?: number | null;
+  exclusions?: string | null;
   serviceId: string;
   serviceLabel: string;
   entitlementType: EntitlementType;
@@ -238,7 +253,9 @@ export function contractDisplayStatus(
   windowDays: number = DEFAULT_EXPIRING_WINDOW_DAYS,
 ): Exclude<ContractDisplayStatus, "pending_activation"> {
   if (contract.status === "cancelled") return "cancelled";
-  if (isExpired(contract.endDate, today)) return "expired";
+  /* Phase 6: a status the contract was put in shows as itself. */
+  if (contract.status !== "active" && contract.status !== "expired") return contract.status;
+  if (contract.status === "expired" || isExpired(contract.endDate, today)) return "expired";
   const start = parseDate(contract.startDate);
   const now = parseDate(today);
   if (start && now && start.getTime() > now.getTime()) return "not_started";

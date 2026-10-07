@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AmcSettings } from "@/components/dashboard/extensions/amc/amc-settings";
 import { fillTemplate, whatsappUrl } from "@/lib/amc/approval-ladder";
 import type { AmcConfig } from "@/lib/amc/config";
+import { firstInstalment } from "@/lib/amc/contract-lifecycle";
 import { templateText } from "@/lib/amc/message-templates";
 import { grandTotalFromFinal } from "@/lib/amc/pricing";
 import { paymentPlanLabel, planFromLegacyTerms, type CustomPlan, type PaymentPlan } from "@/lib/amc/proposal-rules";
@@ -196,4 +197,47 @@ export async function runProposalValiditySweep(admin: Admin, now = new Date(), d
     if (sent) expiring += 1;
   }
   return { expiring, skipped: null };
+}
+
+/**
+ * Email 2 and the WhatsApp "contract ready" message (BRD 6.1, 6.3): the
+ * contract number, period, value incl. VAT, plan, the first instalment and
+ * the signing link.
+ */
+export async function contractShareTexts(
+  admin: Admin,
+  row: Row,
+  input: { config: AmcConfig; link: string; owner: { name: string } },
+): Promise<ShareFacts & { contractNumber: string | null }> {
+  const customer = (row.customer ?? {}) as Row;
+  const property = (row.property ?? {}) as Row;
+  const { data: contract } = await admin
+    .from("amc_contracts")
+    .select("contract_number, start_date, end_date, grand_total")
+    .eq("submission_id", String(row.id))
+    .maybeSingle<Row>();
+  const plan = (row.payment_plan as PaymentPlan | null) ?? planFromLegacyTerms(customer.paymentTerms as string | undefined);
+  const custom = (row.payment_plan_custom as CustomPlan | null) ?? null;
+  const finalPrice = Number(row.final_price ?? 0);
+  const values = {
+    "Client name": String(customer.customerName ?? "").trim() || "customer",
+    "Proposal no": String(row.proposal_number ?? ""),
+    "Contract no": String(contract?.contract_number ?? row.proposal_number ?? ""),
+    "Property address": String(property.propertyAddress ?? property.propertyDetail ?? ""),
+    "Signing link": input.link,
+    "Start date": contract?.start_date ? fmtDate(String(contract.start_date)) : String(customer.startDate ?? ""),
+    "End date": contract?.end_date ? fmtDate(String(contract.end_date)) : String(customer.endDate ?? ""),
+    Value: money(contract?.grand_total ? Number(contract.grand_total) : grandTotalFromFinal(finalPrice)),
+    "Payment plan": paymentPlanLabel(plan, custom),
+    "First amount": money(firstInstalment(plan, custom, finalPrice)),
+    "Coordinator name": input.owner.name,
+  };
+  const email = templateText("emailContractForSignature", input.config.templates)!;
+  const message = templateText("messageContractReady", input.config.templates)!;
+  return {
+    subject: fillTemplate(email.subject ?? "", values),
+    body: fillTemplate(email.body, values),
+    message: fillTemplate(message.body, values),
+    contractNumber: (contract?.contract_number as string | null) ?? null,
+  };
 }

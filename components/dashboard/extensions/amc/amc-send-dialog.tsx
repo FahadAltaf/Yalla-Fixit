@@ -114,8 +114,8 @@ function contactOptions(submission: AmcSubmission, channel: "email" | "whatsapp"
  * A proposal (BRD 5.6, Phase 5) is shared by email (Email 1, to one or more
  * contacts, the owner in copy), by WhatsApp (the message is prepared with
  * the link to send from WhatsApp) or as a link; WhatsApp is the default for
- * residential, email for commercial. A contract is emailed or linked as
- * before.
+ * residential, email for commercial. A contract goes the same three ways
+ * (Phase 6: Email 2, copying the coordinator and Finance).
  */
 export function AmcSendDialog({
   request,
@@ -131,11 +131,6 @@ export function AmcSendDialog({
   const isProposal = request?.document === "proposal";
   /* The channel asked for; "Share" asks for the category's default (shareChannelFor). */
   const [deliver, setDeliver] = useState<AmcSendDeliver>(() => request?.deliver ?? "email");
-  /* Keyed by the request in the list, so each send starts from the
-     customer email saved on the proposal. */
-  const [recipient, setRecipient] = useState(
-    () => request?.submission.customer.customerEmail?.trim() ?? "",
-  );
   const [options, setOptions] = useState<Record<"email" | "whatsapp", Option[]>>(() => ({
     email: request ? contactOptions(request.submission, "email") : [],
     whatsapp: request ? contactOptions(request.submission, "whatsapp") : [],
@@ -150,8 +145,7 @@ export function AmcSendDialog({
   const chosen = channel ? options[channel].filter((o) => o.checked) : [];
   const extraValid =
     channel === "email" ? EMAIL_PATTERN.test(extra.trim()) : channel === "whatsapp" ? !!whatsappNumber(extra) : false;
-  const contractEmailValid = EMAIL_PATTERN.test(recipient.trim());
-  const ready = isProposal ? deliver === "link" || chosen.length > 0 : deliver !== "email" || contractEmailValid;
+  const ready = deliver === "link" || chosen.length > 0;
 
   const addExtra = () => {
     if (!channel || !extraValid) return;
@@ -164,15 +158,11 @@ export function AmcSendDialog({
 
   const confirm = () => {
     if (!request) return;
-    if (isProposal) {
-      onConfirm(request, {
-        deliver,
-        recipients: chosen.map((o) => ({ name: o.name, address: o.address })),
-        ccOwner,
-      });
-    } else {
-      onConfirm(request, { deliver, to: deliver === "email" ? recipient.trim() : undefined });
-    }
+    onConfirm(request, {
+      deliver,
+      recipients: chosen.map((o) => ({ name: o.name, address: o.address })),
+      ccOwner,
+    });
   };
 
   return (
@@ -189,13 +179,9 @@ export function AmcSendDialog({
               ? sentAt
                 ? "Share the proposal again"
                 : "Share the proposal"
-              : deliver === "email"
-                ? sentAt
-                  ? `Email the ${label} again?`
-                  : `Email the ${label} to the client`
-                : sentAt
-                  ? `Get a new ${label} link?`
-                  : `Get the ${label} link?`}
+              : sentAt
+                ? "Send the contract again"
+                : "Send the contract for signature"}
           </DialogTitle>
           <DialogDescription>
             {isProposal
@@ -205,14 +191,14 @@ export function AmcSendDialog({
                   ? "Prepares the WhatsApp message with a secure link; you send it from WhatsApp. The proposal is marked as shared."
                   : `Creates a secure link for ${customer} and copies it. The proposal is marked as shared.`
               : deliver === "email"
-                ? `Emails ${customer} a secure link to review and sign the contract, with the contract attached as a PDF.`
-                : sentAt
-                  ? "Copies a new link to paste into WhatsApp or an email."
-                  : `Creates a secure link for ${customer} and copies it, ready to paste into WhatsApp or an email. The ${label} is marked as sent.`}
+                ? `Emails ${customer} the contract (Email 2) with a secure link to sign it and the PDF attached; the coordinator and Finance are copied.`
+                : deliver === "whatsapp"
+                  ? "Prepares the WhatsApp message with the signing link; you send it from WhatsApp. The contract is marked as sent."
+                  : `Creates a secure signing link for ${customer} and copies it. The contract is marked as sent.`}
           </DialogDescription>
         </DialogHeader>
 
-        {isProposal ? (
+        {request ? (
           <div className="bg-muted inline-flex w-fit rounded-full p-0.5 text-sm" role="tablist" aria-label="Channel">
             {(["whatsapp", "email", "link"] as const).map((c) => (
               <button
@@ -229,7 +215,7 @@ export function AmcSendDialog({
           </div>
         ) : null}
 
-        {isProposal && channel ? (
+        {channel ? (
           <div className="grid gap-2">
             <Label>{channel === "email" ? "Send to" : "Prepare for"}</Label>
             {options[channel].length === 0 ? (
@@ -277,30 +263,6 @@ export function AmcSendDialog({
                 <Switch checked={ccOwner} onCheckedChange={setCcOwner} aria-label="Copy me" />
                 Copy me (the coordinator)
               </label>
-            ) : null}
-          </div>
-        ) : null}
-
-        {!isProposal && deliver === "email" ? (
-          <div className="grid gap-2">
-            <Label htmlFor="amc-send-recipient">Client email</Label>
-            <Input
-              id="amc-send-recipient"
-              type="email"
-              value={recipient}
-              onChange={(event) => setRecipient(event.target.value)}
-              placeholder="client@email.com"
-              aria-invalid={recipient.trim().length > 0 && !contractEmailValid}
-              autoFocus
-            />
-            <p className="text-muted-foreground text-xs">
-              Check the address before sending. Changing it here sends to this
-              address only; the proposal keeps the email it was saved with.
-            </p>
-            {recipient.trim().length > 0 && !contractEmailValid ? (
-              <p className="text-destructive text-xs">
-                Enter a valid email address.
-              </p>
             ) : null}
           </div>
         ) : null}

@@ -55,6 +55,7 @@ import {
   formatDateTime,
 } from "./contract-status";
 import { CoverageCheckDialog } from "./coverage-check-dialog";
+import { ContractLifecycleCard, EntitlementTermsCard } from "./contract-lifecycle-panel";
 import { RecordUsageDialog } from "./record-usage-dialog";
 import { UsageHistory } from "./usage-history";
 
@@ -72,7 +73,7 @@ export function ContractDetail({ id }: { id: string }) {
   const [checking, setChecking] = useState(false);
   const [usageVersion, setUsageVersion] = useState(0);
 
-  useBreadcrumbLabel(id, data?.contract.proposalNumber ?? "Contract");
+  useBreadcrumbLabel(id, data?.contract.lifecycle?.contractNumber ?? data?.contract.proposalNumber ?? "Contract");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -127,7 +128,7 @@ export function ContractDetail({ id }: { id: string }) {
   return (
     <div className="flex w-full flex-1 flex-col gap-6">
       <PageHeading
-        eyebrow={`AMC contract · ${contract.proposalNumber}`}
+        eyebrow={`AMC contract · ${contract.lifecycle?.contractNumber ? `${contract.lifecycle.contractNumber} · proposal ` : ""}${contract.proposalNumber}`}
         title={contract.customerName || "Unnamed customer"}
         description={contract.propertyLabel || undefined}
         actions={
@@ -173,6 +174,9 @@ export function ContractDetail({ id }: { id: string }) {
           unless the contract is renewed.
         </div>
       ) : null}
+
+      {/* Phase 6: from the client's approval to activation and after. */}
+      <ContractLifecycleCard data={data} onChanged={() => void load()} />
 
       <StatCardGrid columns={4}>
         <StatCard
@@ -221,6 +225,8 @@ export function ContractDetail({ id }: { id: string }) {
           caption={summary.lastUsageDate ? `Last used ${formatContractDate(summary.lastUsageDate.slice(0, 10))}` : "Nothing used yet"}
         />
       </StatCardGrid>
+
+      <EntitlementTermsCard data={data} onChanged={() => void load()} />
 
       <SectionCard
         title="Coverage"
