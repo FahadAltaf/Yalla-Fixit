@@ -13,7 +13,15 @@ export async function GET(req: NextRequest) {
   const gate = await requireContractAccess();
   if (!gate.ok) return gate.response;
   try {
-    return NextResponse.json({ customers: await searchCustomers(gate.admin, req.nextUrl.searchParams.get("q") ?? "") });
+    const lifecycle = req.nextUrl.searchParams.get("lifecycle");
+    return NextResponse.json({
+      customers: await searchCustomers(
+        gate.admin,
+        req.nextUrl.searchParams.get("q") ?? "",
+        Math.min(Math.max(Number(req.nextUrl.searchParams.get("limit")) || 25, 1), 200),
+        lifecycle === "prospect" || lifecycle === "client" || lifecycle === "former" ? lifecycle : null,
+      ),
+    });
   } catch (error) {
     return contractErrorResponse(error, "Could not load customers");
   }

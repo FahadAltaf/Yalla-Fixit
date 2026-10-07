@@ -22,5 +22,6 @@ Rules: one file at a time; pre-check first; never `supabase db push` on producti
 | 12 | 20261006163000 | shared_tables_server_only.sql | | | | Live check B | |
 | 13 | 20261007100000 | amc_audit_events_guard.sql (Phase 0) | | | | Post-check §5 | |
 | 14 | 20261007110000 | amc_platform_foundation.sql (Phase 1) | | | | Post-check §6, open Todos | |
+| 15 | 20261007120000 | amc_client_property_assets.sql (Phase 2) | | | | Post-check §7, open AMC Proposals | |
 
 **Held until release (Group B, do not apply):** 20261005160000, 20261005170000, 20261005180000, 20261006160000.

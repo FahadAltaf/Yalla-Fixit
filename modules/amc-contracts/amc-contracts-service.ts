@@ -64,17 +64,44 @@ export type {
   DiscountConfig,
 };
 export type LiveLinks = { migrated: boolean; customer: CustomerRecord | null; property: PropertyRecord | null };
-export type CustomerInput = { name: string; customerRef?: string | null; company?: string | null; email?: string | null; phone?: string | null; notes?: string | null };
+export type CustomerInput = {
+  name: string;
+  customerRef?: string | null;
+  company?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  notes?: string | null;
+  /* Phase 2 (BRD 5.9) */
+  customerType?: "individual" | "company" | null;
+  lifecycle?: "prospect" | "client" | "former";
+  tradeLicenseNo?: string | null;
+  tradeLicenseExpiry?: string | null;
+  trn?: string | null;
+  preferredChannel?: "whatsapp" | "email" | "call" | "sms" | null;
+  preferredLanguage?: string | null;
+};
 export type PropertyInput = {
   label: string;
   address?: string | null;
   community?: string | null;
   propertyCategory?: "residential" | "commercial" | null;
-  unitType?: "villa" | "apartment" | "townhouse" | "office" | "other" | null;
+  unitType?: "villa" | "apartment" | "townhouse" | "restaurant" | "clinic" | "shop" | "office" | "warehouse" | "other" | null;
   bedrooms?: number | null;
   sizeSqft?: number | null;
   notes?: string | null;
+  /* Phase 2 (BRD 5.2) */
+  building?: string | null;
+  unitNo?: string | null;
+  floor?: string | null;
+  street?: string | null;
+  city?: string | null;
+  floorsCount?: number | null;
+  zones?: string[];
+  occupancy?: "owner" | "tenant" | "vacant" | null;
+  accessConstraints?: string | null;
+  parentPropertyId?: string | null;
 };
+export type UnitSummary = { id: string; label: string; unitType: string | null; customerId: string | null };
 export type AdditionalServiceRequest = {
   serviceKey: string;
   serviceLabel: string;
@@ -364,8 +391,10 @@ export const amcContractsService = {
     });
   },
   /* Customers and properties */
-  customers(q = "") {
-    return request<{ customers: CustomerRecord[] }>(`/api/amc-contracts/customers?q=${encodeURIComponent(q)}`);
+  customers(q = "", lifecycle: "prospect" | "client" | "former" | null = null) {
+    const params = new URLSearchParams({ q });
+    if (lifecycle) params.set("lifecycle", lifecycle);
+    return request<{ customers: CustomerRecord[] }>(`/api/amc-contracts/customers?${params}`);
   },
   createCustomer(input: CustomerInput) {
     return request<{ customer: CustomerRecord }>("/api/amc-contracts/customers", { method: "POST", body: JSON.stringify(input) });
@@ -374,7 +403,7 @@ export const amcContractsService = {
     return request<{ customer: CustomerRecord }>(`/api/amc-contracts/customers/${id}`, { method: "PATCH", body: JSON.stringify(input) });
   },
   customer(id: string) {
-    return request<{ overview: CustomerOverview }>(`/api/amc-contracts/customers/${id}`);
+    return request<{ overview: CustomerOverview; canEdit?: boolean }>(`/api/amc-contracts/customers/${id}`);
   },
   customerProperties(id: string) {
     return request<{ properties: PropertyRecord[] }>(`/api/amc-contracts/customers/${id}/properties`);
@@ -389,7 +418,7 @@ export const amcContractsService = {
     return request<{ property: PropertyRecord }>(`/api/amc-contracts/properties/${id}`, { method: "PATCH", body: JSON.stringify(input) });
   },
   property(id: string) {
-    return request<{ overview: PropertyOverview }>(`/api/amc-contracts/properties/${id}`);
+    return request<{ overview: PropertyOverview; units?: { parent: UnitSummary | null; children: UnitSummary[] }; canEdit?: boolean }>(`/api/amc-contracts/properties/${id}`);
   },
   links(contractId: string) {
     return request<{ links: LiveLinks }>(`/api/amc-contracts/${contractId}/links`);

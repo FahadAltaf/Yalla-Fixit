@@ -4,6 +4,8 @@ import { refuseCustomerEdit } from "@/lib/server/amc/customer-access";
 import { contractErrorResponse, requireContractAccess } from "@/lib/server/amc/contract-access";
 import { propertyOverview, updateProperty } from "@/lib/server/amc/business";
 import { UUID, propertySchema } from "@/lib/server/amc/business-schemas";
+import { assertValidParent, propertyUnits } from "@/lib/server/amc/client-profile";
+import { canEditCustomer } from "@/lib/amc/access";
 
 /**
  * A property's AMC view: the current contract, previous contracts (kept
@@ -16,9 +18,13 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ propertyId
   const { propertyId } = await ctx.params;
   if (!UUID.test(propertyId)) return NextResponse.json({ error: "Property not found." }, { status: 404 });
   try {
-    return NextResponse.json({
-      overview: await propertyOverview(gate.admin, { userId: gate.userId, canApprove: gate.seesAll }, propertyId),
-    });
+    const overview = await propertyOverview(gate.admin, { userId: gate.userId, canApprove: gate.seesAll }, propertyId);
+    /* Combined units (BRD 5.2): the parent and the units linked under this one. */
+    const [units, owner] = await Promise.all([
+      propertyUnits(gate.admin, propertyId, overview.property.parentPropertyId),
+      gate.admin.from("customer_properties").select("created_by").eq("id", propertyId).maybeSingle<{ created_by: string | null }>(),
+    ]);
+    return NextResponse.json({ overview, units, canEdit: canEditCustomer(gate.actor, owner.data?.created_by ?? null) });
   } catch (error) {
     return contractErrorResponse(error, "Could not load the property");
   }
@@ -34,6 +40,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ propertyI
   try {
     const refused = await refuseCustomerEdit(gate, "customer_properties", propertyId);
     if (refused) return refused;
+    await assertValidParent(gate.admin, propertyId, parsed.data.parentPropertyId);
     return NextResponse.json({ property: await updateProperty(gate.admin, propertyId, parsed.data, { id: gate.userId, label: gate.label }) });
   } catch (error) {
     return contractErrorResponse(error, "Could not save the property");

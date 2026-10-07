@@ -9,9 +9,11 @@ import { toast } from "sonner";
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { PageHeading, SectionCard } from "@/components/dashboard/shared/kaizen";
+import { PageHeading, PillTabs, SectionCard } from "@/components/dashboard/shared/kaizen";
+import { LIFECYCLE_LABELS } from "@/lib/amc/client-profile";
 import { ActionDialogContent, ErrorState, ListSkeleton } from "@/components/dashboard/shared/kaizen-states";
 import { useDebounce } from "@/hooks/use-debounce";
 import { amcContractsService, type CustomerInput } from "@/modules/amc-contracts/amc-contracts-service";
@@ -19,6 +21,9 @@ import { amcContractsService, type CustomerInput } from "@/modules/amc-contracts
 import { AmcSectionNav } from "./amc-section-nav";
 import { CustomerFields, cleanCustomer } from "./customer-pickers";
 import { useAmcData } from "./use-amc-data";
+import { LIFECYCLE_TONE } from "./profile/identity-card";
+
+type LifecycleFilter = "all" | "prospect" | "client" | "former";
 
 /** Shared customer records: search, open, add. */
 export function CustomersPage() {
@@ -26,7 +31,11 @@ export function CustomersPage() {
   const router = useRouter();
   const [q, setQ] = useState("");
   const term = useDebounce(q.trim(), 250);
-  const { data, error, loading, reload } = useAmcData(() => amcContractsService.customers(term), `customers|${term}`);
+  const [lifecycle, setLifecycle] = useState<LifecycleFilter>("all");
+  const { data, error, loading, reload } = useAmcData(
+    () => amcContractsService.customers(term, lifecycle === "all" ? null : lifecycle),
+    `customers|${term}|${lifecycle}`,
+  );
   const [adding, setAdding] = useState(false);
 
   return (
@@ -43,6 +52,16 @@ export function CustomersPage() {
         }
       />
       <AmcSectionNav current="customers" />
+      <PillTabs<LifecycleFilter>
+        value={lifecycle}
+        onChange={setLifecycle}
+        tabs={[
+          { value: "all", label: "All" },
+          { value: "prospect", label: "Prospects" },
+          { value: "client", label: "Clients" },
+          { value: "former", label: "Former clients" },
+        ]}
+      />
       <SectionCard
         title="Customers"
         icon={<Users />}
@@ -67,6 +86,7 @@ export function CustomersPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead className="pl-5">Customer</TableHead>
+                  <TableHead>Status</TableHead>
                   <TableHead>Customer ID</TableHead>
                   <TableHead>Phone</TableHead>
                   <TableHead className="pr-5">Email</TableHead>
@@ -81,6 +101,11 @@ export function CustomersPage() {
                       </Link>
                       {c.company ? <div className="text-muted-foreground text-xs">{c.company}</div> : null}
                     </TableCell>
+                    <TableCell>
+                      <Badge variant="secondary" className={`border-none ${LIFECYCLE_TONE[c.lifecycle]}`}>
+                        {LIFECYCLE_LABELS[c.lifecycle]}
+                      </Badge>
+                    </TableCell>
                     <TableCell>{c.customerRef ?? "—"}</TableCell>
                     <TableCell>{c.phone ?? "—"}</TableCell>
                     <TableCell className="pr-5">{c.email ?? "—"}</TableCell>
@@ -94,7 +119,7 @@ export function CustomersPage() {
       {adding ? (
         <CustomerDialog
           title="New customer"
-          initial={{ name: "" }}
+          initial={{ name: "", lifecycle: "client" }}
           onOpenChange={(next) => !next && setAdding(false)}
           onSave={async (input) => {
             const { customer } = await amcContractsService.createCustomer(input);

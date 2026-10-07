@@ -383,6 +383,13 @@ Each phase lists its Jira subtasks (in the order I will do them), the work, the 
 **Migration:** `…_amc_client_property_assets.sql` (SAFE).
 **Done when:** a client with two linked units, assets, access rules and documents can be created and viewed on one page.
 
+**Status (7 Oct 2026):** done in code, migration `20261007120000` not applied (log row 15, checks §7). 214 tests, typecheck, lint, harness (`97f`) and main-compatibility (28/11, unchanged) all pass.
+- Client page tabs: overview (identity, lifecycle, consent, properties, contracts), contacts, documents, communication. Payments, schedule, service history and allowances tabs come with Phases 6, 8, 10 and 11.
+- Property page tabs: overview (details, combined units, current AMC, history), assets, access, scope, documents. The asset History tab is filled from Phase 8/10/11 records.
+- The property form is shared by the client page now; the enquiry (Phase 3) and the wizard (Phase 4) reuse it.
+- Still open in DEV-381: existing signed contract PDFs and assessment photos are not listed in the document store yet. They come with the contract record in Phase 5.
+- Before the migration is applied, the client and property screens still work on the old columns; the new tabs show a "migration not applied" note.
+
 ### Phase 3: Enquiry pipeline and site visit
 
 | Jira | Work | Size |

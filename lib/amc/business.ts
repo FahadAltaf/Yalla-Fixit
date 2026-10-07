@@ -24,7 +24,8 @@ import { filsToAed, toFils } from "./pricing";
 /* Customers and properties: snapshot vs live record                    */
 /* ------------------------------------------------------------------ */
 
-export const PROPERTY_UNIT_TYPES = ["villa", "apartment", "townhouse", "office", "other"] as const;
+/* BRD v0.3 5.2 (Phase 2): the full list, shared with the property form. */
+export const PROPERTY_UNIT_TYPES = ["villa", "apartment", "townhouse", "restaurant", "clinic", "shop", "office", "warehouse", "other"] as const;
 export type PropertyUnitType = (typeof PROPERTY_UNIT_TYPES)[number];
 /** The unit types the AMC proposal wizard and pricing know. */
 export const AMC_PROPOSAL_UNIT_TYPES = ["villa", "apartment", "office"] as const;

@@ -47,7 +47,7 @@ type Actor = { id: string; label: string | null };
 type Visibility = { userId: string; canApprove: boolean };
 
 const NOT_MIGRATED =
-  "This needs migration 20261006130000 (AMC business operations), which has not been applied to this database yet.";
+  "This needs an AMC database update (20261006130000, or 20261007120000 for the client profile) that has not been applied to this database yet.";
 
 function notMigrated(error: { code?: string } | null | undefined): boolean {
   return isMissingTable(error) || error?.code === "42703" || error?.code === "PGRST204";
@@ -74,6 +74,18 @@ export interface CustomerRecord {
   snaggingClientId: string | null;
   notes: string | null;
   createdAt: string;
+  /* Phase 2 (BRD 5.9). Defaults when the client-profile update is not applied. */
+  customerType: string | null;
+  lifecycle: "prospect" | "client" | "former";
+  becameClientAt: string | null;
+  tradeLicenseNo: string | null;
+  tradeLicenseExpiry: string | null;
+  trn: string | null;
+  preferredChannel: string | null;
+  preferredLanguage: string | null;
+  marketingConsent: boolean | null;
+  marketingConsentAt: string | null;
+  marketingConsentSource: string | null;
 }
 
 export interface PropertyRecord {
@@ -88,11 +100,42 @@ export interface PropertyRecord {
   sizeSqft: number | null;
   notes: string | null;
   createdAt: string;
+  /* Phase 2 (BRD 5.2). */
+  building: string | null;
+  unitNo: string | null;
+  floor: string | null;
+  street: string | null;
+  city: string | null;
+  floorsCount: number | null;
+  zones: string[];
+  occupancy: string | null;
+  accessConstraints: string | null;
+  parentPropertyId: string | null;
 }
 
-const CUSTOMER_COLUMNS = "id, name, customer_ref, company, email, phone, fsm_contact_id, snagging_client_id, notes, created_at";
-const PROPERTY_COLUMNS =
+/* The columns before the client-profile update (20261007120000), used when it is not applied yet. */
+const CUSTOMER_COLUMNS_V1 = "id, name, customer_ref, company, email, phone, fsm_contact_id, snagging_client_id, notes, created_at";
+const CUSTOMER_COLUMNS = `${CUSTOMER_COLUMNS_V1}, customer_type, lifecycle, became_client_at, trade_license_no, trade_license_expiry, trn, preferred_channel, preferred_language, marketing_consent, marketing_consent_at, marketing_consent_source`;
+const PROPERTY_COLUMNS_V1 =
   "id, customer_id, label, address, community, property_category, unit_type, bedrooms, size_sqft, notes, created_at";
+const PROPERTY_COLUMNS = `${PROPERTY_COLUMNS_V1}, building, unit_no, floor, street, city, floors_count, zones, occupancy, access_constraints, parent_property_id`;
+
+const missingColumn = (error: { code?: string } | null | undefined) => error?.code === "42703" || error?.code === "PGRST204";
+
+/**
+ * Runs a query with the Phase 2 columns, and again with the original ones
+ * when the client-profile update is not applied yet, so the existing
+ * customer screens keep working on a database without it.
+ */
+async function withColumns<T>(
+  run: (columns: string) => PromiseLike<{ data: T | null; error: { code?: string; message: string } | null }>,
+  columns: string,
+  legacy: string,
+): Promise<{ data: T | null; error: { code?: string; message: string } | null }> {
+  const first = await run(columns);
+  if (first.error && missingColumn(first.error)) return run(legacy);
+  return first;
+}
 
 function mapCustomer(r: Row): CustomerRecord {
   return {
@@ -106,6 +149,17 @@ function mapCustomer(r: Row): CustomerRecord {
     snaggingClientId: str(r.snagging_client_id),
     notes: str(r.notes),
     createdAt: String(r.created_at),
+    customerType: str(r.customer_type),
+    lifecycle: r.lifecycle === "prospect" || r.lifecycle === "former" ? r.lifecycle : "client",
+    becameClientAt: str(r.became_client_at),
+    tradeLicenseNo: str(r.trade_license_no),
+    tradeLicenseExpiry: str(r.trade_license_expiry),
+    trn: str(r.trn),
+    preferredChannel: str(r.preferred_channel),
+    preferredLanguage: str(r.preferred_language),
+    marketingConsent: typeof r.marketing_consent === "boolean" ? r.marketing_consent : null,
+    marketingConsentAt: str(r.marketing_consent_at),
+    marketingConsentSource: str(r.marketing_consent_source),
   };
 }
 
@@ -122,6 +176,16 @@ function mapProperty(r: Row): PropertyRecord {
     sizeSqft: num(r.size_sqft),
     notes: str(r.notes),
     createdAt: String(r.created_at),
+    building: str(r.building),
+    unitNo: str(r.unit_no),
+    floor: str(r.floor),
+    street: str(r.street),
+    city: str(r.city),
+    floorsCount: num(r.floors_count),
+    zones: Array.isArray(r.zones) ? (r.zones as string[]) : [],
+    occupancy: str(r.occupancy),
+    accessConstraints: str(r.access_constraints),
+    parentPropertyId: str(r.parent_property_id),
   };
 }
 
@@ -130,17 +194,33 @@ function safeTerm(q: string): string {
   return q.replace(/[,()"'%_*:\\]/g, " ").trim().replace(/\s+/g, " ").slice(0, 100);
 }
 
-export async function searchCustomers(admin: Admin, q: string, limit = 25): Promise<CustomerRecord[]> {
-  let query = admin.from("customers").select(CUSTOMER_COLUMNS).order("name").limit(limit);
+export async function searchCustomers(
+  admin: Admin,
+  q: string,
+  limit = 25,
+  lifecycle: CustomerRecord["lifecycle"] | null = null,
+): Promise<CustomerRecord[]> {
   const term = safeTerm(q);
-  if (term) query = query.or(`name.ilike.%${term}%,customer_ref.ilike.%${term}%,phone.ilike.%${term}%,email.ilike.%${term}%,company.ilike.%${term}%`);
-  const { data, error } = await query;
+  const { data, error } = await withColumns<Row[]>(
+    (columns) => {
+      let query = admin.from("customers").select(columns).order("name").limit(limit);
+      if (term) query = query.or(`name.ilike.%${term}%,customer_ref.ilike.%${term}%,phone.ilike.%${term}%,email.ilike.%${term}%,company.ilike.%${term}%`);
+      if (lifecycle && columns === CUSTOMER_COLUMNS) query = query.eq("lifecycle", lifecycle);
+      return query as unknown as PromiseLike<{ data: Row[] | null; error: { code?: string; message: string } | null }>;
+    },
+    CUSTOMER_COLUMNS,
+    CUSTOMER_COLUMNS_V1,
+  );
   if (error) throw fail(error);
   return ((data ?? []) as Row[]).map(mapCustomer);
 }
 
 export async function getCustomer(admin: Admin, id: string): Promise<CustomerRecord> {
-  const { data, error } = await admin.from("customers").select(CUSTOMER_COLUMNS).eq("id", id).maybeSingle<Row>();
+  const { data, error } = await withColumns<Row>(
+    (columns) => admin.from("customers").select(columns).eq("id", id).maybeSingle<Row>(),
+    CUSTOMER_COLUMNS,
+    CUSTOMER_COLUMNS_V1,
+  );
   if (error) throw fail(error);
   if (!data) throw new ContractError("Customer not found.", 404);
   return mapCustomer(data);
@@ -153,7 +233,17 @@ export interface CustomerInput {
   email?: string | null;
   phone?: string | null;
   notes?: string | null;
+  /* Phase 2 (BRD 5.9); left out = unchanged. */
+  customerType?: string | null;
+  lifecycle?: CustomerRecord["lifecycle"];
+  tradeLicenseNo?: string | null;
+  tradeLicenseExpiry?: string | null;
+  trn?: string | null;
+  preferredChannel?: string | null;
+  preferredLanguage?: string | null;
 }
+
+const blankToNull = (v: string | null | undefined) => (v && v.trim() ? v.trim() : null);
 
 function customerRow(input: CustomerInput) {
   return {
@@ -163,6 +253,15 @@ function customerRow(input: CustomerInput) {
     email: input.email?.trim() || null,
     phone: input.phone?.trim() || null,
     notes: input.notes?.trim() || null,
+    /* Only what the caller sent, so a database without the client-profile
+       update still accepts the original fields. */
+    ...(input.customerType !== undefined ? { customer_type: input.customerType || null } : {}),
+    ...(input.lifecycle !== undefined ? { lifecycle: input.lifecycle } : {}),
+    ...(input.tradeLicenseNo !== undefined ? { trade_license_no: blankToNull(input.tradeLicenseNo) } : {}),
+    ...(input.tradeLicenseExpiry !== undefined ? { trade_license_expiry: input.tradeLicenseExpiry || null } : {}),
+    ...(input.trn !== undefined ? { trn: blankToNull(input.trn) } : {}),
+    ...(input.preferredChannel !== undefined ? { preferred_channel: input.preferredChannel || null } : {}),
+    ...(input.preferredLanguage !== undefined ? { preferred_language: blankToNull(input.preferredLanguage) } : {}),
   };
 }
 
@@ -172,11 +271,12 @@ function customerWriteError(error: { code?: string; message: string }): Contract
 }
 
 export async function createCustomer(admin: Admin, input: CustomerInput, actor: Actor): Promise<CustomerRecord> {
-  const { data, error } = await admin
-    .from("customers")
-    .insert({ ...customerRow(input), created_by: actor.id })
-    .select(CUSTOMER_COLUMNS)
-    .single<Row>();
+  const { data: inserted, error } = await withColumns<Row>(
+    (columns) => admin.from("customers").insert({ ...customerRow(input), created_by: actor.id }).select(columns).single<Row>(),
+    CUSTOMER_COLUMNS,
+    CUSTOMER_COLUMNS_V1,
+  );
+  const data = inserted as Row;
   if (error) throw customerWriteError(error);
   await recordAmcAudit(admin, {
     entityType: "customer",
@@ -190,12 +290,17 @@ export async function createCustomer(admin: Admin, input: CustomerInput, actor: 
 }
 
 export async function updateCustomer(admin: Admin, id: string, input: CustomerInput, actor: Actor): Promise<CustomerRecord> {
-  const { data, error } = await admin
-    .from("customers")
-    .update({ ...customerRow(input), updated_at: new Date().toISOString() })
-    .eq("id", id)
-    .select(CUSTOMER_COLUMNS)
-    .maybeSingle<Row>();
+  const { data, error } = await withColumns<Row>(
+    (columns) =>
+      admin
+        .from("customers")
+        .update({ ...customerRow(input), updated_at: new Date().toISOString() })
+        .eq("id", id)
+        .select(columns)
+        .maybeSingle<Row>(),
+    CUSTOMER_COLUMNS,
+    CUSTOMER_COLUMNS_V1,
+  );
   if (error) throw customerWriteError(error);
   if (!data) throw new ContractError("Customer not found.", 404);
   await recordAmcAudit(admin, {
@@ -210,13 +315,25 @@ export async function updateCustomer(admin: Admin, id: string, input: CustomerIn
 }
 
 export async function listProperties(admin: Admin, customerId: string): Promise<PropertyRecord[]> {
-  const { data, error } = await admin.from("customer_properties").select(PROPERTY_COLUMNS).eq("customer_id", customerId).order("label");
+  const { data, error } = await withColumns<Row[]>(
+    (columns) =>
+      admin.from("customer_properties").select(columns).eq("customer_id", customerId).order("label") as unknown as PromiseLike<{
+        data: Row[] | null;
+        error: { code?: string; message: string } | null;
+      }>,
+    PROPERTY_COLUMNS,
+    PROPERTY_COLUMNS_V1,
+  );
   if (error) throw fail(error);
   return ((data ?? []) as Row[]).map(mapProperty);
 }
 
 export async function getProperty(admin: Admin, id: string): Promise<PropertyRecord> {
-  const { data, error } = await admin.from("customer_properties").select(PROPERTY_COLUMNS).eq("id", id).maybeSingle<Row>();
+  const { data, error } = await withColumns<Row>(
+    (columns) => admin.from("customer_properties").select(columns).eq("id", id).maybeSingle<Row>(),
+    PROPERTY_COLUMNS,
+    PROPERTY_COLUMNS_V1,
+  );
   if (error) throw fail(error);
   if (!data) throw new ContractError("Property not found.", 404);
   return mapProperty(data);
@@ -232,6 +349,17 @@ export interface PropertyInput {
   bedrooms?: number | null;
   sizeSqft?: number | null;
   notes?: string | null;
+  /* Phase 2 (BRD 5.2); left out = unchanged. */
+  building?: string | null;
+  unitNo?: string | null;
+  floor?: string | null;
+  street?: string | null;
+  city?: string | null;
+  floorsCount?: number | null;
+  zones?: string[];
+  occupancy?: string | null;
+  accessConstraints?: string | null;
+  parentPropertyId?: string | null;
 }
 
 function propertyRow(input: PropertyInput) {
@@ -245,15 +373,26 @@ function propertyRow(input: PropertyInput) {
     bedrooms: input.bedrooms ?? null,
     size_sqft: input.sizeSqft ?? null,
     notes: input.notes?.trim() || null,
+    ...(input.building !== undefined ? { building: blankToNull(input.building) } : {}),
+    ...(input.unitNo !== undefined ? { unit_no: blankToNull(input.unitNo) } : {}),
+    ...(input.floor !== undefined ? { floor: blankToNull(input.floor) } : {}),
+    ...(input.street !== undefined ? { street: blankToNull(input.street) } : {}),
+    ...(input.city !== undefined ? { city: blankToNull(input.city) } : {}),
+    ...(input.floorsCount !== undefined ? { floors_count: input.floorsCount } : {}),
+    ...(input.zones !== undefined ? { zones: input.zones.map((z) => z.trim()).filter(Boolean) } : {}),
+    ...(input.occupancy !== undefined ? { occupancy: input.occupancy || null } : {}),
+    ...(input.accessConstraints !== undefined ? { access_constraints: blankToNull(input.accessConstraints) } : {}),
+    ...(input.parentPropertyId !== undefined ? { parent_property_id: input.parentPropertyId } : {}),
   };
 }
 
 export async function createProperty(admin: Admin, input: PropertyInput, actor: Actor): Promise<PropertyRecord> {
-  const { data, error } = await admin
-    .from("customer_properties")
-    .insert({ ...propertyRow(input), created_by: actor.id })
-    .select(PROPERTY_COLUMNS)
-    .single<Row>();
+  const { data: inserted, error } = await withColumns<Row>(
+    (columns) => admin.from("customer_properties").insert({ ...propertyRow(input), created_by: actor.id }).select(columns).single<Row>(),
+    PROPERTY_COLUMNS,
+    PROPERTY_COLUMNS_V1,
+  );
+  const data = inserted as Row;
   if (error) throw fail(error);
   await recordAmcAudit(admin, {
     entityType: "customer",
@@ -267,12 +406,17 @@ export async function createProperty(admin: Admin, input: PropertyInput, actor: 
 }
 
 export async function updateProperty(admin: Admin, id: string, input: PropertyInput, actor: Actor): Promise<PropertyRecord> {
-  const { data, error } = await admin
-    .from("customer_properties")
-    .update({ ...propertyRow(input), updated_at: new Date().toISOString() })
-    .eq("id", id)
-    .select(PROPERTY_COLUMNS)
-    .maybeSingle<Row>();
+  const { data, error } = await withColumns<Row>(
+    (columns) =>
+      admin
+        .from("customer_properties")
+        .update({ ...propertyRow(input), updated_at: new Date().toISOString() })
+        .eq("id", id)
+        .select(columns)
+        .maybeSingle<Row>(),
+    PROPERTY_COLUMNS,
+    PROPERTY_COLUMNS_V1,
+  );
   if (error) throw fail(error);
   if (!data) throw new ContractError("Property not found.", 404);
   await recordAmcAudit(admin, {

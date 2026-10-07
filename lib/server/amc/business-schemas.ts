@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { UNIT_TYPES, customerProfileFields, propertyExtraFields } from "@/lib/amc/client-profile";
+
 /** Request bodies for the AMC business-operations routes. */
 
 const optionalText = (max: number) => z.string().trim().max(max).nullable().optional();
@@ -13,6 +15,8 @@ export const customerSchema = z
     email: z.string().trim().email("Enter a valid email").max(200).nullable().optional().or(z.literal("")),
     phone: optionalText(40),
     notes: optionalText(2000),
+    /* Phase 2 (BRD 5.9): identity and preferences. */
+    ...customerProfileFields,
   })
   .strict();
 
@@ -22,10 +26,11 @@ export const propertySchema = z
     address: optionalText(300),
     community: optionalText(200),
     propertyCategory: z.enum(["residential", "commercial"]).nullable().optional(),
-    unitType: z.enum(["villa", "apartment", "townhouse", "office", "other"]).nullable().optional(),
     bedrooms: z.number().int().min(0).max(100).nullable().optional(),
     sizeSqft: z.number().positive().max(10_000_000).nullable().optional(),
     notes: optionalText(2000),
+    /* Phase 2 (BRD 5.2): unit-level address, floors and zones, occupancy, combined units. */
+    ...propertyExtraFields,
   })
   .strict();
 
@@ -76,7 +81,7 @@ export const updateAssessmentSchema = z
     assessedOn: isoDate.nullable().optional(),
     assessorName: optionalText(200),
     propertyCategory: z.enum(["residential", "commercial"]).nullable().optional(),
-    unitType: z.enum(["villa", "apartment", "townhouse", "office", "other"]).nullable().optional(),
+    unitType: z.enum(UNIT_TYPES).nullable().optional(),
     bedrooms: z.number().int().min(0).max(100).nullable().optional(),
     sizeSqft: z.number().positive().max(10_000_000).nullable().optional(),
     occupancy: z.enum(["occupied", "vacant", "unknown"]).nullable().optional(),

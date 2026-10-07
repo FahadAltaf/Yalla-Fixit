@@ -295,3 +295,57 @@ Expected:
 - the todos check still lists the four live values and adds `~ '^amc_…'`.
 
 **Live check:** open Todos in the live portal; existing to-dos show as before.
+
+## 7. Phase 2 migration: `20261007120000_amc_client_property_assets.sql`
+
+Apply after section 6, the same way. It is **live-safe**:
+- `customers` and `customer_properties` come from Group A file 7 and live `main` never reads them. They only gain nullable columns, or columns with a default;
+- existing customers get `lifecycle = 'client'` from the column default, because they were all created for signed contracts;
+- the property-type check on `customer_properties` and `amc_assessments` is widened (it still accepts villa, apartment and office);
+- six new tables (contacts, communication log, assets, access rules, scope items, documents), all server-only;
+- the private `amc-documents` bucket also accepts .docx and .xlsx, and stays private.
+
+**Pre-check** (read-only):
+```sql
+select to_regclass('public.amc_customer_contacts') as contacts, to_regclass('public.amc_communication_log') as comms,
+       to_regclass('public.amc_property_assets') as assets, to_regclass('public.amc_property_access_rules') as access_rules,
+       to_regclass('public.amc_scope_items') as scope, to_regclass('public.amc_documents') as documents;
+select table_name, column_name from information_schema.columns
+ where table_schema = 'public'
+   and ((table_name = 'customers' and column_name in ('customer_type', 'lifecycle', 'trn', 'marketing_consent'))
+     or (table_name = 'customer_properties' and column_name in ('building', 'zones', 'parent_property_id')));
+select conrelid::regclass, conname, pg_get_constraintdef(oid) from pg_constraint
+ where conrelid in ('public.customer_properties'::regclass, 'public.amc_assessments'::regclass)
+   and contype = 'c' and pg_get_constraintdef(oid) ilike '%unit_type%';
+select id, public, allowed_mime_types from storage.buckets where id = 'amc-documents';
+```
+Expected:
+- all six tables are `null`;
+- the columns query returns **no rows**;
+- one unit-type check per table, each listing `villa`, `apartment`, `office`;
+- the bucket row shows `public = false`.
+
+**If the columns query returns any row, stop and send me the output.** It would mean a column with that name already exists, maybe with a different type.
+
+**Post-check** (read-only):
+```sql
+select c.relname, c.relrowsecurity as rls_on from pg_class c join pg_namespace n on n.oid = c.relnamespace
+ where n.nspname = 'public' and c.relname in ('amc_customer_contacts', 'amc_communication_log', 'amc_property_assets',
+       'amc_property_access_rules', 'amc_scope_items', 'amc_documents');
+select table_name, grantee from information_schema.role_table_grants
+ where table_schema = 'public' and grantee in ('anon', 'authenticated')
+   and table_name in ('amc_customer_contacts', 'amc_communication_log', 'amc_property_assets',
+       'amc_property_access_rules', 'amc_scope_items', 'amc_documents');
+select lifecycle, count(*) from public.customers group by lifecycle;
+select conrelid::regclass, pg_get_constraintdef(oid) from pg_constraint
+ where conname in ('customer_properties_unit_type_check', 'amc_assessments_unit_type_check');
+select public, allowed_mime_types from storage.buckets where id = 'amc-documents';
+```
+Expected:
+- six tables, `rls_on = true`;
+- the grants query returns **no rows**;
+- every existing customer is `client`;
+- both checks list the nine types, from `villa` to `other`;
+- the bucket is still `public = false` and now lists the .docx and .xlsx types.
+
+**Live check:** open AMC Proposals in the live portal. The list and one proposal open as before.
