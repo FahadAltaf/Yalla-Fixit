@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { listTechnicians } from "@/modules/scheduling";
+import { listTechniciansForViewer } from "@/lib/server/scheduling-technicians";
 import { refreshTechniciansIfStale } from "@/lib/server/zoho/service-resources";
 import DailyScheduleDashboard from "@/components/dashboard/scheduling/daily-schedule";
 
@@ -31,7 +31,7 @@ export default async function SchedulingPage() {
   // fraction of the Zoho calls. Never throws -- a stale roster beats a
   // failed page load.
   await refreshTechniciansIfStale();
-  const technicians = await listTechnicians();
+  const technicians = await listTechniciansForViewer();
 
   return <DailyScheduleDashboard technicians={technicians} />;
 }

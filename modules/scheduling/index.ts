@@ -1,4 +1,4 @@
-export { listTechnicians, techniciansService } from "./services/technicians-service";
+export { techniciansService } from "./services/technicians-service";
 export type { TechnicianReference, TechnicianAttributeUpdate } from "./services/technicians-service";
 export { rolesService, serviceTypesService } from "./services/attributes-service";
 export { tagsService } from "./services/tags-service";
