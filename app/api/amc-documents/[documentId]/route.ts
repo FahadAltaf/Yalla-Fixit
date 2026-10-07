@@ -16,6 +16,12 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ documentId
       const managed = await requireManagedContract(gate, doc.entityId, "read");
       if (!managed.ok) return NextResponse.json({ error: "Document not found." }, { status: 404 });
     }
+    if (doc.level === "proposal") {
+      /* Read as the proposal is read: its owner, or once past draft an approver or AMC Operations (View). */
+      const { data } = await gate.admin.from("amc_submissions").select("owner_id, status").eq("id", doc.entityId).maybeSingle<{ owner_id: string; status: string }>();
+      const visible = !!data && (data.owner_id === gate.userId || ((gate.canApprove || gate.actor.ops.view) && data.status !== "draft"));
+      if (!visible) return NextResponse.json({ error: "Document not found." }, { status: 404 });
+    }
     return NextResponse.json({ url: await documentDownloadUrl(gate.admin, doc) }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return contractErrorResponse(error, "Could not prepare the download");

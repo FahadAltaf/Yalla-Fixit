@@ -16,6 +16,9 @@ import {
 import { submittableProblem } from "@/lib/server/amc/pricing";
 import { submissionRateProblem } from "@/lib/server/amc/rate-card";
 import { notifyProposalEvent } from "@/lib/server/amc/notifications";
+import { decideStep, shareProposal } from "@/lib/server/amc/approval-ladder";
+import { readAmcConfig } from "@/lib/server/amc/config";
+import { ContractError } from "@/lib/server/amc/contracts";
 
 /**
  * The internal half of the approval flow (FR5.1–FR5.3, FR5.9).
@@ -35,11 +38,22 @@ import { notifyProposalEvent } from "@/lib/server/amc/notifications";
  *
  * The transition rules, including whether a creator may approve their own
  * proposal, live in lib/amc/workflow.ts.
+ *
+ * Phase 5 (BRD 5.5, DEV-369): submit is "share". The four triggers decide
+ * whether the proposal is approved at once or climbs the configured ladder
+ * (lib/server/amc/approval-ladder.ts), and approve / reject / return act on
+ * the open level. Before 20261007150000, or for a proposal submitted before
+ * the ladder, the single-approver flow below still applies.
  */
 
 const actionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("submit"), id: z.string().uuid() }),
   z.object({ action: z.literal("approve"), id: z.string().uuid() }),
+  z.object({
+    action: z.literal("reject"),
+    id: z.string().uuid(),
+    reason: z.string().trim().min(1, "Give a reason so the owner knows why"),
+  }),
   z.object({
     action: z.literal("send_back"),
     id: z.string().uuid(),
@@ -111,8 +125,50 @@ export async function POST(req: NextRequest) {
   let eventType: string;
 
   /* FR3.4, FR5.2, FR5.3: who may move it, and from where. */
+  const legacyAction = body.action === "reject" ? "send_back" : body.action;
+  if (body.action === "submit") {
+    const check = checkInternalTransition({ action: "submit", from: existing.status, isOwner, canApprove });
+    if (!check.ok) return NextResponse.json({ error: check.error }, { status: check.status });
+    const problem = submittableProblem(existing.services ?? []) ?? (await submissionRateProblem(admin, existing.id));
+    if (problem) return NextResponse.json({ error: problem }, { status: 400 });
+  }
+
+  /* Phase 5: the ladder. */
+  try {
+    const config = await readAmcConfig(admin);
+    const actor = { id: profile.id, label: actorLabel };
+    if (body.action === "submit") {
+      const shared = await shareProposal(admin, body.id, actor, config);
+      if (shared.migrated) {
+        return NextResponse.json({
+          submission: { id: body.id, status: shared.outcome === "pending" ? "awaiting_approval" : "approved" },
+          outcome: shared,
+        });
+      }
+    } else {
+      const decided = await decideStep(
+        admin,
+        {
+          submissionId: body.id,
+          action: body.action === "approve" ? "approve" : body.action === "reject" ? "reject" : "return",
+          comment: body.action === "approve" ? null : body.reason,
+        },
+        actor,
+        canApprove,
+        config,
+      );
+      if (decided.handled) return NextResponse.json({ submission: { id: body.id, status: decided.status }, outcome: decided });
+    }
+  } catch (ladderError) {
+    if (ladderError instanceof ContractError) {
+      return NextResponse.json({ error: ladderError.message }, { status: ladderError.status });
+    }
+    throw ladderError;
+  }
+
+  /* The single-approver flow (no ladder yet). */
   const check = checkInternalTransition({
-    action: body.action,
+    action: legacyAction,
     from: existing.status,
     isOwner,
     canApprove,
@@ -172,9 +228,9 @@ export async function POST(req: NextRequest) {
             status: "sent_back",
             decided_at: now,
             decided_by: profile.id,
-            sent_back_reason: body.reason,
+            sent_back_reason: body.action === "reject" ? `Rejected: ${body.reason}` : body.reason,
           };
-    eventType = body.action === "approve" ? "approved" : "sent_back";
+    eventType = body.action === "approve" ? "approved" : body.action === "reject" ? "rejected_by_approver" : "sent_back";
   }
 
   const { data, error } = await admin
@@ -211,7 +267,7 @@ export async function POST(req: NextRequest) {
     eventType,
     actorId: profile.id,
     actorLabel,
-    justification: body.action === "send_back" ? body.reason : null,
+    justification: body.action === "send_back" || body.action === "reject" ? body.reason : null,
     payload: { from: existing.status, to: update.status },
   });
 
@@ -227,7 +283,7 @@ export async function POST(req: NextRequest) {
     submissionId: body.id,
     actor: { id: profile.id, label: actorLabel },
     at: now,
-    facts: body.action === "send_back" ? { reason: body.reason } : {},
+    facts: body.action === "send_back" || body.action === "reject" ? { reason: body.reason } : {},
   });
 
   /* The partial row selected above; services are internal to the check. */

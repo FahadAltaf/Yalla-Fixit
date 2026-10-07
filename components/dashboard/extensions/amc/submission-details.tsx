@@ -20,6 +20,7 @@ import {
   Phone,
   Link as LinkIcon,
   Mail,
+  MessageCircle,
   Send,
   Undo2,
   Users,
@@ -73,6 +74,7 @@ import { SignedContractAction } from "@/components/dashboard/extensions/amc-cont
 import { SignedArchiveRow } from "@/components/dashboard/extensions/amc-contracts/signed-archive-row";
 import { Fact, ReviewSection, ServicesAndCost } from "./steps/review-step";
 import { ProposalVersionsPanel, ReviseProposalButton } from "./proposal-versions-panel";
+import { ApprovalsAndSendsPanel, RecordClientAnswerButton } from "./proposal-sharing-panel";
 import {
   AMC_STATUS_LABELS,
   isAmcSubmissionEditable,
@@ -395,7 +397,7 @@ function termMonths(start?: string, end?: string): number | null {
  * (useAmcActions).
  */
 /** The tabs this page has, and the only values ?tab= may carry. */
-const TABS = new Set(["record", "services", "versions", "history"]);
+const TABS = new Set(["record", "services", "versions", "approvals", "history"]);
 
 export function SubmissionDetails({
   submission,
@@ -408,6 +410,9 @@ export function SubmissionDetails({
   downloading = false,
   onSend,
   sending = false,
+  onReject,
+  onShare,
+  onChanged,
 }: {
   submission: AmcSubmission;
   onView: (submission: AmcSubmission, documentType: AmcDocumentType) => void;
@@ -427,9 +432,13 @@ export function SubmissionDetails({
   onSend?: (
     submission: AmcSubmission,
     document: "proposal" | "contract",
-    deliver: "email" | "link",
+    deliver: "email" | "link" | "whatsapp",
   ) => void;
   sending?: boolean;
+  /* Phase 5: reject at the approver's level; share on the default channel; re-read after a recorded answer. */
+  onReject?: (submission: AmcSubmission) => void;
+  onShare?: (submission: AmcSubmission) => void;
+  onChanged?: () => void;
 }) {
   const details = useMemo(() => {
     const form = submissionToFormData(submission);
@@ -627,6 +636,8 @@ export function SubmissionDetails({
             <SignedContractAction submission={submission} />
             {/* BRD 5.4: a shared proposal is changed through a new version. */}
             <ReviseProposalButton submission={submission} />
+            {/* BRD 5.6: an answer given outside the link, with evidence. */}
+            {submission.is_own !== false ? <RecordClientAnswerButton submission={submission} onRecorded={() => onChanged?.()} /> : null}
             {canEdit && (
               <Button asChild>
                 <Link href={`/extensions/amc/${submission.id}/edit`}>
@@ -644,6 +655,18 @@ export function SubmissionDetails({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-52">
+                  {sendable === "proposal" && onShare ? (
+                    <DropdownMenuItem onClick={() => onShare(submission)}>
+                      <Send className="size-4" />
+                      Share ({submission.property.propertyCategory === "commercial" ? "email" : "WhatsApp"})
+                    </DropdownMenuItem>
+                  ) : null}
+                  {sendable === "proposal" ? (
+                    <DropdownMenuItem onClick={() => onSend(submission, sendable, "whatsapp")}>
+                      <MessageCircle className="size-4" />
+                      WhatsApp
+                    </DropdownMenuItem>
+                  ) : null}
                   <DropdownMenuItem onClick={() => onSend(submission, sendable, "email")}>
                     <Mail className="size-4" />
                     Email to client
@@ -658,8 +681,13 @@ export function SubmissionDetails({
             {canDecide && awaiting && (
               <>
                 <Button variant="outline" disabled={deciding} onClick={() => onSendBack?.(submission)}>
-                  <Undo2 className="size-4" /> Send back
+                  <Undo2 className="size-4" /> Return
                 </Button>
+                {onReject ? (
+                  <Button variant="outline" disabled={deciding} onClick={() => onReject(submission)}>
+                    <XCircle className="size-4" /> Reject
+                  </Button>
+                ) : null}
                 <Button disabled={deciding} onClick={() => onApprove?.(submission)}>
                   {deciding ? (
                     <Loader2 className="size-4 animate-spin" />
@@ -715,6 +743,7 @@ export function SubmissionDetails({
             Versions
             <TabCount value={submission.current_version ?? 1} />
           </TabsTrigger>
+          <TabsTrigger value="approvals">Approvals &amp; sends</TabsTrigger>
           <TabsTrigger value="history">
             History
             <TabCount value={timeline.length} />
@@ -880,6 +909,7 @@ export function SubmissionDetails({
         )}
 
         {panel("versions", <ProposalVersionsPanel submission={submission} />)}
+        {panel("approvals", <ApprovalsAndSendsPanel submission={submission} />)}
 
         {panel(
           "history",

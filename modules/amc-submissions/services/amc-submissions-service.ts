@@ -28,15 +28,26 @@ export interface AmcSubmissionUpdateInput extends Partial<AmcSubmissionInput> {
 export type AmcApprovalAction =
   | { action: "submit"; id: string }
   | { action: "approve"; id: string }
-  | { action: "send_back"; id: string; reason: string };
+  | { action: "send_back"; id: string; reason: string }
+  /* Phase 5: an approver rejects at their level (a reason is required). */
+  | { action: "reject"; id: string; reason: string };
+
+/* What the ladder did (Phase 5); absent before 20261007150000. */
+export type AmcApprovalOutcome =
+  | { migrated: true; outcome: "shared_directly" | "covered"; requiredLevel: number; triggers: Array<{ key: string; level: number; detail: string }> }
+  | { migrated: true; outcome: "pending"; requiredLevel: number; levelName: string; triggers: Array<{ key: string; level: number; detail: string }> }
+  | { handled: true; status: string; nextLevelName: string | null };
 
 /* FR5.4 / FR5.6 — send to the client, or mint the link to send by hand. */
 export type AmcSendInput = {
   id: string;
   document: "proposal" | "contract";
-  deliver: "email" | "link";
+  deliver: "email" | "link" | "whatsapp";
   /* The address confirmed in the send dialog. */
   to?: string;
+  /* Phase 5: the contacts it goes to (emails, or phone numbers for WhatsApp), and whether to copy the owner. */
+  recipients?: Array<{ name: string; address: string }>;
+  cc_owner?: boolean;
   /* The document as a PDF, attached to the email. */
   pdf_base64?: string;
   pdf_filename?: string;
@@ -49,6 +60,9 @@ export interface AmcSendResult {
   /* Set when the document was marked sent and the link is valid but the
      email did not go — the team needs to know to copy the link. */
   warning?: string;
+  /* WhatsApp (Phase 5): the prepared text and a wa.me link per contact. */
+  message?: string;
+  messages?: Array<{ name: string; address: string; text: string; url: string | null }>;
 }
 
 export const amcSubmissionsService = {
@@ -60,8 +74,8 @@ export const amcSubmissionsService = {
 
   decide: async (
     input: AmcApprovalAction,
-  ): Promise<{ submission: AmcSubmission }> =>
-    executeRESTBackend<{ submission: AmcSubmission }>(
+  ): Promise<{ submission: AmcSubmission; outcome?: AmcApprovalOutcome }> =>
+    executeRESTBackend<{ submission: AmcSubmission; outcome?: AmcApprovalOutcome }>(
       "/api/amc-submissions/approval",
       { method: "POST", body: input as unknown as Record<string, unknown> },
     ),

@@ -456,6 +456,25 @@ Each phase lists its Jira subtasks (in the order I will do them), the work, the 
 **Migration:** `…_amc_approval_ladder_and_send_log.sql` (SAFE).
 **Done when:** demo story steps 4–6 work.
 
+**Status (7 Oct 2026):** done in code, migration `20261007150000` not applied (log row 18, checks §10; nullable columns on the live `amc_submissions`, so apply out of hours). 244 tests, typecheck, lint, harness (`97i`) and main-compatibility (28/11, unchanged) all pass.
+- **Submit = share.** The four triggers (discount, final value, plan outside the band, below floor) are checked. If none is crossed, the proposal is approved at once and ready to share. Otherwise it goes up the ladder: level 1 opens, and each approval opens the next level up to the highest one required. Approvers are the people named per level in AMC configuration; if nobody is named for a level, any AMC approver decides it. Nobody approves their own proposal.
+- **Decisions:** Approve, Return (with comment) and Reject (with reason) are logged with user and time; a reject or return cancels the levels above. Each open level gets a "Proposal approval" to-do and a notification. When it passes the configured hours it escalates one level up (level 3 to itself) through the to-do sweep.
+- **Re-triggering:** a new version is approved at once when it asks for no more than the previous version was approved for. It goes back to the ladder if the discount rises, the plan changes, a line goes below floor, or a higher level is needed.
+- **Sharing:**
+  - by email: Email 1 from the configured template, to one or more contacts, the coordinator in copy, PDF attached, renewal first line;
+  - by WhatsApp: the message is prepared with the link and a wa.me button per contact; residential defaults to WhatsApp, commercial to email;
+  - as a link only.
+  Each send is logged with channel, recipients, cc, version, user, time and outcome, and the proposal page has an Approvals & sends tab.
+- **Client answers:** the link gains "Request a change" with a note; rejection needs a reason, and the answer is stored. The coordinator can record an answer given outside the link, with mandatory evidence uploaded to the proposal's documents; the link then closes.
+- **Locking:** an approved proposal is locked (Revise is no longer offered once the client approves).
+- **Notifications:** pending approval (to the level's approvers), approved at a level, approved, returned or rejected (owner), validity expiring (owner, 3 days before, by sweep), and the client's answer, whether given on the link or recorded.
+- **Unmigrated databases:** before the migration, or for a proposal submitted before the ladder, the old single-approver flow still applies.
+- **Assumptions added:**
+  - the value threshold uses the annual fee before VAT;
+  - "level 1 + Finance" for a non-standard plan is level 1 only until Finance approvers are named;
+  - the validity reminder goes out 3 days before;
+  - rejecting at a level returns the proposal to the owner (as sent back), who can revise and resubmit.
+
 ### Phase 6: Contract and signature
 
 | Jira | Work | Size |

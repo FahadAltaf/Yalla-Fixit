@@ -86,7 +86,7 @@ async function findByToken(token: string) {
         .maybeSingle();
     const missing = (e: { code?: string } | null) => !!e && (e.code === "42703" || e.code === "PGRST204");
     /* The payment plan and property type (Phase 4) first, then without them, then without the contract copy. */
-    let { data, error } = await query(`${PUBLIC_SELECT}, contract_settings_snapshot, payment_plan, payment_plan_custom, property_type`);
+    let { data, error } = await query(`${PUBLIC_SELECT}, contract_settings_snapshot, payment_plan, payment_plan_custom, property_type, client_answer`);
     if (missing(error)) ({ data, error } = await query(`${PUBLIC_SELECT}, contract_settings_snapshot`));
     if (missing(error)) ({ data, error } = await query(PUBLIC_SELECT));
     if (error) throw new Error(error.message);
@@ -267,7 +267,7 @@ export async function POST(
               client_decision: "rejected",
               client_decided_at: now,
               client_decided_by_name: body.name,
-              client_rejected_reason: body.reason,
+              client_rejected_reason: body.action === "request_revision" ? `Revision requested: ${body.reason}` : body.reason,
             };
 
     const { data, error } = await admin
@@ -286,6 +286,20 @@ export async function POST(
       );
     }
 
+    /* Phase 5: which answer, from the link (best effort before 20261007150000). */
+    if (body.action !== "sign") {
+      const { error: answerError } = await admin
+        .from("amc_submissions")
+        .update({
+          client_answer: body.action === "approve" ? "approved" : body.action === "reject" ? "rejected" : "revision_requested",
+          client_answer_source: "link",
+          client_answer_recorded_by: null,
+          client_answer_evidence_id: null,
+        })
+        .eq("id", row.id);
+      if (answerError && answerError.code !== "42703" && answerError.code !== "PGRST204") console.error("AMC client answer not recorded:", answerError.message);
+    }
+
     /* FR5.9 — origin 'client', because there is no account behind this. */
     await recordAmcAudit(admin, {
       entityType: "submission",
@@ -295,11 +309,13 @@ export async function POST(
           ? "contract_signed"
           : body.action === "approve"
             ? "proposal_approved_by_client"
-            : "proposal_rejected_by_client",
+            : body.action === "request_revision"
+              ? "revision_requested_by_client"
+              : "proposal_rejected_by_client",
       actorId: null,
       actorLabel: body.name,
       origin: "client",
-      justification: body.action === "reject" ? body.reason : null,
+      justification: body.action === "reject" || body.action === "request_revision" ? body.reason : null,
       payload: { from: expected, to: update.status },
     });
 
@@ -329,7 +345,7 @@ export async function POST(
         facts: {
           signedByName: body.name,
           signedAt: body.action === "sign" ? now : null,
-          reason: body.action === "reject" ? body.reason : null,
+          reason: body.action === "reject" ? body.reason : body.action === "request_revision" ? `Revision requested: ${body.reason}` : null,
         },
       });
     });

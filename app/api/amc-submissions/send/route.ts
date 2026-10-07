@@ -6,6 +6,7 @@ import { notifyProposalEvent } from "@/lib/server/amc/notifications";
 import { readAmcSettings } from "@/lib/server/amc/settings";
 import { readAmcConfig } from "@/lib/server/amc/config";
 import { proposalValidUntil } from "@/lib/amc/proposal-rules";
+import { proposalShareTexts, recordSend, whatsappMessages } from "@/lib/server/amc/proposal-share";
 import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
 import { linkTokenExpiry, mintLinkToken } from "@/lib/server/link-token";
 import { sendEmail } from "@/lib/server/send-email";
@@ -44,6 +45,12 @@ import {
  * (placeholders, a bad attachment) and ones where the email then fails, so
  * a send that did not reach the client can still be traced.
  *
+ * Phase 5 (BRD 5.6, 6.1): a proposal is shared by email (Email 1 from the
+ * templates in AMC configuration, to one or more contacts, the owner in
+ * copy) or by WhatsApp (the message is prepared with the link for the
+ * owner to send from WhatsApp), and every send is logged with its channel,
+ * recipients, version, user and time.
+ *
  * The PDF attached to the email is still built in the browser. The server
  * checks it is a PDF of sane size and names it itself, but cannot prove
  * its pages match the approved data; generating it on the server belongs
@@ -53,7 +60,14 @@ import {
 const sendSchema = z.object({
   id: z.string().uuid(),
   document: z.enum(["proposal", "contract"]),
-  deliver: z.enum(["email", "link"]).default("email"),
+  deliver: z.enum(["email", "link", "whatsapp"]).default("email"),
+  /* Phase 5: the contacts it goes to (emails, or phone numbers for WhatsApp). */
+  recipients: z
+    .array(z.object({ name: z.string().trim().max(200).default(""), address: z.string().trim().min(3).max(200) }).strict())
+    .max(10)
+    .optional(),
+  /* Email 1 copies the coordinator (the proposal's owner). */
+  cc_owner: z.boolean().default(true),
   /* The address confirmed in the send dialog. Falls back to the
      customer email saved on the proposal. */
   to: z.string().trim().email().optional(),
@@ -179,6 +193,8 @@ export async function POST(req: NextRequest) {
     deliver,
     to: confirmedTo,
     pdf_base64: pdfBase64,
+    recipients: chosen,
+    cc_owner: ccOwner,
   } = parsed.data;
   const admin = await createAdminServerClient();
   const actorLabel = profile.full_name ?? profile.email ?? null;
@@ -437,11 +453,52 @@ export async function POST(req: NextRequest) {
       },
     });
 
+  /* Phase 4/5 fields, read apart so a database without them still sends. */
+  const { data: extra } = await admin
+    .from("amc_submissions")
+    .select("current_version, payment_plan, payment_plan_custom, renewal_of_contract_id, valid_until")
+    .eq("id", id)
+    .maybeSingle<Record<string, unknown>>();
+  const versionNo = Number(extra?.current_version ?? 1);
+  const shareRow = { ...(existing as Record<string, unknown>), ...(extra ?? {}) };
+  const ownerName = profile.full_name?.trim() || profile.email || "Yalla Fix It";
+  const ownerPhone = ((profile as { phone?: string | null }).phone ?? null) || null;
+  const texts =
+    document === "proposal"
+      ? await proposalShareTexts(admin, shareRow, {
+          settings: mergedSettings,
+          config: await readAmcConfig(admin),
+          link,
+          validUntil: (extra?.valid_until as string | null) ?? null,
+          versionNo,
+          owner: { name: ownerName, phone: ownerPhone },
+        }).catch((textError) => {
+          console.error("[amc:send] share texts not built:", textError instanceof Error ? textError.message : textError);
+          return null;
+        })
+      : null;
+  const log = (channel: "email" | "whatsapp" | "link", recipients: Array<{ name: string; address: string }>, outcome: Parameters<typeof recordSend>[1]["outcome"], extraLog: { cc?: string[]; detail?: string | null } = {}) =>
+    recordSend(admin, { submissionId: id, versionNo, document, channel, recipients, outcome, tokenHint: token.hint, sentBy: profile.id, ...extraLog });
+
+  /* WhatsApp: the message is prepared with the link; the owner sends it from WhatsApp (BRD 5.6). */
+  if (deliver === "whatsapp") {
+    const people = chosen ?? [];
+    const text = texts?.message ?? `Your Yalla Fix It AMC ${document} is ready: ${link}`;
+    const messages = whatsappMessages(people, text);
+    await log("whatsapp", people, "prepared");
+    await auditSent("whatsapp_prepared", { recipients: people.length });
+    return NextResponse.json({ submission: data, link, emailed: false, messages, message: text });
+  }
+
   let emailed = false;
   if (deliver === "email") {
-    const to = confirmedTo || customer.customerEmail?.trim();
-    if (!to) {
+    const fallback = confirmedTo || customer.customerEmail?.trim();
+    const people = chosen?.length ? chosen : fallback ? [{ name: customer.customerName ?? "", address: fallback }] : [];
+    const to = people.map((p) => p.address);
+    const cc = ccOwner && profile.email && !to.includes(profile.email) ? [profile.email] : [];
+    if (to.length === 0) {
       await auditSent("no_recipient", { emailed: false, to: null });
+      await log("email", [], "no_recipient");
       /*
         The status change and the token are already committed, so this is
         reported rather than rolled back: the link is valid and the team
@@ -461,42 +518,58 @@ export async function POST(req: NextRequest) {
     }
 
     try {
+      const blocks = texts ? texts.body.split(/\n{2,}/) : [];
       await sendEmail({
         to,
-        subject:
-          document === "proposal"
+        ...(cc.length ? { cc } : {}),
+        subject: texts
+          ? texts.subject
+          : document === "proposal"
             ? `Your AMC proposal ${existing.proposal_number ?? ""}`.trim()
             : `Your AMC contract ${existing.proposal_number ?? ""}`.trim(),
-        html: amcEmailHtml({
-          document,
-          customerName: customer.customerName ?? "",
-          proposalNumber: existing.proposal_number ?? "",
-          property:
-            (existing.property as { propertyAddress?: string } | null)
-              ?.propertyAddress ?? "",
-          finalPrice: Number(existing.final_price ?? 0),
-          link,
-          expiresAt,
-        }),
+        html: texts
+          ? /* Email 1, as AMC configuration words it (BRD 6.1). */
+            clientEmailHtml({
+              eyebrow: "AMC proposal",
+              heading: `Proposal ${existing.proposal_number ?? ""} V${versionNo}`.trim(),
+              greeting: escapeEmailHtml(blocks[0] ?? ""),
+              paragraphs: blocks.slice(1).map((b) => escapeEmailHtml(b).replace(/\n/g, "<br>")),
+              details: [],
+              cta: { label: "Review the proposal", url: link },
+              footnote: `This link is personal to you and works until ${new Date(expiresAt).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}. The proposal is also attached as a PDF.`,
+            })
+          : amcEmailHtml({
+              document,
+              customerName: customer.customerName ?? "",
+              proposalNumber: existing.proposal_number ?? "",
+              property:
+                (existing.property as { propertyAddress?: string } | null)
+                  ?.propertyAddress ?? "",
+              finalPrice: Number(existing.final_price ?? 0),
+              link,
+              expiresAt,
+            }),
         attachment: pdfBase64
           ? {
               /* Named here, never taken from the request. */
               filename: `${document === "proposal" ? "Proposal" : "Contract"}-${String(
                 existing.proposal_number ?? "AMC",
-              ).replace(/[^\w-]+/g, "_")}.pdf`,
+              ).replace(/[^\w-]+/g, "_")}${document === "proposal" ? `-V${versionNo}` : ""}.pdf`,
               content: pdfBase64,
               contentType: "application/pdf",
             }
           : undefined,
       });
       emailed = true;
+      await log("email", people, "sent", { cc });
     } catch (mailError) {
       console.error("AMC send email failed:", safeSummary(mailError));
       await auditSent("email_failed", {
         emailed: false,
-        to,
+        to: to.join(", "),
         error: safeSummary(mailError),
       });
+      await log("email", people, "failed", { cc, detail: safeSummary(mailError) });
       return NextResponse.json({
         submission: data,
         link,
@@ -505,14 +578,13 @@ export async function POST(req: NextRequest) {
           "The document was marked as sent and the link is valid, but the email could not be delivered. Copy the link and send it another way.",
       });
     }
+    /* FR5.9 — the raw token is never audited; the hint identifies the link
+       without being usable. */
+    await auditSent("emailed", { emailed, to: to.join(", "), cc: cc.join(", ") || null, recipients: to.length });
+    return NextResponse.json({ submission: data, link, emailed });
   }
 
-  /* FR5.9 — the raw token is never audited; the hint identifies the link
-     without being usable. */
-  await auditSent(deliver === "email" ? "emailed" : "link_created", {
-    emailed,
-    to: deliver === "email" ? confirmedTo || customer.customerEmail || null : null,
-  });
-
+  await auditSent("link_created", { emailed: false, to: null });
+  await log("link", chosen ?? [], "link_created");
   return NextResponse.json({ submission: data, link, emailed });
 }

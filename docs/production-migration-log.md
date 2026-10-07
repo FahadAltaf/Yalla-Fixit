@@ -25,5 +25,6 @@ Rules: one file at a time; pre-check first; never `supabase db push` on producti
 | 15 | 20261007120000 | amc_client_property_assets.sql (Phase 2) | | | | Post-check §7, open AMC Proposals | |
 | 16 | 20261007130000 | amc_enquiries_and_site_visits.sql (Phase 3) | | | | Post-check §8, open AMC Proposals | |
 | 17 | 20261007140000 | amc_rate_card_and_proposal_versions.sql (Phase 4, live table: out of hours) | | | | Post-check §9, open and save a proposal | |
+| 18 | 20261007150000 | amc_approval_ladder_and_send_log.sql (Phase 5, live table: out of hours) | | | | Post-check §10, open a proposal | |
 
 **Held until release (Group B, do not apply):** 20261005160000, 20261005170000, 20261005180000, 20261006160000.

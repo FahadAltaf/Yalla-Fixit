@@ -41,6 +41,8 @@ export interface PublicStatus {
   startDate: string | null;
   endDate: string | null;
   paymentTerms: string | null;
+  /** approved, rejected or revision_requested, once answered (Phase 5). */
+  answer: string | null;
   property: { propertyAddress?: string } | null;
   finalPrice: number;
   signedByName: string | null;
@@ -68,6 +70,7 @@ export function toPublicStatus(row: PublicRow, kind: LinkKind): PublicStatus {
         ? paymentPlanLabel(row.payment_plan as PaymentPlan, (row.payment_plan_custom as CustomPlan | null) ?? null)
         : str(customer.paymentTerms)
       : null,
+    answer: str(row.client_answer) ?? str(row.client_decision),
     property:
       open && property
         ? { propertyAddress: str(property.propertyAddress) ?? undefined }
@@ -182,6 +185,8 @@ const cleanReason = z
 export const decisionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("approve"), name: cleanName }).strict(),
   z.object({ action: z.literal("reject"), name: cleanName, reason: cleanReason }).strict(),
+  /* BRD 5.6: the third answer, with what should change. */
+  z.object({ action: z.literal("request_revision"), name: cleanName, reason: cleanReason }).strict(),
   z.object({ action: z.literal("sign"), name: cleanName }).strict(),
 ]);
 

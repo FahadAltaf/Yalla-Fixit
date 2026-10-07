@@ -51,6 +51,22 @@ async function authorise(
     const { data } = await gate.admin.from("amc_contracts").select("customer_id").eq("id", entityId).maybeSingle<{ customer_id: string | null }>();
     return { ok: true, customerId: data?.customer_id ?? null };
   }
+  if (level === "proposal") {
+    /* Phase 5: a proposal's documents (the client's decision evidence). Read as the proposal is read;
+       written by its owner, an approver, or AMC Operations (Edit). */
+    const { data } = await gate.admin
+      .from("amc_submissions")
+      .select("owner_id, status, customer_id")
+      .eq("id", entityId)
+      .maybeSingle<{ owner_id: string; status: string; customer_id: string | null }>();
+    const notFound = { ok: false as const, response: NextResponse.json({ error: "Proposal not found." }, { status: 404 }) };
+    if (!data) return notFound;
+    const isOwner = data.owner_id === gate.userId;
+    const canRead = isOwner || ((gate.canApprove || gate.actor.ops.view) && data.status !== "draft");
+    const canWrite = isOwner || gate.canApprove || gate.actor.ops.edit;
+    if (!(mode === "read" ? canRead : canWrite)) return notFound;
+    return { ok: true, customerId: data.customer_id };
+  }
   return { ok: false, response: NextResponse.json({ error: "Documents for this kind of record arrive in a later phase." }, { status: 400 }) };
 }
 

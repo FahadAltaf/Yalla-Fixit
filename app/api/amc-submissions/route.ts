@@ -28,6 +28,7 @@ import {
   type PaymentPlan,
 } from "@/lib/amc/proposal-rules";
 import { rateCardInForce } from "@/lib/server/amc/rate-card";
+import { viewerDecidesStep } from "@/lib/server/amc/approval-ladder";
 import { ActionType, ResourceType } from "@/types/types";
 import type {
   AmcDocumentType,
@@ -337,8 +338,13 @@ export async function GET(req: NextRequest) {
     const isOwn = row.owner_id === profile.id;
     /* DEV-368: approvers and AMC Operations (View) see the team's proposals. */
     const seesTeam = canApprove || hasResourceAction(gate.accessUser, ResourceType.AMC_OPERATIONS, ActionType.VIEW);
+    /* Phase 5: the approvers named for the open level decide it, so they see it too. */
+    const decidesStep =
+      row.status === "awaiting_approval"
+        ? await viewerDecidesStep(admin, row, profile.id, canApprove).catch(() => null)
+        : null;
     // Someone else's draft stays private, even to an approver.
-    if (!isOwn && (!seesTeam || row.status === "draft")) {
+    if (!isOwn && (!(seesTeam || decidesStep) || row.status === "draft")) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
@@ -375,10 +381,12 @@ export async function GET(req: NextRequest) {
       contract_id: contractId,
       /* One rule for the API and the buttons (lib/amc/workflow.ts),
          including whether a creator may approve their own proposal. */
-      viewer_can_approve: canDecideProposal({
-        canApprove,
-        isOwner: row.owner_id === profile.id,
-      }),
+      viewer_can_approve:
+        decidesStep ??
+        canDecideProposal({
+          canApprove,
+          isOwner: row.owner_id === profile.id,
+        }),
     });
   }
 

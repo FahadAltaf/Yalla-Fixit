@@ -26,8 +26,11 @@ export const VERSION_REASON_LABELS: Record<VersionReason, string> = {
   other: "Other",
 };
 
-/** Shared with the client, so an edit makes a new version rather than changing what they saw. */
-export const REVISABLE_STATUSES = ["proposal_sent", "proposal_rejected", "proposal_approved"] as const;
+/**
+ * Shared with the client, so an edit makes a new version rather than
+ * changing what they saw. A proposal the client approved is locked (BRD 5.6).
+ */
+export const REVISABLE_STATUSES = ["proposal_sent", "proposal_rejected"] as const;
 
 export function canRevise(status: string, isOwner: boolean): boolean {
   return isOwner && (REVISABLE_STATUSES as readonly string[]).includes(status);

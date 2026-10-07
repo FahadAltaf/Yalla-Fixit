@@ -10,6 +10,7 @@ import {
   Clock,
   Link as LinkIcon,
   Mail,
+  MessageCircle,
   EllipsisVerticalIcon,
   EyeIcon,
   FileText,
@@ -362,6 +363,12 @@ export function SubmissionsList() {
                     {submission.status === "proposal_sent"
                       ? "Email proposal again"
                       : "Email proposal to client"}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => actions.requestSend(submission, "proposal", "whatsapp")}
+                  >
+                    <MessageCircle className="size-4" />
+                    Share on WhatsApp
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     onClick={() => actions.requestSend(submission, "proposal", "link")}

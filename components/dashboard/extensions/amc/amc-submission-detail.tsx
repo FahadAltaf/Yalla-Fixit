@@ -100,6 +100,9 @@ export function AmcSubmissionDetail({ id }: { id: string }) {
         onView={actions.view}
         onApprove={actions.approve}
         onSendBack={actions.sendBack}
+        onReject={actions.reject}
+        onShare={actions.share}
+        onChanged={load}
         onDownload={actions.download}
         onSend={actions.requestSend}
       />

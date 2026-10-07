@@ -435,3 +435,42 @@ Expected:
 - both triggers listed.
 
 **Live check:** in the live portal, open AMC Proposals, open one proposal, and (as its owner) save one draft. All three work as before.
+
+## 10. Phase 5 migration: `20261007150000_amc_approval_ladder_and_send_log.sql`
+
+Apply after section 9, the same way. **It touches the live `amc_submissions` again**, so apply it out of hours:
+- it adds four **nullable** columns (the client's answer, how it was given, who recorded it, the evidence), with two foreign keys and two partial indexes. No defaults, no rewrite, no existing row changes;
+- live `main` keeps writing `client_decision` 'approved' / 'rejected' as before. The new `client_answer` only adds "revision requested" alongside it. The main-compatibility check is unchanged at 28/11 with this file applied;
+- two new server-only tables: the approval steps, and the send log (append-only).
+
+**Pre-check** (read-only):
+```sql
+select to_regclass('public.amc_approval_steps') as steps, to_regclass('public.amc_send_log') as send_log,
+       to_regclass('public.amc_submission_versions') as versions, to_regclass('public.amc_documents') as documents;
+select column_name from information_schema.columns
+ where table_schema = 'public' and table_name = 'amc_submissions'
+   and column_name in ('client_answer', 'client_answer_source', 'client_answer_recorded_by', 'client_answer_evidence_id');
+select count(*) as awaiting_approval from public.amc_submissions where status = 'awaiting_approval';
+```
+Expected:
+- `steps` and `send_log` are `null`;
+- `versions` and `documents` are present. If either is `null`, apply sections 7 and 9 first;
+- the columns query returns **no rows**;
+- note how many proposals are awaiting approval. They were submitted before the ladder, so they are decided the old way (any AMC approver).
+
+**Post-check** (read-only):
+```sql
+select c.relname, c.relrowsecurity as rls_on from pg_class c join pg_namespace n on n.oid = c.relnamespace
+ where n.nspname = 'public' and c.relname in ('amc_approval_steps', 'amc_send_log');
+select table_name, grantee from information_schema.role_table_grants
+ where table_schema = 'public' and table_name in ('amc_approval_steps', 'amc_send_log') and grantee in ('anon', 'authenticated');
+select count(*) filter (where client_answer is not null) as answers_set, count(*) as proposals from public.amc_submissions;
+select indexname from pg_indexes where indexname = 'idx_amc_approval_steps_one_pending';
+```
+Expected:
+- two tables, `rls_on = true`;
+- the grants query returns **no rows**;
+- `answers_set = 0`;
+- the one-open-level index is listed.
+
+**Live check:** in the live portal, open AMC Proposals, open one proposal, and approve one waiting proposal if there is one. All work as before.

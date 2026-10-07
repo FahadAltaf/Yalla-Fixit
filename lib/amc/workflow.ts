@@ -21,7 +21,7 @@
 
 export type AmcInternalAction = "submit" | "approve" | "send_back";
 export type AmcSendDocument = "proposal" | "contract";
-export type AmcClientAction = "approve" | "reject" | "sign";
+export type AmcClientAction = "approve" | "reject" | "request_revision" | "sign";
 
 /* ------------------------------------------------------------------ */
 /* Self-approval: the single switch                                    */
@@ -143,6 +143,7 @@ export function clientTransition(
   if (from !== expected) {
     return { ok: false, status: 409, error: "This document is no longer awaiting your answer." };
   }
+  /* A rejection and a revision request both return it to the owner (BRD 5.6); client_answer says which. */
   const to =
     action === "sign" ? "signed" : action === "approve" ? "proposal_approved" : "proposal_rejected";
   return { ok: true, to };

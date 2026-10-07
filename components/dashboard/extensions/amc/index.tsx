@@ -518,10 +518,10 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
     }
     if (
       !(await confirm({
-        title: "Submit for approval?",
+        title: "Submit this proposal?",
         description:
-          "The approver will review this proposal. You can't edit it while it's waiting, and nothing goes to the client until it's approved.",
-        confirmText: "Submit for approval",
+          "The approval rules are checked now (discount, value, payment plan, floor rates). Within them it is ready to share at once; otherwise it goes up the approval ladder, and nothing reaches the client until it is approved.",
+        confirmText: "Submit",
       }))
     ) {
       return;
@@ -537,7 +537,7 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
       const submissionId = form.getValues("submissionId");
       if (!submissionId) throw new Error("The draft hasn't been saved yet.");
 
-      await amcSubmissionsService.decide({
+      const { outcome } = await amcSubmissionsService.decide({
         action: "submit",
         id: submissionId,
       });
@@ -552,8 +552,15 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
         The proposal is locked now anyway (FR3.4), so the wizard starts
         fresh and the list shows it as Awaiting approval.
       */
+      /* Phase 5: what the approval rules decided. */
       toast.success(
-        "Sent for approval. Nothing goes to the client until the approver has reviewed it.",
+        outcome && "outcome" in outcome
+          ? outcome.outcome === "pending"
+            ? `Sent to ${outcome.levelName} for approval. Nothing goes to the client until it is approved.`
+            : outcome.outcome === "covered"
+              ? "Approved: this version asks for no more than the last one was approved for. Share it with the client now."
+              : "No approval needed. Share it with the client now."
+          : "Sent for approval. Nothing goes to the client until the approver has reviewed it.",
       );
       // Its own page: what was sent, and where it stands now. The button
       // stays busy until that page replaces this one.

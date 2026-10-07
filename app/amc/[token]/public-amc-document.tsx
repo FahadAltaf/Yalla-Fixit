@@ -20,7 +20,6 @@ import { StatusMessageCard } from "@/components/quotations/status-message-card";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
-  DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
@@ -59,13 +58,14 @@ type PublicStatus = {
   startDate: string | null;
   endDate: string | null;
   paymentTerms: string | null;
+  answer?: string | null;
   property: { propertyAddress?: string } | null;
   finalPrice: number;
   signedByName: string | null;
   signedAt: string | null;
 };
 
-type Action = "approve" | "reject" | "sign";
+type Action = "approve" | "reject" | "revision" | "sign";
 
 export function PublicAmcDocument({ token }: { token: string }) {
   const [doc, setDoc] = useState<PublicStatus | null>(null);
@@ -124,7 +124,7 @@ export function PublicAmcDocument({ token }: { token: string }) {
 
   async function submit(next: Action) {
     if (busy) return;
-    if (next === "reject" && !reason.trim()) return;
+    if ((next === "reject" || next === "revision") && !reason.trim()) return;
     setBusy(true);
     setDialogError(null);
     try {
@@ -132,9 +132,9 @@ export function PublicAmcDocument({ token }: { token: string }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          action: next,
+          action: next === "revision" ? "request_revision" : next,
           name: name.trim(),
-          ...(next === "reject" ? { reason: reason.trim() } : {}),
+          ...(next === "reject" || next === "revision" ? { reason: reason.trim() } : {}),
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -197,10 +197,15 @@ export function PublicAmcDocument({ token }: { token: string }) {
   }
   if (doc.kind === "proposal" && doc.status !== "proposal_sent") {
     if (doc.status === "proposal_rejected") {
+      const declined = doc.answer === "rejected";
       return (
         <StatusMessageCard
-          title="Changes requested"
-          description="Thank you. We have passed your comments to the team and will send you a revised proposal."
+          title={declined ? "Proposal declined" : "Changes requested"}
+          description={
+            declined
+              ? "Thank you. We have recorded your answer and passed your reason to the team."
+              : "Thank you. We have passed your comments to the team and will send you a revised proposal."
+          }
           icon={<MessageSquareWarning size={32} className="text-amber-600" />}
           iconBg="bg-amber-50"
         />
@@ -251,6 +256,14 @@ export function PublicAmcDocument({ token }: { token: string }) {
             onClick={() => start("reject")}
           >
             <MessageSquareWarning className="size-4" /> Reject
+          </Button>
+          <Button
+            className="flex-1 sm:flex-none"
+            variant="outline"
+            disabled={busy}
+            onClick={() => start("revision")}
+          >
+            <MessageSquareWarning className="size-4" /> Request a change
           </Button>
           <Button className="flex-1 sm:flex-none" disabled={busy} onClick={() => start("approve")}>
             <CheckCircle2 className="size-4" /> Approve proposal
@@ -305,7 +318,9 @@ export function PublicAmcDocument({ token }: { token: string }) {
                     ? "This signs the contract and confirms you accept all of its terms. It is final."
                     : action === "approve"
                       ? "This confirms you accept the proposal. We will then prepare your contract for signature."
-                      : "Tell us why, and we will revise it and send it to you again."}
+                      : action === "revision"
+                        ? "Tell us what to change, and we will send you a revised proposal."
+                        : "Tell us why you are declining it."}
               </DialogDescription>
             </DialogHeader>
 
@@ -327,10 +342,10 @@ export function PublicAmcDocument({ token }: { token: string }) {
                   placeholder="e.g. Sarah Ahmed"
                 />
               </div>
-            ) : action === "reject" ? (
+            ) : action === "reject" || action === "revision" ? (
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="amc-client-reason">
-                  Why are you rejecting it? <span className="text-destructive">*</span>
+                  {action === "revision" ? "What should change?" : "Why are you rejecting it?"} <span className="text-destructive">*</span>
                 </Label>
                 <Textarea
                   id="amc-client-reason"
@@ -338,7 +353,7 @@ export function PublicAmcDocument({ token }: { token: string }) {
                   autoFocus
                   rows={3}
                   onChange={(event) => setReason(event.target.value)}
-                  placeholder="Please tell us what is wrong so we can revise it"
+                  placeholder={action === "revision" ? "e.g. Add 2 more AC units, quarterly payments" : "Please tell us why"}
                 />
               </div>
             ) : (
@@ -369,14 +384,14 @@ export function PublicAmcDocument({ token }: { token: string }) {
                   <Button variant="outline" disabled={busy} onClick={() => setStep("name")}>
                     Back
                   </Button>
-                  {action === "reject" ? (
+                  {action === "reject" || action === "revision" ? (
                     <Button
-                      variant="destructive"
+                      variant={action === "reject" ? "destructive" : "default"}
                       disabled={busy || !reason.trim()}
-                      onClick={() => void submit("reject")}
+                      onClick={() => void submit(action)}
                     >
                       {busy ? <Loader2 className="size-4 animate-spin" /> : null}
-                      {busy ? "Rejecting…" : "Reject proposal"}
+                      {busy ? "Sending…" : action === "reject" ? "Reject proposal" : "Request the change"}
                     </Button>
                   ) : (
                     <Button disabled={busy} onClick={() => action && void submit(action)}>

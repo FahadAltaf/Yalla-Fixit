@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AmcConfig } from "@/lib/amc/config";
 import { readAmcConfig } from "@/lib/server/amc/config";
 import { runEnquiryFollowUpSweep, runEnquiryIdleSweep } from "@/lib/server/amc/enquiries";
+import { runProposalValiditySweep } from "@/lib/server/amc/proposal-share";
 import { runExpiryReminderSweep } from "@/lib/server/amc/reminders";
 import { escalateDueAmcTodos } from "@/lib/server/amc/todos";
 
@@ -47,6 +48,11 @@ export const AMC_JOBS: AmcJob[] = [
     key: "enquiry_idle",
     label: "Flag idle enquiries; escalate to management after the escalation days",
     run: async ({ admin, config, now }) => ({ ...(await runEnquiryIdleSweep(admin, config, now)) }),
+  },
+  {
+    key: "proposal_validity",
+    label: "Tell owners when a proposal with the client is about to lapse",
+    run: async ({ admin, now }) => ({ ...(await runProposalValiditySweep(admin, now)) }),
   },
   {
     key: "expiry_reminders",

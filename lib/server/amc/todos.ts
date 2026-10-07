@@ -159,10 +159,13 @@ export async function closeAmcTodos(
  * (after 15 idle days) and by default; later phases give each kind its own
  * rule (the next approval level, the supervisor for an SLA at risk).
  */
-export function escalationRecipients(kind: AmcTodoKind, config: AmcConfig, level: number): string[] {
+export function escalationRecipients(kind: AmcTodoKind, config: AmcConfig, level: number, dedupeKey?: string | null): string[] {
   switch (kind) {
-    case "proposal_approval":
-      return approversForLevel(config, Math.min(level + 1, 3));
+    case "proposal_approval": {
+      /* The approval level is in the key (…:l<level>, Phase 5): escalate one level up, level 3 to itself. */
+      const approvalLevel = Number(/:l([1-3])$/.exec(dedupeKey ?? "")?.[1] ?? 0);
+      return approversForLevel(config, Math.min((approvalLevel || level) + 1, 3));
+    }
     default:
       return approversForLevel(config, 2);
   }
@@ -178,7 +181,7 @@ export async function escalateDueAmcTodos(admin: Admin, config: AmcConfig, now =
   const result: EscalationRunResult = { checked: 0, escalated: 0 };
   const { data, error } = await admin
     .from("amc_todos")
-    .select("id, kind, entity_type, entity_id, todo_id, escalation_level")
+    .select("id, kind, entity_type, entity_id, todo_id, escalation_level, dedupe_key")
     .is("closed_at", null)
     .is("escalated_at", null)
     .lte("escalate_at", now.toISOString())
@@ -192,6 +195,7 @@ export async function escalateDueAmcTodos(admin: Admin, config: AmcConfig, now =
     entity_id: string;
     todo_id: string | null;
     escalation_level: number;
+    dedupe_key: string | null;
   }>;
   result.checked = rows.length;
 
@@ -205,7 +209,7 @@ export async function escalateDueAmcTodos(admin: Admin, config: AmcConfig, now =
       .select("id");
     if (!claimed || claimed.length === 0) continue;
 
-    const recipients = escalationRecipients(row.kind, config, row.escalation_level + 1);
+    const recipients = escalationRecipients(row.kind, config, row.escalation_level + 1, row.dedupe_key);
     if (row.todo_id && recipients.length > 0) {
       await admin
         .from("todo_assignees")
