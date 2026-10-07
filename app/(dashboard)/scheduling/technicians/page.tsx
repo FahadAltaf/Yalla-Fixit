@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { listTechnicians } from "@/modules/scheduling";
+import { listTechniciansForViewer } from "@/lib/server/scheduling-technicians";
 import { refreshTechniciansIfStale } from "@/lib/server/zoho/service-resources";
 import SchedulingDashboard from "@/components/dashboard/scheduling";
 
@@ -28,7 +28,7 @@ export default async function TechniciansPage() {
   // Replaces the every-30-minutes pg_cron refresh: pull the roster from Zoho
   // FSM only when the cache has aged past 6h and someone is actually looking.
   await refreshTechniciansIfStale();
-  const technicians = await listTechnicians();
+  const technicians = await listTechniciansForViewer();
 
   return <SchedulingDashboard technicians={technicians} />;
 }
