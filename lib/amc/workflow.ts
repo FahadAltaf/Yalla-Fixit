@@ -23,15 +23,12 @@ export type AmcClientAction = "approve" | "reject" | "sign";
 /* ------------------------------------------------------------------ */
 
 /**
- * BUSINESS DECISION REQUIRED: "Can a proposal creator approve their own
- * AMC proposal?"
- *
- * Production allows it today (three proposals were approved by their own
- * author by 5 Oct 2026), so this stays `true` until the decision is made.
- * Setting it to `false` blocks it in the approval API and hides Approve /
- * Send back on the creator's own proposals, with no other change needed.
+ * Decided by BRD v0.3 (5.5, 6.7): nobody approves their own proposal.
+ * The approval API refuses the creator, and Approve / Send back are hidden
+ * on the creator's own proposals. (Production allowed it until Oct 2026;
+ * three proposals were approved by their own author by 5 Oct 2026.)
  */
-export const AMC_SELF_APPROVAL_ALLOWED = true;
+export const AMC_SELF_APPROVAL_ALLOWED = false;
 
 /** Whether this viewer may approve or send back this proposal. */
 export function canDecideProposal({

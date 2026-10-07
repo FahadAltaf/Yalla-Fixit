@@ -1,4 +1,6 @@
 import { Resend } from "resend";
+
+import { applyEmailRedirect } from "@/lib/server/email-redirect";
 import type { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 
 type Admin = Awaited<ReturnType<typeof createAdminServerClient>>;
@@ -60,11 +62,16 @@ export async function notifyApproversOfSubmission(
       </div>`;
 
     const resend = new Resend(apiKey);
-    await resend.emails.send({
-      from,
+    const envelope = applyEmailRedirect({
       to: recipients.map((r) => r.email),
       subject: `Schedule approval needed — ${opts.date}`,
       html,
+    });
+    await resend.emails.send({
+      from,
+      to: envelope.to,
+      subject: envelope.subject,
+      html: envelope.html,
     } as Parameters<typeof resend.emails.send>[0]);
 
     return { sent: recipients.length };

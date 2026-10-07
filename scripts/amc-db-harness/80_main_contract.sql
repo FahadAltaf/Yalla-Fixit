@@ -113,9 +113,16 @@ SELECT pg_temp.chk('amc.audit_settings_history', $q$
   SELECT id, actor_label, payload, created_at FROM public.amc_audit_events
    WHERE entity_type = 'settings' ORDER BY created_at DESC LIMIT 20
 $q$);
+-- The audit trail is never rewritten: main's rules silently ignore an UPDATE;
+-- from 20261007100000 a trigger refuses it with an error. Either passes.
+-- (Main itself never updates or deletes audit rows.)
 SELECT pg_temp.chk('amc.audit_append_only', $q$
   DO $d$ BEGIN
-    UPDATE public.amc_audit_events SET actor_label = 'x' WHERE entity_type = 'settings';
+    BEGIN
+      UPDATE public.amc_audit_events SET actor_label = 'x' WHERE entity_type = 'settings';
+    EXCEPTION WHEN raise_exception THEN
+      IF SQLERRM NOT LIKE 'amc_audit_events is append-only%' THEN RAISE; END IF;
+    END;
     IF EXISTS (SELECT 1 FROM public.amc_audit_events WHERE actor_label = 'x') THEN RAISE EXCEPTION 'audit rewritten'; END IF;
   END $d$
 $q$);

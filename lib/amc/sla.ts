@@ -5,7 +5,9 @@
  *
  * The AMC customer requirements give two targets:
  *   emergency call-out:      attendance within 120 minutes of the request
- *   non-emergency call-out:  scheduled within 6 hours of the request
+ *   non-emergency call-out:  scheduled within 48 hours of the request
+ *                            (BRD v0.3 5.13 and the contract; the old brochure
+ *                            said 6 hours)
  *
  * The portal does not record request, scheduling or arrival times for FSM
  * work today (schedule_entries keeps FSM's raw status, not timestamps), so
@@ -39,8 +41,8 @@ export const AMC_SLA_DEFAULTS: Record<CallOutClass, SlaDefinition> = {
   non_emergency: {
     callOutClass: "non_emergency",
     metric: "scheduling",
-    targetMinutes: 360,
-    label: "Non-emergency scheduling within 6 hours",
+    targetMinutes: 48 * 60,
+    label: "Non-emergency scheduling within 48 hours",
   },
 };
 

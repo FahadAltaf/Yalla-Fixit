@@ -346,7 +346,7 @@ const PROVIDER_TEXT_FIELDS: {
     { key: "address", label: "Company address", wide: true },
     { key: "standardResponseTime", label: "Standard response time", hint: "Printed in the proposal's commercial offer." },
     { key: "emergencyResponseTime", label: "Emergency response time", hint: "Printed in the proposal's commercial offer." },
-    { key: "proposalValidity", label: "Proposal validity", hint: "Printed in the proposal details." },
+    { key: "proposalValidity", label: "Proposal validity", hint: "Kept for reference. Not printed on proposals yet; each proposal gets its own validity date in a later update." },
   ];
 
 type View = "values" | "clauses" | "scopes" | "approvers" | "history";

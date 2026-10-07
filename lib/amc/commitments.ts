@@ -7,11 +7,10 @@
  * not receive FSM request or arrival times, so compliance is UNKNOWN until
  * it does (lib/amc/sla.ts).
  *
- * BUSINESS DECISION REQUIRED (recorded in the master status report): the
- * brochure says non-emergency visits are scheduled within 6 hours, while
- * the contract wording and the proposal's "standard response time" say 48
- * hours. This module reports what the signed wording says; it does not
- * pick between them.
+ * BRD v0.3 (5.13) settles it at 48 hours, as the contract says; the old
+ * brochure said non-emergency visits are scheduled within 6 hours. A
+ * signed contract still shows the wording it was signed with: this module
+ * reports what the signed wording says and never rewrites it.
  */
 
 export interface SignedCommitments {

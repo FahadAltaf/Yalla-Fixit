@@ -464,7 +464,6 @@ export function AssessmentDetail({ id }: { id: string }) {
             <Field label="Bedrooms" type="number" editable={editable} value={draft.bedrooms?.toString() ?? ""} onChange={(v) => setDraft({ ...draft, bedrooms: v === "" ? null : Number(v) })} />
             <Field label="Size (sq ft)" type="number" editable={editable} value={draft.sizeSqft?.toString() ?? ""} onChange={(v) => setDraft({ ...draft, sizeSqft: v === "" ? null : Number(v) })} />
           </div>
-          <p className="text-muted-foreground text-xs">Photos and attachments are not stored yet: the portal&apos;s current upload bucket is public, so it is not used for customer properties.</p>
         </SectionCard>
 
         <SectionCard

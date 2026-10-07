@@ -271,13 +271,16 @@ test("renewal reminders: configurable default thresholds, switched off", () => {
 
 test("SLA: emergency attendance and non-emergency scheduling", () => {
   assert.equal(AMC_SLA_DEFAULTS.emergency.targetMinutes, 120);
-  assert.equal(AMC_SLA_DEFAULTS.non_emergency.targetMinutes, 360);
+  assert.equal(AMC_SLA_DEFAULTS.non_emergency.targetMinutes, 48 * 60); // BRD v0.3 5.13
   const req = "2026-10-05T08:00:00Z";
   assert.equal(evaluateSla("emergency", { requestedAt: req, arrivedAt: "2026-10-05T09:30:00Z" }).state, "met");
   const late = evaluateSla("emergency", { requestedAt: req, arrivedAt: "2026-10-05T10:30:00Z" });
   assert.equal(late.state, "breached");
   assert.equal(late.minutesFromTarget, 30);
   assert.equal(evaluateSla("non_emergency", { requestedAt: req, scheduledAt: "2026-10-05T13:00:00Z" }).state, "met");
+  // 30 hours is inside the 48-hour target (it breached the old 6 h); 49 hours is not.
+  assert.equal(evaluateSla("non_emergency", { requestedAt: req, scheduledAt: "2026-10-06T14:00:00Z" }).state, "met");
+  assert.equal(evaluateSla("non_emergency", { requestedAt: req, scheduledAt: "2026-10-07T09:00:00Z" }).state, "breached");
   assert.equal(
     evaluateSla("emergency", { requestedAt: req }, { now: new Date("2026-10-05T09:00:00Z") }).state,
     "pending",

@@ -45,27 +45,17 @@ test("approve / send back: approvers only, only while awaiting approval", () => 
   }
 });
 
-test("self-approval follows the single switch", () => {
-  // Today's production behaviour, pending the business decision.
-  assert.equal(AMC_SELF_APPROVAL_ALLOWED, true);
-  assert.equal(canDecideProposal({ canApprove: true, isOwner: true }), true);
-  assert.equal(
-    checkInternalTransition({ action: "approve", from: "awaiting_approval", isOwner: true, canApprove: true }).ok,
-    true,
-  );
+test("nobody approves their own proposal (BRD v0.3 5.5, 6.7)", () => {
+  assert.equal(AMC_SELF_APPROVAL_ALLOWED, false);
+  assert.equal(canDecideProposal({ canApprove: true, isOwner: true }), false);
+  assert.equal(canDecideProposal({ canApprove: true, isOwner: false }), true);
+  const own = checkInternalTransition({ action: "approve", from: "awaiting_approval", isOwner: true, canApprove: true });
+  assert.equal(own.ok ? null : own.status, 403);
 
-  // Switched off: the creator is refused, another approver is not.
+  // The explicit switch agrees; an approver without the right is refused too.
   const off = { selfApprovalAllowed: false };
   assert.equal(canDecideProposal({ canApprove: true, isOwner: true, ...off }), false);
   assert.equal(canDecideProposal({ canApprove: true, isOwner: false, ...off }), true);
-  const own = checkInternalTransition({
-    action: "approve",
-    from: "awaiting_approval",
-    isOwner: true,
-    canApprove: true,
-    ...off,
-  });
-  assert.equal(own.ok ? null : own.status, 403);
   assert.equal(canDecideProposal({ canApprove: false, isOwner: false }), false);
 });
 
