@@ -57,9 +57,11 @@ BEGIN
     RAISE EXCEPTION 'notification without recipient accepted';
   EXCEPTION WHEN check_violation THEN NULL;
   END;
+  /* Event names are validated in code since 20261007110000; the table
+     refuses only a malformed name. */
   BEGIN
-    INSERT INTO public.amc_notifications (event, recipient_email, channel, dedupe_key, title, body) VALUES ('made_up', 'x@y.z', 'email', 'k3', 't', 'b');
-    RAISE EXCEPTION 'unknown event accepted';
+    INSERT INTO public.amc_notifications (event, recipient_email, channel, dedupe_key, title, body) VALUES ('Made Up!', 'x@y.z', 'email', 'k3', 't', 'b');
+    RAISE EXCEPTION 'malformed event accepted';
   EXCEPTION WHEN check_violation THEN NULL;
   END;
 END $$;

@@ -21,5 +21,6 @@ Rules: one file at a time; pre-check first; never `supabase db push` on producti
 | 11 | 20261006162000 | amc_history_survives_user_deletion.sql | | | | | |
 | 12 | 20261006163000 | shared_tables_server_only.sql | | | | Live check B | |
 | 13 | 20261007100000 | amc_audit_events_guard.sql (Phase 0) | | | | Post-check §5 | |
+| 14 | 20261007110000 | amc_platform_foundation.sql (Phase 1) | | | | Post-check §6, open Todos | |
 
 **Held until release (Group B, do not apply):** 20261005160000, 20261005170000, 20261005180000, 20261006160000.

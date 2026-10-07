@@ -328,6 +328,23 @@ export function canUseAmc(user: Parameters<typeof hasResourceAction>[0]): boolea
     hasResourceAction(user, ResourceType.AMC, ActionType.APPROVE) ||
     /* AMC operations staff reach the contract screens too. */
     hasResourceAction(user, ResourceType.AMC_OPERATIONS, ActionType.VIEW) ||
-    hasResourceAction(user, ResourceType.AMC_OPERATIONS, ActionType.EDIT)
+    hasResourceAction(user, ResourceType.AMC_OPERATIONS, ActionType.EDIT) ||
+    /* BRD v0.3 6.7: any of the AMC role permissions opens the module. */
+    AMC_MODULE_RESOURCES.some((resource) => hasResourceAction(user, resource, ActionType.VIEW))
   );
+}
+
+/** The AMC permission areas added for BRD v0.3 (Phase 1). */
+export const AMC_MODULE_RESOURCES = [
+  ResourceType.AMC_ENQUIRIES,
+  ResourceType.AMC_RATE_CARD,
+  ResourceType.AMC_CONFIG,
+  ResourceType.AMC_PAYMENTS,
+  ResourceType.AMC_VISITS,
+  ResourceType.AMC_ALLOWANCES,
+] as const;
+
+/** Who may open AMC configuration (DEV-419): admins and AMC Configuration View. */
+export function canViewAmcConfig(user: Parameters<typeof hasResourceAction>[0]): boolean {
+  return hasResourceAction(user, ResourceType.AMC_CONFIG, ActionType.VIEW);
 }

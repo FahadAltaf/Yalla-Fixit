@@ -18,7 +18,7 @@ import {
   UserCog,
 } from "lucide-react";
 
-import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
+import { canUseAmc, canViewAmcConfig } from "@/components/dashboard/extensions/amc/amc-constants";
 
 // hasViewPermission and filter functions unchanged
 const hasViewPermission = (
@@ -127,6 +127,13 @@ export const baseSectionsItems: MenuItem[] = [
         title: "AMC contracts",
         url: "/extensions/amc-contracts",
         canSee: canUseAmc,
+      },
+      {
+        /* BRD v0.3 configuration (DEV-419). Also under Settings for admins;
+           here for managers and department heads who are not admins. */
+        title: "AMC configuration",
+        url: "/settings/amc/configuration",
+        canSee: canViewAmcConfig,
       },
     ],
   },
@@ -258,6 +265,7 @@ export const getNavData = (user: User) => {
           said the same word twice.
         */
         { title: "AMC", url: "/settings/amc", canSee: canUseAmc },
+        { title: "AMC configuration", url: "/settings/amc/configuration", canSee: canViewAmcConfig },
         /*
           The rate card and the quotation wording, which used to sit under
           Snagging beside the work they price. They configure the module

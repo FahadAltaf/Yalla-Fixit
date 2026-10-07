@@ -343,6 +343,17 @@ Each phase lists its Jira subtasks (in the order I will do them), the work, the 
 
 ### Phase 1: Foundation: configuration, roles, platform services
 
+**Status (7 Oct 2026): done in code.**
+- **Built:**
+  - configuration (13 sections) with history, and a screen at Settings → AMC configuration;
+  - six new permission areas and six AMC role templates (one-click, admin);
+  - corrections limited to an authorised role;
+  - status-history helper, AMC to-dos with escalation, and the generic notify;
+  - home notifications panel and the `/notifications` inbox;
+  - templates for the 4 emails and 8 messages, with WhatsApp links;
+  - the scheduled-job runner `/api/amc-jobs/run` with Run now.
+- **Migration:** `20261007110000_amc_platform_foundation.sql` (live-safe; checks §6 of the check sheet).
+
 | Jira | Work | Size |
 |---|---|---|
 | DEV-357 | `amc_config` with validated keys for every §5 value; every change audited (who, when, old, new) | M |

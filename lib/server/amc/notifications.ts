@@ -317,7 +317,8 @@ export async function notifyProposalEvent(
 
 export interface InAppNotification {
   id: string;
-  event: AmcNotificationEvent;
+  /* A workflow event (lib/amc/notifications.ts) or a later-phase event name. */
+  event: AmcNotificationEvent | (string & {});
   title: string;
   body: string;
   link: string | null;
@@ -329,15 +330,17 @@ export async function listMyNotifications(
   admin: Admin,
   userId: string,
   limit = 30,
+  options: { offset?: number; unreadOnly?: boolean } = {},
 ): Promise<{ notifications: InAppNotification[]; unread: number; migrated: boolean }> {
+  const offset = Math.max(0, options.offset ?? 0);
+  let listQuery = admin
+    .from(TABLE)
+    .select("id, event, title, body, link, created_at, read_at")
+    .eq("recipient_user_id", userId)
+    .eq("channel", "in_app");
+  if (options.unreadOnly) listQuery = listQuery.is("read_at", null);
   const [list, count] = await Promise.all([
-    admin
-      .from(TABLE)
-      .select("id, event, title, body, link, created_at, read_at")
-      .eq("recipient_user_id", userId)
-      .eq("channel", "in_app")
-      .order("created_at", { ascending: false })
-      .limit(limit),
+    listQuery.order("created_at", { ascending: false }).range(offset, offset + limit - 1),
     admin
       .from(TABLE)
       .select("id", { count: "exact", head: true })
@@ -375,6 +378,65 @@ export async function markNotificationsRead(admin: Admin, userId: string, ids: s
   if (ids !== "all") q = q.in("id", ids.slice(0, 200));
   const { error } = await q;
   if (error && !missing(error)) throw new Error(error.message);
+}
+
+/* ------------------------------------------------------------------ */
+/* Named users, any AMC record (Phase 1 base for BRD 6.2)              */
+/* ------------------------------------------------------------------ */
+
+export interface NotifyUsersInput {
+  /** lowercase_with_underscores (the table checks the pattern). */
+  event: string;
+  userIds: string[];
+  title: string;
+  body: string;
+  /** A portal path; never a client token link. */
+  link?: string | null;
+  entityType?: string | null;
+  entityId?: string | null;
+  contractId?: string | null;
+  submissionId?: string | null;
+  /** Same key + recipient = same notification (retries write nothing). */
+  dedupeKey: string;
+}
+
+/**
+ * In-app notifications for named users about any AMC record: to-do
+ * escalations, enquiries, visits, call outs, payments. BRD 6.2 asks for
+ * portal notifications, none as SMS; emails stay limited to the BRD
+ * emails. Best effort: never throws.
+ */
+export async function notifyUsers(admin: Admin, input: NotifyUsersInput): Promise<number> {
+  const userIds = [...new Set(input.userIds.filter(Boolean))];
+  if (userIds.length === 0) return 0;
+  try {
+    const rows = userIds.map((userId) => ({
+      event: input.event,
+      recipient_user_id: userId,
+      channel: "in_app",
+      status: "delivered",
+      dedupe_key: input.dedupeKey.slice(0, 300),
+      title: input.title.slice(0, 300),
+      body: input.body.slice(0, 2000),
+      link: input.link ?? null,
+      entity_type: input.entityType ?? null,
+      entity_id: input.entityId ?? null,
+      contract_id: input.contractId ?? null,
+      submission_id: input.submissionId ?? null,
+    }));
+    const { data, error } = await admin
+      .from(TABLE)
+      .upsert(rows, { onConflict: "dedupe_key,channel,recipient_key", ignoreDuplicates: true })
+      .select("id");
+    if (error) {
+      if (!missing(error)) console.error(`AMC notification ${input.event} not recorded:`, error.message);
+      return 0;
+    }
+    return (data ?? []).length;
+  } catch (error) {
+    console.error(`AMC notification ${input.event} failed:`, error instanceof Error ? error.message : error);
+    return 0;
+  }
 }
 
 /* ------------------------------------------------------------------ */

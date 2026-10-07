@@ -12,7 +12,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  */
 
 export type AmcAuditEntry = {
-  entityType: "submission" | "settings" | "contract" | "assessment" | "customer" | "quote";
+  /* Any AMC record type (lowercase, underscores): the database checks the
+     name pattern since 20261007110000, so new records need no migration. */
+  entityType:
+    | "submission" | "settings" | "contract" | "assessment" | "customer" | "quote" | "config"
+    | (string & {});
   entityId?: string | null;
   eventType: string;
   actorId?: string | null;

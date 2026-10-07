@@ -63,6 +63,7 @@ export async function requireContractAccess(): Promise<ContractGate> {
     userId: access.profile.id,
     canApprove,
     ops: { view: has(ActionType.VIEW), create: has(ActionType.CREATE), edit: has(ActionType.EDIT), approve: has(ActionType.APPROVE) },
+    allowanceOverride: hasResourceAction(access.accessUser, ResourceType.AMC_ALLOWANCES, ActionType.APPROVE),
   };
   return {
     ok: true,

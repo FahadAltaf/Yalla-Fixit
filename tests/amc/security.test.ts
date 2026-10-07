@@ -81,8 +81,10 @@ test("usage: recording and correcting are different privileges", () => {
   assert.equal(canCorrectUsage(opsEditor, "u-owner"), false, "Edit alone does not correct");
   assert.equal(canCorrectUsage(stranger, "u-owner"), false);
   assert.equal(canCorrectUsage(approver, "u-owner"), true);
-  assert.equal(canCorrectUsage(owner, "u-owner"), true, "owner corrections kept until the business decides");
-  assert.equal(canCorrectUsage(owner, "u-owner", true), false, "the approver-only switch takes them away");
+  // BRD v0.3 6.7: only an authorised role reverses an allowance movement.
+  assert.equal(canCorrectUsage(owner, "u-owner"), false, "the owner no longer corrects");
+  assert.equal(canCorrectUsage(owner, "u-owner", false), true, "only if the switch were turned back off");
+  assert.equal(canCorrectUsage({ ...stranger, allowanceOverride: true }, "u-owner"), true, "AMC Allowances (Approve) may");
 });
 
 test("cancellation: approvers only", () => {

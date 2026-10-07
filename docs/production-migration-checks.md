@@ -256,3 +256,42 @@ Expected:
 - the foreign key without `ON DELETE SET NULL` (it shows no ON DELETE clause, meaning NO ACTION).
 
 No live check needed. Rollback SQL is at the end of the file.
+
+## 6. Phase 1 migration: `20261007110000_amc_platform_foundation.sql`
+
+Apply after section 5, the same way. It is **live-safe**:
+- three new tables (configuration, AMC to-do links, job runs) that live `main` never reads;
+- the audit-type check becomes a name pattern, which still accepts what `main` writes;
+- the AMC notification event check becomes a name pattern;
+- the to-do link-type check also allows `amc_…` types, which live `main` shows as plain text.
+
+**Pre-check** (read-only):
+```sql
+select to_regclass('public.amc_config') as amc_config, to_regclass('public.amc_todos') as amc_todos,
+       to_regclass('public.amc_job_runs') as amc_job_runs, to_regclass('public.amc_notifications') as amc_notifications;
+select conname, pg_get_constraintdef(oid) from pg_constraint
+ where conrelid in ('public.amc_audit_events'::regclass, 'public.todos'::regclass) and contype = 'c';
+```
+Expected:
+- the first three are `null` (not there yet);
+- `amc_notifications` is present (from Group A, file 9);
+- the audit CHECK lists entity types;
+- the todos CHECK lists `'work_order', 'quotation', 'appointment', 'amc_contract'`.
+
+**Post-check** (read-only):
+```sql
+select c.relname, c.relrowsecurity as rls_on from pg_class c join pg_namespace n on n.oid = c.relnamespace
+ where n.nspname = 'public' and c.relname in ('amc_config', 'amc_todos', 'amc_job_runs');
+select table_name, grantee from information_schema.role_table_grants
+ where table_schema = 'public' and table_name in ('amc_config', 'amc_todos', 'amc_job_runs')
+   and grantee in ('anon', 'authenticated');
+select conname, pg_get_constraintdef(oid) from pg_constraint
+ where conname in ('amc_audit_events_entity_type_check', 'amc_notifications_event_name', 'todos_related_type_check');
+```
+Expected:
+- three tables, `rls_on = true`;
+- the grants query returns **no rows**;
+- the audit and notification checks use `~` (a name pattern);
+- the todos check still lists the four live values and adds `~ '^amc_…'`.
+
+**Live check:** open Todos in the live portal; existing to-dos show as before.

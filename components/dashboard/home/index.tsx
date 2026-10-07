@@ -1,7 +1,10 @@
 "use client";
 
 import { PageHeading } from "@/components/dashboard/shared/kaizen";
+import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
 import { useAuth } from "@/context/AuthContext";
+
+import { HomeNotificationsPanel } from "./notifications-panel";
 
 /**
  * The home page.
@@ -16,6 +19,10 @@ import { useAuth } from "@/context/AuthContext";
  * Each module's own landing page is where its figures belong: Snagging
  * Overview for throughput and the attention list, AMC proposals for the
  * approval queue, Todos for the list.
+ *
+ * The one exception is unread notifications (BRD 6.2: shown on the home
+ * page until opened, then in the inbox). The panel appears only when there
+ * is something to open.
  */
 export default function HomeDashboard() {
   const { userProfile } = useAuth();
@@ -29,6 +36,7 @@ export default function HomeDashboard() {
         title={name ? `Welcome back, ${name}` : "Welcome back"}
         description="Pick a module from the sidebar to get started."
       />
+      {canUseAmc(userProfile) ? <HomeNotificationsPanel /> : null}
     </div>
   );
 }

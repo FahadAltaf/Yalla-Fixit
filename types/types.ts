@@ -121,6 +121,14 @@ export enum ResourceType {
      FSM links, customers and assessments, Approve = correct usage. Adds to
      the owner/approver rules; it never takes anything away. */
   AMC_OPERATIONS = "amc_operations",
+  /* BRD v0.3 6.7 (Phase 1). Each is granted per role in the Permissions
+     screen; admins inherit all of them. */
+  AMC_ENQUIRIES = "amc_enquiries", // enquiry pipeline: View / Create / Edit / Export
+  AMC_RATE_CARD = "amc_rate_card", // rate card: View / Edit (department head and Finance)
+  AMC_CONFIG = "amc_config", // configuration: View / Edit; Approve = thresholds and value bands (management)
+  AMC_PAYMENTS = "amc_payments", // payments: View / Create / Edit; Approve = initial-payment gate override
+  AMC_VISITS = "amc_visits", // visits: View / Create / Edit; Approve = supervisor closure
+  AMC_ALLOWANCES = "amc_allowances", // allowances: View; Approve = override and reversal
   // Scheduling
   SCHEDULING = "scheduling",
   // Property Care / Snagging

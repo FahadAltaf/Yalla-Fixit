@@ -10,18 +10,21 @@
  *   member     any other AMC user (AMC View)
  *
  * The operations permission only ever ADDS rights; the owner/approver rules
- * that existed before (6 Oct 2026) are unchanged. BUSINESS DECISION
- * REQUIRED: whether corrections become approver-only (AMC_CORRECTIONS_APPROVER_ONLY).
+ * that existed before (6 Oct 2026) are unchanged, except corrections:
+ * BRD v0.3 6.7 says only an authorised role reverses an allowance movement,
+ * so the proposal owner no longer corrects usage (AMC_CORRECTIONS_APPROVER_ONLY).
  */
 
 export interface AmcActor {
   userId: string;
   canApprove: boolean;
   ops: { view: boolean; create: boolean; edit: boolean; approve: boolean };
+  /** AMC Allowances (Approve): the named override and reversal right (BRD 6.7). */
+  allowanceOverride?: boolean;
 }
 
-/** Off: the proposal owner may correct usage on their own contract, as today. */
-export const AMC_CORRECTIONS_APPROVER_ONLY = false;
+/** On (BRD v0.3 6.7): only an authorised role corrects or reverses usage. */
+export const AMC_CORRECTIONS_APPROVER_ONLY = true;
 
 const isOwner = (a: AmcActor, ownerId: string | null | undefined) => !!ownerId && ownerId === a.userId;
 
@@ -56,7 +59,7 @@ export function canCorrectUsage(
   ownerId: string | null | undefined,
   approverOnly: boolean = AMC_CORRECTIONS_APPROVER_ONLY,
 ): boolean {
-  if (a.canApprove || a.ops.approve) return true;
+  if (a.canApprove || a.ops.approve || a.allowanceOverride) return true;
   return !approverOnly && isOwner(a, ownerId);
 }
 

@@ -4,12 +4,22 @@ import { z } from "zod";
 import { contractErrorResponse, requireContractAccess } from "@/lib/server/amc/contract-access";
 import { listMyNotifications, markNotificationsRead } from "@/lib/server/amc/notifications";
 
-/** The caller's own AMC notifications (in-app), newest first, and marking them read. */
-export async function GET() {
+/**
+ * The caller's own AMC notifications (in-app), newest first, and marking
+ * them read. ?limit=&offset= page the inbox; ?unread=1 lists only what is
+ * still unopened (the home page, BRD 6.2).
+ */
+export async function GET(req: NextRequest) {
   const gate = await requireContractAccess();
   if (!gate.ok) return gate.response;
+  const params = req.nextUrl.searchParams;
+  const limit = Math.min(Math.max(Number(params.get("limit")) || 30, 1), 100);
+  const offset = Math.max(Number(params.get("offset")) || 0, 0);
   try {
-    return NextResponse.json(await listMyNotifications(gate.admin, gate.userId), { headers: { "Cache-Control": "no-store" } });
+    return NextResponse.json(
+      await listMyNotifications(gate.admin, gate.userId, limit, { offset, unreadOnly: params.get("unread") === "1" }),
+      { headers: { "Cache-Control": "no-store" } },
+    );
   } catch (error) {
     return contractErrorResponse(error, "Could not load notifications");
   }

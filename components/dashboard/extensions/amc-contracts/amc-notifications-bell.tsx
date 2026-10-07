@@ -114,6 +114,11 @@ export function AmcNotificationsBell({ className }: { className?: string }) {
             </ul>
           )}
         </div>
+        <div className="border-t px-4 py-2">
+          <Button variant="ghost" size="sm" className="h-7 w-full text-xs" onClick={() => { setOpen(false); router.push("/notifications"); }}>
+            Open inbox
+          </Button>
+        </div>
       </PopoverContent>
     </Popover>
   );

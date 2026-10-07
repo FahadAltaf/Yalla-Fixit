@@ -82,15 +82,29 @@ ALTER TABLE public.password_resets ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow All on Password Resets" ON public.password_resets FOR ALL TO public USING (true) WITH CHECK (true);
 INSERT INTO public.password_resets (email, token, expires_at) VALUES ('admin@test.local', 'RESET-TOKEN', now() + interval '1 hour');
 
--- todos as created by 20260520_create_todos_module.sql (inline CHECK).
+-- todos as in production: 20260520_create_todos_module.sql (inline CHECK)
+-- plus 20260523090000 (title, todo_key) and the status columns.
+CREATE SEQUENCE public.todos_key_seq;
 CREATE TABLE public.todos (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   owner_id uuid NOT NULL REFERENCES public.user_profile(id) ON DELETE CASCADE,
+  title text NOT NULL DEFAULT 'Untitled' CHECK (length(trim(title)) > 0),
+  todo_key text NOT NULL DEFAULT ('YFI-' || nextval('public.todos_key_seq')),
   description text NOT NULL,
   related_type text CHECK (related_type IS NULL OR related_type IN ('work_order', 'quotation', 'appointment')),
   related_id text,
   deadline_at timestamptz NOT NULL,
-  reminder_at timestamptz
+  reminder_at timestamptz,
+  status text NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'in_progress', 'done', 'canceled', 'blocked')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  completed_at timestamptz
+);
+CREATE TABLE public.todo_assignees (
+  todo_id uuid NOT NULL REFERENCES public.todos(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES public.user_profile(id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (todo_id, user_id)
 );
 
 -- snagging_clients / snagging_properties as in production (columns the AMC migrations reference).
