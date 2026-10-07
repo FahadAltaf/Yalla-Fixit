@@ -1,0 +1,258 @@
+# Production migration checks: Group A (live-safe)
+
+For `docs/amc-brd-v0.3-implementation-plan.md` §3. All queries in sections 1 and 3 are **read-only**. Run them in the Supabase SQL editor of the **production** project (the one in the app's `.env`, `sxzp…`).
+**Save the output of section 1 before applying anything:** it is also the record used for any rollback.
+
+> The Supabase project this development environment can reach ("TPH Portal Staging", `sancq…`) is a different application, with no portal or AMC tables. It is **not** the target. Apply only to the project in the app's `.env`.
+
+## 1. Pre-check (before file 1)
+
+```sql
+-- 1.1 Which AMC objects exist today
+select
+  to_regclass('public.amc_submissions')    is not null as has_amc_submissions,
+  to_regclass('public.amc_settings')       is not null as has_amc_settings,
+  to_regclass('public.amc_audit_events')   is not null as has_amc_audit_events,
+  to_regclass('public.amc_proposal_number_seq') is not null as has_number_seq,
+  to_regclass('public.amc_contracts')      is not null as has_amc_contracts,
+  to_regclass('public.customers')          is not null as has_customers,
+  to_regclass('public.customer_properties') is not null as has_customer_properties,
+  to_regclass('public.amc_notifications')  is not null as has_amc_notifications;
+```
+Expected: the first four `true`, the last four `false`. **If `customers` or `customer_properties` already exist, stop and send me the output** (name clash).
+
+```sql
+-- 1.2 Columns the migrations will add to amc_submissions must not exist yet
+select column_name from information_schema.columns
+ where table_schema = 'public' and table_name = 'amc_submissions'
+   and column_name in ('renewal_of_contract_id','customer_id','property_id','assessment_id');
+```
+Expected: **no rows**.
+
+```sql
+-- 1.3 Constraints the migrations replace
+select conrelid::regclass as table_name, conname, pg_get_constraintdef(oid) as definition
+  from pg_constraint
+ where conname in ('amc_audit_events_entity_type_check', 'amc_submissions_owner_id_fkey')
+    or (conrelid = 'public.todos'::regclass and contype = 'c');
+```
+Expected:
+- `amc_audit_events_entity_type_check` allows `'submission', 'settings'`;
+- `amc_submissions_owner_id_fkey` is `... ON DELETE CASCADE`;
+- one CHECK on `todos` allowing `'work_order', 'quotation', 'appointment'`.
+
+```sql
+-- 1.4 Storage: buckets and the policies on storage.objects
+select id, public from storage.buckets where id in ('uploads', 'amc-documents');
+select policyname, cmd, roles, qual, with_check
+  from pg_policies where schemaname = 'storage' and tablename = 'objects'
+ order by policyname;
+```
+Expected:
+- `uploads` exists with `public = true`; `amc-documents` does **not** exist.
+- Among the policies: `Allow authenticated users to upload files` (INSERT) and `Allow users to update their own uploads` (UPDATE).
+
+**If the uploads INSERT/UPDATE policies have other names, stop and send me the list**, so file 10 replaces the right ones.
+
+```sql
+-- 1.5 Policies and browser grants on the tables files 1, 3, 10 and 12 tighten
+select tablename, policyname, cmd, roles
+  from pg_policies
+ where schemaname = 'public'
+   and tablename in ('amc_submissions','amc_settings','amc_audit_events','schedule_audit_events','todos',
+                     'fsm_appointment_snapshots','leave_records','lookup_options','schedule_entries',
+                     'schedule_entry_assignments','schedule_versions','technician_lookup_assignments',
+                     'technician_reference','todo_assignees','todo_comments','todo_tags','todo_updates')
+ order by tablename, policyname;
+
+select table_name, grantee, string_agg(privilege_type, ',' order by privilege_type) as privileges
+  from information_schema.role_table_grants
+ where table_schema = 'public' and grantee in ('anon','authenticated')
+   and table_name in ('amc_submissions','amc_settings','amc_audit_events','schedule_audit_events','todos',
+                      'technician_reference','schedule_entries','lookup_options')
+ group by table_name, grantee order by table_name, grantee;
+```
+Expected: "Allow All on …" policies on most of these tables, and full grants to `anon`/`authenticated`. These are exactly what Group A closes. Save the output.
+
+```sql
+-- 1.6 Data that the owner-FK change (file 11) relies on
+select count(*) as proposals,
+       count(*) filter (where owner_id is null) as without_owner
+  from public.amc_submissions;
+```
+Any result is fine. This is for the record.
+
+## 2. Apply Group A
+
+One file at a time, in this order. Stop at the first error and send it to me.
+
+| # | File | After it |
+|---|---|---|
+| 1 | `20261005100000_amc_close_direct_writes.sql` | — |
+| 2 | `20261005110000_amc_proposal_number_beyond_9999.sql` | — |
+| 3 | `20261005150000_restrict_shared_allow_all_policies.sql` | — |
+| 4 | `20261006100000_active_amc_contracts.sql` | — |
+| 5 | `20261006110000_active_amc_operations.sql` | — |
+| 6 | `20261006120000_amc_fsm_integration.sql` | — |
+| 7 | `20261006130000_amc_business_operations.sql` | — |
+| 8 | `20261006140000_amc_atomic_activation_and_dashboard.sql` | — |
+| 9 | `20261006150000_amc_business_completion.sql` | — |
+| 10 | `20261006161000_todos_and_uploads_tightened.sql` | **Live check A** (below) |
+| 11 | `20261006162000_amc_history_survives_user_deletion.sql` | — |
+| 12 | `20261006163000_shared_tables_server_only.sql` | **Live check B** (below) |
+
+Command (or paste the whole file into the SQL editor and run it):
+```bash
+psql "<PRODUCTION_DB_URL>" -v ON_ERROR_STOP=1 -1 -f supabase/migrations/<file>
+```
+
+**Do not apply** `20261005160000`, `20261005170000`, `20261005180000` or `20261006160000` (Group B, held until release).
+**Never run** `supabase db push` against production.
+
+### Live check A (after file 10), in the live portal (`main`), signed in as a normal user
+1. Profile settings → change the profile photo → it saves and shows.
+2. Open Todos → the list loads; create a to-do and tick it done.
+3. An admin changes the organisation logo → it saves and shows.
+
+If any fails, run **Rollback A** at once and send me the error.
+
+### Live check B (after file 12), in the live portal (`main`)
+1. Scheduling → open today's board → entries and technicians show; drag one entry and undo.
+2. Scheduling → technicians list and leave records load.
+3. Open a to-do with comments and assignees.
+
+If any fails, run **Rollback B** at once and send me the error.
+
+## 3. Post-check (after file 12)
+
+```sql
+-- 3.1 The 18 new AMC tables exist, all with RLS on
+select c.relname, c.relrowsecurity as rls_on
+  from pg_class c join pg_namespace n on n.oid = c.relnamespace
+ where n.nspname = 'public' and c.relkind = 'r'
+   and c.relname in ('amc_contracts','amc_contract_entitlements','amc_entitlement_usage','amc_renewal_reminders',
+                     'amc_fsm_service_mappings','amc_fsm_links','amc_fsm_sync_events','customers','customer_properties',
+                     'amc_assessment_checklist','amc_assessments','amc_assessment_items','amc_additional_service_discount',
+                     'amc_additional_quotes','amc_notifications','amc_notification_settings','amc_signed_documents',
+                     'amc_assessment_photos')
+ order by c.relname;
+```
+Expected: **18 rows, every `rls_on = true`**.
+
+```sql
+-- 3.2 Nothing granted to the browser roles on AMC tables or the tightened shared tables
+select table_name, grantee, string_agg(privilege_type, ',') as privileges
+  from information_schema.role_table_grants
+ where table_schema = 'public' and grantee in ('anon','authenticated')
+   and (table_name like 'amc\_%' or table_name in ('customers','customer_properties','todos','schedule_audit_events',
+        'fsm_appointment_snapshots','leave_records','lookup_options','schedule_entries','schedule_entry_assignments',
+        'schedule_versions','technician_lookup_assignments','technician_reference','todo_assignees','todo_comments',
+        'todo_tags','todo_updates'))
+ group by table_name, grantee order by table_name, grantee;
+```
+Expected: one of two shapes.
+- **Exactly one row:** `technician_reference | authenticated | SELECT`.
+- **Also a row for `amc_submissions | authenticated | SELECT`,** if production granted it before. Live `main` reads proposals through the server, so either is fine.
+
+```sql
+-- 3.3 Open policies gone; technician read policy present
+select tablename, policyname, cmd, roles
+  from pg_policies
+ where schemaname = 'public'
+   and (policyname ilike 'Allow All%' or tablename = 'technician_reference')
+   and tablename in ('amc_submissions','amc_settings','amc_audit_events','schedule_audit_events','todos',
+                     'fsm_appointment_snapshots','leave_records','lookup_options','schedule_entries',
+                     'schedule_entry_assignments','schedule_versions','technician_lookup_assignments',
+                     'technician_reference','todo_assignees','todo_comments','todo_tags','todo_updates');
+```
+Expected: only `technician_reference | technician_reference authenticated read | SELECT | {authenticated}`.
+
+```sql
+-- 3.4 Constraints, storage, functions
+select conname, pg_get_constraintdef(oid) from pg_constraint
+ where conname in ('amc_audit_events_entity_type_check','amc_submissions_owner_id_fkey','todos_related_type_check');
+select id, public from storage.buckets where id in ('uploads','amc-documents');
+select policyname, cmd, roles from pg_policies
+ where schemaname = 'storage' and tablename = 'objects'
+   and policyname in ('Allow authenticated users to upload files','Allow users to update their own uploads');
+select p.proname,
+       has_function_privilege('anon', p.oid, 'EXECUTE') as anon_can_run,
+       has_function_privilege('authenticated', p.oid, 'EXECUTE') as authenticated_can_run
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+ where n.nspname = 'public' and p.proname in ('amc_activate_contract','amc_contracts_dashboard','amc_next_proposal_number',
+       'amc_next_assessment_number','amc_next_additional_quote_number','amc_apply_entitlement_usage');
+```
+Expected:
+- **Constraints:**
+  - owner FK `ON DELETE RESTRICT`;
+  - the audit types now include `contract`;
+  - the to-do types include `amc_contract`.
+- **Buckets:** `uploads` public = true; `amc-documents` public = **false**.
+- **Upload policies:** both present, roles `{authenticated}`.
+- **Functions:** all six listed, with both `…_can_run` columns `false`.
+
+Send me the outputs of 3.1–3.4. I compare them and confirm.
+
+## 4. Rollback (only if a live check fails)
+
+**Rollback A** (file 10). It restores the previous open rules. Use the exact definitions you saved in 1.4/1.5 if they differ from these:
+```sql
+begin;
+drop policy if exists "Allow authenticated users to upload files" on storage.objects;
+create policy "Allow authenticated users to upload files" on storage.objects for insert to public with check (bucket_id = 'uploads');
+drop policy if exists "Allow users to update their own uploads" on storage.objects;
+create policy "Allow users to update their own uploads" on storage.objects for update to public using (bucket_id = 'uploads');
+grant all on public.todos to anon, authenticated;
+create policy "Allow All on todos" on public.todos for all to public using (true) with check (true);
+commit;
+```
+
+**Rollback B** (file 12). Run per table that broke, or for all twelve:
+```sql
+begin;
+do $$
+declare t text;
+begin
+  foreach t in array array['fsm_appointment_snapshots','leave_records','lookup_options','schedule_entries',
+    'schedule_entry_assignments','schedule_versions','technician_lookup_assignments','technician_reference',
+    'todo_assignees','todo_comments','todo_tags','todo_updates'] loop
+    if to_regclass('public.' || t) is null then continue; end if;
+    execute format('grant all on public.%I to anon, authenticated', t);
+    execute format('drop policy if exists %I on public.%I', 'Allow All on ' || t, t);
+    execute format('create policy %I on public.%I for all to public using (true) with check (true)', 'Allow All on ' || t, t);
+  end loop;
+end $$;
+commit;
+```
+
+Files 1–9 and 11 need no live check. They only add objects or close permissions that live `main` does not use. Their own rollback notes are at the end of each file.
+
+## 5. Phase 0 migration: `20261007100000_amc_audit_events_guard.sql`
+
+Apply after Group A, the same way (one file, `psql -1` or SQL editor). It is **live-safe**: live `main` only inserts into `amc_audit_events`. It fixes the live error where deleting a user who ever acted on a proposal fails with an internal error.
+
+**Pre-check** (read-only):
+```sql
+select rulename from pg_rules where tablename = 'amc_audit_events';
+select conname, pg_get_constraintdef(oid) from pg_constraint
+ where conrelid = 'public.amc_audit_events'::regclass and contype = 'f';
+```
+Expected:
+- two rules, `amc_audit_events_no_update` and `amc_audit_events_no_delete`;
+- one foreign key named `amc_audit_events_actor_id_fkey`, `... ON DELETE SET NULL`.
+
+**If the foreign key has a different name, stop and send me the output.**
+
+**Post-check** (read-only):
+```sql
+select rulename from pg_rules where tablename = 'amc_audit_events';
+select tgname from pg_trigger where tgrelid = 'public.amc_audit_events'::regclass and not tgisinternal order by tgname;
+select conname, pg_get_constraintdef(oid) from pg_constraint
+ where conrelid = 'public.amc_audit_events'::regclass and contype = 'f';
+```
+Expected:
+- no rules;
+- triggers `amc_audit_events_append_only_rows` and `amc_audit_events_append_only_truncate`;
+- the foreign key without `ON DELETE SET NULL` (it shows no ON DELETE clause, meaning NO ACTION).
+
+No live check needed. Rollback SQL is at the end of the file.
