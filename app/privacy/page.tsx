@@ -109,7 +109,7 @@ export default function PrivacyPolicyPage() {
           />
           <Permission
             name="Location"
-            why="The approximate position where a defect photo was taken, so a defect can be tied to the right property. Collected only while you are using the app, never in the background."
+            why="The approximate position where a defect photo was taken, so a defect can be tied to the right property. The app only asks for it while you are using it, and it does not track you when the app is closed."
           />
           <Permission
             name="Account details"
@@ -128,14 +128,15 @@ export default function PrivacyPolicyPage() {
 
       <Section title="Why we collect it">
         <p>
-          Solely to carry out and record property inspection work: to produce inspection
-          reports, to show a client which defects were found and which were fixed, and to
-          keep an audit trail of who recorded what and when.
+          Only to carry out and record property inspection work. That means producing
+          the inspection report, showing a client which defects were found and which were
+          fixed, and keeping a record of who logged what and when.
         </p>
         <p>
-          Inspection records are working documents of a commercial service. They may be
-          shared with the client who commissioned the inspection, and with the developer
-          or contractor responsible for putting the defects right.
+          An inspection is work done for a paying client, and the record of it is their
+          business document. We may give it to the client who commissioned the
+          inspection, and to the developer or contractor who has to put the defects
+          right.
         </p>
       </Section>
 
@@ -219,9 +220,9 @@ export default function PrivacyPolicyPage() {
           </p>
           <p>
             <strong className="text-foreground">What is kept, and why:</strong> the
-            inspection records themselves &mdash; the defects, photographs and
-            reports &mdash; belong to the client who commissioned the inspection and
-            are kept as business records. Where we are able to, we remove your name
+            inspection records themselves, meaning the defects, photographs and
+            reports, belong to the client who commissioned the inspection and are kept
+            as business records. Where we are able to, we remove your name
             from them rather than deleting the inspection. We will tell you plainly
             which of your data falls into this category.
           </p>
@@ -238,7 +239,7 @@ export default function PrivacyPolicyPage() {
           You can ask us for a copy of the personal data we hold about you, ask us to
           correct it, or ask us to delete it. Because inspection records are commercial
           documents belonging to our client, deletion may not always be possible while a
-          contract is running &mdash; we will tell you plainly if that is the case.
+          contract is running. We will tell you plainly if that is the case.
         </p>
         <p>
           If you are a client&rsquo;s employee, please raise the request with your own
