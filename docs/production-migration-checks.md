@@ -594,3 +594,37 @@ Expected:
 **Live check:** open AMC Proposals in the live portal; it works as before. In the demo portal, activate a signed contract: it shows **Pending initial payment** and a Payments tab with its schedule; recording the first instalment makes it Active.
 
 **After applying, in AMC configuration → Payments:** name the Finance users (they hear about payments and get the overdue to-do) and check "Remind the client before an instalment is due" (7 days by default). Make sure the scheduled AMC jobs run daily (the new `payments` job sends Email 4, overdue to-dos and cheque alerts).
+
+
+## 14. Phase 8 migration: `20261008110000_amc_ppm_schedule.sql`
+
+Apply after section 13. It is **live-safe**: every table it touches is branch-only (live `main` reads none of them), and `amc_submissions` is not touched. What it adds:
+- `amc_visits`: the planned PPM visits, each with its cycle, service window, target date (and the original one once rescheduled) and one of the twelve visit statuses;
+- `amc_visit_lines`: one row per service line (trade) on a visit, so a clubbed visit has several and each is completed separately;
+- `amc_visit_changes`: the schedule's history, append-only;
+- on `amc_contracts`: the confirmed plan of record (who, when), the service window length and the appointment-attempt rule per contract;
+- `amc_fsm_links.visit_id`: an FSM appointment can name the visit it carries out.
+
+**Pre-check** (read-only):
+```sql
+select to_regclass('public.amc_visits') as visits, to_regclass('public.amc_instalments') as instalments;
+```
+Expected: `visits` is `null` and `instalments` is present (section 13 applied).
+
+**Post-check** (read-only):
+```sql
+select c.relname, c.relrowsecurity from pg_class c
+ where c.oid in ('public.amc_visits'::regclass, 'public.amc_visit_lines'::regclass, 'public.amc_visit_changes'::regclass);
+select table_name, grantee from information_schema.role_table_grants
+ where table_schema = 'public' and grantee in ('anon', 'authenticated')
+   and table_name in ('amc_visits', 'amc_visit_lines', 'amc_visit_changes');
+select column_name from information_schema.columns where table_name = 'amc_fsm_links' and column_name = 'visit_id';
+```
+Expected:
+- `relrowsecurity = true` on all three;
+- the grants query returns **no rows**;
+- `visit_id` is listed.
+
+**Live check:** open AMC Proposals in the live portal; it works as before. In the demo portal, an active contract shows a **Schedule** tab: its tentative visits with service windows, which can be moved, clubbed and confirmed.
+
+**After applying:** check AMC configuration → Calendar (weekend days and holidays) and Scheduling (service window, 15 days by default) before the first schedules are made. The daily AMC jobs now include `ppm_overdue`.

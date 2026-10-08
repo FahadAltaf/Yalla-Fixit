@@ -6,6 +6,7 @@ import { runEnquiryFollowUpSweep, runEnquiryIdleSweep } from "@/lib/server/amc/e
 import { runProposalValiditySweep } from "@/lib/server/amc/proposal-share";
 import { runContractExpirySweep, runUnsignedContractSweep } from "@/lib/server/amc/contract-lifecycle";
 import { runPaymentSweep } from "@/lib/server/amc/payments";
+import { runPpmOverdueSweep } from "@/lib/server/amc/ppm";
 import { runExpiryReminderSweep } from "@/lib/server/amc/reminders";
 import { escalateDueAmcTodos } from "@/lib/server/amc/todos";
 
@@ -70,6 +71,11 @@ export const AMC_JOBS: AmcJob[] = [
     key: "payments",
     label: "Instalment statuses, due and overdue reminders, cheque dates and late first payments",
     run: async ({ admin, config, now }) => ({ ...(await runPaymentSweep(admin, config, now)) }),
+  },
+  {
+    key: "ppm_overdue",
+    label: "Tell owners about PPM visits past their service window",
+    run: async ({ admin, now }) => ({ ...(await runPpmOverdueSweep(admin, now)) }),
   },
   {
     key: "expiry_reminders",

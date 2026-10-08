@@ -71,6 +71,7 @@ import { ContractFsm } from "./contract-fsm";
 import { ContractLifecycleCard, EntitlementTermsCard, useLifecycleDialogs } from "./contract-lifecycle-panel";
 import { ContractPaymentsPanel, openInstalmentCount, useContractPayments } from "./contract-payments-panel";
 import { ContractRenewal, RenewalReminders } from "./contract-renewal";
+import { ContractSchedulePanel, useContractSchedule } from "./contract-schedule-panel";
 import {
   AUDIT_LABELS,
   CALL_OUT_LABELS,
@@ -90,14 +91,15 @@ import { UsageHistory } from "./usage-history";
 
 const LIST = "/extensions/amc-contracts";
 
-const TABS = ["overview", "coverage", "usage", "fsm", "commercial", "payments", "renewal", "documents", "history"] as const;
+const TABS = ["overview", "coverage", "schedule", "usage", "fsm", "commercial", "payments", "renewal", "documents", "history"] as const;
 type Tab = (typeof TABS)[number];
 
 /**
  * One operational AMC contract, laid out like a Snagging job: the way back
  * and Refresh, a header card with the contract's state and its next step,
  * the four figures, then tabs for its lifecycle, every service and its
- * allowance, usage, FSM, commercial, payments, renewal, documents and history.
+ * allowance, the PPM schedule, usage, FSM, commercial, payments, renewal,
+ * documents and history.
  */
 export function ContractDetail({ id }: { id: string }) {
   const router = useRouter();
@@ -191,8 +193,12 @@ function ContractView({
   const canViewPayments = data.permissions.payments?.canView === true;
   const { tab, setTab, isOpened } = useUrlTab<Tab>(canViewPayments ? TABS : TABS.filter((t) => t !== "payments"), "overview");
   const payments = useContractPayments(data.contract.id, canViewPayments);
-  /* Money moving can move the contract too (the first instalment starts it), so both reload. */
-  const reloadWithPayments = () => Promise.all([load(), payments.reload()]);
+  /* The PPM schedule (Phase 8), loaded here so the tab can show what is left or overdue. */
+  const schedule = useContractSchedule(data.contract.id);
+  const overdueVisits = schedule.data?.progress.overdue ?? 0;
+  /* Money moving can move the contract too (the first instalment starts it and makes its
+     schedule), so all three reload. */
+  const reloadWithPayments = () => Promise.all([load(), payments.reload(), schedule.reload()]);
   const paymentDialogs = usePaymentDialogs(reloadWithPayments);
   const lifecycleDialogs = useLifecycleDialogs(data, () => void reloadWithPayments());
 
@@ -204,7 +210,7 @@ function ContractView({
 
   const refresh = async () => {
     setUsageVersion((v) => v + 1);
-    const [ok] = await Promise.all([load(), payments.reload()]);
+    const [ok] = await Promise.all([load(), payments.reload(), schedule.reload()]);
     if (ok) toast.success("Up to date");
     else toast.error("Could not refresh the contract. What was on screen is kept.");
   };
@@ -492,6 +498,16 @@ function ContractView({
             Coverage
             <TabCount value={entitlements.length} />
           </TabsTrigger>
+          <TabsTrigger value="schedule">
+            Schedule
+            {overdueVisits > 0 ? (
+              <Badge className="bg-warning text-on-tone ml-1.5 px-1.5 font-normal tabular-nums" aria-label={`${overdueVisits} overdue`}>
+                {overdueVisits}
+              </Badge>
+            ) : (
+              <TabCount value={schedule.data?.progress.remaining} />
+            )}
+          </TabsTrigger>
           <TabsTrigger value="usage">
             Usage
             <TabCount value={summary.usageEvents} />
@@ -657,6 +673,8 @@ function ContractView({
             </SectionCard>
           </>,
         )}
+
+        {panel("schedule", <ContractSchedulePanel contractId={contract.id} schedule={schedule} />)}
 
         {panel(
           "usage",

@@ -29,5 +29,6 @@ Rules: one file at a time; pre-check first; never `supabase db push` on producti
 | 19 | 20261007160000 | amc_contract_lifecycle.sql (Phase 6) | | | | Post-check §11, open AMC Proposals | |
 | 20 | 20261007170000 | amc_shared_clients.sql (AMC on Snagging clients; live table: out of hours) | | | | Post-check §12, open Snagging Clients and AMC Proposals | |
 | 21 | 20261008100000 | amc_payments.sql (Phase 7) | | | | Post-check §13, open AMC Proposals | |
+| 22 | 20261008110000 | amc_ppm_schedule.sql (Phase 8) | | | | Post-check §14, open AMC Proposals | |
 
 **Held until release (Group B, do not apply):** 20261005160000, 20261005170000, 20261005180000, 20261006160000.

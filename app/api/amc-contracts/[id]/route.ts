@@ -127,6 +127,8 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
         canCorrect: canCorrectUsage(gate.actor, loaded.ownerId),
         canCancel: gate.canApprove && contract.status === "active",
         canRenew: canOperateContract(gate.actor, loaded.ownerId) && contract.status !== "cancelled" && !contract.renewedByContractId && !renewalResult.data,
+        /* Phase 8: the PPM schedule is changed by those who operate the contract, while it is active or on hold. */
+        canSchedule: (contract.status === "active" || contract.status === "on_hold") && canOperateContract(gate.actor, loaded.ownerId),
         /* Phase 7 payments: Finance (AMC Payments) on any contract; the owner records what came in. */
         payments: {
           canView: gate.payments.view || canOperateContract(gate.actor, loaded.ownerId),

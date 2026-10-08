@@ -24,6 +24,7 @@ import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { prospectBecomesClient, setContractStatus } from "@/lib/server/amc/contract-state";
 import { ContractError, isMissingTable } from "@/lib/server/amc/contracts";
 import { notifyContractEvent, notifyUsers } from "@/lib/server/amc/notifications";
+import { ensurePpmSchedule } from "@/lib/server/amc/ppm";
 import { recordSend } from "@/lib/server/amc/proposal-share";
 import { closeAmcTodos, openAmcTodo } from "@/lib/server/amc/todos";
 import { sendEmail } from "@/lib/server/send-email";
@@ -408,7 +409,10 @@ export async function gateAfterOneStepActivation(admin: Admin, contractId: strin
   if (c.status !== "active" || !c.start_date) return { status: String(c.status) };
   const term = Number(c.term_months) || termMonthsBetween(String(c.start_date), String(c.end_date)) || 12;
   const made = await createSchedule(admin, { contractId, commencementDate: String(c.start_date), termMonths: term }, actor, config, now);
-  if (!made.migrated || gateOpen(made.first, false)) return { status: "active" };
+  if (!made.migrated || gateOpen(made.first, false)) {
+    await ensurePpmSchedule(admin, contractId, actor, config);
+    return { status: "active" };
+  }
   await setContractStatus(admin, contractId, "active", "pending_initial_payment", {}, actor, "Waiting for the first instalment");
   await notifyUsers(admin, {
     event: "initial_payment_pending",
@@ -503,12 +507,14 @@ async function afterMoneyMoved(admin: Admin, instalmentId: string, config: AmcCo
     actor,
     after === "received" ? "First instalment received" : `First instalment ${after === "waived" ? "waived" : "written off"}`,
   );
-  await startedFollowUps(admin, c, actor, "First instalment received");
+  await startedFollowUps(admin, c, actor, "First instalment received", config);
   return { status: after, contractStarted: true };
 }
 
 /** What happens once a waiting contract starts: the client, the follow-up to-do, the owner told. */
-async function startedFollowUps(admin: Admin, c: Row, actor: Actor, reason: string) {
+async function startedFollowUps(admin: Admin, c: Row, actor: Actor, reason: string, config: AmcConfig) {
+  /* Phase 8: the tentative PPM schedule, now that visits can be released. */
+  await ensurePpmSchedule(admin, String(c.id), actor, config);
   await prospectBecomesClient(admin, c.customer_id, actor, `Contract ${reference(c)}: ${reason.toLowerCase()}`);
   await closeAmcTodos(admin, { entityType: "contract", entityId: String(c.id), kind: "contract_follow_up" }, { status: "done", reason }).catch(() => 0);
   await notifyContractEvent(admin, { event: "contract_activated", contractId: String(c.id), actor: { id: actor.id, label: actor.label } }).catch(() => undefined);
@@ -810,7 +816,7 @@ export async function performPaymentAction(
         `Started before the first payment: ${action.reason}`,
       );
       await audit("initial_payment_gate_overridden", { reason: action.reason });
-      await startedFollowUps(admin, c, actor, "Started on agreed terms");
+      await startedFollowUps(admin, c, actor, "Started on agreed terms", config);
       return { ok: true };
     }
     case "generate_schedule": {

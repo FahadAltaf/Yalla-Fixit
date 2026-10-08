@@ -585,6 +585,8 @@ Three changes the user asked for before Phase 7:
 **Migration:** `…_amc_ppm_schedule.sql` (SAFE).
 **Done when:** demo story step 9 works.
 
+**Status (8 Oct 2026):** done in code, migration `20261008110000` not applied (log row 22, checks §14). The tentative schedule is made when a contract becomes active (after the initial payment gate, or on the override): one visit per PPM line occurrence, cycles in whole months when the term divides evenly (6 a year = every 2 months), a service window from the start of each cycle (15 days by default, per contract), target on the first working day (weekend days and holidays from AMC configuration), preferred months/days from the property scope. Move (inside the window = not a reschedule; outside after confirmation = reason, original kept, Rescheduled), add/remove with reason, club overlapping visits of different services and separate again, confirm as plan of record, per-contract window and attempt rule, history append-only, completed/remaining/overdue, PPM overdue notification (daily `ppm_overdue` job). Contract Schedule tab. 278 tests, typecheck, lint, harness (`97m`) and main-compatibility (28/11, unchanged) all pass.
+
 ### Phase 9: Scheduling board, skills, assignment, confirmation, access
 
 | Jira | Work | Size |

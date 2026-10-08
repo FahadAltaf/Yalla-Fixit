@@ -22,6 +22,7 @@ import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { ContractError, isMissingTable, prepareActivation } from "@/lib/server/amc/contracts";
 import { prospectBecomesClient, setContractStatus } from "@/lib/server/amc/contract-state";
 import { createSchedule } from "@/lib/server/amc/payments";
+import { ensurePpmSchedule } from "@/lib/server/amc/ppm";
 import { gateOpen } from "@/lib/amc/payments";
 import { notifyContractEvent, notifyUsers } from "@/lib/server/amc/notifications";
 import { recordStatusChange } from "@/lib/server/amc/status-history";
@@ -501,6 +502,8 @@ export async function activateSignedContract(
     /* Signed and paid (or started on agreed terms): the prospect is a client (BRD 5.9). */
     await prospectBecomesClient(admin, c.customer_id, actor, `Contract ${String(c.contract_number ?? "")} ${override ? "started on agreed terms" : "activated"}`);
     await notifyContractEvent(admin, { event: "contract_activated", contractId, actor }).catch(() => undefined);
+    /* Phase 8: the tentative PPM schedule. */
+    await ensurePpmSchedule(admin, contractId, actor, config);
   } else {
     const { data: s } = await admin.from("amc_submissions").select("owner_id").eq("id", String(c.submission_id)).maybeSingle<Row>();
     await notifyUsers(admin, {
