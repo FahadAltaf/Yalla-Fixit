@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Image from "next/image";
 
 import CompanyLogo from "@/public/site-logo.webp";
+import { ScrollToHash } from "./scroll-to-hash";
 
 /**
  * The privacy policy for the YFI Snagging inspection app.
@@ -57,6 +58,8 @@ function Permission({ name, why }: { name: string; why: string }) {
 export default function PrivacyPolicyPage() {
   return (
     <main className="mx-auto w-full max-w-2xl px-4 py-12 sm:py-16">
+      {/* The client re-render resets the browser's own #hash jump. */}
+      <ScrollToHash />
       <header>
         {/*
           The mark, because this page is the one thing a store reviewer
