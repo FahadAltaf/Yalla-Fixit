@@ -127,6 +127,16 @@ CREATE TABLE public.snagging_properties (
   furnished boolean NOT NULL DEFAULT false
 );
 
+-- The FSM technician roster (scheduling), as production has it: the AMC technician tables reference it.
+CREATE TABLE public.technician_reference (
+  fsm_resource_id text PRIMARY KEY,
+  display_name text NOT NULL,
+  is_active boolean NOT NULL DEFAULT true,
+  last_synced_at timestamptz NOT NULL DEFAULT now(),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  role_id uuid, service_type_id uuid, shift text, team_leader_fsm_id text, board_position integer
+);
+
 -- Supabase storage, as far as the AMC migrations touch it.
 CREATE SCHEMA storage;
 CREATE TABLE storage.buckets (

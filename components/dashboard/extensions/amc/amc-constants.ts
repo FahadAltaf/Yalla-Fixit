@@ -363,3 +363,8 @@ export function canViewAmcRateCard(user: Parameters<typeof hasResourceAction>[0]
 export function canViewAmcPayments(user: Parameters<typeof hasResourceAction>[0]): boolean {
   return hasResourceAction(user, ResourceType.AMC_PAYMENTS, ActionType.VIEW);
 }
+
+/* The visit board (Phase 9), gated as /api/amc-board is. */
+export function canViewAmcVisits(user: Parameters<typeof hasResourceAction>[0]): boolean {
+  return hasResourceAction(user, ResourceType.AMC_VISITS, ActionType.VIEW);
+}

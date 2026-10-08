@@ -17,6 +17,7 @@ import {
   type VisitStatus,
   type WorkingCalendar,
 } from "@/lib/amc/ppm";
+import { effectiveAccess, type AccessStatus } from "@/lib/amc/visits";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { ContractError, isMissingTable } from "@/lib/server/amc/contracts";
 import { notifyUsers } from "@/lib/server/amc/notifications";
@@ -75,6 +76,11 @@ export interface VisitRecord {
   source: string;
   statusReason: string | null;
   lines: VisitLineRecord[];
+  /* Phase 9 (20261008120000): where it sits on the board, the client's answer and access. Absent before then. */
+  scheduledStart?: string | null;
+  technicianIds?: string[];
+  clientConfirmation?: string | null;
+  accessStatus?: AccessStatus | null;
   /** The window has passed and the visit is not done. */
   overdue: boolean;
 }
@@ -127,6 +133,8 @@ const VISIT_COLUMNS =
   "id, contract_id, visit_no, status, cycle_start, cycle_end, window_start, window_end, target_date, original_target_date, reschedule_count, source, status_reason, overdue_notified_at, " +
   "lines:amc_visit_lines!amc_visit_lines_visit_id_fkey(id, entitlement_id, service_id, service_label, occurrence, status, home_window_start, home_window_end, home_target_date)";
 
+const BOARD_COLUMNS = "scheduled_start, technician_ids, client_confirmation, access_status, access_valid_until";
+
 function mapVisit(r: Row, today: string): VisitRecord {
   const status = r.status as VisitStatus;
   const windowEnd = String(r.window_end);
@@ -158,6 +166,14 @@ function mapVisit(r: Row, today: string): VisitRecord {
     statusReason: str(r.status_reason),
     lines,
     overdue: PLANNABLE_STATUSES.includes(status) && windowEnd < today,
+    ...("scheduled_start" in r
+      ? {
+          scheduledStart: str(r.scheduled_start),
+          technicianIds: Array.isArray(r.technician_ids) ? (r.technician_ids as string[]) : [],
+          clientConfirmation: str(r.client_confirmation),
+          accessStatus: effectiveAccess(str(r.access_status) as AccessStatus | null, str(r.access_valid_until), String(r.target_date)),
+        }
+      : {}),
   };
 }
 
@@ -266,7 +282,12 @@ export async function contractPpm(admin: Admin, contractId: string, config: AmcC
     throw error;
   }
   const [visitsResult, changesResult, lines] = await Promise.all([
-    admin.from("amc_visits").select(VISIT_COLUMNS).eq("contract_id", contractId).order("target_date").order("visit_no"),
+    /* With the board columns when Phase 9 is applied; without them before. */
+    (async () => {
+      const read = (columns: string) => admin.from("amc_visits").select(columns).eq("contract_id", contractId).order("target_date").order("visit_no");
+      const first = await read(`${VISIT_COLUMNS}, ${BOARD_COLUMNS}`);
+      return first.error && (first.error.code === "42703" || first.error.code === "PGRST204") ? read(VISIT_COLUMNS) : first;
+    })(),
     admin
       .from("amc_visit_changes")
       .select("id, visit_id, change_type, from_date, to_date, reason, detail, actor_label, created_at")

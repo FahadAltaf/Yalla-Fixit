@@ -608,6 +608,8 @@ Three changes the user asked for before Phase 7:
 **Migration:** `…_amc_technician_skills_and_confirmation.sql` (SAFE: additive columns on live tables).
 **Done when:** demo story step 10 works.
 
+**Status (8 Oct 2026):** done in code, migration `20261008120000` not applied (log row 23, checks §15). Technician skills (trade, level, certificate expiry) and AMC profile (areas, vehicle, driver, tools, access permissions) in new AMC tables keyed by the FSM technician; AMC → Technicians screen (in the AMC menu rather than inside the live scheduling screens, so they stay untouched). Suggestions from the visit lines and standard durations list only competent technicians with valid certificates, free (live jobs and leave read only, AMC bookings) and with the access permission; blocked otherwise, override of the suggestion needs a reason. AMC → Visit board (an AMC overlay: live jobs and leave shown read-only; nothing written to `schedule_entries` until Phase 15): place by drag or dialog, move one or many (outside the window = reason, original kept), reassign, take off the board. Confirmation to-do and notification N days before the window, request by prepared WhatsApp or email, attempts log, rule per contract, escalation after the attempts; access status with pass and validity, access to-do and alert; client reminder email the day before (daily `visits` job). Not done: technician reminder on the day (FSM app, Phase 15), pass upload from the visit dialog, the no-show-consumes-a-visit rule (Phase 10). 287 tests, typecheck, lint, harness (`97n`) and main-compatibility (28/11, unchanged) all pass.
+
 ### Phase 10: Visit execution and closure (portal side)
 
 | Jira | Work | Size |

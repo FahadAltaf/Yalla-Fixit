@@ -10,6 +10,7 @@ import {
   Combine,
   Database,
   EllipsisVertical,
+  ExternalLink,
   History,
   MoreHorizontal,
   RefreshCw,
@@ -41,15 +42,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { todayInDubai } from "@/lib/amc/contracts";
-import {
-  PLANNABLE_STATUSES,
-  VISIT_CHANGE_LABELS,
-  VISIT_STATUS_LABELS,
-  classifyMove,
-  clubbingGroups,
-  windowsOverlap,
-  type VisitStatus,
-} from "@/lib/amc/ppm";
+import { PLANNABLE_STATUSES, VISIT_CHANGE_LABELS, VISIT_STATUS_LABELS, classifyMove, clubbingGroups, windowsOverlap } from "@/lib/amc/ppm";
+import { ACCESS_STATUS_LABELS } from "@/lib/amc/visits";
 import {
   scheduleService,
   type ContractScheduleResponse,
@@ -59,8 +53,22 @@ import {
   type VisitChangeRecord,
   type VisitRecord,
 } from "@/modules/amc-contracts/schedule-service";
+import type { BoardVisit } from "@/modules/amc-contracts/visits-service";
 
 import { formatContractDate, formatDateTime } from "./contract-status";
+import { VisitDetailDialog } from "./visit-detail-dialog";
+import {
+  ACCESS_TONE,
+  CHANNEL_LABELS,
+  CHANNELS,
+  CONFIRMATION_SHORT,
+  CONFIRMATION_TONE,
+  slotDay,
+  slotTime,
+  visitStatusTone,
+  type Channel,
+  type ConfirmationState,
+} from "./visit-status";
 
 /**
  * A contract's PPM schedule (Phase 8), loaded by the contract page itself
@@ -100,32 +108,15 @@ export type ContractScheduleState = ReturnType<typeof useContractSchedule>;
 
 const isPlannable = (v: VisitRecord) => PLANNABLE_STATUSES.includes(v.status);
 
-/* Theme tokens only: tentative is muted, planned is brand, attention is amber, done is green. */
-function visitStatusTone(status: VisitStatus): string {
-  switch (status) {
-    case "scheduled":
-      return "bg-brand-50 text-brand";
-    case "confirmed":
-      return "bg-brand-100 text-brand";
-    case "in_progress":
-    case "submitted":
-      return "bg-brand-50 text-brand";
-    case "completed":
-    case "completed_with_additional_work":
-      return "bg-success/10 text-success";
-    case "rescheduled":
-    case "pending_access":
-    case "partially_completed":
-      return "bg-warning/10 text-warning";
-    case "not_completed":
-      return "bg-danger/10 text-danger";
-    case "cancelled":
-      return "bg-mist text-ink-soft line-through";
-    case "not_scheduled":
-    default:
-      return "bg-mist text-ink-soft";
-  }
-}
+/*
+  What the board adds to a visit (Phase 9): its slot, crew, confirmation
+  and access. Optional, since a schedule answer may not carry them; the
+  row shows each chip only when it is set.
+*/
+type ScheduleVisit = VisitRecord & Partial<Pick<BoardVisit, "scheduledStart" | "technicianIds" | "clientConfirmation" | "accessStatus">>;
+
+/* The visit dialog opens straight from a link (the board's ?visit=<id>). */
+const visitInUrl = () => (typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("visit"));
 
 const toDate = (iso: string) => new Date(`${iso.slice(0, 10)}T00:00:00`);
 /** "4 Nov", for windows inside a month heading that already says the year. */
@@ -134,10 +125,6 @@ const windowLabel = (v: { windowStart: string; windowEnd: string }) =>
   v.windowStart === v.windowEnd ? dayMonth(v.windowStart) : `${dayMonth(v.windowStart)} – ${dayMonth(v.windowEnd)}`;
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const sharesService = (a: VisitRecord, b: VisitRecord) => a.lines.some((l) => b.lines.some((m) => m.entitlementId === l.entitlementId));
-
-const CHANNELS = ["whatsapp", "call", "sms", "email"] as const;
-type Channel = (typeof CHANNELS)[number];
-const CHANNEL_LABELS: Record<Channel, string> = { whatsapp: "WhatsApp", call: "Call", sms: "SMS", email: "Email" };
 
 type DialogKind = "move" | "add" | "remove" | "club" | "rules";
 
@@ -149,6 +136,9 @@ export function ContractSchedulePanel({ contractId, schedule }: { contractId: st
   const [target, setTarget] = useState<VisitRecord | null>(null);
   const [openKind, setOpenKind] = useState<DialogKind | null>(null);
   const [historyPage, setHistoryPage] = useState(0);
+  /* The visit dialog: any visit, any user (it shows only what they may change). */
+  const [visitId, setVisitId] = useState<string | null>(visitInUrl);
+  const [visitOpen, setVisitOpen] = useState(() => visitInUrl() !== null);
 
   const visits = useMemo(() => data?.visits ?? [], [data]);
   const plannable = useMemo(() => visits.filter(isPlannable), [visits]);
@@ -200,6 +190,20 @@ export function ContractSchedulePanel({ contractId, schedule }: { contractId: st
     setOpenKind(kind);
   };
   const closeDialog = (next: boolean) => !next && setOpenKind(null);
+  const openVisit = (id: string) => {
+    setVisitId(id);
+    setVisitOpen(true);
+  };
+  const closeVisit = (next: boolean) => {
+    if (next) return;
+    setVisitOpen(false);
+    /* Drop ?visit= so a refresh does not open it again. */
+    const query = new URLSearchParams(window.location.search);
+    if (query.has("visit")) {
+      query.delete("visit");
+      window.history.replaceState(null, "", `?${query.toString()}`);
+    }
+  };
   /* The dialog keeps its own pending state and shows a failure as a toast; this posts, reloads and closes. */
   const submit = async (action: ScheduleActionInput, success: string) => {
     await post(action);
@@ -412,16 +416,16 @@ export function ContractSchedulePanel({ contractId, schedule }: { contractId: st
                   key={v.id}
                   visit={v}
                   actions={
-                    canEdit && isPlannable(v) ? (
-                      <VisitMenu
-                        visit={v}
-                        canClub={clubCandidates(v).length > 0}
-                        onMove={() => openDialog("move", v)}
-                        onClub={() => openDialog("club", v)}
-                        onSeparate={(line) => separate(v, line)}
-                        onRemove={() => openDialog("remove", v)}
-                      />
-                    ) : null
+                    <VisitMenu
+                      visit={v}
+                      editable={canEdit && isPlannable(v)}
+                      canClub={clubCandidates(v).length > 0}
+                      onOpen={() => openVisit(v.id)}
+                      onMove={() => openDialog("move", v)}
+                      onClub={() => openDialog("club", v)}
+                      onSeparate={(line) => separate(v, line)}
+                      onRemove={() => openDialog("remove", v)}
+                    />
                   }
                 />
               ))}
@@ -443,6 +447,7 @@ export function ContractSchedulePanel({ contractId, schedule }: { contractId: st
         submit={submit}
       />
       <RulesDialog open={openKind === "rules"} onOpenChange={closeDialog} rules={rules} submit={submit} />
+      <VisitDetailDialog visitId={visitId} open={visitOpen} onOpenChange={closeVisit} onChanged={reload} />
       {confirmDialog}
     </>
   );
@@ -459,9 +464,12 @@ function groupByMonth(visits: VisitRecord[]): Array<[string, VisitRecord[]]> {
   return [...groups.entries()];
 }
 
-function VisitRow({ visit, actions }: { visit: VisitRecord; actions: ReactNode }) {
+function VisitRow({ visit, actions }: { visit: ScheduleVisit; actions: ReactNode }) {
   const cancelled = visit.status === "cancelled";
   const struck = cancelled ? "text-muted-foreground line-through" : "";
+  const confirmation = visit.clientConfirmation && visit.clientConfirmation in CONFIRMATION_SHORT ? (visit.clientConfirmation as ConfirmationState) : null;
+  const access = visit.accessStatus && visit.accessStatus !== "not_required" ? visit.accessStatus : null;
+  const crew = visit.technicianIds?.length ?? 0;
   return (
     <li className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3">
       <div className={`w-16 shrink-0 text-sm font-medium tabular-nums ${struck}`}>Visit {visit.visitNo}</div>
@@ -482,6 +490,27 @@ function VisitRow({ visit, actions }: { visit: VisitRecord; actions: ReactNode }
         <p className="text-muted-foreground text-xs">
           {[`Window ${windowLabel(visit)}`, visit.source === "added" ? "Added" : null, visit.statusReason].filter(Boolean).join(" · ")}
         </p>
+        {visit.scheduledStart || confirmation || access ? (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {visit.scheduledStart ? (
+              <Badge variant="secondary" className="bg-brand-50 text-brand border-0 font-medium">
+                <CalendarClock className="size-3" />
+                {slotDay(visit.scheduledStart)} {slotTime(visit.scheduledStart)}
+                {crew ? ` · ${plural(crew, "technician")}` : ""}
+              </Badge>
+            ) : null}
+            {confirmation ? (
+              <Badge variant="secondary" className={`border-0 font-medium ${CONFIRMATION_TONE[confirmation]}`}>
+                {CONFIRMATION_SHORT[confirmation]}
+              </Badge>
+            ) : null}
+            {access ? (
+              <Badge variant="secondary" className={`border-0 font-medium ${ACCESS_TONE[access]}`}>
+                Pass {ACCESS_STATUS_LABELS[access].toLowerCase()}
+              </Badge>
+            ) : null}
+          </div>
+        ) : null}
       </div>
       <div className="text-right">
         <div className={`text-sm font-semibold tabular-nums ${struck}`}>{formatContractDate(visit.targetDate)}</div>
@@ -509,14 +538,19 @@ function VisitRow({ visit, actions }: { visit: VisitRecord; actions: ReactNode }
 
 function VisitMenu({
   visit,
+  editable,
   canClub,
+  onOpen,
   onMove,
   onClub,
   onSeparate,
   onRemove,
 }: {
   visit: VisitRecord;
+  /** The schedule changes; opening the visit is for everyone. */
+  editable: boolean;
   canClub: boolean;
+  onOpen: () => void;
   onMove: () => void;
   onClub: () => void;
   onSeparate: (line: VisitRecord["lines"][number]) => void;
@@ -531,29 +565,38 @@ function VisitMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
-        <DropdownMenuItem onClick={onMove}>
-          <CalendarDays className="size-4" />
-          Move date
+        <DropdownMenuItem onClick={onOpen}>
+          <ExternalLink className="size-4" />
+          Open visit
         </DropdownMenuItem>
-        {canClub ? (
-          <DropdownMenuItem onClick={onClub}>
-            <Combine className="size-4" />
-            Club with…
-          </DropdownMenuItem>
-        ) : null}
-        {visit.lines.length > 1
-          ? visit.lines.map((l) => (
-              <DropdownMenuItem key={l.id} onClick={() => onSeparate(l)}>
-                <Split className="size-4" />
-                Separate {l.serviceLabel}
+        {editable ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={onMove}>
+              <CalendarDays className="size-4" />
+              Move date
+            </DropdownMenuItem>
+            {canClub ? (
+              <DropdownMenuItem onClick={onClub}>
+                <Combine className="size-4" />
+                Club with…
               </DropdownMenuItem>
-            ))
-          : null}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem variant="destructive" onClick={onRemove}>
-          <Trash2 className="size-4" />
-          Remove
-        </DropdownMenuItem>
+            ) : null}
+            {visit.lines.length > 1
+              ? visit.lines.map((l) => (
+                  <DropdownMenuItem key={l.id} onClick={() => onSeparate(l)}>
+                    <Split className="size-4" />
+                    Separate {l.serviceLabel}
+                  </DropdownMenuItem>
+                ))
+              : null}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onClick={onRemove}>
+              <Trash2 className="size-4" />
+              Remove
+            </DropdownMenuItem>
+          </>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );

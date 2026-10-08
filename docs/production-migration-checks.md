@@ -628,3 +628,39 @@ Expected:
 **Live check:** open AMC Proposals in the live portal; it works as before. In the demo portal, an active contract shows a **Schedule** tab: its tentative visits with service windows, which can be moved, clubbed and confirmed.
 
 **After applying:** check AMC configuration → Calendar (weekend days and holidays) and Scheduling (service window, 15 days by default) before the first schedules are made. The daily AMC jobs now include `ppm_overdue`.
+
+
+## 15. Phase 9 migration: `20261008120000_amc_visit_assignment_and_confirmation.sql`
+
+Apply after section 14. It is **live-safe**: no column, constraint or row is added to or changed on the live scheduling tables, and `amc_submissions` is not touched. What it adds:
+- `amc_technician_profiles` and `amc_technician_skills`: AMC's view of each FSM technician (areas, vehicle, driver, tools, access permissions; trades with level and certificate expiry). Both **reference** `technician_reference`. Creating them takes a brief lock on that small live table. Afterwards the FSM roster sync deactivates a technician with AMC skills instead of deleting them, which is what it already does for technicians other rows point at.
+- on `amc_visits`: the board slot (day, start, end, crew, lead, override reason), the client's confirmation and the access status with its pass;
+- `amc_visit_attempts`: every attempt to reach the client, append-only;
+- `amc_send_log` accepts the appointment confirmation and reminder.
+
+AMC visits placed on the AMC visit board stay on `amc_visits`. Nothing is written to `schedule_entries` (Phase 15 publishes to FSM), so live coordinators never see them.
+
+**Pre-check** (read-only):
+```sql
+select to_regclass('public.amc_technician_skills') as skills, to_regclass('public.amc_visits') as visits;
+select count(*) as technicians from public.technician_reference;
+```
+Expected: `skills` is `null` and `visits` is present (section 14 applied). Note the technician count.
+
+**Post-check** (read-only):
+```sql
+select c.relname, c.relrowsecurity from pg_class c
+ where c.oid in ('public.amc_technician_profiles'::regclass, 'public.amc_technician_skills'::regclass, 'public.amc_visit_attempts'::regclass);
+select table_name, grantee from information_schema.role_table_grants
+ where table_schema = 'public' and grantee in ('anon', 'authenticated')
+   and table_name in ('amc_technician_profiles', 'amc_technician_skills', 'amc_visit_attempts');
+select count(*) as technicians from public.technician_reference;
+```
+Expected:
+- `relrowsecurity = true` on all three;
+- the grants query returns **no rows**;
+- the same technician count.
+
+**Live check:** open Scheduling (the board and Technicians & leave) and AMC Proposals in the live portal; both work as before. In the demo portal, open AMC → Technicians, give a technician the AC trade, then place a confirmed visit from AMC → Visit board.
+
+**After applying:** record each technician's trades in AMC → Technicians before the board can suggest anyone (nobody without a recorded skill is ever suggested or assignable). Check AMC configuration → Scheduling (confirmation lead days, attempts, durations, access alert days). The daily AMC jobs now include `visits`.

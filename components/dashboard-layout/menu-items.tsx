@@ -25,6 +25,7 @@ import {
   canViewAmcEnquiries,
   canViewAmcPayments,
   canViewAmcRateCard,
+  canViewAmcVisits,
 } from "@/components/dashboard/extensions/amc/amc-constants";
 
 // hasViewPermission and filter functions unchanged
@@ -170,6 +171,8 @@ export const baseSectionsItems: MenuItem[] = [
         canSee: canUseAmc,
       },
       { title: "Site visits", url: "/extensions/amc-contracts/assessments", canSee: canUseAmc },
+      { title: "Visit board", url: "/extensions/amc-contracts/board", canSee: canViewAmcVisits },
+      { title: "Technicians", url: "/extensions/amc-contracts/technicians", canSee: canUseAmc },
       { title: "Reports", url: "/extensions/amc-contracts/reports", canSee: canUseAmc },
       { title: "Rate card", url: "/extensions/amc-contracts/rate-card", canSee: canViewAmcRateCard },
       { title: "FSM mapping", url: "/extensions/amc-contracts/fsm-services", canSee: canUseAmc },

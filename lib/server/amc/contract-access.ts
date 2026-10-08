@@ -38,6 +38,8 @@ export type ContractGate =
       seesAll: boolean;
       /** AMC Payments (Phase 7): Finance sees every contract's payments; Approve = gate override, write-off. */
       payments: { view: boolean; create: boolean; edit: boolean; approve: boolean };
+      /** AMC Visits (Phase 9): the board, assignment, confirmation; Approve = supervisor closure (Phase 10). */
+      visits: { view: boolean; create: boolean; edit: boolean; approve: boolean };
     }
   | { ok: false; response: NextResponse };
 
@@ -80,6 +82,12 @@ export async function requireContractAccess(): Promise<ContractGate> {
       create: hasResourceAction(access.accessUser, ResourceType.AMC_PAYMENTS, ActionType.CREATE),
       edit: hasResourceAction(access.accessUser, ResourceType.AMC_PAYMENTS, ActionType.EDIT),
       approve: hasResourceAction(access.accessUser, ResourceType.AMC_PAYMENTS, ActionType.APPROVE),
+    },
+    visits: {
+      view: hasResourceAction(access.accessUser, ResourceType.AMC_VISITS, ActionType.VIEW),
+      create: hasResourceAction(access.accessUser, ResourceType.AMC_VISITS, ActionType.CREATE),
+      edit: hasResourceAction(access.accessUser, ResourceType.AMC_VISITS, ActionType.EDIT),
+      approve: hasResourceAction(access.accessUser, ResourceType.AMC_VISITS, ActionType.APPROVE),
     },
   };
 }
