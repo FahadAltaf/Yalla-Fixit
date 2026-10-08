@@ -169,6 +169,67 @@ export default function PrivacyPolicyPage() {
         </p>
       </Section>
 
+      {/*
+        Google Play's Data safety form asks for a URL that "prominently
+        features the steps users should take to request that their data
+        is deleted", and names what is deleted and what is kept. A policy
+        that merely mentions the right in a paragraph does not satisfy
+        it, so the steps are their own numbered section with an anchor to
+        link straight to.
+      */}
+      <section id="data-deletion" className="scroll-mt-8 mt-10">
+        <h2 className="text-foreground text-lg font-semibold tracking-tight">
+          Requesting deletion of your data
+        </h2>
+        <div className="text-muted-foreground mt-2 space-y-3 text-[0.95rem] leading-relaxed">
+          <p>
+            You can ask us to delete the personal data we hold about you, with or
+            without closing your account. To do so:
+          </p>
+          <ol className="border-border bg-card list-decimal space-y-2 rounded-lg border py-4 pr-5 pl-9">
+            <li>
+              Email{" "}
+              <a
+                className="text-brand font-medium underline underline-offset-2"
+                href={`mailto:${CONTACT}?subject=Data%20deletion%20request`}
+              >
+                {CONTACT}
+              </a>{" "}
+              with the subject &ldquo;Data deletion request&rdquo;.
+            </li>
+            <li>
+              Tell us the email address your YFI Snagging account uses, so we can
+              find the right records.
+            </li>
+            <li>
+              Say whether you want your account closed as well, or only your
+              personal data removed.
+            </li>
+          </ol>
+          <p>
+            We reply within 30 days. There is no charge.
+          </p>
+          <p>
+            <strong className="text-foreground">What is deleted:</strong> your name,
+            email address and account, and the record of which inspections you
+            personally carried out.
+          </p>
+          <p>
+            <strong className="text-foreground">What is kept, and why:</strong> the
+            inspection records themselves &mdash; the defects, photographs and
+            reports &mdash; belong to the client who commissioned the inspection and
+            are kept as business records. Where we are able to, we remove your name
+            from them rather than deleting the inspection. We will tell you plainly
+            which of your data falls into this category.
+          </p>
+          <p>
+            <strong className="text-foreground">Retention:</strong> records we must
+            keep for legal or contractual reasons are held for as long as that
+            obligation lasts, and are then deleted.
+          </p>
+        </div>
+      </section>
+
       <Section title="Your rights">
         <p>
           You can ask us for a copy of the personal data we hold about you, ask us to
