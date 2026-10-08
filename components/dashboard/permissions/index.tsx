@@ -50,7 +50,15 @@ export default function PermissionManagementPage() {
   async function fetchPermissions() {
     if (!selectedRoleId) return;
 
-    // setIsRefetching(true);
+    /*
+      The table's loading state, which was commented out.
+
+      Refresh re-read the permissions perfectly well and said nothing
+      about it: `loading` stayed false, the rows never changed (they are
+      usually the same rows), and the button looked broken while working.
+      The skeleton is the only thing that tells you it happened.
+    */
+    setIsRefetching(true);
     try {
       const rolePermissions = await permissionsService.getPermissionsByRole(
         selectedRoleId

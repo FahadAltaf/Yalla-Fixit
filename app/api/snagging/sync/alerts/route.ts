@@ -72,7 +72,7 @@ export async function POST(req: NextRequest) {
     if (!profile || !accessUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.VIEW)) {
+    if (!hasResourceAction(accessUser, ResourceType.MOBILE_APP, ActionType.VIEW)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 

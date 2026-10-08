@@ -41,12 +41,16 @@ export const RESOURCE_ACTIONS: Record<ResourceType, ActionType[]> = menuResource
 );
 
 /*
-  Signing in to the inspector app. View is the whole of it: a yes or no
-  about the phone, with what an inspector may then do decided by the job
-  they are named on. It has no menu entry, so it is named here or it
-  would never reach the Permissions screen at all.
+  The inspector app. View signs in and reads the jobs; Edit sends back
+  what was captured -- the same two the app's endpoints ask for.
+
+  Which jobs an inspector sees, and which they may write to, is still
+  decided by who is named on the job, not here.
+
+  It has no menu entry, so it is named here or it would never reach the
+  Permissions screen at all.
 */
-RESOURCE_ACTIONS[ResourceType.MOBILE_APP] = [ActionType.VIEW];
+RESOURCE_ACTIONS[ResourceType.MOBILE_APP] = [ActionType.VIEW, ActionType.EDIT];
 
 RESOURCE_ACTIONS[ResourceType.TODOS] = CRUD_MODULE_ACTIONS;
 /* FR5.3 — Approve is the only AMC action granted by role. Creating and

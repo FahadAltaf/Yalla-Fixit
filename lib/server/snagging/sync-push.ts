@@ -75,7 +75,7 @@ export async function handleSyncPush(req: NextRequest, body?: unknown) {
     if (!profile || !accessUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.EDIT)) {
+    if (!hasResourceAction(accessUser, ResourceType.MOBILE_APP, ActionType.EDIT)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 

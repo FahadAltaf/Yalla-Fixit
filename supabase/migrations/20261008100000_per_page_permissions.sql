@@ -78,14 +78,18 @@ on conflict (role_id, resource, action) do nothing;
 
 -- ── The app ──────────────────────────────────────────────────────────
 --
--- View only: it is a yes or no about signing in, and what an inspector
--- may then do is decided by the job they are named on, not by an action
--- on this resource.
+-- View signs in and pulls the jobs; Edit sends back what was captured.
+-- Each role's own Snagging actions are mirrored, so an inspector with
+-- snagging view+edit can still do exactly what it could yesterday, and a
+-- read-only office role does not quietly gain the ability to capture.
+--
+-- Which jobs they see, and which they may write to, is decided by who is
+-- named on the job -- not by this.
 insert into public.role_access (role_id, resource, action, enabled)
-select distinct ra.role_id, 'mobile_app', 'view', true
+select ra.role_id, 'mobile_app', ra.action, true
 from public.role_access ra
 where ra.resource = 'snagging'
-  and ra.action = 'view'
+  and ra.action in ('view', 'edit')
   and ra.enabled is distinct from false
 on conflict (role_id, resource, action) do nothing;
 
