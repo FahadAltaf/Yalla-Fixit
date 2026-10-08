@@ -5,6 +5,7 @@ import { readAmcConfig } from "@/lib/server/amc/config";
 import { runEnquiryFollowUpSweep, runEnquiryIdleSweep } from "@/lib/server/amc/enquiries";
 import { runProposalValiditySweep } from "@/lib/server/amc/proposal-share";
 import { runContractExpirySweep, runUnsignedContractSweep } from "@/lib/server/amc/contract-lifecycle";
+import { runPaymentSweep } from "@/lib/server/amc/payments";
 import { runExpiryReminderSweep } from "@/lib/server/amc/reminders";
 import { escalateDueAmcTodos } from "@/lib/server/amc/todos";
 
@@ -64,6 +65,11 @@ export const AMC_JOBS: AmcJob[] = [
     key: "contract_expiry_status",
     label: "Mark active contracts past their end date as expired",
     run: async ({ admin, now }) => ({ ...(await runContractExpirySweep(admin, now)) }),
+  },
+  {
+    key: "payments",
+    label: "Instalment statuses, due and overdue reminders, cheque dates and late first payments",
+    run: async ({ admin, config, now }) => ({ ...(await runPaymentSweep(admin, config, now)) }),
   },
   {
     key: "expiry_reminders",

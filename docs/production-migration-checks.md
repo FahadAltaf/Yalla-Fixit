@@ -557,3 +557,40 @@ Expected:
 - the grants query returns **no rows**.
 
 **Live check:** in the live portal, open Snagging → Clients and a snagging job; both work as before. Open AMC Proposals; it works as before. In the demo portal, open AMC → Clients: the Snagging clients are listed.
+
+
+## 13. Phase 7 migration: `20261008100000_amc_payments.sql`
+
+Apply after section 12. It is **live-safe**: every table it touches is branch-only (live `main` reads none of them), and `amc_submissions` is not touched. What it adds:
+- `amc_instalments`, the payment schedule with the nine statuses (Not Due … Waived);
+- `amc_cheques`, the cheque register (held, deposited, cleared, bounced, replaced, returned);
+- `amc_payments`, the receipts (cash, transfer, payment link, cleared cheque); voided with a reason, never deleted;
+- on `amc_contracts`: the payment plan, when the first instalment arrived, the authorised gate override (who, when, why) and the late-first-payment stamp;
+- `amc_send_log` accepts `instalment_reminder` (Email 4).
+
+**Pre-check** (read-only):
+```sql
+select to_regclass('public.amc_instalments') as instalments, to_regclass('public.amc_client_profiles') as profiles;
+select status, count(*) from public.amc_contracts group by status;
+```
+Expected:
+- `instalments` is `null` and `profiles` is present (section 12 applied);
+- note the contract counts per status.
+
+**Post-check** (read-only):
+```sql
+select c.relname, c.relrowsecurity from pg_class c
+ where c.oid in ('public.amc_instalments'::regclass, 'public.amc_cheques'::regclass, 'public.amc_payments'::regclass);
+select table_name, grantee from information_schema.role_table_grants
+ where table_schema = 'public' and grantee in ('anon', 'authenticated')
+   and table_name in ('amc_instalments', 'amc_cheques', 'amc_payments');
+select status, count(*) from public.amc_contracts group by status;
+```
+Expected:
+- `relrowsecurity = true` on all three;
+- the grants query returns **no rows**;
+- the same contract counts per status as before.
+
+**Live check:** open AMC Proposals in the live portal; it works as before. In the demo portal, activate a signed contract: it shows **Pending initial payment** and a Payments tab with its schedule; recording the first instalment makes it Active.
+
+**After applying, in AMC configuration → Payments:** name the Finance users (they hear about payments and get the overdue to-do) and check "Remind the client before an instalment is due" (7 days by default). Make sure the scheduled AMC jobs run daily (the new `payments` job sends Email 4, overdue to-dos and cheque alerts).

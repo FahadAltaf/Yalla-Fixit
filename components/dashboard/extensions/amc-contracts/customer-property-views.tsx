@@ -18,6 +18,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DataRow, SectionCard, StatCard, StatCardGrid, TabCount } from "@/components/dashboard/shared/kaizen";
 import { ActionDialogContent, ErrorState, SectionSkeleton, StatGridSkeleton, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
+import { canViewAmcPayments } from "@/components/dashboard/extensions/amc/amc-constants";
+import { useAuth } from "@/context/AuthContext";
 import { RENEWAL_STAGE_LABELS, type RenewalStage } from "@/lib/amc/business";
 import { LIFECYCLE_LABELS, documentExpiryState } from "@/lib/amc/client-profile";
 import { formatQuantity, todayInDubai } from "@/lib/amc/contracts";
@@ -26,6 +28,7 @@ import { amcContractsService, type CustomerInput, type CustomerOverview, type Pr
 import { ELIGIBILITY_LABELS } from "./contract-commercial";
 import { CONTRACT_STATUS_LABELS, contractStatusTone, formatContractDate } from "./contract-status";
 import { CustomerDialog } from "./customers-page";
+import { ClientPaymentsPanel } from "./payments-page";
 import { PropertyFields, UNIT_TYPE_LABELS, cleanProperty } from "./customer-pickers";
 import { useAmcData } from "./use-amc-data";
 import { CommunicationPanel } from "./profile/communication-panel";
@@ -281,7 +284,7 @@ function StartAssessmentButton({ customerId, propertyId }: { customerId: string 
 
 /* ------------------------------------------------------------------ */
 
-const CUSTOMER_TABS = ["overview", "properties", "contracts", "visits", "contacts", "documents", "communication"] as const;
+const CUSTOMER_TABS = ["overview", "properties", "contracts", "payments", "visits", "contacts", "documents", "communication"] as const;
 
 /**
  * The client profile (BRD 5.9, DEV-379), one page per client like the
@@ -296,7 +299,10 @@ export function CustomerDetail({ id }: { id: string }) {
   useBreadcrumbLabel(id, data?.overview.customer.name ?? "Client");
   const editing = useDialog();
   const addingProperty = useDialog();
-  const { tab, setTab, isOpened } = useUrlTab(CUSTOMER_TABS, "overview");
+  /* Payments (Phase 7) only for AMC Payments (View), as /api/amc-payments answers. */
+  const { userProfile } = useAuth();
+  const canViewPayments = canViewAmcPayments(userProfile);
+  const { tab, setTab, isOpened } = useUrlTab(canViewPayments ? CUSTOMER_TABS : CUSTOMER_TABS.filter((t) => t !== "payments"), "overview");
 
   const toolbar = <DetailToolbar backHref={CLIENTS_HREF} backLabel="Clients" fetchedAt={fetchedAt} refreshing={refreshing} onRefresh={data ? refresh : undefined} />;
 
@@ -401,6 +407,7 @@ export function CustomerDetail({ id }: { id: string }) {
             Contracts
             <TabCount value={contracts.length} />
           </TabsTrigger>
+          {canViewPayments ? <TabsTrigger value="payments">Payments</TabsTrigger> : null}
           <TabsTrigger value="visits">
             Site visits
             <TabCount value={assessments.length} />
@@ -471,6 +478,7 @@ export function CustomerDetail({ id }: { id: string }) {
             </SectionCard>
           </>,
         )}
+        {canViewPayments ? panel("payments", <ClientPaymentsPanel clientId={customer.id} />) : null}
         {panel(
           "visits",
           <SectionCard title="Site visits" description="Surveys of the client's properties, and the proposals raised from them." icon={<ClipboardCheck />} bodyClassName="border-t">

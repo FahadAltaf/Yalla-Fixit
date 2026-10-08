@@ -37,6 +37,7 @@ const AMC_SECTIONS: Record<string, { label: string; href?: string }> = {
   reports: { label: "Reports" },
   settings: { label: "Operations settings" },
   "fsm-services": { label: "FSM mapping" },
+  payments: { label: "Payments" },
 };
 const AMC_WORDS: Record<string, string> = { new: "New proposal", edit: "Edit" };
 

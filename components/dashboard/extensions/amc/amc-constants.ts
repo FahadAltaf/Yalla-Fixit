@@ -358,3 +358,8 @@ export function canViewAmcEnquiries(user: Parameters<typeof hasResourceAction>[0
 export function canViewAmcRateCard(user: Parameters<typeof hasResourceAction>[0]): boolean {
   return hasResourceAction(user, ResourceType.AMC_RATE_CARD, ActionType.VIEW);
 }
+
+/* Finance's payments views (Phase 7), gated as /api/amc-payments is. */
+export function canViewAmcPayments(user: Parameters<typeof hasResourceAction>[0]): boolean {
+  return hasResourceAction(user, ResourceType.AMC_PAYMENTS, ActionType.VIEW);
+}

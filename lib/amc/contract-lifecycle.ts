@@ -127,6 +127,13 @@ export const activationSchema = z
     action: z.literal("activate"),
     commencementDate: isoDate,
     termMonths: z.number().int().min(1).max(120),
+    /* Phase 7 (DEV-386): start before the first instalment arrives, on agreed
+       credit terms. Needs AMC Payments (Approve), and always a reason. */
+    startWithoutPayment: z
+      .object({ reason: z.string().trim().min(3, "Say why the contract starts before the first payment").max(500) })
+      .strict()
+      .optional()
+      .nullable(),
   })
   .strict();
 

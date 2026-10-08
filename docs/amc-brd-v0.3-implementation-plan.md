@@ -570,6 +570,8 @@ Three changes the user asked for before Phase 7:
 **Migration:** `…_amc_payments.sql` (SAFE).
 **Done when:** demo story step 8 works.
 
+**Status (8 Oct 2026):** done in code, migration `20261008100000` not applied (log row 21, checks §13). Activation makes the schedule and holds the contract in Pending Initial Payment until instalment 1 is received (or AMC Payments Approve starts it with a reason); the prospect becomes a client then, no longer on signing. Cash/transfer/link payments (partial allowed), the cheque register, void and cash handover, write-off/waive, Email 4, the overdue to-do, cheque-date and late-first-payment alerts (daily `payments` job). Screens: contract Payments tab, AMC → Payments for Finance, client Payments tab. 268 tests, typecheck, lint, harness (`97l`) and main-compatibility (28/11, unchanged) all pass. Not done: proof-of-transfer upload in the payment dialog, payment links and Zoho Finance invoices/receipts (Phase 15).
+
 ### Phase 8: PPM schedule
 
 | Jira | Work | Size |

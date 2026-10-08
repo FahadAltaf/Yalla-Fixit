@@ -114,7 +114,8 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
             gate.userId,
           ),
         canRecordScan: AWAITING_SIGNATURE.includes(contract.status as ContractStatus) && canOperateContract(gate.actor, loaded.ownerId),
-        canActivate: (contract.status === "signed" || contract.status === "pending_initial_payment") && canOperateContract(gate.actor, loaded.ownerId),
+        /* A contract waiting for its first payment is past activation: it starts when the payment is in. */
+        canActivate: contract.status === "signed" && canOperateContract(gate.actor, loaded.ownerId),
         canEditTerms: PRE_ACTIVATION.includes(contract.status as ContractStatus) && canOperateContract(gate.actor, loaded.ownerId),
         canHold: (contract.status === "active" || contract.status === "on_hold") && canOperateContract(gate.actor, loaded.ownerId),
         canTerminate: gate.canApprove && (contract.status === "active" || contract.status === "on_hold"),
@@ -126,6 +127,13 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
         canCorrect: canCorrectUsage(gate.actor, loaded.ownerId),
         canCancel: gate.canApprove && contract.status === "active",
         canRenew: canOperateContract(gate.actor, loaded.ownerId) && contract.status !== "cancelled" && !contract.renewedByContractId && !renewalResult.data,
+        /* Phase 7 payments: Finance (AMC Payments) on any contract; the owner records what came in. */
+        payments: {
+          canView: gate.payments.view || canOperateContract(gate.actor, loaded.ownerId),
+          canRecord: gate.payments.create || gate.payments.edit || canOperateContract(gate.actor, loaded.ownerId),
+          canEdit: gate.payments.edit,
+          canApprove: gate.payments.approve,
+        },
       },
     });
   } catch (error) {

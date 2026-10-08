@@ -145,11 +145,12 @@ export function useLifecycleDialogs(data: ContractDetail, onChanged: () => void)
 /* One action at a time: success is a toast and the dialog closes; a failure is a toast and it stays open. */
 function useAction() {
   const [busy, setBusy] = useState(false);
-  const run = async (fn: () => Promise<unknown>, success: string, after: () => void) => {
+  /* success may depend on the answer (activation lands active or waiting for payment). */
+  const run = async <T,>(fn: () => Promise<T>, success: string | ((result: T) => string), after: () => void) => {
     setBusy(true);
     try {
-      await fn();
-      toast.success(success);
+      const result = await fn();
+      toast.success(typeof success === "function" ? success(result) : success);
       after();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Something went wrong.");
@@ -320,15 +321,29 @@ function ActivateDialog({ open, onOpenChange, data, onDone }: DialogProps & { da
   const initialTerm = () => String(data.contract.termMonths && data.contract.termMonths >= 12 ? data.contract.termMonths : 12);
   const [start, setStart] = useState(initialStart);
   const [term, setTerm] = useState(initialTerm);
+  /* Phase 7 (DEV-386): starting before the first instalment needs AMC Payments (Approve) and a reason. */
+  const canStartEarly = data.permissions.payments?.canApprove === true;
+  const [startEarly, setStartEarly] = useState(false);
+  const [earlyReason, setEarlyReason] = useState("");
   const { busy, run } = useAction();
 
   useResetOnOpen(open, () => {
     setStart(initialStart());
     setTerm(initialTerm());
+    setStartEarly(false);
+    setEarlyReason("");
   });
 
   const months = Number(term);
   const end = start && months >= 1 ? expiryFromCommencement(start, months) : null;
+  const early = canStartEarly && startEarly;
+  const activate = async () =>
+    (await lifecycle(data.contract.id, {
+      action: "activate",
+      commencementDate: start,
+      termMonths: months,
+      ...(early ? { startWithoutPayment: { reason: earlyReason.trim() } } : {}),
+    })) as { status?: string };
   return (
     <DialogShell
       open={open}
@@ -341,8 +356,17 @@ function ActivateDialog({ open, onOpenChange, data, onDone }: DialogProps & { da
           pending={busy}
           pendingLabel="Activating…"
           icon={<Play className="size-4" />}
-          disabled={!start || !(months >= 1)}
-          onClick={() => void run(() => lifecycle(data.contract.id, { action: "activate", commencementDate: start, termMonths: months }), "Contract activated.", onDone)}
+          disabled={!start || !(months >= 1) || (early && earlyReason.trim().length < 3)}
+          onClick={() =>
+            void run(
+              activate,
+              (result) =>
+                result?.status === "pending_initial_payment"
+                  ? "Contract activated. It waits for the first instalment before visits are released."
+                  : "Contract activated.",
+              onDone,
+            )
+          }
         >
           Activate
         </SubmitButton>
@@ -359,6 +383,25 @@ function ActivateDialog({ open, onOpenChange, data, onDone }: DialogProps & { da
         </div>
       </div>
       {end ? <p className="text-muted-foreground text-sm">Runs to {formatContractDate(end)}.</p> : null}
+      <p className="text-muted-foreground text-sm">
+        {early
+          ? "The payment schedule is made now. The contract starts straight away; the first instalment is still collected."
+          : "The payment schedule is made now. The contract waits for the first instalment before any visit is released."}
+      </p>
+      {canStartEarly ? (
+        <div className="grid gap-3 rounded-lg border p-3">
+          <label className="flex items-start gap-2 text-sm">
+            <Checkbox checked={startEarly} onCheckedChange={(v) => setStartEarly(v === true)} className="mt-0.5" />
+            Start before the first payment (agreed credit terms)
+          </label>
+          {startEarly ? (
+            <div className="grid gap-2">
+              <Label htmlFor="act-early-reason">Reason</Label>
+              <Textarea id="act-early-reason" rows={2} value={earlyReason} onChange={(e) => setEarlyReason(e.target.value)} maxLength={500} />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </DialogShell>
   );
 }

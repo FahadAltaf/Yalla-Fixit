@@ -23,6 +23,7 @@ import {
   canUseAmc,
   canViewAmcConfig,
   canViewAmcEnquiries,
+  canViewAmcPayments,
   canViewAmcRateCard,
 } from "@/components/dashboard/extensions/amc/amc-constants";
 
@@ -160,6 +161,7 @@ export const baseSectionsItems: MenuItem[] = [
            sections claim longer prefixes, so this only wins on those. */
         canSee: canUseAmc,
       },
+      { title: "Payments", url: "/extensions/amc-contracts/payments", canSee: canViewAmcPayments },
       {
         title: "Clients",
         url: "/extensions/amc-contracts/customers",

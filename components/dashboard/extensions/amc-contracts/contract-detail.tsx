@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
   Ban,
+  Banknote,
   Check,
   Copy,
   FileSignature,
@@ -68,6 +69,7 @@ import { ContractCustomer } from "./contract-customer";
 import { ContractDocuments } from "./contract-documents";
 import { ContractFsm } from "./contract-fsm";
 import { ContractLifecycleCard, EntitlementTermsCard, useLifecycleDialogs } from "./contract-lifecycle-panel";
+import { ContractPaymentsPanel, openInstalmentCount, useContractPayments } from "./contract-payments-panel";
 import { ContractRenewal, RenewalReminders } from "./contract-renewal";
 import {
   AUDIT_LABELS,
@@ -81,20 +83,21 @@ import {
   formatDateTime,
 } from "./contract-status";
 import { CoverageCheckDialog } from "./coverage-check-dialog";
+import { usePaymentDialogs } from "./payment-dialogs";
 import { useUrlTab } from "./profile/use-url-tab";
 import { RecordUsageDialog } from "./record-usage-dialog";
 import { UsageHistory } from "./usage-history";
 
 const LIST = "/extensions/amc-contracts";
 
-const TABS = ["overview", "coverage", "usage", "fsm", "commercial", "renewal", "documents", "history"] as const;
+const TABS = ["overview", "coverage", "usage", "fsm", "commercial", "payments", "renewal", "documents", "history"] as const;
 type Tab = (typeof TABS)[number];
 
 /**
  * One operational AMC contract, laid out like a Snagging job: the way back
  * and Refresh, a header card with the contract's state and its next step,
  * the four figures, then tabs for its lifecycle, every service and its
- * allowance, usage, FSM, commercial, renewal, documents and history.
+ * allowance, usage, FSM, commercial, payments, renewal, documents and history.
  */
 export function ContractDetail({ id }: { id: string }) {
   const router = useRouter();
@@ -184,8 +187,14 @@ function ContractView({
   const [cancelling, setCancelling] = useState(false);
   const [checking, setChecking] = useState(false);
   const [usageVersion, setUsageVersion] = useState(0);
-  const { tab, setTab, isOpened } = useUrlTab<Tab>(TABS, "overview");
-  const lifecycleDialogs = useLifecycleDialogs(data, () => void load());
+  /* Payments (Phase 7) for Finance and the owner; the tab is not offered to anyone else. */
+  const canViewPayments = data.permissions.payments?.canView === true;
+  const { tab, setTab, isOpened } = useUrlTab<Tab>(canViewPayments ? TABS : TABS.filter((t) => t !== "payments"), "overview");
+  const payments = useContractPayments(data.contract.id, canViewPayments);
+  /* Money moving can move the contract too (the first instalment starts it), so both reload. */
+  const reloadWithPayments = () => Promise.all([load(), payments.reload()]);
+  const paymentDialogs = usePaymentDialogs(reloadWithPayments);
+  const lifecycleDialogs = useLifecycleDialogs(data, () => void reloadWithPayments());
 
   /* After usage or a correction: the allowances and the history both move. */
   const reloadAll = () => {
@@ -195,7 +204,8 @@ function ContractView({
 
   const refresh = async () => {
     setUsageVersion((v) => v + 1);
-    if (await load()) toast.success("Up to date");
+    const [ok] = await Promise.all([load(), payments.reload()]);
+    if (ok) toast.success("Up to date");
     else toast.error("Could not refresh the contract. What was on screen is kept.");
   };
 
@@ -208,6 +218,10 @@ function ContractView({
   const status = contract.status as ContractStatus;
   const canRecord = permissions.canRecordUsage && entitlements.some((e) => e.consumable);
   const counted = summary.withRemaining + summary.exhausted;
+  const paymentPerms = payments.data?.permissions ?? permissions.payments;
+  /* Waiting for its first payment (DEV-386): recording it is the next step. */
+  const awaitingFirst = status === "pending_initial_payment";
+  const firstInstalment = awaitingFirst ? (payments.data?.gate.firstInstalment ?? null) : null;
 
   /*
     The header shows the step the contract is at as its one primary
@@ -219,9 +233,15 @@ function ContractView({
     ? { label: "Sign", icon: <PenLine className="size-4" />, onClick: () => lifecycleDialogs.open("sign") }
     : permissions.canActivate
       ? { label: "Activate", icon: <Play className="size-4" />, onClick: () => lifecycleDialogs.open("activate") }
-      : canRecord
-        ? { label: "Record usage", icon: <Plus className="size-4" />, onClick: () => recordUsage(null) }
-        : null;
+      : firstInstalment && firstInstalment.outstanding > 0 && paymentPerms?.canRecord
+        ? {
+            label: "Record payment",
+            icon: <Banknote className="size-4" />,
+            onClick: () => paymentDialogs.open(contract.id, { kind: "record_payment", instalment: firstInstalment }),
+          }
+        : canRecord
+          ? { label: "Record usage", icon: <Plus className="size-4" />, onClick: () => recordUsage(null) }
+          : null;
   const recordInMore = canRecord && primary?.label !== "Record usage";
   const holdItems = [
     permissions.canRecordScan ? (
@@ -234,6 +254,12 @@ function ContractView({
       <DropdownMenuItem key="hold" onClick={() => lifecycleDialogs.openStatus("on_hold")}>
         <Pause className="size-4" />
         Put on hold
+      </DropdownMenuItem>
+    ) : null,
+    awaitingFirst && paymentPerms?.canApprove ? (
+      <DropdownMenuItem key="start" onClick={() => paymentDialogs.open(contract.id, { kind: "override_gate" })}>
+        <Play className="size-4" />
+        Start before payment
       </DropdownMenuItem>
     ) : null,
     permissions.canHold && status === "on_hold" ? (
@@ -278,25 +304,33 @@ function ContractView({
             title: `Ended ${formatContractDate(contract.endDate)}`,
             body: "Work after that date is chargeable unless the contract is renewed.",
           }
-        : contract.lifecycle?.statusReason
+        : awaitingFirst
           ? {
-              tone: status === "terminated" ? "danger" : "warning",
-              title: CONTRACT_STATUS_NAMES[status] ?? status,
-              body: contract.lifecycle.statusReason,
+              tone: "warning",
+              title: "Waiting for its first payment",
+              body: firstInstalment
+                ? `Instalment 1 (AED ${firstInstalment.outstanding.toLocaleString("en-AE", { minimumFractionDigits: 2 })}) is due ${formatContractDate(firstInstalment.dueDate)}. No visits are released until it is received.`
+                : "No visits are released until the first instalment is received.",
             }
-          : status === "signed" || status === "pending_initial_payment"
+            : contract.lifecycle?.statusReason
             ? {
-                tone: "info",
-                title: `Signed ${contract.signedAt ? formatDateTime(contract.signedAt) : ""}`.trim(),
-                body: `${contract.lifecycle?.signatureRoute === "scan" && contract.lifecycle.signedScanDate ? `Scan dated ${formatContractDate(contract.lifecycle.signedScanDate)}. ` : ""}Activate it with the commencement date: visits and coverage start from then.`,
+                tone: status === "terminated" ? "danger" : "warning",
+                title: CONTRACT_STATUS_NAMES[status] ?? status,
+                body: contract.lifecycle.statusReason,
               }
-            : contract.displayStatus === "not_started"
+            : status === "signed"
               ? {
                   tone: "info",
-                  title: `Coverage starts on ${formatContractDate(contract.startDate)}`,
-                  body: "Usage can be recorded from then.",
+                  title: `Signed ${contract.signedAt ? formatDateTime(contract.signedAt) : ""}`.trim(),
+                  body: `${contract.lifecycle?.signatureRoute === "scan" && contract.lifecycle.signedScanDate ? `Scan dated ${formatContractDate(contract.lifecycle.signedScanDate)}. ` : ""}Activate it with the commencement date: visits and coverage start from then.`,
                 }
-              : null;
+              : contract.displayStatus === "not_started"
+                ? {
+                    tone: "info",
+                    title: `Coverage starts on ${formatContractDate(contract.startDate)}`,
+                    body: "Usage can be recorded from then.",
+                  }
+                : null;
 
   /* A tab's body, mounted on first open and kept after. */
   const panel = (value: Tab, children: ReactNode) =>
@@ -464,6 +498,12 @@ function ContractView({
           </TabsTrigger>
           <TabsTrigger value="fsm">FSM</TabsTrigger>
           <TabsTrigger value="commercial">Commercial</TabsTrigger>
+          {canViewPayments ? (
+            <TabsTrigger value="payments">
+              Payments
+              <TabCount value={openInstalmentCount(payments.data)} />
+            </TabsTrigger>
+          ) : null}
           <TabsTrigger value="renewal">Renewal</TabsTrigger>
           <TabsTrigger value="documents">Documents</TabsTrigger>
           <TabsTrigger value="history">
@@ -661,6 +701,19 @@ function ContractView({
           </div>,
         )}
 
+        {canViewPayments
+          ? panel(
+              "payments",
+              <ContractPaymentsPanel
+                contractId={contract.id}
+                contractStatus={status}
+                payments={payments}
+                dialogs={paymentDialogs}
+                onChanged={reloadWithPayments}
+              />,
+            )
+          : null}
+
         {panel(
           "renewal",
           <div className="grid gap-6 lg:grid-cols-2">
@@ -730,6 +783,7 @@ function ContractView({
         contract={{ id: contract.id, proposalNumber: contract.proposalNumber, customerName: contract.customerName }}
       />
       {lifecycleDialogs.dialogs}
+      {paymentDialogs.dialogs}
     </div>
   );
 }

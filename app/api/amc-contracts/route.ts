@@ -23,6 +23,8 @@ import {
   mapContract,
 } from "@/lib/server/amc/contracts";
 import { loadPendingActivations } from "@/lib/server/amc/contract-operations";
+import { readAmcConfig } from "@/lib/server/amc/config";
+import { gateAfterOneStepActivation } from "@/lib/server/amc/payments";
 import { fetchAllRowsById } from "@/lib/server/amc/paging";
 import { likeTerm, pageParams } from "@/lib/server/snagging/search";
 
@@ -344,7 +346,14 @@ export async function POST(req: NextRequest) {
       { submissionId, startDate, endDate },
       { id: gate.userId, label: gate.label },
     );
-    return NextResponse.json({ contract }, { status: 201 });
+    /* Phase 7: the schedule and the initial payment gate, as in the lifecycle activation. */
+    const gated = await gateAfterOneStepActivation(
+      gate.admin,
+      contract.id,
+      { id: gate.userId, label: gate.label },
+      await readAmcConfig(gate.admin),
+    );
+    return NextResponse.json({ contract: { ...contract, status: gated.status } }, { status: 201 });
   } catch (error) {
     return contractErrorResponse(error, "Could not activate the contract");
   }

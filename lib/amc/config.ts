@@ -65,6 +65,12 @@ const paymentsSchema = z
     customPlanAllowed: z.boolean(),
     lateFirstPaymentDays: int(1, 90),
     chequeAlertDaysBefore: int(0, 60),
+    /* Phase 7, defaulted so a payments section saved earlier still validates.
+       Email 4 goes this many days before an instalment falls due. */
+    dueReminderDaysBefore: int(0, 60).default(7),
+    /* Finance: with the contract owner, hears about payments and holds the
+       "Instalment overdue" to-do (BRD 6.8). */
+    financeUserIds: uuidList.default([]),
   })
   .strict()
   .refine((v) => v.plansAboveBand.includes(v.defaultPlanAboveBand), {
@@ -248,6 +254,8 @@ export const AMC_CONFIG_DEFAULTS: AmcConfig = {
     customPlanAllowed: true,
     lateFirstPaymentDays: 7,
     chequeAlertDaysBefore: 3,
+    dueReminderDaysBefore: 7,
+    financeUserIds: [],
   },
   proposals: {
     validityDays: 30,

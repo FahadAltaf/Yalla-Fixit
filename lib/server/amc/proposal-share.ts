@@ -90,7 +90,8 @@ export function whatsappMessages(recipients: Array<{ name: string; address: stri
 export interface SendLogEntry {
   submissionId: string;
   versionNo: number;
-  document: "proposal" | "contract";
+  /* instalment_reminder: Email 4 (Phase 7, 20261008100000). */
+  document: "proposal" | "contract" | "instalment_reminder";
   channel: "email" | "whatsapp" | "link" | "sms";
   recipients: Array<{ name: string; address: string }>;
   cc?: string[];

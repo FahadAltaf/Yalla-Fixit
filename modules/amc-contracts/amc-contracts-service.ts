@@ -242,6 +242,8 @@ export interface ContractDetail {
     canHold?: boolean;
     canTerminate?: boolean;
     canCallOff?: boolean;
+    /* Phase 7: AMC Payments, or the owner recording what came in. Absent on older responses. */
+    payments?: { canView: boolean; canRecord: boolean; canEdit: boolean; canApprove: boolean };
   };
 }
 

@@ -36,6 +36,8 @@ export type ContractGate =
       actor: AmcActor;
       /** Lists and reports show every contract (approver or AMC Operations). */
       seesAll: boolean;
+      /** AMC Payments (Phase 7): Finance sees every contract's payments; Approve = gate override, write-off. */
+      payments: { view: boolean; create: boolean; edit: boolean; approve: boolean };
     }
   | { ok: false; response: NextResponse };
 
@@ -73,6 +75,12 @@ export async function requireContractAccess(): Promise<ContractGate> {
     canApprove,
     actor,
     seesAll: seesAllContracts(actor),
+    payments: {
+      view: hasResourceAction(access.accessUser, ResourceType.AMC_PAYMENTS, ActionType.VIEW),
+      create: hasResourceAction(access.accessUser, ResourceType.AMC_PAYMENTS, ActionType.CREATE),
+      edit: hasResourceAction(access.accessUser, ResourceType.AMC_PAYMENTS, ActionType.EDIT),
+      approve: hasResourceAction(access.accessUser, ResourceType.AMC_PAYMENTS, ActionType.APPROVE),
+    },
   };
 }
 
@@ -96,7 +104,11 @@ export async function requireManagedContract(
   const notFound = { ok: false as const, response: NextResponse.json({ error: "Contract not found." }, { status: 404 }) };
   if (!UUID.test(id)) return notFound;
   const loaded = await loadContract(gate.admin, id);
-  const allowed = mode === "read" ? canReadContract(gate.actor, loaded.ownerId) : canOperateContract(gate.actor, loaded.ownerId);
+  /* Finance (AMC Payments View) reads any contract: the payments page links to them all. */
+  const allowed =
+    mode === "read"
+      ? canReadContract(gate.actor, loaded.ownerId) || gate.payments.view
+      : canOperateContract(gate.actor, loaded.ownerId);
   if (!allowed) return notFound;
   return { ok: true as const, ...loaded };
 }

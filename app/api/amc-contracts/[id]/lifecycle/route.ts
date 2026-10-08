@@ -43,6 +43,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       case "scan":
         return NextResponse.json(await recordSignedScan(gate.admin, id, body, actor));
       case "activate":
+        /* Starting before the first payment is an authorised override (BRD 6.7, DEV-386). */
+        if (body.startWithoutPayment && !gate.payments.approve) {
+          return NextResponse.json({ error: "Only someone with AMC Payments (Approve) can start a contract before its first payment." }, { status: 403 });
+        }
         return NextResponse.json(await activateSignedContract(gate.admin, id, body, actor, await readAmcConfig(gate.admin)));
       case "entitlement":
         await updateEntitlementTerms(gate.admin, id, body, actor);

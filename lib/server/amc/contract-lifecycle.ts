@@ -19,8 +19,10 @@ import {
 import { termMonthsBetween, todayInDubai } from "@/lib/amc/contracts";
 import { grandTotalFromFinal, vatOnFinal } from "@/lib/amc/pricing";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
-import { recordLifecycleChange } from "@/lib/server/amc/client-profile";
 import { ContractError, isMissingTable, prepareActivation } from "@/lib/server/amc/contracts";
+import { prospectBecomesClient, setContractStatus } from "@/lib/server/amc/contract-state";
+import { createSchedule } from "@/lib/server/amc/payments";
+import { gateOpen } from "@/lib/amc/payments";
 import { notifyContractEvent, notifyUsers } from "@/lib/server/amc/notifications";
 import { recordStatusChange } from "@/lib/server/amc/status-history";
 import { closeAmcTodos, openAmcTodo } from "@/lib/server/amc/todos";
@@ -123,33 +125,9 @@ async function contractRow(admin: Admin, filter: { id?: string; submissionId?: s
   return data ?? null;
 }
 
-async function setStatus(admin: Admin, contractId: string, from: string, to: ContractStatus, extra: Row, actor: Actor, reason: string | null) {
-  const now = new Date().toISOString();
-  const { data, error } = await admin
-    .from("amc_contracts")
-    .update({ status: to, status_changed_at: now, updated_at: now, ...extra })
-    .eq("id", contractId)
-    .eq("status", from)
-    .select("id");
-  if (error) throw new ContractError(error.message, error.code === "23514" ? 409 : 500);
-  if (!data?.length) throw new ContractError("Someone else changed this contract a moment ago. Reload it.", 409);
-  await recordStatusChange(admin, { entityType: "contract", entityId: contractId, from, to, reason, actor: { id: actor.id, label: actor.label } });
-}
-
-/** The client becomes a client (BRD 5.9): on signing until Phase 7 adds the first payment. */
-async function prospectBecomesClient(admin: Admin, customerId: unknown, actor: Actor, reason: string) {
-  if (typeof customerId !== "string" || !customerId) return;
-  /* Lifecycle is on the client's AMC profile (20261007170000); a client with
-     none reads as a client already, so there is nothing to change. */
-  const { data } = await admin.from("amc_client_profiles").select("lifecycle").eq("client_id", customerId).maybeSingle<Row>();
-  if (!data || data.lifecycle === "client") return;
-  const { error } = await admin
-    .from("amc_client_profiles")
-    .update({ lifecycle: "client", updated_at: new Date().toISOString() })
-    .eq("client_id", customerId);
-  if (error) return;
-  await recordLifecycleChange(admin, customerId, String(data.lifecycle ?? "prospect"), "client", { id: actor.id ?? "", label: actor.label }, reason);
-}
+/* The guarded status move and prospect-to-client are shared with the
+   payments (lib/server/amc/contract-state.ts). */
+const setStatus = setContractStatus;
 
 /* ------------------------------------------------------------------ */
 /* Creation on client approval (DEV-351, 372, 373)                     */
@@ -335,7 +313,6 @@ async function afterSignature(admin: Admin, c: Row, status: ContractStatus, sign
       : {};
   await setStatus(admin, String(c.id), from, status, extra, actor, status === "signed" ? "All signatures recorded" : "Signature recorded");
   if (status === "signed") {
-    await prospectBecomesClient(admin, c.customer_id, actor, `Contract ${String(c.contract_number ?? "")} signed`);
     await closeAmcTodos(admin, { entityType: "contract", entityId: String(c.id), kind: "contract_follow_up" }, { status: "done", reason: "Signed" }).catch(() => 0);
     await notifyContractEvent(admin, { event: "contract_signed", contractId: String(c.id), actor: { id: actor.id, label: actor.label }, at: new Date().toISOString() }).catch(() => undefined);
   } else {
@@ -448,7 +425,6 @@ export async function recordSignedScan(
     actorLabel: actor.label,
     payload: { documentId: input.documentId, signedDate: input.signedDate, signedByName: input.signedByName.trim() },
   });
-  await prospectBecomesClient(admin, c.customer_id, actor, `Contract ${String(c.contract_number ?? "")} signed (scan)`);
   await closeAmcTodos(admin, { entityType: "contract", entityId: contractId, kind: "contract_follow_up" }, { status: "done", reason: "Signed scan" }).catch(() => 0);
   return { status: "signed" as const };
 }
@@ -460,7 +436,7 @@ export async function recordSignedScan(
 export async function activateSignedContract(
   admin: Admin,
   contractId: string,
-  input: { commencementDate: string; termMonths: number },
+  input: { commencementDate: string; termMonths: number; startWithoutPayment?: { reason: string } | null },
   actor: { id: string; label: string | null },
   config: AmcConfig,
 ) {
@@ -473,14 +449,38 @@ export async function activateSignedContract(
   if (termProblem) throw new ContractError(termProblem, 400);
   const endDate = expiryFromCommencement(input.commencementDate, input.termMonths);
   const nowIso = new Date().toISOString();
+
+  /* BRD 5.8: the payment schedule is made on activation (made again if the
+     contract is activated a second time before anything was paid). */
+  const schedule = await createSchedule(
+    admin,
+    { contractId, commencementDate: input.commencementDate, termMonths: input.termMonths, replaceUnpaid: true },
+    actor,
+    config,
+  );
+  /* DEV-386: the contract waits in Pending Initial Payment, releasing no
+     visit, until the first instalment is received -- unless an authorised
+     person starts it on agreed terms (the route checks who). Without the
+     payments tables there is no schedule and it starts, as before Phase 7. */
+  const override = input.startWithoutPayment?.reason?.trim() || null;
+  const target: ContractStatus = gateOpen(schedule.first, Boolean(override)) ? "active" : "pending_initial_payment";
   await setStatus(
     admin,
     contractId,
     String(c.status),
-    "active",
-    { start_date: input.commencementDate, end_date: endDate, term_months: input.termMonths, activated_at: nowIso, activated_by: actor.id },
+    target,
+    {
+      start_date: input.commencementDate,
+      end_date: endDate,
+      term_months: input.termMonths,
+      activated_at: nowIso,
+      activated_by: actor.id,
+      ...(override ? { gate_override_by: actor.id, gate_override_at: nowIso, gate_override_reason: override } : {}),
+    },
     actor,
-    `Commences ${input.commencementDate} for ${input.termMonths} months (to ${endDate})`,
+    `Commences ${input.commencementDate} for ${input.termMonths} months (to ${endDate})${
+      target === "pending_initial_payment" ? "; waiting for the first instalment" : override ? `; started before the first payment: ${override}` : ""
+    }`,
   );
   /* A renewal's predecessor is renewed. */
   if (c.renewed_from_contract_id) {
@@ -489,17 +489,33 @@ export async function activateSignedContract(
       await setStatus(admin, String(previous.id), String(previous.status), "renewed", {}, actor, `Renewed by ${String(c.contract_number ?? "")}`).catch(() => undefined);
     }
   }
-  await prospectBecomesClient(admin, c.customer_id, actor, `Contract ${String(c.contract_number ?? "")} activated`);
   await recordAmcAudit(admin, {
     entityType: "contract",
     entityId: contractId,
     eventType: "contract_activated",
     actorId: actor.id,
     actorLabel: actor.label,
-    payload: { commencementDate: input.commencementDate, termMonths: input.termMonths, endDate },
+    payload: { commencementDate: input.commencementDate, termMonths: input.termMonths, endDate, status: target, gateOverride: override },
   });
-  await notifyContractEvent(admin, { event: "contract_activated", contractId, actor }).catch(() => undefined);
-  return { status: "active" as const, endDate };
+  if (target === "active") {
+    /* Signed and paid (or started on agreed terms): the prospect is a client (BRD 5.9). */
+    await prospectBecomesClient(admin, c.customer_id, actor, `Contract ${String(c.contract_number ?? "")} ${override ? "started on agreed terms" : "activated"}`);
+    await notifyContractEvent(admin, { event: "contract_activated", contractId, actor }).catch(() => undefined);
+  } else {
+    const { data: s } = await admin.from("amc_submissions").select("owner_id").eq("id", String(c.submission_id)).maybeSingle<Row>();
+    await notifyUsers(admin, {
+      event: "initial_payment_pending",
+      userIds: [String(s?.owner_id ?? ""), ...config.payments.financeUserIds],
+      title: `Contract ${String(c.contract_number ?? "")} is waiting for its first payment`,
+      body: `${String(c.customer_name ?? "")}: activated from ${input.commencementDate}. No visits are released until the first instalment is received.`,
+      link: `/extensions/amc-contracts/${contractId}?tab=payments`,
+      entityType: "contract",
+      entityId: contractId,
+      contractId,
+      dedupeKey: `initial_payment_pending:${contractId}:${nowIso}`,
+    });
+  }
+  return { status: target, endDate };
 }
 
 export async function changeContractStatus(admin: Admin, contractId: string, input: { to: ManualStatusTarget; reason: string }, actor: { id: string; label: string | null }) {

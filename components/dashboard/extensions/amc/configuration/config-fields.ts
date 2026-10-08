@@ -77,6 +77,8 @@ export const SECTION_DEFS: SectionDef[] = [
       { key: "customPlanAllowed", label: "Allow another plan (always approved first)", kind: "boolean" },
       { key: "lateFirstPaymentDays", label: "Alert when the first payment is late by", kind: "number", unit: "days", min: 1, max: 90 },
       { key: "chequeAlertDaysBefore", label: "Alert before a cheque date", kind: "number", unit: "days", min: 0, max: 60 },
+      { key: "dueReminderDaysBefore", label: "Remind the client before an instalment is due", kind: "number", unit: "days", min: 0, max: 60 },
+      { key: "financeUserIds", label: "Finance", kind: "users", hint: "With the contract owner, they hear about payments and get the overdue instalment to-do." },
     ],
   },
   {
