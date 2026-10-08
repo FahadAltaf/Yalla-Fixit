@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 
-import { HeadingSkeleton } from "@/components/dashboard/shared/kaizen-states";
+import { TablePageSkeleton } from "@/components/dashboard/snagging/route-skeletons";
 import { AmcContractsPage } from "@/components/dashboard/extensions/amc-contracts/amc-contracts-page";
 
 export const metadata: Metadata = {
@@ -14,7 +14,7 @@ export default function AmcContractsRoute() {
   // The status filter lives in the query string (?status=), which needs
   // Suspense under the App Router.
   return (
-    <Suspense fallback={<HeadingSkeleton />}>
+    <Suspense fallback={<TablePageSkeleton filters={2} columns={8} />}>
       <AmcContractsPage />
     </Suspense>
   );

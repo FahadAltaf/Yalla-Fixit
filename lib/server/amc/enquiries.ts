@@ -21,7 +21,16 @@ import {
   type UpdateEnquiryInput,
 } from "@/lib/amc/enquiries";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
-import { createAssessment, createCustomer, getCustomer, getProperty } from "@/lib/server/amc/business";
+import {
+  CLIENT_EMBED,
+  PROPERTY_EMBED,
+  createAssessment,
+  createCustomer,
+  embeddedClient,
+  embeddedProperty,
+  getCustomer,
+  getProperty,
+} from "@/lib/server/amc/business";
 import { createContact } from "@/lib/server/amc/client-profile";
 import { ContractError, isMissingTable } from "@/lib/server/amc/contracts";
 import { notifyUsers } from "@/lib/server/amc/notifications";
@@ -98,26 +107,32 @@ export interface EnquiryRecord {
 
 const ENQUIRY_COLUMNS =
   "id, enquiry_number, enquired_at, source, referrer, customer_id, property_id, contact_name, contact_phone, contact_email, contact_whatsapp, preferred_channel, preferred_language, area, property_category, unit_type, need, owner_id, stage, stage_changed_at, lost_reason, lost_notes, next_follow_up_at, last_activity_at, submission_id, created_by, created_at, " +
-  "customer:customers(id, name, customer_ref, lifecycle), property:customer_properties(id, label, property_category, unit_type), " +
+  `customer:snagging_clients(${CLIENT_EMBED}), property:snagging_properties(${PROPERTY_EMBED}), ` +
   "owner:user_profile!amc_enquiries_owner_id_fkey(id, full_name, email), submission:amc_submissions!amc_enquiries_submission_id_fkey(id, proposal_number, status)";
 
 function mapEnquiry(r: Row, config: Pick<AmcConfig, "enquiries" | "proposals">, now: Date): EnquiryRecord {
-  const c = (r.customer as Row | null) ?? {};
-  const p = r.property as Row | null;
+  /* The client and address are Snagging's records with their AMC profiles. */
+  const c = embeddedClient(r.customer);
+  const p = embeddedProperty(r.property);
   const o = r.owner as Row | null;
   const s = r.submission as Row | null;
   const stage = String(r.stage);
   const lastActivityAt = String(r.last_activity_at);
   /* The property's category wins once one is linked; until then, what the enquiry says. */
-  const category = str(p?.property_category) ?? str(r.property_category);
+  const category = p?.propertyCategory ?? str(r.property_category);
   return {
     id: String(r.id),
     enquiryNumber: String(r.enquiry_number),
     enquiredAt: String(r.enquired_at),
     source: String(r.source),
     referrer: str(r.referrer),
-    customer: { id: String(c.id ?? r.customer_id), name: String(c.name ?? ""), customerRef: str(c.customer_ref), lifecycle: String(c.lifecycle ?? "prospect") },
-    property: p ? { id: String(p.id), label: String(p.label), propertyCategory: str(p.property_category), unitType: str(p.unit_type) } : null,
+    customer: {
+      id: c?.id ?? String(r.customer_id),
+      name: c?.name ?? "",
+      customerRef: c?.customerRef ?? null,
+      lifecycle: c?.lifecycle ?? "client",
+    },
+    property: p,
     contactName: String(r.contact_name),
     contactPhone: str(r.contact_phone),
     contactEmail: str(r.contact_email),
@@ -218,7 +233,11 @@ export async function listEnquiries(
   const term = safeTerm(filters.q ?? "");
   if (term) {
     const like = `%${term}%`;
-    const { data: customers } = await admin.from("customers").select("id").or(`name.ilike.${like},customer_ref.ilike.${like}`).limit(200);
+    const { data: customers } = await admin
+      .from("amc_client_directory")
+      .select("id")
+      .or(`name.ilike.${like},customer_ref.ilike.${like}`)
+      .limit(200);
     const clauses = [`enquiry_number.ilike.${like}`, `contact_name.ilike.${like}`, `need.ilike.${like}`, `area.ilike.${like}`, `contact_phone.ilike.${like}`];
     const ids = ((customers ?? []) as Row[]).map((r) => String(r.id));
     if (ids.length) clauses.push(`customer_id.in.(${ids.join(",")})`);
@@ -264,12 +283,12 @@ export async function listFollowUps(admin: Admin, enquiryId: string): Promise<Fo
 export async function listSiteVisits(admin: Admin, enquiryId: string): Promise<SiteVisitSummary[]> {
   const { data, error } = await admin
     .from("amc_assessments")
-    .select("id, assessment_number, status, scheduled_at, assessed_on, assessor_name, attendance, property:customer_properties(id, label)")
+    .select("id, assessment_number, status, scheduled_at, assessed_on, assessor_name, attendance, property:snagging_properties(id, unit_label)")
     .eq("enquiry_id", enquiryId)
     .order("created_at", { ascending: false });
   if (error) throw fail(error);
   return ((data ?? []) as unknown as Row[]).map((r) => {
-    const p = r.property as Row | null;
+    const p = embeddedProperty(r.property);
     return {
       id: String(r.id),
       assessmentNumber: String(r.assessment_number),
@@ -278,7 +297,7 @@ export async function listSiteVisits(admin: Admin, enquiryId: string): Promise<S
       assessedOn: str(r.assessed_on),
       assessorName: str(r.assessor_name),
       attendance: str(r.attendance),
-      property: p ? { id: String(p.id), label: String(p.label) } : null,
+      property: p ? { id: p.id, label: p.label } : null,
     };
   });
 }
@@ -718,7 +737,7 @@ export async function linkEnquiryProposal(admin: Admin, enquiryId: string, submi
 
 type SweepRow = { id: string; enquiry_number: string; owner_id: string | null; last_activity_at: string; next_follow_up_at: string | null; customer: Row | null };
 
-const SWEEP_COLUMNS = "id, enquiry_number, owner_id, last_activity_at, next_follow_up_at, customer:customers(name)";
+const SWEEP_COLUMNS = "id, enquiry_number, owner_id, last_activity_at, next_follow_up_at, customer:snagging_clients(name)";
 
 /**
  * Idle enquiries (BRD 5.1): the owner hears after the idle days, management

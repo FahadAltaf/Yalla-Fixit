@@ -41,7 +41,7 @@ async function authorise(
       const refused = await refuseCustomerEdit(gate, "customer_properties", entityId);
       if (refused) return { ok: false, response: refused };
     }
-    const { data } = await gate.admin.from("customer_properties").select("customer_id").eq("id", entityId).maybeSingle<{ customer_id: string | null }>();
+    const { data } = await gate.admin.from("amc_property_directory").select("customer_id").eq("id", entityId).maybeSingle<{ customer_id: string | null }>();
     if (!data) return { ok: false, response: NextResponse.json({ error: "Property not found." }, { status: 404 }) };
     return { ok: true, customerId: data.customer_id };
   }

@@ -23,9 +23,8 @@ interface StepProps {
 }
 
 /**
- * A titled part of the review, laid out like the other two steps. Shared
- * with the proposal's own page, so a proposal reads the same before and
- * after it is submitted.
+ * A titled part of the review, laid out like the sections of the other
+ * two steps.
  */
 export function ReviewSection({
   icon: Icon,
@@ -289,11 +288,11 @@ export function ReviewStep({ form, computed }: StepProps) {
       {/* Everything entered in step 1, read back in one place. */}
       <ReviewSection
         icon={Building2}
-        title="Property and customer"
+        title="Property and client"
         description="Check these before submitting. Go back a step to change anything."
       >
         <dl className="grid gap-x-6 gap-y-4 rounded-lg border p-4 sm:grid-cols-2 xl:grid-cols-4">
-          <Fact label="Customer">{values.customerName}</Fact>
+          <Fact label="Client">{values.customerName}</Fact>
           <Fact label="Proposal number">{values.proposalNumber}</Fact>
           <Fact label="Property category">
             <span className="capitalize">{values.propertyCategory}</span>

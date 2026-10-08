@@ -1,11 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CheckCircle2, Circle, Clock, FileUp, Inbox, Link as LinkIcon, Loader2, Mail, MessageCircle, Send, ShieldCheck, XCircle } from "lucide-react";
+import { CheckCircle2, Circle, Clock, FileUp, Link as LinkIcon, Mail, MessageCircle, Send, ShieldCheck, XCircle } from "lucide-react";
 import { toast } from "sonner";
 
 import { SectionCard } from "@/components/dashboard/shared/kaizen";
-import { ActionDialogContent, ErrorState, ListSkeleton } from "@/components/dashboard/shared/kaizen-states";
+import {
+  ActionDialogContent,
+  ErrorState,
+  ListSkeleton,
+  SectionSkeleton,
+  SubmitButton,
+} from "@/components/dashboard/shared/kaizen-states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -60,12 +66,12 @@ const when = (iso: string) =>
   new Date(iso).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Dubai" });
 
 const STEP_TONE: Record<SharingData["steps"][number]["status"], string> = {
-  waiting: "bg-muted text-muted-foreground",
-  pending: "bg-amber-500/10 text-amber-700 dark:text-amber-400",
-  approved: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
-  rejected: "bg-rose-500/10 text-rose-700 dark:text-rose-400",
-  returned: "bg-rose-500/10 text-rose-700 dark:text-rose-400",
-  cancelled: "bg-muted text-muted-foreground",
+  waiting: "bg-mist text-ink-soft",
+  pending: "bg-warning/10 text-warning",
+  approved: "bg-success/10 text-success",
+  rejected: "bg-danger/10 text-danger",
+  returned: "bg-danger/10 text-danger",
+  cancelled: "bg-mist text-ink-soft",
 };
 const STEP_LABEL: Record<SharingData["steps"][number]["status"], string> = {
   waiting: "Waiting",
@@ -105,7 +111,13 @@ export function ApprovalsAndSendsPanel({ submission }: { submission: AmcSubmissi
 
   const current = state.key === key ? state : { data: null, error: null };
   if (current.error) return <ErrorState title="Could not load the approvals and sends" message={current.error} onRetry={() => setReload((n) => n + 1)} />;
-  if (!current.data) return <ListSkeleton rows={4} />;
+  if (!current.data) {
+    return (
+      <SectionSkeleton>
+        <ListSkeleton rows={4} />
+      </SectionSkeleton>
+    );
+  }
   const { steps, sendLog, migrated } = current.data;
   if (!migrated) {
     return (
@@ -138,7 +150,7 @@ export function ApprovalsAndSendsPanel({ submission }: { submission: AmcSubmissi
             return (
               <div key={roundKey} className="border-b px-5 py-4 last:border-b-0">
                 <div className="mb-2 flex flex-wrap items-center gap-2 text-sm">
-                  <Badge variant="secondary" className="font-normal">
+                  <Badge variant="secondary" className="border-0 font-medium">
                     V{first.versionNo} · round {first.round}
                   </Badge>
                   <span className="text-muted-foreground">
@@ -165,7 +177,7 @@ export function ApprovalsAndSendsPanel({ submission }: { submission: AmcSubmissi
                             <div className="text-muted-foreground text-xs">Escalates {when(s.escalateAt)} if still open</div>
                           ) : null}
                         </div>
-                        <Badge variant="secondary" className={`border-none font-normal ${STEP_TONE[s.status]}`}>
+                        <Badge variant="secondary" className={`border-0 font-medium ${STEP_TONE[s.status]}`}>
                           {STEP_LABEL[s.status]}
                         </Badge>
                       </li>
@@ -198,7 +210,7 @@ export function ApprovalsAndSendsPanel({ submission }: { submission: AmcSubmissi
                     </div>
                   </div>
                   <div className="text-right text-xs">
-                    <Badge variant="secondary" className={`font-normal ${e.outcome === "failed" ? "bg-rose-500/10 text-rose-700" : ""}`}>
+                    <Badge variant="secondary" className={`border-0 font-medium ${e.outcome === "failed" ? "bg-danger/10 text-danger" : ""}`}>
                       {OUTCOME_LABEL[e.outcome] ?? e.outcome}
                     </Badge>
                     <div className="text-muted-foreground mt-1">
@@ -215,24 +227,36 @@ export function ApprovalsAndSendsPanel({ submission }: { submission: AmcSubmissi
   );
 }
 
+/** Whether an answer from outside the link can be recorded now: only while the proposal is with the client. */
+export function canRecordClientAnswer(submission: AmcSubmission) {
+  return submission.status === "proposal_sent";
+}
+
 /**
  * The client answered outside the link (BRD 5.6, DEV-371): record their
  * decision with the evidence, which goes to the proposal's documents.
+ * Controlled, so the proposal page can open it from its "More" menu.
  */
-export function RecordClientAnswerButton({ submission, onRecorded }: { submission: AmcSubmission; onRecorded: () => void }) {
-  const [open, setOpen] = useState(false);
+export function RecordClientAnswerDialog({
+  submission,
+  open,
+  onOpenChange,
+  onRecorded,
+}: {
+  submission: AmcSubmission;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onRecorded: () => void;
+}) {
   const [answer, setAnswer] = useState<ClientAnswer | "">("");
   const [clientName, setClientName] = useState(submission.customer.customerName ?? "");
   const [note, setNote] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  if (submission.status !== "proposal_sent") return null;
 
   const record = async () => {
     if (!answer || !file) return;
     setBusy(true);
-    setError(null);
     try {
       const { document } = await clientProfileService.uploadDocument({
         file,
@@ -246,80 +270,70 @@ export function RecordClientAnswerButton({ submission, onRecorded }: { submissio
         body: JSON.stringify({ id: submission.id, answer, clientName: clientName.trim(), note: note.trim() || null, evidenceDocumentId: document.id }),
       });
       toast.success(`Recorded: ${CLIENT_ANSWER_LABELS[answer]}. The client's link is closed.`);
-      setOpen(false);
+      setBusy(false);
+      onOpenChange(false);
       onRecorded();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not record the answer.");
+      toast.error(e instanceof Error ? e.message : "Could not record the answer.");
       setBusy(false);
     }
   };
 
   return (
-    <>
-      <Button variant="outline" onClick={() => setOpen(true)}>
-        <Inbox className="size-4" />
-        Record the client&apos;s answer
-      </Button>
-      {open ? (
-        <Dialog open onOpenChange={(value) => !busy && setOpen(value)}>
-          <ActionDialogContent busy={busy} className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle>Record the client&apos;s answer</DialogTitle>
-              <DialogDescription>
-                For an answer given by email, phone or WhatsApp instead of the link. Attach the evidence; it is kept with the proposal&apos;s documents.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="grid gap-3">
-              <div className="grid gap-1.5">
-                <Label>Answer</Label>
-                <Select value={answer} onValueChange={(v) => setAnswer(v as ClientAnswer)}>
-                  <SelectTrigger aria-label="Answer">
-                    <SelectValue placeholder="Choose" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {CLIENT_ANSWERS.map((a) => (
-                      <SelectItem key={a} value={a}>
-                        {CLIENT_ANSWER_LABELS[a]}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-1.5">
-                <Label htmlFor="answer-name">Who answered</Label>
-                <Input id="answer-name" value={clientName} onChange={(e) => setClientName(e.target.value)} maxLength={200} />
-              </div>
-              {answer && answer !== "approved" ? (
-                <div className="grid gap-1.5">
-                  <Label htmlFor="answer-note">{answer === "revision_requested" ? "What they want changed" : "Why they declined"}</Label>
-                  <Textarea id="answer-note" rows={3} value={note} onChange={(e) => setNote(e.target.value)} maxLength={1000} />
-                </div>
-              ) : null}
-              <div className="grid gap-1.5">
-                <Label htmlFor="answer-file">Evidence (PDF, image, Word)</Label>
-                <Input id="answer-file" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.docx" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-              </div>
-              {error ? (
-                <p className="text-destructive text-sm" role="alert">
-                  {error}
-                </p>
-              ) : null}
+    <Dialog open={open} onOpenChange={(value) => !busy && onOpenChange(value)}>
+      <ActionDialogContent busy={busy} className="max-h-[88vh] overflow-y-auto sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Record the client&apos;s answer</DialogTitle>
+          <DialogDescription>
+            For an answer given by email, phone or WhatsApp instead of the link; the evidence you attach is kept with the proposal&apos;s documents.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4 py-2">
+          <div className="grid gap-1.5">
+            <Label htmlFor="answer-choice">Answer</Label>
+            <Select value={answer} onValueChange={(v) => setAnswer(v as ClientAnswer)}>
+              <SelectTrigger id="answer-choice" aria-label="Answer">
+                <SelectValue placeholder="Choose" />
+              </SelectTrigger>
+              <SelectContent>
+                {CLIENT_ANSWERS.map((a) => (
+                  <SelectItem key={a} value={a}>
+                    {CLIENT_ANSWER_LABELS[a]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="answer-name">Who answered</Label>
+            <Input id="answer-name" value={clientName} onChange={(e) => setClientName(e.target.value)} maxLength={200} />
+          </div>
+          {answer && answer !== "approved" ? (
+            <div className="grid gap-1.5">
+              <Label htmlFor="answer-note">{answer === "revision_requested" ? "What they want changed" : "Why they declined"}</Label>
+              <Textarea id="answer-note" rows={3} value={note} onChange={(e) => setNote(e.target.value)} maxLength={1000} />
             </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setOpen(false)} disabled={busy}>
-                Cancel
-              </Button>
-              <Button
-                onClick={() => void record()}
-                disabled={busy || !answer || !file || clientName.trim().length < 2 || (answer !== "approved" && !note.trim())}
-              >
-                {busy ? <Loader2 className="size-4 animate-spin" /> : <FileUp className="size-4" />}
-                Record
-              </Button>
-            </DialogFooter>
-          </ActionDialogContent>
-        </Dialog>
-      ) : null}
-    </>
+          ) : null}
+          <div className="grid gap-1.5">
+            <Label htmlFor="answer-file">Evidence (PDF, image, Word)</Label>
+            <Input id="answer-file" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.docx" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+            Cancel
+          </Button>
+          <SubmitButton
+            onClick={() => void record()}
+            disabled={!answer || !file || clientName.trim().length < 2 || (answer !== "approved" && !note.trim())}
+            pending={busy}
+            pendingLabel="Recording…"
+            icon={<FileUp className="size-4" />}
+          >
+            Record
+          </SubmitButton>
+        </DialogFooter>
+      </ActionDialogContent>
+    </Dialog>
   );
 }

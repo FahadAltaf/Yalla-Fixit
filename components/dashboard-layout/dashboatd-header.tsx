@@ -17,6 +17,55 @@ import {
   useBreadcrumbLabelVersion,
 } from "./breadcrumb-labels";
 
+type Crumb = { segment: string; href: string; label?: string };
+
+/*
+  AMC lives under /extensions/amc (proposals) and /extensions/amc-contracts
+  (everything else) -- addresses kept because stored notifications and sent
+  emails link there -- but it is its own module in the sidebar. The trail
+  reads as that module: "AMC / Clients / Al Noor", not "Extensions / Amc
+  Contracts / Customers / ...". Each crumb links to a page that exists.
+*/
+const AMC_HOME = "/extensions/amc-contracts";
+const AMC_SECTIONS: Record<string, { label: string; href?: string }> = {
+  enquiries: { label: "Enquiries" },
+  customers: { label: "Clients" },
+  // A property has no list of its own; it belongs to its client.
+  properties: { label: "Clients", href: `${AMC_HOME}/customers` },
+  assessments: { label: "Site visits" },
+  "rate-card": { label: "Rate card" },
+  reports: { label: "Reports" },
+  settings: { label: "Operations settings" },
+  "fsm-services": { label: "FSM mapping" },
+};
+const AMC_WORDS: Record<string, string> = { new: "New proposal", edit: "Edit" };
+
+function crumbsFor(segments: string[]): Crumb[] {
+  const plain = segments.map((segment, index) => ({
+    segment,
+    href: "/" + segments.slice(0, index + 1).join("/"),
+  }));
+  if (segments[0] !== "extensions" || (segments[1] !== "amc" && segments[1] !== "amc-contracts")) {
+    return plain.map((crumb) => (crumb.segment === "amc" ? { ...crumb, label: "AMC" } : crumb));
+  }
+  const crumbs: Crumb[] = [{ segment: "amc", href: AMC_HOME, label: "AMC" }];
+  const rest = plain.slice(2).map((crumb) =>
+    AMC_WORDS[crumb.segment] ? { ...crumb, label: AMC_WORDS[crumb.segment] } : crumb,
+  );
+  if (segments[1] === "amc") {
+    crumbs.push({ segment: "proposals", href: "/extensions/amc", label: "Proposals" });
+    return [...crumbs, ...rest];
+  }
+  const section = segments[2] ? AMC_SECTIONS[segments[2]] : undefined;
+  if (section) {
+    crumbs.push({ segment: segments[2], href: section.href ?? rest[0].href, label: section.label });
+    return [...crumbs, ...rest.slice(1)];
+  }
+  // The contracts list itself, or one contract.
+  crumbs.push({ segment: "contracts", href: AMC_HOME, label: "Contracts" });
+  return [...crumbs, ...rest];
+}
+
 const DashboardHeader = () => {
   const pathname = usePathname();
 
@@ -24,6 +73,7 @@ const DashboardHeader = () => {
     () => pathname.split("/").filter(Boolean),
     [pathname],
   );
+  const crumbs = React.useMemo(() => crumbsFor(segments), [segments]);
 
   // Re-reads when a record page registers a name for its id segment.
   void useBreadcrumbLabelVersion();
@@ -54,9 +104,8 @@ const DashboardHeader = () => {
                   </BreadcrumbItem>
                 </>
               )}
-              {segments.map((segment, index) => {
-                const href = "/" + segments.slice(0, index + 1).join("/");
-                const isLast = index === segments.length - 1;
+              {crumbs.map(({ segment, href, label: fixed }, index) => {
+                const isLast = index === crumbs.length - 1;
                 // A page that knows its own name supplies one; otherwise
                 // the segment is title-cased. Without this a record page
                 // showed its raw id as the page title.
@@ -69,6 +118,7 @@ const DashboardHeader = () => {
                   );
                 const label =
                   registered ??
+                  fixed ??
                   (isId
                     ? "Details"
                     : decodeURIComponent(segment)
@@ -76,7 +126,7 @@ const DashboardHeader = () => {
                         .replace(/\b\w/g, (char) => char.toUpperCase()));
 
                 return (
-                  <React.Fragment key={href}>
+                  <React.Fragment key={`${index}:${href}`}>
                     <BreadcrumbSeparator className="text-muted-foreground/50"> / </BreadcrumbSeparator>
                     <BreadcrumbItem>
                       {isLast ? (

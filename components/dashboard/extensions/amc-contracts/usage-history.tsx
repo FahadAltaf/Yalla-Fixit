@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ListPager, SectionCard } from "@/components/dashboard/shared/kaizen";
-import { ListSkeleton } from "@/components/dashboard/shared/kaizen-states";
+import { ErrorState, ListSkeleton } from "@/components/dashboard/shared/kaizen-states";
 import { formatQuantity, unitWord } from "@/lib/amc/contracts";
 import {
   amcContractsService,
@@ -32,6 +32,12 @@ const KIND_LABELS: Record<UsageEntry["kind"], string> = {
   consumption: "Used",
   correction: "Correction",
   adjustment: "Adjustment",
+};
+
+const KIND_TONE: Record<UsageEntry["kind"], string> = {
+  consumption: "bg-brand-50 text-brand",
+  correction: "bg-warning/10 text-warning",
+  adjustment: "bg-mist text-ink-soft",
 };
 
 /**
@@ -60,7 +66,9 @@ export function UsageHistory({
   const [service, setService] = useState("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /* Kept after the dialog closes, so it can animate out with its content. */
   const [correcting, setCorrecting] = useState<UsageEntry | null>(null);
+  const [correctOpen, setCorrectOpen] = useState(false);
   const byId = new Map(entitlements.map((e) => [e.id, e]));
 
   const ticket = useRef(0);
@@ -127,12 +135,7 @@ export function UsageHistory({
       }
     >
       {error ? (
-        <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-          <span className="text-destructive">{error}</span>
-          <Button size="sm" variant="outline" onClick={() => void load()}>
-            Retry
-          </Button>
-        </div>
+        <ErrorState title="Could not load the usage history" message={error} onRetry={() => void load()} retrying={loading} />
       ) : loading && rows.length === 0 ? (
         <ListSkeleton rows={4} />
       ) : rows.length === 0 ? (
@@ -163,7 +166,7 @@ export function UsageHistory({
                   const isCorrection = u.kind === "correction";
                   const original = isCorrection ? correctedEntry(u.correctsUsageId) : undefined;
                   return (
-                    <TableRow key={u.id} className={isCorrection ? "bg-amber-500/5" : undefined}>
+                    <TableRow key={u.id} className={isCorrection ? "bg-warning/5" : undefined}>
                       <TableCell className="pl-5 align-top">
                         <div className="tabular-nums">{formatContractDate(u.occurredAt.slice(0, 10))}</div>
                         <div className="text-muted-foreground text-xs" title="When the entry was made">
@@ -172,15 +175,12 @@ export function UsageHistory({
                       </TableCell>
                       <TableCell className="align-top">
                         <div className="font-medium">{e?.serviceLabel ?? "Service"}</div>
-                        <Badge
-                          variant="secondary"
-                          className={`mt-1 border-none font-normal ${isCorrection ? "bg-amber-600/10 text-amber-700 dark:bg-amber-400/10 dark:text-amber-400" : ""}`}
-                        >
+                        <Badge variant="secondary" className={`mt-1 border-0 font-medium ${KIND_TONE[u.kind]}`}>
                           {KIND_LABELS[u.kind]}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right align-top tabular-nums">
-                        <div className={isCorrection ? "text-amber-700 dark:text-amber-400" : undefined}>{amountOf(u)}</div>
+                        <div className={isCorrection ? "text-warning" : undefined}>{amountOf(u)}</div>
                         {u.kind === "consumption" && u.correctedQuantity !== 0 ? (
                           <div className="text-muted-foreground text-xs">
                             {formatQuantity(u.netQuantity)} after corrections
@@ -210,7 +210,14 @@ export function UsageHistory({
                       </TableCell>
                       <TableCell className="pr-5 text-right align-top">
                         {canCorrect && u.kind === "consumption" && u.netQuantity > 0 ? (
-                          <Button size="sm" variant="ghost" onClick={() => setCorrecting(u)}>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              setCorrecting(u);
+                              setCorrectOpen(true);
+                            }}
+                          >
                             <Undo2 className="size-4" />
                             Correct
                           </Button>
@@ -239,13 +246,13 @@ export function UsageHistory({
 
       {correcting ? (
         <CorrectUsageDialog
-          open={Boolean(correcting)}
-          onOpenChange={(next) => !next && setCorrecting(null)}
+          open={correctOpen}
+          onOpenChange={setCorrectOpen}
           contractId={contractId}
           entry={correcting}
           entitlement={byId.get(correcting.entitlementId)}
           onCorrected={() => {
-            setCorrecting(null);
+            setCorrectOpen(false);
             onChanged();
           }}
         />

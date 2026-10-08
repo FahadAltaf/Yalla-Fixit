@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { CalendarPlus, CheckCircle2, MessageSquarePlus, Save, XCircle } from "lucide-react";
+import { toast } from "sonner";
 
-import { ActionDialogContent } from "@/components/dashboard/shared/kaizen-states";
+import { ActionDialogContent, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -18,6 +20,7 @@ import {
   checkStageChange,
   type FollowUpChannel,
 } from "@/lib/amc/enquiries";
+import { cn } from "@/lib/utils";
 import { amcContractsService, type CustomerRecord, type PropertyInput } from "@/modules/amc-contracts/amc-contracts-service";
 import { enquiriesService, type CreateEnquiryInput, type EnquiryMeta, type EnquiryRecord, type UpdateEnquiryInput } from "@/modules/amc-contracts/enquiries-service";
 
@@ -29,33 +32,49 @@ import { PersonSelect, fromLocalInput, localInputIn, toLocalInput } from "./enqu
 /* Shared bits                                                         */
 /* ------------------------------------------------------------------ */
 
-function FormError({ error }: { error: string | null }) {
-  return error ? (
-    <p className="text-destructive text-sm" role="alert">
-      {error}
-    </p>
-  ) : null;
-}
+type Work = { working: boolean; run: (action: () => Promise<void>, fallback: string) => Promise<void> };
 
-function useSubmit() {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const run = async (action: () => Promise<void>) => {
-    setBusy(true);
-    setError(null);
+/**
+ * The dialog shell every form here shares, as on Snagging: always mounted
+ * and controlled, undismissable while it saves, closed only once the save
+ * has worked, and a failure said in a toast with the form left as it was.
+ * The form itself renders inside the content, so it starts fresh on each open.
+ */
+function WorkDialog({
+  open,
+  onOpenChange,
+  className,
+  children,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  className?: string;
+  children: (work: Work) => React.ReactNode;
+}) {
+  const [working, setWorking] = useState(false);
+  const run = async (action: () => Promise<void>, fallback: string) => {
+    setWorking(true);
     try {
       await action();
+      onOpenChange(false);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not save.");
-      setBusy(false);
+      toast.error(e instanceof Error ? e.message : fallback);
+    } finally {
+      setWorking(false);
     }
   };
-  return { busy, error, setError, run };
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <ActionDialogContent busy={working} className={className}>
+        {children({ working, run })}
+      </ActionDialogContent>
+    </Dialog>
+  );
 }
 
 function Field({ label, htmlFor, children, className }: { label: string; htmlFor?: string; children: React.ReactNode; className?: string }) {
   return (
-    <div className={`grid gap-1.5 ${className ?? ""}`}>
+    <div className={cn("grid gap-2", className)}>
       <Label htmlFor={htmlFor}>{label}</Label>
       {children}
     </div>
@@ -79,7 +98,7 @@ function SimpleSelect({
 }) {
   return (
     <Select value={value ?? (allowNone ? "none" : "")} onValueChange={(v) => onChange(v === "none" ? null : v)}>
-      <SelectTrigger aria-label={label}>
+      <SelectTrigger className="w-full" aria-label={label}>
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent>
@@ -145,18 +164,23 @@ function cleanDraft(d: EnquiryDraft): EnquiryDraft {
   };
 }
 
-export function EnquiryFormDialog({
-  meta,
-  enquiry,
-  onClose,
-  onSaved,
-}: {
+type EnquiryFormProps = {
   meta: EnquiryMeta;
   /** null = log a new enquiry. */
   enquiry: EnquiryRecord | null;
-  onClose: () => void;
-  onSaved: (saved: EnquiryRecord) => void;
-}) {
+  /** Told about the saved enquiry before the dialog closes (toast, reload or open it). */
+  onSaved: (saved: EnquiryRecord) => void | Promise<void>;
+};
+
+export function EnquiryFormDialog({ open, onOpenChange, ...props }: EnquiryFormProps & { open: boolean; onOpenChange: (open: boolean) => void }) {
+  return (
+    <WorkDialog open={open} onOpenChange={onOpenChange} className="max-h-[88vh] overflow-y-auto sm:max-w-2xl">
+      {(work) => <EnquiryForm {...props} work={work} onCancel={() => onOpenChange(false)} />}
+    </WorkDialog>
+  );
+}
+
+function EnquiryForm({ meta, enquiry, onSaved, work, onCancel }: EnquiryFormProps & { work: Work; onCancel: () => void }) {
   const creating = enquiry === null;
   const [draft, setDraft] = useState<EnquiryDraft>(() => draftFrom(enquiry, meta));
   const [clientMode, setClientMode] = useState<"new" | "existing">("new");
@@ -166,12 +190,11 @@ export function EnquiryFormDialog({
     customerType: "individual",
     company: "",
   });
-  const { busy, error, run } = useSubmit();
   const set = (patch: Partial<EnquiryDraft>) => setDraft((d) => ({ ...d, ...patch }));
   const referral = /referr/i.test(draft.source);
 
   const save = () =>
-    run(async () => {
+    work.run(async () => {
       const clean = cleanDraft(draft);
       if (creating) {
         const input: CreateEnquiryInput = {
@@ -183,41 +206,42 @@ export function EnquiryFormDialog({
               : null,
         };
         const { enquiry: saved } = await enquiriesService.create(input);
-        onSaved(saved);
+        await onSaved(saved);
       } else {
         const { enquiry: saved } = await enquiriesService.update(enquiry.id, clean);
-        onSaved(saved);
+        await onSaved(saved);
       }
-    });
+    }, "Could not save the enquiry.");
 
   const clientReady = !creating || (clientMode === "existing" ? !!existing : !!newClient.name.trim());
   const ready = clientReady && !!draft.contactName.trim() && draft.need.trim().length >= 3 && !!draft.source;
 
   return (
-    <Dialog open onOpenChange={(next) => !busy && !next && onClose()}>
-      <ActionDialogContent busy={busy} className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>{creating ? "Log an enquiry" : `Edit ${enquiry.enquiryNumber}`}</DialogTitle>
-          <DialogDescription>
-            {creating
-              ? "A new client becomes a prospect record now, so nothing is typed twice later."
-              : "Changes are recorded. The stage is changed separately."}
-          </DialogDescription>
-        </DialogHeader>
+    <>
+      <DialogHeader>
+        <DialogTitle>{creating ? "New enquiry" : `Edit ${enquiry.enquiryNumber}`}</DialogTitle>
+        <DialogDescription>
+          {creating ? "Logs the enquiry; a new client becomes a prospect record now, so nothing is typed twice later." : "Saves the changes to this enquiry. The stage is changed separately."}
+        </DialogDescription>
+      </DialogHeader>
 
+      <div className="grid gap-6 py-2">
         {creating ? (
-          <section className="grid gap-3">
-            <div className="flex items-center justify-between gap-2">
+          <section className="grid gap-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-sm font-medium">Client</h3>
-              <div className="bg-muted inline-flex rounded-full p-0.5 text-sm" role="tablist" aria-label="Client">
+              <div className="bg-muted inline-flex w-fit rounded-md p-0.5" role="group" aria-label="Client">
                 {(["new", "existing"] as const).map((m) => (
                   <button
                     key={m}
                     type="button"
-                    role="tab"
-                    aria-selected={clientMode === m}
+                    aria-pressed={clientMode === m}
                     onClick={() => setClientMode(m)}
-                    className={`rounded-full px-3 py-1 ${clientMode === m ? "bg-background shadow-sm" : "text-muted-foreground"}`}
+                    className={
+                      clientMode === m
+                        ? "bg-background text-foreground rounded px-3 py-1 text-xs font-medium shadow-sm"
+                        : "text-muted-foreground hover:text-foreground rounded px-3 py-1 text-xs font-medium"
+                    }
                   >
                     {m === "new" ? "New prospect" : "Existing client"}
                   </button>
@@ -225,7 +249,7 @@ export function EnquiryFormDialog({
               </div>
             </div>
             {clientMode === "existing" ? (
-              <>
+              <div className="grid gap-2">
                 <CustomerSearch
                   selectedId={existing?.id}
                   onPick={(c) => {
@@ -234,9 +258,9 @@ export function EnquiryFormDialog({
                   }}
                 />
                 {existing ? <p className="text-muted-foreground text-xs">Linked to {existing.name}.</p> : null}
-              </>
+              </div>
             ) : (
-              <div className="grid gap-3 sm:grid-cols-3">
+              <div className="grid gap-4 sm:grid-cols-3">
                 <Field label="Client name" htmlFor="enq-client" className="sm:col-span-2">
                   <Input id="enq-client" value={newClient.name} onChange={(e) => setNewClient((c) => ({ ...c, name: e.target.value }))} maxLength={200} />
                 </Field>
@@ -261,9 +285,9 @@ export function EnquiryFormDialog({
           </section>
         ) : null}
 
-        <section className="grid gap-3">
+        <section className="grid gap-4">
           <h3 className="text-sm font-medium">Contact</h3>
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Contact name" htmlFor="enq-contact">
               <Input id="enq-contact" value={draft.contactName} onChange={(e) => set({ contactName: e.target.value })} maxLength={200} />
             </Field>
@@ -292,9 +316,9 @@ export function EnquiryFormDialog({
           <p className="text-muted-foreground text-xs">A phone, WhatsApp or email is needed.</p>
         </section>
 
-        <section className="grid gap-3">
+        <section className="grid gap-4">
           <h3 className="text-sm font-medium">Enquiry</h3>
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Source">
               <SimpleSelect label="Source" value={draft.source} options={meta.sources.map((s) => [s, s])} onChange={(v) => set({ source: v ?? "" })} />
             </Field>
@@ -354,18 +378,17 @@ export function EnquiryFormDialog({
             </Field>
           </div>
         </section>
+      </div>
 
-        <FormError error={error} />
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button onClick={() => void save()} disabled={busy || !ready}>
-            {busy ? "Saving…" : creating ? "Log enquiry" : "Save"}
-          </Button>
-        </DialogFooter>
-      </ActionDialogContent>
-    </Dialog>
+      <DialogFooter>
+        <Button variant="outline" onClick={onCancel} disabled={work.working}>
+          Cancel
+        </Button>
+        <SubmitButton onClick={() => void save()} disabled={!ready} pending={work.working} pendingLabel="Saving…" icon={<Save className="size-4" />}>
+          {creating ? "Log enquiry" : "Save"}
+        </SubmitButton>
+      </DialogFooter>
+    </>
   );
 }
 
@@ -373,26 +396,28 @@ export function EnquiryFormDialog({
 /* Change stage (DEV-359)                                              */
 /* ------------------------------------------------------------------ */
 
-export function StageDialog({
-  meta,
-  enquiry,
-  hasCompletedSiteVisit,
-  initialStage,
-  onClose,
-  onSave,
-}: {
+type StageProps = {
   meta: EnquiryMeta;
   enquiry: EnquiryRecord;
   hasCompletedSiteVisit: boolean;
   initialStage?: string;
-  onClose: () => void;
+  /** Saves, says so and reloads; a throw keeps the dialog open. */
   onSave: (input: { stage: string; reason?: string | null; lostReason?: string | null; lostNotes?: string | null }) => Promise<void>;
-}) {
+};
+
+export function StageDialog({ open, onOpenChange, ...props }: StageProps & { open: boolean; onOpenChange: (open: boolean) => void }) {
+  return (
+    <WorkDialog open={open} onOpenChange={onOpenChange} className="sm:max-w-md">
+      {(work) => <StageForm {...props} work={work} onCancel={() => onOpenChange(false)} />}
+    </WorkDialog>
+  );
+}
+
+function StageForm({ meta, enquiry, hasCompletedSiteVisit, initialStage, onSave, work, onCancel }: StageProps & { work: Work; onCancel: () => void }) {
   const [stage, setStage] = useState<string>(initialStage ?? "");
   const [reason, setReason] = useState("");
   const [lostReason, setLostReason] = useState<string | null>(null);
   const [lostNotes, setLostNotes] = useState("");
-  const { busy, error, run } = useSubmit();
   const lost = stage === ENQUIRY_STAGE.lost;
   const reopening = CLOSED_STAGES.includes(enquiry.stage);
   /* The same check the server runs, so the warning shows before saving. */
@@ -414,53 +439,58 @@ export function StageDialog({
   const ready = !!stage && stage !== enquiry.stage && (!lost || !!lostReason) && (!reopening || !!reason.trim()) && !blocked;
 
   return (
-    <Dialog open onOpenChange={(next) => !busy && !next && onClose()}>
-      <ActionDialogContent busy={busy} className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Change stage</DialogTitle>
-          <DialogDescription>
-            {enquiry.enquiryNumber} is at {enquiry.stage}. The change is recorded with your name and the time.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-3">
-          <Field label="New stage">
-            <SimpleSelect label="New stage" value={stage} options={meta.stages.filter((s) => s !== enquiry.stage).map((s) => [s, s])} onChange={(v) => setStage(v ?? "")} />
-          </Field>
-          {lost ? (
-            <>
-              <Field label="Why was it lost?">
-                <SimpleSelect label="Lost reason" value={lostReason} options={meta.lostReasons.map((r) => [r, r])} onChange={setLostReason} />
-              </Field>
-              <Field label="Notes (optional)" htmlFor="stage-lost-notes">
-                <Textarea id="stage-lost-notes" rows={2} value={lostNotes} onChange={(e) => setLostNotes(e.target.value)} maxLength={1000} />
-              </Field>
-            </>
-          ) : (
-            <Field label={reopening ? `Why reopen an enquiry that is ${enquiry.stage}?` : "Note (optional)"} htmlFor="stage-reason">
-              <Textarea id="stage-reason" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} />
+    <>
+      <DialogHeader>
+        <DialogTitle>Change stage</DialogTitle>
+        <DialogDescription>
+          Moves {enquiry.enquiryNumber} on from {enquiry.stage}; the change is recorded with your name and the time.
+        </DialogDescription>
+      </DialogHeader>
+      <div className="grid gap-4 py-2">
+        <Field label="New stage">
+          <SimpleSelect label="New stage" value={stage} options={meta.stages.filter((s) => s !== enquiry.stage).map((s) => [s, s])} onChange={(v) => setStage(v ?? "")} />
+        </Field>
+        {lost ? (
+          <>
+            <Field label="Why was it lost?">
+              <SimpleSelect label="Lost reason" value={lostReason} options={meta.lostReasons.map((r) => [r, r])} onChange={setLostReason} />
             </Field>
-          )}
-          {blocked ? (
-            <p className="text-destructive text-sm">{blocked}</p>
-          ) : preview && preview.ok && preview.warning ? (
-            <p className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">{preview.warning} You can continue; it is recorded.</p>
-          ) : null}
-        </div>
-        <FormError error={error} />
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button
-            variant={lost ? "destructive" : "default"}
-            disabled={busy || !ready}
-            onClick={() => void run(() => onSave({ stage, reason: reason.trim() || null, lostReason: lost ? lostReason : null, lostNotes: lost ? lostNotes.trim() || null : null }))}
-          >
-            {busy ? "Saving…" : lost ? "Mark lost" : "Change stage"}
-          </Button>
-        </DialogFooter>
-      </ActionDialogContent>
-    </Dialog>
+            <Field label="Notes (optional)" htmlFor="stage-lost-notes">
+              <Textarea id="stage-lost-notes" rows={2} value={lostNotes} onChange={(e) => setLostNotes(e.target.value)} maxLength={1000} />
+            </Field>
+          </>
+        ) : (
+          <Field label={reopening ? `Why reopen an enquiry that is ${enquiry.stage}?` : "Note (optional)"} htmlFor="stage-reason">
+            <Textarea id="stage-reason" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} />
+          </Field>
+        )}
+        {blocked ? (
+          <p className="text-danger text-sm">{blocked}</p>
+        ) : preview && preview.ok && preview.warning ? (
+          <p className="border-warning/30 bg-warning/5 rounded-md border px-3 py-2 text-sm">{preview.warning} You can continue; it is recorded.</p>
+        ) : null}
+      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={onCancel} disabled={work.working}>
+          Cancel
+        </Button>
+        <SubmitButton
+          variant={lost ? "destructive" : "default"}
+          disabled={!ready}
+          pending={work.working}
+          pendingLabel="Saving…"
+          icon={lost ? <XCircle className="size-4" /> : <CheckCircle2 className="size-4" />}
+          onClick={() =>
+            void work.run(
+              () => onSave({ stage, reason: reason.trim() || null, lostReason: lost ? lostReason : null, lostNotes: lost ? lostNotes.trim() || null : null }),
+              "Could not change the stage.",
+            )
+          }
+        >
+          {lost ? "Mark lost" : "Change stage"}
+        </SubmitButton>
+      </DialogFooter>
+    </>
   );
 }
 
@@ -468,17 +498,21 @@ export function StageDialog({
 /* Log a follow-up (DEV-359)                                           */
 /* ------------------------------------------------------------------ */
 
-export function FollowUpDialog({
-  meta,
-  enquiry,
-  onClose,
-  onSave,
-}: {
+type FollowUpProps = {
   meta: EnquiryMeta;
   enquiry: EnquiryRecord;
-  onClose: () => void;
   onSave: (input: { occurredAt: string; channel: FollowUpChannel; outcome: string; notes: string | null; nextFollowUpAt: string | null; moveToStage: string | null }) => Promise<void>;
-}) {
+};
+
+export function FollowUpDialog({ open, onOpenChange, ...props }: FollowUpProps & { open: boolean; onOpenChange: (open: boolean) => void }) {
+  return (
+    <WorkDialog open={open} onOpenChange={onOpenChange} className="max-h-[88vh] overflow-y-auto sm:max-w-lg">
+      {(work) => <FollowUpForm {...props} work={work} onCancel={() => onOpenChange(false)} />}
+    </WorkDialog>
+  );
+}
+
+function FollowUpForm({ meta, enquiry, onSave, work, onCancel }: FollowUpProps & { work: Work; onCancel: () => void }) {
   const [when, setWhen] = useState(() => localInputIn(0));
   const [channel, setChannel] = useState<FollowUpChannel>(
     (FOLLOW_UP_CHANNELS as readonly string[]).includes(enquiry.preferredChannel ?? "") ? (enquiry.preferredChannel as FollowUpChannel) : "call",
@@ -487,28 +521,29 @@ export function FollowUpDialog({
   const [notes, setNotes] = useState("");
   const [next, setNext] = useState(() => localInputIn(2, 10));
   const [moveTo, setMoveTo] = useState<string | null>(null);
-  const { busy, error, run } = useSubmit();
 
   return (
-    <Dialog open onOpenChange={(open) => !busy && !open && onClose()}>
-      <ActionDialogContent busy={busy} className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Log a follow-up</DialogTitle>
-          <DialogDescription>It resets the idle clock and appears in the client&apos;s communication log too.</DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-3 sm:grid-cols-2">
+    <>
+      <DialogHeader>
+        <DialogTitle>Log a follow-up</DialogTitle>
+        <DialogDescription>Records the contact, resets the idle clock and adds it to the client&apos;s communication log.</DialogDescription>
+      </DialogHeader>
+      <div className="grid gap-4 py-2">
+        <div className="grid gap-4 sm:grid-cols-2">
           <Field label="When" htmlFor="fu-when">
             <Input id="fu-when" type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
           </Field>
           <Field label="Channel">
             <SimpleSelect label="Channel" value={channel} options={FOLLOW_UP_CHANNELS.map((c) => [c, FOLLOW_UP_CHANNEL_LABELS[c]])} onChange={(v) => setChannel((v as FollowUpChannel) ?? "call")} />
           </Field>
-          <Field label="Outcome" htmlFor="fu-outcome" className="sm:col-span-2">
-            <Input id="fu-outcome" placeholder="Spoke to Sara; wants a quote for 6 AC units" value={outcome} onChange={(e) => setOutcome(e.target.value)} maxLength={500} />
-          </Field>
-          <Field label="Notes (optional)" htmlFor="fu-notes" className="sm:col-span-2">
-            <Textarea id="fu-notes" rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={2000} />
-          </Field>
+        </div>
+        <Field label="Outcome" htmlFor="fu-outcome">
+          <Input id="fu-outcome" placeholder="Spoke to Sara; wants a quote for 6 AC units" value={outcome} onChange={(e) => setOutcome(e.target.value)} maxLength={500} />
+        </Field>
+        <Field label="Notes (optional)" htmlFor="fu-notes">
+          <Textarea id="fu-notes" rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={2000} />
+        </Field>
+        <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Next follow-up" htmlFor="fu-next">
             <Input id="fu-next" type="datetime-local" value={next} onChange={(e) => setNext(e.target.value)} />
           </Field>
@@ -524,15 +559,19 @@ export function FollowUpDialog({
           </Field>
         </div>
         {!next ? <p className="text-muted-foreground text-xs">With no next follow-up, the enquiry goes idle after {meta.idleDays} days.</p> : null}
-        <FormError error={error} />
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button
-            disabled={busy || outcome.trim().length < 2}
-            onClick={() =>
-              void run(() =>
+      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={onCancel} disabled={work.working}>
+          Cancel
+        </Button>
+        <SubmitButton
+          disabled={outcome.trim().length < 2}
+          pending={work.working}
+          pendingLabel="Saving…"
+          icon={<MessageSquarePlus className="size-4" />}
+          onClick={() =>
+            void work.run(
+              () =>
                 onSave({
                   occurredAt: fromLocalInput(when) ?? new Date().toISOString(),
                   channel,
@@ -541,14 +580,14 @@ export function FollowUpDialog({
                   nextFollowUpAt: fromLocalInput(next),
                   moveToStage: moveTo,
                 }),
-              )
-            }
-          >
-            {busy ? "Saving…" : "Log follow-up"}
-          </Button>
-        </DialogFooter>
-      </ActionDialogContent>
-    </Dialog>
+              "Could not log the follow-up.",
+            )
+          }
+        >
+          Log follow-up
+        </SubmitButton>
+      </DialogFooter>
+    </>
   );
 }
 
@@ -556,41 +595,44 @@ export function FollowUpDialog({
 /* Book a site visit (DEV-362)                                         */
 /* ------------------------------------------------------------------ */
 
-export function SiteVisitDialog({
-  meta,
-  enquiry,
-  onClose,
-  onSave,
-}: {
+type SiteVisitProps = {
   meta: EnquiryMeta;
   enquiry: EnquiryRecord;
-  onClose: () => void;
   onSave: (input: { propertyId: string; scheduledAt: string; assessorId: string }) => Promise<void>;
-}) {
+};
+
+export function SiteVisitDialog({ open, onOpenChange, ...props }: SiteVisitProps & { open: boolean; onOpenChange: (open: boolean) => void }) {
+  return (
+    <WorkDialog open={open} onOpenChange={onOpenChange} className="max-h-[88vh] overflow-y-auto sm:max-w-md">
+      {(work) => <SiteVisitForm {...props} work={work} onCancel={() => onOpenChange(false)} />}
+    </WorkDialog>
+  );
+}
+
+function SiteVisitForm({ meta, enquiry, onSave, work, onCancel }: SiteVisitProps & { work: Work; onCancel: () => void }) {
   const [propertyId, setPropertyId] = useState<string | null>(enquiry.property?.id ?? null);
   const [when, setWhen] = useState(() => localInputIn(2, 10));
   const [assessorId, setAssessorId] = useState<string | null>(enquiry.owner?.id ?? meta.me);
   const [addingProperty, setAddingProperty] = useState(false);
   const [propertyVersion, setPropertyVersion] = useState(0);
-  const { busy, error, run } = useSubmit();
   const scheduledAt = fromLocalInput(when);
 
   return (
-    <Dialog open onOpenChange={(open) => !busy && !open && onClose()}>
-      <ActionDialogContent busy={busy} className="max-h-[90vh] overflow-y-auto sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Book a site visit</DialogTitle>
-          <DialogDescription>
-            An assessment of the property is opened, dated and assigned. The assessor is told in the portal and records attendance, asset counts and findings on it.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-3">
-          <Field label="Property">
-            <PropertySelect customerId={enquiry.customer.id} value={propertyId} onChange={(p) => setPropertyId(p?.id ?? null)} refreshKey={propertyVersion} />
-          </Field>
+    <>
+      <DialogHeader>
+        <DialogTitle>Book a site visit</DialogTitle>
+        <DialogDescription>
+          Opens a dated site visit for the property and assigns it; the assessor is told in the portal and records attendance, asset counts and findings on it.
+        </DialogDescription>
+      </DialogHeader>
+      <div className="grid gap-4 py-2">
+        <Field label="Property">
+          <PropertySelect customerId={enquiry.customer.id} value={propertyId} onChange={(p) => setPropertyId(p?.id ?? null)} refreshKey={propertyVersion} />
           <Button variant="link" className="h-auto justify-start p-0" onClick={() => setAddingProperty(true)}>
             Add a property for {enquiry.customer.name}
           </Button>
+        </Field>
+        <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Date and time" htmlFor="sv-when">
             <Input id="sv-when" type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
           </Field>
@@ -598,37 +640,39 @@ export function SiteVisitDialog({
             <PersonSelect label="Assessor" people={meta.people} value={assessorId} onChange={setAssessorId} />
           </Field>
         </div>
-        <FormError error={error} />
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button
-            disabled={busy || !propertyId || !scheduledAt || !assessorId}
-            onClick={() => void run(() => onSave({ propertyId: propertyId!, scheduledAt: scheduledAt!, assessorId: assessorId! }))}
-          >
-            {busy ? "Booking…" : "Book site visit"}
-          </Button>
-        </DialogFooter>
-        {addingProperty ? (
-          <PropertyDialog
-            title={`Add property for ${enquiry.customer.name}`}
-            initial={{
-              label: "",
-              unitType: (enquiry.unitType as PropertyInput["unitType"]) ?? null,
-              propertyCategory: (enquiry.propertyCategory as PropertyInput["propertyCategory"]) ?? null,
-              community: enquiry.area,
-            }}
-            onOpenChange={(open) => !open && setAddingProperty(false)}
-            onSave={async (input) => {
-              const { property } = await amcContractsService.createProperty(enquiry.customer.id, input);
-              setPropertyId(property.id);
-              setPropertyVersion((v) => v + 1);
-              setAddingProperty(false);
-            }}
-          />
-        ) : null}
-      </ActionDialogContent>
-    </Dialog>
+      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={onCancel} disabled={work.working}>
+          Cancel
+        </Button>
+        <SubmitButton
+          disabled={!propertyId || !scheduledAt || !assessorId}
+          pending={work.working}
+          pendingLabel="Booking…"
+          icon={<CalendarPlus className="size-4" />}
+          onClick={() => void work.run(() => onSave({ propertyId: propertyId!, scheduledAt: scheduledAt!, assessorId: assessorId! }), "Could not book the site visit.")}
+        >
+          Book site visit
+        </SubmitButton>
+      </DialogFooter>
+      {addingProperty ? (
+        <PropertyDialog
+          title={`Add property for ${enquiry.customer.name}`}
+          initial={{
+            label: "",
+            unitType: (enquiry.unitType as PropertyInput["unitType"]) ?? null,
+            propertyCategory: (enquiry.propertyCategory as PropertyInput["propertyCategory"]) ?? null,
+            community: enquiry.area,
+          }}
+          onOpenChange={(open) => !open && setAddingProperty(false)}
+          onSave={async (input) => {
+            const { property } = await amcContractsService.createProperty(enquiry.customer.id, input);
+            setPropertyId(property.id);
+            setPropertyVersion((v) => v + 1);
+            setAddingProperty(false);
+          }}
+        />
+      ) : null}
+    </>
   );
 }

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Receipt } from "lucide-react";
+import { Link2, Plus, Receipt, Save, SearchCheck, XCircle } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -14,7 +14,7 @@ import { Money } from "@/components/ui/money";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { DataRow, SectionCard, SubHeading } from "@/components/dashboard/shared/kaizen";
-import { ActionDialogContent, ListSkeleton } from "@/components/dashboard/shared/kaizen-states";
+import { ActionDialogContent, ErrorState, ListSkeleton, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
 import { todayInDubai } from "@/lib/amc/contracts";
 import { DatePickerField } from "@/components/dashboard/extensions/amc/components/date-picker-field";
 import {
@@ -43,6 +43,12 @@ const QUOTE_STATUS: Record<QuoteRecord["status"], string> = {
   cancelled: "Cancelled",
 };
 
+const QUOTE_TONE: Record<QuoteRecord["status"], string> = {
+  draft: "bg-warning/10 text-warning",
+  estimate_linked: "bg-success/10 text-success",
+  cancelled: "bg-mist text-ink-soft",
+};
+
 const aed = (n: number) => `AED ${n.toLocaleString("en-AE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /** The figures, always in full: standard, discount, saving, final. Nothing is hidden. */
@@ -54,7 +60,7 @@ export function DiscountBreakdown({ standard, percent, amount, final }: { standa
       <dd className="text-right tabular-nums">{aed(standard)}</dd>
       <dt className="text-muted-foreground">AMC discount</dt>
       <dd className="text-right tabular-nums">{percent > 0 ? `${percent}%` : "None"}</dd>
-      <dt className="text-muted-foreground">Customer saves</dt>
+      <dt className="text-muted-foreground">Client saves</dt>
       <dd className="text-right tabular-nums">{aed(amount)}</dd>
       <dt className="font-medium">Final price</dt>
       <dd className="text-right font-medium tabular-nums">{final === null ? "—" : aed(final)}</dd>
@@ -80,7 +86,13 @@ export function ContractCommercial({
   const [data, setData] = useState<CommercialHistory | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  /* Kept after the dialog closes, so it can animate out with its content. */
   const [acting, setActing] = useState<{ quote: QuoteRecord; action: "link_estimate" | "cancel" } | null>(null);
+  const [actingOpen, setActingOpen] = useState(false);
+  const act = (quote: QuoteRecord, action: "link_estimate" | "cancel") => {
+    setActing({ quote, action });
+    setActingOpen(true);
+  };
 
   const [version, setVersion] = useState(0);
   const load = useCallback(() => setVersion((v) => v + 1), []);
@@ -103,13 +115,21 @@ export function ContractCommercial({
       action={
         canManage && contract.status === "active" ? (
           <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
+            <Plus className="size-4" />
             Additional service
           </Button>
         ) : null
       }
     >
       {error ? (
-        <p className="text-destructive text-sm">{error}</p>
+        <ErrorState
+          title="Could not load the commercial history"
+          message={error}
+          onRetry={() => {
+            setError(null);
+            load();
+          }}
+        />
       ) : !data ? (
         <ListSkeleton rows={3} />
       ) : (
@@ -146,7 +166,7 @@ export function ContractCommercial({
                     <span className="font-medium">
                       {q.quoteNumber} · {q.serviceLabel}
                     </span>
-                    <Badge variant="secondary" className="font-normal">
+                    <Badge variant="secondary" className={`border-0 font-medium ${QUOTE_TONE[q.status]}`}>
                       {QUOTE_STATUS[q.status]}
                     </Badge>
                   </div>
@@ -162,11 +182,11 @@ export function ContractCommercial({
                   {canManage && q.status !== "cancelled" ? (
                     <div className="flex gap-1">
                       {q.status === "draft" ? (
-                        <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => setActing({ quote: q, action: "link_estimate" })}>
+                        <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => act(q, "link_estimate")}>
                           Link FSM estimate
                         </Button>
                       ) : null}
-                      <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => setActing({ quote: q, action: "cancel" })}>
+                      <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => act(q, "cancel")}>
                         Cancel
                       </Button>
                     </div>
@@ -182,25 +202,25 @@ export function ContractCommercial({
         </>
       )}
 
-      {adding ? (
-        <AdditionalServiceDialog
-          contractId={contract.id}
-          entitlements={entitlements}
-          onOpenChange={(next) => !next && setAdding(false)}
-          onSaved={() => {
-            setAdding(false);
-            void load();
-          }}
-        />
-      ) : null}
+      <AdditionalServiceDialog
+        open={adding}
+        onOpenChange={setAdding}
+        contractId={contract.id}
+        entitlements={entitlements}
+        onSaved={() => {
+          setAdding(false);
+          void load();
+        }}
+      />
       {acting ? (
         <QuoteActionDialog
+          open={actingOpen}
+          onOpenChange={setActingOpen}
           contractId={contract.id}
           quote={acting.quote}
           action={acting.action}
-          onOpenChange={(next) => !next && setActing(null)}
           onDone={() => {
-            setActing(null);
+            setActingOpen(false);
             void load();
           }}
         />
@@ -212,11 +232,13 @@ export function ContractCommercial({
 const OTHER = "__other__";
 
 function AdditionalServiceDialog({
+  open,
+  onOpenChange,
   contractId,
   entitlements,
-  onOpenChange,
   onSaved,
 }: {
+  open: boolean;
   contractId: string;
   entitlements: Entitlement[];
   onOpenChange: (open: boolean) => void;
@@ -230,8 +252,21 @@ function AdditionalServiceDialog({
   const [price, setPrice] = useState("");
   const [notes, setNotes] = useState("");
   const [result, setResult] = useState<AdditionalServiceEligibility | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [working, setWorking] = useState<"check" | "save" | null>(null);
+  const busy = working !== null;
+
+  /* Each opening starts a new quote. */
+  useEffect(() => {
+    if (!open) return;
+    setChoice(OTHER);
+    setLabel("");
+    setKey("");
+    setCategory("");
+    setDate(todayInDubai());
+    setPrice("");
+    setNotes("");
+    setResult(null);
+  }, [open]);
 
   const onContract = entitlements.find((e) => e.serviceId === choice);
   const request = (): AdditionalServiceRequest => ({
@@ -246,40 +281,38 @@ function AdditionalServiceDialog({
   const valid = (onContract || label.trim()) && date && (price === "" || Number(price) >= 0);
 
   const check = async () => {
-    setBusy(true);
-    setError(null);
+    setWorking("check");
     try {
       setResult((await amcContractsService.checkAdditionalService(contractId, request())).eligibility);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not check the service.");
+      toast.error(e instanceof Error ? e.message : "Could not check the service.");
     } finally {
-      setBusy(false);
+      setWorking(null);
     }
   };
   const save = async () => {
-    setBusy(true);
-    setError(null);
+    setWorking("save");
     try {
       const { quote } = await amcContractsService.createQuote(contractId, request());
       toast.success(`${quote.quoteNumber} saved. Create the estimate in Zoho FSM with these figures, then link it.`);
       onSaved();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not save the quote.");
+      toast.error(e instanceof Error ? e.message : "Could not save the quote.");
     } finally {
-      setBusy(false);
+      setWorking(null);
     }
   };
 
   return (
-    <Dialog open onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <ActionDialogContent busy={busy} className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+    <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
+      <ActionDialogContent busy={busy} className="max-h-[88vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Additional service</DialogTitle>
-          <DialogDescription>Check whether it is covered or discounted, then save a quote. Nothing is sent to the customer.</DialogDescription>
+          <DialogDescription>Check whether it is covered or discounted, then save a quote. Nothing is sent to the client.</DialogDescription>
         </DialogHeader>
-        <div className="grid gap-3">
-          <div className="grid gap-1.5">
-            <Label>Service</Label>
+        <div className="grid gap-4 py-2">
+          <div className="grid gap-2">
+            <Label htmlFor="aq-service">Service</Label>
             <Select
               value={choice}
               onValueChange={(v) => {
@@ -287,7 +320,7 @@ function AdditionalServiceDialog({
                 setResult(null);
               }}
             >
-              <SelectTrigger aria-label="Service">
+              <SelectTrigger id="aq-service">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -301,33 +334,33 @@ function AdditionalServiceDialog({
             </Select>
           </div>
           {!onContract ? (
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="grid gap-1.5 sm:col-span-2">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-2 sm:col-span-2">
                 <Label htmlFor="aq-label">Service name</Label>
                 <Input id="aq-label" value={label} onChange={(e) => { setLabel(e.target.value); setResult(null); }} maxLength={200} placeholder="e.g. Interior painting" />
               </div>
-              <div className="grid gap-1.5">
+              <div className="grid gap-2">
                 <Label htmlFor="aq-key">Service key (optional)</Label>
                 <Input id="aq-key" value={key} onChange={(e) => { setKey(e.target.value); setResult(null); }} maxLength={100} placeholder="e.g. painting" />
               </div>
-              <div className="grid gap-1.5">
+              <div className="grid gap-2">
                 <Label htmlFor="aq-cat">Category (optional)</Label>
                 <Input id="aq-cat" value={category} onChange={(e) => { setCategory(e.target.value); setResult(null); }} maxLength={100} placeholder="e.g. plumbing" />
               </div>
               <p className="text-muted-foreground text-xs sm:col-span-2">The key and category decide whether the AMC discount applies (Settings).</p>
             </div>
           ) : null}
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="grid gap-1.5">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-2">
               <Label htmlFor="aq-date">Date of the work</Label>
               <DatePickerField id="aq-date" value={date} onChange={(v) => { setDate(v); setResult(null); }} />
             </div>
-            <div className="grid gap-1.5">
+            <div className="grid gap-2">
               <Label htmlFor="aq-price">Standard price (AED, excl. VAT)</Label>
               <Input id="aq-price" type="number" min={0} step="0.01" value={price} onChange={(e) => { setPrice(e.target.value); setResult(null); }} />
             </div>
           </div>
-          <div className="grid gap-1.5">
+          <div className="grid gap-2">
             <Label htmlFor="aq-notes">Notes (optional)</Label>
             <Textarea id="aq-notes" rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={1000} />
           </div>
@@ -344,25 +377,30 @@ function AdditionalServiceDialog({
               ) : null}
             </div>
           ) : null}
-          {error ? (
-            <p className="text-destructive text-sm" role="alert">
-              {error}
-            </p>
-          ) : null}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-            Close
+            Cancel
           </Button>
-          <Button variant="outline" onClick={() => void check()} disabled={busy || !valid}>
+          <SubmitButton
+            variant="outline"
+            onClick={() => void check()}
+            disabled={busy || !valid}
+            pending={working === "check"}
+            pendingLabel="Checking…"
+            icon={<SearchCheck className="size-4" />}
+          >
             Check
-          </Button>
-          <Button
+          </SubmitButton>
+          <SubmitButton
             onClick={() => void save()}
             disabled={busy || !valid || !result || result.outcome === "included_in_amc" || result.standardPrice === null}
+            pending={working === "save"}
+            pendingLabel="Saving…"
+            icon={<Save className="size-4" />}
           >
             Save quote
-          </Button>
+          </SubmitButton>
         </DialogFooter>
       </ActionDialogContent>
     </Dialog>
@@ -370,12 +408,14 @@ function AdditionalServiceDialog({
 }
 
 function QuoteActionDialog({
+  open,
+  onOpenChange,
   contractId,
   quote,
   action,
-  onOpenChange,
   onDone,
 }: {
+  open: boolean;
   contractId: string;
   quote: QuoteRecord;
   action: "link_estimate" | "cancel";
@@ -384,10 +424,11 @@ function QuoteActionDialog({
 }) {
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (open) setValue("");
+  }, [open, quote.id, action]);
   const submit = async () => {
     setBusy(true);
-    setError(null);
     try {
       await amcContractsService.updateQuote(
         contractId,
@@ -397,13 +438,13 @@ function QuoteActionDialog({
       toast.success(action === "link_estimate" ? "Estimate linked" : "Quote cancelled");
       onDone();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not update the quote.");
+      toast.error(e instanceof Error ? e.message : "Could not update the quote.");
     } finally {
       setBusy(false);
     }
   };
   return (
-    <Dialog open onOpenChange={(next) => !busy && onOpenChange(next)}>
+    <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <ActionDialogContent busy={busy} className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{action === "link_estimate" ? `Link the FSM estimate for ${quote.quoteNumber}` : `Cancel ${quote.quoteNumber}?`}</DialogTitle>
@@ -413,30 +454,36 @@ function QuoteActionDialog({
               : "The quote stays in the history; its figures are not counted."}
           </DialogDescription>
         </DialogHeader>
-        {action === "link_estimate" ? (
-          <div className="grid gap-3">
-            <DiscountBreakdown standard={quote.standardPrice} percent={quote.discountPercent} amount={quote.discountAmount} final={quote.finalPrice} />
-            <Input value={value} onChange={(e) => setValue(e.target.value)} placeholder="e.g. EST1043" aria-label="Estimate number" maxLength={60} />
-          </div>
-        ) : (
-          <Textarea value={value} onChange={(e) => setValue(e.target.value)} rows={2} placeholder="Reason" aria-label="Reason" maxLength={500} />
-        )}
-        {error ? (
-          <p className="text-destructive text-sm" role="alert">
-            {error}
-          </p>
-        ) : null}
+        <div className="grid gap-4 py-2">
+          {action === "link_estimate" ? (
+            <>
+              <DiscountBreakdown standard={quote.standardPrice} percent={quote.discountPercent} amount={quote.discountAmount} final={quote.finalPrice} />
+              <div className="grid gap-2">
+                <Label htmlFor="aq-estimate">Estimate number</Label>
+                <Input id="aq-estimate" value={value} onChange={(e) => setValue(e.target.value)} placeholder="e.g. EST1043" maxLength={60} />
+              </div>
+            </>
+          ) : (
+            <div className="grid gap-2">
+              <Label htmlFor="aq-cancel-reason">Reason</Label>
+              <Textarea id="aq-cancel-reason" value={value} onChange={(e) => setValue(e.target.value)} rows={2} maxLength={500} />
+            </div>
+          )}
+        </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-            Close
+            {action === "cancel" ? "Keep quote" : "Cancel"}
           </Button>
-          <Button
+          <SubmitButton
             variant={action === "cancel" ? "destructive" : "default"}
             onClick={() => void submit()}
-            disabled={busy || value.trim().length < (action === "cancel" ? 3 : 2)}
+            disabled={value.trim().length < (action === "cancel" ? 3 : 2)}
+            pending={busy}
+            pendingLabel={action === "cancel" ? "Cancelling…" : "Linking…"}
+            icon={action === "cancel" ? <XCircle className="size-4" /> : <Link2 className="size-4" />}
           >
             {action === "link_estimate" ? "Link estimate" : "Cancel quote"}
-          </Button>
+          </SubmitButton>
         </DialogFooter>
       </ActionDialogContent>
     </Dialog>

@@ -172,7 +172,7 @@ export function AmcSendDialog({
         if (!open && !pending) onCancel();
       }}
     >
-      <ActionDialogContent busy={pending} className="sm:max-w-lg">
+      <ActionDialogContent busy={pending} className="max-h-[88vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>
             {isProposal
@@ -198,88 +198,90 @@ export function AmcSendDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {request ? (
-          <div className="bg-muted inline-flex w-fit rounded-full p-0.5 text-sm" role="tablist" aria-label="Channel">
-            {(["whatsapp", "email", "link"] as const).map((c) => (
-              <button
-                key={c}
-                type="button"
-                role="tab"
-                aria-selected={deliver === c}
-                onClick={() => setDeliver(c)}
-                className={`rounded-full px-3 py-1 ${deliver === c ? "bg-background shadow-sm" : "text-muted-foreground"}`}
-              >
-                {c === "whatsapp" ? "WhatsApp" : c === "email" ? "Email" : "Link only"}
-              </button>
-            ))}
-          </div>
-        ) : null}
-
-        {channel ? (
-          <div className="grid gap-2">
-            <Label>{channel === "email" ? "Send to" : "Prepare for"}</Label>
-            {options[channel].length === 0 ? (
-              <p className="text-muted-foreground text-xs">
-                No {channel === "email" ? "email address" : "mobile number"} on the proposal. Add one below.
-              </p>
-            ) : (
-              <ul className="divide-y rounded-md border text-sm">
-                {options[channel].map((o) => (
-                  <li key={o.key}>
-                    <label className="flex items-center gap-2 px-3 py-2">
-                      <Checkbox
-                        checked={o.checked}
-                        onCheckedChange={(checked) =>
-                          setOptions((all) => ({
-                            ...all,
-                            [channel]: all[channel].map((x) => (x.key === o.key ? { ...x, checked: checked === true } : x)),
-                          }))
-                        }
-                      />
-                      <span className="min-w-0 flex-1 truncate">
-                        {o.name ? <span className="font-medium">{o.name} · </span> : null}
-                        {o.address}
-                      </span>
-                    </label>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <div className="flex gap-2">
-              <Input
-                value={extra}
-                onChange={(event) => setExtra(event.target.value)}
-                onKeyDown={(event) => event.key === "Enter" && addExtra()}
-                placeholder={channel === "email" ? "another@email.com" : "050 123 4567"}
-                aria-label={channel === "email" ? "Another email address" : "Another mobile number"}
-              />
-              <Button type="button" variant="outline" onClick={addExtra} disabled={!extraValid}>
-                <Plus className="size-4" />
-                Add
-              </Button>
+        <div className="grid gap-4 py-2">
+          {request ? (
+            <div className="bg-muted inline-flex w-fit rounded-full p-0.5 text-sm" role="tablist" aria-label="Channel">
+              {(["whatsapp", "email", "link"] as const).map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  role="tab"
+                  aria-selected={deliver === c}
+                  onClick={() => setDeliver(c)}
+                  className={`rounded-full px-3 py-1 ${deliver === c ? "bg-background shadow-sm" : "text-muted-foreground"}`}
+                >
+                  {c === "whatsapp" ? "WhatsApp" : c === "email" ? "Email" : "Link only"}
+                </button>
+              ))}
             </div>
-            {channel === "email" ? (
-              <label className="text-muted-foreground flex items-center gap-2 text-xs">
-                <Switch checked={ccOwner} onCheckedChange={setCcOwner} aria-label="Copy me" />
-                Copy me (the coordinator)
-              </label>
-            ) : null}
-          </div>
-        ) : null}
+          ) : null}
 
-        {sentAt ? (
-          <Alert className="border-amber-300/60 bg-amber-50 text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
-            <TriangleAlert className="size-4" />
-            <AlertTitle>
-              A link was already sent on{" "}
-              {format(new Date(sentAt), "d MMM yyyy, HH:mm")}
-            </AlertTitle>
-            <AlertDescription className="text-current/80">
-              Sharing again creates a new link, and the one the client already
-              has stops working. Make sure they use the new one.
-            </AlertDescription>
-          </Alert>
-        ) : null}
+          {channel ? (
+            <div className="grid gap-2">
+              <Label>{channel === "email" ? "Send to" : "Prepare for"}</Label>
+              {options[channel].length === 0 ? (
+                <p className="text-muted-foreground text-xs">
+                  No {channel === "email" ? "email address" : "mobile number"} on the proposal. Add one below.
+                </p>
+              ) : (
+                <ul className="divide-y rounded-md border text-sm">
+                  {options[channel].map((o) => (
+                    <li key={o.key}>
+                      <label className="flex items-center gap-2 px-3 py-2">
+                        <Checkbox
+                          checked={o.checked}
+                          onCheckedChange={(checked) =>
+                            setOptions((all) => ({
+                              ...all,
+                              [channel]: all[channel].map((x) => (x.key === o.key ? { ...x, checked: checked === true } : x)),
+                            }))
+                          }
+                        />
+                        <span className="min-w-0 flex-1 truncate">
+                          {o.name ? <span className="font-medium">{o.name} · </span> : null}
+                          {o.address}
+                        </span>
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="flex gap-2">
+                <Input
+                  value={extra}
+                  onChange={(event) => setExtra(event.target.value)}
+                  onKeyDown={(event) => event.key === "Enter" && addExtra()}
+                  placeholder={channel === "email" ? "another@email.com" : "050 123 4567"}
+                  aria-label={channel === "email" ? "Another email address" : "Another mobile number"}
+                />
+                <Button type="button" variant="outline" onClick={addExtra} disabled={!extraValid}>
+                  <Plus className="size-4" />
+                  Add
+                </Button>
+              </div>
+              {channel === "email" ? (
+                <label className="text-muted-foreground flex items-center gap-2 text-xs">
+                  <Switch checked={ccOwner} onCheckedChange={setCcOwner} aria-label="Copy me" />
+                  Copy me (the coordinator)
+                </label>
+              ) : null}
+            </div>
+          ) : null}
+
+          {sentAt ? (
+            <Alert className="border-warning/30 bg-warning/5">
+              <TriangleAlert className="text-warning size-4" />
+              <AlertTitle>
+                A link was already sent on{" "}
+                {format(new Date(sentAt), "d MMM yyyy, HH:mm")}
+              </AlertTitle>
+              <AlertDescription>
+                Sharing again creates a new link, and the one the client already
+                has stops working. Make sure they use the new one.
+              </AlertDescription>
+            </Alert>
+          ) : null}
+        </div>
 
         <DialogFooter>
           <Button variant="outline" onClick={onCancel} disabled={pending}>

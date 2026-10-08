@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Check, SearchIcon } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { SubmitButton } from "@/components/dashboard/shared/kaizen-states";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -17,7 +18,7 @@ import {
   type PropertyRecord,
 } from "@/modules/amc-contracts/amc-contracts-service";
 
-/** Search shared customers by name, Customer ID, phone or email and pick one. */
+/** Search the shared clients by name, Customer ID, phone or email and pick one. */
 export function CustomerSearch({
   onPick,
   selectedId,
@@ -38,7 +39,7 @@ export function CustomerSearch({
         setResults(customers);
         setError(null);
       },
-      (e) => !stale && setError(e instanceof Error ? e.message : "Could not search customers."),
+      (e) => !stale && setError(e instanceof Error ? e.message : "Could not search clients."),
     );
     return () => {
       stale = true;
@@ -47,32 +48,42 @@ export function CustomerSearch({
 
   return (
     <div className="grid gap-2">
-      <Input placeholder="Search name, Customer ID, phone or email" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search customers" />
-      {error ? <p className="text-destructive text-xs">{error}</p> : null}
+      <div className="relative">
+        <Input type="search" placeholder="Search name, Customer ID, phone or email…" className="ps-9" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search clients" />
+        <SearchIcon aria-hidden className="text-muted-foreground/80 pointer-events-none absolute start-3 top-1/2 size-4 -translate-y-1/2" />
+      </div>
+      {error ? <p className="text-danger text-xs">{error}</p> : null}
       <ul className="max-h-56 divide-y overflow-y-auto rounded-lg border text-sm">
         {results.length === 0 ? (
-          <li className="text-muted-foreground px-3 py-2">{term ? "No customers match." : "No customers yet."}</li>
+          <li className="text-muted-foreground px-3 py-2">{term ? "No clients match." : "No clients yet."}</li>
         ) : (
-          results.map((c) => (
-            <li key={c.id}>
-              <button
-                type="button"
-                onClick={() => onPick(c)}
-                className={`hover:bg-muted w-full px-3 py-2 text-left ${selectedId === c.id ? "bg-muted" : ""}`}
-              >
-                <span className="font-medium">{c.name}</span>
-                {c.customerRef ? <span className="text-muted-foreground"> · {c.customerRef}</span> : null}
-                <span className="text-muted-foreground block truncate text-xs">{[c.phone, c.email].filter(Boolean).join(" · ") || "No contact details"}</span>
-              </button>
-            </li>
-          ))
+          results.map((c) => {
+            const picked = selectedId === c.id;
+            return (
+              <li key={c.id}>
+                <button
+                  type="button"
+                  onClick={() => onPick(c)}
+                  aria-pressed={picked}
+                  className={`flex w-full items-center gap-3 px-3 py-2 text-left ${picked ? "bg-brand-50" : "hover:bg-muted/50"}`}
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className={`font-medium ${picked ? "text-brand" : ""}`}>{c.name}</span>
+                    {c.customerRef ? <span className="text-muted-foreground"> · {c.customerRef}</span> : null}
+                    <span className="text-muted-foreground block truncate text-xs">{[c.phone, c.email].filter(Boolean).join(" · ") || "No contact details"}</span>
+                  </span>
+                  {picked ? <Check className="text-brand size-4 shrink-0" aria-hidden /> : null}
+                </button>
+              </li>
+            );
+          })
         )}
       </ul>
     </div>
   );
 }
 
-/** A customer's properties to pick from. */
+/** A client's properties to pick from. */
 export function PropertySelect({
   customerId,
   value,
@@ -100,13 +111,13 @@ export function PropertySelect({
   return (
     <Select value={value ?? ""} onValueChange={(id) => onChange(list.find((p) => p.id === id) ?? null)} disabled={!customerId || list.length === 0}>
       <SelectTrigger aria-label="Property">
-        <SelectValue placeholder={!customerId ? "Choose the customer first" : list.length ? "Choose a property" : "No properties yet"} />
+        <SelectValue placeholder={!customerId ? "Choose the client first" : list.length ? "Choose a property" : "No properties yet"} />
       </SelectTrigger>
       <SelectContent>
         {list.map((p) => (
           <SelectItem key={p.id} value={p.id}>
             {p.label}
-            {p.unitType ? ` · ${p.unitType}` : ""}
+            {p.unitType ? ` · ${UNIT_LABELS[p.unitType as keyof typeof UNIT_LABELS] ?? p.unitType}` : ""}
           </SelectItem>
         ))}
       </SelectContent>
@@ -117,7 +128,7 @@ export function PropertySelect({
 export function CustomerFields({ value, onChange }: { value: CustomerInput; onChange: (next: CustomerInput) => void }) {
   const set = (k: keyof CustomerInput) => (e: { target: { value: string } }) => onChange({ ...value, [k]: e.target.value });
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
+    <div className="grid gap-4 sm:grid-cols-2">
       <div className="grid gap-1.5 sm:col-span-2">
         <Label htmlFor="cust-name">Name</Label>
         <Input id="cust-name" value={value.name} onChange={set("name")} maxLength={200} />
@@ -222,7 +233,7 @@ export function PropertyFields({
 }) {
   const text = (k: keyof PropertyInput) => (e: { target: { value: string } }) => onChange({ ...value, [k]: e.target.value });
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
+    <div className="grid gap-4 sm:grid-cols-2">
       <div className="grid gap-1.5 sm:col-span-2">
         <Label htmlFor="prop-label">Property</Label>
         <Input id="prop-label" value={value.label} onChange={(e) => onChange({ ...value, label: e.target.value })} placeholder="e.g. Villa 12, Street 4" maxLength={200} />
@@ -269,7 +280,7 @@ export function PropertyFields({
           </SelectContent>
         </Select>
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-2 gap-4">
         <div className="grid gap-1.5">
           <Label htmlFor="prop-bed">Bedrooms</Label>
           <Input
@@ -295,7 +306,7 @@ export function PropertyFields({
         <Label htmlFor="prop-building">Building / tower</Label>
         <Input id="prop-building" value={value.building ?? ""} onChange={text("building")} maxLength={200} />
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-2 gap-4">
         <div className="grid gap-1.5">
           <Label htmlFor="prop-unit">Unit no.</Label>
           <Input id="prop-unit" value={value.unitNo ?? ""} onChange={text("unitNo")} maxLength={60} />
@@ -313,7 +324,7 @@ export function PropertyFields({
         <Label htmlFor="prop-city">City / emirate</Label>
         <Input id="prop-city" value={value.city ?? ""} onChange={text("city")} maxLength={80} placeholder="e.g. Dubai" />
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-2 gap-4">
         <div className="grid gap-1.5">
           <Label htmlFor="prop-floors">Floors</Label>
           <Input
@@ -415,8 +426,8 @@ export function cleanProperty(input: PropertyInput): PropertyInput {
 
 export function SubmitRow({ busy, label, onClick, disabled }: { busy: boolean; label: string; onClick: () => void; disabled?: boolean }) {
   return (
-    <Button onClick={onClick} disabled={busy || disabled}>
-      {busy ? "Saving…" : label}
-    </Button>
+    <SubmitButton onClick={onClick} pending={busy} pendingLabel="Saving…" disabled={disabled}>
+      {label}
+    </SubmitButton>
   );
 }

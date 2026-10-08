@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 
-import { HeadingSkeleton } from "@/components/dashboard/shared/kaizen-states";
+import { TablePageSkeleton } from "@/components/dashboard/snagging/route-skeletons";
 import { AmcSubmissionsPage } from "@/components/dashboard/extensions/amc/amc-submissions-page";
 
 const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
-const title = "AMC proposals | Extensions";
+const title = "Proposals | AMC";
 const description =
   "Every AMC proposal and contract: drafts, those waiting for approval, and where each stands with the client.";
 
@@ -22,7 +22,7 @@ export default function AmcProposalsRoute() {
   // The filters live in the query string (?status=, ?scope=), which needs
   // Suspense under the App Router.
   return (
-    <Suspense fallback={<HeadingSkeleton withActions />}>
+    <Suspense fallback={<TablePageSkeleton filters={1} columns={5} />}>
       <AmcSubmissionsPage />
     </Suspense>
   );

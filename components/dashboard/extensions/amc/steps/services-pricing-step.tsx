@@ -181,7 +181,7 @@ export function ServicesPricingStep({ form, catalogue, settings, rules }: StepPr
             rateCard={!!card}
             discountNote={
               rules ? (
-                <p className={`flex items-center gap-1.5 text-xs ${level ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground"}`}>
+                <p className={`flex items-center gap-1.5 text-xs ${level ? "text-warning" : "text-muted-foreground"}`}>
                   <BadgePercent className="size-3.5" />
                   {level
                     ? `A ${discount}% discount needs ${approvalLevelName(rules.approvals, level)} approval.`
@@ -566,7 +566,7 @@ function PaymentPlanSection({ form, rules }: { form: UseFormReturn<AmcFormData>;
           </SelectContent>
         </Select>
         {nonStandard ? (
-          <p className="text-xs text-amber-700 dark:text-amber-400">
+          <p className="text-warning text-xs">
             {plan === "custom" ? "A custom plan" : "This plan is outside the standard plans for this value and"} needs approval.
           </p>
         ) : null}

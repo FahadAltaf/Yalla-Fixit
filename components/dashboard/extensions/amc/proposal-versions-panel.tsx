@@ -6,9 +6,16 @@ import { FileDown, GitBranch, History, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { SectionCard } from "@/components/dashboard/shared/kaizen";
-import { ActionDialogContent, ErrorState, ListSkeleton } from "@/components/dashboard/shared/kaizen-states";
+import {
+  ActionDialogContent,
+  ErrorState,
+  ListSkeleton,
+  SectionSkeleton,
+  SubmitButton,
+} from "@/components/dashboard/shared/kaizen-states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Label } from "@/components/ui/label";
@@ -76,7 +83,13 @@ export function ProposalVersionsPanel({ submission }: { submission: AmcSubmissio
   };
 
   if (current.error) return <ErrorState title="Could not load the versions" message={current.error} onRetry={() => setReload((n) => n + 1)} />;
-  if (!current.versions) return <ListSkeleton rows={3} />;
+  if (!current.versions) {
+    return (
+      <SectionSkeleton>
+        <ListSkeleton rows={3} />
+      </SectionSkeleton>
+    );
+  }
   if (!current.migrated) {
     return (
       <SectionCard icon={<GitBranch />} title="Versions" bodyClassName="px-5 pb-5">
@@ -111,7 +124,7 @@ export function ProposalVersionsPanel({ submission }: { submission: AmcSubmissio
         <ul className="divide-y">
           {versions.map((v) => (
             <li key={v.id} className="flex flex-wrap items-start gap-3 px-5 py-3.5 text-sm">
-              <Badge variant="secondary" className="font-normal">V{v.versionNo}</Badge>
+              <Badge variant="secondary" className="border-0 font-medium">V{v.versionNo}</Badge>
               <div className="min-w-0 flex-1">
                 <div className="font-medium">
                   {v.reason ? VERSION_REASON_LABELS[v.reason] : "Original"}
@@ -131,7 +144,7 @@ export function ProposalVersionsPanel({ submission }: { submission: AmcSubmissio
             </li>
           ))}
           <li className="flex flex-wrap items-start gap-3 px-5 py-3.5 text-sm">
-            <Badge className="font-normal">V{active}</Badge>
+            <Badge variant="secondary" className="bg-brand-50 text-brand border-0 font-medium">V{active}</Badge>
             <div className="min-w-0 flex-1">
               <div className="font-medium">
                 {submission.version_reason ? VERSION_REASON_LABELS[submission.version_reason] : "Original"}
@@ -212,94 +225,103 @@ export function ProposalVersionsPanel({ submission }: { submission: AmcSubmissio
           </div>
         </SectionCard>
       ) : (
-        <EmptyState
-          icon={<GitBranch className="size-5" />}
-          title="One version so far"
-          description="If the client asks for changes after seeing the proposal, revise it: this version is locked with its document and V2 opens."
-        />
+        <Card className="p-0">
+          <EmptyState
+            className="border-0"
+            icon={<GitBranch className="size-5" />}
+            title="One version so far"
+            description="If the client asks for changes after seeing the proposal, revise it: this version is locked with its document and V2 opens."
+          />
+        </Card>
       )}
     </div>
   );
 }
 
-/** Revise: lock the shared version and open the next as a draft (the owner's action). */
-export function ReviseProposalButton({ submission }: { submission: AmcSubmission }) {
+/** Whether this viewer may revise the proposal: the owner, once the client has seen it. */
+export function canReviseProposal(submission: AmcSubmission) {
+  return canRevise(submission.status, submission.is_own !== false);
+}
+
+/**
+ * Revise: lock the shared version and open the next as a draft (the
+ * owner's action). Controlled, so the proposal page can open it from its
+ * "More" menu -- a dialog inside a menu item closes with the menu.
+ */
+export function ReviseProposalDialog({
+  submission,
+  open,
+  onOpenChange,
+}: {
+  submission: AmcSubmission;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
   const [reason, setReason] = useState<VersionReason | "">("");
   const [summary, setSummary] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  if (!canRevise(submission.status, submission.is_own !== false)) return null;
   const next = (submission.current_version ?? 1) + 1;
 
   const revise = async () => {
     if (!reason) return;
     setBusy(true);
-    setError(null);
     try {
       const result = await proposalRulesService.revise({ id: submission.id, reason, summary: summary.trim() });
       toast.success(`V${result.lockedVersionNo} is locked with its document. V${result.versionNo} is open as a draft.`);
       router.push(`/extensions/amc/${submission.id}/edit?step=2`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not revise the proposal.");
+      toast.error(e instanceof Error ? e.message : "Could not revise the proposal.");
       setBusy(false);
     }
   };
 
   return (
-    <>
-      <Button variant="outline" onClick={() => setOpen(true)}>
-        <GitBranch className="size-4" />
-        Revise (V{next})
-      </Button>
-      {open ? (
-        <Dialog open onOpenChange={(value) => !busy && setOpen(value)}>
-          <ActionDialogContent busy={busy} className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle>Revise this proposal</DialogTitle>
-              <DialogDescription>
-                The client has seen V{next - 1}. It is locked with the document they were sent, and V{next} opens as a draft that goes through approval
-                again. The client&apos;s current link stops working.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="grid gap-3">
-              <div className="grid gap-1.5">
-                <Label>Why</Label>
-                <Select value={reason} onValueChange={(value) => setReason(value as VersionReason)}>
-                  <SelectTrigger aria-label="Reason for the new version">
-                    <SelectValue placeholder="Choose a reason" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {VERSION_REASONS.map((r) => (
-                      <SelectItem key={r} value={r}>
-                        {VERSION_REASON_LABELS[r]}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-1.5">
-                <Label htmlFor="revise-summary">What changes</Label>
-                <Textarea id="revise-summary" rows={3} value={summary} onChange={(e) => setSummary(e.target.value)} maxLength={1000} placeholder="e.g. Client dropped plumbing; discount raised to 12%" />
-              </div>
-              {error ? (
-                <p className="text-destructive text-sm" role="alert">
-                  {error}
-                </p>
-              ) : null}
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setOpen(false)} disabled={busy}>
-                Cancel
-              </Button>
-              <Button onClick={() => void revise()} disabled={busy || !reason || summary.trim().length < 5}>
-                {busy ? "Locking V" + (next - 1) + "…" : `Open V${next}`}
-              </Button>
-            </DialogFooter>
-          </ActionDialogContent>
-        </Dialog>
-      ) : null}
-    </>
+    <Dialog open={open} onOpenChange={(value) => !busy && onOpenChange(value)}>
+      <ActionDialogContent busy={busy} className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Revise this proposal</DialogTitle>
+          <DialogDescription>
+            V{next - 1} is locked with the document the client was sent, and V{next} opens as a draft that goes through approval again; the
+            client&apos;s current link stops working.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4 py-2">
+          <div className="grid gap-1.5">
+            <Label htmlFor="revise-reason">Why</Label>
+            <Select value={reason} onValueChange={(value) => setReason(value as VersionReason)}>
+              <SelectTrigger id="revise-reason" aria-label="Reason for the new version">
+                <SelectValue placeholder="Choose a reason" />
+              </SelectTrigger>
+              <SelectContent>
+                {VERSION_REASONS.map((r) => (
+                  <SelectItem key={r} value={r}>
+                    {VERSION_REASON_LABELS[r]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="revise-summary">What changes</Label>
+            <Textarea id="revise-summary" rows={3} value={summary} onChange={(e) => setSummary(e.target.value)} maxLength={1000} placeholder="e.g. Client dropped plumbing; discount raised to 12%" />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+            Cancel
+          </Button>
+          <SubmitButton
+            onClick={() => void revise()}
+            disabled={!reason || summary.trim().length < 5}
+            pending={busy}
+            pendingLabel={`Locking V${next - 1}…`}
+            icon={<GitBranch className="size-4" />}
+          >
+            Open V{next}
+          </SubmitButton>
+        </DialogFooter>
+      </ActionDialogContent>
+    </Dialog>
   );
 }

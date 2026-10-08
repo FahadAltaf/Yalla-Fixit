@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { BellRing, Repeat } from "lucide-react";
+import { BellPlus, BellRing, Repeat } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Money } from "@/components/ui/money";
 import { SectionCard } from "@/components/dashboard/shared/kaizen";
-import { ActionDialogContent, ListSkeleton } from "@/components/dashboard/shared/kaizen-states";
+import { ActionDialogContent, ErrorState, ListSkeleton, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
 import {
   amcContractsService,
   type ReminderPlan,
@@ -117,13 +117,14 @@ export function ContractRenewal({
           </Button>
         ) : canRenew && data?.canCreate ? (
           <Button size="sm" variant="outline" onClick={() => setPreviewOpen(true)}>
+            <Repeat className="size-4" />
             Create renewal proposal
           </Button>
         ) : null
       }
     >
       {error ? (
-        <p className="text-destructive text-sm">{error}</p>
+        <ErrorState title="Could not load the renewal" message={error} onRetry={() => void load()} />
       ) : !data ? (
         <ListSkeleton rows={3} />
       ) : (
@@ -147,7 +148,7 @@ export function ContractRenewal({
       )}
 
       <Dialog open={previewOpen} onOpenChange={(next) => !creating && setPreviewOpen(next)}>
-        <ActionDialogContent busy={creating} className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+        <ActionDialogContent busy={creating} className="max-h-[88vh] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Create renewal proposal</DialogTitle>
             <DialogDescription>
@@ -156,16 +157,16 @@ export function ContractRenewal({
             </DialogDescription>
           </DialogHeader>
           {created ? (
-            <div className="grid gap-3 text-sm">
+            <div className="grid gap-3 py-2 text-sm">
               <p>The renewal proposal has been created as a draft.</p>
               {created.dropped.length ? (
-                <p className="text-amber-700 dark:text-amber-400">
+                <p className="text-warning">
                   Not carried over (no longer offered): {created.dropped.join(", ")}.
                 </p>
               ) : null}
             </div>
           ) : data?.preview ? (
-            <div className="grid gap-4 text-sm">
+            <div className="grid gap-4 py-2 text-sm">
               <dl className="grid grid-cols-2 gap-3 rounded-lg border p-3">
                 <div>
                   <dt className="text-muted-foreground text-xs">New period</dt>
@@ -187,7 +188,7 @@ export function ContractRenewal({
                 </div>
               </dl>
               <div>
-                <p className="mb-1 font-medium">Copied: customer, property, account managers and these services</p>
+                <p className="mb-1 font-medium">Copied: client, property, account managers and these services</p>
                 <ul className="divide-y rounded-lg border">
                   {data.preview.services.map((s) => (
                     <li key={s.serviceId} className="flex justify-between gap-2 px-3 py-1.5">
@@ -201,7 +202,7 @@ export function ContractRenewal({
                 </ul>
               </div>
               {data.preview.droppedServices.length ? (
-                <p className="text-amber-700 dark:text-amber-400">
+                <p className="text-warning">
                   Not carried over (no longer offered for this property type):{" "}
                   {data.preview.droppedServices.map((s) => s.label).join(", ")}.
                 </p>
@@ -213,7 +214,7 @@ export function ContractRenewal({
               </p>
             </div>
           ) : (
-            <p className="text-muted-foreground text-sm">{data?.blockedReason ?? "Loading…"}</p>
+            <p className="text-muted-foreground py-2 text-sm">{data?.blockedReason ?? "Loading…"}</p>
           )}
           <DialogFooter>
             {created ? (
@@ -225,9 +226,15 @@ export function ContractRenewal({
                 <Button variant="outline" onClick={() => setPreviewOpen(false)} disabled={creating}>
                   Cancel
                 </Button>
-                <Button onClick={() => void create()} disabled={creating || !data?.preview}>
-                  {creating ? "Creating…" : "Create renewal proposal"}
-                </Button>
+                <SubmitButton
+                  onClick={() => void create()}
+                  disabled={!data?.preview}
+                  pending={creating}
+                  pendingLabel="Creating…"
+                  icon={<Repeat className="size-4" />}
+                >
+                  Create renewal proposal
+                </SubmitButton>
               </>
             )}
           </DialogFooter>
@@ -246,6 +253,7 @@ export function RenewalReminders({ contractId, cancelled }: { contractId: string
   const [plan, setPlan] = useState<ReminderPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let stale = false;
@@ -256,7 +264,7 @@ export function RenewalReminders({ contractId, cancelled }: { contractId: string
     return () => {
       stale = true;
     };
-  }, [contractId]);
+  }, [contractId, attempt]);
 
   const create = async () => {
     setBusy(true);
@@ -279,14 +287,28 @@ export function RenewalReminders({ contractId, cancelled }: { contractId: string
       bodyClassName="px-5 pb-5 space-y-3"
       action={
         plan?.enabled && missing > 0 && !cancelled ? (
-          <Button size="sm" variant="outline" onClick={() => void create()} disabled={busy}>
-            {busy ? "Creating…" : "Create reminders"}
-          </Button>
+          <SubmitButton
+            size="sm"
+            variant="outline"
+            onClick={() => void create()}
+            pending={busy}
+            pendingLabel="Creating…"
+            icon={<BellPlus className="size-4" />}
+          >
+            Create reminders
+          </SubmitButton>
         ) : null
       }
     >
       {error ? (
-        <p className="text-destructive text-sm">{error}</p>
+        <ErrorState
+          title="Could not load the reminders"
+          message={error}
+          onRetry={() => {
+            setError(null);
+            setAttempt((n) => n + 1);
+          }}
+        />
       ) : !plan ? (
         <ListSkeleton rows={2} />
       ) : (
@@ -302,7 +324,7 @@ export function RenewalReminders({ contractId, cancelled }: { contractId: string
                   <span>
                     {r.daysBefore} days before · <span className="tabular-nums">{formatContractDate(r.remindOn)}</span>
                   </span>
-                  <Badge variant="secondary" className="font-normal">
+                  <Badge variant="secondary" className={`border-0 font-medium ${r.created ? "bg-success/10 text-success" : "bg-mist text-ink-soft"}`}>
                     {r.created ? "Todo created" : "Planned"}
                   </Badge>
                 </li>

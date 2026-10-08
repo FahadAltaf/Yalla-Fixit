@@ -19,9 +19,12 @@ export async function refuseCustomerEdit(
   table: "customers" | "customer_properties",
   id: string,
 ): Promise<NextResponse | null> {
-  const { data } = await gate.admin.from(table).select("id, created_by").eq("id", id).maybeSingle<{ id: string; created_by: string | null }>();
+  /* The records are Snagging's clients and addresses (20261007170000); the
+     directories read them with their creator, whichever module added them. */
+  const source = table === "customers" ? "amc_client_directory" : "amc_property_directory";
+  const { data } = await gate.admin.from(source).select("id, created_by").eq("id", id).maybeSingle<{ id: string; created_by: string | null }>();
   if (!data) {
-    return NextResponse.json({ error: table === "customers" ? "Customer not found." : "Property not found." }, { status: 404 });
+    return NextResponse.json({ error: table === "customers" ? "Client not found." : "Property not found." }, { status: 404 });
   }
   if (!canEditCustomer(gate.actor, data.created_by)) {
     return NextResponse.json(

@@ -61,11 +61,16 @@ export function ContractDocuments({
   ];
 
   return (
-    <SectionCard title="Documents" icon={<FileText />} bodyClassName="px-5 pb-5 space-y-3">
+    <SectionCard
+      title="Documents"
+      description="The archived signed contract, and the proposal and contract rebuilt from what was signed."
+      icon={<FileText />}
+      bodyClassName="px-5 pb-5 space-y-3"
+    >
       {actions.dialogs}
       <SignedArchiveRow submissionId={submissionId} />
       {docs.map((doc) => (
-        <div key={doc.type} className="flex flex-wrap items-center justify-between gap-2">
+        <div key={doc.type} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">
           <div className="min-w-0">
             <div className="text-sm font-medium">
               {doc.label} <span className="text-muted-foreground text-xs font-normal">· generated</span>

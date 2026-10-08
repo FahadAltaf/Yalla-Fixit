@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ClipboardPlus } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -9,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { ActionDialogContent } from "@/components/dashboard/shared/kaizen-states";
+import { ActionDialogContent, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
 import { DatePickerField } from "@/components/dashboard/extensions/amc/components/date-picker-field";
 import { checkUsage, formatQuantity, todayInDubai, unitWord, usagePreview } from "@/lib/amc/contracts";
 import { amcContractsService, type ContractDetail } from "@/modules/amc-contracts/amc-contracts-service";
@@ -49,6 +50,7 @@ export function RecordUsageDialog({
   const [reference, setReference] = useState("");
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
+  /* Form checks only; a server failure is a toast. */
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -96,7 +98,7 @@ export function RecordUsageDialog({
       onOpenChange(false);
       onRecorded();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not record the usage.");
+      toast.error(e instanceof Error ? e.message : "Could not record the usage.");
     } finally {
       setBusy(false);
     }
@@ -106,7 +108,7 @@ export function RecordUsageDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <ActionDialogContent busy={busy} className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+      <ActionDialogContent busy={busy} className="max-h-[88vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Record usage</DialogTitle>
           <DialogDescription>
@@ -115,7 +117,7 @@ export function RecordUsageDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-4">
+        <div className="grid gap-4 py-2">
           <div className="grid gap-2">
             <Label htmlFor="amc-usage-service">Service</Label>
             <Select value={entitlementId} onValueChange={setEntitlementId}>
@@ -207,7 +209,7 @@ export function RecordUsageDialog({
           ) : null}
 
           {error || (check && !check.ok && quantity !== "") ? (
-            <p className="text-destructive text-sm" role="alert">
+            <p className="text-danger text-sm" role="alert">
               {error ?? (check && !check.ok ? check.error : "")}
             </p>
           ) : null}
@@ -217,9 +219,15 @@ export function RecordUsageDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={() => void submit()} disabled={busy || !check?.ok || refMissing}>
-            {busy ? "Saving…" : "Record usage"}
-          </Button>
+          <SubmitButton
+            onClick={() => void submit()}
+            disabled={!check?.ok || refMissing}
+            pending={busy}
+            pendingLabel="Saving…"
+            icon={<ClipboardPlus className="size-4" />}
+          >
+            Record usage
+          </SubmitButton>
         </DialogFooter>
       </ActionDialogContent>
     </Dialog>
@@ -230,7 +238,7 @@ function PreviewCell({ label, value, danger }: { label: string; value: string; d
   return (
     <div>
       <dt className="text-muted-foreground text-xs">{label}</dt>
-      <dd className={`font-medium tabular-nums ${danger ? "text-destructive" : ""}`}>{value}</dd>
+      <dd className={`font-medium tabular-nums ${danger ? "text-danger" : ""}`}>{value}</dd>
     </div>
   );
 }

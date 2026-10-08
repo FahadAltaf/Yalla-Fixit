@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Inbox } from "lucide-react";
 
 import { DataRow, SectionCard } from "@/components/dashboard/shared/kaizen";
+import { EmptyState } from "@/components/ui/empty-state";
 import { enquiriesService } from "@/modules/amc-contracts/enquiries-service";
 
 import { formatContractDate } from "../contract-status";
@@ -24,9 +25,14 @@ export function ClientEnquiriesCard({ customerId }: { customerId: string }) {
   const [list, meta] = data;
   if (!list.migrated) return null;
   return (
-    <SectionCard title="Enquiries" icon={<Inbox />} bodyClassName="px-5 pb-5">
+    <SectionCard
+      title="Enquiries"
+      description={list.total > list.enquiries.length ? `The latest ${list.enquiries.length} of ${list.total}, newest first.` : "Every enquiry from this client, newest first."}
+      icon={<Inbox />}
+      bodyClassName={list.enquiries.length === 0 ? "border-t" : "px-5 pb-5"}
+    >
       {list.enquiries.length === 0 ? (
-        <p className="text-muted-foreground text-sm">No enquiries for this client.</p>
+        <EmptyState icon={<Inbox className="size-5" />} title="No enquiries" description="Enquiries logged for this client appear here." />
       ) : (
         list.enquiries.map((e) => (
           <DataRow
@@ -47,7 +53,6 @@ export function ClientEnquiriesCard({ customerId }: { customerId: string }) {
           />
         ))
       )}
-      {list.total > list.enquiries.length ? <p className="text-muted-foreground mt-2 text-xs">Showing the latest {list.enquiries.length} of {list.total}.</p> : null}
     </SectionCard>
   );
 }

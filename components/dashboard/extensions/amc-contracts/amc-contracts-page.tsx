@@ -7,7 +7,7 @@ import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-lab
 import { Button } from "@/components/ui/button";
 import { PageHeading } from "@/components/dashboard/shared/kaizen";
 
-import { AmcSectionNav } from "./amc-section-nav";
+import { AmcNotificationsBell } from "./amc-notifications-bell";
 import { ContractsList } from "./contracts-list";
 import { ContractsSummary } from "./contracts-summary";
 import { CoverageCheckDialog } from "./coverage-check-dialog";
@@ -24,19 +24,21 @@ export function AmcContractsPage() {
   return (
     <div className="flex w-full flex-1 flex-col gap-6">
       <PageHeading
-        eyebrow="Extensions"
+        eyebrow="Operations"
         title="AMC contracts"
         description="Activate signed AMC proposals, track what each contract covers and how much is used, and see what is expiring."
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" onClick={() => setChecking(true)}>
+            <AmcNotificationsBell />
+            {/* Contracts are made by activating a signed proposal, so the
+                heading's action is the question asked most: is this covered? */}
+            <Button onClick={() => setChecking(true)}>
               <ShieldCheck className="size-4" />
               Check coverage
             </Button>
           </div>
         }
       />
-      <AmcSectionNav current="contracts" />
       <ContractsSummary refreshKey={summaryKey} />
       <ContractsList onRefresh={() => setSummaryKey((k) => k + 1)} />
       <CoverageCheckDialog open={checking} onOpenChange={setChecking} />

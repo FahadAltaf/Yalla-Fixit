@@ -1,34 +1,41 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ArrowLeft, Pencil, Workflow } from "lucide-react";
-import Link from "next/link";
+import type { ColumnDef } from "@tanstack/react-table";
+import { Pencil, Save, Search, Trash2, TriangleAlert, Workflow } from "lucide-react";
 import { toast } from "sonner";
 
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
-import { AmcSectionNav } from "./amc-section-nav";
+import { StatusSelect } from "@/components/data-table/toolbars/status-select";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { PageHeading, SectionCard } from "@/components/dashboard/shared/kaizen";
-import { ActionDialogContent, ErrorState, ListSkeleton } from "@/components/dashboard/shared/kaizen-states";
+import { ActionDialogContent, ErrorState, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
+import { cn } from "@/lib/utils";
 import {
   amcContractsService,
   type FsmServiceMappingOverview,
   type FsmWorkOrderForAmc,
 } from "@/modules/amc-contracts/amc-contracts-service";
 
+import { AmcNotificationsBell } from "./amc-notifications-bell";
+import { ConfigTableToolbar, LocalDataTable } from "./config-table";
+
 type Service = FsmServiceMappingOverview["services"][number];
 
+/* Theme tones: linked, linked but switched off, not linked yet. */
 const STATUS_TONES: Record<string, string> = {
-  mapped: "bg-green-600/10 text-green-700 dark:bg-green-400/10 dark:text-green-400",
-  inactive: "bg-amber-600/10 text-amber-700 dark:bg-amber-400/10 dark:text-amber-400",
-  unmapped: "bg-muted text-muted-foreground",
+  mapped: "bg-success/10 text-success",
+  inactive: "bg-warning/10 text-warning",
+  unmapped: "bg-mist text-ink-soft",
 };
+const STATUS_LABELS: Record<string, string> = { mapped: "Mapped", inactive: "Inactive", unmapped: "Unmapped" };
 
 /**
  * AMC service -> Zoho FSM service. The two catalogues share no identifier,
@@ -40,7 +47,12 @@ export function FsmServiceMapping() {
   useBreadcrumbLabel("fsm-services", "FSM service mapping");
   const [data, setData] = useState<FsmServiceMappingOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /* The service being edited; kept while the dialog closes so its content does not blank mid-animation. */
   const [editing, setEditing] = useState<Service | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState("all");
+  const [pageSize, setPageSize] = useState(10);
 
   const [attempt, setAttempt] = useState(0);
   const load = useCallback(() => {
@@ -58,136 +70,206 @@ export function FsmServiceMapping() {
     };
   }, [attempt]);
 
-  const mapped = data?.services.filter((s) => s.status === "mapped").length ?? 0;
+  const services = data?.services ?? [];
+  const mapped = services.filter((s) => s.status === "mapped").length;
+  const canEdit = Boolean(data?.canEdit && data.migrated);
+  const term = search.trim().toLowerCase();
+  const shown = services.filter(
+    (s) =>
+      (status === "all" || s.status === status) &&
+      (!term || `${s.label} ${s.amcServiceId} ${s.fsmServiceName ?? ""} ${s.fsmServiceId ?? ""}`.toLowerCase().includes(term)),
+  );
+  const open = (service: Service) => {
+    setEditing(service);
+    setDialogOpen(true);
+  };
+
+  const columns: ColumnDef<Service, unknown>[] = [
+    {
+      id: "amc",
+      header: "AMC service",
+      cell: ({ row }) => (
+        <div className="flex min-w-0 flex-col">
+          <span className="truncate font-medium">{row.original.label}</span>
+          <span className="text-muted-foreground truncate text-xs">{row.original.amcServiceId}</span>
+        </div>
+      ),
+    },
+    {
+      id: "fsm",
+      header: "FSM service",
+      cell: ({ row }) =>
+        row.original.fsmServiceId ? (
+          <div className="flex min-w-0 flex-col">
+            <span className="truncate text-sm">{row.original.fsmServiceName ?? "—"}</span>
+            <span className="text-muted-foreground truncate text-xs tabular-nums">{row.original.fsmServiceId}</span>
+          </div>
+        ) : (
+          <span className="text-muted-foreground text-sm">Not mapped</span>
+        ),
+    },
+    {
+      id: "status",
+      header: "Status",
+      cell: ({ row }) => (
+        <Badge variant="secondary" className={cn("border-0 font-medium", STATUS_TONES[row.original.status])}>
+          {STATUS_LABELS[row.original.status] ?? row.original.status}
+        </Badge>
+      ),
+    },
+    ...(canEdit
+      ? [
+          {
+            id: "actions",
+            header: () => <span className="sr-only">Actions</span>,
+            cell: ({ row }) => (
+              <div className="flex justify-end">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-label={`Edit the mapping for ${row.original.label}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    open(row.original);
+                  }}
+                >
+                  <Pencil className="size-3.5" />
+                  Edit
+                </Button>
+              </div>
+            ),
+          } satisfies ColumnDef<Service, unknown>,
+        ]
+      : []),
+  ];
 
   return (
     <div className="flex w-full flex-1 flex-col gap-6">
       <PageHeading
-        eyebrow="AMC contracts"
+        eyebrow="Configuration"
         title="FSM service mapping"
         description="Which Zoho FSM service each AMC service corresponds to. FSM work is matched to a contract's services through this."
-        actions={
-          <Button asChild variant="outline">
-            <Link href="/extensions/amc-contracts">
-              <ArrowLeft className="size-4" />
-              AMC contracts
-            </Link>
-          </Button>
-        }
+        actions={<AmcNotificationsBell />}
       />
-      <AmcSectionNav current="fsm-services" />
-      {error ? (
-        <ErrorState title="Could not load the mapping" message={error} onRetry={() => void load()} />
-      ) : !data ? (
-        <SectionCard title="Services" icon={<Workflow />} bodyClassName="px-5 pb-5">
-          <ListSkeleton rows={6} />
-        </SectionCard>
-      ) : (
-        <SectionCard
-          title="Services"
-          description={
-            data.migrated
-              ? `${mapped} of ${data.services.length} AMC services mapped.${data.canEdit ? "" : " Only AMC approvers can change this."}`
-              : "Needs migration 20261006120000 (AMC FSM integration)."
-          }
-          icon={<Workflow />}
-          bodyClassName="pb-2"
-        >
-          <div className="overflow-x-auto">
-            <Table className="min-w-[640px]">
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="pl-5">AMC service</TableHead>
-                  <TableHead>FSM service</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="pr-5 text-right">
-                    <span className="sr-only">Actions</span>
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {data.services.map((s) => (
-                  <TableRow key={s.amcServiceId}>
-                    <TableCell className="pl-5">
-                      <div className="font-medium">{s.label}</div>
-                      <div className="text-muted-foreground text-xs">{s.amcServiceId}</div>
-                    </TableCell>
-                    <TableCell>
-                      {s.fsmServiceId ? (
-                        <div>
-                          <div>{s.fsmServiceName ?? "—"}</div>
-                          <div className="text-muted-foreground text-xs tabular-nums">{s.fsmServiceId}</div>
-                        </div>
-                      ) : (
-                        <span className="text-muted-foreground">Not mapped</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="secondary" className={`border-none font-normal capitalize ${STATUS_TONES[s.status]}`}>
-                        {s.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="pr-5 text-right">
-                      {data.canEdit && data.migrated ? (
-                        <Button size="sm" variant="ghost" onClick={() => setEditing(s)}>
-                          <Pencil className="size-4" />
-                          Edit
-                        </Button>
-                      ) : null}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        </SectionCard>
-      )}
-      {editing ? (
-        <EditMappingDialog
-          service={editing}
-          onOpenChange={(next) => !next && setEditing(null)}
-          onSaved={(next) => {
-            setData((prev) => (prev ? { ...next, canEdit: prev.canEdit } : next));
-            setEditing(null);
-          }}
-        />
+      {data && !data.migrated ? (
+        <Alert className="border-warning/30 bg-warning/5">
+          <TriangleAlert className="text-warning" />
+          <AlertTitle>The mapping cannot be changed yet</AlertTitle>
+          <AlertDescription>Needs migration 20261006120000 (AMC FSM integration).</AlertDescription>
+        </Alert>
       ) : null}
+      {error ? <ErrorState title="Could not load the mapping" message={error} onRetry={load} /> : null}
+
+      <SectionCard
+        title="Services"
+        description={
+          data
+            ? `${mapped} of ${services.length} AMC services mapped.${data.canEdit ? "" : " Only AMC approvers can change this."}`
+            : "Each AMC service and the FSM service it is matched to."
+        }
+        icon={<Workflow />}
+      >
+        <LocalDataTable
+          columns={columns}
+          rows={shown}
+          loading={!data && !error}
+          pageSize={pageSize}
+          resetKey={`${term}|${status}`}
+          onRowClick={canEdit ? open : undefined}
+          toolbar={
+            <ConfigTableToolbar
+              search={search}
+              onSearchChange={setSearch}
+              placeholder="Search by AMC or FSM service…"
+              searchLabel="Search services"
+              loading={!data && !error}
+              pageSize={pageSize}
+              onPageSizeChange={setPageSize}
+              onRefresh={load}
+              filters={
+                <StatusSelect
+                  value={status}
+                  onChange={setStatus}
+                  options={[
+                    { value: "all", label: "All", count: services.length },
+                    ...(["mapped", "inactive", "unmapped"] as const).map((s) => ({
+                      value: s,
+                      label: STATUS_LABELS[s],
+                      count: services.filter((x) => x.status === s).length,
+                    })),
+                  ]}
+                />
+              }
+            />
+          }
+          emptyState={
+            services.length === 0 ? (
+              <EmptyState icon={<Workflow />} title="No AMC services yet" description="Services appear here once they are in the AMC catalogue." />
+            ) : (
+              <EmptyState icon={<Workflow />} title="No services match" description="Try another name or id, or show every status." />
+            )
+          }
+        />
+      </SectionCard>
+
+      <EditMappingDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        service={editing}
+        onSaved={(next) => {
+          setData((prev) => (prev ? { ...next, canEdit: prev.canEdit } : next));
+          setDialogOpen(false);
+        }}
+      />
     </div>
   );
 }
 
 function EditMappingDialog({
-  service,
+  open,
   onOpenChange,
+  service,
   onSaved,
 }: {
-  service: Service;
+  open: boolean;
   onOpenChange: (open: boolean) => void;
+  service: Service | null;
   onSaved: (data: FsmServiceMappingOverview) => void;
 }) {
-  const [fsmServiceId, setFsmServiceId] = useState(service.fsmServiceId ?? "");
-  const [fsmServiceName, setFsmServiceName] = useState(service.fsmServiceName ?? "");
-  const [active, setActive] = useState(service.status !== "inactive");
+  const [fsmServiceId, setFsmServiceId] = useState(service?.fsmServiceId ?? "");
+  const [fsmServiceName, setFsmServiceName] = useState(service?.fsmServiceName ?? "");
+  const [active, setActive] = useState(service?.status !== "inactive");
   const [woRef, setWoRef] = useState("");
   const [wo, setWo] = useState<FsmWorkOrderForAmc | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  /* Which action is running, so only its button shows the spinner. */
+  const [busy, setBusy] = useState<null | "find" | "save" | "remove">(null);
+  /* Each opening starts from the stored mapping, seeded during render so the previous service never paints. */
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    if (open) {
+      setFsmServiceId(service?.fsmServiceId ?? "");
+      setFsmServiceName(service?.fsmServiceName ?? "");
+      setActive(service?.status !== "inactive");
+      setWoRef("");
+      setWo(null);
+    }
+  }
 
   const find = async () => {
-    setBusy(true);
-    setError(null);
+    setBusy("find");
     try {
       setWo((await amcContractsService.fsmWorkOrder(woRef.trim())).workOrder);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not find the work order.");
+      toast.error(e instanceof Error ? e.message : "Could not find the work order.");
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
   const save = async (remove = false) => {
-    setBusy(true);
-    setError(null);
+    if (!service) return;
+    setBusy(remove ? "remove" : "save");
     try {
       const next = await amcContractsService.saveFsmService({
         amcServiceId: service.amcServiceId,
@@ -198,9 +280,9 @@ function EditMappingDialog({
       toast.success(remove ? "Mapping removed" : "Mapping saved");
       onSaved(next);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not save the mapping.");
+      toast.error(e instanceof Error ? e.message : "Could not save the mapping.");
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
@@ -209,22 +291,29 @@ function EditMappingDialog({
     : [];
 
   return (
-    <Dialog open onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <ActionDialogContent busy={busy} className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+    <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
+      <ActionDialogContent busy={busy !== null} className="max-h-[88vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Map {service.label}</DialogTitle>
+          <DialogTitle>Map {service?.label ?? "service"}</DialogTitle>
           <DialogDescription>
             Find the FSM service on a work order that has this kind of work, or enter its FSM id.
           </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-4">
+        <div className="grid gap-4 py-2">
           <div className="grid gap-2">
             <Label htmlFor="amc-map-wo">Find from a work order</Label>
             <div className="flex gap-2">
               <Input id="amc-map-wo" placeholder="e.g. WO731" value={woRef} onChange={(e) => setWoRef(e.target.value)} />
-              <Button variant="outline" onClick={() => void find()} disabled={busy || woRef.trim().length < 2}>
+              <SubmitButton
+                variant="outline"
+                pending={busy === "find"}
+                pendingLabel="Finding…"
+                icon={<Search className="size-4" />}
+                onClick={() => void find()}
+                disabled={busy !== null || woRef.trim().length < 2}
+              >
                 Find
-              </Button>
+              </SubmitButton>
             </div>
             {wo ? (
               servicesOnWo.length ? (
@@ -242,7 +331,7 @@ function EditMappingDialog({
                         <span>{l.serviceName ?? "Unnamed service"}</span>
                         <span className="text-muted-foreground text-xs tabular-nums">
                           {l.serviceId}
-                          {l.amcServiceId && l.amcServiceId !== service.amcServiceId ? ` (mapped to ${l.amcServiceId})` : ""}
+                          {l.amcServiceId && l.amcServiceId !== service?.amcServiceId ? ` (mapped to ${l.amcServiceId})` : ""}
                         </span>
                       </button>
                     </li>
@@ -267,24 +356,33 @@ function EditMappingDialog({
             <Checkbox checked={active} onCheckedChange={(v) => setActive(v === true)} aria-label="Active" />
             Active (used to match FSM work)
           </label>
-          {error ? (
-            <p className="text-destructive text-sm" role="alert">
-              {error}
-            </p>
-          ) : null}
         </div>
         <DialogFooter>
-          {service.fsmServiceId ? (
-            <Button variant="ghost" className="mr-auto" onClick={() => void save(true)} disabled={busy}>
+          {service?.fsmServiceId ? (
+            <SubmitButton
+              variant="ghost"
+              className="text-destructive hover:text-destructive mr-auto"
+              pending={busy === "remove"}
+              pendingLabel="Removing…"
+              icon={<Trash2 className="size-4" />}
+              onClick={() => void save(true)}
+              disabled={busy !== null}
+            >
               Remove mapping
-            </Button>
+            </SubmitButton>
           ) : null}
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy !== null}>
             Cancel
           </Button>
-          <Button onClick={() => void save()} disabled={busy || !/^[A-Za-z0-9_-]+$/.test(fsmServiceId.trim())}>
-            {busy ? "Saving…" : "Save"}
-          </Button>
+          <SubmitButton
+            pending={busy === "save"}
+            pendingLabel="Saving…"
+            icon={<Save className="size-4" />}
+            onClick={() => void save()}
+            disabled={busy !== null || !/^[A-Za-z0-9_-]+$/.test(fsmServiceId.trim())}
+          >
+            Save
+          </SubmitButton>
         </DialogFooter>
       </ActionDialogContent>
     </Dialog>

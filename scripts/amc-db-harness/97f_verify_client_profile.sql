@@ -21,22 +21,28 @@ BEGIN
     END IF;
   END LOOP;
 
-  INSERT INTO public.customers (name) VALUES ('Profile test client') RETURNING id INTO c;
-  IF (SELECT lifecycle FROM public.customers WHERE id = c) <> 'client' THEN
-    RAISE EXCEPTION 'a customer without a lifecycle is not a client';
+  -- The client is a Snagging client; AMC's fields are its profile (20261007170000).
+  INSERT INTO public.snagging_clients (name) VALUES ('Profile test client') RETURNING id INTO c;
+  IF (SELECT lifecycle FROM public.amc_client_directory WHERE id = c) <> 'client' THEN
+    RAISE EXCEPTION 'a client without a lifecycle is not a client';
   END IF;
-  UPDATE public.customers SET lifecycle = 'prospect', customer_type = 'company', trn = '100123456700003' WHERE id = c;
+  INSERT INTO public.amc_client_profiles (client_id, lifecycle, customer_type, trn) VALUES (c, 'prospect', 'company', '100123456700003');
 
   -- Property types and combined units.
-  INSERT INTO public.customer_properties (customer_id, label, unit_type, property_category) VALUES (c, 'Restaurant A', 'restaurant', 'commercial') RETURNING id INTO p1;
-  INSERT INTO public.customer_properties (customer_id, label, unit_type, parent_property_id, zones) VALUES (c, 'Kitchen unit', 'other', p1, ARRAY['Kitchen']) RETURNING id INTO p2;
+  INSERT INTO public.snagging_properties (client_id, unit_label, property_type) VALUES (c, 'Restaurant A', 'commercial') RETURNING id INTO p1;
+  INSERT INTO public.amc_property_profiles (property_id, unit_type, property_category) VALUES (p1, 'restaurant', 'commercial');
+  INSERT INTO public.snagging_properties (client_id, unit_label, property_type) VALUES (c, 'Kitchen unit', 'commercial') RETURNING id INTO p2;
+  INSERT INTO public.amc_property_profiles (property_id, unit_type, parent_property_id, zones) VALUES (p2, 'other', p1, ARRAY['Kitchen']);
+  IF (SELECT unit_type FROM public.amc_property_directory WHERE id = p1) <> 'restaurant' THEN
+    RAISE EXCEPTION 'the AMC unit type did not override the Snagging type';
+  END IF;
   BEGIN
-    UPDATE public.customer_properties SET parent_property_id = id WHERE id = p1;
+    UPDATE public.amc_property_profiles SET parent_property_id = property_id WHERE property_id = p1;
     RAISE EXCEPTION 'a property became its own parent';
   EXCEPTION WHEN check_violation THEN NULL;
   END;
   BEGIN
-    DELETE FROM public.customer_properties WHERE id = p1;
+    DELETE FROM public.snagging_properties WHERE id = p1;
     RAISE EXCEPTION 'a parent with units was deleted';
   EXCEPTION WHEN foreign_key_violation THEN NULL;
   END;
@@ -97,7 +103,7 @@ BEGIN
   -- Communication log rows survive with the client.
   INSERT INTO public.amc_communication_log (customer_id, channel, direction, summary) VALUES (c, 'call', 'outbound', 'Called about the renewal');
   BEGIN
-    DELETE FROM public.customers WHERE id = c;
+    DELETE FROM public.snagging_clients WHERE id = c;
     RAISE EXCEPTION 'a client with history was deleted';
   EXCEPTION WHEN foreign_key_violation THEN NULL;
   END;

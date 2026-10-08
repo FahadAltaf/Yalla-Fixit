@@ -1,17 +1,17 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 
-import { HeadingSkeleton } from "@/components/dashboard/shared/kaizen-states";
+import { WizardSkeleton } from "@/components/dashboard/snagging/route-skeletons";
 import { AmcWizard } from "@/components/dashboard/extensions/amc";
 
 export const metadata: Metadata = {
-  title: "New AMC proposal | Extensions",
+  title: "New proposal | AMC",
   robots: { index: false, follow: false },
 };
 
 export default function NewAmcProposalRoute() {
   return (
-    <Suspense fallback={<HeadingSkeleton />}>
+    <Suspense fallback={<WizardSkeleton />}>
       <AmcWizard />
     </Suspense>
   );

@@ -119,8 +119,8 @@ END $$;
 
 -- 5. Photos: added and removed while draft; fixed once completed.
 SET ROLE service_role;
-INSERT INTO public.customers (id, name) VALUES ('97b10000-0000-0000-0000-000000000001', 'Photo Customer');
-INSERT INTO public.customer_properties (id, customer_id, label) VALUES ('97b20000-0000-0000-0000-000000000001', '97b10000-0000-0000-0000-000000000001', 'Villa P');
+INSERT INTO public.snagging_clients (id, name) VALUES ('97b10000-0000-0000-0000-000000000001', 'Photo Customer');
+INSERT INTO public.snagging_properties (id, client_id, unit_label) VALUES ('97b20000-0000-0000-0000-000000000001', '97b10000-0000-0000-0000-000000000001', 'Villa P');
 INSERT INTO public.amc_assessments (id, customer_id, property_id) VALUES
   ('97b30000-0000-0000-0000-000000000001', '97b10000-0000-0000-0000-000000000001', '97b20000-0000-0000-0000-000000000001'),
   ('97b30000-0000-0000-0000-000000000002', '97b10000-0000-0000-0000-000000000001', '97b20000-0000-0000-0000-000000000001');

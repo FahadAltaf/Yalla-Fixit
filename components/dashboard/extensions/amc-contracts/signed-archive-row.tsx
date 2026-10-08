@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Archive, ExternalLink } from "lucide-react";
+import { Archive, ArchiveRestore, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { SubmitButton } from "@/components/dashboard/shared/kaizen-states";
 import { amcContractsService, type SignedArchiveRecord } from "@/modules/amc-contracts/amc-contracts-service";
 
 import { formatDateTime } from "./contract-status";
@@ -70,7 +71,7 @@ export function SignedArchiveRow({ submissionId }: { submissionId: string }) {
         <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
           <Archive className="text-muted-foreground size-4" />
           Signed contract
-          <Badge variant="secondary" className="font-normal">
+          <Badge variant="secondary" className="bg-success/10 text-success border-0 font-medium">
             Archived signed document
           </Badge>
         </div>
@@ -94,9 +95,16 @@ export function SignedArchiveRow({ submissionId }: { submissionId: string }) {
           Open
         </Button>
       ) : (
-        <Button size="sm" variant="outline" onClick={() => void archiveNow()} disabled={busy}>
-          {busy ? "Archiving…" : "Archive now"}
-        </Button>
+        <SubmitButton
+          size="sm"
+          variant="outline"
+          onClick={() => void archiveNow()}
+          pending={busy}
+          pendingLabel="Archiving…"
+          icon={<ArchiveRestore className="size-4" />}
+        >
+          Archive now
+        </SubmitButton>
       )}
     </div>
   );

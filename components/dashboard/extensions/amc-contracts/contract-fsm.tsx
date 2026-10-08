@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { CalendarClock, CheckCircle2, Link2, PlugZap, RefreshCw, Unlink } from "lucide-react";
+import { CalendarClock, Check, CheckCircle2, Link2, PlugZap, RefreshCw, Unlink } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { SectionCard } from "@/components/dashboard/shared/kaizen";
-import { ActionDialogContent, ListSkeleton } from "@/components/dashboard/shared/kaizen-states";
+import { ActionDialogContent, ErrorState, ListSkeleton, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
 import { formatQuantity } from "@/lib/amc/contracts";
 import {
   amcContractsService,
@@ -69,7 +69,9 @@ export function ContractFsm({
   const [checking, setChecking] = useState(false);
   const [linkCustomer, setLinkCustomer] = useState(false);
   const [linkWork, setLinkWork] = useState(false);
+  /* Kept after the dialog closes, so it can animate out with its content. */
   const [reviewing, setReviewing] = useState<Visit | null>(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [unlinking, setUnlinking] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -108,12 +110,7 @@ export function ContractFsm({
   if (error) {
     return (
       <SectionCard title="Zoho FSM" icon={<PlugZap />} bodyClassName="px-5 pb-5">
-        <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-          <span className="text-destructive">{error}</span>
-          <Button size="sm" variant="outline" onClick={() => void load()}>
-            Retry
-          </Button>
-        </div>
+        <ErrorState title="Could not load the FSM activity" message={error} onRetry={() => void load()} />
       </SectionCard>
     );
   }
@@ -138,10 +135,17 @@ export function ContractFsm({
         action={
           canManage && data.migrated ? (
             <div className="flex flex-wrap gap-2">
-              <Button size="sm" variant="outline" onClick={() => void checkFsm()} disabled={checking || s.linkedWork === 0}>
-                <RefreshCw className={`size-4 ${checking ? "animate-spin" : ""}`} />
-                {checking ? "Checking…" : "Check FSM"}
-              </Button>
+              <SubmitButton
+                size="sm"
+                variant="outline"
+                onClick={() => void checkFsm()}
+                disabled={s.linkedWork === 0}
+                pending={checking}
+                pendingLabel="Checking…"
+                icon={<RefreshCw className="size-4" />}
+              >
+                Check FSM
+              </SubmitButton>
               <Button size="sm" onClick={() => setLinkWork(true)}>
                 <Link2 className="size-4" />
                 Link FSM work
@@ -157,13 +161,13 @@ export function ContractFsm({
         ) : (
           <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
             <StatusItem
-              label="FSM customer"
+              label="FSM client"
               value={s.customer === "linked" ? "Linked" : "Missing"}
               tone={s.customer === "linked" ? "good" : "warn"}
               hint={
                 s.fsmCustomer?.fsmContactId
                   ? `${s.fsmCustomer.fsmContactName ?? "Contact"}${s.fsmCustomer.fsmCustomerId ? ` · ${s.fsmCustomer.fsmCustomerId}` : ""}`
-                  : "Usage cannot be matched to the customer automatically"
+                  : "Usage cannot be matched to the client automatically"
               }
               action={
                 canManage ? (
@@ -243,7 +247,14 @@ export function ContractFsm({
             {data.visits.length === 0 ? (
               <p className="text-muted-foreground text-sm">No visits yet.</p>
             ) : (
-              <VisitTable visits={data.visits} canManage={canManage} onReview={setReviewing} />
+              <VisitTable
+                visits={data.visits}
+                canManage={canManage}
+                onReview={(visit) => {
+                  setReviewing(visit);
+                  setReviewOpen(true);
+                }}
+              />
             )}
           </SectionCard>
 
@@ -292,13 +303,13 @@ export function ContractFsm({
       />
       {reviewing ? (
         <ReviewVisitDialog
-          open={Boolean(reviewing)}
-          onOpenChange={(next) => !next && setReviewing(null)}
+          open={reviewOpen}
+          onOpenChange={setReviewOpen}
           contractId={contractId}
           visit={reviewing}
           entitlement={entitlements.find((e) => e.id === reviewing.entitlementId)}
           onDone={() => {
-            setReviewing(null);
+            setReviewOpen(false);
             void load();
             onUsageChanged();
           }}
@@ -333,9 +344,9 @@ function StatusItem({
 }) {
   const toneClass =
     tone === "good"
-      ? "text-green-700 dark:text-green-400"
+      ? "text-success"
       : tone === "warn"
-        ? "text-amber-700 dark:text-amber-400"
+        ? "text-warning"
         : tone === "muted"
           ? "text-muted-foreground"
           : "";
@@ -410,12 +421,12 @@ function VisitTable({
                   {v.usage ? (
                     <div>
                       {formatQuantity(v.usage.quantity)}{" "}
-                      <Badge variant="secondary" className="ml-1 font-normal">
+                      <Badge variant="secondary" className="bg-mist text-ink-soft ml-1 border-0 font-medium">
                         {usageSourceLabel(v.usage.source)}
                       </Badge>
                     </div>
                   ) : v.syncStatus ? (
-                    <span className={v.syncStatus === "needs_review" ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground"}>
+                    <span className={v.syncStatus === "needs_review" ? "text-warning" : "text-muted-foreground"}>
                       {SYNC_LABELS[v.syncStatus] ?? v.syncStatus}
                     </span>
                   ) : (
@@ -465,15 +476,13 @@ function useWorkOrderLookup(contractId: string) {
   const [ref, setRef] = useState("");
   const [workOrder, setWorkOrder] = useState<FsmWorkOrderForAmc | null>(null);
   const [looking, setLooking] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const lookup = async () => {
     setLooking(true);
-    setError(null);
     setWorkOrder(null);
     try {
       setWorkOrder((await amcContractsService.fsmWorkOrder(ref.trim(), contractId)).workOrder);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not find the work order.");
+      toast.error(e instanceof Error ? e.message : "Could not find the work order.");
     } finally {
       setLooking(false);
     }
@@ -481,9 +490,8 @@ function useWorkOrderLookup(contractId: string) {
   const reset = () => {
     setRef("");
     setWorkOrder(null);
-    setError(null);
   };
-  return { ref, setRef, workOrder, looking, error, lookup, reset };
+  return { ref, setRef, workOrder, looking, lookup, reset };
 }
 
 function WorkOrderField({ lookup, id }: { lookup: ReturnType<typeof useWorkOrderLookup>; id: string }) {
@@ -499,15 +507,16 @@ function WorkOrderField({ lookup, id }: { lookup: ReturnType<typeof useWorkOrder
           onChange={(event) => lookup.setRef(event.target.value)}
           onKeyDown={(event) => event.key === "Enter" && lookup.ref.trim().length >= 2 && void lookup.lookup()}
         />
-        <Button variant="outline" onClick={() => void lookup.lookup()} disabled={lookup.looking || lookup.ref.trim().length < 2}>
-          {lookup.looking ? "Finding…" : "Find"}
-        </Button>
+        <SubmitButton
+          variant="outline"
+          onClick={() => void lookup.lookup()}
+          disabled={lookup.ref.trim().length < 2}
+          pending={lookup.looking}
+          pendingLabel="Finding…"
+        >
+          Find
+        </SubmitButton>
       </div>
-      {lookup.error ? (
-        <p className="text-destructive text-sm" role="alert">
-          {lookup.error}
-        </p>
-      ) : null}
     </div>
   );
 }
@@ -525,13 +534,11 @@ function LinkCustomerDialog({
 }) {
   const lookup = useWorkOrderLookup(contractId);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ name: string | null; customerId: string | null; matches: boolean | null } | null>(null);
 
   useEffect(() => {
     if (open) {
       lookup.reset();
-      setError(null);
       setResult(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset only when the dialog opens
@@ -540,13 +547,13 @@ function LinkCustomerDialog({
   const link = async () => {
     if (!lookup.workOrder) return;
     setBusy(true);
-    setError(null);
     try {
       const { customer } = await amcContractsService.linkFsmCustomer(contractId, lookup.workOrder.workOrderId);
       setResult({ name: customer.fsmContactName, customerId: customer.fsmCustomerId, matches: customer.matchesProposalCustomerId });
+      toast.success("FSM client linked");
       onLinked();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not link the customer.");
+      toast.error(e instanceof Error ? e.message : "Could not link the client.");
     } finally {
       setBusy(false);
     }
@@ -556,26 +563,26 @@ function LinkCustomerDialog({
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <ActionDialogContent busy={busy} className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Link the FSM customer</DialogTitle>
+          <DialogTitle>Link the FSM client</DialogTitle>
           <DialogDescription>
-            Find a work order of this customer in FSM. Its FSM contact becomes the contract&apos;s FSM
-            customer, by id. Customers are never matched by name.
+            Find a work order of this client in FSM. Its FSM contact becomes the contract&apos;s FSM
+            client, by id. Clients are never matched by name.
           </DialogDescription>
         </DialogHeader>
         {result ? (
-          <div className="grid gap-2 text-sm">
+          <div className="grid gap-2 py-2 text-sm">
             <p>
               Linked to <span className="font-medium">{result.name ?? "the FSM contact"}</span>
-              {result.customerId ? ` (Customer ID ${result.customerId})` : " (no Customer ID in FSM)"}.
+              {result.customerId ? ` (Client ID ${result.customerId})` : " (no Client ID in FSM)"}.
             </p>
             {result.matches === false ? (
-              <p className="text-amber-700 dark:text-amber-400">
-                The proposal&apos;s Customer ID differs from FSM&apos;s. Check that this is the right customer.
+              <p className="text-warning">
+                The proposal&apos;s Client ID differs from FSM&apos;s. Check that this is the right client.
               </p>
             ) : null}
           </div>
         ) : (
-          <div className="grid gap-4">
+          <div className="grid gap-4 py-2">
             <WorkOrderField lookup={lookup} id="amc-fsm-customer-wo" />
             {lookup.workOrder ? (
               <div className="rounded-lg border p-3 text-sm">
@@ -585,11 +592,6 @@ function LinkCustomerDialog({
                   {lookup.workOrder.contactId ? "" : " (cannot link)"}
                 </div>
               </div>
-            ) : null}
-            {error ? (
-              <p className="text-destructive text-sm" role="alert">
-                {error}
-              </p>
             ) : null}
           </div>
         )}
@@ -601,9 +603,15 @@ function LinkCustomerDialog({
               <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
                 Cancel
               </Button>
-              <Button onClick={() => void link()} disabled={busy || !lookup.workOrder?.contactId}>
-                {busy ? "Linking…" : "Link this customer"}
-              </Button>
+              <SubmitButton
+                onClick={() => void link()}
+                disabled={!lookup.workOrder?.contactId}
+                pending={busy}
+                pendingLabel="Linking…"
+                icon={<Link2 className="size-4" />}
+              >
+                Link this client
+              </SubmitButton>
             </>
           )}
         </DialogFooter>
@@ -635,7 +643,6 @@ function LinkWorkDialog({
   const [entitlementId, setEntitlementId] = useState("");
   const [requestedAt, setRequestedAt] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [verdict, setVerdict] = useState<{ headline: string; details: string[] } | null>(null);
 
   useEffect(() => {
@@ -645,7 +652,6 @@ function LinkWorkDialog({
       setLineId(NONE);
       setEntitlementId("");
       setRequestedAt("");
-      setError(null);
       setVerdict(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset only when the dialog opens
@@ -665,7 +671,6 @@ function LinkWorkDialog({
   const link = async () => {
     if (!wo || !entitlementId) return;
     setBusy(true);
-    setError(null);
     try {
       const result = await amcContractsService.linkFsmWork(contractId, {
         workOrderId: wo.workOrderId,
@@ -675,9 +680,10 @@ function LinkWorkDialog({
         requestedAt: requestedAt ? `${requestedAt}:00+04:00` : null,
       });
       setVerdict(result.verdict);
+      toast.success("FSM work linked");
       onLinked();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not link the work.");
+      toast.error(e instanceof Error ? e.message : "Could not link the work.");
     } finally {
       setBusy(false);
     }
@@ -685,7 +691,7 @@ function LinkWorkDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <ActionDialogContent busy={busy} className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+      <ActionDialogContent busy={busy} className="max-h-[88vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Link FSM work</DialogTitle>
           <DialogDescription>
@@ -694,7 +700,7 @@ function LinkWorkDialog({
           </DialogDescription>
         </DialogHeader>
         {verdict ? (
-          <div className="grid gap-2 rounded-lg border p-3 text-sm">
+          <div className="my-2 grid gap-2 rounded-lg border p-3 text-sm">
             <div className="font-medium">{verdict.headline}</div>
             <ul className="text-muted-foreground list-disc pl-5">
               {verdict.details.map((d) => (
@@ -703,7 +709,7 @@ function LinkWorkDialog({
             </ul>
           </div>
         ) : (
-          <div className="grid gap-4">
+          <div className="grid gap-4 py-2">
             <WorkOrderField lookup={lookup} id="amc-fsm-link-wo" />
             {wo ? (
               <>
@@ -759,7 +765,7 @@ function LinkWorkDialog({
                   </Select>
                 </div>
                 <div className="grid gap-2">
-                  <Label htmlFor="amc-fsm-link-req">Customer request time (optional)</Label>
+                  <Label htmlFor="amc-fsm-link-req">Client request time (optional)</Label>
                   <Input
                     id="amc-fsm-link-req"
                     type="datetime-local"
@@ -767,15 +773,10 @@ function LinkWorkDialog({
                     onChange={(event) => setRequestedAt(event.target.value)}
                   />
                   <p className="text-muted-foreground text-xs">
-                    Dubai time. FSM does not record when the customer asked; response targets are measured from this.
+                    Dubai time. FSM does not record when the client asked; response targets are measured from this.
                   </p>
                 </div>
               </>
-            ) : null}
-            {error ? (
-              <p className="text-destructive text-sm" role="alert">
-                {error}
-              </p>
             ) : null}
           </div>
         )}
@@ -787,9 +788,15 @@ function LinkWorkDialog({
               <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
                 Cancel
               </Button>
-              <Button onClick={() => void link()} disabled={busy || !wo || !entitlementId}>
-                {busy ? "Linking…" : "Link work"}
-              </Button>
+              <SubmitButton
+                onClick={() => void link()}
+                disabled={!wo || !entitlementId}
+                pending={busy}
+                pendingLabel="Linking…"
+                icon={<Link2 className="size-4" />}
+              >
+                Link work
+              </SubmitButton>
             </>
           )}
         </DialogFooter>
@@ -843,7 +850,6 @@ function ReviewVisitDialog({
   const confirm = async () => {
     if (!visit.appointmentId) return;
     setBusy(true);
-    setError(null);
     try {
       const { outcome } = await amcContractsService.syncFsmAppointment(contractId, visit.appointmentId, {
         confirm: true,
@@ -853,10 +859,10 @@ function ReviewVisitDialog({
         toast.success(outcome.status === "recorded" ? "Usage recorded from FSM" : "Usage taken back");
         onDone();
       } else {
-        setError(outcome.reason);
+        toast.error(outcome.reason);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not record the usage.");
+      toast.error(e instanceof Error ? e.message : "Could not record the usage.");
     } finally {
       setBusy(false);
     }
@@ -873,7 +879,7 @@ function ReviewVisitDialog({
             {visit.serviceLabel} · {visit.appointment ?? visit.appointmentId} · {visit.workOrder}
           </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-3 text-sm">
+        <div className="grid gap-4 py-2 text-sm">
           {plan ? <p>{plan.reason}</p> : !error ? <ListSkeleton rows={2} /> : null}
           {hours && plan ? (
             <div className="grid gap-2">
@@ -896,18 +902,24 @@ function ReviewVisitDialog({
             </div>
           ) : null}
           {error ? (
-            <p className="text-destructive" role="alert">
+            <p className="text-danger" role="alert">
               {error}
             </p>
           ) : null}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-            Close
+            Cancel
           </Button>
-          <Button onClick={() => void confirm()} disabled={busy || !plan || Boolean(error) || !hoursOk}>
-            {busy ? "Recording…" : "Confirm"}
-          </Button>
+          <SubmitButton
+            onClick={() => void confirm()}
+            disabled={!plan || Boolean(error) || !hoursOk}
+            pending={busy}
+            pendingLabel="Recording…"
+            icon={<Check className="size-4" />}
+          >
+            Confirm
+          </SubmitButton>
         </DialogFooter>
       </ActionDialogContent>
     </Dialog>
@@ -929,23 +941,18 @@ function UnlinkDialog({
 }) {
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    if (open) {
-      setReason("");
-      setError(null);
-    }
+    if (open) setReason("");
   }, [open]);
   const submit = async () => {
     if (!linkId) return;
     setBusy(true);
-    setError(null);
     try {
       await amcContractsService.unlinkFsmWork(contractId, linkId, reason.trim());
       toast.success("FSM work unlinked");
       onDone();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not unlink.");
+      toast.error(e instanceof Error ? e.message : "Could not unlink.");
     } finally {
       setBusy(false);
     }
@@ -960,22 +967,24 @@ function UnlinkDialog({
             usage history if it should not count.
           </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-2">
+        <div className="grid gap-2 py-2">
           <Label htmlFor="amc-fsm-unlink">Reason</Label>
           <Textarea id="amc-fsm-unlink" rows={2} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} />
-          {error ? (
-            <p className="text-destructive text-sm" role="alert">
-              {error}
-            </p>
-          ) : null}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             Keep link
           </Button>
-          <Button variant="destructive" onClick={() => void submit()} disabled={busy || reason.trim().length < 3}>
-            {busy ? "Unlinking…" : "Unlink"}
-          </Button>
+          <SubmitButton
+            variant="destructive"
+            onClick={() => void submit()}
+            disabled={reason.trim().length < 3}
+            pending={busy}
+            pendingLabel="Unlinking…"
+            icon={<Unlink className="size-4" />}
+          >
+            Unlink
+          </SubmitButton>
         </DialogFooter>
       </ActionDialogContent>
     </Dialog>

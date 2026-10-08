@@ -22,13 +22,15 @@ SELECT gen_random_uuid(),
        CASE WHEN g % 3 = 0 THEN now() - (g % 30) * interval '1 day' END
   FROM generate_series(1, 12000) g;
 
--- Customers and properties (8k / 10k).
-INSERT INTO public.customers (id, name, customer_ref)
-SELECT gen_random_uuid(), 'Customer ' || g, 'YFI' || (100000 + g) FROM generate_series(1, 8000) g;
-INSERT INTO public.customer_properties (customer_id, label, unit_type)
+-- Clients and addresses (8k / 10k): Snagging's records, with AMC profiles (20261007170000).
+INSERT INTO public.snagging_clients (id, name)
+SELECT gen_random_uuid(), 'Customer ' || g FROM generate_series(1, 8000) g;
+INSERT INTO public.amc_client_profiles (client_id, customer_ref)
+SELECT id, 'YFI' || (100000 + substr(name, 10)::int) FROM public.snagging_clients WHERE name LIKE 'Customer %';
+INSERT INTO public.snagging_properties (client_id, unit_label, property_type)
 SELECT c.id, 'Villa ' || g, 'villa'
   FROM generate_series(1, 10000) g
-  JOIN LATERAL (SELECT id FROM public.customers WHERE name = 'Customer ' || (1 + g % 8000)) c ON true;
+  JOIN LATERAL (SELECT id FROM public.snagging_clients WHERE name = 'Customer ' || (1 + g % 8000)) c ON true;
 
 -- 9,900 contracts (100 signed proposals stay pending). Dates spread so every display status occurs.
 INSERT INTO public.amc_contracts (id, submission_id, proposal_number, status, customer, property,
@@ -43,7 +45,7 @@ SELECT gen_random_uuid(), s.id, s.proposal_number,
        s.final_price, s.final_price, round(s.final_price * 0.05, 2), round(s.final_price * 1.05, 2),
        s.signed_at, s.signed_by_name,
        CASE WHEN s.rn % 50 = 0 THEN now() END, CASE WHEN s.rn % 50 = 0 THEN 'Customer left' END,
-       (SELECT id FROM public.customers c WHERE c.customer_ref = s.customer->>'customerId')
+       (SELECT client_id FROM public.amc_client_profiles c WHERE c.customer_ref = s.customer->>'customerId')
   FROM (SELECT *, row_number() OVER (ORDER BY created_at, id) AS rn FROM public.amc_submissions WHERE status = 'signed') s
  WHERE s.rn <= 9900;
 
@@ -81,7 +83,7 @@ SELECT fsm_appointment_id, 'consume', contract_id, id, 'recorded', 1, now() FROM
 INSERT INTO public.amc_assessments (customer_id, property_id, assessor_name, created_at)
 SELECT p.customer_id, p.id, 'Assessor ' || (g % 7), now() - (g % 400) * interval '1 day'
   FROM generate_series(1, 5000) g
-  JOIN LATERAL (SELECT id, customer_id FROM public.customer_properties OFFSET g LIMIT 1) p ON true;
+  JOIN LATERAL (SELECT id, client_id AS customer_id FROM public.snagging_properties OFFSET g LIMIT 1) p ON true;
 INSERT INTO public.amc_assessment_items (assessment_id, item_key, category_key, category_label, label, sort_order)
 SELECT a.id, k.item_key, k.category_key, k.category_label, k.label, k.sort_order
   FROM public.amc_assessments a CROSS JOIN public.amc_assessment_checklist k;
@@ -97,8 +99,8 @@ SELECT 'amc_contract_entitlements', count(*) FROM public.amc_contract_entitlemen
 SELECT 'amc_entitlement_usage', count(*) FROM public.amc_entitlement_usage UNION ALL
 SELECT 'amc_fsm_links', count(*) FROM public.amc_fsm_links UNION ALL
 SELECT 'amc_fsm_sync_events', count(*) FROM public.amc_fsm_sync_events UNION ALL
-SELECT 'customers', count(*) FROM public.customers UNION ALL
-SELECT 'customer_properties', count(*) FROM public.customer_properties UNION ALL
+SELECT 'snagging_clients', count(*) FROM public.snagging_clients UNION ALL
+SELECT 'snagging_properties', count(*) FROM public.snagging_properties UNION ALL
 SELECT 'amc_assessments', count(*) FROM public.amc_assessments UNION ALL
 SELECT 'amc_assessment_items', count(*) FROM public.amc_assessment_items UNION ALL
 SELECT 'amc_additional_quotes', count(*) FROM public.amc_additional_quotes;

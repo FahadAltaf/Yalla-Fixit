@@ -6,14 +6,23 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
-import { ArrowLeft, Check, FileText, Loader2, ScrollText, SendHorizonal } from "lucide-react";
+import {
+  ArrowLeft,
+  ClipboardCheck,
+  FileText,
+  ListCheck,
+  Loader2,
+  ScrollText,
+  SendHorizonal,
+  UserRound,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { PageHeading } from "@/components/dashboard/shared/kaizen";
-import { useConfirm } from "@/components/dashboard/shared/kaizen-states";
+import { SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
+import { WizardSkeleton } from "@/components/dashboard/snagging/route-skeletons";
 import { Card } from "@/components/ui/card";
 import { Form } from "@/components/ui/form";
-import { cn } from "@/lib/utils";
 import { amcSubmissionsService } from "@/modules/amc-submissions";
 
 import { getDefaultFormValues } from "./amc-constants";
@@ -43,18 +52,21 @@ import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-lab
 const STEPS = [
   {
     id: 1,
-    title: "Property and customer",
-    description: "Property, client, and contract details",
+    title: "Property and client",
+    description: "The property, who the proposal is for, the contract dates and the contacts.",
+    icon: UserRound,
   },
   {
     id: 2,
     title: "Services and pricing",
-    description: "Service table, base prices and discount",
+    description: "The services, their units and frequencies, the prices and any discount.",
+    icon: ListCheck,
   },
   {
     id: 3,
     title: "Review and submit",
-    description: "Summary, preview and submit for approval",
+    description: "Read it back, preview both documents, then submit it for approval.",
+    icon: ClipboardCheck,
   },
 ] as const;
 
@@ -90,7 +102,7 @@ function getErrorMessage(error: unknown, fallback: string) {
 }
 
 const STEP_VALIDATION_MESSAGES: Record<number, string> = {
-  1: "Fill in the property, customer and contract details before you continue.",
+  1: "Fill in the property, client and contract details before you continue.",
   2: "Pick at least one service and give each one units, a frequency and a base price before you continue.",
 };
 
@@ -132,9 +144,6 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
   const searchParams = useSearchParams();
   const initialStep = useRef(Number(searchParams.get("step")) || 1);
   const [currentStep, setCurrentStep] = useState(1);
-  /* The furthest step reached. Every step up to it stays clickable in the
-     step pills, forwards as well as back. */
-  const [furthestStep, setFurthestStep] = useState(1);
   // True while the proposal named in the address is being loaded, so the
   // step in the address is not rewritten before it arrives.
   const restoringRef = useRef(Boolean(submissionId));
@@ -280,8 +289,6 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
           clientName: submission.client_decided_by_name ?? null,
         });
         setCurrentStep(Math.min(Math.max(step, 1), STEPS.length));
-        /* A saved submission has been through the steps already. */
-        setFurthestStep(STEPS.length);
       } catch (error) {
         console.error(error);
         toast.error(
@@ -332,10 +339,10 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
     }
   }, [currentStep, openSubmissionId]);
 
-  // The breadcrumb names the proposal by its customer, not its id.
+  // The breadcrumb names the proposal by its client, not its id.
   const customerName = form.watch("customerName");
   useBreadcrumbLabel(openSubmissionId || undefined, customerName || "Proposal");
-  useBreadcrumbLabel("amc", "AMC proposals");
+  useBreadcrumbLabel("amc", "Proposals");
   useBreadcrumbLabel("new", "New proposal");
 
   useEffect(() => {
@@ -453,7 +460,6 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
       }
 
       setCurrentStep(targetStep);
-      setFurthestStep((furthest) => Math.max(furthest, targetStep));
       pendingScrollRef.current = true;
 
       const isForward = targetStep > currentStep;
@@ -471,33 +477,6 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
 
   const handleBack = () => {
     void saveAndNavigate(Math.max(currentStep - 1, 1), false);
-  };
-
-  /*
-    Any step reached so far can be clicked. Going back needs no checks.
-    Going forward checks every step being skipped, in order, and stops on
-    the first one with something missing -- so a jump ahead can never
-    carry a half-filled step into Review & Submit.
-  */
-  const handleStepClick = async (stepId: number) => {
-    if (stepId === currentStep || stepId > furthestStep) return;
-    if (stepId < currentStep) {
-      void saveAndNavigate(stepId, false);
-      return;
-    }
-    for (let step = currentStep; step < stepId; step++) {
-      const fields = STEP_FIELDS[step] ?? [];
-      const isValid = fields.length === 0 ? true : await form.trigger(fields);
-      if (!isValid) {
-        toast.error(
-          STEP_VALIDATION_MESSAGES[step] ??
-            "Please complete all required fields before continuing.",
-        );
-        if (step !== currentStep) void saveAndNavigate(step, false);
-        return;
-      }
-    }
-    void saveAndNavigate(stepId, false);
   };
 
   /*
@@ -677,9 +656,9 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
   const isReviewStep = currentStep === STEPS.length;
 
   /*
-    The same page shape as the snagging module: the house heading, then
-    the view switcher, then the work in one card -- the form's steps as
-    titled sections and its buttons in a footer, not cards inside a card.
+    The same page shape as New job: the house heading, then the work in
+    one card -- the step's title, its fields as titled sections, and its
+    buttons in a footer, not cards inside a card.
   */
   const editing = Boolean(openSubmissionId);
 
@@ -692,14 +671,20 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
     [watchedValues, liveSettings],
   );
 
+  /* The saved proposal has not arrived: the page's shape, not an empty form. */
+  if (loadingSubmission) return <WizardSkeleton />;
+
+  const stepInfo = STEPS[currentStep - 1];
+  const StepIcon = stepInfo.icon;
+
   return (
     <div ref={wizardRef} className="flex w-full flex-1 flex-col gap-6">
       <PageHeading
-        eyebrow="AMC proposals"
+        eyebrow="Sales"
         title={
           editing
             ? customerName || "Untitled proposal"
-            : "New AMC proposal"
+            : "New proposal"
         }
         description={
           editing
@@ -723,7 +708,7 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
             <Button variant="outline" asChild>
               <Link href="/extensions/amc">
                 <ArrowLeft className="size-4" />
-                All proposals
+                Back to proposals
               </Link>
             </Button>
           </div>
@@ -756,86 +741,37 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
         />
       )}
 
-      {loadingSubmission ? (
-        <>
-          {/* Mirrors the real layout: the steps sit above the card. */}
-          <div className="bg-muted mb-4 h-8 w-72 animate-pulse rounded-full" />
-          <Card className="p-6">
-            <div className="grid gap-4 sm:grid-cols-2">
-              {Array.from({ length: 6 }, (_, index) => (
-                <div key={index} className="bg-muted h-10 animate-pulse rounded-md" />
-              ))}
-            </div>
-          </Card>
-        </>
-      ) : (
-        <Form {...form}>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!isReviewStep) {
-                handleNext();
-              }
-            }}
-          >
-            {/* Where you are in the three steps. Outside the card, so it
-                reads as navigation over the form rather than as the form's
-                own first row. */}
-            <div className="mb-4 flex flex-wrap gap-2">
-              {STEPS.map((step) => {
-                const isActive = step.id === currentStep;
-                /* Reached already: clickable, marked done. */
-                const isComplete = !isActive && step.id <= furthestStep;
-
-                return (
-                  <button
-                    key={step.id}
-                    type="button"
-                    disabled={step.id > furthestStep}
-                    onClick={() => void handleStepClick(step.id)}
-                    className={cn(
-                      "inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-sm font-medium transition-colors",
-                      isActive && "border-brand bg-brand text-primary-foreground",
-                      isComplete &&
-                        "border-brand/30 bg-brand-50 text-brand hover:bg-brand-50/70 cursor-pointer",
-                      !isActive &&
-                        !isComplete &&
-                        "border-border text-muted-foreground cursor-default opacity-70",
-                    )}
-                  >
-                    {isComplete ? <Check className="size-3.5 shrink-0" /> : null}
-                    {step.title}
-                  </button>
-                );
-              })}
-            </div>
-
-            <Card className="gap-0 p-0">
-              <div className="space-y-6 p-4 sm:p-6">{renderStep()}</div>
-
-              <div className="flex flex-col-reverse gap-2 border-t px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={handleBack}
-                  disabled={currentStep === 1}
-                  className="w-full sm:w-auto"
-                >
-                  Back
-                </Button>
-
-                {!isReviewStep ? (
-                  <Button type="submit" className="w-full min-w-[110px] sm:w-auto">
-                    Continue
-                  </Button>
-                ) : (
-                  <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
-                    {/* Both documents, exactly as the client gets them. */}
+      <Form {...form}>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!isReviewStep) {
+              handleNext();
+            }
+          }}
+        >
+          <Card className="gap-0 p-0">
+            <div className="space-y-6 p-4">
+              {/* Each step opens with its own title, as on New job: no step
+                  bar above the card, the footer says how far along it is. */}
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="flex items-center gap-2 text-xl">
+                    <StepIcon className="text-brand size-5" />
+                    {stepInfo.title}
+                  </h2>
+                  <p className="text-muted-foreground mt-1 text-sm">
+                    {stepInfo.description}
+                  </p>
+                </div>
+                {isReviewStep ? (
+                  /* Both documents, exactly as the client gets them. */
+                  <div className="flex flex-wrap items-center gap-2">
                     <Button
                       type="button"
                       variant="outline"
+                      size="sm"
                       onClick={() => setPreviewDoc("proposal")}
-                      className="w-full sm:w-auto"
                     >
                       <FileText className="size-4" />
                       Preview proposal
@@ -843,39 +779,60 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
                     <Button
                       type="button"
                       variant="outline"
+                      size="sm"
                       onClick={() => setPreviewDoc("contract")}
-                      className="w-full sm:w-auto"
                     >
                       <ScrollText className="size-4" />
                       Preview contract
                     </Button>
-                    {/* FR5.1 — the only way out of the wizard. Nothing
-                        reaches the client before internal approval. */}
-                    <Button
-                      type="button"
-                      onClick={() => void handleSubmitForApproval()}
-                      disabled={isSubmitting}
-                      className="w-full gap-2 sm:w-auto"
-                    >
-                      {isSubmitting ? (
-                        <>
-                          <Loader2 className="size-4 animate-spin" />
-                          Submitting…
-                        </>
-                      ) : (
-                        <>
-                          <SendHorizonal className="size-4" />
-                          Submit for approval
-                        </>
-                      )}
-                    </Button>
                   </div>
+                ) : null}
+              </div>
+              {renderStep()}
+            </div>
+
+            <div className="flex items-center justify-between gap-4 border-t px-6 py-4">
+              <div className="min-w-0">
+                <p className="text-muted-foreground text-xs">
+                  Step {currentStep} of {STEPS.length}
+                  {isReviewStep
+                    ? ". Nothing reaches the client before it is approved."
+                    : ". Your draft saves when you move on."}
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                {/* On the first step, Back leaves the wizard. */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() =>
+                    currentStep === 1 ? router.push("/extensions/amc") : handleBack()
+                  }
+                  disabled={isSubmitting}
+                >
+                  Back
+                </Button>
+
+                {!isReviewStep ? (
+                  <Button type="submit">Continue</Button>
+                ) : (
+                  /* FR5.1 — the only way out of the wizard. Nothing
+                     reaches the client before internal approval. */
+                  <SubmitButton
+                    type="button"
+                    onClick={() => void handleSubmitForApproval()}
+                    pending={isSubmitting}
+                    pendingLabel="Submitting…"
+                    icon={<SendHorizonal className="size-4" />}
+                  >
+                    Submit for approval
+                  </SubmitButton>
                 )}
               </div>
-            </Card>
-          </form>
-        </Form>
-      )}
+            </div>
+          </Card>
+        </form>
+      </Form>
     </div>
   );
 }

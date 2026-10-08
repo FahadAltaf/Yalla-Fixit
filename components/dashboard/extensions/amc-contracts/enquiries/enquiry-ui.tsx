@@ -8,13 +8,13 @@ import { ENQUIRY_STAGE, isAtOrAfter } from "@/lib/amc/enquiries";
 import { cn } from "@/lib/utils";
 import type { EnquiryRecord } from "@/modules/amc-contracts/enquiries-service";
 
-/* Soft-tinted pills, as on the canonical table: one colour family per part of the pipeline. */
+/* Soft-tinted pills in theme tokens, as on Snagging: one tone per part of the pipeline. */
 const TONE = {
-  early: "bg-sky-500/10 text-sky-700 dark:text-sky-400",
-  proposal: "bg-amber-500/10 text-amber-700 dark:text-amber-400",
-  won: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
-  lost: "bg-rose-500/10 text-rose-700 dark:text-rose-400",
-  hold: "bg-muted text-muted-foreground",
+  early: "bg-brand-50 text-brand",
+  proposal: "bg-warning/10 text-warning",
+  won: "bg-success/10 text-success",
+  lost: "bg-danger/10 text-danger",
+  hold: "bg-mist text-ink-soft",
 } as const;
 
 export function stageTone(stage: string, stages: readonly string[]): string {
@@ -26,8 +26,17 @@ export function stageTone(stage: string, stages: readonly string[]): string {
 
 export function StageBadge({ stage, stages, className }: { stage: string; stages: readonly string[]; className?: string }) {
   return (
-    <Badge variant="secondary" className={cn("border-none font-normal", stageTone(stage, stages), className)}>
+    <Badge variant="secondary" className={cn("border-0 font-medium", stageTone(stage, stages), className)}>
       {stage}
+    </Badge>
+  );
+}
+
+/** A site visit's status (the assessment record under it): draft until completed. */
+export function SiteVisitStatusBadge({ status, className }: { status: string; className?: string }) {
+  return (
+    <Badge variant="secondary" className={cn("border-0 font-medium capitalize", status === "completed" ? TONE.won : TONE.hold, className)}>
+      {status}
     </Badge>
   );
 }
@@ -37,7 +46,7 @@ export function EnquiryFlags({ enquiry, compact = false }: { enquiry: Pick<Enqui
   const flags: React.ReactNode[] = [];
   if (enquiry.idle.state) {
     flags.push(
-      <Badge key="idle" variant="outline" className={cn("gap-1 font-normal", enquiry.idle.state === "escalate" ? "border-rose-500/40 text-rose-700 dark:text-rose-400" : "border-amber-500/40 text-amber-700 dark:text-amber-400")}>
+      <Badge key="idle" variant="secondary" className={cn("gap-1 border-0 font-medium", enquiry.idle.state === "escalate" ? TONE.lost : TONE.proposal)}>
         <AlarmClock className="size-3" />
         {enquiry.idle.state === "escalate" ? `Idle ${enquiry.idle.days}d · escalated` : `Idle ${enquiry.idle.days}d`}
       </Badge>,
@@ -45,7 +54,7 @@ export function EnquiryFlags({ enquiry, compact = false }: { enquiry: Pick<Enqui
   }
   if (enquiry.followUp === "overdue" || enquiry.followUp === "today") {
     flags.push(
-      <Badge key="fu" variant="outline" className={cn("gap-1 font-normal", enquiry.followUp === "overdue" ? "border-rose-500/40 text-rose-700 dark:text-rose-400" : "")}>
+      <Badge key="fu" variant="secondary" className={cn("gap-1 border-0 font-medium", enquiry.followUp === "overdue" ? TONE.lost : TONE.early)}>
         <CalendarClock className="size-3" />
         {enquiry.followUp === "overdue" ? "Follow-up overdue" : "Follow-up today"}
       </Badge>,
@@ -53,7 +62,7 @@ export function EnquiryFlags({ enquiry, compact = false }: { enquiry: Pick<Enqui
   }
   if (!compact && enquiry.siteVisitRequired) {
     flags.push(
-      <Badge key="sv" variant="outline" className="gap-1 font-normal">
+      <Badge key="sv" variant="secondary" className={cn("gap-1 border-0 font-medium", TONE.hold)}>
         <Flag className="size-3" />
         Site visit required
       </Badge>,
@@ -90,7 +99,31 @@ export function localInputIn(days = 0, hour?: number): string {
   return toLocalInput(d.toISOString());
 }
 
+/** "14:32" on the viewer's own clock, for the "Updated" note beside Refresh. */
+export function formatClock(at: number): string {
+  return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" }).format(new Date(at));
+}
+
 /* ------------------------------------------------------------------ */
+
+/**
+ * Label-and-value rows for a record being read, as on Snagging's job setup.
+ * A missing value shows an em dash, so the shape of the record stays the same.
+ */
+export function DetailList({ rows }: { rows: Array<{ label: string; value?: React.ReactNode }> }) {
+  return (
+    <dl className="divide-y">
+      {rows.map((row) => (
+        <div key={row.label} className="flex items-baseline justify-between gap-4 py-2">
+          <dt className="text-muted-foreground shrink-0 text-sm">{row.label}</dt>
+          <dd className="min-w-0 text-right text-sm font-medium">
+            {row.value === null || row.value === undefined || row.value === "" ? <span className="text-muted-foreground font-normal">—</span> : row.value}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
 
 export function PersonSelect({
   people,
@@ -109,7 +142,7 @@ export function PersonSelect({
 }) {
   return (
     <Select value={value ?? (allowNone ? "none" : "")} onValueChange={(v) => onChange(v === "none" ? null : v)}>
-      <SelectTrigger aria-label={label}>
+      <SelectTrigger className="w-full" aria-label={label}>
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent>

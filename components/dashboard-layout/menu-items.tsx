@@ -9,6 +9,7 @@ import {
 import {
   CalendarClock,
   ClipboardCheck,
+  FileSignature,
   LayoutDashboard,
   ListTodo,
   Puzzle,
@@ -18,7 +19,12 @@ import {
   UserCog,
 } from "lucide-react";
 
-import { canUseAmc, canViewAmcConfig } from "@/components/dashboard/extensions/amc/amc-constants";
+import {
+  canUseAmc,
+  canViewAmcConfig,
+  canViewAmcEnquiries,
+  canViewAmcRateCard,
+} from "@/components/dashboard/extensions/amc/amc-constants";
 
 // hasViewPermission and filter functions unchanged
 const hasViewPermission = (
@@ -116,25 +122,6 @@ export const baseSectionsItems: MenuItem[] = [
         url: "/extensions/quotation-templates",
         resource: ResourceType.EXTENSIONS,
       },
-      {
-        title: "AMC proposals",
-        url: "/extensions/amc",
-        // AMC view or approve, which the resource filter cannot say.
-        canSee: canUseAmc,
-      },
-      {
-        /* Signed agreements in operation (Active AMC). Same access. */
-        title: "AMC contracts",
-        url: "/extensions/amc-contracts",
-        canSee: canUseAmc,
-      },
-      {
-        /* BRD v0.3 configuration (DEV-419). Also under Settings for admins;
-           here for managers and department heads who are not admins. */
-        title: "AMC configuration",
-        url: "/settings/amc/configuration",
-        canSee: canViewAmcConfig,
-      },
     ],
   },
   {
@@ -143,6 +130,52 @@ export const baseSectionsItems: MenuItem[] = [
     icon: <CalendarClock className="size-4 text-primary" />,
     isActive: false,
     resource: ResourceType.SCHEDULING,
+  },
+  /*
+    AMC is a module of its own, laid out like Snagging: one parent, each
+    section a sub-item. It used to hang off Extensions (so an AMC user
+    without the Extensions permission never saw it) with the rest of its
+    sections in a row of pills inside each page.
+
+    The addresses stay under /extensions/amc*: notifications already
+    stored, and emails already sent, link there.
+
+    Every entry uses canSee rather than resource: AMC access is "any of
+    the AMC permissions" (an approver may hold Approve without View),
+    which the plain resource filter cannot express.
+  */
+  {
+    title: "AMC",
+    url: "/extensions/amc-contracts",
+    icon: <FileSignature className="size-4 text-primary" />,
+    isActive: false,
+    canSee: canUseAmc,
+    items: [
+      { title: "Enquiries", url: "/extensions/amc-contracts/enquiries", canSee: canViewAmcEnquiries },
+      { title: "Proposals", url: "/extensions/amc", canSee: canUseAmc },
+      {
+        title: "Contracts",
+        url: "/extensions/amc-contracts",
+        /* A contract opens at /extensions/amc-contracts/<id>; the other
+           sections claim longer prefixes, so this only wins on those. */
+        canSee: canUseAmc,
+      },
+      {
+        title: "Clients",
+        url: "/extensions/amc-contracts/customers",
+        // A property page belongs to its client.
+        match: ["/extensions/amc-contracts/properties"],
+        canSee: canUseAmc,
+      },
+      { title: "Site visits", url: "/extensions/amc-contracts/assessments", canSee: canUseAmc },
+      { title: "Reports", url: "/extensions/amc-contracts/reports", canSee: canUseAmc },
+      { title: "Rate card", url: "/extensions/amc-contracts/rate-card", canSee: canViewAmcRateCard },
+      { title: "FSM mapping", url: "/extensions/amc-contracts/fsm-services", canSee: canUseAmc },
+      { title: "Operations settings", url: "/extensions/amc-contracts/settings", canSee: canUseAmc },
+      /* Admins also have it under Settings; this is for managers and
+         department heads with AMC Configuration who are not admins. */
+      { title: "Configuration", url: "/settings/amc/configuration", canSee: canViewAmcConfig },
+    ],
   },
   {
     title: "Snagging",

@@ -25,8 +25,10 @@ BEGIN
     RAISE EXCEPTION 'browser roles can allocate enquiry numbers';
   END IF;
 
-  INSERT INTO public.customers (name, lifecycle) VALUES ('Enquiry test prospect', 'prospect') RETURNING id INTO c;
-  INSERT INTO public.customer_properties (customer_id, label, unit_type, property_category) VALUES (c, 'Clinic 3', 'clinic', 'commercial') RETURNING id INTO p;
+  INSERT INTO public.snagging_clients (name) VALUES ('Enquiry test prospect') RETURNING id INTO c;
+  INSERT INTO public.amc_client_profiles (client_id, lifecycle) VALUES (c, 'prospect');
+  INSERT INTO public.snagging_properties (client_id, unit_label, property_type) VALUES (c, 'Clinic 3', 'commercial') RETURNING id INTO p;
+  INSERT INTO public.amc_property_profiles (property_id, unit_type, property_category) VALUES (p, 'clinic', 'commercial');
 
   -- Numbering and defaults.
   INSERT INTO public.amc_enquiries (source, customer_id, contact_name, contact_phone, need)
@@ -62,7 +64,7 @@ BEGIN
   EXCEPTION WHEN foreign_key_violation THEN NULL;
   END;
   BEGIN
-    DELETE FROM public.customers WHERE id = c;
+    DELETE FROM public.snagging_clients WHERE id = c;
     RAISE EXCEPTION 'a prospect with enquiries was deleted';
   EXCEPTION WHEN foreign_key_violation THEN NULL;
   END;

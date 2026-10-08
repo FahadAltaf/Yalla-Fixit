@@ -193,7 +193,7 @@ export function PropertyCustomerStep({ form }: StepProps) {
               render={({ field }) => (
                 <FormItem className="sm:col-span-2 xl:col-span-3">
                   <FormLabel>
-                    Customer address
+                    Client address
                     <RequiredMark />
                   </FormLabel>
                   <FormControl>
@@ -204,7 +204,7 @@ export function PropertyCustomerStep({ form }: StepProps) {
                     />
                   </FormControl>
                   <FormDescription>
-                    The full address, printed as Customer Address on the
+                    The full address, exactly as it should be printed on the
                     contract.
                   </FormDescription>
                   <FormMessage />
@@ -219,7 +219,7 @@ export function PropertyCustomerStep({ form }: StepProps) {
         <div>
           <h3 className="flex items-center gap-2 text-base font-semibold">
             <UserRound className="text-brand size-4" />
-            Customer and contract
+            Client and contract
           </h3>
           <p className="text-muted-foreground mt-0.5 text-sm">
             Client details, contract period, and proposal reference.
@@ -234,7 +234,7 @@ export function PropertyCustomerStep({ form }: StepProps) {
                 <FormItem className="flex flex-col">
 
                   <FormLabel>
-                    Customer name
+                    Client name
                     <RequiredMark />
                   </FormLabel>
                   <FormControl>
@@ -251,7 +251,7 @@ export function PropertyCustomerStep({ form }: StepProps) {
               render={({ field }) => (
                 <FormItem className="flex flex-col">
                   <FormLabel>
-                    Customer ID
+                    Client ID
                     <RequiredMark />
                   </FormLabel>
                   <FormControl className="">
@@ -298,7 +298,7 @@ export function PropertyCustomerStep({ form }: StepProps) {
                   <FormControl>
                     <Input
                       type="email"
-                      placeholder="customer@email.com"
+                      placeholder="client@email.com"
                       {...field}
                     />
                   </FormControl>
@@ -408,7 +408,8 @@ export function PropertyCustomerStep({ form }: StepProps) {
           <h3 className="flex items-center gap-2 text-base font-semibold">
             <Users className="text-brand size-4" />
             Coordination contacts
-          </h3>          <p className="text-muted-foreground mt-0.5 text-sm">
+          </h3>
+          <p className="text-muted-foreground mt-0.5 text-sm">
             Who the team coordinates with day to day. One is enough; add a
             second only if the client has one.
           </p>

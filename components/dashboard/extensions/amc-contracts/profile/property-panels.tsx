@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Archive, ClipboardList, KeyRound, MoreHorizontal, Pencil, Plus, Power, Wrench } from "lucide-react";
+import { Archive, ClipboardList, EllipsisVerticalIcon, KeyRound, Pencil, Plus, Power, Wrench } from "lucide-react";
 import { toast } from "sonner";
 
 import { SectionCard } from "@/components/dashboard/shared/kaizen";
-import { ActionDialogContent, ErrorState, ListSkeleton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
+import { ActionDialogContent, ErrorState, ListSkeleton, SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -40,22 +40,43 @@ import { amcSettingsService } from "@/modules/amc-submissions/services/amc-setti
 
 import { formatContractDate } from "../contract-status";
 import { useAmcData } from "../use-amc-data";
+import { useDialog } from "./use-dialog";
 
 const nul = (v: string | null | undefined) => (v && v.trim() ? v.trim() : null);
 const CONDITION_TONE: Record<string, string> = {
-  good: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
-  fair: "bg-sky-500/10 text-sky-700 dark:text-sky-400",
-  poor: "bg-amber-500/10 text-amber-700 dark:text-amber-400",
-  critical: "bg-destructive/10 text-destructive",
-  unknown: "bg-muted text-muted-foreground",
+  good: "bg-success/10 text-success",
+  fair: "bg-brand-50 text-brand",
+  poor: "bg-warning/10 text-warning",
+  critical: "bg-danger/10 text-danger",
+  unknown: "bg-mist text-ink-soft",
 };
 
-function ErrorLine({ error }: { error: string | null }) {
-  return error ? (
-    <p className="text-destructive text-sm" role="alert">
-      {error}
-    </p>
-  ) : null;
+/** The kebab every row's actions sit behind (role-actions.tsx). */
+function RowMenu({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon" className="size-8">
+          <EllipsisVerticalIcon className="size-4" />
+          <span className="sr-only">{label}</span>
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">{children}</DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** Runs a dialog's save: a toast on failure, closed on success. */
+async function runSave(setBusy: (busy: boolean) => void, work: () => Promise<void>, close: () => void) {
+  setBusy(true);
+  try {
+    await work();
+    close();
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : "Could not save");
+  } finally {
+    setBusy(false);
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -64,9 +85,10 @@ function ErrorLine({ error }: { error: string | null }) {
 
 export function AssetsPanel({ propertyId, canEdit }: { propertyId: string; canEdit: boolean }) {
   const { data, error, loading, reload } = useAmcData(() => clientProfileService.assets(propertyId), `assets|${propertyId}`);
-  const [editing, setEditing] = useState<AssetRecord | "new" | null>(null);
-  const [retiring, setRetiring] = useState<AssetRecord | null>(null);
+  const editing = useDialog<AssetRecord | "new">();
+  const retiring = useDialog<AssetRecord>();
   const [showRetired, setShowRetired] = useState(false);
+  const canAdd = canEdit && data?.migrated !== false;
 
   const all = data?.assets ?? [];
   const assets = all.filter((a) => showRetired || a.status === "active");
@@ -85,8 +107,8 @@ export function AssetsPanel({ propertyId, canEdit }: { propertyId: string; canEd
               {showRetired ? "Hide retired" : "Show retired"}
             </Button>
           ) : null}
-          {canEdit && data?.migrated !== false ? (
-            <Button size="sm" variant="outline" onClick={() => setEditing("new")}>
+          {canAdd ? (
+            <Button size="sm" variant="outline" onClick={() => editing.show("new")}>
               <Plus className="size-4" />
               Add asset
             </Button>
@@ -103,14 +125,17 @@ export function AssetsPanel({ propertyId, canEdit }: { propertyId: string; canEd
       ) : data?.migrated === false ? (
         <p className="text-muted-foreground px-5 py-4 text-sm">The asset register arrives with the Phase 2 database update (20261007120000).</p>
       ) : assets.length === 0 ? (
-        <div className="p-5">
-          <EmptyState icon={<Wrench className="size-5" />} title="No assets yet" description="List the AC units by type and count, water heaters, pumps and boards. Visits and call outs build each asset's history." />
-        </div>
+        <EmptyState
+          icon={<Wrench className="size-5" />}
+          title="No assets yet"
+          description="List the AC units by type and count, water heaters, pumps and boards. Visits and call outs build each asset's history."
+          action={canAdd ? { label: "Add asset", onClick: () => editing.show("new") } : undefined}
+        />
       ) : (
         <div className="overflow-x-auto">
           <Table className="min-w-[760px]">
-            <TableHeader>
-              <TableRow>
+            <TableHeader className="[&_th]:text-muted-foreground">
+              <TableRow className="hover:bg-transparent">
                 <TableHead className="pl-5">Asset</TableHead>
                 <TableHead>Trade</TableHead>
                 <TableHead className="text-right">Qty</TableHead>
@@ -123,7 +148,7 @@ export function AssetsPanel({ propertyId, canEdit }: { propertyId: string; canEd
             </TableHeader>
             <TableBody>
               {assets.map((a) => (
-                <TableRow key={a.id} className={a.status === "retired" ? "opacity-60" : undefined}>
+                <TableRow key={a.id} className={`h-14 ${a.status === "retired" ? "opacity-60" : ""}`}>
                   <TableCell className="pl-5">
                     <div className="font-medium">{a.assetType}</div>
                     {a.status === "retired" ? (
@@ -140,29 +165,22 @@ export function AssetsPanel({ propertyId, canEdit }: { propertyId: string; canEd
                   <TableCell>{[a.make, a.model].filter(Boolean).join(" ") || "—"}</TableCell>
                   <TableCell className="font-mono text-xs">{a.serialNo ?? "—"}</TableCell>
                   <TableCell>
-                    <Badge variant="secondary" className={`border-none capitalize ${CONDITION_TONE[a.condition] ?? ""}`}>
+                    <Badge variant="secondary" className={`border-0 font-medium capitalize ${CONDITION_TONE[a.condition] ?? ""}`}>
                       {a.condition}
                     </Badge>
                   </TableCell>
                   <TableCell className="pr-5">
                     {canEdit && a.status === "active" ? (
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" aria-label={`Actions for ${a.assetType}`}>
-                            <MoreHorizontal className="size-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => setEditing(a)}>
-                            <Pencil className="size-4" />
-                            Edit
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => setRetiring(a)}>
-                            <Archive className="size-4" />
-                            Retire
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
+                      <RowMenu label={`Actions for ${a.assetType}`}>
+                        <DropdownMenuItem onClick={() => editing.show(a)}>
+                          <Pencil className="size-4" />
+                          Edit
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => retiring.show(a)} className="text-destructive focus:text-destructive">
+                          <Archive className="size-4" />
+                          Retire
+                        </DropdownMenuItem>
+                      </RowMenu>
                     ) : null}
                   </TableCell>
                 </TableRow>
@@ -171,40 +189,50 @@ export function AssetsPanel({ propertyId, canEdit }: { propertyId: string; canEd
           </Table>
         </div>
       )}
-      {editing ? (
-        <AssetDialog
-          initial={editing === "new" ? null : editing}
-          onClose={() => setEditing(null)}
-          onSave={async (input) => {
-            if (editing === "new") await clientProfileService.addAsset(propertyId, input);
-            else await clientProfileService.updateAsset(propertyId, editing.id, input);
-            toast.success("Asset saved");
-            setEditing(null);
-            reload();
-          }}
-        />
-      ) : null}
-      {retiring ? (
-        <ReasonDialog
-          title={`Retire ${retiring.assetType}?`}
-          description="It leaves the active register; its details and history are kept."
-          label="Why is it retired?"
-          placeholder="e.g. Replaced with a new unit"
-          confirm="Retire"
-          onClose={() => setRetiring(null)}
-          onSave={async (reason) => {
-            await clientProfileService.retireAsset(propertyId, retiring.id, reason);
-            toast.success("Asset retired");
-            setRetiring(null);
-            reload();
-          }}
-        />
-      ) : null}
+      <AssetDialog
+        key={editing.key}
+        open={editing.open}
+        onOpenChange={editing.onOpenChange}
+        initial={editing.target === "new" ? null : editing.target}
+        onSave={async (input) => {
+          const target = editing.target;
+          if (!target || target === "new") await clientProfileService.addAsset(propertyId, input);
+          else await clientProfileService.updateAsset(propertyId, target.id, input);
+          toast.success("Asset saved");
+          reload();
+        }}
+      />
+      <ReasonDialog
+        key={`retire-${retiring.key}`}
+        open={retiring.open}
+        onOpenChange={retiring.onOpenChange}
+        title={`Retire ${retiring.target?.assetType ?? "this asset"}?`}
+        description="Takes it off the active register; its details and history are kept."
+        label="Why is it retired?"
+        placeholder="e.g. Replaced with a new unit"
+        confirm="Retire"
+        onSave={async (reason) => {
+          if (!retiring.target) return;
+          await clientProfileService.retireAsset(propertyId, retiring.target.id, reason);
+          toast.success("Asset retired");
+          reload();
+        }}
+      />
     </SectionCard>
   );
 }
 
-function AssetDialog({ initial, onClose, onSave }: { initial: AssetRecord | null; onClose: () => void; onSave: (input: AssetInput) => Promise<void> }) {
+function AssetDialog({
+  open,
+  onOpenChange,
+  initial,
+  onSave,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  initial: AssetRecord | null;
+  onSave: (input: AssetInput) => Promise<void>;
+}) {
   const [v, setV] = useState<AssetInput>(
     initial
       ? {
@@ -223,15 +251,14 @@ function AssetDialog({ initial, onClose, onSave }: { initial: AssetRecord | null
       : { assetType: "", trade: "ac", quantity: 1, condition: "unknown" },
   );
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const text = (k: keyof AssetInput) => (e: { target: { value: string } }) => setV((x) => ({ ...x, [k]: e.target.value }));
   const suggestions = ASSET_TYPE_SUGGESTIONS[v.trade as keyof typeof ASSET_TYPE_SUGGESTIONS] ?? [];
 
-  const save = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      await onSave({
+  const save = () =>
+    runSave(
+      setBusy,
+      () =>
+        onSave({
         ...v,
         assetType: v.assetType.trim(),
         location: nul(v.location),
@@ -241,25 +268,22 @@ function AssetDialog({ initial, onClose, onSave }: { initial: AssetRecord | null
         capacity: nul(v.capacity),
         installedOn: v.installedOn || null,
         notes: nul(v.notes),
-      });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not save");
-      setBusy(false);
-    }
-  };
+        }),
+      () => onOpenChange(false),
+    );
 
   return (
-    <Dialog open onOpenChange={(next) => !busy && !next && onClose()}>
-      <ActionDialogContent busy={busy} className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+    <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
+      <ActionDialogContent busy={busy} className="max-h-[88vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>{initial ? "Edit asset" : "Add asset"}</DialogTitle>
-          <DialogDescription>Identical units can be one row with a quantity; a serial number means one unit.</DialogDescription>
+          <DialogDescription>Saves the asset on this property&apos;s register. Identical units can be one row with a quantity; a serial number means one unit.</DialogDescription>
         </DialogHeader>
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-4 py-2 sm:grid-cols-2">
           <div className="grid gap-1.5">
             <Label>Trade</Label>
             <Select value={v.trade} onValueChange={(trade) => setV((x) => ({ ...x, trade }))}>
-              <SelectTrigger aria-label="Trade">
+              <SelectTrigger aria-label="Trade" className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -311,7 +335,7 @@ function AssetDialog({ initial, onClose, onSave }: { initial: AssetRecord | null
           <div className="grid gap-1.5">
             <Label>Condition</Label>
             <Select value={v.condition} onValueChange={(condition) => setV((x) => ({ ...x, condition }))}>
-              <SelectTrigger aria-label="Condition">
+              <SelectTrigger aria-label="Condition" className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -328,14 +352,13 @@ function AssetDialog({ initial, onClose, onSave }: { initial: AssetRecord | null
             <Textarea id="asset-notes" rows={2} value={v.notes ?? ""} onChange={text("notes")} maxLength={1000} />
           </div>
         </div>
-        <ErrorLine error={error} />
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={() => void save()} disabled={busy || !v.assetType.trim()}>
-            {busy ? "Saving…" : "Save"}
-          </Button>
+          <SubmitButton onClick={() => void save()} pending={busy} pendingLabel="Saving…" disabled={!v.assetType.trim()}>
+            {initial ? "Save changes" : "Add asset"}
+          </SubmitButton>
         </DialogFooter>
       </ActionDialogContent>
     </Dialog>
@@ -343,54 +366,45 @@ function AssetDialog({ initial, onClose, onSave }: { initial: AssetRecord | null
 }
 
 export function ReasonDialog({
+  open,
+  onOpenChange,
   title,
   description,
   label,
   placeholder,
   confirm,
-  onClose,
   onSave,
 }: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   title: string;
   description: string;
   label: string;
   placeholder?: string;
   confirm: string;
-  onClose: () => void;
   onSave: (reason: string) => Promise<void>;
 }) {
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const save = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      await onSave(reason.trim());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not save");
-      setBusy(false);
-    }
-  };
+  const save = () => runSave(setBusy, () => onSave(reason.trim()), () => onOpenChange(false));
   return (
-    <Dialog open onOpenChange={(next) => !busy && !next && onClose()}>
+    <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <ActionDialogContent busy={busy} className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
-        <div className="grid gap-1.5">
+        <div className="grid gap-1.5 py-2">
           <Label htmlFor="reason-text">{label}</Label>
           <Textarea id="reason-text" rows={3} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={300} placeholder={placeholder} />
         </div>
-        <ErrorLine error={error} />
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>
-          <Button variant="destructive" onClick={() => void save()} disabled={busy || reason.trim().length < 3}>
-            {busy ? "Saving…" : confirm}
-          </Button>
+          <SubmitButton variant="destructive" onClick={() => void save()} pending={busy} pendingLabel="Saving…" disabled={reason.trim().length < 3}>
+            {confirm}
+          </SubmitButton>
         </DialogFooter>
       </ActionDialogContent>
     </Dialog>
@@ -405,8 +419,9 @@ const dayList = (days: number[]) => (days.length === 0 || days.length === 7 ? "A
 
 export function AccessRulesPanel({ propertyId, canEdit }: { propertyId: string; canEdit: boolean }) {
   const { data, error, loading, reload } = useAmcData(() => clientProfileService.accessRules(propertyId), `rules|${propertyId}`);
-  const [editing, setEditing] = useState<AccessRuleRecord | "new" | null>(null);
+  const editing = useDialog<AccessRuleRecord | "new">();
   const { confirm, dialog } = useConfirm();
+  const canAdd = canEdit && data?.migrated !== false;
 
   const toggle = async (r: AccessRuleRecord) => {
     const ok = await confirm({
@@ -425,8 +440,8 @@ export function AccessRulesPanel({ propertyId, canEdit }: { propertyId: string; 
       description="What a visit needs before it can happen: gate pass, permits, security clearance, lift booking, keys (BRD 5.9). Visits show each rule and its status."
       bodyClassName="border-t"
       action={
-        canEdit && data?.migrated !== false ? (
-          <Button size="sm" variant="outline" onClick={() => setEditing("new")}>
+        canAdd ? (
+          <Button size="sm" variant="outline" onClick={() => editing.show("new")}>
             <Plus className="size-4" />
             Add rule
           </Button>
@@ -443,9 +458,12 @@ export function AccessRulesPanel({ propertyId, canEdit }: { propertyId: string; 
       ) : data?.migrated === false ? (
         <p className="text-muted-foreground px-5 py-4 text-sm">Access rules arrive with the Phase 2 database update (20261007120000).</p>
       ) : (data?.rules.length ?? 0) === 0 ? (
-        <div className="p-5">
-          <EmptyState icon={<KeyRound className="size-5" />} title="No access rules" description="Add the community gate pass, building permit or key collection this property needs, with the lead time." />
-        </div>
+        <EmptyState
+          icon={<KeyRound className="size-5" />}
+          title="No access rules"
+          description="Add the community gate pass, building permit or key collection this property needs, with the lead time."
+          action={canAdd ? { label: "Add rule", onClick: () => editing.show("new") } : undefined}
+        />
       ) : (
         <ul className="divide-y">
           {data!.rules.map((r) => (
@@ -453,10 +471,14 @@ export function AccessRulesPanel({ propertyId, canEdit }: { propertyId: string; 
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-medium">{ACCESS_TYPE_LABELS[r.accessType as keyof typeof ACCESS_TYPE_LABELS] ?? r.accessType}</span>
-                  <Badge variant="secondary" className="font-normal">
+                  <Badge variant="secondary" className="bg-brand-50 text-brand border-0 font-medium">
                     {r.leadTimeDays ? `${r.leadTimeDays} day(s) ahead` : "Same day"}
                   </Badge>
-                  {!r.active ? <Badge variant="outline">Off</Badge> : null}
+                  {!r.active ? (
+                    <Badge variant="secondary" className="bg-mist text-ink-soft border-0 font-medium">
+                      Off
+                    </Badge>
+                  ) : null}
                 </div>
                 <div className="text-muted-foreground mt-1 text-sm">
                   {[
@@ -471,41 +493,34 @@ export function AccessRulesPanel({ propertyId, canEdit }: { propertyId: string; 
                 {r.notes ? <p className="text-muted-foreground mt-1 text-sm">{r.notes}</p> : null}
               </div>
               {canEdit ? (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon" aria-label="Rule actions">
-                      <MoreHorizontal className="size-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={() => setEditing(r)}>
-                      <Pencil className="size-4" />
-                      Edit
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => void toggle(r)}>
-                      <Power className="size-4" />
-                      {r.active ? "Switch off" : "Switch on"}
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                <RowMenu label="Rule actions">
+                  <DropdownMenuItem onClick={() => editing.show(r)}>
+                    <Pencil className="size-4" />
+                    Edit
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => void toggle(r)}>
+                    <Power className="size-4" />
+                    {r.active ? "Switch off" : "Switch on"}
+                  </DropdownMenuItem>
+                </RowMenu>
               ) : null}
             </li>
           ))}
         </ul>
       )}
-      {editing ? (
-        <AccessRuleDialog
-          initial={editing === "new" ? null : editing}
-          onClose={() => setEditing(null)}
-          onSave={async (input) => {
-            if (editing === "new") await clientProfileService.addAccessRule(propertyId, input);
-            else await clientProfileService.updateAccessRule(propertyId, editing.id, { ...input, active: editing.active });
-            toast.success("Access rule saved");
-            setEditing(null);
-            reload();
-          }}
-        />
-      ) : null}
+      <AccessRuleDialog
+        key={editing.key}
+        open={editing.open}
+        onOpenChange={editing.onOpenChange}
+        initial={editing.target === "new" ? null : editing.target}
+        onSave={async (input) => {
+          const target = editing.target;
+          if (!target || target === "new") await clientProfileService.addAccessRule(propertyId, input);
+          else await clientProfileService.updateAccessRule(propertyId, target.id, { ...input, active: target.active });
+          toast.success("Access rule saved");
+          reload();
+        }}
+      />
     </SectionCard>
   );
 }
@@ -527,7 +542,7 @@ function DayPicker({ value, onChange }: { value: number[]; onChange: (days: numb
   return (
     <div className="flex flex-wrap gap-1.5">
       {WEEKDAY_SHORT.map((d, i) => (
-        <label key={d} className="has-[:checked]:border-primary has-[:checked]:bg-primary/5 flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-xs">
+        <label key={d} className="has-[:checked]:border-brand/30 has-[:checked]:bg-brand-50 flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-xs">
           <Checkbox checked={value.includes(i)} onCheckedChange={(c) => onChange(c ? [...value, i] : value.filter((x) => x !== i))} />
           {d}
         </label>
@@ -536,16 +551,25 @@ function DayPicker({ value, onChange }: { value: number[]; onChange: (days: numb
   );
 }
 
-function AccessRuleDialog({ initial, onClose, onSave }: { initial: AccessRuleRecord | null; onClose: () => void; onSave: (input: AccessRuleInput) => Promise<void> }) {
+function AccessRuleDialog({
+  open,
+  onOpenChange,
+  initial,
+  onSave,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  initial: AccessRuleRecord | null;
+  onSave: (input: AccessRuleInput) => Promise<void>;
+}) {
   const [v, setV] = useState<AccessRuleInput>(initial ? ruleInput(initial) : { accessType: "community_gate_pass", leadTimeDays: 2, permittedDays: [] });
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const text = (k: keyof AccessRuleInput) => (e: { target: { value: string } }) => setV((x) => ({ ...x, [k]: e.target.value }));
-  const save = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      await onSave({
+  const save = () =>
+    runSave(
+      setBusy,
+      () =>
+        onSave({
         ...v,
         issuer: nul(v.issuer),
         permittedFrom: v.permittedFrom || null,
@@ -554,24 +578,21 @@ function AccessRuleDialog({ initial, onClose, onSave }: { initial: AccessRuleRec
         contactName: nul(v.contactName),
         contactPhone: nul(v.contactPhone),
         notes: nul(v.notes),
-      });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not save");
-      setBusy(false);
-    }
-  };
+        }),
+      () => onOpenChange(false),
+    );
   return (
-    <Dialog open onOpenChange={(next) => !busy && !next && onClose()}>
-      <ActionDialogContent busy={busy} className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+    <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
+      <ActionDialogContent busy={busy} className="max-h-[88vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>{initial ? "Edit access rule" : "Add access rule"}</DialogTitle>
-          <DialogDescription>The lead time decides when the access to-do appears before a visit.</DialogDescription>
+          <DialogDescription>Saves what a visit to this property needs. The lead time decides when the access to-do appears before a visit.</DialogDescription>
         </DialogHeader>
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-4 py-2 sm:grid-cols-2">
           <div className="grid gap-1.5">
             <Label>Access type</Label>
             <Select value={v.accessType} onValueChange={(accessType) => setV((x) => ({ ...x, accessType }))}>
-              <SelectTrigger aria-label="Access type">
+              <SelectTrigger aria-label="Access type" className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -620,14 +641,13 @@ function AccessRuleDialog({ initial, onClose, onSave }: { initial: AccessRuleRec
             <Textarea id="rule-notes" rows={2} value={v.notes ?? ""} onChange={text("notes")} maxLength={2000} />
           </div>
         </div>
-        <ErrorLine error={error} />
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={() => void save()} disabled={busy}>
-            {busy ? "Saving…" : "Save"}
-          </Button>
+          <SubmitButton onClick={() => void save()} pending={busy} pendingLabel="Saving…">
+            {initial ? "Save changes" : "Add rule"}
+          </SubmitButton>
         </DialogFooter>
       </ActionDialogContent>
     </Dialog>
@@ -671,8 +691,9 @@ export function ScopePanel({ propertyId, canEdit }: { propertyId: string; canEdi
   const { data, error, loading, reload } = useAmcData(() => clientProfileService.scope(propertyId), `scope|${propertyId}`);
   const assets = useAmcData(() => clientProfileService.assets(propertyId), `assets|${propertyId}`);
   const catalogue = useCatalogue();
-  const [editing, setEditing] = useState<ScopeItemRecord | "new" | null>(null);
+  const editing = useDialog<ScopeItemRecord | "new">();
   const { confirm, dialog } = useConfirm();
+  const canAdd = canEdit && data?.migrated !== false;
   const label = (id: string) => catalogue.find((s) => s.id === id)?.label ?? id;
   const items = (data?.items ?? []).filter((i) => i.active);
 
@@ -694,8 +715,8 @@ export function ScopePanel({ propertyId, canEdit }: { propertyId: string; canEdi
       description="The services this property needs, by trade, with frequency, duration, preferred months or days and exclusions (BRD 5.2). Captured once; the proposal and the PPM schedule reuse it."
       bodyClassName="border-t"
       action={
-        canEdit && data?.migrated !== false ? (
-          <Button size="sm" variant="outline" onClick={() => setEditing("new")}>
+        canAdd ? (
+          <Button size="sm" variant="outline" onClick={() => editing.show("new")}>
             <Plus className="size-4" />
             Add to scope
           </Button>
@@ -712,14 +733,17 @@ export function ScopePanel({ propertyId, canEdit }: { propertyId: string; canEdi
       ) : data?.migrated === false ? (
         <p className="text-muted-foreground px-5 py-4 text-sm">Scope capture arrives with the Phase 2 database update (20261007120000).</p>
       ) : items.length === 0 ? (
-        <div className="p-5">
-          <EmptyState icon={<ClipboardList className="size-5" />} title="No scope yet" description="Add the services this property needs; the proposal starts from this list." />
-        </div>
+        <EmptyState
+          icon={<ClipboardList className="size-5" />}
+          title="No scope yet"
+          description="Add the services this property needs; the proposal starts from this list."
+          action={canAdd ? { label: "Add to scope", onClick: () => editing.show("new") } : undefined}
+        />
       ) : (
         <div className="overflow-x-auto">
           <Table className="min-w-[760px]">
-            <TableHeader>
-              <TableRow>
+            <TableHeader className="[&_th]:text-muted-foreground">
+              <TableRow className="hover:bg-transparent">
                 <TableHead className="pl-5">Service</TableHead>
                 <TableHead>Trade</TableHead>
                 <TableHead className="text-right">Qty</TableHead>
@@ -733,7 +757,7 @@ export function ScopePanel({ propertyId, canEdit }: { propertyId: string; canEdi
               {items.map((i) => {
                 const asset = assets.data?.assets.find((a) => a.id === i.assetId);
                 return (
-                  <TableRow key={i.id}>
+                  <TableRow key={i.id} className="h-14">
                     <TableCell className="pl-5">
                       <div className="font-medium">{label(i.serviceId)}</div>
                       {asset ? <div className="text-muted-foreground text-xs">For {asset.assetType}{asset.location ? `, ${asset.location}` : ""}</div> : null}
@@ -749,23 +773,16 @@ export function ScopePanel({ propertyId, canEdit }: { propertyId: string; canEdi
                     <TableCell className="text-muted-foreground max-w-56 truncate text-sm">{i.exclusions ?? "—"}</TableCell>
                     <TableCell className="pr-5">
                       {canEdit ? (
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" aria-label="Scope item actions">
-                              <MoreHorizontal className="size-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => setEditing(i)}>
-                              <Pencil className="size-4" />
-                              Edit
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => void remove(i)}>
-                              <Archive className="size-4" />
-                              Remove
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                        <RowMenu label={`Actions for ${label(i.serviceId)}`}>
+                          <DropdownMenuItem onClick={() => editing.show(i)}>
+                            <Pencil className="size-4" />
+                            Edit
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => void remove(i)} className="text-destructive focus:text-destructive">
+                            <Archive className="size-4" />
+                            Remove
+                          </DropdownMenuItem>
+                        </RowMenu>
                       ) : null}
                     </TableCell>
                   </TableRow>
@@ -775,21 +792,21 @@ export function ScopePanel({ propertyId, canEdit }: { propertyId: string; canEdi
           </Table>
         </div>
       )}
-      {editing ? (
-        <ScopeDialog
-          initial={editing === "new" ? null : editing}
-          catalogue={catalogue}
-          assets={(assets.data?.assets ?? []).filter((a) => a.status === "active")}
-          onClose={() => setEditing(null)}
-          onSave={async (input) => {
-            if (editing === "new") await clientProfileService.addScopeItem(propertyId, input);
-            else await clientProfileService.updateScopeItem(propertyId, editing.id, { ...input, active: true });
-            toast.success("Scope saved");
-            setEditing(null);
-            reload();
-          }}
-        />
-      ) : null}
+      <ScopeDialog
+        key={editing.key}
+        open={editing.open}
+        onOpenChange={editing.onOpenChange}
+        initial={editing.target === "new" ? null : editing.target}
+        catalogue={catalogue}
+        assets={(assets.data?.assets ?? []).filter((a) => a.status === "active")}
+        onSave={async (input) => {
+          const target = editing.target;
+          if (!target || target === "new") await clientProfileService.addScopeItem(propertyId, input);
+          else await clientProfileService.updateScopeItem(propertyId, target.id, { ...input, active: true });
+          toast.success("Scope saved");
+          reload();
+        }}
+      />
     </SectionCard>
   );
 }
@@ -808,39 +825,31 @@ const scopeInput = (i: ScopeItemRecord): ScopeItemInput => ({
 });
 
 function ScopeDialog({
+  open,
+  onOpenChange,
   initial,
   catalogue,
   assets,
-  onClose,
   onSave,
 }: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   initial: ScopeItemRecord | null;
   catalogue: CatalogueService[];
   assets: AssetRecord[];
-  onClose: () => void;
   onSave: (input: ScopeItemInput) => Promise<void>;
 }) {
   const [v, setV] = useState<ScopeItemInput>(initial ? scopeInput(initial) : { serviceId: "", trade: "ac", quantity: 1, preferredMonths: [], preferredDays: [] });
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const save = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      await onSave({ ...v, exclusions: nul(v.exclusions), notes: nul(v.notes) });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not save");
-      setBusy(false);
-    }
-  };
+  const save = () => runSave(setBusy, () => onSave({ ...v, exclusions: nul(v.exclusions), notes: nul(v.notes) }), () => onOpenChange(false));
   return (
-    <Dialog open onOpenChange={(next) => !busy && !next && onClose()}>
-      <ActionDialogContent busy={busy} className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+    <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
+      <ActionDialogContent busy={busy} className="max-h-[88vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>{initial ? "Edit scope item" : "Add to scope"}</DialogTitle>
-          <DialogDescription>Preferred months and days set the target dates in the PPM schedule.</DialogDescription>
+          <DialogDescription>Saves a service this property needs. Preferred months and days set the target dates in the PPM schedule.</DialogDescription>
         </DialogHeader>
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-4 py-2 sm:grid-cols-2">
           <div className="grid gap-1.5 sm:col-span-2">
             <Label>Service</Label>
             <Select
@@ -850,7 +859,7 @@ function ScopeDialog({
                 setV((x) => ({ ...x, serviceId, trade: tradeForService(serviceId), frequencyPerYear: x.frequencyPerYear ?? s?.frequencyPerYear ?? null }));
               }}
             >
-              <SelectTrigger aria-label="Service">
+              <SelectTrigger aria-label="Service" className="w-full">
                 <SelectValue placeholder={catalogue.length ? "Choose a service" : "Loading services…"} />
               </SelectTrigger>
               <SelectContent>
@@ -865,7 +874,7 @@ function ScopeDialog({
           <div className="grid gap-1.5">
             <Label>Trade</Label>
             <Select value={v.trade} onValueChange={(trade) => setV((x) => ({ ...x, trade }))}>
-              <SelectTrigger aria-label="Trade">
+              <SelectTrigger aria-label="Trade" className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -880,7 +889,7 @@ function ScopeDialog({
           <div className="grid gap-1.5">
             <Label>For asset (optional)</Label>
             <Select value={v.assetId ?? "none"} onValueChange={(a) => setV((x) => ({ ...x, assetId: a === "none" ? null : a }))}>
-              <SelectTrigger aria-label="Asset">
+              <SelectTrigger aria-label="Asset" className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -925,7 +934,7 @@ function ScopeDialog({
             <Label>Preferred months</Label>
             <div className="flex flex-wrap gap-1.5">
               {MONTHS.map((m, idx) => (
-                <label key={m} className="has-[:checked]:border-primary has-[:checked]:bg-primary/5 flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-xs">
+                <label key={m} className="has-[:checked]:border-brand/30 has-[:checked]:bg-brand-50 flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-xs">
                   <Checkbox
                     checked={v.preferredMonths.includes(idx + 1)}
                     onCheckedChange={(c) => setV((x) => ({ ...x, preferredMonths: c ? [...x.preferredMonths, idx + 1] : x.preferredMonths.filter((n) => n !== idx + 1) }))}
@@ -944,14 +953,13 @@ function ScopeDialog({
             <Textarea id="scope-excl" rows={2} value={v.exclusions ?? ""} onChange={(e) => setV((x) => ({ ...x, exclusions: e.target.value }))} maxLength={2000} />
           </div>
         </div>
-        <ErrorLine error={error} />
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={() => void save()} disabled={busy || !v.serviceId}>
-            {busy ? "Saving…" : "Save"}
-          </Button>
+          <SubmitButton onClick={() => void save()} pending={busy} pendingLabel="Saving…" disabled={!v.serviceId}>
+            {initial ? "Save changes" : "Add to scope"}
+          </SubmitButton>
         </DialogFooter>
       </ActionDialogContent>
     </Dialog>

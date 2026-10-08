@@ -131,8 +131,16 @@ function TemplateRow({
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="text-sm font-medium">{t.label}</h3>
         <span className="text-muted-foreground text-xs">{t.source}</span>
-        {t.draft ? <Badge variant="outline">Draft</Badge> : null}
-        {customised ? <Badge variant="secondary">Changed</Badge> : null}
+        {t.draft ? (
+          <Badge variant="secondary" className="bg-mist text-ink-soft border-0 font-medium">
+            Draft
+          </Badge>
+        ) : null}
+        {customised ? (
+          <Badge variant="secondary" className="bg-brand-50 text-brand border-0 font-medium">
+            Changed
+          </Badge>
+        ) : null}
         {customised && editable ? (
           <Button
             variant="ghost"

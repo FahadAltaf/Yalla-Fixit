@@ -348,3 +348,13 @@ export const AMC_MODULE_RESOURCES = [
 export function canViewAmcConfig(user: Parameters<typeof hasResourceAction>[0]): boolean {
   return hasResourceAction(user, ResourceType.AMC_CONFIG, ActionType.VIEW);
 }
+
+/* The sidebar's AMC sections, gated as their API routes are, so nobody is
+   shown a menu entry that only answers "Forbidden". */
+export function canViewAmcEnquiries(user: Parameters<typeof hasResourceAction>[0]): boolean {
+  return hasResourceAction(user, ResourceType.AMC_ENQUIRIES, ActionType.VIEW);
+}
+
+export function canViewAmcRateCard(user: Parameters<typeof hasResourceAction>[0]): boolean {
+  return hasResourceAction(user, ResourceType.AMC_RATE_CARD, ActionType.VIEW);
+}

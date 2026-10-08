@@ -23,7 +23,8 @@ export function SignedContractAction({ submission }: { submission: AmcSubmission
     return (
       <Button asChild variant="outline">
         <Link href={`/extensions/amc-contracts/${submission.contract_id}`}>
-          <ScrollText className="size-4" /> Open contract
+          <ScrollText className="size-4" />
+          Open contract
         </Link>
       </Button>
     );
@@ -35,8 +36,10 @@ export function SignedContractAction({ submission }: { submission: AmcSubmission
 
   return (
     <>
+      {/* The proposal's last step, so it is the header's primary button. */}
       <Button onClick={() => setOpen(true)}>
-        <CalendarCheck2 className="size-4" /> Activate AMC
+        <CalendarCheck2 className="size-4" />
+        Activate AMC
       </Button>
       <ActivateContractDialog
         open={open}

@@ -1,16 +1,21 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ScrollText } from "lucide-react";
+import { ArrowLeft, RefreshCw, SearchX } from "lucide-react";
+import { toast } from "sonner";
 
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
-import { HeadingSkeleton, SectionSkeleton } from "@/components/dashboard/shared/kaizen-states";
+import { ErrorState } from "@/components/dashboard/shared/kaizen-states";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { amcSubmissionsService } from "@/modules/amc-submissions";
 
 import { SubmissionDetails } from "./submission-details";
 import type { AmcSubmission } from "./amc-types";
+import { ProposalBodySkeleton } from "./proposal-skeletons";
 import { useAmcActions } from "./use-amc-actions";
 
 /**
@@ -25,15 +30,22 @@ export function AmcSubmissionDetail({ id }: { id: string }) {
   const router = useRouter();
   const [submission, setSubmission] = useState<AmcSubmission | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "missing" | "error">("loading");
+  const [error, setError] = useState<string | null>(null);
+  /* When the proposal on screen was read, for "Updated 14:32". */
+  const [fetchedAt, setFetchedAt] = useState<number | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   const apply = useCallback((next: AmcSubmission) => {
     setSubmission(next);
     setState("ready");
+    setError(null);
+    setFetchedAt(Date.now());
   }, []);
-  const fail = useCallback((error: unknown) => {
-    console.error(error);
-    const message = error instanceof Error ? error.message.toLowerCase() : "";
-    setState(message.includes("not found") ? "missing" : "error");
+  const fail = useCallback((reason: unknown) => {
+    console.error(reason);
+    const message = reason instanceof Error ? reason.message : "";
+    setError(message || null);
+    setState(message.toLowerCase().includes("not found") ? "missing" : "error");
   }, []);
 
   // Read again after an action, or from "Try again".
@@ -47,50 +59,111 @@ export function AmcSubmissionDetail({ id }: { id: string }) {
     let cancelled = false;
     amcSubmissionsService.getSubmission(id).then(
       (next) => !cancelled && apply(next),
-      (error) => !cancelled && fail(error),
+      (reason) => !cancelled && fail(reason),
     );
     return () => {
       cancelled = true;
     };
   }, [id, apply, fail]);
 
+  /*
+    Refresh keeps what is on screen if the read fails: a proposal already
+    showing is not swapped for an error because one request did not land.
+  */
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      apply(await amcSubmissionsService.getSubmission(id));
+      toast.success("Up to date");
+    } catch (reason) {
+      if (submission) {
+        toast.error(reason instanceof Error ? reason.message : "Could not refresh. What was on screen is kept.");
+      } else {
+        fail(reason);
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  }, [id, apply, fail, submission]);
+
   const actions = useAmcActions({ onChanged: load });
 
-  // The breadcrumb names the proposal by its customer, not its id.
-  useBreadcrumbLabel("amc", "AMC proposals");
+  // The breadcrumb names the proposal by its client, not its id.
+  useBreadcrumbLabel("amc", "Proposals");
   useBreadcrumbLabel(id, submission?.customer.customerName || undefined);
+
+  /* The way back and Refresh, drawn before the proposal arrives. */
+  const toolbar = (
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <BackToProposals />
+      <div className="flex items-center gap-3">
+        {fetchedAt ? (
+          <span className="text-muted-foreground hidden text-xs sm:inline">
+            Updated {formatClock(fetchedAt)}
+          </span>
+        ) : null}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void refresh()}
+          disabled={state === "loading" || refreshing}
+          aria-label="Refresh this proposal"
+        >
+          <RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />
+          <span className="hidden sm:inline">Refresh</span>
+        </Button>
+      </div>
+    </div>
+  );
 
   if (state === "loading") {
     return (
       <div className="flex flex-col gap-4">
-        <HeadingSkeleton withActions />
-        <SectionSkeleton />
+        {toolbar}
+        <ProposalBodySkeleton />
       </div>
     );
   }
 
-  if (state !== "ready" || !submission) {
+  if (state === "error") {
     return (
-      <EmptyState
-        icon={<ScrollText className="size-5" />}
-        title={state === "missing" ? "This proposal isn't available" : "Couldn't load this proposal"}
-        description={
-          state === "missing"
-            ? "It may have been deleted, or it may belong to someone else and not be waiting for your approval."
-            : "Something went wrong while loading it. Try again in a moment."
-        }
-        action={
-          state === "error"
-            ? { label: "Try again", onClick: () => void load() }
-            : { label: "All proposals", onClick: () => router.push("/extensions/amc"), variant: "outline" }
-        }
-      />
+      <div className="flex flex-col gap-4">
+        {toolbar}
+        <ErrorState
+          title="Could not load this proposal"
+          message={error}
+          onRetry={() => void refresh()}
+          retrying={refreshing}
+        />
+      </div>
+    );
+  }
+
+  if (state === "missing" || !submission) {
+    return (
+      <div className="flex flex-col gap-4">
+        <BackToProposals />
+        <Card className="p-0">
+          <EmptyState
+            className="border-0"
+            icon={<SearchX className="size-6" />}
+            title="This proposal isn't available"
+            description="It may have been deleted, or it may belong to someone else and not be waiting for your approval."
+            action={{
+              label: "Back to proposals",
+              onClick: () => router.push("/extensions/amc"),
+              variant: "outline",
+            }}
+          />
+        </Card>
+      </div>
     );
   }
 
   return (
     <div className="flex w-full flex-1 flex-col gap-4">
       {actions.dialogs}
+      {toolbar}
       <SubmissionDetails
         submission={submission}
         canApprove={Boolean(submission.viewer_can_approve)}
@@ -108,4 +181,23 @@ export function AmcSubmissionDetail({ id }: { id: string }) {
       />
     </div>
   );
+}
+
+function BackToProposals() {
+  return (
+    <Button asChild variant="ghost" size="sm" className="-ml-2 self-start">
+      <Link href="/extensions/amc">
+        <ArrowLeft className="size-4" />
+        Proposals
+      </Link>
+    </Button>
+  );
+}
+
+/** "14:32" on the viewer's own clock, for the "Updated" note beside Refresh. */
+function formatClock(at: number): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(at));
 }

@@ -27,5 +27,6 @@ Rules: one file at a time; pre-check first; never `supabase db push` on producti
 | 17 | 20261007140000 | amc_rate_card_and_proposal_versions.sql (Phase 4, live table: out of hours) | | | | Post-check §9, open and save a proposal | |
 | 18 | 20261007150000 | amc_approval_ladder_and_send_log.sql (Phase 5, live table: out of hours) | | | | Post-check §10, open a proposal | |
 | 19 | 20261007160000 | amc_contract_lifecycle.sql (Phase 6) | | | | Post-check §11, open AMC Proposals | |
+| 20 | 20261007170000 | amc_shared_clients.sql (AMC on Snagging clients; live table: out of hours) | | | | Post-check §12, open Snagging Clients and AMC Proposals | |
 
 **Held until release (Group B, do not apply):** 20261005160000, 20261005170000, 20261005180000, 20261006160000.

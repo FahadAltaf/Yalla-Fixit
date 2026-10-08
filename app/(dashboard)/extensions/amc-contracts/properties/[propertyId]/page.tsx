@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { PropertyDetail } from "@/components/dashboard/extensions/amc-contracts/customer-property-views";
 
 export const metadata: Metadata = {
-  title: "Property | AMC contracts",
+  title: "Property | AMC",
   robots: { index: false, follow: false },
 };
 

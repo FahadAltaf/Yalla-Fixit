@@ -5,6 +5,7 @@ import { FileText, Undo2 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 
+import { amcStatusTone } from "./amc-status";
 import { AMC_STATUS_LABELS, type AmcSubmissionStatus } from "./amc-types";
 
 /**
@@ -30,10 +31,11 @@ export function SubmissionStatusBanner({
   clientName?: string | null;
   proposalNumber?: string;
 }) {
+  /* Red, as on the proposal's page and its status badge: the team has to act. */
   if (status === "proposal_rejected") {
     return (
-      <Alert variant="destructive">
-        <Undo2 className="size-4" />
+      <Alert className="border-danger/30 bg-danger/5">
+        <Undo2 className="text-danger size-4" />
         <AlertTitle>
           {clientName?.trim() || "The client"} asked for changes
           {proposalNumber ? ` (${proposalNumber})` : ""}
@@ -54,8 +56,8 @@ export function SubmissionStatusBanner({
 
   if (status === "sent_back") {
     return (
-      <Alert variant="destructive">
-        <Undo2 className="size-4" />
+      <Alert className="border-danger/30 bg-danger/5">
+        <Undo2 className="text-danger size-4" />
         <AlertTitle>
           Sent back by the approver
           {proposalNumber ? ` (${proposalNumber})` : ""}
@@ -84,7 +86,9 @@ export function SubmissionStatusBanner({
           "this proposal"
         )}
       </span>
-      <Badge variant="secondary">{AMC_STATUS_LABELS[status] ?? status}</Badge>
+      <Badge variant="secondary" className={`border-0 font-medium ${amcStatusTone(status)}`}>
+        {AMC_STATUS_LABELS[status] ?? status}
+      </Badge>
     </div>
   );
 }

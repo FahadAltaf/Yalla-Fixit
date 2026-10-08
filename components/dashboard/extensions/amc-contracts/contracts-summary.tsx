@@ -82,7 +82,7 @@ export function ContractsSummary({ refreshKey }: { refreshKey: number }) {
       </StatCardGrid>
 
       <p className="text-muted-foreground text-xs">
-        Renewal pipeline, expiry, account managers, services and customer figures:{" "}
+        Renewal pipeline, expiry, account managers, services and client figures:{" "}
         <Link href={`${BASE}/reports`} className="underline">
           Reports
         </Link>

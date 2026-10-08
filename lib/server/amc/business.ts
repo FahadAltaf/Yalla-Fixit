@@ -53,7 +53,7 @@ type Actor = { id: string; label: string | null };
 type Visibility = { userId: string; canApprove: boolean };
 
 const NOT_MIGRATED =
-  "This needs an AMC database update (20261006130000, or 20261007120000 for the client profile) that has not been applied to this database yet.";
+  "This needs an AMC database update (20261007170000, AMC on Snagging's clients) that has not been applied to this database yet.";
 
 function notMigrated(error: { code?: string } | null | undefined): boolean {
   return isMissingTable(error) || error?.code === "42703" || error?.code === "PGRST204";
@@ -119,19 +119,58 @@ export interface PropertyRecord {
   parentPropertyId: string | null;
 }
 
-/* The columns before the client-profile update (20261007120000), used when it is not applied yet. */
-const CUSTOMER_COLUMNS_V1 = "id, name, customer_ref, company, email, phone, fsm_contact_id, snagging_client_id, notes, created_at";
-const CUSTOMER_COLUMNS = `${CUSTOMER_COLUMNS_V1}, customer_type, lifecycle, became_client_at, trade_license_no, trade_license_expiry, trn, preferred_channel, preferred_language, marketing_consent, marketing_consent_at, marketing_consent_source`;
-const PROPERTY_COLUMNS_V1 =
-  "id, customer_id, label, address, community, property_category, unit_type, bedrooms, size_sqft, notes, created_at";
-const PROPERTY_COLUMNS = `${PROPERTY_COLUMNS_V1}, building, unit_no, floor, street, city, floors_count, zones, occupancy, access_constraints, parent_property_id`;
+/*
+  Clients and addresses are Snagging's (20261007170000). A client is a
+  snagging_clients row and an address a snagging_properties row, whichever
+  module created it; what only AMC keeps about them is in
+  amc_client_profiles / amc_property_profiles. Reads go through the two
+  directory views, which put both side by side under the names this module
+  has always used, so CustomerRecord and PropertyRecord did not change.
+*/
+const CLIENT_DIRECTORY = "amc_client_directory";
+const PROPERTY_DIRECTORY = "amc_property_directory";
+const CUSTOMER_COLUMNS =
+  "id, name, customer_ref, company, email, phone, fsm_contact_id, notes, created_at, customer_type, lifecycle, became_client_at, trade_license_no, trade_license_expiry, trn, preferred_channel, preferred_language, marketing_consent, marketing_consent_at, marketing_consent_source";
+const PROPERTY_COLUMNS =
+  "id, customer_id, label, address, community, property_category, unit_type, bedrooms, size_sqft, notes, created_at, building, unit_no, floor, street, city, floors_count, zones, occupancy, access_constraints, parent_property_id";
+
+/** A client or address embedded in another AMC row (one FK, so no hint needed). */
+export const CLIENT_EMBED = "id, name, profile:amc_client_profiles(customer_ref, lifecycle)";
+export const PROPERTY_EMBED = "id, unit_label, property_type, profile:amc_property_profiles(property_category, unit_type)";
+
+/* PostgREST returns a one-to-one embed as an object; be ready for an array too. */
+const one = (v: unknown): Row | null => (Array.isArray(v) ? ((v[0] as Row | undefined) ?? null) : ((v as Row | null) ?? null));
+
+export function embeddedClient(
+  v: unknown,
+): { id: string; name: string; customerRef: string | null; lifecycle: CustomerRecord["lifecycle"] } | null {
+  const c = one(v);
+  if (!c) return null;
+  const p = one(c.profile);
+  const lifecycle = p?.lifecycle === "prospect" || p?.lifecycle === "former" ? p.lifecycle : "client";
+  return { id: String(c.id), name: String(c.name ?? ""), customerRef: str(p?.customer_ref), lifecycle };
+}
+
+export function embeddedProperty(
+  v: unknown,
+): { id: string; label: string; propertyCategory: string | null; unitType: string | null } | null {
+  const sp = one(v);
+  if (!sp) return null;
+  const p = one(sp.profile);
+  const type = str(sp.property_type);
+  return {
+    id: String(sp.id),
+    label: String(sp.unit_label ?? ""),
+    propertyCategory: str(p?.property_category) ?? (type === "commercial" ? "commercial" : type ? "residential" : null),
+    unitType: str(p?.unit_type) ?? (type && type !== "commercial" ? type : null),
+  };
+}
 
 const missingColumn = (error: { code?: string } | null | undefined) => error?.code === "42703" || error?.code === "PGRST204";
 
 /**
- * Runs a query with the Phase 2 columns, and again with the original ones
- * when the client-profile update is not applied yet, so the existing
- * customer screens keep working on a database without it.
+ * Runs a query with the newer columns, and again with the original ones
+ * when an update is not applied yet.
  */
 async function withColumns<T>(
   run: (columns: string) => PromiseLike<{ data: T | null; error: { code?: string; message: string } | null }>,
@@ -152,7 +191,8 @@ function mapCustomer(r: Row): CustomerRecord {
     email: str(r.email),
     phone: str(r.phone),
     fsmContactId: str(r.fsm_contact_id),
-    snaggingClientId: str(r.snagging_client_id),
+    /* The client IS the Snagging client now. */
+    snaggingClientId: String(r.id),
     notes: str(r.notes),
     createdAt: String(r.created_at),
     customerType: str(r.customer_type),
@@ -207,28 +247,18 @@ export async function searchCustomers(
   lifecycle: CustomerRecord["lifecycle"] | null = null,
 ): Promise<CustomerRecord[]> {
   const term = safeTerm(q);
-  const { data, error } = await withColumns<Row[]>(
-    (columns) => {
-      let query = admin.from("customers").select(columns).order("name").limit(limit);
-      if (term) query = query.or(`name.ilike.%${term}%,customer_ref.ilike.%${term}%,phone.ilike.%${term}%,email.ilike.%${term}%,company.ilike.%${term}%`);
-      if (lifecycle && columns === CUSTOMER_COLUMNS) query = query.eq("lifecycle", lifecycle);
-      return query as unknown as PromiseLike<{ data: Row[] | null; error: { code?: string; message: string } | null }>;
-    },
-    CUSTOMER_COLUMNS,
-    CUSTOMER_COLUMNS_V1,
-  );
+  let query = admin.from(CLIENT_DIRECTORY).select(CUSTOMER_COLUMNS).order("name").limit(limit);
+  if (term) query = query.or(`name.ilike.%${term}%,customer_ref.ilike.%${term}%,phone.ilike.%${term}%,email.ilike.%${term}%,company.ilike.%${term}%`);
+  if (lifecycle) query = query.eq("lifecycle", lifecycle);
+  const { data, error } = await query;
   if (error) throw fail(error);
-  return ((data ?? []) as Row[]).map(mapCustomer);
+  return ((data ?? []) as unknown as Row[]).map(mapCustomer);
 }
 
 export async function getCustomer(admin: Admin, id: string): Promise<CustomerRecord> {
-  const { data, error } = await withColumns<Row>(
-    (columns) => admin.from("customers").select(columns).eq("id", id).maybeSingle<Row>(),
-    CUSTOMER_COLUMNS,
-    CUSTOMER_COLUMNS_V1,
-  );
+  const { data, error } = await admin.from(CLIENT_DIRECTORY).select(CUSTOMER_COLUMNS).eq("id", id).maybeSingle<Row>();
   if (error) throw fail(error);
-  if (!data) throw new ContractError("Customer not found.", 404);
+  if (!data) throw new ContractError("Client not found.", 404);
   return mapCustomer(data);
 }
 
@@ -251,16 +281,21 @@ export interface CustomerInput {
 
 const blankToNull = (v: string | null | undefined) => (v && v.trim() ? v.trim() : null);
 
-function customerRow(input: CustomerInput) {
+/** The fields that live on the shared Snagging client. */
+function clientRow(input: CustomerInput) {
   return {
     name: input.name.trim(),
-    customer_ref: input.customerRef?.trim() || null,
-    company: input.company?.trim() || null,
-    email: input.email?.trim() || null,
-    phone: input.phone?.trim() || null,
-    notes: input.notes?.trim() || null,
-    /* Only what the caller sent, so a database without the client-profile
-       update still accepts the original fields. */
+    company: blankToNull(input.company),
+    email: blankToNull(input.email),
+    phone: blankToNull(input.phone),
+    notes: blankToNull(input.notes),
+  };
+}
+
+/** The fields only AMC keeps; only what the caller sent. */
+function clientProfileRow(input: CustomerInput): Record<string, unknown> {
+  return {
+    ...(input.customerRef !== undefined ? { customer_ref: blankToNull(input.customerRef) } : {}),
     ...(input.customerType !== undefined ? { customer_type: input.customerType || null } : {}),
     ...(input.lifecycle !== undefined ? { lifecycle: input.lifecycle } : {}),
     ...(input.tradeLicenseNo !== undefined ? { trade_license_no: blankToNull(input.tradeLicenseNo) } : {}),
@@ -272,74 +307,120 @@ function customerRow(input: CustomerInput) {
 }
 
 function customerWriteError(error: { code?: string; message: string }): ContractError {
-  if (error.code === "23505") return new ContractError("Another customer already has that Customer ID.", 409);
+  if (error.code === "23505") return new ContractError("Another client already has that Customer ID.", 409);
   return fail(error);
 }
 
-export async function createCustomer(admin: Admin, input: CustomerInput, actor: Actor): Promise<CustomerRecord> {
-  const { data: inserted, error } = await withColumns<Row>(
-    (columns) => admin.from("customers").insert({ ...customerRow(input), created_by: actor.id }).select(columns).single<Row>(),
-    CUSTOMER_COLUMNS,
-    CUSTOMER_COLUMNS_V1,
-  );
-  const data = inserted as Row;
+/**
+ * Writes a client's AMC profile: creates it the first time AMC touches the
+ * client (always, when `create`), otherwise changes only what was sent.
+ * Lifecycle and consent changes elsewhere in AMC go through here too.
+ */
+export async function writeClientProfile(
+  admin: Admin,
+  clientId: string,
+  fields: Record<string, unknown>,
+  actorId: string | null,
+  create = false,
+): Promise<void> {
+  const { data: existing, error: readError } = await admin
+    .from("amc_client_profiles")
+    .select("client_id")
+    .eq("client_id", clientId)
+    .maybeSingle<Row>();
+  if (readError) throw fail(readError);
+  if (existing) {
+    if (Object.keys(fields).length === 0) return;
+    const { error } = await admin
+      .from("amc_client_profiles")
+      .update({ ...fields, updated_at: new Date().toISOString() })
+      .eq("client_id", clientId);
+    if (error) throw customerWriteError(error);
+    return;
+  }
+  if (!create && Object.keys(fields).length === 0) return;
+  const { error } = await admin.from("amc_client_profiles").insert({ client_id: clientId, ...fields, created_by: actorId });
   if (error) throw customerWriteError(error);
+}
+
+/* An ilike pattern that matches the text exactly, wildcards included. */
+const exactly = (text: string) => text.replace(/[\\%_]/g, (c) => `\\${c}`);
+
+/**
+ * Adds a client from AMC. Snagging's rule decides whether it already
+ * exists -- the same name and email is the same client
+ * (lib/server/snagging/client.ts) -- so a client quoted for snagging and
+ * then for an AMC is one record, not two.
+ */
+export async function createCustomer(admin: Admin, input: CustomerInput, actor: Actor): Promise<CustomerRecord> {
+  const row = clientRow(input);
+  const { data: candidates, error: findError } = await admin
+    .from("snagging_clients")
+    .select("id, email")
+    .ilike("name", exactly(row.name))
+    .limit(20);
+  if (findError) throw fail(findError);
+  const match = ((candidates ?? []) as Row[]).find(
+    (c) => String(c.email ?? "").toLowerCase() === (row.email ?? "").toLowerCase(),
+  );
+  let id: string;
+  if (match) {
+    id = String(match.id);
+  } else {
+    const { data, error } = await admin
+      .from("snagging_clients")
+      .insert({ ...row, created_by: actor.id })
+      .select("id")
+      .single<Row>();
+    if (error) throw fail(error);
+    id = String(data.id);
+  }
+  const profile = clientProfileRow(input);
+  /* Someone already on file (a Snagging client, say) is not made a prospect
+     again because an enquiry named them: their standing stays as it is. */
+  if (match) delete profile.lifecycle;
+  await writeClientProfile(admin, id, profile, actor.id, true);
   await recordAmcAudit(admin, {
     entityType: "customer",
-    entityId: String(data.id),
+    entityId: id,
     eventType: "customer_created",
     actorId: actor.id,
     actorLabel: actor.label,
-    payload: { customerRef: data.customer_ref ?? null },
+    payload: { customerRef: input.customerRef ?? null, existingClient: Boolean(match) },
   });
-  return mapCustomer(data);
+  return getCustomer(admin, id);
 }
 
 export async function updateCustomer(admin: Admin, id: string, input: CustomerInput, actor: Actor): Promise<CustomerRecord> {
-  const { data, error } = await withColumns<Row>(
-    (columns) =>
-      admin
-        .from("customers")
-        .update({ ...customerRow(input), updated_at: new Date().toISOString() })
-        .eq("id", id)
-        .select(columns)
-        .maybeSingle<Row>(),
-    CUSTOMER_COLUMNS,
-    CUSTOMER_COLUMNS_V1,
-  );
-  if (error) throw customerWriteError(error);
-  if (!data) throw new ContractError("Customer not found.", 404);
+  const { data, error } = await admin
+    .from("snagging_clients")
+    .update({ ...clientRow(input), updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .select("id")
+    .maybeSingle<Row>();
+  if (error) throw fail(error);
+  if (!data) throw new ContractError("Client not found.", 404);
+  const profile = clientProfileRow(input);
+  await writeClientProfile(admin, id, profile, actor.id);
   await recordAmcAudit(admin, {
     entityType: "customer",
     entityId: id,
     eventType: "customer_updated",
     actorId: actor.id,
     actorLabel: actor.label,
-    payload: { fields: Object.keys(customerRow(input)) },
+    payload: { fields: [...Object.keys(clientRow(input)), ...Object.keys(profile)] },
   });
-  return mapCustomer(data);
+  return getCustomer(admin, id);
 }
 
 export async function listProperties(admin: Admin, customerId: string): Promise<PropertyRecord[]> {
-  const { data, error } = await withColumns<Row[]>(
-    (columns) =>
-      admin.from("customer_properties").select(columns).eq("customer_id", customerId).order("label") as unknown as PromiseLike<{
-        data: Row[] | null;
-        error: { code?: string; message: string } | null;
-      }>,
-    PROPERTY_COLUMNS,
-    PROPERTY_COLUMNS_V1,
-  );
+  const { data, error } = await admin.from(PROPERTY_DIRECTORY).select(PROPERTY_COLUMNS).eq("customer_id", customerId).order("label");
   if (error) throw fail(error);
-  return ((data ?? []) as Row[]).map(mapProperty);
+  return ((data ?? []) as unknown as Row[]).map(mapProperty);
 }
 
 export async function getProperty(admin: Admin, id: string): Promise<PropertyRecord> {
-  const { data, error } = await withColumns<Row>(
-    (columns) => admin.from("customer_properties").select(columns).eq("id", id).maybeSingle<Row>(),
-    PROPERTY_COLUMNS,
-    PROPERTY_COLUMNS_V1,
-  );
+  const { data, error } = await admin.from(PROPERTY_DIRECTORY).select(PROPERTY_COLUMNS).eq("id", id).maybeSingle<Row>();
   if (error) throw fail(error);
   if (!data) throw new ContractError("Property not found.", 404);
   return mapProperty(data);
@@ -368,23 +449,44 @@ export interface PropertyInput {
   parentPropertyId?: string | null;
 }
 
-function propertyRow(input: PropertyInput) {
+/**
+ * Snagging's four property types from AMC's finer list. Undefined when
+ * nothing says (a residential category with no unit type), so an address
+ * Snagging already typed keeps its type.
+ */
+export function snaggingPropertyType(input: Pick<PropertyInput, "unitType" | "propertyCategory">): string | undefined {
+  if (input.unitType === "villa" || input.unitType === "apartment" || input.unitType === "townhouse") return input.unitType;
+  if (input.unitType) return "commercial";
+  if (input.propertyCategory === "commercial") return "commercial";
+  return undefined;
+}
+
+/** The fields that live on the shared Snagging address. */
+function snaggingPropertyRow(input: PropertyInput) {
+  const type = snaggingPropertyType(input);
   return {
-    ...(input.customerId !== undefined ? { customer_id: input.customerId } : {}),
-    label: input.label.trim(),
-    address: input.address?.trim() || null,
-    community: input.community?.trim() || null,
+    ...(input.customerId !== undefined ? { client_id: input.customerId } : {}),
+    unit_label: input.label.trim(),
+    community: blankToNull(input.community),
+    bedrooms: input.bedrooms ?? null,
+    built_up_area_sqft: input.sizeSqft ?? null,
+    ...(type ? { property_type: type } : {}),
+    ...(input.building !== undefined ? { building_name: blankToNull(input.building) } : {}),
+    ...(input.floorsCount !== undefined ? { floors: input.floorsCount } : {}),
+  };
+}
+
+/** The fields only AMC keeps about an address. */
+function propertyProfileRow(input: PropertyInput): Record<string, unknown> {
+  return {
+    address: blankToNull(input.address),
     property_category: input.propertyCategory || null,
     unit_type: input.unitType || null,
-    bedrooms: input.bedrooms ?? null,
-    size_sqft: input.sizeSqft ?? null,
-    notes: input.notes?.trim() || null,
-    ...(input.building !== undefined ? { building: blankToNull(input.building) } : {}),
+    notes: blankToNull(input.notes),
     ...(input.unitNo !== undefined ? { unit_no: blankToNull(input.unitNo) } : {}),
     ...(input.floor !== undefined ? { floor: blankToNull(input.floor) } : {}),
     ...(input.street !== undefined ? { street: blankToNull(input.street) } : {}),
     ...(input.city !== undefined ? { city: blankToNull(input.city) } : {}),
-    ...(input.floorsCount !== undefined ? { floors_count: input.floorsCount } : {}),
     ...(input.zones !== undefined ? { zones: input.zones.map((z) => z.trim()).filter(Boolean) } : {}),
     ...(input.occupancy !== undefined ? { occupancy: input.occupancy || null } : {}),
     ...(input.accessConstraints !== undefined ? { access_constraints: blankToNull(input.accessConstraints) } : {}),
@@ -392,48 +494,88 @@ function propertyRow(input: PropertyInput) {
   };
 }
 
-export async function createProperty(admin: Admin, input: PropertyInput, actor: Actor): Promise<PropertyRecord> {
-  const { data: inserted, error } = await withColumns<Row>(
-    (columns) => admin.from("customer_properties").insert({ ...propertyRow(input), created_by: actor.id }).select(columns).single<Row>(),
-    PROPERTY_COLUMNS,
-    PROPERTY_COLUMNS_V1,
-  );
-  const data = inserted as Row;
+async function writePropertyProfile(admin: Admin, propertyId: string, fields: Record<string, unknown>, actor: Actor) {
+  const { data: existing, error: readError } = await admin
+    .from("amc_property_profiles")
+    .select("property_id")
+    .eq("property_id", propertyId)
+    .maybeSingle<Row>();
+  if (readError) throw fail(readError);
+  const { error } = existing
+    ? await admin
+        .from("amc_property_profiles")
+        .update({ ...fields, updated_at: new Date().toISOString() })
+        .eq("property_id", propertyId)
+    : await admin.from("amc_property_profiles").insert({ property_id: propertyId, ...fields, created_by: actor.id });
   if (error) throw fail(error);
+}
+
+const norm = (v: unknown) => String(v ?? "").trim().toLowerCase();
+
+/**
+ * Adds an address from AMC. Snagging's rule decides whether it exists: the
+ * client's address with the same unit, building and community is the same
+ * address (lib/server/snagging/property.ts), so it is reused, not doubled.
+ */
+export async function createProperty(admin: Admin, input: PropertyInput, actor: Actor): Promise<PropertyRecord> {
+  const row = snaggingPropertyRow(input);
+  let id: string | null = null;
+  if (input.customerId) {
+    const { data: candidates, error: findError } = await admin
+      .from("snagging_properties")
+      .select("id, building_name, community")
+      .eq("client_id", input.customerId)
+      .eq("unit_label", row.unit_label)
+      .limit(50);
+    if (findError) throw fail(findError);
+    const match = ((candidates ?? []) as Row[]).find(
+      (c) => norm(c.building_name) === norm(input.building) && norm(c.community) === norm(input.community),
+    );
+    if (match) id = String(match.id);
+  }
+  if (id) {
+    const { error } = await admin.from("snagging_properties").update({ ...row, updated_at: new Date().toISOString() }).eq("id", id);
+    if (error) throw fail(error);
+  } else {
+    const { data, error } = await admin
+      .from("snagging_properties")
+      .insert({ ...row, created_by: actor.id })
+      .select("id")
+      .single<Row>();
+    if (error) throw fail(error);
+    id = String(data.id);
+  }
+  await writePropertyProfile(admin, id, propertyProfileRow(input), actor);
   await recordAmcAudit(admin, {
     entityType: "customer",
-    entityId: (data.customer_id as string | null) ?? String(data.id),
+    entityId: input.customerId ?? id,
     eventType: "property_created",
     actorId: actor.id,
     actorLabel: actor.label,
-    payload: { propertyId: data.id },
+    payload: { propertyId: id },
   });
-  return mapProperty(data);
+  return getProperty(admin, id);
 }
 
 export async function updateProperty(admin: Admin, id: string, input: PropertyInput, actor: Actor): Promise<PropertyRecord> {
-  const { data, error } = await withColumns<Row>(
-    (columns) =>
-      admin
-        .from("customer_properties")
-        .update({ ...propertyRow(input), updated_at: new Date().toISOString() })
-        .eq("id", id)
-        .select(columns)
-        .maybeSingle<Row>(),
-    PROPERTY_COLUMNS,
-    PROPERTY_COLUMNS_V1,
-  );
+  const { data, error } = await admin
+    .from("snagging_properties")
+    .update({ ...snaggingPropertyRow(input), updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .select("id, client_id")
+    .maybeSingle<Row>();
   if (error) throw fail(error);
   if (!data) throw new ContractError("Property not found.", 404);
+  await writePropertyProfile(admin, id, propertyProfileRow(input), actor);
   await recordAmcAudit(admin, {
     entityType: "customer",
-    entityId: (data.customer_id as string | null) ?? id,
+    entityId: (data.client_id as string | null) ?? id,
     eventType: "property_updated",
     actorId: actor.id,
     actorLabel: actor.label,
     payload: { propertyId: id },
   });
-  return mapProperty(data);
+  return getProperty(admin, id);
 }
 
 /* ------------------------------------------------------------------ */
@@ -650,7 +792,7 @@ async function assessmentsFor(admin: Admin, column: "customer_id" | "property_id
   const { data, error } = await admin
     .from("amc_assessments")
     .select(
-      "id, assessment_number, status, assessed_on, assessor_name, summary, property_id, submission_id, created_at, property:customer_properties(label), submission:amc_submissions!amc_assessments_submission_id_fkey(id, proposal_number, status)",
+      "id, assessment_number, status, assessed_on, assessor_name, summary, property_id, submission_id, created_at, property:snagging_properties(unit_label), submission:amc_submissions!amc_assessments_submission_id_fkey(id, proposal_number, status)",
     )
     .eq(column, id)
     .order("created_at", { ascending: false });
@@ -662,7 +804,7 @@ async function assessmentsFor(admin: Admin, column: "customer_id" | "property_id
     assessedOn: str(a.assessed_on),
     assessorName: str(a.assessor_name),
     summary: str(a.summary),
-    propertyLabel: str((a.property as Row | null)?.label),
+    propertyLabel: str(one(a.property)?.unit_label),
     proposal: a.submission
       ? { id: String((a.submission as Row).id), proposalNumber: String((a.submission as Row).proposal_number ?? ""), status: String((a.submission as Row).status) }
       : null,
@@ -837,23 +979,22 @@ export interface AssessmentRecord {
   }>;
 }
 
-const ASSESSMENT_JOINS =
-  "customer:customers(id, name, customer_ref), property:customer_properties(id, label), submission:amc_submissions!amc_assessments_submission_id_fkey(id, proposal_number, status)";
+const ASSESSMENT_JOINS = `customer:snagging_clients(${CLIENT_EMBED}), property:snagging_properties(${PROPERTY_EMBED}), submission:amc_submissions!amc_assessments_submission_id_fkey(id, proposal_number, status)`;
 const ASSESSMENT_COLUMNS_V1 = `id, assessment_number, status, customer_id, property_id, contract_id, submission_id, assessed_on, assessor_id, assessor_name, property_category, unit_type, bedrooms, size_sqft, occupancy, summary, findings, notes, recommended_service_ids, completed_at, created_by, created_at, ${ASSESSMENT_JOINS}`;
 /* The site-visit columns (20261007130000). */
 const SITE_VISIT_COLUMNS = ["enquiry_id", "scheduled_at", "attendance", "asset_counts", "access_notes", "exclusions"] as const;
 const ASSESSMENT_COLUMNS = `${ASSESSMENT_COLUMNS_V1}, ${SITE_VISIT_COLUMNS.join(", ")}`;
 
 function mapAssessment(r: Row, items: Row[] = []): AssessmentRecord {
-  const c = r.customer as Row | null;
-  const p = r.property as Row | null;
+  const c = embeddedClient(r.customer);
+  const p = embeddedProperty(r.property);
   const s = r.submission as Row | null;
   return {
     id: String(r.id),
     assessmentNumber: String(r.assessment_number),
     status: r.status as "draft" | "completed",
-    customer: c ? { id: String(c.id), name: String(c.name), customerRef: str(c.customer_ref) } : null,
-    property: p ? { id: String(p.id), label: String(p.label) } : null,
+    customer: c ? { id: c.id, name: c.name, customerRef: c.customerRef } : null,
+    property: p ? { id: p.id, label: p.label } : null,
     contractId: str(r.contract_id),
     proposal: s ? { id: String(s.id), proposalNumber: String(s.proposal_number ?? ""), status: String(s.status) } : null,
     assessedOn: str(r.assessed_on),
@@ -911,8 +1052,8 @@ export async function listAssessments(
     /* Customers and properties matching the term, by id (bounded: a search
        this broad is refined by typing more, not by paging 200 customers). */
     const [{ data: customers }, { data: properties }] = await Promise.all([
-      admin.from("customers").select("id").or(`name.ilike.${like},customer_ref.ilike.${like}`).limit(200),
-      admin.from("customer_properties").select("id").ilike("label", like).limit(200),
+      admin.from(CLIENT_DIRECTORY).select("id").or(`name.ilike.${like},customer_ref.ilike.${like}`).limit(200),
+      admin.from(PROPERTY_DIRECTORY).select("id").ilike("label", like).limit(200),
     ]);
     const clauses = [`assessment_number.ilike.${like}`, `assessor_name.ilike.${like}`];
     const customerIds = ((customers ?? []) as Row[]).map((r) => String(r.id));

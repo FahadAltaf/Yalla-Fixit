@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { AmcSubmissionDetail } from "@/components/dashboard/extensions/amc/amc-submission-detail";
 
 export const metadata: Metadata = {
-  title: "AMC proposal | Extensions",
+  title: "Proposal | AMC",
   robots: { index: false, follow: false },
 };
 

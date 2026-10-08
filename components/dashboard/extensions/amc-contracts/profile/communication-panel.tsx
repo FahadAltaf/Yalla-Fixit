@@ -5,7 +5,7 @@ import { MessagesSquare, Plus } from "lucide-react";
 import { toast } from "sonner";
 
 import { SectionCard, timeAgo } from "@/components/dashboard/shared/kaizen";
-import { ActionDialogContent, ErrorState, ListSkeleton } from "@/components/dashboard/shared/kaizen-states";
+import { ActionDialogContent, ErrorState, ListSkeleton, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -19,6 +19,7 @@ import { clientProfileService, type CommunicationInput } from "@/modules/amc-con
 
 import { formatDateTime } from "../contract-status";
 import { useAmcData } from "../use-amc-data";
+import { useDialog } from "./use-dialog";
 
 const DIRECTION_LABELS = { outbound: "To the client", inbound: "From the client", internal: "Internal note" } as const;
 
@@ -29,7 +30,7 @@ const DIRECTION_LABELS = { outbound: "To the client", inbound: "From the client"
  */
 export function CommunicationPanel({ customerId }: { customerId: string }) {
   const { data, error, loading, reload } = useAmcData(() => clientProfileService.communications(customerId), `comms|${customerId}`);
-  const [adding, setAdding] = useState(false);
+  const adding = useDialog();
 
   return (
     <SectionCard
@@ -39,7 +40,7 @@ export function CommunicationPanel({ customerId }: { customerId: string }) {
       bodyClassName="border-t"
       action={
         data?.migrated !== false ? (
-          <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
+          <Button size="sm" variant="outline" onClick={() => adding.show(true)}>
             <Plus className="size-4" />
             Log a communication
           </Button>
@@ -55,19 +56,26 @@ export function CommunicationPanel({ customerId }: { customerId: string }) {
       ) : data?.migrated === false ? (
         <p className="text-muted-foreground px-5 py-4 text-sm">The communication log arrives with the Phase 2 database update (20261007120000).</p>
       ) : (data?.entries.length ?? 0) === 0 ? (
-        <div className="p-5">
-          <EmptyState icon={<MessagesSquare className="size-5" />} title="Nothing logged yet" description="Log calls, WhatsApp conversations and meetings so the next person knows what was agreed." />
-        </div>
+        <EmptyState
+          icon={<MessagesSquare className="size-5" />}
+          title="Nothing logged yet"
+          description="Log calls, WhatsApp conversations and meetings so the next person knows what was agreed."
+          action={{ label: "Log a communication", onClick: () => adding.show(true) }}
+        />
       ) : (
         <ul className="divide-y">
           {data!.entries.map((e) => (
             <li key={e.id} className="px-5 py-3.5">
               <div className="flex flex-wrap items-center gap-2 text-sm">
-                <Badge variant="secondary" className="font-normal">
+                <Badge variant="secondary" className="bg-mist text-ink-soft border-0 font-medium">
                   {CHANNEL_LABELS[e.channel] ?? e.channel}
                 </Badge>
                 <span className="text-muted-foreground">{DIRECTION_LABELS[e.direction as keyof typeof DIRECTION_LABELS] ?? e.direction}</span>
-                {e.source === "system" ? <Badge variant="outline">Portal</Badge> : null}
+                {e.source === "system" ? (
+                  <Badge variant="secondary" className="bg-brand-50 text-brand border-0 font-medium">
+                    Portal
+                  </Badge>
+                ) : null}
                 <span className="text-muted-foreground ml-auto text-xs tabular-nums" title={formatDateTime(e.occurredAt)}>
                   {timeAgo(e.occurredAt)} · {e.loggedBy ?? "—"}
                 </span>
@@ -78,22 +86,21 @@ export function CommunicationPanel({ customerId }: { customerId: string }) {
           ))}
         </ul>
       )}
-      {adding ? (
-        <LogDialog
-          onClose={() => setAdding(false)}
-          onSave={async (input) => {
-            await clientProfileService.logCommunication(customerId, input);
-            toast.success("Logged");
-            setAdding(false);
-            reload();
-          }}
-        />
-      ) : null}
+      <LogDialog
+        key={adding.key}
+        open={adding.open}
+        onOpenChange={adding.onOpenChange}
+        onSave={async (input) => {
+          await clientProfileService.logCommunication(customerId, input);
+          toast.success("Logged");
+          reload();
+        }}
+      />
     </SectionCard>
   );
 }
 
-function LogDialog({ onClose, onSave }: { onClose: () => void; onSave: (input: CommunicationInput) => Promise<void> }) {
+function LogDialog({ open, onOpenChange, onSave }: { open: boolean; onOpenChange: (open: boolean) => void; onSave: (input: CommunicationInput) => Promise<void> }) {
   const [value, setValue] = useState<CommunicationInput>({ channel: "call", direction: "outbound", summary: "" });
   const [when, setWhen] = useState(() => {
     const d = new Date();
@@ -101,27 +108,27 @@ function LogDialog({ onClose, onSave }: { onClose: () => void; onSave: (input: C
     return d.toISOString().slice(0, 16);
   });
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const save = async () => {
     setBusy(true);
-    setError(null);
     try {
       await onSave({ ...value, subject: value.subject?.trim() || null, summary: value.summary.trim(), occurredAt: new Date(when).toISOString() });
+      onOpenChange(false);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not save");
+      toast.error(e instanceof Error ? e.message : "Could not save the entry.");
+    } finally {
       setBusy(false);
     }
   };
 
   return (
-    <Dialog open onOpenChange={(next) => !busy && !next && onClose()}>
+    <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <ActionDialogContent busy={busy} className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Log a communication</DialogTitle>
-          <DialogDescription>Entries are kept as written; add a new one to correct or follow up.</DialogDescription>
+          <DialogDescription>Adds an entry to the client&apos;s log. Entries are kept as written; add a new one to correct or follow up.</DialogDescription>
         </DialogHeader>
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-4 py-2 sm:grid-cols-2">
           <div className="grid gap-1.5">
             <Label>Channel</Label>
             <Select value={value.channel} onValueChange={(channel) => setValue((v) => ({ ...v, channel }))}>
@@ -165,18 +172,13 @@ function LogDialog({ onClose, onSave }: { onClose: () => void; onSave: (input: C
             <Textarea id="log-summary" rows={4} value={value.summary} onChange={(e) => setValue((v) => ({ ...v, summary: e.target.value }))} maxLength={4000} />
           </div>
         </div>
-        {error ? (
-          <p className="text-destructive text-sm" role="alert">
-            {error}
-          </p>
-        ) : null}
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={() => void save()} disabled={busy || !value.summary.trim()}>
-            {busy ? "Saving…" : "Save"}
-          </Button>
+          <SubmitButton onClick={() => void save()} pending={busy} pendingLabel="Saving…" disabled={!value.summary.trim()}>
+            Log it
+          </SubmitButton>
         </DialogFooter>
       </ActionDialogContent>
     </Dialog>

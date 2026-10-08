@@ -21,7 +21,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ customerId
   try {
     const [overview, owner] = await Promise.all([
       customerOverview(gate.admin, { userId: gate.userId, canApprove: gate.seesAll }, customerId),
-      gate.admin.from("customers").select("created_by").eq("id", customerId).maybeSingle<{ created_by: string | null }>(),
+      gate.admin.from("amc_client_directory").select("created_by").eq("id", customerId).maybeSingle<{ created_by: string | null }>(),
     ]);
     /* The screens show edit actions only to those the server will let save. */
     return NextResponse.json({ overview, canEdit: canEditCustomer(gate.actor, owner.data?.created_by ?? null) });

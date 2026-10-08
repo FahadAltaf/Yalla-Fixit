@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { AssessmentsPage } from "@/components/dashboard/extensions/amc-contracts/assessments";
 
 export const metadata: Metadata = {
-  title: "Property assessments | AMC contracts",
+  title: "Site visits | AMC",
   robots: { index: false, follow: false },
 };
 

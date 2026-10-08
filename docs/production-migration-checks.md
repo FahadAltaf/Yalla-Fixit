@@ -515,3 +515,45 @@ Expected:
 **Live check:** open AMC Proposals in the live portal; it works as before. In the demo portal, open AMC → Contracts: existing contracts show with their numbers.
 
 **After applying, in AMC configuration → Contracts and signing:** name the internal signatories, choose who signs first, and add the Finance email to copy on Email 2.
+
+
+## 12. AMC on Snagging's clients: `20261007170000_amc_shared_clients.sql`
+
+Apply after section 11. From here on an AMC client **is** the Snagging client (`snagging_clients`) and an AMC address **is** the Snagging property (`snagging_properties`). AMC's own extra fields move to two new side tables. What it changes:
+- new server-only tables `amc_client_profiles` and `amc_property_profiles`, keyed by the Snagging ids;
+- every AMC foreign key that pointed at `customers` / `customer_properties` now points at the Snagging tables (same name, same delete rule);
+- two server-only views, `amc_client_directory` and `amc_property_directory`;
+- **nothing** is added to or changed on `snagging_clients` or `snagging_properties`.
+
+It refuses to run if `customers` or `customer_properties` has a row; both were empty on 7 Oct 2026. It swaps two foreign keys on the **live** `amc_submissions` (both columns are NULL on every row), so apply it **out of hours**, like rows 17 and 18.
+
+**Pre-check** (read-only):
+```sql
+select (select count(*) from public.customers) as customers, (select count(*) from public.customer_properties) as properties;
+select to_regclass('public.amc_client_profiles') as profiles;
+select count(*) as clients from public.snagging_clients;
+```
+Expected:
+- `customers = 0` and `properties = 0` (if not, **stop**: the migration will refuse anyway);
+- `profiles` is `null`;
+- note the client count.
+
+**Post-check** (read-only):
+```sql
+select conrelid::regclass as tbl, conname from pg_constraint
+ where contype = 'f' and confrelid in ('public.customers'::regclass, 'public.customer_properties'::regclass)
+   and conrelid not in ('public.customers'::regclass, 'public.customer_properties'::regclass);
+select count(*) as fks_to_snagging from pg_constraint
+ where contype = 'f' and conname like 'amc%' and confrelid in ('public.snagging_clients'::regclass, 'public.snagging_properties'::regclass);
+select count(*) as clients, count(*) filter (where lifecycle = 'client') as as_clients from public.amc_client_directory;
+select table_name, grantee from information_schema.role_table_grants
+ where table_schema = 'public' and grantee in ('anon', 'authenticated')
+   and table_name in ('amc_client_profiles', 'amc_property_profiles', 'amc_client_directory', 'amc_property_directory');
+```
+Expected:
+- the first query returns **no rows**;
+- `fks_to_snagging` is 18 or more;
+- `clients` equals the client count from the pre-check, and so does `as_clients`;
+- the grants query returns **no rows**.
+
+**Live check:** in the live portal, open Snagging → Clients and a snagging job; both work as before. Open AMC Proposals; it works as before. In the demo portal, open AMC → Clients: the Snagging clients are listed.

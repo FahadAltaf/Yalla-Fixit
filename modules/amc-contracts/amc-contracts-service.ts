@@ -409,9 +409,11 @@ export const amcContractsService = {
     });
   },
   /* Customers and properties */
-  customers(q = "", lifecycle: "prospect" | "client" | "former" | null = null) {
+  /* The pickers take the server default (25); the Clients list asks for the most the API gives (200). */
+  customers(q = "", lifecycle: "prospect" | "client" | "former" | null = null, limit?: number) {
     const params = new URLSearchParams({ q });
     if (lifecycle) params.set("lifecycle", lifecycle);
+    if (limit) params.set("limit", String(limit));
     return request<{ customers: CustomerRecord[] }>(`/api/amc-contracts/customers?${params}`);
   },
   createCustomer(input: CustomerInput) {

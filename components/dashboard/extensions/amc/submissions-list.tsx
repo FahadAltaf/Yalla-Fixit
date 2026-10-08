@@ -21,11 +21,9 @@ import {
   Undo2,
   UserRound,
 } from "lucide-react";
-import { toast } from "sonner";
 
 import { DataTable } from "@/components/data-table";
 import { IconText } from "@/components/data-table/columns/icon-text";
-import { RecordsToolbar } from "@/components/data-table/toolbars/records-toolbar";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { IdentityCell } from "@/components/ui/entity-avatar";
@@ -33,18 +31,15 @@ import { Money } from "@/components/ui/money";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { ErrorState } from "@/components/dashboard/shared/kaizen-states";
 import { useDebounce } from "@/hooks/use-debounce";
 import { amcSubmissionsService } from "@/modules/amc-submissions";
 
@@ -54,6 +49,7 @@ import { canDecideProposal } from "@/lib/amc/workflow";
 import { AMC_APPROVALS_CHANGED } from "./amc-approval-notice";
 import { amcStatusTone } from "./amc-status";
 import { useAmcActions } from "./use-amc-actions";
+import { ProposalsToolbar } from "./proposals-toolbar";
 import {
   AMC_STATUSES,
   AMC_STATUS_LABELS,
@@ -76,7 +72,7 @@ function getErrorMessage(error: unknown, fallback: string) {
  * approver -- everyone's past draft.
  *
  * Opening one goes to its own page (/extensions/amc/<id>); editing a draft
- * goes to the wizard (/extensions/amc/<id>/edit); Create New starts one at
+ * goes to the wizard (/extensions/amc/<id>/edit); New proposal starts one at
  * /extensions/amc/new. The filters live in the address (?status=,
  * ?scope=), so a filtered list can be reloaded or shared.
  */
@@ -89,7 +85,8 @@ export function SubmissionsList() {
   const [total, setTotal] = useState(0);
   const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
   const [isLoading, setIsLoading] = useState(true);
-  const [loadError, setLoadError] = useState(false);
+  /* Why the last load failed; shown above the table, not inside it. */
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [canApprove, setCanApprove] = useState(false);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
@@ -134,7 +131,7 @@ export function SubmissionsList() {
   const loadSubmissions = useCallback(async () => {
     const mine = ++ticket.current;
     setIsLoading(true);
-    setLoadError(false);
+    setLoadError(null);
     try {
       const response = await amcSubmissionsService.listSubmissions({
         status,
@@ -163,8 +160,7 @@ export function SubmissionsList() {
       console.error(error);
       setSubmissions([]);
       setTotal(0);
-      setLoadError(true);
-      toast.error(getErrorMessage(error, "Couldn't load submissions. Try again."));
+      setLoadError(getErrorMessage(error, "Couldn't load proposals. Try again."));
     } finally {
       if (mine === ticket.current) setIsLoading(false);
     }
@@ -197,15 +193,15 @@ export function SubmissionsList() {
   const columns: ColumnDef<AmcSubmission>[] = [
     {
       id: "customer",
-      header: "Customer / Property",
+      header: "Client / Property",
       cell: ({ row }) => (
-        // The customer is the way into the proposal's own page.
+        // The client is the way into the proposal's own page.
         <Link
           href={`/extensions/amc/${row.original.id}`}
           className="focus-visible:ring-ring block rounded-md hover:opacity-80 focus-visible:ring-2 focus-visible:outline-none"
         >
           <IdentityCell
-            title={row.original.customer.customerName || "Unnamed customer"}
+            title={row.original.customer.customerName || "Unnamed client"}
             subtitle={row.original.property.propertyAddress || "No address"}
             icon={UserRound}
           />
@@ -253,7 +249,7 @@ export function SubmissionsList() {
           <div className="flex flex-col items-start gap-1">
             <Badge
               variant="secondary"
-              className={`border-none ${amcStatusTone(submission.status)}`}
+              className={`border-0 font-medium ${amcStatusTone(submission.status)}`}
             >
               {AMC_STATUS_LABELS[submission.status] ?? submission.status}
             </Badge>
@@ -300,11 +296,22 @@ export function SubmissionsList() {
         const submission = row.original;
         const isViewing = actions.viewingKey?.startsWith(`${submission.id}:`);
         const sending = actions.sendingId === submission.id;
-        const customer = submission.customer.customerName || "Unnamed customer";
+        const customer = submission.customer.customerName || "Unnamed client";
+        const isOwn = submission.is_own !== false;
+        const canEdit = isAmcSubmissionEditable(submission.status) && isOwn;
+        // FR5.4 / FR5.6 — what may go to the client, and only from its owner.
+        const canSendProposal =
+          isOwn && (submission.status === "approved" || submission.status === "proposal_sent");
+        const canSendContract =
+          isOwn &&
+          (submission.status === "proposal_approved" || submission.status === "contract_sent");
+        const canDecide =
+          submission.status === "awaiting_approval" &&
+          canDecideProposal({ canApprove, isOwner: isOwn });
         return (
           /* The row opens the proposal; the menu is its own thing, so a
              click in here never counts as a click on the row. */
-          <div onClick={(event) => event.stopPropagation()}>
+          <div className="flex justify-end" onClick={(event) => event.stopPropagation()}>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -323,111 +330,123 @@ export function SubmissionsList() {
                 )}
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {/* FR3.4 — locked once sent for review. Hidden rather
-                  than shown-and-refused: opening a locked submission in
-                  the wizard would let the team type into a form whose
-                  every autosave the server rejects. */}
-              {/* Every proposal has its own page: the customer,
-                  services, prices and everything that has happened. */}
-              <DropdownMenuItem asChild>
-                <Link href={`/extensions/amc/${submission.id}`}>
-                  <Info className="size-4" />
-                  View details
-                </Link>
-              </DropdownMenuItem>
-              {isAmcSubmissionEditable(submission.status) &&
-              submission.is_own !== false ? (
+            {/* Grouped so ten items read as four short lists: open it,
+                read its documents, send it, decide on it. */}
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuGroup>
+                {/* Every proposal has its own page: the client,
+                    services, prices and everything that has happened. */}
                 <DropdownMenuItem asChild>
-                  <Link href={`/extensions/amc/${submission.id}/edit`}>
-                    <PencilIcon className="size-4" />
-                    Edit
+                  <Link href={`/extensions/amc/${submission.id}`}>
+                    <Info className="size-4" />
+                    View details
                   </Link>
                 </DropdownMenuItem>
-              ) : null}
+                {/* FR3.4 — locked once sent for review. Hidden rather
+                    than shown-and-refused: opening a locked submission in
+                    the wizard would let the team type into a form whose
+                    every autosave the server rejects. */}
+                {canEdit ? (
+                  <DropdownMenuItem asChild>
+                    <Link href={`/extensions/amc/${submission.id}/edit`}>
+                      <PencilIcon className="size-4" />
+                      Edit
+                    </Link>
+                  </DropdownMenuItem>
+                ) : null}
+              </DropdownMenuGroup>
 
-              {/* FR5.4 — a proposal may only be sent once it has been
-                  approved internally. FR5.6 — a contract only once the
-                  client has approved the proposal. */}
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel className="text-muted-foreground text-xs font-normal">
+                Documents
+              </DropdownMenuLabel>
+              <DropdownMenuGroup>
+                <DropdownMenuItem onClick={() => actions.view(submission, "proposal")}>
+                  <FileText className="size-4" />
+                  View proposal
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => actions.view(submission, "contract")}>
+                  <EyeIcon className="size-4" />
+                  View contract
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+
               {/* Sending is the owner's, as it is on the server: an
                   approver decides whether it may go out, and the document
                   goes to the client in the owner's name. */}
-              {submission.is_own !== false &&
-                (submission.status === "approved" ||
-                  submission.status === "proposal_sent") && (
+              {canSendProposal || canSendContract ? (
                 <>
-                  <DropdownMenuItem
-                    onClick={() => actions.requestSend(submission, "proposal", "email")}
-                  >
-                    <Mail className="size-4" />
-                    {submission.status === "proposal_sent"
-                      ? "Email proposal again"
-                      : "Email proposal to client"}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => actions.requestSend(submission, "proposal", "whatsapp")}
-                  >
-                    <MessageCircle className="size-4" />
-                    Share on WhatsApp
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => actions.requestSend(submission, "proposal", "link")}
-                  >
-                    <LinkIcon className="size-4" />
-                    Copy proposal link
-                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel className="text-muted-foreground text-xs font-normal">
+                    Send to client
+                  </DropdownMenuLabel>
+                  <DropdownMenuGroup>
+                    {canSendProposal ? (
+                      <>
+                        <DropdownMenuItem
+                          onClick={() => actions.requestSend(submission, "proposal", "email")}
+                        >
+                          <Mail className="size-4" />
+                          {submission.status === "proposal_sent"
+                            ? "Email proposal again"
+                            : "Email proposal to client"}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => actions.requestSend(submission, "proposal", "whatsapp")}
+                        >
+                          <MessageCircle className="size-4" />
+                          Share on WhatsApp
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => actions.requestSend(submission, "proposal", "link")}
+                        >
+                          <LinkIcon className="size-4" />
+                          Copy proposal link
+                        </DropdownMenuItem>
+                      </>
+                    ) : null}
+                    {canSendContract ? (
+                      <>
+                        <DropdownMenuItem
+                          onClick={() => actions.requestSend(submission, "contract", "email")}
+                        >
+                          <Mail className="size-4" />
+                          {submission.status === "contract_sent"
+                            ? "Email contract again"
+                            : "Email contract to client"}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => actions.requestSend(submission, "contract", "link")}
+                        >
+                          <LinkIcon className="size-4" />
+                          Copy contract link
+                        </DropdownMenuItem>
+                      </>
+                    ) : null}
+                  </DropdownMenuGroup>
                 </>
-              )}
-              {submission.is_own !== false &&
-                (submission.status === "proposal_approved" ||
-                  submission.status === "contract_sent") && (
-                <>
-                  <DropdownMenuItem
-                    onClick={() => actions.requestSend(submission, "contract", "email")}
-                  >
-                    <Mail className="size-4" />
-                    {submission.status === "contract_sent"
-                      ? "Email contract again"
-                      : "Email contract to client"}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => actions.requestSend(submission, "contract", "link")}
-                  >
-                    <LinkIcon className="size-4" />
-                    Copy contract link
-                  </DropdownMenuItem>
-                </>
-              )}
+              ) : null}
 
               {/* FR5.2 — the approver's two decisions, on the queue rows
                   only. */}
-              {submission.status === "awaiting_approval" &&
-                canDecideProposal({ canApprove, isOwner: submission.is_own !== false }) && (
+              {canDecide ? (
                 <>
-                  <DropdownMenuItem
-                    onClick={() => actions.approve(submission)}
-                  >
-                    <CheckCircle2 className="size-4" />
-                    Approve
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => actions.sendBack(submission)}>
-                    <Undo2 className="size-4" />
-                    Send back…
-                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel className="text-muted-foreground text-xs font-normal">
+                    Decision
+                  </DropdownMenuLabel>
+                  <DropdownMenuGroup>
+                    <DropdownMenuItem onClick={() => actions.approve(submission)}>
+                      <CheckCircle2 className="size-4" />
+                      Approve
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => actions.sendBack(submission)}>
+                      <Undo2 className="size-4" />
+                      Send back…
+                    </DropdownMenuItem>
+                  </DropdownMenuGroup>
                 </>
-              )}
-              <DropdownMenuItem
-                onClick={() => actions.view(submission, "proposal")}
-              >
-                <FileText className="size-4" />
-                View proposal
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => actions.view(submission, "contract")}
-              >
-                <EyeIcon className="size-4" />
-                View contract
-              </DropdownMenuItem>
+              ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
           </div>
@@ -436,111 +455,103 @@ export function SubmissionsList() {
     },
   ];
 
+  const statusOptions = [
+    { value: "all", label: "All statuses", count: statusCounts.all ?? 0 },
+    ...AMC_STATUSES.map((value) => ({
+      value,
+      label: AMC_STATUS_LABELS[value],
+      count: statusCounts[value] ?? 0,
+    })),
+  ];
+
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-6">
       {actions.dialogs}
+
+      {loadError ? (
+        <ErrorState
+          title="Could not load proposals"
+          message={loadError}
+          onRetry={() => void loadSubmissions()}
+          retrying={isLoading}
+        />
+      ) : null}
+
       <Card className="py-0">
-        {loadError ? (
-          <EmptyState
-            className="border-0"
-            icon={<ScrollText className="size-5" />}
-            title="Could not load submissions"
-            description="Something went wrong while loading your AMC submissions."
-            action={{ label: "Retry", onClick: () => void loadSubmissions() }}
-          />
-        ) : (
-          <DataTable
-            columns={columns}
-            data={submissions}
-            loading={isLoading}
-            rowCount={total}
-            pageSize={pageSize}
-            currentPage={page}
-            isPagination
-            onPageChange={setPage}
-            onPageSizeChange={(size) => {
-              setPageSize(size);
-              setPage(0);
-            }}
-            onGlobalFilterChange={(value) => {
-              setSearch(value);
-              setPage(0);
-            }}
-            /* The row opens the proposal, as a row does on Jobs and
-               Quotations. The Actions menu stops the click itself, so the
-               two do not fight over it. */
-            handleRowClick={(row) => router.push(`/extensions/amc/${row.id}`)}
-            toolbar={
-              <RecordsToolbar
-                fetchRecords={() => void loadSubmissions()}
-                globalFilter={search}
-                onGlobalFilterChange={(value) => {
-                  setSearch(value);
-                  setPage(0);
-                }}
-                isSearchLoading={isLoading}
-                /* What the server matches (GET /api/amc-submissions). An
-                   approver can also find a proposal by who raised it; the
-                   box is too narrow to say so without cutting it off. */
-                searchPlaceholder="Search by customer, number or address…"
-                filters={
-                  <>
-                    {/* Whose proposals: an approver sees everyone's. */}
-                    {canApprove ? (
-                      <Select value={scope} onValueChange={(value) => setFilter("scope", value)}>
-                        <SelectTrigger className="w-[200px]" aria-label="Show submissions">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">All submissions</SelectItem>
-                          <SelectItem value="mine">Mine only</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    ) : null}
-                    {/* Where they stand, with how many are in each. */}
-                    <Select value={status} onValueChange={(value) => setFilter("status", value)}>
-                      <SelectTrigger className="w-[200px]" aria-label="Filter by status">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All statuses ({statusCounts.all ?? 0})</SelectItem>
-                        {AMC_STATUSES.map((value) => (
-                          <SelectItem key={value} value={value}>
-                            {AMC_STATUS_LABELS[value]} ({statusCounts[value] ?? 0})
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </>
-                }
-                pageSize={pageSize}
-                onPageSizeChange={(size) => {
-                  setPageSize(size);
-                  setPage(0);
-                }}
-              />
-            }
-            emptyState={
-              <EmptyState
-                className="border-0"
-                icon={<ScrollText className="size-5" />}
-                title={filtered ? "No matching submissions" : "No AMC submissions yet"}
-                description={
-                  filtered
+        <DataTable
+          columns={columns}
+          data={submissions}
+          loading={isLoading}
+          rowCount={total}
+          pageSize={pageSize}
+          currentPage={page}
+          isPagination
+          onPageChange={setPage}
+          onPageSizeChange={(size) => {
+            setPageSize(size);
+            setPage(0);
+          }}
+          onGlobalFilterChange={(value) => {
+            setSearch(value);
+            setPage(0);
+          }}
+          /* The row opens the proposal, as a row does on Jobs and
+             Quotations. The Actions menu stops the click itself, so the
+             two do not fight over it. */
+          handleRowClick={(row) => router.push(`/extensions/amc/${row.id}`)}
+          toolbar={
+            <ProposalsToolbar
+              search={search}
+              onSearchChange={(value) => {
+                setSearch(value);
+                setPage(0);
+              }}
+              isLoading={isLoading}
+              onRefresh={() => void loadSubmissions()}
+              statusOptions={statusOptions}
+              status={status}
+              onStatusChange={(value) => setFilter("status", value)}
+              /* Whose proposals: an approver sees everyone's. */
+              showScope={canApprove}
+              scope={scope}
+              onScopeChange={(value) => setFilter("scope", value)}
+              pageSize={pageSize}
+              onPageSizeChange={(size) => {
+                setPageSize(size);
+                setPage(0);
+              }}
+            />
+          }
+          emptyState={
+            <EmptyState
+              className="border-0"
+              icon={<ScrollText className="size-5" />}
+              title={
+                loadError
+                  ? "Proposals could not be loaded"
+                  : filtered
+                    ? "No matching proposals"
+                    : "No proposals yet"
+              }
+              description={
+                loadError
+                  ? "Try again once the connection is back."
+                  : filtered
                     ? search
-                      ? `Nothing matches "${search}" with these filters. Try another customer, number or address.`
+                      ? `Nothing matches "${search}" with these filters. Try another client, number or address.`
                       : "No proposals match these filters."
                     : "Start a new proposal and it will show up here."
-                }
-                action={
-                  filtered
+              }
+              action={
+                loadError
+                  ? undefined
+                  : filtered
                     ? { label: "Clear filters", onClick: clearFilters, variant: "outline" }
-                    : { label: "Create New", onClick: () => router.push("/extensions/amc/new") }
-                }
-              />
-            }
-          />
-        )}
+                    : { label: "New proposal", onClick: () => router.push("/extensions/amc/new") }
+              }
+            />
+          }
+        />
       </Card>
     </div>
   );

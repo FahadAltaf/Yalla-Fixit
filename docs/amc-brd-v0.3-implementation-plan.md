@@ -523,6 +523,36 @@ Each phase lists its Jira subtasks (in the order I will do them), the work, the 
   - the expiry is the day before the same date after the term;
   - the client signature on the link is recorded even if an internal signatory was due first.
 
+### Phase 6b: Snagging's clients, the AMC menu, the Snagging design (asked for on 7 Oct 2026)
+
+Three changes the user asked for before Phase 7:
+
+1. **One client master.** AMC uses Snagging's clients and addresses (`snagging_clients`, `snagging_properties`). It no longer keeps its own `customers` / `customer_properties`, which were empty in production. AMC-only fields go in `amc_client_profiles` / `amc_property_profiles`, keyed by the Snagging ids. Every AMC foreign key now points at the Snagging tables. Reads go through `amc_client_directory` / `amc_property_directory`.
+   - A client AMC has never touched reads as lifecycle "client" with no Customer ID.
+   - Snagging's own matching rules apply when AMC adds a client or address: the same name and email is the same client, and the same unit, building and community is the same address. A client already on file is never downgraded to prospect by an enquiry.
+   - AMC's nine unit types map to Snagging's four (other types become `commercial`). An unknown type leaves Snagging's value unchanged.
+   - Migration `20261007170000`: log row 20, checks §12. It changes nothing on the Snagging tables and refuses to run if the old tables have rows. It swaps two foreign keys on the live `amc_submissions`, so apply it out of hours. Harness `97k`; main-compatibility 28/11, unchanged.
+2. **AMC parent menu.** AMC is now a top-level sidebar group like Snagging, with these sub-items:
+   - Enquiries
+   - Proposals
+   - Contracts
+   - Clients
+   - Site visits
+   - Reports
+   - Rate card
+   - FSM mapping
+   - Operations settings
+   - Configuration
+
+   Each sub-item is gated like its API. The AMC entries left Extensions. The addresses stay under `/extensions/amc*`, because stored notifications and sent emails link there. Breadcrumbs read "AMC / …".
+3. **Snagging design on every AMC screen.** Every AMC screen now follows the Snagging layout:
+   - **List pages:** PageHeading, then a Card holding a DataTable. Its toolbar has search, a status dropdown, page size and refresh. Below the table: "Showing X to Y of Z", skeleton rows while loading, and a distinct empty state.
+   - **Detail pages:** a back toolbar, a header card, stat cards and URL-synced tabs.
+   - **Dialogs:** controlled ActionDialogContent with a SubmitButton and toasts.
+   - **Status colours:** theme tokens only.
+   - **Routes:** each route has its own loading and error screen.
+   - **In-page nav:** the in-page AMC pill nav is gone; its notifications bell sits in each page heading.
+
 ### Phase 7: Payments (without external integrations)
 
 | Jira | Work | Size |

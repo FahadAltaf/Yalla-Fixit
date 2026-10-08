@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Undo2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -8,7 +9,7 @@ import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } fr
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { ActionDialogContent } from "@/components/dashboard/shared/kaizen-states";
+import { ActionDialogContent, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
 import { checkCorrection, formatQuantity, unitWord } from "@/lib/amc/contracts";
 import {
   amcContractsService,
@@ -78,7 +79,7 @@ export function CorrectUsageDialog({
       onOpenChange(false);
       onCorrected();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not record the correction.");
+      toast.error(e instanceof Error ? e.message : "Could not record the correction.");
     } finally {
       setBusy(false);
     }
@@ -117,7 +118,7 @@ export function CorrectUsageDialog({
           </div>
         </dl>
 
-        <div className="grid gap-4">
+        <div className="grid gap-4 py-2">
           <div className="grid gap-2">
             <Label htmlFor="amc-correct-amount">Quantity to take back{unit ? ` (${unit})` : ""}</Label>
             <Input
@@ -143,7 +144,7 @@ export function CorrectUsageDialog({
             />
           </div>
           {error || (!check.ok && reason.trim().length >= 3 && amount !== "") ? (
-            <p className="text-destructive text-sm" role="alert">
+            <p className="text-danger text-sm" role="alert">
               {error ?? (!check.ok ? check.error : "")}
             </p>
           ) : null}
@@ -153,9 +154,15 @@ export function CorrectUsageDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={() => void submit()} disabled={busy || !check.ok}>
-            {busy ? "Saving…" : "Record correction"}
-          </Button>
+          <SubmitButton
+            onClick={() => void submit()}
+            disabled={!check.ok}
+            pending={busy}
+            pendingLabel="Saving…"
+            icon={<Undo2 className="size-4" />}
+          >
+            Record correction
+          </SubmitButton>
         </DialogFooter>
       </ActionDialogContent>
     </Dialog>

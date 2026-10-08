@@ -1,37 +1,52 @@
 \set ON_ERROR_STOP on
 SET ROLE service_role;
 
--- Shared customers: unique business ref (case-insensitive), FSM contact and Snagging bridge.
-INSERT INTO public.snagging_clients (id, name) VALUES ('aaaaaaaa-0000-0000-0000-000000000001', 'Client');
-INSERT INTO public.customers (id, name, customer_ref, snagging_client_id)
-VALUES ('c0000000-0000-0000-0000-000000000001', 'Client', 'YFI1806', 'aaaaaaaa-0000-0000-0000-000000000001');
+-- Shared clients (20261007170000): the client IS the Snagging client; the
+-- AMC fields sit in amc_client_profiles. Unique business ref (case-insensitive).
+INSERT INTO public.snagging_clients (id, name) VALUES ('c0000000-0000-0000-0000-000000000001', 'Client');
+INSERT INTO public.snagging_clients (id, name) VALUES ('aaaaaaaa-0000-0000-0000-000000000001', 'Other');
+INSERT INTO public.amc_client_profiles (client_id, customer_ref) VALUES ('c0000000-0000-0000-0000-000000000001', 'YFI1806');
 DO $$
 BEGIN
   BEGIN
-    INSERT INTO public.customers (name, customer_ref) VALUES ('Other', 'yfi1806 ');
+    INSERT INTO public.amc_client_profiles (client_id, customer_ref) VALUES ('aaaaaaaa-0000-0000-0000-000000000001', 'yfi1806 ');
     RAISE EXCEPTION 'duplicate customer ref was allowed';
   EXCEPTION WHEN unique_violation THEN NULL;
   END;
   BEGIN
-    INSERT INTO public.customers (name, snagging_client_id) VALUES ('Other', 'aaaaaaaa-0000-0000-0000-000000000001');
-    RAISE EXCEPTION 'one snagging client linked to two customers';
+    INSERT INTO public.amc_client_profiles (client_id) VALUES ('c0000000-0000-0000-0000-000000000001');
+    RAISE EXCEPTION 'one client with two AMC profiles';
   EXCEPTION WHEN unique_violation THEN NULL;
   END;
   BEGIN
-    INSERT INTO public.customer_properties (label, unit_type) VALUES ('X', 'castle');
+    INSERT INTO public.snagging_properties (client_id, unit_label) VALUES ('c0000000-0000-0000-0000-000000000001', 'X') ;
+    INSERT INTO public.amc_property_profiles (property_id, unit_type)
+      SELECT id, 'castle' FROM public.snagging_properties WHERE unit_label = 'X';
     RAISE EXCEPTION 'unknown unit type was allowed';
   EXCEPTION WHEN check_violation THEN NULL;
   END;
+  -- A client AMC never touched reads as a client with no Customer ID.
+  IF (SELECT lifecycle FROM public.amc_client_directory WHERE id = 'aaaaaaaa-0000-0000-0000-000000000001') <> 'client' THEN
+    RAISE EXCEPTION 'directory default lifecycle is not client';
+  END IF;
 END $$;
-INSERT INTO public.customer_properties (id, customer_id, label, unit_type, property_category)
-VALUES ('d0000000-0000-0000-0000-000000000001', 'c0000000-0000-0000-0000-000000000001', 'Villa 12', 'villa', 'residential');
+INSERT INTO public.snagging_properties (id, client_id, unit_label, property_type)
+VALUES ('d0000000-0000-0000-0000-000000000001', 'c0000000-0000-0000-0000-000000000001', 'Villa 12', 'villa');
+DO $$
+BEGIN
+  -- The directory derives AMC's category and unit type from Snagging's property_type.
+  IF (SELECT property_category || '/' || unit_type FROM public.amc_property_directory
+       WHERE id = 'd0000000-0000-0000-0000-000000000001') <> 'residential/villa' THEN
+    RAISE EXCEPTION 'directory did not derive the property type';
+  END IF;
+END $$;
 
 -- Live link on a contract; the signed snapshot does not follow customer edits.
 UPDATE public.amc_contracts
    SET customer_id = 'c0000000-0000-0000-0000-000000000001', property_id = 'd0000000-0000-0000-0000-000000000001',
        customer = '{"customerName":"As signed"}'
  WHERE id = '55555555-5555-5555-5555-555555555555';
-UPDATE public.customers SET name = 'Renamed today', phone = '0500000000' WHERE id = 'c0000000-0000-0000-0000-000000000001';
+UPDATE public.snagging_clients SET name = 'Renamed today', phone = '0500000000' WHERE id = 'c0000000-0000-0000-0000-000000000001';
 DO $$
 BEGIN
   IF (SELECT customer->>'customerName' FROM public.amc_contracts WHERE id = '55555555-5555-5555-5555-555555555555') <> 'As signed' THEN
@@ -138,7 +153,9 @@ RESET ROLE;
 SET ROLE authenticated;
 DO $$
 BEGIN
-  BEGIN PERFORM 1 FROM public.customers; RAISE EXCEPTION 'authenticated reads customers';
+  BEGIN PERFORM 1 FROM public.amc_client_profiles; RAISE EXCEPTION 'authenticated reads client profiles';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN PERFORM 1 FROM public.amc_client_directory; RAISE EXCEPTION 'authenticated reads the client directory';
   EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   BEGIN PERFORM 1 FROM public.amc_assessments; RAISE EXCEPTION 'authenticated reads assessments';
   EXCEPTION WHEN insufficient_privilege THEN NULL; END;

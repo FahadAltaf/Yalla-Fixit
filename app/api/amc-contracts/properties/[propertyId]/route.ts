@@ -22,7 +22,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ propertyId
     /* Combined units (BRD 5.2): the parent and the units linked under this one. */
     const [units, owner] = await Promise.all([
       propertyUnits(gate.admin, propertyId, overview.property.parentPropertyId),
-      gate.admin.from("customer_properties").select("created_by").eq("id", propertyId).maybeSingle<{ created_by: string | null }>(),
+      gate.admin.from("amc_property_directory").select("created_by").eq("id", propertyId).maybeSingle<{ created_by: string | null }>(),
     ]);
     return NextResponse.json({ overview, units, canEdit: canEditCustomer(gate.actor, owner.data?.created_by ?? null) });
   } catch (error) {

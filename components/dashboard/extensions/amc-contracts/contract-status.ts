@@ -25,26 +25,26 @@ export const CONTRACT_STATUS_LABELS: Record<ContractDisplayStatus, string> = {
 export function contractStatusTone(status: ContractDisplayStatus): string {
   switch (status) {
     case "active":
-      return "bg-green-600/10 text-green-700 dark:bg-green-400/10 dark:text-green-400";
+      return "bg-success/10 text-success";
     case "expiring":
     case "pending_activation":
     case "pending_client_signature":
     case "pending_internal_signature":
     case "pending_initial_payment":
     case "on_hold":
-      return "bg-amber-600/10 text-amber-700 dark:bg-amber-400/10 dark:text-amber-400";
+      return "bg-warning/10 text-warning";
     case "expired":
     case "cancelled":
     case "terminated":
-      return "bg-destructive/10 text-destructive";
+      return "bg-danger/10 text-danger";
     case "renewed":
     case "draft":
-      return "bg-muted text-muted-foreground";
+      return "bg-mist text-ink-soft";
     case "signed":
-      return "bg-green-600/10 text-green-700 dark:bg-green-400/10 dark:text-green-400";
+      return "bg-success/10 text-success";
     case "not_started":
     default:
-      return "bg-sky-600/10 text-sky-700 dark:bg-sky-400/10 dark:text-sky-400";
+      return "bg-brand-50 text-brand";
   }
 }
 
@@ -94,19 +94,19 @@ export const ENTITLEMENT_STATE_LABELS: Record<EntitlementState, string> = {
 export function entitlementStateTone(state: EntitlementState): string {
   switch (state) {
     case "available":
-      return "bg-green-600/10 text-green-700 dark:bg-green-400/10 dark:text-green-400";
+      return "bg-success/10 text-success";
     case "low_remaining":
-      return "bg-amber-600/10 text-amber-700 dark:bg-amber-400/10 dark:text-amber-400";
+      return "bg-warning/10 text-warning";
     case "exhausted":
     case "expired":
     case "cancelled":
-      return "bg-destructive/10 text-destructive";
+      return "bg-danger/10 text-danger";
     case "unlimited":
     case "included":
-      return "bg-violet-600/10 text-violet-700 dark:bg-violet-400/10 dark:text-violet-300";
+      return "bg-brand-100 text-brand";
     case "not_started":
     default:
-      return "bg-sky-600/10 text-sky-700 dark:bg-sky-400/10 dark:text-sky-400";
+      return "bg-brand-50 text-brand";
   }
 }
 

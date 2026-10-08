@@ -9,13 +9,15 @@ import {
   CheckCircle2,
   ChevronDown,
   Circle,
-  Download,
   FileType,
   EyeIcon,
   FileText,
+  GitBranch,
   History,
+  Inbox,
   ListCheck,
   Loader2,
+  MoreHorizontal,
   PencilIcon,
   Phone,
   Link as LinkIcon,
@@ -23,6 +25,7 @@ import {
   MessageCircle,
   Send,
   Undo2,
+  UserRound,
   Users,
   XCircle,
 } from "lucide-react";
@@ -32,6 +35,7 @@ import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -39,12 +43,14 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   DataRow,
+  ListPager,
   SectionCard,
   StatCard,
   StatCardGrid,
   TabCount,
   timeAgo,
 } from "@/components/dashboard/shared/kaizen";
+import { SubmitButton } from "@/components/dashboard/shared/kaizen-states";
 import { Card } from "@/components/ui/card";
 import {
   Select,
@@ -72,9 +78,17 @@ import { submissionToFormData } from "./amc-submission-mapper";
 import { canDecideProposal } from "@/lib/amc/workflow";
 import { SignedContractAction } from "@/components/dashboard/extensions/amc-contracts/signed-contract-action";
 import { SignedArchiveRow } from "@/components/dashboard/extensions/amc-contracts/signed-archive-row";
-import { Fact, ReviewSection, ServicesAndCost } from "./steps/review-step";
-import { ProposalVersionsPanel, ReviseProposalButton } from "./proposal-versions-panel";
-import { ApprovalsAndSendsPanel, RecordClientAnswerButton } from "./proposal-sharing-panel";
+import { ServicesAndCost } from "./steps/review-step";
+import {
+  ProposalVersionsPanel,
+  ReviseProposalDialog,
+  canReviseProposal,
+} from "./proposal-versions-panel";
+import {
+  ApprovalsAndSendsPanel,
+  RecordClientAnswerDialog,
+  canRecordClientAnswer,
+} from "./proposal-sharing-panel";
 import {
   AMC_STATUS_LABELS,
   isAmcSubmissionEditable,
@@ -89,7 +103,7 @@ import {
  *
  * Once a submission is sent for review it can no longer be edited (FR3.4),
  * which used to leave its details reachable only by opening the proposal
- * or contract PDF. This is the place to check them — the customer, the
+ * or contract PDF. This is the place to check them — the client, the
  * services and prices, and the history: who approved it, when it went to
  * the client, what the client answered.
  */
@@ -173,7 +187,7 @@ function buildTimelineFromEvents(
           at: event.at,
           note: notEmailed
             ? payload.outcome === "no_recipient"
-              ? "No customer email on the proposal; the link can be copied instead"
+              ? "No client email on the proposal; the link can be copied instead"
               : `${to ? `To ${to}. ` : ""}${typeof payload.error === "string" ? payload.error : "Delivery failed"}`
             : !viaLink && to
               ? `To ${to}`
@@ -478,7 +492,7 @@ export function SubmissionDetails({
 
   const { form, data } = details;
   const { totals } = data;
-  const title = submission.customer.customerName || "Unnamed customer";
+  const title = submission.customer.customerName || "Unnamed client";
   const awaiting = submission.status === "awaiting_approval";
   const canEdit = isAmcSubmissionEditable(submission.status) && submission.is_own !== false;
   /* Approver rights, less the creator's own proposal when self-approval
@@ -535,10 +549,31 @@ export function SubmissionDetails({
   /* A tab's body, mounted on first open and kept after. */
   const panel = (value: string, children: ReactNode) =>
     mounted.has(value) ? (
-      <TabsContent value={value} forceMount className="mt-4 data-[state=inactive]:hidden">
+      <TabsContent
+        value={value}
+        forceMount
+        className="mt-4 flex flex-col gap-6 data-[state=inactive]:hidden"
+      >
         {children}
       </TabsContent>
     ) : null;
+
+  /* The History tab, a page at a time: a proposal that has been round the
+     ladder a few times carries an entry for every step of every round. */
+  const [historyPage, setHistoryPage] = useState(0);
+  const [historyPageSize, setHistoryPageSize] = useState(10);
+  const historyRows = orderedTimeline.slice(
+    historyPage * historyPageSize,
+    (historyPage + 1) * historyPageSize,
+  );
+
+  /* The header's own dialogs, opened from its "More" menu. */
+  const [reviseOpen, setReviseOpen] = useState(false);
+  const [answerOpen, setAnswerOpen] = useState(false);
+  const isOwn = submission.is_own !== false;
+  const revisable = canReviseProposal(submission);
+  const answerable = isOwn && canRecordClientAnswer(submission);
+  const canDecideNow = canDecide && awaiting;
 
   /* The one thing on this proposal that needs somebody's attention. */
   const attention =
@@ -571,13 +606,21 @@ export function SubmissionDetails({
       {/* The proposal at a glance, and what can be done with it. */}
       <Card className="gap-0 overflow-hidden p-0">
         <div className="flex flex-wrap items-center justify-between gap-4 p-5">
-          <div className="min-w-0 space-y-1.5">
-            <p className="eyebrow">
-              AMC proposal{submission.customer.proposalNumber ? ` · ${submission.customer.proposalNumber}` : ""}
-            </p>
+          <div className="min-w-0 space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline">AMC proposal</Badge>
+              {submission.customer.proposalNumber ? (
+                <Badge variant="outline" className="tabular-nums">
+                  {submission.customer.proposalNumber}
+                </Badge>
+              ) : null}
+              {(submission.current_version ?? 1) > 1 ? (
+                <Badge variant="outline">V{submission.current_version}</Badge>
+              ) : null}
+            </div>
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-2xl">{title}</h2>
-              <Badge variant="secondary" className={`border-none ${amcStatusTone(submission.status)}`}>
+              <Badge variant="secondary" className={`border-0 font-medium ${amcStatusTone(submission.status)}`}>
                 {AMC_STATUS_LABELS[submission.status] ?? submission.status}
               </Badge>
             </div>
@@ -585,7 +628,7 @@ export function SubmissionDetails({
               {[
                 form.propertyAddress,
                 sentenceCase(data.propertyTypeLabel),
-                submission.is_own === false && submission.owner_name
+                !isOwn && submission.owner_name
                   ? `submitted by ${submission.owner_name}`
                   : "yours",
               ]
@@ -594,61 +637,47 @@ export function SubmissionDetails({
             </p>
           </div>
 
+          {/*
+            Two or three buttons, the one this proposal is waiting on last;
+            everything else is under More, so the row reads as "the next
+            step" rather than as every action the page can take.
+          */}
           <div className="flex flex-wrap items-center gap-2">
-            {/* The documents on screen, then as files. */}
             <Button variant="outline" onClick={() => onView(submission, "proposal")}>
-              <EyeIcon className="size-4" /> Preview
+              <EyeIcon className="size-4" />
+              Preview
             </Button>
-            {onDownload && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" disabled={downloading}>
-                    {downloading ? (
-                      <Loader2 className="size-4 animate-spin" />
-                    ) : (
-                      <Download className="size-4" />
-                    )}
-                    Download
-                    <ChevronDown className="size-3.5" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-48">
-                  {(["proposal", "contract"] as const).map((documentType, index) => (
-                    <div key={documentType}>
-                      {index > 0 && <DropdownMenuSeparator />}
-                      <DropdownMenuLabel className="text-muted-foreground text-xs font-normal">
-                        {documentType === "proposal" ? "Proposal" : "Contract"}
-                      </DropdownMenuLabel>
-                      <DropdownMenuItem onClick={() => onDownload(submission, documentType, "pdf")}>
-                        <FileText className="size-4" />
-                        PDF
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => onDownload(submission, documentType, "docx")}>
-                        <FileType className="size-4" />
-                        Word (.docx)
-                      </DropdownMenuItem>
-                    </div>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
+
+            <MoreActions
+              downloading={downloading}
+              onDownload={onDownload ? (type, format) => onDownload(submission, type, format) : undefined}
+              revise={revisable ? { label: `Revise (V${(submission.current_version ?? 1) + 1})`, onSelect: () => setReviseOpen(true) } : null}
+              recordAnswer={answerable ? () => setAnswerOpen(true) : null}
+              reject={canDecideNow && onReject ? () => onReject(submission) : null}
+              rejectDisabled={deciding}
+            />
 
             <SignedContractAction submission={submission} />
-            {/* BRD 5.4: a shared proposal is changed through a new version. */}
-            <ReviseProposalButton submission={submission} />
-            {/* BRD 5.6: an answer given outside the link, with evidence. */}
-            {submission.is_own !== false ? <RecordClientAnswerButton submission={submission} onRecorded={() => onChanged?.()} /> : null}
-            {canEdit && (
-              <Button asChild>
-                <Link href={`/extensions/amc/${submission.id}/edit`}>
-                  <PencilIcon className="size-4" /> Edit
-                </Link>
-              </Button>
-            )}
-            {sendable && onSend && (
+
+            {canDecideNow ? (
+              <>
+                <Button variant="outline" disabled={deciding} onClick={() => onSendBack?.(submission)}>
+                  <Undo2 className="size-4" />
+                  Return
+                </Button>
+                <SubmitButton
+                  pending={deciding}
+                  pendingLabel="Approving…"
+                  icon={<CheckCircle2 className="size-4" />}
+                  onClick={() => onApprove?.(submission)}
+                >
+                  Approve
+                </SubmitButton>
+              </>
+            ) : sendable && onSend ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button disabled={sending}>
+                  <Button disabled={sending} aria-busy={sending}>
                     {sending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
                     {resend ? `Send ${sendable} again` : `Send ${sendable}`}
                     <ChevronDown className="size-3.5" />
@@ -656,10 +685,13 @@ export function SubmissionDetails({
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-52">
                   {sendable === "proposal" && onShare ? (
-                    <DropdownMenuItem onClick={() => onShare(submission)}>
-                      <Send className="size-4" />
-                      Share ({submission.property.propertyCategory === "commercial" ? "email" : "WhatsApp"})
-                    </DropdownMenuItem>
+                    <>
+                      <DropdownMenuItem onClick={() => onShare(submission)}>
+                        <Send className="size-4" />
+                        Share ({submission.property.propertyCategory === "commercial" ? "email" : "WhatsApp"})
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                    </>
                   ) : null}
                   <DropdownMenuItem onClick={() => onSend(submission, sendable, "whatsapp")}>
                     <MessageCircle className="size-4" />
@@ -675,27 +707,14 @@ export function SubmissionDetails({
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-            )}
-            {canDecide && awaiting && (
-              <>
-                <Button variant="outline" disabled={deciding} onClick={() => onSendBack?.(submission)}>
-                  <Undo2 className="size-4" /> Return
-                </Button>
-                {onReject ? (
-                  <Button variant="outline" disabled={deciding} onClick={() => onReject(submission)}>
-                    <XCircle className="size-4" /> Reject
-                  </Button>
-                ) : null}
-                <Button disabled={deciding} onClick={() => onApprove?.(submission)}>
-                  {deciding ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <CheckCircle2 className="size-4" />
-                  )}
-                  Approve
-                </Button>
-              </>
-            )}
+            ) : canEdit ? (
+              <Button asChild>
+                <Link href={`/extensions/amc/${submission.id}/edit`}>
+                  <PencilIcon className="size-4" />
+                  Edit
+                </Link>
+              </Button>
+            ) : null}
           </div>
         </div>
 
@@ -715,22 +734,63 @@ export function SubmissionDetails({
         ) : null}
       </Card>
 
-      {/*
-        The record, in tabs.
+      {revisable ? (
+        <ReviseProposalDialog submission={submission} open={reviseOpen} onOpenChange={setReviseOpen} />
+      ) : null}
+      {answerable ? (
+        <RecordClientAnswerDialog
+          submission={submission}
+          open={answerOpen}
+          onOpenChange={setAnswerOpen}
+          onRecorded={() => onChanged?.()}
+        />
+      ) : null}
 
-        It was one column: the property, the services, the contacts and
-        then every event, so reading the cost meant scrolling past the
-        address and reading the history meant scrolling past everything.
-        Same shape as a job page now. The header above stays put, because
-        the actions are there and they apply whichever tab is open.
+      {/* The four figures that matter, under the header as on a job. */}
+      <StatCardGrid columns={4}>
+        <StatCard
+          label="Grand total"
+          value={<Money value={totals.grandTotal} />}
+          headline={`${formatCurrencyAED(totals.finalPrice)} a year before VAT`}
+          caption={
+            totals.discountAmount > 0
+              ? `${totals.discountPercent}% discount applied`
+              : "No discount"
+          }
+        />
+        <StatCard
+          label="Services"
+          value={data.frequencyRows.length}
+          headline={data.frequencyRows.length === 1 ? "Service" : "Services"}
+          caption="Each with its own frequency and price"
+        />
+        <StatCard
+          label="Contract term"
+          value={months !== null ? `${months} ${months === 1 ? "month" : "months"}` : "—"}
+          headline={`${formatDisplayDate(form.startDate) || "—"} to ${data.endDate || "—"}`}
+          caption={`Paid ${formatPaymentLabel(form).toLowerCase()}`}
+        />
+        <StatCard
+          label="Stage"
+          value={AMC_STATUS_LABELS[submission.status] ?? submission.status}
+          headline={stage.next}
+          caption={`Updated ${timeAgo(submission.updated_at)}`}
+          tone={stage.tone}
+        />
+      </StatCardGrid>
+
+      {/*
+        The record, in tabs, the same shape as a job page. The header above
+        stays put, because the actions are there and they apply whichever
+        tab is open.
       */}
       <Tabs value={activeTab} onValueChange={setTab}>
         <TabsList className="h-auto w-full flex-wrap justify-start gap-1 group-data-horizontal/tabs:h-auto">
           {/*
-            "Details" rather than "Property & customer": the tab now
-            holds the property, the customer, the contract dates and
-            everyone named on it, and a title that lists two of those
-            four reads as though the rest are somewhere else.
+            "Details" rather than "Property & client": the tab holds the
+            property, the client, the contract dates and everyone named on
+            it, and a title that lists two of those four reads as though the
+            rest are somewhere else.
           */}
           <TabsTrigger value="record">Details</TabsTrigger>
           <TabsTrigger value="services">
@@ -750,160 +810,128 @@ export function SubmissionDetails({
 
         {panel(
           "record",
-          <div className="flex flex-col gap-4">
-            {/*
-              The four figures, on the tab the page opens on rather than
-              above the bar. They describe the proposal as a whole, and
-              this is the tab that describes the proposal as a whole; on
-              the cost and contact tabs they repeated what was already in
-              front of you.
-            */}
+          <>
             {/* Signed: the archived signed contract, apart from the
-                generated documents in the Documents menu. */}
+                generated documents in the Download menu. */}
             {submission.status === "signed" ? <SignedArchiveRow submissionId={submission.id} /> : null}
-            <StatCardGrid columns={4}>
-              <StatCard
-                label="Grand total"
-                value={<Money value={totals.grandTotal} />}
-                headline={`${formatCurrencyAED(totals.finalPrice)} a year before VAT`}
-                caption={
-                  totals.discountAmount > 0
-                    ? `${totals.discountPercent}% discount applied`
-                    : "No discount"
-                }
-              />
-              <StatCard
-                label="Services"
-                value={data.frequencyRows.length}
-                headline={data.frequencyRows.length === 1 ? "Service" : "Services"}
-                caption="Each with its own frequency and price"
-              />
-              <StatCard
-                label="Contract term"
-                value={months !== null ? `${months} ${months === 1 ? "month" : "months"}` : "—"}
-                headline={`${formatDisplayDate(form.startDate) || "—"} to ${data.endDate || "—"}`}
-                caption={`Paid ${formatPaymentLabel(form).toLowerCase()}`}
-              />
-              <StatCard
-                label="Stage"
-                value={AMC_STATUS_LABELS[submission.status] ?? submission.status}
-                headline={stage.next}
-                caption={`Updated ${timeAgo(submission.updated_at)}`}
-                tone={stage.tone}
-              />
-            </StatCardGrid>
 
-            <Card className="min-w-0 gap-0 p-4 sm:p-6">
-              <ReviewSection
-                icon={Building2}
-                title="Property and customer"
-                description="What the proposal and the contract are written for."
+            <div className="grid gap-6 lg:grid-cols-2">
+              <SectionCard
+                icon={<UserRound />}
+                title="Client"
+                description="Who the proposal and the contract are written for."
+                bodyClassName="px-5 pb-4"
               >
-                <dl className="grid gap-x-6 gap-y-4 rounded-lg border p-4 sm:grid-cols-2 xl:grid-cols-4">
-                  <Fact label="Customer">{form.customerName}</Fact>
-                  <Fact label="Customer ID">{form.customerId}</Fact>
-                  <Fact label="Phone">{formatPhoneForDocument(form.customerPhone)}</Fact>
-                  <Fact label="Email">{form.customerEmail}</Fact>
-                  <Fact label="Property category">
-                    <span className="capitalize">{form.propertyCategory}</span>
-                  </Fact>
-                  <Fact label="Unit type">
-                    <span className="capitalize">{form.unitType}</span>
-                  </Fact>
-                  <Fact label="Property detail">{form.propertyDetail}</Fact>
-                  <Fact label="Address">{form.propertyAddress}</Fact>
-                  <Fact label="Contract period">
-                    <span className="inline-flex items-center gap-1.5">
-                      <CalendarRange className="text-muted-foreground size-3.5" aria-hidden />
-                      {formatDisplayDate(form.startDate)} → {data.endDate || "—"}
-                    </span>
-                  </Fact>
-                  <Fact label="Payment terms">{formatPaymentLabel(form)}</Fact>
-                  <Fact label="Proposal number">
-                    {submission.customer.proposalNumber}
-                    {(submission.current_version ?? 1) > 1 ? ` · V${submission.current_version}` : ""}
-                  </Fact>
-                  <Fact label="Valid until">
-                    {submission.valid_until ? formatDisplayDate(submission.valid_until) : "Set when the proposal is sent"}
-                  </Fact>
-                  {submission.enquiry_id ? (
-                    <Fact label="Enquiry">
-                      <Link href={`/extensions/amc-contracts/enquiries/${submission.enquiry_id}`} className="hover:underline">
-                        Open the enquiry
-                      </Link>
-                    </Fact>
-                  ) : null}
-                  <Fact label="Property type">{sentenceCase(data.propertyTypeLabel)}</Fact>
-                </dl>
-              </ReviewSection>
-            </Card>
+                <DetailList
+                  rows={[
+                    { label: "Client", value: form.customerName },
+                    { label: "Client ID", value: form.customerId },
+                    { label: "Phone", value: formatPhoneForDocument(form.customerPhone) },
+                    { label: "Email", value: form.customerEmail },
+                  ]}
+                />
+              </SectionCard>
 
-            {/*
-              Everyone named on the proposal, in a card of its own.
+              <SectionCard
+                icon={<Building2 />}
+                title="Property"
+                description="Where the services are delivered."
+                bodyClassName="px-5 pb-4"
+              >
+                <DetailList
+                  rows={[
+                    { label: "Category", value: sentenceCase(form.propertyCategory) },
+                    { label: "Unit type", value: sentenceCase(form.unitType) },
+                    { label: "Property type", value: sentenceCase(data.propertyTypeLabel) },
+                    { label: "Property detail", value: form.propertyDetail },
+                    { label: "Address", value: form.propertyAddress },
+                  ]}
+                />
+              </SectionCard>
 
-              They were a tab, which gave two or three names a whole page
-              and put them a click from the property they are contacts
-              for. Folding them into the card above instead needed a rule
-              across the middle to keep them apart, which is a card doing
-              the job of two. The page stacks cards the way a job page
-              stacks its panels, so this is one of those.
-            */}
-            <Card className="min-w-0 gap-0 p-4 sm:p-6">
-              <ReviewSection
-                icon={Users}
+              <SectionCard
+                icon={<CalendarRange />}
+                title="Contract"
+                description="The term, how it is paid, and the proposal it comes from."
+                bodyClassName="px-5 pb-4"
+              >
+                <DetailList
+                  rows={[
+                    {
+                      label: "Contract period",
+                      value: `${formatDisplayDate(form.startDate) || "—"} → ${data.endDate || "—"}`,
+                    },
+                    { label: "Payment terms", value: formatPaymentLabel(form) },
+                    {
+                      label: "Proposal number",
+                      value: submission.customer.proposalNumber
+                        ? `${submission.customer.proposalNumber}${(submission.current_version ?? 1) > 1 ? ` · V${submission.current_version}` : ""}`
+                        : null,
+                    },
+                    {
+                      label: "Valid until",
+                      value: submission.valid_until
+                        ? formatDisplayDate(submission.valid_until)
+                        : "Set when the proposal is sent",
+                    },
+                    {
+                      label: "Enquiry",
+                      value: submission.enquiry_id ? (
+                        <Link
+                          href={`/extensions/amc-contracts/enquiries/${submission.enquiry_id}`}
+                          className="hover:text-brand underline underline-offset-2"
+                        >
+                          Open the enquiry
+                        </Link>
+                      ) : null,
+                    },
+                  ]}
+                />
+              </SectionCard>
+
+              {/* Everyone named on the proposal, beside the contract they
+                  are contacts for. */}
+              <SectionCard
+                icon={<Users />}
                 title="Contacts"
-                /*
-                  What the two lists are for, rather than how many rows
-                  are about to appear underneath. The count was already
-                  there to be seen, and said nothing about why a reader
-                  would want either group.
-                */
                 description="Who the team coordinates with on the client's side, and who the client calls on ours."
+                bodyClassName="space-y-6 px-5 pb-5"
               >
-                {/*
-                  The two groups sit directly on the card. They used to be
-                  boxed inside it, which put a border around a border around
-                  each person's own bordered card: three frames deep before
-                  you reached a name.
-                */}
-                <div className="space-y-6">
-                  <ContactGroup
-                    title="Coordination contacts"
-                    people={form.coordinationContacts.map((contact) => ({
-                      name: contact.name,
-                      phone: contact.phone,
-                      role: contact.designation
-                        ? sentenceCase(formatDesignationLabel(contact.designation))
-                        : "",
-                    }))}
-                    empty="No coordination contacts on this proposal."
-                  />
-                  <ContactGroup
-                    title="Account managers"
-                    people={(form.accountManagers ?? []).map((manager) => ({
-                      name: manager.name,
-                      phone: manager.phone,
-                      role: "Account manager",
-                    }))}
-                    empty="No account managers on this proposal."
-                  />
-                </div>
-                </ReviewSection>
-            </Card>
-          </div>,
+                <ContactGroup
+                  title="Coordination contacts"
+                  people={form.coordinationContacts.map((contact) => ({
+                    name: contact.name,
+                    phone: contact.phone,
+                    role: contact.designation
+                      ? sentenceCase(formatDesignationLabel(contact.designation))
+                      : "",
+                  }))}
+                  empty="No coordination contacts on this proposal."
+                />
+                <ContactGroup
+                  title="Account managers"
+                  people={(form.accountManagers ?? []).map((manager) => ({
+                    name: manager.name,
+                    phone: manager.phone,
+                    role: "Account manager",
+                  }))}
+                  empty="No account managers on this proposal."
+                />
+              </SectionCard>
+            </div>
+          </>,
         )}
 
         {panel(
           "services",
-          <Card className="min-w-0 gap-0 p-4 sm:p-6">
-            <ReviewSection
-              icon={ListCheck}
-              title="Services and cost"
-              description="As it appears in the documents, with the total before and after 5% VAT."
-            >
-              <ServicesAndCost rows={data.frequencyRows} totals={totals} />
-            </ReviewSection>
-          </Card>,
+          <SectionCard
+            icon={<ListCheck />}
+            title="Services and cost"
+            description="As it appears in the documents, with the total before and after 5% VAT."
+            bodyClassName="px-5 pb-5"
+          >
+            <ServicesAndCost rows={data.frequencyRows} totals={totals} />
+          </SectionCard>,
         )}
 
         {panel("versions", <ProposalVersionsPanel submission={submission} />)}
@@ -911,63 +939,193 @@ export function SubmissionDetails({
 
         {panel(
           "history",
-            <SectionCard
-              icon={<History />}
-              title="History"
-              description={`Every recorded action on this proposal. ${timeline.length} ${
-                timeline.length === 1 ? "event" : "events"
-              }.`}
-              bodyClassName="border-t"
-              action={
-                <Select
-                  value={historyOrder}
-                  onValueChange={(value) => setHistoryOrder(value as "desc" | "asc")}
-                >
-                  <SelectTrigger size="sm" className="w-[130px]" aria-label="Sort history">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="desc">Newest first</SelectItem>
-                    <SelectItem value="asc">Oldest first</SelectItem>
-                  </SelectContent>
-                </Select>
-              }
-            >
-              {/*
-                The same row a job's history uses: an icon in its own
-                square, what happened, who by, and when on the right. The
-                dot-and-rail timeline this replaced drew a vertical line
-                down the page for a list that is almost always two or
-                three entries long, and it looked nothing like the history
-                a reader sees on a job.
-              */}
-              <ol className="divide-y">
-                {orderedTimeline.map((step, index) => {
-                  const Icon =
-                    step.tone === "good"
-                      ? CheckCircle2
-                      : step.tone === "bad"
-                        ? XCircle
-                        : Circle;
-                  return (
-                    <li key={`${step.label}-${index}`}>
-                      <DataRow
-                        icon={<Icon aria-hidden />}
-                        title={step.label}
-                        subtitle={step.note ? step.note : undefined}
-                        trailing={
-                          <span className="text-muted-foreground text-xs">
-                            {formatWhen(step.at)}
-                          </span>
-                        }
-                      />
-                    </li>
-                  );
-                })}
-              </ol>
-            </SectionCard>
+          <SectionCard
+            icon={<History />}
+            title="History"
+            description={`Every recorded action on this proposal. ${timeline.length} ${
+              timeline.length === 1 ? "event" : "events"
+            }.`}
+            bodyClassName="border-t"
+            action={
+              <Select
+                value={historyOrder}
+                onValueChange={(value) => {
+                  setHistoryOrder(value as "desc" | "asc");
+                  setHistoryPage(0);
+                }}
+              >
+                <SelectTrigger size="sm" className="w-[130px]" aria-label="Sort history">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="desc">Newest first</SelectItem>
+                  <SelectItem value="asc">Oldest first</SelectItem>
+                </SelectContent>
+              </Select>
+            }
+          >
+            {/*
+              The same row a job's history uses: an icon in its own
+              square, what happened, who by, and when on the right.
+            */}
+            <ol className="divide-y">
+              {historyRows.map((step, index) => {
+                const Icon =
+                  step.tone === "good"
+                    ? CheckCircle2
+                    : step.tone === "bad"
+                      ? XCircle
+                      : Circle;
+                return (
+                  <li key={`${step.label}-${historyPage}-${index}`}>
+                    <DataRow
+                      icon={<Icon aria-hidden />}
+                      title={step.label}
+                      subtitle={step.note ? step.note : undefined}
+                      trailing={
+                        <span className="text-muted-foreground text-xs">
+                          {formatWhen(step.at)}
+                        </span>
+                      }
+                    />
+                  </li>
+                );
+              })}
+            </ol>
+            <ListPager
+              page={historyPage}
+              pageSize={historyPageSize}
+              total={orderedTimeline.length}
+              onPageChange={setHistoryPage}
+              onPageSizeChange={setHistoryPageSize}
+              noun="events"
+              className="border-t"
+            />
+          </SectionCard>,
         )}
       </Tabs>
     </div>
+  );
+}
+
+/**
+ * Label-and-value rows for a record somebody is reading, not editing --
+ * the job page's DetailList. A missing value shows an em dash rather than
+ * collapsing the row, so the record keeps its shape.
+ */
+function DetailList({
+  rows,
+}: {
+  rows: Array<{ label: string; value?: ReactNode }>;
+}) {
+  return (
+    <dl className="divide-y">
+      {rows.map((row) => (
+        <div key={row.label} className="flex items-baseline justify-between gap-4 py-1.5">
+          <dt className="text-muted-foreground shrink-0 text-sm">{row.label}</dt>
+          <dd className="min-w-0 truncate text-right text-sm font-medium">
+            {row.value !== null && row.value !== undefined && row.value !== "" ? (
+              row.value
+            ) : (
+              <span className="text-muted-foreground font-normal">—</span>
+            )}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/**
+ * The header's "More" menu: the documents as files, and the actions that
+ * are not this proposal's next step.
+ */
+function MoreActions({
+  downloading,
+  onDownload,
+  revise,
+  recordAnswer,
+  reject,
+  rejectDisabled,
+}: {
+  downloading: boolean;
+  onDownload?: (documentType: AmcDocumentType, format: "pdf" | "docx") => void;
+  revise: { label: string; onSelect: () => void } | null;
+  recordAnswer: (() => void) | null;
+  reject: (() => void) | null;
+  rejectDisabled: boolean;
+}) {
+  if (!onDownload && !revise && !recordAnswer && !reject) return null;
+  const hasActions = Boolean(revise || recordAnswer || reject);
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" aria-busy={downloading}>
+          {downloading ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <MoreHorizontal className="size-4" />
+          )}
+          More
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        {onDownload
+          ? (["proposal", "contract"] as const).map((documentType, index) => (
+            <DropdownMenuGroup key={documentType}>
+              {index > 0 ? <DropdownMenuSeparator /> : null}
+              <DropdownMenuLabel className="text-muted-foreground text-xs font-normal">
+                Download {documentType}
+              </DropdownMenuLabel>
+              <DropdownMenuItem
+                disabled={downloading}
+                onClick={() => onDownload(documentType, "pdf")}
+              >
+                <FileText className="size-4" />
+                PDF
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={downloading}
+                onClick={() => onDownload(documentType, "docx")}
+              >
+                <FileType className="size-4" />
+                Word (.docx)
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+          ))
+          : null}
+        {hasActions ? (
+          <>
+            {onDownload ? <DropdownMenuSeparator /> : null}
+            <DropdownMenuGroup>
+              {/* BRD 5.4: a shared proposal is changed through a new version. */}
+              {revise ? (
+                <DropdownMenuItem onClick={revise.onSelect}>
+                  <GitBranch className="size-4" />
+                  {revise.label}
+                </DropdownMenuItem>
+              ) : null}
+              {/* BRD 5.6: an answer given outside the link, with evidence. */}
+              {recordAnswer ? (
+                <DropdownMenuItem onClick={recordAnswer}>
+                  <Inbox className="size-4" />
+                  Record the client&apos;s answer
+                </DropdownMenuItem>
+              ) : null}
+              {reject ? (
+                <DropdownMenuItem
+                  variant="destructive"
+                  disabled={rejectDisabled}
+                  onClick={reject}
+                >
+                  <XCircle className="size-4" />
+                  Reject…
+                </DropdownMenuItem>
+              ) : null}
+            </DropdownMenuGroup>
+          </>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

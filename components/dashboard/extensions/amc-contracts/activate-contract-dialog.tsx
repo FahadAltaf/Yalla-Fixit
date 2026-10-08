@@ -12,7 +12,7 @@ import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } fr
 import { Label } from "@/components/ui/label";
 import { Money } from "@/components/ui/money";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ActionDialogContent } from "@/components/dashboard/shared/kaizen-states";
+import { ActionDialogContent, ErrorState, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
 import { DatePickerField } from "@/components/dashboard/extensions/amc/components/date-picker-field";
 import { defaultEndDate, formatQuantity, unitWord, validatePeriod } from "@/lib/amc/contracts";
 import { AMC_VAT_PERCENT } from "@/lib/amc/pricing";
@@ -45,7 +45,9 @@ export function ActivateContractDialog({
   const [endDate, setEndDate] = useState("");
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
+  /* Date checks only; a server failure is a toast. */
   const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     if (!open) return;
@@ -67,7 +69,7 @@ export function ActivateContractDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, submissionId]);
+  }, [open, submissionId, attempt]);
 
   const period = startDate && endDate ? validatePeriod(startDate, endDate) : null;
   const datesChanged =
@@ -97,7 +99,7 @@ export function ActivateContractDialog({
       onOpenChange(false);
       onActivated(contract.id);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not activate the contract.");
+      toast.error(e instanceof Error ? e.message : "Could not activate the contract.");
     } finally {
       setBusy(false);
     }
@@ -105,12 +107,9 @@ export function ActivateContractDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <ActionDialogContent busy={busy} className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+      <ActionDialogContent busy={busy} className="max-h-[88vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <CalendarCheck2 className="text-brand size-5" />
-            Activate AMC
-          </DialogTitle>
+          <DialogTitle>Activate AMC</DialogTitle>
           <DialogDescription>
             Check what the contract will hold. The services, prices and wording the client signed
             are copied onto it and do not change afterwards.
@@ -118,19 +117,21 @@ export function ActivateContractDialog({
         </DialogHeader>
 
         {loadError ? (
-          <p className="text-destructive text-sm" role="alert">
-            {loadError}
-          </p>
+          <ErrorState
+            title="Could not load the proposal"
+            message={loadError}
+            onRetry={() => setAttempt((n) => n + 1)}
+          />
         ) : !preview ? (
-          <div className="space-y-3" aria-busy="true">
+          <div className="space-y-3 py-2" aria-busy="true">
             <Skeleton className="h-16 w-full" />
             <Skeleton className="h-10 w-full" />
             <Skeleton className="h-32 w-full" />
           </div>
         ) : (
-          <div className="grid gap-5">
+          <div className="grid gap-5 py-2">
             <dl className="grid gap-x-6 gap-y-3 rounded-lg border p-4 text-sm sm:grid-cols-2">
-              <Fact label="Customer" value={preview.customerName || "—"} hint={preview.customerRef ? `Customer ID ${preview.customerRef}` : undefined} />
+              <Fact label="Client" value={preview.customerName || "—"} hint={preview.customerRef ? `Client ID ${preview.customerRef}` : undefined} />
               <Fact label="Property" value={preview.propertyLabel || "—"} />
               <Fact
                 label="Contract value"
@@ -150,7 +151,7 @@ export function ActivateContractDialog({
             </dl>
 
             {blocked ? (
-              <div className="bg-destructive/5 text-destructive rounded-lg border border-destructive/20 px-4 py-3 text-sm" role="alert">
+              <div className="border-danger/30 bg-danger/5 text-danger rounded-lg border px-4 py-3 text-sm" role="alert">
                 {blocked}{" "}
                 {preview.existingContractId ? (
                   <Link href={`/extensions/amc-contracts/${preview.existingContractId}`} className="font-medium underline">
@@ -196,7 +197,7 @@ export function ActivateContractDialog({
                       <li key={e.serviceId} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
                         <span className="flex min-w-0 flex-wrap items-center gap-2">
                           <span className="font-medium">{e.serviceLabel}</span>
-                          <Badge variant="secondary" className="font-normal">
+                          <Badge variant="secondary" className="bg-mist text-ink-soft border-0 font-medium">
                             {ENTITLEMENT_TYPE_LABELS[e.entitlementType]}
                           </Badge>
                           {e.callOutClass ? (
@@ -225,7 +226,7 @@ export function ActivateContractDialog({
                     aria-label="I have checked these details"
                   />
                   <span>
-                    I have checked the customer, property, value, dates and services. Activating
+                    I have checked the client, property, value, dates and services. Activating
                     starts coverage on the start date and cannot be undone (a contract can only be
                     cancelled).
                   </span>
@@ -234,7 +235,7 @@ export function ActivateContractDialog({
             )}
 
             {error || (period && !period.ok) ? (
-              <p className="text-destructive text-sm" role="alert">
+              <p className="text-danger text-sm" role="alert">
                 {error ?? (period && !period.ok ? period.error : "")}
               </p>
             ) : null}
@@ -245,9 +246,15 @@ export function ActivateContractDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={() => void submit()} disabled={busy || !preview || !!blocked || !period?.ok || !confirmed}>
-            {busy ? "Activating…" : "Activate contract"}
-          </Button>
+          <SubmitButton
+            onClick={() => void submit()}
+            disabled={!preview || !!blocked || !period?.ok || !confirmed}
+            pending={busy}
+            pendingLabel="Activating…"
+            icon={<CalendarCheck2 className="size-4" />}
+          >
+            Activate contract
+          </SubmitButton>
         </DialogFooter>
       </ActionDialogContent>
     </Dialog>

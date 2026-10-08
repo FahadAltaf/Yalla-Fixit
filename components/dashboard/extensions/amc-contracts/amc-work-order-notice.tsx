@@ -34,11 +34,11 @@ export function AmcWorkOrderNotice({ workOrderId, date }: { workOrderId: string;
   if (lines.length === 0) return null;
 
   return (
-    <div className="flex items-start gap-2 rounded-md border border-sky-600/20 bg-sky-600/5 px-3 py-2 text-xs text-sky-900 dark:text-sky-200">
-      <ShieldCheck className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+    <div className="border-brand/30 bg-brand-50 flex items-start gap-2 rounded-md border px-3 py-2 text-xs">
+      <ShieldCheck className="text-brand mt-0.5 size-3.5 shrink-0" aria-hidden />
       <div className="space-y-0.5">
-        <div className="font-medium">
-          AMC customer{lines[0].answer.proposalNumber ? ` · ${lines[0].answer.proposalNumber}` : ""}
+        <div className="text-brand font-medium">
+          AMC client{lines[0].answer.proposalNumber ? ` · ${lines[0].answer.proposalNumber}` : ""}
           {context.links.length ? " · linked to the contract" : ""}
         </div>
         {lines.map((l) => (

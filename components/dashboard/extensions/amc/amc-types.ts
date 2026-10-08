@@ -130,11 +130,11 @@ export const amcFormSchema = z
       amcAccountManagerSchema,
       amcAccountManagerSchema,
     ]),
-    customerName: z.string().min(1, "Customer name is required"),
+    customerName: z.string().min(1, "Client name is required"),
     /* FR4.4 / §8.2: prints in the contract header, where it used to
        fall back to "XXX". Required now. */
     customerId: z.string().min(1, "Customer ID is required"),
-    customerPhone: z.string().min(1, "Customer phone is required"),
+    customerPhone: z.string().min(1, "Client phone is required"),
     customerEmail: z.string().email("Invalid email address"),
     coordinationContacts: z.tuple([
       coordinationContactSchema,

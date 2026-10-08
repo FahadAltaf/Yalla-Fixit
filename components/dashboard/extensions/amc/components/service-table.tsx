@@ -228,7 +228,7 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote }
                                 <span className="tabular-nums">{formatCurrencyAED(row.basePrice)}</span>
                               )}
                               {row.promotionPercent ? (
-                                <Badge variant="secondary" className="w-fit border-none bg-emerald-500/10 px-1.5 py-0 text-[10px] font-normal text-emerald-700 dark:text-emerald-400">
+                                <Badge variant="secondary" className="bg-success/10 text-success w-fit border-0 px-1.5 py-0 text-[10px] font-medium">
                                   Promotion −{row.promotionPercent}%
                                 </Badge>
                               ) : null}
@@ -261,7 +261,7 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote }
                             formatCurrencyAED(price)
                           )}
                           {row.included && row.belowFloor ? (
-                            <div className="text-[10px] font-normal text-amber-700 dark:text-amber-400" title={row.floorRate != null ? `Floor rate ${formatCurrencyAED(row.floorRate)}` : undefined}>
+                            <div className="text-warning text-[10px] font-normal" title={row.floorRate != null ? `Floor rate ${formatCurrencyAED(row.floorRate)}` : undefined}>
                               Below floor after discount
                             </div>
                           ) : null}

@@ -139,9 +139,14 @@ async function setStatus(admin: Admin, contractId: string, from: string, to: Con
 /** The client becomes a client (BRD 5.9): on signing until Phase 7 adds the first payment. */
 async function prospectBecomesClient(admin: Admin, customerId: unknown, actor: Actor, reason: string) {
   if (typeof customerId !== "string" || !customerId) return;
-  const { data } = await admin.from("customers").select("lifecycle").eq("id", customerId).maybeSingle<Row>();
+  /* Lifecycle is on the client's AMC profile (20261007170000); a client with
+     none reads as a client already, so there is nothing to change. */
+  const { data } = await admin.from("amc_client_profiles").select("lifecycle").eq("client_id", customerId).maybeSingle<Row>();
   if (!data || data.lifecycle === "client") return;
-  const { error } = await admin.from("customers").update({ lifecycle: "client", updated_at: new Date().toISOString() }).eq("id", customerId);
+  const { error } = await admin
+    .from("amc_client_profiles")
+    .update({ lifecycle: "client", updated_at: new Date().toISOString() })
+    .eq("client_id", customerId);
   if (error) return;
   await recordLifecycleChange(admin, customerId, String(data.lifecycle ?? "prospect"), "client", { id: actor.id ?? "", label: actor.label }, reason);
 }

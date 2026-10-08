@@ -4,11 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
-import { CalendarCheck2, EllipsisVertical, EyeIcon, FileSignature, ScrollText, UserRound } from "lucide-react";
+import { Building2, CalendarCheck2, EllipsisVertical, EyeIcon, FileSignature, ScrollText, UserRound } from "lucide-react";
 import { toast } from "sonner";
 
 import { DataTable } from "@/components/data-table";
-import { RecordsToolbar } from "@/components/data-table/toolbars/records-toolbar";
+import { IconText } from "@/components/data-table/columns/icon-text";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -21,8 +21,7 @@ import {
 import { EmptyState } from "@/components/ui/empty-state";
 import { IdentityCell } from "@/components/ui/entity-avatar";
 import { Money } from "@/components/ui/money";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { PillTabs } from "@/components/dashboard/shared/kaizen";
+import { ErrorState } from "@/components/dashboard/shared/kaizen-states";
 import { useDebounce } from "@/hooks/use-debounce";
 import {
   amcContractsService,
@@ -33,8 +32,9 @@ import {
 
 import { ActivateContractDialog } from "./activate-contract-dialog";
 import { CONTRACT_STATUS_LABELS, contractStatusTone, formatContractDate } from "./contract-status";
+import { ALL_MANAGERS, ContractsToolbar } from "./contracts-toolbar";
 
-const TABS: ReadonlyArray<{ value: ContractListStatus; label: string }> = [
+const STATUSES: ReadonlyArray<{ value: ContractListStatus; label: string }> = [
   { value: "all", label: "All" },
   { value: "active", label: "Active" },
   { value: "expiring", label: "Expiring" },
@@ -43,8 +43,6 @@ const TABS: ReadonlyArray<{ value: ContractListStatus; label: string }> = [
   { value: "not_started", label: "Not started" },
   { value: "cancelled", label: "Cancelled" },
 ];
-
-const ALL_MANAGERS = "__all__";
 
 /* The server sorts; the table keeps the order it was given. */
 const serverSorted = { enableSorting: true, sortingFn: () => 0 } as const;
@@ -60,7 +58,7 @@ export function ContractsList({ onRefresh }: { onRefresh?: () => void }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const statusParam = searchParams.get("status");
-  const status: ContractListStatus = TABS.some((t) => t.value === statusParam)
+  const status: ContractListStatus = STATUSES.some((t) => t.value === statusParam)
     ? (statusParam as ContractListStatus)
     : "all";
 
@@ -75,10 +73,12 @@ export function ContractsList({ onRefresh }: { onRefresh?: () => void }) {
   const [sort, setSort] = useState<{ key: ContractSortKey; dir: "asc" | "desc" }>({ key: "end", dir: "asc" });
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
+  /* Kept after the dialog closes, so it can animate out with its content. */
   const [activating, setActivating] = useState<ContractListRow | null>(null);
+  const [activateOpen, setActivateOpen] = useState(false);
   const debouncedSearch = useDebounce(search.trim(), 300);
 
-  const setStatus = (value: ContractListStatus) => {
+  const setStatus = (value: string) => {
     const next = new URLSearchParams(searchParams.toString());
     if (value === "all") next.delete("status");
     else next.set("status", value);
@@ -122,6 +122,11 @@ export function ContractsList({ onRefresh }: { onRefresh?: () => void }) {
     void load();
   }, [load]);
 
+  const refresh = () => {
+    void load();
+    onRefresh?.();
+  };
+
   const hrefOf = (row: ContractListRow) =>
     row.kind === "contract" ? `/extensions/amc-contracts/${row.id}` : `/extensions/amc/${row.submissionId}`;
   const open = (row: ContractListRow) => router.push(hrefOf(row));
@@ -144,11 +149,15 @@ export function ContractsList({ onRefresh }: { onRefresh?: () => void }) {
     },
     {
       id: "customer",
-      header: "Customer",
+      header: "Client",
       accessorFn: (row) => row.customerName,
       ...serverSorted,
       cell: ({ row }) => (
-        <IdentityCell title={row.original.customerName || "Unnamed customer"} subtitle={undefined} icon={UserRound} />
+        <IdentityCell
+          title={row.original.customerName || "Unnamed client"}
+          subtitle={row.original.accountManagers.join(", ") || undefined}
+          icon={UserRound}
+        />
       ),
     },
     {
@@ -156,15 +165,17 @@ export function ContractsList({ onRefresh }: { onRefresh?: () => void }) {
       header: "Property",
       accessorFn: (row) => row.propertyLabel,
       ...serverSorted,
-      cell: ({ row }) => (
-        <span className="text-muted-foreground line-clamp-2 max-w-[220px] text-sm">{row.original.propertyLabel || "—"}</span>
-      ),
-    },
-    {
-      id: "manager",
-      header: "Account manager",
-      cell: ({ row }) => <span className="text-sm">{row.original.accountManagers.join(", ") || "—"}</span>,
-      enableSorting: false,
+      cell: ({ row }) =>
+        row.original.propertyLabel ? (
+          <span className="flex max-w-[240px] items-start gap-1.5 text-sm">
+            <Building2 className="text-muted-foreground mt-0.5 size-3.5 shrink-0" aria-hidden />
+            <span className="line-clamp-2">{row.original.propertyLabel}</span>
+          </span>
+        ) : (
+          <IconText icon={Building2} muted>
+            —
+          </IconText>
+        ),
     },
     {
       id: "start",
@@ -196,7 +207,7 @@ export function ContractsList({ onRefresh }: { onRefresh?: () => void }) {
         return (
           <div className="text-sm leading-tight">
             <div>{c.totalServices} services</div>
-            <div className={`text-xs ${c.exhausted ? "text-destructive" : "text-muted-foreground"}`}>
+            <div className={`text-xs ${c.exhausted ? "text-danger" : "text-muted-foreground"}`}>
               {c.exhausted ? `${c.exhausted} exhausted` : c.withRemaining ? "Allowances left" : c.unlimited ? "Unlimited" : "Included"}
             </div>
           </div>
@@ -215,7 +226,7 @@ export function ContractsList({ onRefresh }: { onRefresh?: () => void }) {
       id: "status",
       header: "Status",
       cell: ({ row }) => (
-        <Badge variant="secondary" className={`border-none ${contractStatusTone(row.original.displayStatus)}`}>
+        <Badge variant="secondary" className={`border-0 font-medium ${contractStatusTone(row.original.displayStatus)}`}>
           {CONTRACT_STATUS_LABELS[row.original.displayStatus]}
         </Badge>
       ),
@@ -228,15 +239,21 @@ export function ContractsList({ onRefresh }: { onRefresh?: () => void }) {
         <div className="flex justify-end" onClick={(event) => event.stopPropagation()}>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" aria-label="Actions">
+              <Button variant="ghost" size="icon" className="size-8">
                 <EllipsisVertical className="size-4" />
+                <span className="sr-only">Actions for {row.original.proposalNumber || "this contract"}</span>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               {row.original.kind === "pending" ? (
                 <>
                   {row.original.canActivate ? (
-                    <DropdownMenuItem onClick={() => setActivating(row.original)}>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        setActivating(row.original);
+                        setActivateOpen(true);
+                      }}
+                    >
                       <CalendarCheck2 className="size-4" />
                       Activate AMC
                     </DropdownMenuItem>
@@ -269,123 +286,104 @@ export function ContractsList({ onRefresh }: { onRefresh?: () => void }) {
   const filtered = status !== "all" || Boolean(search) || manager !== ALL_MANAGERS;
 
   return (
-    <div className="flex flex-col gap-4">
-      <PillTabs
-        tabs={TABS.map((tab) => ({ ...tab, count: counts[tab.value] }))}
-        value={status}
-        onChange={setStatus}
-      />
+    <div className="flex flex-col gap-6">
+      {loadError ? (
+        <ErrorState
+          title="Could not load AMC contracts"
+          message={loadError}
+          onRetry={() => void load()}
+          retrying={isLoading}
+        />
+      ) : null}
+
       <Card className="py-0">
-        {loadError ? (
-          <EmptyState
-            className="border-0"
-            icon={<ScrollText className="size-5" />}
-            title="Could not load AMC contracts"
-            description={loadError}
-            action={{ label: "Retry", onClick: () => void load() }}
-          />
-        ) : (
-          <DataTable
-            columns={columns}
-            data={rows}
-            loading={isLoading}
-            rowCount={total}
-            pageSize={pageSize}
-            currentPage={page}
-            isPagination
-            onPageChange={setPage}
-            onPageSizeChange={(size) => {
-              setPageSize(size);
-              setPage(0);
-            }}
-            onSortingChange={(key, dir) => {
-              setSort(key && key in { contract: 1, customer: 1, property: 1, start: 1, end: 1, value: 1 }
-                ? { key: key as ContractSortKey, dir: dir ?? "asc" }
-                : { key: "end", dir: "asc" });
-              setPage(0);
-            }}
-            onGlobalFilterChange={(value) => {
-              setSearch(value);
-              setPage(0);
-            }}
-            handleRowClick={(row) => open(row)}
-            toolbar={
-              <RecordsToolbar
-                fetchRecords={() => {
-                  void load();
-                  onRefresh?.();
-                }}
-                globalFilter={search}
-                onGlobalFilterChange={(value) => {
-                  setSearch(value);
-                  setPage(0);
-                }}
-                isSearchLoading={isLoading}
-                searchPlaceholder="Search customer, property, number or account manager…"
-                pageSize={pageSize}
-                onPageSizeChange={(size) => {
-                  setPageSize(size);
-                  setPage(0);
-                }}
-                filters={
-                  <Select
-                    value={manager}
-                    onValueChange={(value) => {
-                      setManager(value);
-                      setPage(0);
-                    }}
-                  >
-                    <SelectTrigger className="h-9 w-full sm:w-[200px]" aria-label="Filter by account manager">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={ALL_MANAGERS}>All account managers</SelectItem>
-                      {managers.map((name) => (
-                        <SelectItem key={name} value={name}>
-                          {name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                }
-              />
-            }
-            emptyState={
-              <EmptyState
-                className="border-0"
-                icon={<ScrollText className="size-5" />}
-                title={filtered ? "No matching contracts" : "No AMC contracts yet"}
-                description={
-                  filtered
+        <DataTable
+          columns={columns}
+          data={rows}
+          loading={isLoading}
+          rowCount={total}
+          pageSize={pageSize}
+          currentPage={page}
+          isPagination
+          onPageChange={setPage}
+          onPageSizeChange={(size) => {
+            setPageSize(size);
+            setPage(0);
+          }}
+          onSortingChange={(key, dir) => {
+            setSort(key && key in { contract: 1, customer: 1, property: 1, start: 1, end: 1, value: 1 }
+              ? { key: key as ContractSortKey, dir: dir ?? "asc" }
+              : { key: "end", dir: "asc" });
+            setPage(0);
+          }}
+          onGlobalFilterChange={(value) => {
+            setSearch(value);
+            setPage(0);
+          }}
+          handleRowClick={(row) => open(row)}
+          toolbar={
+            <ContractsToolbar
+              search={search}
+              onSearchChange={(value) => {
+                setSearch(value);
+                setPage(0);
+              }}
+              isLoading={isLoading}
+              statusOptions={STATUSES.map((entry) => ({ ...entry, count: counts[entry.value] }))}
+              status={status}
+              onStatusChange={setStatus}
+              managers={managers}
+              manager={manager}
+              onManagerChange={(value) => {
+                setManager(value);
+                setPage(0);
+              }}
+              pageSize={pageSize}
+              onPageSizeChange={(size) => {
+                setPageSize(size);
+                setPage(0);
+              }}
+              onRefresh={refresh}
+            />
+          }
+          emptyState={
+            <EmptyState
+              icon={<ScrollText />}
+              title={loadError ? "Contracts could not be loaded" : filtered ? "No matching contracts" : "No AMC contracts yet"}
+              description={
+                loadError
+                  ? "Try again once the connection is back."
+                  : filtered
                     ? "Nothing matches this search and filter."
                     : "When a client signs an AMC proposal it appears here, ready to be activated."
-                }
-                action={
-                  filtered
-                    ? {
-                        label: "Clear filters",
-                        variant: "outline",
-                        onClick: () => {
-                          setSearch("");
-                          setManager(ALL_MANAGERS);
-                          setStatus("all");
-                        },
-                      }
-                    : { label: "Go to AMC proposals", onClick: () => router.push("/extensions/amc") }
-                }
-              />
-            }
-          />
-        )}
+              }
+              {...(loadError
+                ? {}
+                : {
+                    action: filtered
+                      ? {
+                          label: "Clear filters",
+                          variant: "outline" as const,
+                          onClick: () => {
+                            setSearch("");
+                            setManager(ALL_MANAGERS);
+                            setStatus("all");
+                          },
+                        }
+                      : { label: "Go to AMC proposals", onClick: () => router.push("/extensions/amc") },
+                  })}
+            />
+          }
+        />
       </Card>
 
       {activating ? (
         <ActivateContractDialog
-          open={Boolean(activating)}
-          onOpenChange={(next) => !next && setActivating(null)}
+          open={activateOpen}
+          onOpenChange={setActivateOpen}
           submissionId={activating.submissionId}
           onActivated={(contractId) => {
-            setActivating(null);
+            setActivateOpen(false);
             toast.message("Opening the contract…");
             router.push(`/extensions/amc-contracts/${contractId}`);
           }}

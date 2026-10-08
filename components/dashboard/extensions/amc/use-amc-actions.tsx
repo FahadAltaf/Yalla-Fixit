@@ -1,11 +1,15 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Copy, Loader2, MessageCircle, Undo2, XCircle } from "lucide-react";
+import { Copy, MessageCircle, Undo2, XCircle } from "lucide-react";
 import { saveAs } from "file-saver";
 import { toast } from "sonner";
 
-import { useConfirm } from "@/components/dashboard/shared/kaizen-states";
+import {
+  ActionDialogContent,
+  SubmitButton,
+  useConfirm,
+} from "@/components/dashboard/shared/kaizen-states";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -22,7 +26,6 @@ import { buildAmcPdfFromSubmission, savedSettingsFor } from "./amc-document-util
 import { AmcPreviewDialog, previewTitle, submissionPreviewData } from "./amc-preview-dialog";
 import { AMC_APPROVALS_CHANGED } from "./amc-approval-notice";
 import { AmcLinkDialog } from "./amc-link-dialog";
-import { ActionDialogContent } from "@/components/dashboard/shared/kaizen-states";
 import { AmcSendDialog, shareChannelFor, type AmcSendChoice, type AmcSendDeliver, type AmcSendRequest } from "./amc-send-dialog";
 import type { AmcSettings } from "./amc-settings";
 import type { AmcDocumentType, AmcSubmission } from "./amc-types";
@@ -89,6 +92,9 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
     documentType: AmcDocumentType;
     settings?: AmcSettings;
   } | null>(null);
+  /* Kept apart from `preview`, so the document stays on screen while the
+     dialog animates closed instead of vanishing under it. */
+  const [previewOpen, setPreviewOpen] = useState(false);
   /*
     The link just minted, kept on screen.
 
@@ -306,6 +312,7 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
         ? (await amcSettingsService.getSettings().catch(() => null))?.settings
         : undefined;
       setPreview({ submission, documentType, settings });
+      setPreviewOpen(true);
     } finally {
       setViewingKey(null);
     }
@@ -326,8 +333,8 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
       />
       {preview ? (
         <AmcPreviewDialog
-          open
-          onOpenChange={(open) => !open && setPreview(null)}
+          open={previewOpen}
+          onOpenChange={setPreviewOpen}
           title={previewTitle(preview.submission)}
           documentType={preview.documentType}
           onDocumentTypeChange={(documentType) =>
@@ -352,34 +359,37 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
         onConfirm={(request, choice) => void send(request.submission, request.document, choice)}
       />
       <Dialog open={Boolean(whatsapp)} onOpenChange={(open) => !open && setWhatsapp(null)}>
-        <ActionDialogContent className="sm:max-w-lg">
+        {/* Prepared already: nothing runs from here, so it never blocks closing. */}
+        <ActionDialogContent busy={false} className="max-h-[88vh] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Send on WhatsApp</DialogTitle>
             <DialogDescription>
               The proposal is marked as shared and the link is live. Open WhatsApp for each contact and press send.
             </DialogDescription>
           </DialogHeader>
-          <p className="bg-muted/40 rounded-md border p-3 text-sm whitespace-pre-wrap">{whatsapp?.text}</p>
-          <ul className="grid gap-2">
-            {(whatsapp?.messages ?? []).map((m) => (
-              <li key={m.address} className="flex items-center justify-between gap-2 text-sm">
-                <span className="min-w-0 truncate">
-                  {m.name ? <span className="font-medium">{m.name} · </span> : null}
-                  {m.address}
-                </span>
-                {m.url ? (
-                  <Button asChild size="sm">
-                    <a href={m.url} target="_blank" rel="noopener noreferrer">
-                      <MessageCircle className="size-4" />
-                      Open WhatsApp
-                    </a>
-                  </Button>
-                ) : (
-                  <span className="text-muted-foreground text-xs">Not a mobile number</span>
-                )}
-              </li>
-            ))}
-          </ul>
+          <div className="grid gap-4 py-2">
+            <p className="bg-muted/40 rounded-md border p-3 text-sm whitespace-pre-wrap">{whatsapp?.text}</p>
+            <ul className="grid gap-2">
+              {(whatsapp?.messages ?? []).map((m) => (
+                <li key={m.address} className="flex items-center justify-between gap-2 text-sm">
+                  <span className="min-w-0 truncate">
+                    {m.name ? <span className="font-medium">{m.name} · </span> : null}
+                    {m.address}
+                  </span>
+                  {m.url ? (
+                    <Button asChild size="sm">
+                      <a href={m.url} target="_blank" rel="noopener noreferrer">
+                        <MessageCircle className="size-4" />
+                        Open WhatsApp
+                      </a>
+                    </Button>
+                  ) : (
+                    <span className="text-muted-foreground text-xs">Not a mobile number</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
           <DialogFooter>
             <Button
               variant="outline"
@@ -405,7 +415,7 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
               It goes back to the owner with your reason and the rest of the approval ladder is cancelled. Nothing goes to the client.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
+          <div className="grid gap-2 py-2">
             <Label htmlFor="amc-reject-reason">Why?</Label>
             <Textarea
               id="amc-reject-reason"
@@ -419,14 +429,16 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
             <Button variant="outline" onClick={() => setRejectFor(null)} disabled={deciding}>
               Cancel
             </Button>
-            <Button
+            <SubmitButton
               variant="destructive"
               onClick={() => rejectFor && void decide(rejectFor, "reject", rejectReason.trim())}
-              disabled={deciding || rejectReason.trim().length === 0}
+              disabled={rejectReason.trim().length === 0}
+              pending={deciding}
+              pendingLabel="Rejecting…"
+              icon={<XCircle className="size-4" />}
             >
-              {deciding ? <Loader2 className="size-4 animate-spin" /> : <XCircle className="size-4" />}
               Reject
-            </Button>
+            </SubmitButton>
           </DialogFooter>
         </ActionDialogContent>
       </Dialog>
@@ -439,7 +451,7 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
               Nothing goes to the client.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
+          <div className="grid gap-2 py-2">
             <Label htmlFor="amc-send-back-reason">What needs changing?</Label>
             <Textarea
               id="amc-send-back-reason"
@@ -455,15 +467,17 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
             </Button>
             {/* FR5.2 requires a reason, so the action stays disabled until
                 there is one rather than failing on the server. */}
-            <Button
+            <SubmitButton
               onClick={() =>
                 sendBackFor && void decide(sendBackFor, "send_back", sendBackReason.trim())
               }
-              disabled={deciding || sendBackReason.trim().length === 0}
+              disabled={sendBackReason.trim().length === 0}
+              pending={deciding}
+              pendingLabel="Sending back…"
+              icon={<Undo2 className="size-4" />}
             >
-              {deciding ? <Loader2 className="size-4 animate-spin" /> : <Undo2 className="size-4" />}
               Send back
-            </Button>
+            </SubmitButton>
           </DialogFooter>
         </ActionDialogContent>
       </Dialog>

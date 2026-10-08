@@ -5,9 +5,10 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { History, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 
-import { PageHeading, PillTabs, SectionCard, timeAgo } from "@/components/dashboard/shared/kaizen";
-import { ErrorState, FieldsSkeleton, HeadingSkeleton } from "@/components/dashboard/shared/kaizen-states";
+import { DataRow, PageHeading, PillTabs, SectionCard, timeAgo } from "@/components/dashboard/shared/kaizen";
+import { ErrorState, FieldsSkeleton, HeadingSkeleton, SectionSkeleton } from "@/components/dashboard/shared/kaizen-states";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { EmptyState } from "@/components/ui/empty-state";
 import { useAuth } from "@/context/AuthContext";
 import type { AmcConfig, AmcConfigSection } from "@/lib/amc/config";
 import type { AmcTemplatesConfig } from "@/lib/amc/message-templates";
@@ -92,7 +93,9 @@ export function AmcConfigurationPage() {
     return (
       <div className="flex flex-col gap-6">
         <HeadingSkeleton />
-        <FieldsSkeleton />
+        <SectionSkeleton>
+          <FieldsSkeleton />
+        </SectionSkeleton>
       </div>
     );
   }
@@ -162,7 +165,7 @@ export function AmcConfigurationPage() {
 function Heading() {
   return (
     <PageHeading
-      eyebrow="Settings"
+      eyebrow="Configuration"
       title="AMC configuration"
       description="Approval ladder, payment bands, pipeline, schedule, service levels, renewals, the email and message texts, the AMC roles and the scheduled jobs. Changes apply from the next action; every change is recorded."
     />
@@ -185,17 +188,19 @@ function ConfigHistory({ data }: { data: AmcConfigResponse }) {
   return (
     <SectionCard icon={<History />} title="Change history" description="Who changed what, when, with the old and new values (BRD 5.3, 6.9)." bodyClassName="border-t">
       {data.history.length === 0 ? (
-        <p className="text-muted-foreground px-5 py-6 text-sm">No changes yet: every section shows its default.</p>
+        <EmptyState icon={<History />} title="No changes yet" description="Every section shows its default until someone saves it." />
       ) : (
         <ul className="divide-y">
           {data.history.map((h) => (
-            <li key={h.id} className="px-5 py-3 text-sm">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium">{SECTION_TITLES[h.section] ?? h.section}</span>
-                <span className="text-muted-foreground">{h.actorLabel ?? "Someone"}</span>
-                <span className="text-muted-foreground ml-auto text-xs tabular-nums">{timeAgo(h.createdAt)}</span>
-              </div>
-              <ul className="text-muted-foreground mt-1 space-y-0.5 text-xs">
+            <li key={h.id}>
+              <DataRow
+                icon={<History />}
+                title={SECTION_TITLES[h.section] ?? h.section}
+                subtitle={h.actorLabel ?? "Someone"}
+                trailing={<span className="text-muted-foreground text-xs tabular-nums">{timeAgo(h.createdAt)}</span>}
+              />
+              {/* Indented under the title, past the icon tile, so each change reads as part of its row. */}
+              <ul className="text-muted-foreground -mt-1 space-y-0.5 pr-5 pb-3 pl-17 text-xs">
                 {h.changes.map((c) => (
                   <li key={c.field}>
                     {c.field}: {show(c.before)} → {show(c.after)}

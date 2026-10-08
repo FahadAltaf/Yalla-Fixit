@@ -2,13 +2,13 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Building2, UserRound } from "lucide-react";
+import { Building2, Link2, UserRound } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DataRow, SectionCard, SubHeading } from "@/components/dashboard/shared/kaizen";
-import { ActionDialogContent, ListSkeleton } from "@/components/dashboard/shared/kaizen-states";
+import { ActionDialogContent, ErrorState, ListSkeleton, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
 import { amcContractsService, type ContractDetail, type LiveLinks } from "@/modules/amc-contracts/amc-contracts-service";
 
 import { CustomerSearch, PropertySelect } from "./customer-pickers";
@@ -28,7 +28,10 @@ export function ContractCustomer({
 }) {
   const [links, setLinks] = useState<LiveLinks | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [linking, setLinking] = useState<"customer" | "property" | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  /* The kind is kept after the dialog closes, so it animates out unchanged. */
+  const [linking, setLinking] = useState<"customer" | "property">("customer");
+  const [linkOpen, setLinkOpen] = useState(false);
 
   useEffect(() => {
     let stale = false;
@@ -39,15 +42,20 @@ export function ContractCustomer({
     return () => {
       stale = true;
     };
-  }, [contract.id]);
+  }, [contract.id, attempt]);
+
+  const openLink = (kind: "customer" | "property") => {
+    setLinking(kind);
+    setLinkOpen(true);
+  };
 
   const signed = contract.customer as Record<string, string | undefined>;
   const signedProperty = contract.property as Record<string, string | undefined>;
 
   return (
-    <SectionCard title="Customer and property" icon={<UserRound />} bodyClassName="px-5 pb-5 space-y-3">
+    <SectionCard title="Client and property" icon={<UserRound />} bodyClassName="px-5 pb-5 space-y-3">
       <SubHeading>As signed</SubHeading>
-      <DataRow title={contract.customerName || "—"} subtitle={contract.customerRef ? `Customer ID ${contract.customerRef}` : "Customer"} />
+      <DataRow title={contract.customerName || "—"} subtitle={contract.customerRef ? `Client ID ${contract.customerRef}` : "Client"} />
       {signed.customerPhone || signed.customerEmail ? (
         <DataRow title={signed.customerPhone || "—"} subtitle={signed.customerEmail || "Contact"} />
       ) : null}
@@ -61,11 +69,18 @@ export function ContractCustomer({
 
       <SubHeading>Today</SubHeading>
       {error ? (
-        <p className="text-destructive text-sm">{error}</p>
+        <ErrorState
+          title="Could not load the linked records"
+          message={error}
+          onRetry={() => {
+            setError(null);
+            setAttempt((n) => n + 1);
+          }}
+        />
       ) : !links ? (
         <ListSkeleton rows={2} />
       ) : !links.migrated ? (
-        <p className="text-muted-foreground text-xs">Needs migration 20261006130000 to link customer records.</p>
+        <p className="text-muted-foreground text-xs">Needs migration 20261006130000 to link client records.</p>
       ) : (
         <>
           <DataRow
@@ -76,17 +91,17 @@ export function ContractCustomer({
                   {links.customer.name}
                 </Link>
               ) : (
-                "No customer record linked"
+                "No client record linked"
               )
             }
             subtitle={
               links.customer
-                ? [links.customer.customerRef, links.customer.phone, links.customer.email].filter(Boolean).join(" · ") || "Customer record"
-                : "Link one to see this customer's other contracts"
+                ? [links.customer.customerRef, links.customer.phone, links.customer.email].filter(Boolean).join(" · ") || "Client record"
+                : "Link one to see this client's other contracts"
             }
             trailing={
               canManage ? (
-                <Button size="sm" variant="ghost" onClick={() => setLinking("customer")}>
+                <Button size="sm" variant="ghost" onClick={() => openLink("customer")}>
                   {links.customer ? "Change" : "Link"}
                 </Button>
               ) : null
@@ -106,25 +121,26 @@ export function ContractCustomer({
             subtitle={links.property ? [links.property.unitType, links.property.address].filter(Boolean).join(" · ") || "Property record" : undefined}
             trailing={
               canManage ? (
-                <Button size="sm" variant="ghost" onClick={() => setLinking("property")}>
+                <Button size="sm" variant="ghost" onClick={() => openLink("property")}>
                   {links.property ? "Change" : "Link"}
                 </Button>
               ) : null
             }
           />
-          <p className="text-muted-foreground text-xs">Editing the customer or property record never changes what was signed.</p>
+          <p className="text-muted-foreground text-xs">Editing the client or property record never changes what was signed.</p>
         </>
       )}
 
-      {linking && links ? (
+      {links ? (
         <LinkDialog
+          open={linkOpen}
+          onOpenChange={setLinkOpen}
           kind={linking}
           contractId={contract.id}
           links={links}
-          onOpenChange={(next) => !next && setLinking(null)}
           onDone={(next) => {
             setLinks(next);
-            setLinking(null);
+            setLinkOpen(false);
           }}
         />
       ) : null}
@@ -133,12 +149,14 @@ export function ContractCustomer({
 }
 
 function LinkDialog({
+  open,
+  onOpenChange,
   kind,
   contractId,
   links,
-  onOpenChange,
   onDone,
 }: {
+  open: boolean;
   kind: "customer" | "property";
   contractId: string;
   links: LiveLinks;
@@ -147,17 +165,20 @@ function LinkDialog({
 }) {
   const [pickedId, setPickedId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const noun = kind === "customer" ? "client" : "property";
+
+  useEffect(() => {
+    if (open) setPickedId(null);
+  }, [open, kind]);
 
   const save = async (input: { id?: string | null; createFromSnapshot?: boolean }) => {
     setBusy(true);
-    setError(null);
     try {
       const { links: next } = await amcContractsService.setLink(contractId, { kind, ...input });
-      toast.success(input.id === null ? `${kind === "customer" ? "Customer" : "Property"} unlinked` : `${kind === "customer" ? "Customer" : "Property"} linked`);
+      toast.success(input.id === null ? `${kind === "customer" ? "Client" : "Property"} unlinked` : `${kind === "customer" ? "Client" : "Property"} linked`);
       onDone(next);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not save the link.");
+      toast.error(e instanceof Error ? e.message : "Could not save the link.");
     } finally {
       setBusy(false);
     }
@@ -166,32 +187,27 @@ function LinkDialog({
   const current = kind === "customer" ? links.customer : links.property;
 
   return (
-    <Dialog open onOpenChange={(next) => !busy && onOpenChange(next)}>
+    <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <ActionDialogContent busy={busy} className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Link the {kind}</DialogTitle>
+          <DialogTitle>Link the {noun}</DialogTitle>
           <DialogDescription>
             {kind === "customer"
-              ? "Pick the customer record, or make one from what was signed. Customers are never matched by name automatically."
+              ? "Pick the client record, or make one from what was signed. Clients are never matched by name automatically."
               : links.customer
                 ? `Pick one of ${links.customer.name}'s properties, or make one from what was signed.`
-                : "Link the customer first to choose from their properties, or make one from what was signed."}
+                : "Link the client first to choose from their properties, or make one from what was signed."}
           </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-3">
+        <div className="grid gap-4 py-2">
           {kind === "customer" ? (
             <CustomerSearch selectedId={pickedId} onPick={(c) => setPickedId(c.id)} />
           ) : (
             <PropertySelect customerId={links.customer?.id ?? null} value={pickedId} onChange={(p) => setPickedId(p?.id ?? null)} />
           )}
           <Button variant="outline" onClick={() => void save({ createFromSnapshot: true })} disabled={busy}>
-            Create from the signed {kind}
+            Create from the signed {noun}
           </Button>
-          {error ? (
-            <p className="text-destructive text-sm" role="alert">
-              {error}
-            </p>
-          ) : null}
         </div>
         <DialogFooter>
           {current ? (
@@ -202,9 +218,15 @@ function LinkDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={() => void save({ id: pickedId })} disabled={busy || !pickedId}>
+          <SubmitButton
+            onClick={() => void save({ id: pickedId })}
+            disabled={!pickedId}
+            pending={busy}
+            pendingLabel="Saving…"
+            icon={<Link2 className="size-4" />}
+          >
             Link
-          </Button>
+          </SubmitButton>
         </DialogFooter>
       </ActionDialogContent>
     </Dialog>

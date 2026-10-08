@@ -31,7 +31,7 @@ type Admin = SupabaseClient;
 type Row = Record<string, unknown>;
 type Actor = { id: string; label: string | null };
 
-const NOT_MIGRATED = "The client profile is not set up on this database yet (migration 20261007120000).";
+const NOT_MIGRATED = "The client profile is not set up on this database yet (migration 20261007170000).";
 const notMigrated = (error: { code?: string } | null | undefined) =>
   isMissingTable(error) || error?.code === "42703" || error?.code === "PGRST204";
 function fail(error: { code?: string; message: string }): ContractError {
@@ -56,7 +56,11 @@ export async function recordLifecycleChange(
 ): Promise<void> {
   if (from === to) return;
   if (to === "client") {
-    await admin.from("customers").update({ became_client_at: new Date().toISOString() }).eq("id", customerId).is("became_client_at", null);
+    /* The client is Snagging's; the date AMC first counted them a client is
+       on their AMC profile (20261007170000), made here if they have none. */
+    const now = new Date().toISOString();
+    await admin.from("amc_client_profiles").upsert({ client_id: customerId }, { onConflict: "client_id", ignoreDuplicates: true });
+    await admin.from("amc_client_profiles").update({ became_client_at: now }).eq("client_id", customerId).is("became_client_at", null);
   }
   await recordStatusChange(admin, { entityType: "customer", entityId: customerId, from, to, reason, actor });
 }
@@ -69,22 +73,24 @@ export async function setMarketingConsent(
   actor: Actor,
 ): Promise<void> {
   const { data: before, error: readError } = await admin
-    .from("customers")
+    .from("amc_client_directory")
     .select("marketing_consent")
     .eq("id", customerId)
     .maybeSingle<{ marketing_consent: boolean | null }>();
   if (readError) throw fail(readError);
-  if (!before) throw new ContractError("Customer not found.", 404);
-  const { error } = await admin
-    .from("customers")
-    .update({
+  if (!before) throw new ContractError("Client not found.", 404);
+  /* Consent is AMC's, on the client's AMC profile (made if they have none). */
+  const { error } = await admin.from("amc_client_profiles").upsert(
+    {
+      client_id: customerId,
       marketing_consent: input.consent,
       marketing_consent_at: new Date().toISOString(),
       marketing_consent_source: input.source.trim(),
       marketing_consent_by: actor.id,
       updated_at: new Date().toISOString(),
-    })
-    .eq("id", customerId);
+    },
+    { onConflict: "client_id" },
+  );
   if (error) throw fail(error);
   await recordAmcAudit(admin, {
     entityType: "customer",
@@ -285,7 +291,7 @@ export async function assertValidParent(admin: Admin, propertyId: string | null,
   /* Walk up from the chosen parent (combined units are a few levels at most). */
   for (let i = 0; current && i < 20; i += 1) {
     const { data, error }: { data: { id: string; parent_property_id: string | null } | null; error: { code?: string; message: string } | null } =
-      await admin.from("customer_properties").select("id, parent_property_id").eq("id", current).maybeSingle();
+      await admin.from("amc_property_directory").select("id, parent_property_id").eq("id", current).maybeSingle();
     if (error) throw fail(error);
     if (!data) {
       if (current === parentId) throw new ContractError("The parent property was not found.", 400);
@@ -310,9 +316,9 @@ export async function propertyUnits(admin: Admin, propertyId: string, parentId: 
   const map = (r: Row): UnitSummary => ({ id: String(r.id), label: String(r.label), unitType: str(r.unit_type), customerId: str(r.customer_id) });
   const [parent, children] = await Promise.all([
     parentId
-      ? admin.from("customer_properties").select("id, label, unit_type, customer_id").eq("id", parentId).maybeSingle<Row>()
+      ? admin.from("amc_property_directory").select("id, label, unit_type, customer_id").eq("id", parentId).maybeSingle<Row>()
       : Promise.resolve({ data: null, error: null }),
-    admin.from("customer_properties").select("id, label, unit_type, customer_id").eq("parent_property_id", propertyId).order("label"),
+    admin.from("amc_property_directory").select("id, label, unit_type, customer_id").eq("parent_property_id", propertyId).order("label"),
   ]);
   if (children.error) {
     if (notMigrated(children.error)) return { parent: null, children: [] };

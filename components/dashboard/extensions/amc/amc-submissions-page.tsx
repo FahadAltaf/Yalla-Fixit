@@ -19,14 +19,14 @@ import { SubmissionsList } from "./submissions-list";
  */
 export function AmcSubmissionsPage() {
   const router = useRouter();
-  useBreadcrumbLabel("amc", "AMC proposals");
+  useBreadcrumbLabel("amc", "Proposals");
 
   return (
     <div className="flex w-full flex-1 flex-col gap-6">
       <PageHeading
-        eyebrow="Extensions"
-        title="AMC proposals"
-        description="Create AMC proposals and contracts, send them for approval, and track each one until the client signs."
+        eyebrow="Sales"
+        title="Proposals"
+        description="Create AMC proposals, send them for approval, and track each one until the client signs."
         /* Beside the title, where Jobs and Quotations put theirs. It sat
            in the table's toolbar, so the one action that starts the work
            was below the filters for finding work already started. */
@@ -36,7 +36,7 @@ export function AmcSubmissionsPage() {
             <Button asChild>
               <Link href="/extensions/amc/new">
                 <Plus className="size-4" />
-                Create New
+                New proposal
               </Link>
             </Button>
           </div>

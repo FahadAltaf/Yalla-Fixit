@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ShieldCheck } from "lucide-react";
+import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ActionDialogContent } from "@/components/dashboard/shared/kaizen-states";
+import { ActionDialogContent, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
 import { DatePickerField } from "@/components/dashboard/extensions/amc/components/date-picker-field";
 import { useDebounce } from "@/hooks/use-debounce";
 import { formatQuantity, todayInDubai, unitWord, type AmcCoverageStatus } from "@/lib/amc/contracts";
@@ -32,9 +33,9 @@ const AMC_STATUS_LABELS: Record<AmcCoverageStatus, string> = {
 };
 
 const VERDICT_TONES = {
-  covered_by_amc: "bg-green-600/10 text-green-700 dark:bg-green-400/10 dark:text-green-400",
-  chargeable: "bg-amber-600/10 text-amber-700 dark:bg-amber-400/10 dark:text-amber-400",
-  no_active_amc: "bg-destructive/10 text-destructive",
+  covered_by_amc: "bg-success/10 text-success",
+  chargeable: "bg-warning/10 text-warning",
+  no_active_amc: "bg-danger/10 text-danger",
 } as const;
 
 const VERDICT_LABELS = {
@@ -72,17 +73,15 @@ export function CoverageCheckDialog({
   const [date, setDate] = useState(todayInDubai());
   const [result, setResult] = useState<CoverageCheckResponse | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const search = useDebounce(contractSearch.trim(), 300);
 
   useEffect(() => {
     if (!open) return;
     setResult(null);
-    setError(null);
     setDate(todayInDubai());
     amcContractsService.coverageCatalogue().then(
       ({ catalogue: items }) => setCatalogue(items),
-      (e) => setError(e instanceof Error ? e.message : "Could not load the services."),
+      (e) => toast.error(e instanceof Error ? e.message : "Could not load the services."),
     );
   }, [open]);
 
@@ -111,12 +110,11 @@ export function CoverageCheckDialog({
   const check = async () => {
     if (!target || !effectiveServiceId) return;
     setBusy(true);
-    setError(null);
     setResult(null);
     try {
       setResult(await amcContractsService.coverage({ ...target, serviceId: effectiveServiceId, date }));
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not check coverage.");
+      toast.error(e instanceof Error ? e.message : "Could not check coverage.");
     } finally {
       setBusy(false);
     }
@@ -135,20 +133,17 @@ export function CoverageCheckDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <ActionDialogContent busy={busy} className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+      <ActionDialogContent busy={busy} className="max-h-[88vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <ShieldCheck className="text-brand size-5" />
-            Check AMC coverage
-          </DialogTitle>
+          <DialogTitle>Check AMC coverage</DialogTitle>
           <DialogDescription>
             {contract
-              ? `Against AMC ${contract.proposalNumber} (${contract.customerName || "customer"}).`
-              : "Find out whether a request is covered by the customer's AMC. Nothing is recorded."}
+              ? `Checks a request against AMC ${contract.proposalNumber} (${contract.customerName || "client"}). Nothing is recorded.`
+              : "Find out whether a request is covered by the client's AMC. Nothing is recorded."}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-4">
+        <div className="grid gap-4 py-2">
           {!contract ? (
             <div className="grid gap-2">
               <Tabs
@@ -159,13 +154,13 @@ export function CoverageCheckDialog({
                 }}
               >
                 <TabsList className="grid w-full grid-cols-2">
-                  <TabsTrigger value="customer">By customer ID</TabsTrigger>
+                  <TabsTrigger value="customer">By client ID</TabsTrigger>
                   <TabsTrigger value="contract">By contract</TabsTrigger>
                 </TabsList>
               </Tabs>
               {lookup === "customer" ? (
                 <div className="grid gap-2">
-                  <Label htmlFor="amc-cov-customer">Customer ID</Label>
+                  <Label htmlFor="amc-cov-customer">Client ID</Label>
                   <Input
                     id="amc-cov-customer"
                     placeholder="e.g. YFI1806"
@@ -173,14 +168,14 @@ export function CoverageCheckDialog({
                     maxLength={100}
                     onChange={(event) => setCustomerRef(event.target.value)}
                   />
-                  <p className="text-muted-foreground text-xs">The Customer ID on the AMC proposal.</p>
+                  <p className="text-muted-foreground text-xs">The Client ID on the AMC proposal.</p>
                 </div>
               ) : (
                 <div className="grid gap-2">
                   <Label htmlFor="amc-cov-contract">Contract</Label>
                   <Input
                     id="amc-cov-contract"
-                    placeholder="Search by customer, property or contract number"
+                    placeholder="Search by client, property or contract number"
                     value={contractSearch}
                     onChange={(event) => {
                       setContractSearch(event.target.value);
@@ -254,16 +249,10 @@ export function CoverageCheckDialog({
             <p className="text-muted-foreground text-sm">The AMC catalogue has no service for this kind of call-out.</p>
           ) : null}
 
-          {error ? (
-            <p className="text-destructive text-sm" role="alert">
-              {error}
-            </p>
-          ) : null}
-
           {result && c ? (
             <div className="grid gap-3 rounded-lg border p-4" aria-live="polite">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <Badge variant="secondary" className={`border-none px-2.5 py-1 text-sm font-semibold ${VERDICT_TONES[result.verdict.verdict]}`}>
+                <Badge variant="secondary" className={`border-0 px-2.5 py-1 text-sm font-semibold ${VERDICT_TONES[result.verdict.verdict]}`}>
                   {VERDICT_LABELS[result.verdict.verdict]}
                 </Badge>
                 <span className="text-muted-foreground text-xs">On {formatContractDate(result.date)}</span>
@@ -291,9 +280,15 @@ export function CoverageCheckDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             Close
           </Button>
-          <Button onClick={() => void check()} disabled={busy || !target || !effectiveServiceId || !date}>
-            {busy ? "Checking…" : "Check coverage"}
-          </Button>
+          <SubmitButton
+            onClick={() => void check()}
+            disabled={!target || !effectiveServiceId || !date}
+            pending={busy}
+            pendingLabel="Checking…"
+            icon={<ShieldCheck className="size-4" />}
+          >
+            Check coverage
+          </SubmitButton>
         </DialogFooter>
       </ActionDialogContent>
     </Dialog>

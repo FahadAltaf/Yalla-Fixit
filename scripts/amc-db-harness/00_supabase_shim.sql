@@ -108,14 +108,23 @@ CREATE TABLE public.todo_assignees (
 );
 
 -- snagging_clients / snagging_properties as in production (columns the AMC migrations reference).
+-- Columns as read from production on 7 Oct 2026 (the tables were made out of band).
 CREATE TABLE public.snagging_clients (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  name text, email text, phone text, company text, crm_contact_id text
+  name text, email text, phone text, company text, crm_contact_id text, notes text,
+  created_by uuid, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE public.snagging_properties (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id uuid REFERENCES public.snagging_clients(id) ON DELETE SET NULL,
-  unit_label text
+  unit_label text, building_name text, community text, developer_name text,
+  property_type text CHECK (property_type IN ('apartment', 'villa', 'townhouse', 'commercial')),
+  bedrooms integer, built_up_area_sqft numeric, plot_area_sqft numeric,
+  external_areas_in_scope boolean NOT NULL DEFAULT false, floors integer,
+  location_lat numeric, location_lng numeric, title_deed_path text,
+  noc_required boolean NOT NULL DEFAULT false, noc_path text,
+  created_by uuid, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+  furnished boolean NOT NULL DEFAULT false
 );
 
 -- Supabase storage, as far as the AMC migrations touch it.
