@@ -30,7 +30,13 @@ export async function GET(req: NextRequest) {
     if (!profile || !accessUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    if (!hasResourceAction(accessUser, ResourceType.SNAGGING, ActionType.VIEW)) {
+    /*
+      The Jobs page's own permission, not Snagging as a whole.
+      The page guard alone only stops the page: this endpoint is a
+      URL like any other, and a role without the page could still
+      call it and read every row.
+    */
+    if (!hasResourceAction(accessUser, ResourceType.SNAGGING_JOBS, ActionType.VIEW)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 

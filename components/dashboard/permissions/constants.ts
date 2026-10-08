@@ -40,6 +40,14 @@ export const RESOURCE_ACTIONS: Record<ResourceType, ActionType[]> = menuResource
   {} as Record<ResourceType, ActionType[]>
 );
 
+/*
+  Signing in to the inspector app. View is the whole of it: a yes or no
+  about the phone, with what an inspector may then do decided by the job
+  they are named on. It has no menu entry, so it is named here or it
+  would never reach the Permissions screen at all.
+*/
+RESOURCE_ACTIONS[ResourceType.MOBILE_APP] = [ActionType.VIEW];
+
 RESOURCE_ACTIONS[ResourceType.TODOS] = CRUD_MODULE_ACTIONS;
 /* FR5.3 — Approve is the only AMC action granted by role. Creating and
    editing a proposal is gated by the email allowlist instead, which FRD
@@ -74,8 +82,16 @@ const resourceDisplayNameMap: Partial<Record<ResourceType, string>> =
     return acc;
   }, {} as Partial<Record<ResourceType, string>>);
 
+/*
+  Resources with no menu entry of their own, which is where the names
+  above come from. Mobile app is not a page in the portal at all -- it is
+  the permission to sign in to the inspector app on a phone.
+*/
 const EXTRA_RESOURCE_NAMES: Partial<Record<ResourceType, string>> = {
   [ResourceType.AMC]: "AMC Proposals",
+  [ResourceType.SNAGGING]: "Snagging (whole module)",
+  [ResourceType.EXTENSIONS]: "Extensions (whole module)",
+  [ResourceType.MOBILE_APP]: "Mobile application",
 };
 
 export const getResourceDisplayName = (resource: ResourceType): string => {
@@ -98,3 +114,45 @@ export const getActionDisplayName = (action: ActionType): string => {
   };
   return names[action] || action;
 };
+
+/*
+  Which module each permission belongs under.
+
+  The screen lists one row per resource, and once Snagging became seven
+  of them they sorted in amongst Todos and Scheduling in enum order,
+  reading as seven unrelated modules. This keeps a module's pages
+  together and under it, so the list reads the way the menu does.
+*/
+export const RESOURCE_PARENT: Partial<Record<ResourceType, ResourceType>> = {
+  [ResourceType.SNAGGING_OVERVIEW]: ResourceType.SNAGGING,
+  [ResourceType.SNAGGING_QUOTATIONS]: ResourceType.SNAGGING,
+  [ResourceType.SNAGGING_JOBS]: ResourceType.SNAGGING,
+  [ResourceType.SNAGGING_CLIENTS]: ResourceType.SNAGGING,
+  [ResourceType.SNAGGING_ANALYTICS]: ResourceType.SNAGGING,
+  [ResourceType.SNAGGING_CATALOGUE]: ResourceType.SNAGGING,
+  [ResourceType.SNAGGING_CHECKLIST]: ResourceType.SNAGGING,
+  [ResourceType.MOBILE_APP]: ResourceType.SNAGGING,
+  [ResourceType.EXTENSIONS_BULK_DOWNLOAD]: ResourceType.EXTENSIONS,
+  [ResourceType.EXTENSIONS_QUOTATION_TEMPLATES]: ResourceType.EXTENSIONS,
+};
+
+/** Modules with pages of their own, which is what makes a row expandable. */
+export function hasChildren(resource: ResourceType): boolean {
+  return Object.values(RESOURCE_PARENT).includes(resource);
+}
+
+/** A module first, then its pages, then the next module. */
+export function orderResources(resources: ResourceType[]): ResourceType[] {
+  const children = new Map<ResourceType, ResourceType[]>();
+  for (const resource of resources) {
+    const parent = RESOURCE_PARENT[resource];
+    if (!parent) continue;
+    children.set(parent, [...(children.get(parent) ?? []), resource]);
+  }
+  const out: ResourceType[] = [];
+  for (const resource of resources) {
+    if (RESOURCE_PARENT[resource]) continue;
+    out.push(resource, ...(children.get(resource) ?? []));
+  }
+  return out;
+}

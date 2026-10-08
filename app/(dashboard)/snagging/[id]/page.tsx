@@ -9,7 +9,9 @@ import {
   loadJobSnags,
   loadJobVisitStatus,
 } from "@/lib/server/snagging/job-detail-sections";
-import { canViewSnagging } from "@/lib/server/snagging/page-access";
+import { canSeeSnaggingPage } from "@/lib/server/snagging/page-access";
+import { NoPageAccess } from "@/components/dashboard/snagging/no-page-access";
+import { ResourceType } from "@/types/types";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 
 const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
@@ -65,7 +67,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 async function readSections(id: string): Promise<JobDetailInitial | undefined> {
   if (!UUID.test(id)) return undefined;
   try {
-    if (!(await canViewSnagging())) return undefined;
+    if (!(await canSeeSnaggingPage(ResourceType.SNAGGING_JOBS))) return undefined;
     const admin = await createAdminServerClient();
     // A failed section becomes `undefined`, which the page fetches itself.
     const settle = <T,>(work: Promise<T>) =>
@@ -123,6 +125,9 @@ export default async function SnaggingDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  /* The permission decides the page, not just the sidebar entry. */
+  if (!(await canSeeSnaggingPage(ResourceType.SNAGGING_JOBS))) return <NoPageAccess page="Jobs" />;
+
   const { id } = await params;
   const initial = await readSections(id);
   return <InspectionDetail taskId={id} initial={initial} />;

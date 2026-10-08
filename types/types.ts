@@ -111,7 +111,10 @@ export enum ResourceType {
   PERMISSIONS = "permissions",
   SETTINGS = "settings",
   // Extensions
+  /* The group; its pages below carry the permissions. */
   EXTENSIONS = "extensions",
+  EXTENSIONS_BULK_DOWNLOAD = "extensions_bulk_download",
+  EXTENSIONS_QUOTATION_TEMPLATES = "extensions_quotation_templates",
   /* FR5.3 — AMC approval rights are granted by role, so the approver can
      change without a code change. Separate from the email allowlist, which
      still decides who can open the extension at all (FRD §4). */
@@ -119,8 +122,29 @@ export enum ResourceType {
   // Scheduling
   SCHEDULING = "scheduling",
   // Property Care / Snagging
+  /*
+    The module as a whole. Kept, and still the thing most code asks
+    about, but it is no longer what decides whether a page opens: each
+    page below carries its own permission so a role can be given Jobs
+    without being given Quotations, which was the whole point.
+  */
   SNAGGING = "snagging",
+  SNAGGING_OVERVIEW = "snagging_overview",
+  SNAGGING_QUOTATIONS = "snagging_quotations",
+  SNAGGING_JOBS = "snagging_jobs",
+  SNAGGING_CLIENTS = "snagging_clients",
+  SNAGGING_ANALYTICS = "snagging_analytics",
   SNAGGING_CATALOGUE = "snagging_catalogue",
+  SNAGGING_CHECKLIST = "snagging_checklist",
+  /*
+    Signing in to the inspector app, and nothing else.
+
+    The app's sign-in used to be gated on Snagging View, which meant
+    anyone who could open the portal's Snagging pages could also sign in
+    on a phone, and anyone who needed the phone was handed the portal.
+    They are different jobs, so they are different permissions.
+  */
+  MOBILE_APP = "mobile_app",
 }
 
 export type TodoStatus =

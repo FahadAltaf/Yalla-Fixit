@@ -11,7 +11,7 @@ import { rolesService } from "@/modules/roles/services/roles-service";
 import { ResourceType, ActionType, Role, RoleAccess } from "@/types/types";
 import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/data-table";
-import { RESOURCE_ACTIONS } from "./constants";
+import { RESOURCE_ACTIONS, RESOURCE_PARENT, orderResources } from "./constants";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/ui/empty-state";
 import { RouteIcon } from "lucide-react";
@@ -64,6 +64,20 @@ export default function PermissionManagementPage() {
     }
   }
 
+  /*
+    Which modules are showing their pages. Closed by default: the screen
+    is read as a list of modules first, and opened when one is being
+    worked on.
+  */
+  const [openModules, setOpenModules] = useState<Set<ResourceType>>(new Set());
+  const toggleModule = (resource: ResourceType) =>
+    setOpenModules((current) => {
+      const next = new Set(current);
+      if (next.has(resource)) next.delete(resource);
+      else next.add(resource);
+      return next;
+    });
+
   // Transform permissions into table data
   // Exclude SETTINGS, ROLES, and PERMISSIONS from the table
   const excludedResources = [
@@ -73,8 +87,20 @@ export default function PermissionManagementPage() {
     ResourceType.USERS,
   ];
 
-  const tableData: PermissionRowData[] = Object.values(ResourceType)
-    .filter((resource) => !excludedResources.includes(resource))
+  /*
+    Ordered so each module is followed by its own pages, and a module's
+    pages are listed only while it is open -- Snagging alone is eight
+    rows, and all of them at once buried Todos and Scheduling.
+  */
+  const tableData: PermissionRowData[] = orderResources(
+    Object.values(ResourceType).filter(
+      (resource) => !excludedResources.includes(resource),
+    ),
+  )
+    .filter((resource) => {
+      const parent = RESOURCE_PARENT[resource];
+      return !parent || openModules.has(parent);
+    })
     .map((resource) => {
       const isDashboard = resource === ResourceType.DASHBOARD;
       const defaultActions = [ActionType.VIEW];
@@ -266,8 +292,11 @@ export default function PermissionManagementPage() {
             data={tableData}
             columns={getPermissionColumns(
               handleToggleEnabled,
-              handleRecordAccessChange,
-              handleActionsChange
+              handleActionsChange,
+              {
+                isOpen: (resource) => openModules.has(resource),
+                onToggle: toggleModule,
+              }
             )}
             pageSize={tableData.length}
             currentPage={0}

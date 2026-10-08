@@ -4,7 +4,9 @@ import { Suspense } from "react";
 import JobsTable from "@/components/dashboard/snagging/jobs-table";
 import { HeadingSkeleton } from "@/components/dashboard/shared/kaizen-states";
 import { listJobs } from "@/lib/server/snagging/job-list";
-import { canViewSnagging } from "@/lib/server/snagging/page-access";
+import { canSeeSnaggingPage } from "@/lib/server/snagging/page-access";
+import { NoPageAccess } from "@/components/dashboard/snagging/no-page-access";
+import { ResourceType } from "@/types/types";
 import { firstJobsPageParams } from "@/lib/snagging/job-filters";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import type { SnaggingTaskSummary } from "@/types/types";
@@ -39,7 +41,7 @@ async function firstPage(address: Record<string, string | string[] | undefined>)
     return Array.isArray(value) ? value[0] : value;
   };
   try {
-    if (!(await canViewSnagging())) return null;
+    if (!(await canSeeSnaggingPage(ResourceType.SNAGGING_JOBS))) return null;
     const admin = await createAdminServerClient();
     // The same rows the API sends, which the table reads as summaries.
     return (await listJobs(
@@ -62,6 +64,9 @@ export default async function SnaggingJobsPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  /* The permission decides the page, not just the sidebar entry. */
+  if (!(await canSeeSnaggingPage(ResourceType.SNAGGING_JOBS))) return <NoPageAccess page="Jobs" />;
+
   const initial = await firstPage(await searchParams);
 
   // JobsTable reads the status filter from the query string, so it is

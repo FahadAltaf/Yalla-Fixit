@@ -55,15 +55,28 @@ const isItemVisible = (item: MenuItem, userProfile: User): boolean => {
 
 const filterMenuItems = (items: MenuItem[], userProfile: User): MenuItem[] => {
   return items
-    // Sub-items carry their own resource — the snag catalogue is
-    // restricted to Ops while the rest of Snagging is not — so the
-    // filter has to reach into them rather than stopping at the group.
+    // Sub-items carry their own resource — each Snagging page is granted
+    // separately — so the filter has to reach into them rather than
+    // stopping at the group.
     .map((item) =>
       item.items?.length
         ? { ...item, items: item.items.filter((subItem) => isItemVisible(subItem, userProfile)) }
         : item,
     )
-    .filter((item) => isItemVisible(item, userProfile));
+    .filter((item) => {
+      /*
+        A group is worth showing only if something inside it is.
+
+        Its own resource is the module as a whole, which a role can still
+        hold while having none of the pages under it -- an inspector, for
+        one, whose work is on the phone. That printed "Snagging" in the
+        sidebar with nothing beneath it and nowhere to go: a menu entry
+        that is only a disappointment. The pages decide now, and the
+        group follows them.
+      */
+      if (item.items && item.items.length === 0) return false;
+      return isItemVisible(item, userProfile);
+    });
 };
 
 const filterMenuSections = (
@@ -109,12 +122,12 @@ export const baseSectionsItems: MenuItem[] = [
       {
         title: "Bulk download",
         url: "/extensions/bulk-download",
-        resource: ResourceType.EXTENSIONS,
+        resource: ResourceType.EXTENSIONS_BULK_DOWNLOAD,
       },
       {
         title: "Quotation templates",
         url: "/extensions/quotation-templates",
-        resource: ResourceType.EXTENSIONS,
+        resource: ResourceType.EXTENSIONS_QUOTATION_TEMPLATES,
       },
       {
         title: "AMC proposals",
@@ -136,6 +149,12 @@ export const baseSectionsItems: MenuItem[] = [
     url: "/snagging",
     icon: <ClipboardCheck className="size-4 text-primary" />,
     isActive: false,
+    /*
+      The group itself, which is shown when any page under it is. Its
+      children carry the permissions now; this one stays the module-wide
+      resource so anything still asking about Snagging as a whole -- the
+      staff lookup, the API guards -- keeps the answer it had.
+    */
     resource: ResourceType.SNAGGING,
     items: [
       {
@@ -143,7 +162,7 @@ export const baseSectionsItems: MenuItem[] = [
         url: "/snagging",
         // The section landing page, so it lights up on /snagging alone.
         exact: true,
-        resource: ResourceType.SNAGGING,
+        resource: ResourceType.SNAGGING_OVERVIEW,
       },
       /*
         Quotations lead, because that is where work now begins (BA v2,
@@ -153,7 +172,7 @@ export const baseSectionsItems: MenuItem[] = [
       {
         title: "Quotations",
         url: "/snagging/quotations",
-        resource: ResourceType.SNAGGING,
+        resource: ResourceType.SNAGGING_QUOTATIONS,
       },
       {
         title: "Jobs",
@@ -161,7 +180,7 @@ export const baseSectionsItems: MenuItem[] = [
         // An inspection opens at /snagging/<id>, not under /snagging/jobs,
         // so Jobs claims those too and stays selected while a job is open.
         match: ["/snagging"],
-        resource: ResourceType.SNAGGING,
+        resource: ResourceType.SNAGGING_JOBS,
       },
       /*
         "New job" is deliberately gone. A job exists to carry out work a
@@ -178,12 +197,12 @@ export const baseSectionsItems: MenuItem[] = [
       {
         title: "Clients",
         url: "/snagging/clients",
-        resource: ResourceType.SNAGGING,
+        resource: ResourceType.SNAGGING_CLIENTS,
       },
       {
         title: "Analytics",
         url: "/snagging/analytics",
-        resource: ResourceType.SNAGGING,
+        resource: ResourceType.SNAGGING_ANALYTICS,
       },
       {
         title: "Snag catalogue",
@@ -193,7 +212,7 @@ export const baseSectionsItems: MenuItem[] = [
       {
         title: "Checklist library",
         url: "/snagging/checklist",
-        resource: ResourceType.SNAGGING_CATALOGUE,
+        resource: ResourceType.SNAGGING_CHECKLIST,
       },
     ],
   },
