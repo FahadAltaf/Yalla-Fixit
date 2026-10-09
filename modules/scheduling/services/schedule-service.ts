@@ -27,6 +27,20 @@ export interface ScheduleEntry {
   fsm_schedule_type: "Time-bound" | "All Day" | null;
   fsm_service_line_item_ids: string[] | null;
   fsm_service_task_line_item_ids: string[] | null;
+  // FR-15 (appointments): a copy to a later day. Until approval creates it,
+  // fsm_work_order_id is the SOURCE work order; afterwards it is the new one
+  // and fsm_created_work_order_* carry the same ids.
+  fsm_create_work_order?: boolean | null;
+  fsm_copy_source_work_order_id?: string | null;
+  fsm_copy_source_work_order_name?: string | null;
+  fsm_copy_source_appointment_id?: string | null;
+  fsm_copy_source_appointment_name?: string | null;
+  fsm_created_work_order_id?: string | null;
+  fsm_created_work_order_name?: string | null;
+  fsm_copy_price?: number | string | null;
+  fsm_copy_currency?: string | null;
+  fsm_copy_source_line_ids?: string[] | null;
+  fsm_work_order_create_started_at?: string | null;
   last_sync_error: string | null;
   last_synced_at: string | null;
   title: string | null;
@@ -112,6 +126,34 @@ export interface FsmUnplacedAppointment {
   technicians: string[];
 }
 
+export interface CopyDayResult {
+  date: string;
+  status: "copied" | "skipped" | "needs_confirmation";
+  reason?: string;
+  entryId?: string;
+  droppedTechnicians?: string[];
+  dayCreated?: boolean;
+}
+
+// FR-15 (appointments): what a copy of an appointment contains and costs,
+// shown before the person confirms. One new work order per copied day.
+export interface CopyPriceQuote {
+  workOrderName: string | null;
+  appointmentName: string | null;
+  summary: string | null;
+  currency: string;
+  lines: { code: string; service: string | null; quantity: number; amount: number; lineAmount: number }[];
+  // Parts tied to those lines; copied and priced too.
+  parts: { code: string; service: string | null; quantity: number; amount: number; lineAmount: number }[];
+  subtotal: number;
+  total: number;
+  // The source lines are free in FSM, so one copy could stay on the same
+  // work order instead of a new one.
+  linesFree: boolean;
+}
+
+export type CopyMode = "new_work_order" | "same_work_order";
+
 export interface DayScheduleResponse {
   version: ScheduleVersion | null;
   entries: ScheduleEntry[];
@@ -119,11 +161,16 @@ export interface DayScheduleResponse {
   carriedOver?: ScheduleEntry[];
   // FSM appointments for this date that have no row to sit on.
   unplaced?: FsmUnplacedAppointment[];
+  // FR-13: the technician row order the team arranged for this day, top to
+  // bottom, or null when they have not arranged one.
+  boardOrder?: string[] | null;
   // FR-4: how many appointments were just pulled in from FSM, if any.
   imported?: number;
   fsmImport?: FsmImportSummary | null;
   // True the first time a day is pulled; later pulls stay quiet unless they add something.
   fsmFirstPull?: boolean;
+  // True when FSM is being re-read after this response; the board reloads soon after.
+  fsmRefreshing?: boolean;
 }
 
 export interface CreateEntryInput {
@@ -207,6 +254,30 @@ export const scheduleService = {
     return executeRESTBackend<ScheduleEntry>("/api/scheduling/schedule/entries", {
       method: "POST",
       body: data as unknown as Record<string, unknown>,
+    });
+  },
+
+  // FR-15 (notes): copy a free-text entry to later days. Each day answers for
+  // itself: copied, skipped (with the reason), or needs confirmation because
+  // the same note is already there.
+  // For an appointment (FR-15): `quoteOnly` answers with the price and the
+  // lines and copies nothing; the real call carries `priceConfirmed`. Each
+  // copied day creates a new work order in FSM on approval, unless `mode`
+  // is "same_work_order" (one day, lines free in FSM).
+  copyEntryToDays: async (input: {
+    entryId: string;
+    dates: string[];
+    confirmDuplicates?: string[];
+    mode?: CopyMode;
+    quoteOnly?: boolean;
+    priceConfirmed?: boolean;
+    // The total the person saw and confirmed; the server refuses the copy
+    // if FSM now quotes a different figure.
+    confirmedTotal?: number;
+  }): Promise<{ results: CopyDayResult[]; quote?: CopyPriceQuote }> => {
+    return executeRESTBackend<{ results: CopyDayResult[]; quote?: CopyPriceQuote }>("/api/scheduling/schedule/entries/copy", {
+      method: "POST",
+      body: input as unknown as Record<string, unknown>,
     });
   },
 
