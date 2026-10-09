@@ -58,6 +58,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  ListFilter,
   Loader2,
   MoreVertical,
   Plus,
@@ -81,6 +82,20 @@ import {
 import TimeSelect from "@/components/ui/time-select";
 
 type Props = { technicians: TechnicianReference[] };
+
+// Columns of the technician list that can be filtered like a spreadsheet.
+type FilterColumn = "role" | "service" | "shift" | "supervisor" | "tags" | "availability";
+const FILTER_COLUMNS: FilterColumn[] = ["role", "service", "shift", "supervisor", "tags", "availability"];
+const FILTER_LABELS: Record<FilterColumn, string> = {
+  role: "Role",
+  service: "Service",
+  shift: "Shift",
+  supervisor: "Supervisor",
+  tags: "Tags",
+  availability: "Availability",
+};
+// The value a row has when a column is empty for it.
+const BLANK = "(blank)";
 
 const SHIFT_OPTIONS = [
   { value: "", label: "— Shift —" },
@@ -205,14 +220,63 @@ export default function SchedulingDashboard({ technicians }: Props) {
     return byTech;
   }, [leaveRecords]);
 
+  // Column filters, as in a spreadsheet: each column offers its distinct
+  // values with a tick box; a row shows when it matches every active column.
+  const [columnFilters, setColumnFilters] = useState<Partial<Record<FilterColumn, Set<string>>>>({});
+  const valuesOf = useMemo(() => {
+    const leaveOf = (id: string) => nearestActiveLeave(leaveByTechnician.get(id) ?? []);
+    return (t: TechnicianReference, column: FilterColumn): string[] => {
+      switch (column) {
+        case "role":
+          return [t.role_name ?? BLANK];
+        case "service":
+          return [t.service_type_name ?? BLANK];
+        case "shift":
+          return [t.shift === "night" ? "Night" : t.shift === "morning" ? "Morning" : BLANK];
+        case "supervisor":
+          return [t.team_leader_name ?? BLANK];
+        case "tags": {
+          const names = (assignments[t.fsm_resource_id] ?? []).map((tag) => tag.name);
+          return names.length ? names : [BLANK];
+        }
+        case "availability": {
+          const leave = leaveOf(t.fsm_resource_id);
+          return [leave ? (leave.current ? "On leave" : "Upcoming leave") : "Available"];
+        }
+      }
+    };
+  }, [assignments, leaveByTechnician]);
+  const filterOptions = useMemo(() => {
+    const out = {} as Record<FilterColumn, { value: string; count: number }[]>;
+    FILTER_COLUMNS.forEach((column) => {
+      const counts = new Map<string, number>();
+      techs.forEach((t) => valuesOf(t, column).forEach((v) => counts.set(v, (counts.get(v) ?? 0) + 1)));
+      out[column] = [...counts.entries()]
+        .sort((a, b) => (a[0] === BLANK ? 1 : b[0] === BLANK ? -1 : a[0].localeCompare(b[0])))
+        .map(([value, count]) => ({ value, count }));
+    });
+    return out;
+  }, [techs, valuesOf]);
+  const setColumnFilter = (column: FilterColumn, values: Set<string> | null) =>
+    setColumnFilters((prev) => {
+      const next = { ...prev };
+      if (values && values.size > 0) next[column] = values;
+      else delete next[column];
+      return next;
+    });
+  const activeFilterCount = Object.keys(columnFilters).length;
+
   const visibleTechnicians = useMemo(() => {
     let list = [...techs];
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       list = list.filter((t) => t.display_name.toLowerCase().includes(q));
     }
+    (Object.entries(columnFilters) as [FilterColumn, Set<string>][]).forEach(([column, allowed]) => {
+      list = list.filter((t) => valuesOf(t, column).some((v) => allowed.has(v)));
+    });
     return list.sort((a, b) => a.display_name.localeCompare(b.display_name));
-  }, [techs, search]);
+  }, [techs, search, columnFilters, valuesOf]);
 
   // Paginate rather than rendering all ~90 technicians at once: a long
   // unbroken table is slow to scan and slow to render.
@@ -226,7 +290,7 @@ export default function SchedulingDashboard({ technicians }: Props) {
   // otherwise a narrowed result set can look empty.
   useEffect(() => {
     setPage(1);
-  }, [search, pageSize]);
+  }, [search, pageSize, columnFilters]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -325,9 +389,12 @@ export default function SchedulingDashboard({ technicians }: Props) {
       return next;
     });
 
-  const allVisibleSelected = pageRows.length > 0 && pageRows.every((t) => selected.has(t.fsm_resource_id));
+  // Everything that matches the search and the column filters, across every
+  // page: filter first, then tick the box, then edit in bulk.
+  const allVisibleSelected =
+    visibleTechnicians.length > 0 && visibleTechnicians.every((t) => selected.has(t.fsm_resource_id));
   const toggleSelectAll = () =>
-    setSelected(allVisibleSelected ? new Set<string>() : new Set(pageRows.map((t) => t.fsm_resource_id)));
+    setSelected(allVisibleSelected ? new Set<string>() : new Set(visibleTechnicians.map((t) => t.fsm_resource_id)));
 
   const selectedIds = [...selected];
 
@@ -366,6 +433,12 @@ export default function SchedulingDashboard({ technicians }: Props) {
               aria-label="Search technicians"
             />
           </div>
+          {activeFilterCount > 0 && (
+            <Button variant="outline" size="sm" onClick={() => setColumnFilters({})}>
+              <X className="size-3.5" />
+              Clear {activeFilterCount} column filter{activeFilterCount === 1 ? "" : "s"} · {visibleTechnicians.length} shown
+            </Button>
+          )}
           <div className="flex items-center gap-2">
             {/* A native <select> was the one control on this page that did
                 not match the rest of the app; this is the same Select used
@@ -475,16 +548,24 @@ export default function SchedulingDashboard({ technicians }: Props) {
                   <Checkbox
                     checked={allVisibleSelected}
                     onCheckedChange={toggleSelectAll}
-                    aria-label="Select all on this page"
+                    aria-label={`Select all ${visibleTechnicians.length} matching technicians`}
+                    title={`Select all ${visibleTechnicians.length} matching technicians`}
                   />
                 </TableHead>
                 <TableHead>Technician</TableHead>
-                <TableHead>Role</TableHead>
-                <TableHead>Service</TableHead>
-                <TableHead>Shift</TableHead>
-                <TableHead>Supervisor</TableHead>
-                <TableHead>Tags</TableHead>
-                <TableHead>Availability</TableHead>
+                {FILTER_COLUMNS.map((column) => (
+                  <TableHead key={column}>
+                    <span className="flex items-center gap-1">
+                      {FILTER_LABELS[column]}
+                      <ColumnFilter
+                        label={FILTER_LABELS[column]}
+                        options={filterOptions[column]}
+                        selected={columnFilters[column] ?? null}
+                        onChange={(values) => setColumnFilter(column, values)}
+                      />
+                    </span>
+                  </TableHead>
+                ))}
                 <TableHead className="w-[1%] text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -1329,5 +1410,100 @@ function ManageTechnicianDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// One column's filter, as in a spreadsheet: every value the column holds,
+// each with a tick box and a count; search to find one; Select all / Clear.
+// Only the ticked values show. An active filter is marked on the heading.
+function ColumnFilter({
+  label,
+  options,
+  selected,
+  onChange,
+}: {
+  label: string;
+  options: { value: string; count: number }[];
+  // null = no filter on this column (everything shows).
+  selected: Set<string> | null;
+  onChange: (values: Set<string> | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const active = selected !== null;
+  const shown = options.filter((o) => o.value.toLowerCase().includes(query.trim().toLowerCase()));
+  const isTicked = (value: string) => (selected ? selected.has(value) : true);
+  const toggle = (value: string) => {
+    const next = new Set(selected ?? options.map((o) => o.value));
+    if (next.has(value)) next.delete(value);
+    else next.add(value);
+    // Everything ticked again means no filter.
+    onChange(next.size === options.length ? null : next);
+  };
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setQuery("");
+      }}
+    >
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            "rounded p-0.5 transition-colors",
+            active
+              ? "bg-primary/15 text-primary"
+              : "text-muted-foreground/60 hover:bg-muted hover:text-foreground",
+          )}
+          title={active ? `${label}: ${selected!.size} of ${options.length} values shown. Click to change.` : `Filter by ${label}`}
+          aria-label={`Filter by ${label}`}
+        >
+          <ListFilter className="size-3.5" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64 gap-2">
+        <div className="flex items-center justify-between text-xs">
+          <span className="font-medium">{label}</span>
+          <span className="flex gap-2">
+            <button type="button" className="text-primary underline underline-offset-2" onClick={() => onChange(null)}>
+              Select all
+            </button>
+            <button
+              type="button"
+              className="text-primary underline underline-offset-2"
+              onClick={() => onChange(new Set<string>(["\u0000none"]))}
+            >
+              Clear
+            </button>
+          </span>
+        </div>
+        {options.length > 8 && (
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search values…"
+            className="h-8 text-xs"
+            aria-label={`Search ${label} values`}
+          />
+        )}
+        <div className="max-h-64 overflow-y-auto">
+          {shown.length === 0 ? (
+            <div className="text-muted-foreground px-1 py-2 text-xs">No values match.</div>
+          ) : (
+            shown.map((o) => (
+              <label key={o.value} className="hover:bg-muted flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-sm">
+                <Checkbox checked={isTicked(o.value)} onCheckedChange={() => toggle(o.value)} aria-label={o.value} />
+                <span className={cn("min-w-0 flex-1 truncate", o.value === BLANK && "text-muted-foreground italic")}>
+                  {o.value}
+                </span>
+                <span className="text-muted-foreground text-xs tabular-nums">{o.count}</span>
+              </label>
+            ))
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }

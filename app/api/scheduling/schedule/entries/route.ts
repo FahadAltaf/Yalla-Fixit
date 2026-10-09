@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { z } from "zod";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
@@ -10,8 +10,8 @@ const baseEntrySchema = {
   scheduleVersionId: z.string().uuid(),
   shift: z.enum(["day", "night"]),
   operatingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  startAt: z.string().datetime(),
-  endAt: z.string().datetime(),
+  startAt: z.string().datetime({ offset: true }),
+  endAt: z.string().datetime({ offset: true }),
   technicianFsmIds: z.array(z.string().trim().min(1)),
   notes: z.string().trim().optional().nullable(),
 };
@@ -130,6 +130,9 @@ export async function POST(req: NextRequest) {
     const payload = parsed.data;
 
     const admin = await createAdminServerClient();
+    // The leave check does not depend on the draft check; both go out at once.
+    const leavePromise = findLeaveConflicts(admin, payload.technicianFsmIds, payload.startAt, payload.endAt);
+    leavePromise.catch(() => undefined);
     await assertDraftEditable(admin, payload.scheduleVersionId);
 
     // A work order can carry several appointments (one per service line), but
@@ -137,11 +140,17 @@ export async function POST(req: NextRequest) {
     // replaces the old work-order-level uniqueness that wrongly blocked a
     // second appointment for the same work order (YFI note on WO2361).
     if (payload.entryType === "new_appointment") {
-      const { data: siblings } = await admin
+      const { data: rows, error: rowsError } = await admin
         .from("schedule_entries")
-        .select("fsm_service_line_item_ids, fsm_work_order_name, fsm_appointment_name, title")
+        .select(
+          "fsm_service_line_item_ids, fsm_work_order_name, fsm_appointment_name, title, fsm_create_work_order, fsm_created_work_order_id",
+        )
         .eq("schedule_version_id", payload.scheduleVersionId)
         .eq("entry_type", "new_appointment");
+      if (rowsError) throw new Error(rowsError.message);
+      // A copy that still waits for its own work order (FR-15) names the
+      // SOURCE lines until approval creates it; it does not hold them here.
+      const siblings = (rows ?? []).filter((s) => !(s.fsm_create_work_order && !s.fsm_created_work_order_id));
       const clash = payload.serviceLineItemIds.filter((id) =>
         (siblings ?? []).some((s) => ((s.fsm_service_line_item_ids as string[] | null) ?? []).includes(id)),
       );
@@ -163,12 +172,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const leaveConflicts = await findLeaveConflicts(
-      admin,
-      payload.technicianFsmIds,
-      payload.startAt,
-      payload.endAt,
-    );
+    const leaveConflicts = await leavePromise;
     if (leaveConflicts.length > 0) {
       return NextResponse.json(
         { error: leaveConflictMessage(leaveConflicts), conflicts: leaveConflicts },
@@ -243,14 +247,17 @@ export async function POST(req: NextRequest) {
       if (assignError) throw new Error(assignError.message);
     }
 
-    await admin.from("schedule_audit_events").insert({
-      event_type: "entry_added",
-      actor_id: profile.id,
-      origin: "portal",
-      schedule_version_id: payload.scheduleVersionId,
-      affected_entity_type: "schedule_entry",
-      affected_entity_id: entry.id,
-      after_value: insertRow,
+    // Written after the response; the caller never waits on the audit trail.
+    after(async () => {
+      await admin.from("schedule_audit_events").insert({
+        event_type: "entry_added",
+        actor_id: profile.id,
+        origin: "portal",
+        schedule_version_id: payload.scheduleVersionId,
+        affected_entity_type: "schedule_entry",
+        affected_entity_id: entry.id,
+        after_value: insertRow,
+      });
     });
 
     return NextResponse.json({ data: entry });
@@ -264,8 +271,8 @@ export async function POST(req: NextRequest) {
 const updateEntrySchema = z.object({
   id: z.string().uuid(),
   shift: z.enum(["day", "night"]).optional(),
-  startAt: z.string().datetime().optional(),
-  endAt: z.string().datetime().optional(),
+  startAt: z.string().datetime({ offset: true }).optional(),
+  endAt: z.string().datetime({ offset: true }).optional(),
   technicianFsmIds: z.array(z.string().trim().min(1)).optional(),
   title: z.string().trim().optional().nullable(),
   notes: z.string().trim().optional().nullable(),
@@ -331,13 +338,19 @@ export async function PUT(req: NextRequest) {
       }
       // Same rule as adding: a service line can only be on one new appointment
       // per day (ignoring this entry itself).
-      const { data: siblings } = await admin
+      const { data: rows, error: rowsError } = await admin
         .from("schedule_entries")
-        .select("id, fsm_service_line_item_ids, fsm_work_order_name, fsm_appointment_name, title")
+        .select(
+          "id, fsm_service_line_item_ids, fsm_work_order_name, fsm_appointment_name, title, fsm_create_work_order, fsm_created_work_order_id",
+        )
         .eq("schedule_version_id", existing.schedule_version_id)
         .eq("entry_type", "new_appointment")
         .neq("id", payload.id);
-      const owner = (siblings ?? []).find((s) =>
+      if (rowsError) throw new Error(rowsError.message);
+      // A copy still waiting for its own work order names the source lines
+      // but does not hold them (FR-15).
+      const siblings = (rows ?? []).filter((s) => !(s.fsm_create_work_order && !s.fsm_created_work_order_id));
+      const owner = siblings.find((s) =>
         ((s.fsm_service_line_item_ids as string[] | null) ?? []).some((id) => payload.serviceLineItemIds!.includes(id)),
       );
       if (owner) {
@@ -398,15 +411,18 @@ export async function PUT(req: NextRequest) {
       }
     }
 
-    await admin.from("schedule_audit_events").insert({
-      event_type: "entry_updated",
-      actor_id: profile.id,
-      origin: "portal",
-      schedule_version_id: existing.schedule_version_id,
-      affected_entity_type: "schedule_entry",
-      affected_entity_id: payload.id,
-      before_value: existing,
-      after_value: updateData,
+    // Written after the response; the caller never waits on the audit trail.
+    after(async () => {
+      await admin.from("schedule_audit_events").insert({
+        event_type: "entry_updated",
+        actor_id: profile.id,
+        origin: "portal",
+        schedule_version_id: existing.schedule_version_id,
+        affected_entity_type: "schedule_entry",
+        affected_entity_id: payload.id,
+        before_value: existing,
+        after_value: updateData,
+      });
     });
 
     return NextResponse.json({ data: updated });
@@ -501,15 +517,26 @@ export async function DELETE(req: NextRequest) {
       updatedVersion = v;
     }
 
-    await admin.from("schedule_audit_events").insert({
-      event_type: "entry_removed",
-      actor_id: profile.id,
-      origin: "portal",
-      schedule_version_id: existing.schedule_version_id,
-      affected_entity_type: "schedule_entry",
-      affected_entity_id: id,
-      before_value: existing,
-      after_value: removingFailed ? { reason: "failed_sync_removed_after_approval" } : null,
+    // Written after the response; the caller never waits on the audit trail.
+    after(async () => {
+      await admin.from("schedule_audit_events").insert({
+        event_type: "entry_removed",
+        actor_id: profile.id,
+        origin: "portal",
+        schedule_version_id: existing.schedule_version_id,
+        affected_entity_type: "schedule_entry",
+        affected_entity_id: id,
+        before_value: existing,
+        after_value: removingFailed
+          ? {
+              reason: "failed_sync_removed_after_approval",
+              // FR-15: a copy whose work order was created but whose
+              // appointment failed leaves that work order in FSM without an
+              // appointment; its id is kept here so it can be found.
+              orphaned_fsm_work_order_id: (existing as { fsm_created_work_order_id?: string | null }).fsm_created_work_order_id ?? null,
+            }
+          : null,
+      });
     });
 
     return NextResponse.json({ data: { success: true, version: updatedVersion } });

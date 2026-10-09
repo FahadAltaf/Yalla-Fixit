@@ -289,7 +289,7 @@ async function main() {
       if (!t || !t.is_active) return [];
       if (t.shift === "night") return ["night"];
       if (t.shift === "morning") return ["day"];
-      return [layout.homeShift(range, windows)];
+      return ["day", "night"]; // no shift set: a row in both grids, all jobs in both
     };
     byDate.forEach((list, date) => {
       const jobs = list.filter(placeable).map((r) => {

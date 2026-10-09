@@ -1,5 +1,7 @@
 import type { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { createFsmAppointment, updateFsmAppointment } from "@/lib/server/zoho/appointments";
+import { createFsmWorkOrderCopy, findRecentFsmWorkOrderCopy } from "@/lib/server/zoho/work-order-copy";
+import { fsmOk, type FsmResult } from "@/lib/server/zoho/fsm-client";
 
 type Admin = Awaited<ReturnType<typeof createAdminServerClient>>;
 
@@ -20,11 +22,20 @@ export type SyncEntryRow = {
   fsm_service_line_item_ids?: string[] | null;
   fsm_service_task_line_item_ids?: string[] | null;
   needs_sync?: boolean | null;
+  // FR-15 (appointments): a copy that first needs its own work order in FSM.
+  fsm_create_work_order?: boolean | null;
+  fsm_created_work_order_id?: string | null;
+  fsm_copy_source_work_order_name?: string | null;
+  fsm_copy_source_appointment_name?: string | null;
+  fsm_copy_price?: number | string | null;
+  fsm_work_order_create_started_at?: string | null;
+  sync_status?: string | null;
 };
 
 // The columns syncEntryToFsm needs; use in .select() so nothing is missed.
+// Needs migration 20261009120000 (the fsm_create_work_order columns).
 export const SYNC_ENTRY_COLUMNS =
-  "id, entry_type, fsm_work_order_id, fsm_appointment_id, fsm_work_order_name, fsm_appointment_name, fsm_last_modified_marker, start_at, end_at, title, operating_date, fsm_appointment_type, fsm_schedule_type, fsm_service_line_item_ids, fsm_service_task_line_item_ids, sync_status, needs_sync";
+  "id, entry_type, fsm_work_order_id, fsm_appointment_id, fsm_work_order_name, fsm_appointment_name, fsm_last_modified_marker, start_at, end_at, title, operating_date, fsm_appointment_type, fsm_schedule_type, fsm_service_line_item_ids, fsm_service_task_line_item_ids, sync_status, needs_sync, fsm_create_work_order, fsm_created_work_order_id, fsm_copy_source_work_order_name, fsm_copy_source_appointment_name, fsm_copy_price, fsm_work_order_create_started_at";
 
 // A short human label for an entry in sync results/toasts (WO2361 · AP-3148),
 // so a failure can name exactly which appointment is the problem.
@@ -110,6 +121,161 @@ export async function syncEntryToFsm(
 
   const startedAt = new Date().toISOString();
   const creating = entry.entry_type === "new_appointment" && !entry.fsm_appointment_id;
+
+  // FR-15 (appointments): a copy of an appointment to a later day gets its
+  // own work order in FSM first (a copy of the lines the original covered),
+  // then the appointment is created on that new work order. The new ids are
+  // written to the entry BEFORE the appointment step, so a retry after an
+  // appointment failure reuses the work order instead of making another.
+  //
+  // Two more guards, because a work order create is not idempotent:
+  //  - the entry is claimed (sync_status = syncing) before anything is sent,
+  //    so two approvals or retries at once cannot both create it;
+  //  - fsm_work_order_create_started_at is set just before the POST; while
+  //    it is set and no id is saved, the outcome is unknown (timeout, 5xx,
+  //    a crash before the save), and FSM is searched for the work order
+  //    before any new create.
+  if (creating && entry.fsm_create_work_order && !entry.fsm_created_work_order_id) {
+    const sourceWorkOrderId = entry.fsm_work_order_id as string;
+    const sourceLineIds = entry.fsm_service_line_item_ids ?? [];
+    const label = syncEntryLabel(entry);
+    const fail = async (error: string, response: unknown): Promise<SyncEntryResult> => {
+      await recordFailure(admin, entry, scheduleVersionId, operationType, error, response);
+      return { entryId: entry.id, status: "failed", error, label };
+    };
+
+    const claimAt = new Date().toISOString();
+    const staleBefore = new Date(Date.now() - 10 * 60_000).toISOString();
+    const { data: claimed, error: claimError } = await admin
+      .from("schedule_entries")
+      .update({ sync_status: "syncing", updated_at: claimAt })
+      .eq("id", entry.id)
+      .is("fsm_created_work_order_id", null)
+      .or(`sync_status.neq.syncing,updated_at.lt.${staleBefore}`)
+      .select("id");
+    if (claimError) return fail(`Could not claim the entry: ${claimError.message}`, null);
+    if (!claimed || claimed.length === 0) {
+      // Someone else holds it (or it was created meanwhile): report, do not
+      // touch the entry.
+      return {
+        entryId: entry.id,
+        status: "failed",
+        error: "This copy is being created in Zoho FSM by another approval or retry. Wait a moment, then refresh.",
+        label,
+      };
+    }
+
+    let made: FsmResult | null = null;
+    let adopted = false;
+    if (entry.fsm_work_order_create_started_at) {
+      const found = await findRecentFsmWorkOrderCopy({
+        sourceWorkOrderId,
+        dueDate: entry.operating_date ?? null,
+        createdAfter: entry.fsm_work_order_create_started_at,
+      });
+      if (!found.ok) {
+        return fail(
+          `An earlier attempt to create this copy's work order has an unknown result, and Zoho FSM could not be checked: ${describeError(found.json, found.status)}`,
+          found.json,
+        );
+      }
+      const matches = (found.json.matches ?? []) as { id: string; name: string | null }[];
+      if (matches.length > 1) {
+        return fail(
+          `Zoho FSM has ${matches.length} work orders that may belong to this copy (${matches.map((m) => m.name ?? m.id).join(", ")}). Cancel the extra ones in FSM, then retry.`,
+          found.json,
+        );
+      }
+      if (matches.length === 1) {
+        made = fsmOk({ workOrderId: matches[0].id, workOrderName: matches[0].name, adopted: true });
+        adopted = true;
+      }
+    }
+    if (!made) {
+      const createStartedAt = new Date().toISOString();
+      const { error: markError } = await admin
+        .from("schedule_entries")
+        .update({ fsm_work_order_create_started_at: createStartedAt })
+        .eq("id", entry.id);
+      if (markError) return fail(`Could not record the attempt before creating the work order: ${markError.message}`, null);
+      made = await createFsmWorkOrderCopy({
+        sourceWorkOrderId,
+        sourceLineIds,
+        dueDate: entry.operating_date ?? null,
+        correlationId: entry.id,
+        expectedTotal:
+          entry.fsm_copy_price !== null && entry.fsm_copy_price !== undefined ? Number(entry.fsm_copy_price) : null,
+      });
+    }
+    const madeAt = new Date().toISOString();
+    await admin.from("schedule_audit_events").insert({
+      event_type: "sync_create_work_order",
+      origin: "system",
+      schedule_version_id: scheduleVersionId,
+      schedule_entry_id: entry.id,
+      affected_entity_type: "schedule_entry",
+      affected_entity_id: entry.id,
+      status: made.ok ? "succeeded" : "failed",
+      correlation_id: entry.id,
+      error_message: made.ok ? null : JSON.stringify(made.json),
+      after_value: {
+        response: made.json,
+        adopted,
+        source_work_order_id: sourceWorkOrderId,
+        source_line_ids: sourceLineIds,
+        startedAt,
+        completedAt: madeAt,
+      },
+    });
+    if (!made.ok) {
+      const error = describeError(made.json, made.status);
+      // FSM said no (a 4xx with a reason, or a pre-check): nothing was
+      // created, so the next attempt may create. Anything else (timeout,
+      // 5xx, no id in the answer) is unknown and keeps the marker.
+      const fsmStatus = Number(made.json?.fsmStatus ?? 0);
+      const definite = made.status === 409 || made.status === 404 || (fsmStatus >= 400 && fsmStatus < 500 && !made.json?.timedOut);
+      if (definite) {
+        await admin.from("schedule_entries").update({ fsm_work_order_create_started_at: null }).eq("id", entry.id);
+      }
+      return fail(
+        definite ? error : `${error} The result is unknown; the next retry checks Zoho FSM for the work order before creating one.`,
+        made.json,
+      );
+    }
+
+    const newWorkOrderId = made.json.workOrderId as string;
+    const newWorkOrderName = (made.json.workOrderName as string | null) ?? null;
+    const { error: saveError } = await admin
+      .from("schedule_entries")
+      .update({
+        fsm_created_work_order_id: newWorkOrderId,
+        fsm_created_work_order_name: newWorkOrderName,
+        fsm_work_order_id: newWorkOrderId,
+        fsm_work_order_name: newWorkOrderName ?? newWorkOrderId,
+        // The new work order holds only the copied lines, so the appointment
+        // takes every line and every task on it; no id mapping to go wrong.
+        fsm_service_line_item_ids: null,
+        fsm_service_task_line_item_ids: null,
+        updated_at: madeAt,
+      })
+      .eq("id", entry.id);
+    if (saveError) {
+      // The work order exists in FSM; the marker stays set, so the next
+      // retry finds it there instead of creating another.
+      return fail(
+        `Work order ${newWorkOrderName ?? newWorkOrderId} was created in Zoho FSM but could not be saved on the entry: ${saveError.message}. Retry: it will be found in FSM, not created again.`,
+        made.json,
+      );
+    }
+    entry = {
+      ...entry,
+      fsm_created_work_order_id: newWorkOrderId,
+      fsm_work_order_id: newWorkOrderId,
+      fsm_work_order_name: newWorkOrderName ?? newWorkOrderId,
+      fsm_service_line_item_ids: null,
+      fsm_service_task_line_item_ids: null,
+    };
+  }
 
   const scheduleType = entry.fsm_schedule_type === "All Day" ? "All Day" : "Time-bound";
   const result = creating
