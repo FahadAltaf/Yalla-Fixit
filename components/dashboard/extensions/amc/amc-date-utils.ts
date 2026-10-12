@@ -63,6 +63,22 @@ export function contractTermPhrase(months: number): string {
   return parts.join(" ") || "1 year";
 }
 
+/*
+  The fee's period in words, for the proposal and its page (Sharon, Oct
+  2026). A six-month contract's fee was still "a year" and its label the
+  "Annual fee"; both follow the term now, and a one-year contract reads
+  exactly as before.
+*/
+/** "a year", "for 6 months" -- after an amount. */
+export function termFeePhrase(months: number): string {
+  return months === 12 ? "a year" : `for ${contractTermPhrase(months)}`;
+}
+
+/** "Annual fee", "Fee for 6 months" -- as a label. */
+export function termFeeLabel(months: number): string {
+  return months === 12 ? "Annual fee" : `Fee for ${contractTermPhrase(months)}`;
+}
+
 /** "1 Year Only" -- the contract's own Period of Service row. */
 export function contractTermLabel(months: number): string {
   const phrase = contractTermPhrase(months)

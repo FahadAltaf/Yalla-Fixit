@@ -180,6 +180,15 @@ const additionalWorkSchema = z
   })
   .strict();
 
+/* BRD 5.15: the client report's own words, residential and commercial (Phase 12). */
+const clientReportSchema = z
+  .object({
+    residentialIntro: text(600),
+    commercialIntro: text(600),
+    closing: text(400),
+  })
+  .strict();
+
 const todosSchema = z
   .object({
     /* Live `main` emails any to-do whose reminder time is set, so AMC
@@ -200,6 +209,7 @@ export const AMC_CONFIG_SCHEMAS = {
   allowances: allowancesSchema,
   renewals: renewalsSchema,
   additionalWork: additionalWorkSchema,
+  clientReport: clientReportSchema,
   todos: todosSchema,
   /* Email and WhatsApp/SMS texts: saved changes only (lib/amc/message-templates.ts). */
   templates: templatesConfigSchema,
@@ -222,6 +232,7 @@ export const AMC_CONFIG_SECTION_LEVEL: Record<AmcConfigSection, "management" | "
   allowances: "admin",
   renewals: "admin",
   additionalWork: "admin",
+  clientReport: "admin",
   todos: "admin",
   templates: "admin",
 };
@@ -350,6 +361,13 @@ export const AMC_CONFIG_DEFAULTS: AmcConfig = {
   },
   additionalWork: {
     materialHandlingFeePercent: 20,
+  },
+  clientReport: {
+    residentialIntro:
+      "Here is the service summary for your home: the planned visits done so far, the call outs we attended, any additional work, and what remains on your AMC.",
+    commercialIntro:
+      "Here is the service summary for your premises: the planned maintenance carried out, the call outs we attended and how fast, any additional work, and the balance of your AMC.",
+    closing: "For anything you need, call or WhatsApp your account manager. Thank you for choosing Yalla Fix It.",
   },
   todos: {
     emailReminders: false,

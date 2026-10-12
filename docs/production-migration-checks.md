@@ -773,3 +773,31 @@ Expected:
 **Live check:** open AMC Proposals in the live portal; it works as before. In the demo portal, open Permissions: AMC now lists Call outs and Additional work. Then open AMC → Call outs and log a non-emergency call out on an active contract. The coverage answer shows before you confirm, and the contract's Call outs tab shows the unit as booked.
 
 **After applying:** check AMC configuration → SLA (minutes and hours, the at-risk percent), Allowances (when the warning starts) and Additional work (the material handling fee). The daily AMC jobs now include `call_outs`.
+
+
+## 19. Phase 12 migration: `20261012130000_amc_client_report.sql`
+
+Apply after section 18. It is **live-safe** and small:
+- `amc_send_log` accepts `client_report`: the per-contract client report, emailed or prepared for WhatsApp. The report itself is stored as a contract document (category "Client report"), which needs no change.
+- Three indexes the reports read by date: call outs by report time, payments by date received, visits by closure.
+
+No report function or view is added: the dashboard and the operational and commercial reports read the existing tables.
+
+**Order matters.** Sections 17, 18 and 19 each rewrite the list of documents `amc_send_log` accepts, every time with all the values before it plus their own. Apply them in order. If an earlier one is ever run again, run the later ones again after it.
+
+**Pre-check** (read-only):
+```sql
+select pg_get_constraintdef(oid) from pg_constraint where conname = 'amc_send_log_document_check';
+```
+Expected: the list ends with `additional_work_quotation` (section 18 applied).
+
+**Post-check** (read-only):
+```sql
+select pg_get_constraintdef(oid) from pg_constraint where conname = 'amc_send_log_document_check';
+select to_regclass('public.idx_amc_call_outs_reported'), to_regclass('public.idx_amc_payments_received'), to_regclass('public.idx_amc_visits_closed');
+```
+Expected: the list ends with `client_report`, and all three indexes are present.
+
+**Live check:** open AMC Proposals in the live portal; it works as before. In the demo portal, open AMC → Reports. Check the Dashboard, then Operations and Commercial for this month with a CSV export of one table. Then open an active contract, preview its client report, and send it.
+
+**After applying:** the opening and closing words of the client report are in AMC configuration → Client report (residential and commercial).

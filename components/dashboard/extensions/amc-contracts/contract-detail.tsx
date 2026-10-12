@@ -10,6 +10,7 @@ import {
   Check,
   Copy,
   FileSignature,
+  FileText,
   FileUp,
   Gauge,
   History,
@@ -23,6 +24,7 @@ import {
   ReceiptText,
   RefreshCw,
   SearchX,
+  Send,
   ShieldCheck,
   XCircle,
 } from "lucide-react";
@@ -62,8 +64,10 @@ import { CONTRACT_STATUS_NAMES, type ContractStatus } from "@/lib/amc/contract-l
 import { formatQuantity, unitWord } from "@/lib/amc/contracts";
 import { AMC_VAT_PERCENT } from "@/lib/amc/pricing";
 import { amcContractsService, type ContractDetail as Detail } from "@/modules/amc-contracts/amc-contracts-service";
+import { insightsService } from "@/modules/amc-contracts/insights-service";
 
 import { CancelContractDialog } from "./cancel-contract-dialog";
+import { SendClientReportDialog } from "./client-report-dialog";
 import { ContractCallOutsPanel } from "./contract-call-outs-panel";
 import { ContractCommercial } from "./contract-commercial";
 import { ContractCustomer } from "./contract-customer";
@@ -189,6 +193,7 @@ function ContractView({
   const [usageFor, setUsageFor] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [reporting, setReporting] = useState(false);
   const [usageVersion, setUsageVersion] = useState(0);
   /* Payments (Phase 7) for Finance and the owner; the tab is not offered to anyone else. */
   const canViewPayments = data.permissions.payments?.canView === true;
@@ -197,6 +202,8 @@ function ContractView({
   /* The PPM schedule (Phase 8), loaded here so the tab can show what is left or overdue. */
   const schedule = useContractSchedule(data.contract.id);
   const overdueVisits = schedule.data?.progress.overdue ?? 0;
+  /* Whoever operates the contract (the schedule answer says so) may send the client report; anyone who can read it may preview. */
+  const canOperate = schedule.data?.permissions.canEdit === true;
   /* Money moving can move the contract too (the first instalment starts it and makes its
      schedule), so all three reload. */
   const reloadWithPayments = () => Promise.all([load(), payments.reload(), schedule.reload()]);
@@ -406,6 +413,19 @@ function ContractView({
                     Open source proposal
                   </Link>
                 </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem asChild>
+                  <a href={insightsService.clientReportHref(contract.id)} target="_blank" rel="noopener noreferrer">
+                    <FileText className="size-4" />
+                    Preview client report
+                  </a>
+                </DropdownMenuItem>
+                {canOperate ? (
+                  <DropdownMenuItem onClick={() => setReporting(true)}>
+                    <Send className="size-4" />
+                    Send client report
+                  </DropdownMenuItem>
+                ) : null}
                 {endItems.length ? <DropdownMenuSeparator /> : null}
                 {endItems}
               </DropdownMenuContent>
@@ -803,6 +823,14 @@ function ContractView({
         open={checking}
         onOpenChange={setChecking}
         contract={{ id: contract.id, proposalNumber: contract.proposalNumber, customerName: contract.customerName }}
+      />
+      <SendClientReportDialog
+        open={reporting}
+        onOpenChange={setReporting}
+        contractId={contract.id}
+        contractLabel={`AMC ${contract.lifecycle?.contractNumber ?? contract.proposalNumber}`}
+        customerName={contract.customerName}
+        defaultEmail={(contract.customer as Record<string, string | undefined>).customerEmail?.trim() || null}
       />
       {lifecycleDialogs.dialogs}
       {paymentDialogs.dialogs}

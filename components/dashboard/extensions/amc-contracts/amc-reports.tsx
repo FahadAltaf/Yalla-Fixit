@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
 import { useDebounce } from "@/hooks/use-debounce";
 import { amcContractsService, type AmcReports as Reports } from "@/modules/amc-contracts/amc-contracts-service";
 
+import { CommercialReportView, DashboardReport, OperationsReport, PeriodPicker, defaultReportPeriod, type ReportPeriod } from "./amc-insights";
 import { AmcNotificationsBell } from "./amc-notifications-bell";
 import { ConfigTableToolbar, LocalDataTable } from "./config-table";
 import { CONTRACT_STATUS_LABELS, formatContractDate } from "./contract-status";
@@ -30,6 +31,20 @@ import { ExportMenu } from "./export-menu";
 import { useAmcData } from "./use-amc-data";
 
 type Tab = "expiry" | "pipeline" | "managers" | "services";
+/* Phase 12 puts the dashboard and the period reports in front of the portfolio reports. */
+const REPORT_TABS = [
+  { value: "dashboard", label: "Dashboard" },
+  { value: "operations", label: "Operations" },
+  { value: "commercial", label: "Commercial" },
+  { value: "expiry", label: "Expiry" },
+  { value: "pipeline", label: "Renewal pipeline" },
+  { value: "managers", label: "Account managers" },
+  { value: "services", label: "Services" },
+] as const;
+type ReportTab = (typeof REPORT_TABS)[number]["value"];
+const PORTFOLIO_TABS: readonly string[] = ["expiry", "pipeline", "managers", "services"] satisfies Tab[];
+const isPortfolioTab = (t: ReportTab): t is Tab => PORTFOLIO_TABS.includes(t);
+const isReportTab = (t: string | null): t is ReportTab => REPORT_TABS.some((r) => r.value === t);
 type ExpiryRow = Reports["expiry"][number];
 type PipelineRow = Reports["pipeline"][number];
 type ManagerRow = Reports["portfolio"][number];
@@ -56,17 +71,93 @@ const right = (text: string) =>
 /* A link inside a clickable row: it opens its own record, not the row's. */
 const stop = (event: React.MouseEvent) => event.stopPropagation();
 
+/* The tab lives in ?tab= so a link or a refresh lands on it. Read after hydration, so the server's render (no tab) matches. */
+const subscribeToHistory = (onChange: () => void) => {
+  window.addEventListener("popstate", onChange);
+  return () => window.removeEventListener("popstate", onChange);
+};
+const tabInUrl = () => new URLSearchParams(window.location.search).get("tab");
+
+function useReportTab() {
+  const asked = useSyncExternalStore(subscribeToHistory, tabInUrl, () => null);
+  const [picked, setPicked] = useState<ReportTab | null>(null);
+  const tab: ReportTab = picked ?? (isReportTab(asked) ? asked : "dashboard");
+  const setTab = useCallback((next: ReportTab) => {
+    setPicked(next);
+    const query = new URLSearchParams(window.location.search);
+    query.set("tab", next);
+    window.history.replaceState(null, "", `?${query.toString()}`);
+  }, []);
+  return [tab, setTab] as const;
+}
+
 /**
- * AMC reports: portfolio figures, expiry, the renewal pipeline, account
- * managers and services. Counted from the contracts the viewer can see;
- * every export is the rows on screen, filters applied.
+ * AMC reports: the management dashboard, the operations and commercial
+ * reports for a period, then the portfolio (figures, expiry, the renewal
+ * pipeline, account managers and services). Counted from the contracts the
+ * viewer can see; every export is the rows on screen, filters applied.
  */
 export function AmcReports() {
   useBreadcrumbLabel("reports", "Reports");
-  const [tab, setTab] = useState<Tab>("expiry");
+  const [tab, setTab] = useReportTab();
+  /* One period for Operations and Commercial, kept while moving between them. */
+  const [period, setPeriod] = useState<ReportPeriod>(defaultReportPeriod);
+  /* The portfolio filters are kept here, so they survive a visit to another tab. */
   const [manager, setManager] = useState(ALL);
   const [customer, setCustomer] = useState("");
   const [property, setProperty] = useState("");
+
+  return (
+    <div className="flex w-full flex-1 flex-col gap-6">
+      <PageHeading
+        eyebrow="Insights"
+        title="Reports"
+        description="The dashboard, operations and commercial reports, and the contract portfolio, from contract data only. Draft or rejected proposals and quotes are never counted as revenue."
+        actions={<AmcNotificationsBell />}
+      />
+
+      <PillTabs tabs={REPORT_TABS} value={tab} onChange={setTab} />
+
+      {tab === "dashboard" ? <DashboardReport /> : null}
+      {tab === "operations" || tab === "commercial" ? (
+        <>
+          <PeriodPicker value={period} onChange={setPeriod} />
+          {tab === "operations" ? <OperationsReport period={period} /> : <CommercialReportView period={period} />}
+        </>
+      ) : null}
+      {isPortfolioTab(tab) ? (
+        <PortfolioReports
+          tab={tab}
+          manager={manager}
+          setManager={setManager}
+          customer={customer}
+          setCustomer={setCustomer}
+          property={property}
+          setProperty={setProperty}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/** The portfolio reports, loaded only while one of their tabs is open. */
+function PortfolioReports({
+  tab,
+  manager,
+  setManager,
+  customer,
+  setCustomer,
+  property,
+  setProperty,
+}: {
+  tab: Tab;
+  manager: string;
+  setManager: (v: string) => void;
+  customer: string;
+  setCustomer: (v: string) => void;
+  property: string;
+  setProperty: (v: string) => void;
+}) {
   const c = useDebounce(customer.trim(), 300);
   const p = useDebounce(property.trim(), 300);
   const filters = { manager: manager === ALL ? undefined : manager, customer: c || undefined, property: p || undefined };
@@ -74,14 +165,7 @@ export function AmcReports() {
   const summary = useAmcData(() => amcContractsService.summary(), "summary");
 
   return (
-    <div className="flex w-full flex-1 flex-col gap-6">
-      <PageHeading
-        eyebrow="Insights"
-        title="Reports"
-        description="Contracts, renewals and services, from contract data only. Draft or rejected proposals and quotes are never counted as revenue."
-        actions={<AmcNotificationsBell />}
-      />
-
+    <>
       {/* The filters narrow every figure and table below, so they sit above them all rather than in one table's toolbar. */}
       <div className="flex flex-wrap items-center gap-2">
         <Select value={manager} onValueChange={setManager}>
@@ -111,9 +195,9 @@ export function AmcReports() {
           </SectionSkeleton>
         </>
       ) : (
-        <ReportsBody reports={data.reports} tab={tab} setTab={setTab} pending={summary.data?.summary.pendingActivation ?? null} usage30={summary.data?.summary.usageLast30Days ?? null} />
+        <ReportsBody reports={data.reports} tab={tab} pending={summary.data?.summary.pendingActivation ?? null} usage30={summary.data?.summary.usageLast30Days ?? null} />
       )}
-    </div>
+    </>
   );
 }
 
@@ -132,13 +216,11 @@ function SearchBox({ value, onChange, placeholder, label, pending }: { value: st
 function ReportsBody({
   reports,
   tab,
-  setTab,
   pending,
   usage30,
 }: {
   reports: Reports;
   tab: Tab;
-  setTab: (t: Tab) => void;
   pending: number | null;
   usage30: number | null;
 }) {
@@ -168,21 +250,9 @@ function ReportsBody({
         <StatCard label="Usage events" value={usage30 ?? "—"} headline="Last 30 days" caption="Consumption entries" />
       </StatCardGrid>
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <PillTabs
-          tabs={[
-            { value: "expiry", label: "Expiry" },
-            { value: "pipeline", label: "Renewal pipeline" },
-            { value: "managers", label: "Account managers" },
-            { value: "services", label: "Services" },
-          ]}
-          value={tab}
-          onChange={(v) => setTab(v as Tab)}
-        />
-        <div className="flex items-center gap-2">
-          <span className="text-muted-foreground hidden text-sm md:inline">Active contracts, filters applied:</span>
-          <ExportMenu name="active-contracts" columns={ACTIVE_COLUMNS} rows={activeRows(reports)} />
-        </div>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <span className="text-muted-foreground hidden text-sm md:inline">Active contracts, filters applied:</span>
+        <ExportMenu name="active-contracts" columns={ACTIVE_COLUMNS} rows={activeRows(reports)} />
       </div>
       {tab === "expiry" ? <ExpiryReport reports={reports} /> : null}
       {tab === "pipeline" ? <PipelineReport reports={reports} /> : null}

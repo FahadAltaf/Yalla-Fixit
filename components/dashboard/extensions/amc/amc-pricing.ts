@@ -250,12 +250,19 @@ export function defaultFrequencyFor(
 }
 
 /** How the proposal is paid, as the documents print it: the plan when it has one, else its legacy terms. */
-export function formatPaymentLabel(data: Pick<AmcFormData, "paymentTerms" | "paymentPlan" | "paymentPlanCustom">): string {
-  return data.paymentPlan ? paymentPlanLabel(data.paymentPlan, data.paymentPlanCustom ?? null) : formatPaymentTermsLabel(data.paymentTerms);
+export function formatPaymentLabel(
+  data: Pick<AmcFormData, "paymentTerms" | "paymentPlan" | "paymentPlanCustom">,
+  /* The legacy "Annual" reads "Upfront" off a 12-month term (main, Oct 2026). */
+  termMonths = 12,
+): string {
+  return data.paymentPlan ? paymentPlanLabel(data.paymentPlan, data.paymentPlanCustom ?? null) : formatPaymentTermsLabel(data.paymentTerms, termMonths);
 }
 
 export function formatPaymentTermsLabel(
   terms: AmcFormData["paymentTerms"],
+  /* "Annual" is one payment for the whole term; on a shorter or longer
+     term it is called what it is. */
+  termMonths = 12,
 ): string {
   switch (terms) {
     case "monthly":
@@ -263,7 +270,7 @@ export function formatPaymentTermsLabel(
     case "quarterly":
       return "Quarterly";
     case "annual":
-      return "Annual";
+      return termMonths === 12 ? "Annual" : "Upfront";
     default:
       return "TBD";
   }

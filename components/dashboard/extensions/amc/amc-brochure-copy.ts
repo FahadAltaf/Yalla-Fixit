@@ -52,7 +52,7 @@ export const AMC_BROCHURE_FIELDS = [
     label: "Why choose: point 2 (phone)",
     hint: "The title, a blank line, then the text.",
     value:
-      "Unlimited Emergency Call-Outs\n\nFor AC malfunctions, plumbing problems, and electrical failures - plus unlimited non-emergency visits depending on your package.",
+      "Unlimited Emergency Call-Outs\n\nFor AC malfunctions, plumbing problems, and electrical failures, at any hour of the day or night.",
   },
   {
     key: "why3",

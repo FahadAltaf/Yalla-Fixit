@@ -225,6 +225,16 @@ export const SECTION_DEFS: SectionDef[] = [
     fields: [{ key: "materialHandlingFeePercent", label: "Material handling fee", kind: "number", unit: "%", min: 0, max: 100, step: 0.5 }],
   },
   {
+    section: "clientReport",
+    title: "Client report",
+    description: "BRD 5.15. The opening and closing words of the client report sent per contract, residential and commercial.",
+    fields: [
+      { key: "residentialIntro", label: "Opening, residential", kind: "text" },
+      { key: "commercialIntro", label: "Opening, commercial", kind: "text" },
+      { key: "closing", label: "Closing", kind: "text" },
+    ],
+  },
+  {
     section: "todos",
     title: "To-dos",
     description: "BRD 6.8. AMC to-dos appear in Todos for the people on the record.",
@@ -244,7 +254,7 @@ export const CONFIG_VIEWS = [
   { value: "approvals", label: "Approvals and payments", sections: ["approvals", "payments"] },
   { value: "pipeline", label: "Pipeline and contracts", sections: ["enquiries", "proposals", "contracts"] },
   { value: "scheduling", label: "Scheduling and SLA", sections: ["calendar", "scheduling", "sla"] },
-  { value: "delivery", label: "Allowances and renewals", sections: ["allowances", "renewals", "additionalWork", "todos"] },
+  { value: "delivery", label: "Allowances and renewals", sections: ["allowances", "renewals", "additionalWork", "clientReport", "todos"] },
   { value: "templates", label: "Emails and messages", sections: [] },
   { value: "roles", label: "Roles and jobs", sections: [] },
   { value: "history", label: "Change history", sections: [] },

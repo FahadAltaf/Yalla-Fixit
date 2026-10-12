@@ -264,7 +264,7 @@ function contractBlocks(data: AmcComputedData): Block[] {
       ],
     ],
     ["Amount in Words", totals.amountInWords],
-    ["Terms of Payment", [t(formatPaymentLabel(formData), { bold: true, tone: "brand" })]],
+    ["Terms of Payment", [t(formatPaymentLabel(formData, totals.termMonths), { bold: true, tone: "brand" })]],
   ]);
 
   const contacts = formData.coordinationContacts.filter((c) => c.name?.trim() || c.phone?.trim());
@@ -317,15 +317,34 @@ function contractBlocks(data: AmcComputedData): Block[] {
     if (clause.role === "handymanRates") {
       return fill(clause.body ?? "").length <= 1;
     }
+    /*
+      The call-out definitions only where the call-out is bought (Sharon,
+      Oct 2026): a contract without call-outs still printed "attended free
+      of charge within 120 minutes" under 3.1.
+    */
+    if (clause.role === "emergencyCallOut") return !selectedIds.includes("emergency");
+    if (clause.role === "nonEmergencyCallOut") return !selectedIds.includes("non-emergency");
     return false;
   };
 
-  const clauses = settings.clauseList.filter(
+  const kept = settings.clauseList.filter(
     (clause) =>
       clause.enabled !== false &&
-      !(clause.role && PROPOSAL_ONLY.has(clause.role)) &&
-      !drawsNothing(clause),
+      !(clause.role && PROPOSAL_ONLY.has(clause.role)),
   );
+  /*
+    A heading whose every sub-clause draws nothing goes with them: with
+    neither call-out on the contract, clause 3 would otherwise print as a
+    title with nothing under it. Only a heading with no role and no text
+    of its own; one with text of its own still has something to say.
+  */
+  const clauses = kept.filter((clause, index) => {
+    if (drawsNothing(clause)) return false;
+    if (clause.level !== 1 || clause.role || (clause.body ?? "").trim()) return true;
+    const children: typeof kept = [];
+    for (let i = index + 1; i < kept.length && kept[i].level !== 1; i += 1) children.push(kept[i]);
+    return children.length === 0 || children.some((child) => !drawsNothing(child));
+  });
   /*
     The scopes this contract prints, from AMC Settings.
 
@@ -395,6 +414,20 @@ function contractBlocks(data: AmcComputedData): Block[] {
      printing a number that is now somebody else's. */
   const refText = (value: string) =>
     value
+      /*
+        "...according to price list (Clause –)" on a contract without the
+        price list (Sharon, Oct 2026): the sentence names the rates instead,
+        and any other "(Clause X)" pointing at a clause that is not there is
+        left out rather than printed as a dash.
+      */
+      .replace(
+        /\s*according to (?:the )?price list \(Clause(?: No\.?)?\s*\{\{clause:priceListIntro\}\}\)/gi,
+        (match) => (numberOf.has("priceListIntro") ? match : " at our standard rates, quoted on request"),
+      )
+      .replace(
+        /\s*\(Clause(?: No\.?)?\s*\{\{clause:([A-Za-z]+)\}\}\)/g,
+        (match, role: string) => (numberOf.has(role) ? match : ""),
+      )
       .replace(
         /\{\{clause:([A-Za-z]+)\}\}/g,
         (_, role: string) => numberOf.get(role) ?? "—",

@@ -9,6 +9,7 @@ import { proposalValidUntil } from "@/lib/amc/proposal-rules";
 import { contractShareTexts, proposalShareTexts, recordSend, whatsappMessages } from "@/lib/server/amc/proposal-share";
 import { contractSent } from "@/lib/server/amc/contract-lifecycle";
 import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
+import { contractTermMonths, termFeeLabel } from "@/components/dashboard/extensions/amc/amc-date-utils";
 import { linkTokenExpiry, mintLinkToken } from "@/lib/server/link-token";
 import { sendEmail } from "@/lib/server/send-email";
 import { clientEmailHtml, escapeEmailHtml } from "@/lib/email-brand";
@@ -131,10 +132,13 @@ function amcEmailHtml(o: {
   proposalNumber: string;
   property: string;
   finalPrice: number;
+  /* The contract's term, for the fee's label (12 when the dates are missing). */
+  termMonths: number;
   link: string;
   expiresAt: string;
 }): string {
   const isProposal = o.document === "proposal";
+  const contractName = o.termMonths === 12 ? "annual maintenance contract" : "maintenance contract";
   const expires = new Date(o.expiresAt).toLocaleDateString("en-GB", {
     day: "numeric",
     month: "long",
@@ -148,19 +152,19 @@ function amcEmailHtml(o: {
     greeting: `Dear ${o.customerName.trim() || "customer"},`,
     paragraphs: isProposal
       ? [
-          `Thank you for considering Yalla Fix It. Your annual maintenance contract proposal${o.property ? ` for <strong>${escapeEmailHtml(o.property)}</strong>` : ""} is ready.`,
+          `Thank you for considering Yalla Fix It. Your ${contractName} proposal${o.property ? ` for <strong>${escapeEmailHtml(o.property)}</strong>` : ""} is ready.`,
           "Please review it and approve it, or tell us what you would like changed.",
         ]
       : [
           "Thank you for approving the proposal.",
-          `Your annual maintenance contract${o.property ? ` for <strong>${escapeEmailHtml(o.property)}</strong>` : ""} is ready. Please review it and sign it online.`,
+          `Your ${contractName}${o.property ? ` for <strong>${escapeEmailHtml(o.property)}</strong>` : ""} is ready. Please review it and sign it online.`,
         ],
     details: [
       ...(o.proposalNumber
         ? [{ label: "Reference", value: o.proposalNumber }]
         : []),
       ...(o.property ? [{ label: "Property", value: o.property }] : []),
-      { label: "Annual fee (excl. VAT)", value: formatAed(o.finalPrice) },
+      { label: `${termFeeLabel(o.termMonths)} (excl. VAT)`, value: formatAed(o.finalPrice) },
     ],
     cta: {
       label: isProposal ? "Review the proposal" : "Review and sign",
@@ -433,6 +437,8 @@ export async function POST(req: NextRequest) {
   const customer = (existing.customer ?? {}) as {
     customerName?: string;
     customerEmail?: string;
+    startDate?: string;
+    endDate?: string;
   };
   const link = `${appUrl()}/amc/${token.raw}`;
 
@@ -560,6 +566,10 @@ export async function POST(req: NextRequest) {
                 (existing.property as { propertyAddress?: string } | null)
                   ?.propertyAddress ?? "",
               finalPrice: Number(existing.final_price ?? 0),
+              termMonths:
+                customer.startDate && customer.endDate
+                  ? contractTermMonths(String(customer.startDate), String(customer.endDate))
+                  : 12,
               link,
               expiresAt,
             }),

@@ -23,6 +23,7 @@ import photoVilla from "@/public/amc/brand/brochure/photo-villa.jpg";
 import puzzle from "@/public/amc/brand/brochure/puzzle.png";
 
 import type { AmcBrochure, AmcBrochureIcon } from "../../amc-brochure";
+import { termFeePhrase } from "../../amc-date-utils";
 import { formatProposalFee } from "../../amc-proposal-content";
 import { AMC_PAGE } from "./amc-doc-theme";
 
@@ -92,11 +93,21 @@ const M = 48;
   so no cell can come out with a band of background down one side.
 */
 const STRIP = 224;
-const PHOTOS = [
+const RESIDENTIAL_PHOTOS = [
   { image: photoInterior, alt: "Apartment interior", cell: 251 },
   { image: photoVilla, alt: "Villa exterior", cell: 292 },
   { image: photoDining, alt: "Restaurant with a marina view", cell: 251 },
 ].map((photo) => ({ ...photo, src: photo.image.src }));
+/*
+  A commercial proposal's own photos (Sharon, Oct 2026: a commercial
+  proposal showed the villa). Jonathan is choosing them: put the three
+  files in public/amc/brand/brochure/ (photo-commercial-1..3.jpg), import
+  them above and list them here, same cell widths. Until then a
+  commercial proposal keeps the standard strip.
+*/
+const COMMERCIAL_PHOTOS: typeof RESIDENTIAL_PHOTOS = [];
+const photosFor = (category: AmcBrochure["propertyCategory"]) =>
+  category === "commercial" && COMMERCIAL_PHOTOS.length ? COMMERCIAL_PHOTOS : RESIDENTIAL_PHOTOS;
 
 const ISO = [
   { src: iso14001.src, alt: "ISO 14001:2015 certified" },
@@ -195,7 +206,7 @@ export function AmcBrochurePage({ brochure, pdf = false }: { brochure: AmcBrochu
 
       {/* 2. Photos, edge to edge */}
       <div style={{ display: "flex", height: `${STRIP}px` }}>
-        {PHOTOS.map((photo) => (
+        {photosFor(brochure.propertyCategory).map((photo) => (
           <div
             key={photo.src}
             style={{ width: `${photo.cell}px`, height: `${STRIP}px`, overflow: "hidden" }}
@@ -369,7 +380,7 @@ export function AmcBrochurePage({ brochure, pdf = false }: { brochure: AmcBrochu
                 <Small pdf={pdf}> / Month</Small>
               </>
             }
-            caption={`AED ${formatProposalFee(brochure.annualFee)} a year · excl. 5% VAT`}
+            caption={`AED ${formatProposalFee(brochure.annualFee)} ${termFeePhrase(brochure.coverageMonths)} · excl. 5% VAT`}
           />
           <PlanCard
             pdf={pdf}
@@ -389,7 +400,7 @@ export function AmcBrochurePage({ brochure, pdf = false }: { brochure: AmcBrochu
             /* The third tile held a word and nothing else, where the two
                beside it each said what their figure meant. */
             caption={`AED ${formatProposalFee(brochure.annualFee)} excl. VAT, ${
-              brochure.paymentTerms.toLowerCase() === "annual"
+              brochure.paidInFull
                 ? "in one payment"
                 : "by instalment"
             }`}
@@ -510,7 +521,7 @@ export function AmcBrochurePage({ brochure, pdf = false }: { brochure: AmcBrochu
                         }}
                       >
                         AED {formatProposalFee(brochure.monthlyFee)} a month · AED{" "}
-                        {formatProposalFee(brochure.annualFee)} a year excl. VAT
+                        {formatProposalFee(brochure.annualFee)} {termFeePhrase(brochure.coverageMonths)} excl. VAT
                       </div>
                     </th>
                     <th style={planHead}>UNITS</th>

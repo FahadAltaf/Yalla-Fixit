@@ -71,6 +71,7 @@ import {
   formatPaymentLabel,
 } from "./amc-pricing";
 import { IdentityCell } from "@/components/ui/entity-avatar";
+import { termFeePhrase } from "./amc-date-utils";
 import { formatPhoneForDocument } from "./amc-phone";
 import { lastSentAt, sendableDocument } from "./amc-send-dialog";
 import { amcStatusTone } from "./amc-status";
@@ -751,7 +752,7 @@ export function SubmissionDetails({
         <StatCard
           label="Grand total"
           value={<Money value={totals.grandTotal} />}
-          headline={`${formatCurrencyAED(totals.finalPrice)} a year before VAT`}
+          headline={`${formatCurrencyAED(totals.finalPrice)} ${termFeePhrase(totals.termMonths)} before VAT`}
           caption={
             totals.discountAmount > 0
               ? `${totals.discountPercent}% discount applied`
@@ -768,7 +769,7 @@ export function SubmissionDetails({
           label="Contract term"
           value={months !== null ? `${months} ${months === 1 ? "month" : "months"}` : "—"}
           headline={`${formatDisplayDate(form.startDate) || "—"} to ${data.endDate || "—"}`}
-          caption={`Paid ${formatPaymentLabel(form).toLowerCase()}`}
+          caption={`Paid ${formatPaymentLabel(form, totals.termMonths).toLowerCase()}`}
         />
         <StatCard
           label="Stage"
@@ -861,7 +862,7 @@ export function SubmissionDetails({
                       label: "Contract period",
                       value: `${formatDisplayDate(form.startDate) || "—"} → ${data.endDate || "—"}`,
                     },
-                    { label: "Payment terms", value: formatPaymentLabel(form) },
+                    { label: "Payment terms", value: formatPaymentLabel(form, totals.termMonths) },
                     {
                       label: "Proposal number",
                       value: submission.customer.proposalNumber

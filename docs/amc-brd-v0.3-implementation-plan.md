@@ -666,6 +666,15 @@ Three changes the user asked for before Phase 7:
 **Migration:** report functions only if needed for speed (SAFE).
 **Done when:** demo story step 14 works, with CSV/Excel export.
 
+**Status (12 Oct 2026):** done in code, migration `20261012130000_amc_client_report.sql` not applied (log row 27, checks §19). No report function was needed: the reports read the existing tables in pages of 200 contracts, scoped to what the caller may see.
+
+- **Client report (DEV-410):** built per contract on demand. It covers the scope with used, booked and remaining allowances; the visits done with dates and up to two photos each; the visits to come; the call outs attended; and additional work with its cost. The opening and closing words are set in configuration, with residential and commercial versions. It can be previewed as a page. Sending stores the PDF as a contract document, emails it to the client with the owner copied, and prepares the WhatsApp text with a link.
+- **Operational (DEV-411):** schedule adherence (done inside the window, early, late); visits due, overdue, upcoming and pending access; trades not done by reason group; call outs by priority (SLA met or missed, covered or chargeable, misuse); contracts at risk of ending incomplete (an overdue visit, or more visits left than half-months to the end); technician utilisation against working days; allowance use with chargeable call outs; access failures by community.
+- **Commercial (DEV-412):** enquiries by source, owner and month, with conversion and lost reasons; proposals and conversion; discounts by approval level; signed value by month and property category; collections and ageing; cheques by status; additional-work revenue; renewals.
+- **Dashboard (DEV-414):** pipeline, contracts, approvals (proposal steps, job sheets awaiting review), delivery, workforce (utilisation over the next 7 days), commercial (signed and collected this month, overdue, quotations awaiting the client), and renewals in 30, 60 and 90 days.
+- **Where:** everything is on the Reports page (AMC Reports permission) for a chosen period, with CSV and Excel export on each table.
+- **Not done:** contract profitability (BRD 5.15), which needs actual labour hours and costs from FSM and Zoho Finance (Phase 15).
+
 ### Phase 13: Renewal, amendments, termination
 
 | Jira | Work | Size |
