@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/table";
 
 import type { AmcComputedData, AmcFormData } from "../amc-types";
+import { termFeeLabel } from "../amc-date-utils";
 import { formatDisplayDate } from "../amc-pricing";
 
 interface StepProps {
@@ -240,7 +241,7 @@ export function ServicesAndCost({
               <TableCell
                 className={`text-muted-foreground ${FREQUENCY_INDENT} text-sm font-normal`}
               >
-                Annual fee (excl. VAT)
+                {termFeeLabel(totals.termMonths)} (excl. VAT)
               </TableCell>
               <TableCell className="text-right text-sm font-normal tabular-nums">
                 <Money value={totals.finalPrice} />

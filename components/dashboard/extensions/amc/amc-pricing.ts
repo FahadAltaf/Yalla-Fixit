@@ -217,6 +217,9 @@ export function syncServiceRowsForUnitType(
 
 export function formatPaymentTermsLabel(
   terms: AmcFormData["paymentTerms"],
+  /* "Annual" is one payment for the whole term; on a shorter or longer
+     term it is called what it is. */
+  termMonths = 12,
 ): string {
   switch (terms) {
     case "monthly":
@@ -224,7 +227,7 @@ export function formatPaymentTermsLabel(
     case "quarterly":
       return "Quarterly";
     case "annual":
-      return "Annual";
+      return termMonths === 12 ? "Annual" : "Upfront";
     default:
       return "TBD";
   }

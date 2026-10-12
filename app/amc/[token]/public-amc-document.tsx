@@ -15,6 +15,8 @@ import {
   computeAmcClientData,
   type AmcClientDocument,
 } from "@/components/dashboard/extensions/amc/amc-document-utils";
+import { contractTermMonths, termFeeLabel } from "@/components/dashboard/extensions/amc/amc-date-utils";
+import { formatPaymentTermsLabel } from "@/components/dashboard/extensions/amc/amc-pricing";
 import { AmcDocumentPreview } from "@/components/dashboard/extensions/amc/templates/AmcDocumentPreview";
 import { StatusMessageCard } from "@/components/quotations/status-message-card";
 import { Button } from "@/components/ui/button";
@@ -231,6 +233,8 @@ export function PublicAmcDocument({ token }: { token: string }) {
   const numbered = doc.proposalNumber ? `${noun} ${doc.proposalNumber}` : `this ${noun}`;
 
   const sentOn = formatClientDate(clientDocument?.sentAt ?? null);
+  /* The fee is for the term, which is not always a year. */
+  const termMonths = doc.startDate && doc.endDate ? contractTermMonths(doc.startDate, doc.endDate) : 12;
   const period =
     doc.startDate && doc.endDate
       ? `${formatClientDate(doc.startDate)} to ${formatClientDate(doc.endDate)}`
@@ -273,9 +277,15 @@ export function PublicAmcDocument({ token }: { token: string }) {
       facts={[
         { label: "Prepared for", value: doc.customerName ?? "—", hint: doc.property?.propertyAddress },
         {
-          label: "Annual fee",
+          label: termFeeLabel(termMonths),
           value: formatCurrencyAED(doc.finalPrice),
-          hint: [doc.paymentTerms && `Paid ${doc.paymentTerms}`, "excl. 5% VAT"].filter(Boolean).join(" · "),
+          hint: [
+            doc.paymentTerms &&
+              `Paid ${formatPaymentTermsLabel(doc.paymentTerms as "monthly" | "quarterly" | "annual", termMonths).toLowerCase()}`,
+            "excl. 5% VAT",
+          ]
+            .filter(Boolean)
+            .join(" · "),
         },
         {
           label: period ? "Contract period" : "Sent",

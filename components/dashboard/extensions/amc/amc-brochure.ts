@@ -79,12 +79,16 @@ export type AmcBrochure = {
   accountManagers: { name: string; phone: string }[];
   propertyLabel: string;
   propertyType: string;
+  /* Which photos the first page shows (residential or commercial). */
+  propertyCategory: "residential" | "commercial";
   coverageMonths: number;
   startLabel: string;
   /* Excluding VAT, as the proposal quotes it. */
   annualFee: number;
   monthlyFee: number;
   paymentTerms: string;
+  /* One payment for the whole term ("Annual" / "Upfront"). */
+  paidInFull: boolean;
   /*
     What this client's plan covers, a row each. Units and frequency stay
     apart rather than joined into one line, because the page prints them
@@ -123,10 +127,31 @@ function point(text: string): { title: string; body: string } {
   return { title: title.trim(), body: rest.join(" ").replace(/\s+/g, " ").trim() };
 }
 
+/*
+  Wording that shipped as a default and was then corrected. A setting
+  saved while it was still the default carries the old words; it reads as
+  the corrected default instead, so nobody has to find and retype it. A
+  setting somebody actually reworded is left alone.
+*/
+const RETIRED_DEFAULTS: Partial<Record<AmcBrochureKey, string[]>> = {
+  why2: [
+    "Unlimited Emergency Call-Outs\n\nFor AC malfunctions, plumbing problems, and electrical failures - plus unlimited non-emergency visits depending on your package.",
+  ],
+};
+
 export function readAmcBrochureCopy(
   text: Partial<Record<AmcBrochureKey, string>> | undefined,
 ): AmcBrochureCopy {
-  const value = { ...getAmcBrochureDefaults(), ...(text ?? {}) };
+  const defaults = getAmcBrochureDefaults();
+  const saved = Object.fromEntries(
+    Object.entries(text ?? {}).map(([key, saved]) => [
+      key,
+      saved !== undefined && RETIRED_DEFAULTS[key as AmcBrochureKey]?.includes(saved.trim())
+        ? defaults[key as AmcBrochureKey]
+        : saved,
+    ]),
+  );
+  const value = { ...defaults, ...saved };
   const whyKeys = ["why1", "why2", "why3", "why4", "why5", "why6"] as const;
   return {
     heroTitle: lines(value.heroTitle),
@@ -172,11 +197,13 @@ export function buildAmcBrochure(data: AmcComputedData): AmcBrochure {
       .filter((manager) => manager.name || manager.phone),
     propertyLabel: getProposalPropertyLabel(formData),
     propertyType: data.propertyTypeLabel,
+    propertyCategory: formData.propertyCategory === "commercial" ? "commercial" : "residential",
     coverageMonths: getProposalCoverageMonths(formData),
     startLabel: getProposalStartLabel(formData),
     annualFee: totals.finalPrice,
     monthlyFee: totals.monthlyPrice,
-    paymentTerms: formatPaymentTermsLabel(formData.paymentTerms),
+    paymentTerms: formatPaymentTermsLabel(formData.paymentTerms, getProposalCoverageMonths(formData)),
+    paidInFull: formData.paymentTerms === "annual",
     services: buildProposalServiceRows(formData, frequencyRows, data.settings.services).map((row) => ({
       label: row.service,
       units: row.units,

@@ -64,6 +64,7 @@ import {
   formatPaymentTermsLabel,
 } from "./amc-pricing";
 import { IdentityCell } from "@/components/ui/entity-avatar";
+import { termFeePhrase } from "./amc-date-utils";
 import { formatPhoneForDocument } from "./amc-phone";
 import { lastSentAt, sendableDocument } from "./amc-send-dialog";
 import { amcStatusTone } from "./amc-status";
@@ -691,7 +692,7 @@ export function SubmissionDetails({
               <StatCard
                 label="Grand total"
                 value={<Money value={totals.grandTotal} />}
-                headline={`${formatCurrencyAED(totals.finalPrice)} a year before VAT`}
+                headline={`${formatCurrencyAED(totals.finalPrice)} ${termFeePhrase(totals.termMonths)} before VAT`}
                 caption={
                   totals.discountAmount > 0
                     ? `${totals.discountPercent}% discount applied`
@@ -708,7 +709,7 @@ export function SubmissionDetails({
                 label="Contract term"
                 value={months !== null ? `${months} ${months === 1 ? "month" : "months"}` : "—"}
                 headline={`${formatDisplayDate(form.startDate) || "—"} to ${data.endDate || "—"}`}
-                caption={`Paid ${formatPaymentTermsLabel(form.paymentTerms).toLowerCase()}`}
+                caption={`Paid ${formatPaymentTermsLabel(form.paymentTerms, totals.termMonths).toLowerCase()}`}
               />
               <StatCard
                 label="Stage"
@@ -744,7 +745,7 @@ export function SubmissionDetails({
                       {formatDisplayDate(form.startDate)} → {data.endDate || "—"}
                     </span>
                   </Fact>
-                  <Fact label="Payment terms">{formatPaymentTermsLabel(form.paymentTerms)}</Fact>
+                  <Fact label="Payment terms">{formatPaymentTermsLabel(form.paymentTerms, totals.termMonths)}</Fact>
                   <Fact label="Proposal number">{submission.customer.proposalNumber}</Fact>
                   <Fact label="Property type">{sentenceCase(data.propertyTypeLabel)}</Fact>
                 </dl>
