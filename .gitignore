@@ -68,3 +68,13 @@ next-env.d.ts
 # Local debug output, never part of a commit.
 debug.log
 .next-check/
+
+# The AMC database harness's working directory.
+#
+# `out/` is a real Postgres data directory the harness initialises --
+# pg_control, pg_xact, WAL segments, thousands of files. It is a local
+# scratch cluster, not source, and it followed a branch switch once and
+# offered itself up as 4,918 changes to commit. Both spellings: the
+# harness has used `.out` and `out` at different times.
+scripts/amc-db-harness/.out/
+scripts/amc-db-harness/out/

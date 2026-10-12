@@ -31,10 +31,11 @@ export const techniciansService = {
 
   // Save the team's row order for the schedule board ("Custom" sort): the full
   // list of technician ids, top to bottom.
-  saveBoardOrder: async (order: string[]): Promise<{ updated: number }> => {
+  // With a date, the order is for that day only (FR-13).
+  saveBoardOrder: async (order: string[], date?: string): Promise<{ updated: number }> => {
     return executeRESTBackend<{ updated: number }>("/api/scheduling/technicians/order", {
       method: "PUT",
-      body: { order },
+      body: date ? { order, date } : { order },
     });
   },
 

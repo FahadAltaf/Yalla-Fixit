@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { createPortal } from "react-dom";
@@ -169,10 +170,11 @@ function onThisDay(entry: ScheduleEntry, date: string, windows: ShiftWindows): b
   return isOnDay(entryRange(entry, date), windows);
 }
 
-// The jobs a technician's row draws in one grid. A technician with a shift has
-// one row, in that shift's grid, and it draws every job of theirs that day.
-// A technician with no shift set has a row in both grids; each draws the jobs
-// whose times belong to it, so nothing is drawn twice.
+// The jobs a technician's row draws in one grid: every job of theirs that
+// day. A technician with no shift set has a row in both grids, and both rows
+// show all their jobs, so a job dropped on either row is seen where it was
+// dropped. (Splitting their jobs between the grids by time hid an appointment
+// added in the Morning grid, 9 Oct 2026.)
 function entriesForGrid(
   entries: ScheduleEntry[],
   technicianShift: TechnicianReference["shift"],
@@ -180,12 +182,9 @@ function entriesForGrid(
   date: string,
   windows: ShiftWindows,
 ): ScheduleEntry[] {
-  const today = entries.filter((entry) => onThisDay(entry, date, windows));
-  if (technicianShift) return today;
-  return today.filter(
-    (entry) =>
-      (entry.fsm_schedule_type === "All Day" ? entry.shift : homeShift(entryRange(entry, date), windows)) === grid,
-  );
+  void technicianShift;
+  void grid;
+  return entries.filter((entry) => onThisDay(entry, date, windows));
 }
 
 // A leave record overlaps the selected day if it touches any moment of it.
@@ -318,9 +317,12 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
   const [hideOnLeave, setHideOnLeave] = useState(false);
   const [onlyUnscheduled, setOnlyUnscheduled] = useState(false);
   // Once the team has arranged the rows, the board opens in that order.
-  const [sortMode, setSortMode] = useState<SortMode>(() =>
-    initialTechnicians.some((t) => t.board_position != null) ? "custom" : "default",
-  );
+  // FR-12: the board opens grouped by site. FR-13: a row order the team
+  // arranged by dragging is for that day only, and takes over when it exists.
+  const [sortMode, setSortMode] = useState<SortMode>("site");
+  const [dayOrder, setDayOrder] = useState<string[] | null>(null);
+  // Row-order saves in flight, so a quiet reload does not undo one.
+  const orderSavingRef = useRef(0);
   const [refreshing, setRefreshing] = useState(false);
   const [zoomIndex, setZoomIndex] = useState(ZOOM_DEFAULT_INDEX);
   const [fieldVis, setFieldVis] = useState<FieldVis>(FIELD_DEFAULT);
@@ -442,14 +444,25 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
   // `silent` reloads in place (after an action) without swapping the board
   // for the loading skeleton.
   const dayRequestRef = useRef(0);
+  // Bumped by every change made on the board. A reload that was already in
+  // flight when a change was made is thrown away, or it would put the board
+  // back to how it was before the change.
+  const mutationSeqRef = useRef(0);
+  // The day on screen, for callbacks that finish after the user has moved on.
+  const dateRef = useRef(date);
+  useEffect(() => {
+    dateRef.current = date;
+  }, [date]);
   const loadDay = useCallback(async (targetDate: string, options?: { reset?: boolean; silent?: boolean }) => {
     const requestId = ++dayRequestRef.current;
+    const mutationSeq = mutationSeqRef.current;
     if (!options?.silent) setLoading(true);
     if (options?.reset) {
       setVersion(null);
       setEntries([]);
       setCarriedOver([]);
       setUnplaced([]);
+      setDayOrder(null);
     }
     try {
       const [result, leave] = await Promise.all([
@@ -458,10 +471,20 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
       ]);
       // A newer load (another date, or a later refresh) supersedes this one.
       if (requestId !== dayRequestRef.current) return;
+      if (options?.silent && mutationSeq !== mutationSeqRef.current) {
+        // Something changed on the board while this was loading: look again.
+        loadDay(targetDate, { silent: true });
+        return;
+      }
       setVersion(result.version);
       setEntries(result.entries);
       setCarriedOver(result.carriedOver ?? []);
       setUnplaced(result.unplaced ?? []);
+      // A quiet reload keeps whatever sort the user has chosen since, and does
+      // not put back an order that is being saved at this moment.
+      if (!options?.silent || orderSavingRef.current === 0) setDayOrder(result.boardOrder ?? null);
+      // Opening a day: its own arrangement if the team made one, else by site.
+      if (!options?.silent) setSortMode(result.boardOrder ? "custom" : "site");
       setLeaveRecords(leave);
       // FR-4: appointments booked straight in FSM are pulled in when a day is
       // first opened.
@@ -471,6 +494,13 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
       if (pull && (result.fsmFirstPull || pull.imported > 0 || (pull.movedOff ?? 0) > 0 || pull.error)) {
         const fsmMessage = describeFsmImport(pull);
         if (fsmMessage) toast.info(fsmMessage, { duration: 8000 });
+      }
+      // The server is re-reading FSM after answering; look again shortly, so
+      // new bookings and statuses appear without waiting for the 5-minute poll.
+      if (result.fsmRefreshing) {
+        window.setTimeout(() => {
+          if (dateRef.current === targetDate && !document.hidden) loadDay(targetDate, { silent: true });
+        }, 45_000);
       }
     } catch (error) {
       if (requestId === dayRequestRef.current) {
@@ -535,6 +565,12 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
     });
     return map;
   }, [boardEntries]);
+
+  // FR-13: this day's arranged order as positions, for the sort.
+  const dayOrderMap = useMemo(
+    () => (dayOrder ? new Map(dayOrder.map((id, i) => [id, i])) : undefined),
+    [dayOrder],
+  );
 
   // FR-6: a technician's "site" is the address of their earliest appointment
   // that day; used by the "Site" grouping to cluster same-address crews.
@@ -614,7 +650,7 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
     // S1: individually hidden technicians never appear on the board (or PDF).
     if (hiddenTechIds.size > 0) list = list.filter((t) => !hiddenTechIds.has(t.fsm_resource_id));
 
-    return orderTechnicians(list, sortMode, roles, services, siteByTechnician);
+    return orderTechnicians(list, sortMode, roles, services, siteByTechnician, dayOrderMap);
   }, [
     technicians,
     search,
@@ -634,20 +670,24 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
     roles,
     services,
     siteByTechnician,
+    dayOrderMap,
   ]);
 
   // A technician's row is in the grid of their own shift, whatever the hours
   // of their jobs (team decision, 2 Oct 2026). A technician with no shift set
-  // is in both.
+  // is on neither grid (decision 9 Oct 2026): the board says how many are
+  // missing, so the team sets their shift in Technicians & Leave.
   const sectionTechnicians = useMemo(() => {
     const belongs = (t: TechnicianReference, key: ShiftKey) =>
-      !t.shift || t.shift === (key === "night" ? "night" : "morning");
+      t.shift === (key === "night" ? "night" : "morning");
     const active = technicians.filter((t) => t.is_active);
     return {
       night: visibleTechnicians.filter((t) => belongs(t, "night")),
       day: visibleTechnicians.filter((t) => belongs(t, "day")),
       nightPick: active.filter((t) => belongs(t, "night")),
       dayPick: active.filter((t) => belongs(t, "day")),
+      // Active technicians with no shift set: not on either grid.
+      noShift: active.filter((t) => !t.shift),
     };
   }, [visibleTechnicians, technicians]);
 
@@ -740,38 +780,51 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
     });
   }, []);
 
-  const hasCustomOrder = useMemo(() => technicians.some((t) => t.board_position != null), [technicians]);
-  const defaultSortMode: SortMode = hasCustomOrder ? "custom" : "default";
+  const hasCustomOrder = dayOrder !== null;
+  const defaultSortMode: SortMode = hasCustomOrder ? "custom" : "site";
 
   // Rows dragged into a new order on the board. `sectionIds` is the order the
   // shift section showed; the move is applied to the whole team's list (so
   // technicians filtered out of view keep their place), saved for everyone,
   // and the board switches to the Custom order. Optimistic, reverted on error.
-  const handleReorder = async (sectionIds: string[], techId: string, toIndex: number) => {
-    const moved = sectionIds.filter((id) => id !== techId);
-    moved.splice(toIndex, 0, techId);
+  // Rows dragged into a new order on the board, one row or a selected block.
+  // `sectionIds` is the order the shift section showed; `techIds` the block in
+  // its current order; `toIndex` where it lands among the other rows. The move
+  // is applied to the whole team's list (so technicians filtered out of view
+  // keep their place) and saved for THIS DAY (FR-13, decided 2 Oct 2026).
+  // Optimistic, reverted on error.
+  const handleReorder = async (sectionIds: string[], techIds: string[], toIndex: number) => {
+    const block = new Set(techIds);
+    const moved = sectionIds.filter((id) => !block.has(id));
+    moved.splice(toIndex, 0, ...techIds);
     const prevId = moved[toIndex - 1] ?? null;
-    const nextId = moved[toIndex + 1] ?? null;
+    const nextId = moved[toIndex + techIds.length] ?? null;
 
-    const order = orderTechnicians(technicians, sortMode, roles, services, siteByTechnician)
+    const order = orderTechnicians(technicians, sortMode, roles, services, siteByTechnician, dayOrderMap)
       .map((t) => t.fsm_resource_id)
-      .filter((id) => id !== techId);
+      .filter((id) => !block.has(id));
     let insertAt = prevId ? order.indexOf(prevId) + 1 : nextId ? order.indexOf(nextId) : 0;
     if (insertAt < 0) insertAt = order.length;
-    order.splice(insertAt, 0, techId);
+    order.splice(insertAt, 0, ...techIds);
 
-    const positionById = new Map(order.map((id, i) => [id, i + 1]));
-    const beforeTechnicians = technicians;
+    const beforeOrder = dayOrder;
     const beforeSort = sortMode;
-    setTechnicians((list) => list.map((t) => ({ ...t, board_position: positionById.get(t.fsm_resource_id) ?? null })));
+    const forDate = date;
+    setDayOrder(order);
     setSortMode("custom");
+    orderSavingRef.current += 1;
     try {
-      await techniciansService.saveBoardOrder(order);
-      if (beforeSort !== "custom") toast.success("Order saved — the board now uses your Custom order");
+      await techniciansService.saveBoardOrder(order, forDate);
+      if (beforeSort !== "custom") toast.success("Order saved for this day — the board now uses it");
     } catch (error) {
-      setTechnicians(beforeTechnicians);
-      setSortMode(beforeSort);
-      toast.error(error instanceof Error ? error.message : "Couldn't save the technician order");
+      // Put the old order back only if the same day is still on screen.
+      if (dateRef.current === forDate) {
+        setDayOrder(beforeOrder);
+        setSortMode(beforeSort);
+      }
+      toast.error(error instanceof Error ? error.message : "Couldn't save the row order");
+    } finally {
+      orderSavingRef.current -= 1;
     }
   };
 
@@ -789,11 +842,15 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
       currentIds.length !== next.technicianFsmIds.length ||
       next.technicianFsmIds.some((id) => !currentIds.includes(id));
     const payload: UpdateEntryInput = { id: entry.id };
-    if (next.startAt !== entry.start_at || next.endAt !== entry.end_at) {
-      payload.startAt = next.startAt;
-      payload.endAt = next.endAt;
+    // Compare instants, not strings: the database hands times over with an
+    // offset and the board makes them with Z. Send the Z form.
+    const iso = (v: string) => new Date(v).toISOString();
+    if (iso(next.startAt) !== iso(entry.start_at) || iso(next.endAt) !== iso(entry.end_at)) {
+      payload.startAt = iso(next.startAt);
+      payload.endAt = iso(next.endAt);
     }
     if (techsChanged) payload.technicianFsmIds = next.technicianFsmIds;
+    mutationSeqRef.current += 1;
     // Keep the shift it is filed under in step with where it now sits.
     const shift = next.shift ?? entry.shift;
     if (shift !== entry.shift && payload.startAt) payload.shift = shift;
@@ -846,6 +903,80 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
   const commitEntryChange = (c: EntryDragCommit) => {
     const { entry } = c;
     const currentIds = (entry.schedule_entry_assignments ?? []).map((a) => a.technician_fsm_id);
+    const targetName = technicians.find((t) => t.fsm_resource_id === c.targetTech)?.display_name ?? "technician";
+
+    // FR-14: a Ctrl-drag copies. A note is copied to where it lands, as a
+    // separate note; an appointment gains the technician it lands on and keeps
+    // its time, since the time is shared by everyone on it.
+    if (c.copy) {
+      if (entry.entry_type === "free_text") {
+        if (!version) return;
+        const startAt = isoAtZonedMinutes(date, c.startMin);
+        const endAt = isoAtZonedMinutes(date, c.endMin);
+        const shift = windows ? homeShift({ startMin: c.startMin, endMin: c.endMin }, windows) : entry.shift;
+        // Shown at once, then swapped for the saved copy; taken off if the
+        // save fails. Nothing waits on a reload of the day.
+        const tempId = `pending-copy-${Date.now()}`;
+        const optimistic: ScheduleEntry = {
+          ...entry,
+          id: tempId,
+          shift,
+          start_at: startAt,
+          end_at: endAt,
+          origin: "portal",
+          sync_status: "not_ready",
+          carried_over: false,
+          schedule_entry_assignments: [
+            {
+              id: `${tempId}-a`,
+              technician_fsm_id: c.targetTech,
+              technician_reference: { display_name: targetName },
+            },
+          ],
+        };
+        mutationSeqRef.current += 1;
+        setEntries((list) => [...list, optimistic]);
+        scheduleService
+          .addEntry({
+            scheduleVersionId: version.id,
+            entryType: "free_text",
+            shift,
+            operatingDate: date,
+            startAt,
+            endAt,
+            technicianFsmIds: [c.targetTech],
+            title: entry.title ?? "Note",
+            notes: entry.notes ?? null,
+          })
+          .then((saved) => {
+            setEntries((list) =>
+              list.map((e) =>
+                e.id === tempId
+                  ? { ...optimistic, ...saved, schedule_entry_assignments: optimistic.schedule_entry_assignments }
+                  : e,
+              ),
+            );
+            toast.success(`Note copied to ${targetName} · ${formatRange(c.startMin, c.endMin)}`);
+          })
+          .catch((error) => {
+            setEntries((list) => list.filter((e) => e.id !== tempId));
+            toast.error(error instanceof Error ? error.message : "Couldn’t copy the note");
+          });
+        return;
+      }
+      if (currentIds.includes(c.targetTech)) {
+        toast.info(`${targetName} is already on this appointment`);
+        return;
+      }
+      saveEntryPlacement(
+        entry,
+        { startAt: entry.start_at, endAt: entry.end_at, technicianFsmIds: [...currentIds, c.targetTech] },
+        `Added ${targetName}`,
+        true,
+      );
+      return;
+    }
+
     // Replace the technician the bar was dragged FROM with the target, keeping
     // any other assignees.
     const technicianFsmIds = c.techChanged
@@ -860,7 +991,6 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
       c.timeChanged && windows ? homeShift({ startMin: c.startMin, endMin: c.endMin }, windows) : entry.shift;
 
     const range = formatRange(c.startMin, c.endMin);
-    const targetName = technicians.find((t) => t.fsm_resource_id === c.targetTech)?.display_name ?? "technician";
     const resized = c.timeChanged && c.startMin === c.origStartMin;
     const message = c.techChanged
       ? c.timeChanged
@@ -940,7 +1070,7 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
         );
       } else {
         toast.success("Schedule approved and published to FSM");
-      } ` `
+      }
 
       loadDay(date, { silent: true });
     } catch (error) {
@@ -1273,10 +1403,10 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
                       default); "Site" groups technicians by appointment address. */}
                   {/* The team's own row order, arranged by dragging rows. */}
                   <SelectItem value="custom" disabled={!hasCustomOrder}>
-                    {hasCustomOrder ? "Custom" : "Custom (drag rows to arrange)"}
+                    {hasCustomOrder ? "Arranged for this day" : "Arranged (drag rows to arrange this day)"}
                   </SelectItem>
-                  <SelectItem value="default">Supervisor</SelectItem>
                   <SelectItem value="site">Site</SelectItem>
+                  <SelectItem value="default">Supervisor</SelectItem>
                   <SelectItem value="name">Name</SelectItem>
                   <SelectItem value="role">Role</SelectItem>
                   <SelectItem value="service">Service</SelectItem>
@@ -1432,6 +1562,7 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
           <BoardNotices
             date={date}
             editable={isEditable}
+            noShift={sectionTechnicians.noShift}
             unplaced={isEditable ? unplaced : []}
             offDay={layout.offDay}
             carriedOver={carriedOver}
@@ -1450,6 +1581,7 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
               date={date}
               windows={windows}
               bounds={nightBounds}
+              allTechnicians={technicians}
               gridEntryIds={layout.gridEntryIds.night}
               canEditHours={Boolean(access?.canEdit)}
               onSaveHours={(start, end) => saveShiftHours("night", start, end)}
@@ -1482,6 +1614,7 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
               date={date}
               windows={windows}
               bounds={dayBounds}
+              allTechnicians={technicians}
               gridEntryIds={layout.gridEntryIds.day}
               canEditHours={Boolean(access?.canEdit)}
               onSaveHours={(start, end) => saveShiftHours("day", start, end)}
@@ -1616,6 +1749,7 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
 function BoardNotices({
   date,
   editable,
+  noShift,
   unplaced,
   offDay,
   carriedOver,
@@ -1624,16 +1758,29 @@ function BoardNotices({
   date: string;
   // The day still takes changes (a draft or a draft revision).
   editable: boolean;
+  // Active technicians with no shift set, who are on neither grid.
+  noShift: TechnicianReference[];
   unplaced: FsmUnplacedAppointment[];
   offDay: ScheduleEntry[];
   carriedOver: ScheduleEntry[];
   onOpenEntry: (entry: ScheduleEntry) => void;
 }) {
   const [open, setOpen] = useState(true);
-  if (unplaced.length === 0 && offDay.length === 0 && carriedOver.length === 0) return null;
+  if (unplaced.length === 0 && offDay.length === 0 && carriedOver.length === 0 && noShift.length === 0) return null;
   const plural = (count: number, one: string, many: string) => (count === 1 ? one : many);
   return (
     <div className="flex flex-col gap-2 print:hidden">
+      {noShift.length > 0 && (
+        <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
+          <div className="text-warning flex items-center gap-2 font-medium">
+            <AlertTriangle className="size-3.5 shrink-0" />
+            {noShift.length} {plural(noShift.length, "technician has", "technicians have")} no shift and {plural(noShift.length, "is", "are")} not on the board
+          </div>
+          <p className="text-muted-foreground mt-1">
+            {noShift.map((t) => t.display_name).join(", ")}. Set their shift in Technicians &amp; Leave to give them a row.
+          </p>
+        </div>
+      )}
       {unplaced.length > 0 && (
         <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
           <button
@@ -1889,11 +2036,13 @@ type EntryDrag = {
   startMin: number;
   endMin: number;
   blockedReason: string | null;
+  // Ctrl held: copy a note / add the technician, instead of moving.
+  copy: boolean;
 };
 
-// A technician row being dragged to a new position.
+// A technician row, or a selected block of rows, being dragged to a new position.
 type RowDrag = {
-  techId: string;
+  techIds: string[];
   fromIndex: number;
   insertIndex: number; // the boundary (0..n) the row would drop at
   boundaryTop: number; // px within the rows wrapper
@@ -1910,6 +2059,7 @@ type EntryDragCommit = {
   origEndMin: number;
   timeChanged: boolean;
   techChanged: boolean;
+  copy: boolean;
 };
 
 function formatDuration(minutes: number) {
@@ -2024,6 +2174,7 @@ function ShiftSection({
   date,
   windows,
   bounds,
+  allTechnicians,
   gridEntryIds,
   canEditHours,
   onSaveHours,
@@ -2055,6 +2206,8 @@ function ShiftSection({
   windows: ShiftWindows;
   // This grid's hours today: its usual hours, stretched to fit its rows' jobs.
   bounds: FittedBounds;
+  // Everyone on the board, for naming a drop target in the other grid.
+  allTechnicians: TechnicianReference[];
   // The jobs drawn in this grid: every job of its rows that is on this day.
   gridEntryIds: Set<string>;
   // The usual hours are set on the board, for everyone, by users who may edit.
@@ -2080,8 +2233,9 @@ function ShiftSection({
   onRoleChange: (technicianFsmId: string, roleId: string | null) => void;
   canEditRoles: boolean;
   canReorder: boolean;
-  // `sectionIds` is this section's displayed order; `toIndex` the new position.
-  onReorder: (sectionIds: string[], technicianFsmId: string, toIndex: number) => void;
+  // `sectionIds` is this section's displayed order; `techIds` the row or block
+  // being moved, in its current order; `toIndex` where it lands among the rest.
+  onReorder: (sectionIds: string[], techIds: string[], toIndex: number) => void;
 }) {
   const span = bounds.end - bounds.start || 1;
 
@@ -2089,6 +2243,13 @@ function ShiftSection({
   const [editingRoleFor, setEditingRoleFor] = useState<string | null>(null);
   const [entryDrag, setEntryDrag] = useState<EntryDrag | null>(null);
   const [rowDrag, setRowDrag] = useState<RowDrag | null>(null);
+  // FR-13: rows ticked to be moved together. Cleared when the day changes.
+  const [selectedRows, setSelectedRows] = useState<Set<string>>(() => new Set());
+  const selectAnchor = useRef<string | null>(null);
+  useEffect(() => {
+    setSelectedRows(new Set());
+    selectAnchor.current = null;
+  }, [date]);
   // The row just dropped, briefly highlighted so the eye can find where it went.
   const [flashTech, setFlashTech] = useState<string | null>(null);
   // Each shift can be folded away, and stays that way between visits.
@@ -2127,7 +2288,9 @@ function ShiftSection({
     date,
     isEditable,
     canReorder,
+    selectedRows,
     technicians,
+    allTechnicians,
     leaveByTechnician,
     onEntryClick,
     onEntryCommit,
@@ -2142,7 +2305,9 @@ function ShiftSection({
       date,
       isEditable,
       canReorder,
+      selectedRows,
       technicians,
+      allTechnicians,
       leaveByTechnician,
       onEntryClick,
       onEntryCommit,
@@ -2264,19 +2429,23 @@ function ShiftSection({
       let started = false;
       let current: EntryDrag | null = null;
       let stopScroll: (() => void) | null = null;
+      // Ctrl (or Cmd) at any point of the drag means copy (FR-14).
+      let copyHeld = e.ctrlKey || e.metaKey;
 
-      // Only rows inside this shift section are valid drop targets.
+      // Any technician row on the board is a drop target, in this grid or the
+      // other one, so a morning appointment can be given to a night technician.
       const rowAt = (x: number, y: number) => {
         const row = (document.elementFromPoint(x, y) as HTMLElement | null)?.closest<HTMLElement>("[data-tech-fsm]");
-        return row && rowsRef.current?.contains(row) ? (row.dataset.techFsm ?? null) : null;
+        return row?.dataset.techFsm ?? null;
       };
 
       const compute = (): EntryDrag => {
-        const { bounds: b, leaveByTechnician: leaveMap, technicians: techs } = latest.current;
+        const { bounds: b, leaveByTechnician: leaveMap, allTechnicians: techs } = latest.current;
         const { x, y } = pointerRef.current;
         const scrolled = (paneRef.current?.scrollLeft ?? startScrollLeft) - startScrollLeft;
         const delta = Math.round(((x - startX + scrolled) * minPerPx) / TIME_STEP_MINUTES) * TIME_STEP_MINUTES;
-        const base = { entry, mode, sourceTech, origStartMin: placed.startMin, origEndMin: placed.endMin };
+        const copy = mode === "move" && copyHeld;
+        const base = { entry, mode, sourceTech, origStartMin: placed.startMin, origEndMin: placed.endMin, copy };
 
         if (mode === "resize") {
           const endMin = Math.max(
@@ -2286,8 +2455,14 @@ function ShiftSection({
           return { ...base, targetTech: sourceTech, startMin: placed.startMin, endMin, blockedReason: null };
         }
 
-        const startMin = Math.max(b.start, Math.min(placed.startMin + delta, b.end - duration));
-        const endMin = startMin + duration;
+        // Adding a technician to an appointment never moves it: the time is
+        // shared by everyone on it, so the preview and the leave check use the
+        // appointment's own time.
+        const holdTime = copy && entry.entry_type !== "free_text";
+        const startMin = holdTime
+          ? placed.startMin
+          : Math.max(b.start, Math.min(placed.startMin + delta, b.end - duration));
+        const endMin = holdTime ? placed.endMin : startMin + duration;
         const targetTech = rowAt(x, y) ?? current?.targetTech ?? sourceTech;
         let blockedReason: string | null = null;
         const leave = targetTech !== sourceTech ? leaveMap.get(targetTech) : undefined;
@@ -2310,7 +2485,8 @@ function ShiftSection({
           next.startMin !== current.startMin ||
           next.endMin !== current.endMin ||
           next.targetTech !== current.targetTech ||
-          next.blockedReason !== current.blockedReason
+          next.blockedReason !== current.blockedReason ||
+          next.copy !== current.copy
         ) {
           current = next;
           setEntryDrag(next);
@@ -2322,6 +2498,7 @@ function ShiftSection({
         window.removeEventListener("pointerup", onUp);
         window.removeEventListener("pointercancel", onCancel);
         window.removeEventListener("keydown", onKey);
+        window.removeEventListener("keyup", onKey);
         stopScroll?.();
         document.body.style.removeProperty("cursor");
         document.body.style.removeProperty("user-select");
@@ -2329,6 +2506,7 @@ function ShiftSection({
 
       const onMove = (ev: PointerEvent) => {
         pointerRef.current = { x: ev.clientX, y: ev.clientY };
+        copyHeld = ev.ctrlKey || ev.metaKey;
         if (!started) {
           if (!canDrag) return;
           if (Math.abs(ev.clientX - startX) < DRAG_THRESHOLD_PX && Math.abs(ev.clientY - startY) < DRAG_THRESHOLD_PX) {
@@ -2353,7 +2531,18 @@ function ShiftSection({
         if (!final) return;
         const timeChanged = final.startMin !== final.origStartMin || final.endMin !== final.origEndMin;
         const techChanged = final.targetTech !== final.sourceTech;
-        if (!timeChanged && !techChanged) return;
+        // A copy of an appointment only ever adds a technician; a copy of a
+        // note needs somewhere new to land.
+        const copy = final.copy && (entry.entry_type === "free_text" ? timeChanged || techChanged : techChanged);
+        if (!copy && !timeChanged && !techChanged) return;
+        if (final.copy && !copy) {
+          toast.info(
+            entry.entry_type === "free_text"
+              ? "Drop the copy on another technician or at another time"
+              : "Drop on another technician to add them to the appointment",
+          );
+          return;
+        }
         if (final.blockedReason) {
           toast.error(final.blockedReason);
           return;
@@ -2368,6 +2557,7 @@ function ShiftSection({
           origEndMin: final.origEndMin,
           timeChanged,
           techChanged,
+          copy,
         });
       };
 
@@ -2375,8 +2565,13 @@ function ShiftSection({
         cleanup();
         setEntryDrag(null);
       };
-      // Escape drops the drag without changing anything.
+      // Escape drops the drag without changing anything; Ctrl toggles copy.
       const onKey = (ev: KeyboardEvent) => {
+        if (ev.key === "Control" || ev.key === "Meta") {
+          copyHeld = ev.type === "keydown";
+          if (started) update();
+          return;
+        }
         if (ev.key !== "Escape" || !started) return;
         cleanup();
         setEntryDrag(null);
@@ -2386,6 +2581,7 @@ function ShiftSection({
       window.addEventListener("pointerup", onUp);
       window.addEventListener("pointercancel", onCancel);
       window.addEventListener("keydown", onKey);
+      window.addEventListener("keyup", onKey);
     },
     [positionPill, startAutoScroll],
   );
@@ -2395,12 +2591,45 @@ function ShiftSection({
     window.setTimeout(() => setFlashTech((t) => (t === techId ? null : t)), 1200);
   }, []);
 
+  // FR-13: tick rows to move them together. Ctrl-click adds one, Shift-click a
+  // range from the last tick, a plain click toggles one.
+  const selectRow = useCallback((e: ReactMouseEvent<HTMLElement>, techId: string) => {
+    const ids = latest.current.technicians.map((t) => t.fsm_resource_id);
+    setSelectedRows((prev) => {
+      const next = new Set(prev);
+      if (e.shiftKey && selectAnchor.current && ids.includes(selectAnchor.current)) {
+        const a = ids.indexOf(selectAnchor.current);
+        const b = ids.indexOf(techId);
+        ids.slice(Math.min(a, b), Math.max(a, b) + 1).forEach((id) => next.add(id));
+        return next;
+      }
+      if (next.has(techId)) next.delete(techId);
+      else next.add(techId);
+      selectAnchor.current = techId;
+      return next;
+    });
+  }, []);
+  const clearSelection = useCallback(() => {
+    setSelectedRows(new Set());
+    selectAnchor.current = null;
+  }, []);
+
+  // The rows a press on `techId` moves: the selected block when the row is
+  // part of it, otherwise that row alone, in the order they are shown.
+  const blockFor = (techId: string) => {
+    const { selectedRows: sel, technicians: techs } = latest.current;
+    if (sel.has(techId) && sel.size > 1) return techs.map((t) => t.fsm_resource_id).filter((id) => sel.has(id));
+    return [techId];
+  };
+
   // Team-arranged rows: press and hold a row's handle, then drag it up or down.
-  // The row lifts and follows the pointer, a line shows where it will land, and
-  // releasing saves the new order for everyone.
+  // The row (or the selected block) lifts and follows the pointer, a line shows
+  // where it will land, and releasing saves the new order for this day.
   const beginRowPress = useCallback(
     (e: ReactPointerEvent<HTMLElement>, techId: string) => {
       if (e.button !== 0 || !latest.current.canReorder) return;
+      const block = blockFor(techId);
+      const blockSet = new Set(block);
       e.preventDefault(); // no text selection while holding...
       const grip = e.currentTarget as HTMLElement;
       // ...but do select the handle, so ↑ / ↓ move the row after a click.
@@ -2443,7 +2672,7 @@ function ShiftSection({
         insertIndex = idx;
         const last = geometry[geometry.length - 1];
         setRowDrag({
-          techId,
+          techIds: block,
           fromIndex,
           insertIndex: idx,
           boundaryTop: idx < geometry.length ? geometry[idx].top : last.top + last.height,
@@ -2508,9 +2737,12 @@ function ShiftSection({
           return;
         }
         setRowDrag(null);
-        const to = insertIndex > fromIndex ? insertIndex - 1 : insertIndex;
-        if (to === fromIndex) return;
-        latest.current.onReorder(ids, techId, to);
+        // Where the block lands among the rows that are not part of it.
+        const to = ids.slice(0, insertIndex).filter((id) => !blockSet.has(id)).length;
+        const wasAt = ids.findIndex((id) => blockSet.has(id));
+        const contiguous = block.every((id, i) => ids[wasAt + i] === id);
+        if (contiguous && to === wasAt) return;
+        latest.current.onReorder(ids, block, to);
         flashRow(techId);
       };
 
@@ -2532,23 +2764,32 @@ function ShiftSection({
     [startAutoScroll, flashRow],
   );
 
-  // Keyboard alternative: focus a row's handle and use ↑ / ↓.
+  // Keyboard alternative: focus a row's handle and use ↑ / ↓. Escape clears
+  // the selection.
   const moveRowByKey = useCallback(
     (e: ReactKeyboardEvent<HTMLElement>, techId: string) => {
+      if (e.key === "Escape") {
+        clearSelection();
+        return;
+      }
       if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
       e.preventDefault();
       const ids = latest.current.technicians.map((t) => t.fsm_resource_id);
-      const from = ids.indexOf(techId);
-      const to = e.key === "ArrowUp" ? from - 1 : from + 1;
-      if (from === -1 || to < 0 || to >= ids.length) return;
-      latest.current.onReorder(ids, techId, to);
+      const block = blockFor(techId);
+      const blockSet = new Set(block);
+      const rest = ids.filter((id) => !blockSet.has(id));
+      const first = ids.findIndex((id) => blockSet.has(id));
+      const at = ids.slice(0, first).filter((id) => !blockSet.has(id)).length;
+      const to = e.key === "ArrowUp" ? at - 1 : at + 1;
+      if (first === -1 || to < 0 || to > rest.length) return;
+      latest.current.onReorder(ids, block, to);
       flashRow(techId);
       // The row re-renders in its new place; keep focus on its handle.
       requestAnimationFrame(() =>
         rowsRef.current?.querySelector<HTMLElement>(`[data-grip="${CSS.escape(techId)}"]`)?.focus(),
       );
     },
-    [flashRow],
+    [flashRow, clearSelection],
   );
 
   const addEntry = useCallback(
@@ -2562,15 +2803,18 @@ function ShiftSection({
   );
 
   const nameOf = (techId: string) =>
-    technicians.find((t) => t.fsm_resource_id === techId)?.display_name ?? "another technician";
+    allTechnicians.find((t) => t.fsm_resource_id === techId)?.display_name ?? "another technician";
   const dragTimeChanged = entryDrag
     ? entryDrag.startMin !== entryDrag.origStartMin || entryDrag.endMin !== entryDrag.origEndMin
     : false;
   const dragTechChanged = entryDrag ? entryDrag.targetTech !== entryDrag.sourceTech : false;
   const dragBand = entryDrag ? spanPct(entryDrag.startMin, entryDrag.endMin, bounds) : null;
-  const rowDragTech = rowDrag ? (technicians.find((t) => t.fsm_resource_id === rowDrag.techId) ?? null) : null;
+  const rowDragTech = rowDrag ? (technicians.find((t) => t.fsm_resource_id === rowDrag.techIds[0]) ?? null) : null;
+  const rowDragCount = rowDrag?.techIds.length ?? 0;
   const showInsertLine =
-    rowDrag !== null && rowDrag.insertIndex !== rowDrag.fromIndex && rowDrag.insertIndex !== rowDrag.fromIndex + 1;
+    rowDrag !== null &&
+    (rowDragCount > 1 || (rowDrag.insertIndex !== rowDrag.fromIndex && rowDrag.insertIndex !== rowDrag.fromIndex + 1));
+  const selectedCount = selectedRows.size;
 
   return (
     <div className="rounded-md border">
@@ -2595,11 +2839,19 @@ function ShiftSection({
           </span>
         </button>
         <div className="flex min-w-0 items-center gap-3">
+          {!collapsed && selectedCount > 0 && (
+            <span className="bg-primary/10 text-primary flex shrink-0 items-center gap-2 rounded px-2 py-0.5 text-[11px] font-medium">
+              {selectedCount} row{selectedCount === 1 ? "" : "s"} selected · drag any of them to move all
+              <button type="button" onClick={clearSelection} className="underline underline-offset-2">
+                Clear
+              </button>
+            </span>
+          )}
           {!collapsed && (isEditable || canReorder) && (
             <span className="text-muted-foreground hidden truncate text-[11px] xl:inline">
               {[
-                isEditable && "Drag a bar to move or reassign it, or its right edge to change its length",
-                canReorder && "drag ⠿ to reorder technicians",
+                isEditable && "Drag a bar to move or reassign it (hold Ctrl to copy a note or add a technician), or its right edge to change its length",
+                canReorder && "tick rows and drag ⠿ to reorder them",
               ]
                 .filter(Boolean)
                 .join(" · ")}
@@ -2695,7 +2947,9 @@ function ShiftSection({
                     isEditingRole={editingRoleFor === id}
                     roles={roles}
                     drag={involved}
-                    isRowDragSource={rowDrag?.techId === id}
+                    isRowDragSource={rowDrag?.techIds.includes(id) ?? false}
+                    selected={selectedRows.has(id)}
+                    onSelectRow={selectRow}
                     flash={flashTech === id}
                     onAddEntry={addEntry}
                     onEntryClick={clickEntry}
@@ -2729,10 +2983,12 @@ function ShiftSection({
                   >
                     <GripVertical className="text-primary size-4 shrink-0" />
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-medium">{rowDragTech.display_name}</div>
-                      {rowDragTech.role_name && (
-                        <div className="text-muted-foreground truncate text-[10px]">{rowDragTech.role_name}</div>
-                      )}
+                      <div className="truncate text-sm font-medium">
+                        {rowDragCount > 1 ? `${rowDragCount} technicians` : rowDragTech.display_name}
+                      </div>
+                      <div className="text-muted-foreground truncate text-[10px]">
+                        {rowDragCount > 1 ? `${rowDragTech.display_name} and ${rowDragCount - 1} more` : rowDragTech.role_name}
+                      </div>
                     </div>
                   </div>
                 )}
@@ -2772,7 +3028,17 @@ function ShiftSection({
                 </>
               ) : (
                 <>
-                  {dragTechChanged && (
+                  {entryDrag.copy && (
+                    <span className="text-primary flex items-center gap-1.5 font-medium">
+                      <Plus className="size-3.5 shrink-0" />
+                      {entryDrag.entry.entry_type === "free_text"
+                        ? "Copy the note here"
+                        : dragTechChanged
+                          ? `Add ${nameOf(entryDrag.targetTech)} to this appointment`
+                          : "Drop on another technician to add them"}
+                    </span>
+                  )}
+                  {dragTechChanged && !entryDrag.copy && (
                     <span className="flex items-center gap-1.5">
                       <UserRound className="text-primary size-3.5 shrink-0" />
                       <span className="truncate">{nameOf(entryDrag.sourceTech)}</span>
@@ -2780,20 +3046,20 @@ function ShiftSection({
                       <b className="truncate">{nameOf(entryDrag.targetTech)}</b>
                     </span>
                   )}
-                  {dragTimeChanged && (
+                  {dragTimeChanged && !(entryDrag.copy && entryDrag.entry.entry_type !== "free_text") && (
                     <span className="flex items-center gap-1.5">
                       <Clock className="text-primary size-3.5 shrink-0" />
                       <b>{formatRange(entryDrag.startMin, entryDrag.endMin)}</b>
                     </span>
                   )}
-                  {dragTimeChanged && (
+                  {dragTimeChanged && !entryDrag.copy && (
                     <span className="text-muted-foreground pl-5">
                       was {formatRange(entryDrag.origStartMin, entryDrag.origEndMin)}
                     </span>
                   )}
-                  {!dragTechChanged && !dragTimeChanged && (
+                  {!dragTechChanged && !dragTimeChanged && !entryDrag.copy && (
                     <span className="text-muted-foreground">
-                      Drag sideways to change the time, or up / down to reassign
+                      Drag sideways to change the time, or up / down to reassign · hold Ctrl to copy
                     </span>
                   )}
                 </>
@@ -2829,6 +3095,9 @@ type TechnicianRowProps = {
   // Set only when this row is the source or target of a bar drag.
   drag: EntryDrag | null;
   isRowDragSource: boolean;
+  // FR-13: ticked to move with the other selected rows.
+  selected: boolean;
+  onSelectRow: (e: ReactMouseEvent<HTMLElement>, techId: string) => void;
   flash: boolean;
   onAddEntry: (technicianFsmId: string, slot?: SlotSelection) => void;
   onEntryClick: (entry: ScheduleEntry) => void;
@@ -2868,6 +3137,8 @@ const TechnicianRow = memo(function TechnicianRow({
   roles,
   drag,
   isRowDragSource,
+  selected,
+  onSelectRow,
   flash,
   onAddEntry,
   onEntryClick,
@@ -2932,9 +3203,11 @@ const TechnicianRow = memo(function TechnicianRow({
 
   const ghostView = ghost
     ? {
-      ...spanPct(ghost.startMin, ghost.endMin, bounds),
-      top: ghostLane * laneHeight + 2,
-      text: entryText(ghost.entry, fieldVis, false).primaryText,
+        ...spanPct(ghost.startMin, ghost.endMin, bounds),
+        top: ghostLane * laneHeight + 2,
+        text: ghost.copy
+          ? `${ghost.entry.entry_type === "free_text" ? "Copy of " : "Also "}${entryText(ghost.entry, fieldVis, false).primaryText}`
+          : entryText(ghost.entry, fieldVis, false).primaryText,
       freeText: ghost.entry.entry_type === "free_text",
     }
     : null;
@@ -2945,6 +3218,7 @@ const TechnicianRow = memo(function TechnicianRow({
       className={cn(
         "group/row relative flex items-stretch border-b transition-opacity last:border-0",
         isRowDragSource && "opacity-40",
+        selected && "bg-primary/5",
       )}
       style={{ backgroundColor: roleColor ? `${roleColor}0f` : undefined }}
     >
@@ -2977,6 +3251,20 @@ const TechnicianRow = memo(function TechnicianRow({
           </button>
         )}
         <div className="group flex min-w-0 items-start gap-1">
+          {canReorder && (
+            <input
+              type="checkbox"
+              checked={selected}
+              onChange={() => undefined}
+              onClick={(e) => onSelectRow(e, id)}
+              className={cn(
+                "accent-primary mt-0.5 size-3.5 shrink-0 cursor-pointer transition-opacity",
+                selected ? "opacity-100" : "opacity-0 group-hover/row:opacity-100 focus:opacity-100",
+              )}
+              title="Tick to move this row with others (Shift-click for a range)"
+              aria-label={`Select ${technician.display_name} to move with other rows`}
+            />
+          )}
           <span
             className="line-clamp-2 min-w-0 flex-1 text-sm leading-tight font-medium break-words"
             style={{ color: roleColor ?? undefined }}
@@ -3114,7 +3402,8 @@ const TechnicianRow = memo(function TechnicianRow({
           const carried = Boolean(entry.carried_over);
           const beingDragged = drag !== null && drag.entry.id === entry.id && drag.sourceTech === id;
           const resizing = beingDragged && drag.mode === "resize";
-          const movingAway = beingDragged && drag.mode === "move";
+          // A copy leaves the original where it is.
+          const movingAway = beingDragged && drag.mode === "move" && !drag.copy;
           const shownEnd = resizing ? drag.endMin : endMin;
           const { leftPct, widthPct } = resizing ? spanPct(placed.visibleStart, shownEnd, bounds) : placed;
           const isFreeText = entry.entry_type === "free_text";

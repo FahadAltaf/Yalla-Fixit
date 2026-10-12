@@ -2,7 +2,9 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 
 import QuotationsAdmin from "@/components/dashboard/snagging/quotations-admin";
-import { canViewSnagging } from "@/lib/server/snagging/page-access";
+import { canSeeSnaggingPage } from "@/lib/server/snagging/page-access";
+import { NoPageAccess } from "@/components/dashboard/snagging/no-page-access";
+import { ResourceType } from "@/types/types";
 import { listQuotations } from "@/lib/server/snagging/quotation-list";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import type { SnaggingQuotationSummary } from "@/modules/snagging";
@@ -31,7 +33,7 @@ export const metadata: Metadata = {
  */
 async function firstPage(address: Record<string, string | string[] | undefined>) {
   try {
-    if (!(await canViewSnagging())) return null;
+    if (!(await canSeeSnaggingPage(ResourceType.SNAGGING_QUOTATIONS))) return null;
     const status = Array.isArray(address.status) ? address.status[0] : address.status;
     const params = new URLSearchParams({ page: "0", pageSize: String(QUOTATIONS_FIRST_PAGE_SIZE) });
     if (status && status !== "all") params.set("status", status);
@@ -56,6 +58,9 @@ export default async function SnaggingQuotationsPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  /* The permission decides the page, not just the sidebar entry. */
+  if (!(await canSeeSnaggingPage(ResourceType.SNAGGING_QUOTATIONS))) return <NoPageAccess page="Quotations" />;
+
   const initial = await firstPage(await searchParams);
   // QuotationsAdmin reads the status filter from the query string, so it
   // is wrapped in Suspense as useSearchParams requires under the App

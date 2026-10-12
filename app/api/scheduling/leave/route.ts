@@ -9,8 +9,8 @@ const createLeaveSchema = z
   .object({
     technicianFsmId: z.string().trim().min(1),
     leaveType: z.string().trim().min(1),
-    startAt: z.string().datetime(),
-    endAt: z.string().datetime(),
+    startAt: z.string().datetime({ offset: true }),
+    endAt: z.string().datetime({ offset: true }),
     notes: z.string().trim().optional().nullable(),
   })
   .refine((data) => new Date(data.endAt) >= new Date(data.startAt), {
@@ -23,8 +23,8 @@ const updateLeaveSchema = z
   .object({
     id: z.string().uuid(),
     leaveType: z.string().trim().min(1).optional(),
-    startAt: z.string().datetime().optional(),
-    endAt: z.string().datetime().optional(),
+    startAt: z.string().datetime({ offset: true }).optional(),
+    endAt: z.string().datetime({ offset: true }).optional(),
     notes: z.string().trim().optional().nullable(),
     status: z.enum(["active", "cancelled"]).optional(),
   })

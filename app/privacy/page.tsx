@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Image from "next/image";
 
 import CompanyLogo from "@/public/site-logo.webp";
+import { ScrollToHash } from "./scroll-to-hash";
 
 /**
  * The privacy policy for the YFI Snagging inspection app.
@@ -57,6 +58,8 @@ function Permission({ name, why }: { name: string; why: string }) {
 export default function PrivacyPolicyPage() {
   return (
     <main className="mx-auto w-full max-w-2xl px-4 py-12 sm:py-16">
+      {/* The client re-render resets the browser's own #hash jump. */}
+      <ScrollToHash />
       <header>
         {/*
           The mark, because this page is the one thing a store reviewer
@@ -106,7 +109,7 @@ export default function PrivacyPolicyPage() {
           />
           <Permission
             name="Location"
-            why="The approximate position where a defect photo was taken, so a defect can be tied to the right property. Collected only while you are using the app, never in the background."
+            why="The approximate position where a defect photo was taken, so a defect can be tied to the right property. The app only asks for it while you are using it, and it does not track you when the app is closed."
           />
           <Permission
             name="Account details"
@@ -125,14 +128,15 @@ export default function PrivacyPolicyPage() {
 
       <Section title="Why we collect it">
         <p>
-          Solely to carry out and record property inspection work: to produce inspection
-          reports, to show a client which defects were found and which were fixed, and to
-          keep an audit trail of who recorded what and when.
+          Only to carry out and record property inspection work. That means producing
+          the inspection report, showing a client which defects were found and which were
+          fixed, and keeping a record of who logged what and when.
         </p>
         <p>
-          Inspection records are working documents of a commercial service. They may be
-          shared with the client who commissioned the inspection, and with the developer
-          or contractor responsible for putting the defects right.
+          An inspection is work done for a paying client, and the record of it is their
+          business document. We may give it to the client who commissioned the
+          inspection, and to the developer or contractor who has to put the defects
+          right.
         </p>
       </Section>
 
@@ -169,12 +173,73 @@ export default function PrivacyPolicyPage() {
         </p>
       </Section>
 
+      {/*
+        Google Play's Data safety form asks for a URL that "prominently
+        features the steps users should take to request that their data
+        is deleted", and names what is deleted and what is kept. A policy
+        that merely mentions the right in a paragraph does not satisfy
+        it, so the steps are their own numbered section with an anchor to
+        link straight to.
+      */}
+      <section id="data-deletion" className="scroll-mt-8 mt-10">
+        <h2 className="text-foreground text-lg font-semibold tracking-tight">
+          Requesting deletion of your data
+        </h2>
+        <div className="text-muted-foreground mt-2 space-y-3 text-[0.95rem] leading-relaxed">
+          <p>
+            You can ask us to delete the personal data we hold about you, with or
+            without closing your account. To do so:
+          </p>
+          <ol className="border-border bg-card list-decimal space-y-2 rounded-lg border py-4 pr-5 pl-9">
+            <li>
+              Email{" "}
+              <a
+                className="text-brand font-medium underline underline-offset-2"
+                href={`mailto:${CONTACT}?subject=Data%20deletion%20request`}
+              >
+                {CONTACT}
+              </a>{" "}
+              with the subject &ldquo;Data deletion request&rdquo;.
+            </li>
+            <li>
+              Tell us the email address your YFI Snagging account uses, so we can
+              find the right records.
+            </li>
+            <li>
+              Say whether you want your account closed as well, or only your
+              personal data removed.
+            </li>
+          </ol>
+          <p>
+            We reply within 30 days. There is no charge.
+          </p>
+          <p>
+            <strong className="text-foreground">What is deleted:</strong> your name,
+            email address and account, and the record of which inspections you
+            personally carried out.
+          </p>
+          <p>
+            <strong className="text-foreground">What is kept, and why:</strong> the
+            inspection records themselves, meaning the defects, photographs and
+            reports, belong to the client who commissioned the inspection and are kept
+            as business records. Where we are able to, we remove your name
+            from them rather than deleting the inspection. We will tell you plainly
+            which of your data falls into this category.
+          </p>
+          <p>
+            <strong className="text-foreground">Retention:</strong> records we must
+            keep for legal or contractual reasons are held for as long as that
+            obligation lasts, and are then deleted.
+          </p>
+        </div>
+      </section>
+
       <Section title="Your rights">
         <p>
           You can ask us for a copy of the personal data we hold about you, ask us to
           correct it, or ask us to delete it. Because inspection records are commercial
           documents belonging to our client, deletion may not always be possible while a
-          contract is running &mdash; we will tell you plainly if that is the case.
+          contract is running. We will tell you plainly if that is the case.
         </p>
         <p>
           If you are a client&rsquo;s employee, please raise the request with your own

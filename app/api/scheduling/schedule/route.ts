@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
@@ -53,18 +53,16 @@ export async function GET(req: NextRequest) {
     }
 
     const admin = await createAdminServerClient();
-    const { data: zoneRow } = await admin.from("settings").select("org_timezone").eq("id", 1).maybeSingle();
+    // Every round trip to the database costs about half a second from the
+    // Gulf, so independent reads go out together.
+    const [{ data: zoneRow }, { data: currentRow, error: currentError }] = await Promise.all([
+      admin.from("settings").select("org_timezone").eq("id", 1).maybeSingle(),
+      // The day IS its current version now -- there is no separate
+      // daily_schedules row, and no current_version_id pointer to keep in step
+      // with is_current. BR-017's partial unique index guarantees at most one.
+      admin.from("schedule_versions").select("*").eq("schedule_date", date).eq("is_current", true).maybeSingle(),
+    ]);
     const timeZone = zoneRow?.org_timezone || DEFAULT_ORG_TIMEZONE;
-
-    // The day IS its current version now -- there is no separate
-    // daily_schedules row, and no current_version_id pointer to keep in step
-    // with is_current. BR-017's partial unique index guarantees at most one.
-    const { data: currentRow, error: currentError } = await admin
-      .from("schedule_versions")
-      .select("*")
-      .eq("schedule_date", date)
-      .eq("is_current", true)
-      .maybeSingle();
     if (currentError) throw new Error(currentError.message);
     let version = currentRow;
 
@@ -106,6 +104,8 @@ export async function GET(req: NextRequest) {
     let imported = 0;
     let fsmImport: Awaited<ReturnType<typeof importFsmAppointmentsForDay>> | null = null;
     let fsmFirstPull = false;
+    // True when the re-read runs after this response instead of before it.
+    let fsmRefreshing = false;
     const editable = version.status === "draft" || version.status === "draft_revision";
     const lastPull = version.fsm_imported_at ? new Date(version.fsm_imported_at).getTime() : 0;
     if (Date.now() - lastPull > FSM_REFRESH_MINUTES * 60_000) {
@@ -123,21 +123,60 @@ export async function GET(req: NextRequest) {
       // just without the throttle.
       if (claimError || (claimed?.length ?? 0) > 0) {
         fsmFirstPull = !version.fsm_imported_at;
-        if (editable) {
-          fsmImport = await importFsmAppointmentsForDay(admin, { date, versionId: version.id });
-          imported = fsmImport.imported;
+        const versionId = version.id as string;
+        const refresh = async () => {
+          const result = editable ? await importFsmAppointmentsForDay(admin, { date, versionId }) : null;
+          await reconcileFsmAppointments({ operatingDate: date });
+          return result;
+        };
+        if (fsmFirstPull) {
+          // The first open of a day has nothing to show until FSM is read.
+          fsmImport = await refresh();
+          imported = fsmImport?.imported ?? 0;
+        } else {
+          // Later re-reads take 30 to 60 seconds (one FSM read per appointment),
+          // which made every load of the board wait that long. The day is
+          // served as it is, and the re-read runs after the response; the board
+          // reloads itself shortly after to pick up what it found.
+          fsmRefreshing = true;
+          after(async () => {
+            try {
+              await refresh();
+            } catch (error) {
+              console.error(`[schedule] background FSM refresh failed for ${date}:`, error);
+            }
+          });
         }
-        await reconcileFsmAppointments({ operatingDate: date });
         if (!claimError) version = { ...version, fsm_imported_at: stamp };
       }
     }
 
-    const { data: entries, error: entriesError } = await admin
-      .from("schedule_entries")
-      .select(ENTRY_SELECT)
-      .eq("schedule_version_id", version.id)
-      .order("shift", { ascending: true })
-      .order("start_at", { ascending: true });
+    // The day's own entries, the jobs carried over from earlier days, the
+    // FSM appointments with no row, and the team's row order: four
+    // independent reads, sent together.
+    const dayStart = zonedTimeToUtc(date, "00:00:00", timeZone).toISOString();
+    const versionId = version.id as string;
+    const [entriesRes, carriedRes, unplacedStored, orderRes] = await Promise.all([
+      admin
+        .from("schedule_entries")
+        .select(ENTRY_SELECT)
+        .eq("schedule_version_id", versionId)
+        .order("shift", { ascending: true })
+        .order("start_at", { ascending: true }),
+      admin
+        .from("schedule_entries")
+        .select(`${ENTRY_SELECT}, schedule_versions!inner(is_current)`)
+        .eq("schedule_versions.is_current", true)
+        .lt("operating_date", date)
+        .gte("operating_date", addDaysToDateString(date, -CARRY_OVER_DAYS))
+        .gt("end_at", dayStart)
+        .order("start_at", { ascending: true }),
+      editable && !(fsmImport && !fsmImport.error)
+        ? readUnplacedAppointments(admin, versionId)
+        : Promise.resolve<UnplacedAppointment[]>([]),
+      admin.from("schedule_board_orders").select("technician_order").eq("schedule_date", date).maybeSingle(),
+    ]);
+    const { data: entries, error: entriesError } = entriesRes;
     if (entriesError) throw new Error(entriesError.message);
 
     // A job that started on an earlier day and is still running on this one
@@ -145,15 +184,7 @@ export async function GET(req: NextRequest) {
     // showed it and its technicians looked free until it ended. It is sent
     // along, marked, to be drawn but not edited here.
     let carriedOver: Record<string, unknown>[] = [];
-    const dayStart = zonedTimeToUtc(date, "00:00:00", timeZone).toISOString();
-    const { data: carriedRows, error: carriedError } = await admin
-      .from("schedule_entries")
-      .select(`${ENTRY_SELECT}, schedule_versions!inner(is_current)`)
-      .eq("schedule_versions.is_current", true)
-      .lt("operating_date", date)
-      .gte("operating_date", addDaysToDateString(date, -CARRY_OVER_DAYS))
-      .gt("end_at", dayStart)
-      .order("start_at", { ascending: true });
+    const { data: carriedRows, error: carriedError } = carriedRes;
     if (carriedError) {
       // Never a reason to fail the day itself.
       console.error("Schedule GET carried-over error:", carriedError.message);
@@ -176,15 +207,16 @@ export async function GET(req: NextRequest) {
     // FSM appointments for the date with nobody to draw them on. Only while
     // the day still takes new bookings; an approved day's list is fixed.
     let unplaced: UnplacedAppointment[] = [];
-    if (editable) {
-      unplaced =
-        fsmImport && !fsmImport.error
-          ? (fsmImport.unplaced ?? [])
-          : await readUnplacedAppointments(admin, version.id);
-    }
+    if (editable) unplaced = fsmImport && !fsmImport.error ? (fsmImport.unplaced ?? []) : unplacedStored;
+
+    // FR-13: the row order the team arranged for this day, if any. The table
+    // is a later migration; without it the board simply has no saved order.
+    let boardOrder: string[] | null = null;
+    const { data: orderRow, error: orderError } = orderRes;
+    if (!orderError && Array.isArray(orderRow?.technician_order)) boardOrder = orderRow.technician_order as string[];
 
     return NextResponse.json({
-      data: { version, entries: entries ?? [], carriedOver, unplaced, imported, fsmImport, fsmFirstPull },
+      data: { version, entries: entries ?? [], carriedOver, unplaced, boardOrder, imported, fsmImport, fsmFirstPull, fsmRefreshing },
     });
   } catch (error) {
     console.error("Schedule GET error:", error);

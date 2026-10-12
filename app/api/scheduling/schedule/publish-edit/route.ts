@@ -9,8 +9,8 @@ import { syncEntryToFsm, type SyncEntryRow } from "@/lib/server/schedule-sync";
 const publishEditSchema = z
   .object({
     entryId: z.string().uuid(),
-    startAt: z.string().datetime(),
-    endAt: z.string().datetime(),
+    startAt: z.string().datetime({ offset: true }),
+    endAt: z.string().datetime({ offset: true }),
     shift: z.enum(["day", "night"]).optional(),
     technicianFsmIds: z.array(z.string().trim().min(1)).min(1),
   })

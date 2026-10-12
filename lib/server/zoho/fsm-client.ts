@@ -101,8 +101,15 @@ export async function fsmFetch(
   token: string,
   path: string,
   init?: RequestInit,
+  // `retry: false` never repeats a call whose outcome is unknown. A create
+  // that is not idempotent (POST /Work_Orders) must not be sent again after
+  // a timeout or a 5xx: the first attempt may well have succeeded in FSM,
+  // and a second one would make a duplicate record nobody asked for. A 429
+  // is still retried: FSM did not process it.
+  options: { retry?: boolean } = {},
 ): Promise<{ ok: boolean; status: number; json: any }> {
   let lastError: unknown = null;
+  const once = options.retry === false;
 
   for (let attempt = 1; attempt <= FSM_MAX_ATTEMPTS; attempt += 1) {
     let res: Response;
@@ -119,7 +126,7 @@ export async function fsmFetch(
     } catch (error) {
       // A timeout or a socket error. Retryable, but only so many times.
       lastError = error;
-      if (attempt === FSM_MAX_ATTEMPTS) {
+      if (once || attempt === FSM_MAX_ATTEMPTS) {
         return {
           ok: false,
           status: 408,
@@ -133,7 +140,7 @@ export async function fsmFetch(
       continue;
     }
 
-    if (isRetryable(res.status) && attempt < FSM_MAX_ATTEMPTS) {
+    if (isRetryable(res.status) && attempt < FSM_MAX_ATTEMPTS && (!once || res.status === 429)) {
       const retryAfter = Number(res.headers.get("retry-after"));
       const wait = Number.isFinite(retryAfter) && retryAfter > 0
         ? Math.min(retryAfter * 1000, 30_000)

@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 
 import ClientsAdmin from "@/components/dashboard/snagging/clients-admin";
-import { canViewSnagging } from "@/lib/server/snagging/page-access";
+import { canSeeSnaggingPage } from "@/lib/server/snagging/page-access";
+import { NoPageAccess } from "@/components/dashboard/snagging/no-page-access";
+import { ResourceType } from "@/types/types";
 import { listClients } from "@/lib/server/snagging/client-list";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import type { SnaggingClientOption } from "@/modules/snagging";
@@ -28,7 +30,7 @@ export const metadata: Metadata = {
  */
 async function firstPage() {
   try {
-    if (!(await canViewSnagging())) return null;
+    if (!(await canSeeSnaggingPage(ResourceType.SNAGGING_CLIENTS))) return null;
     const admin = await createAdminServerClient();
     const result = await listClients(
       admin,
@@ -42,5 +44,8 @@ async function firstPage() {
 }
 
 export default async function SnaggingClientsPage() {
+  /* The permission decides the page, not just the sidebar entry. */
+  if (!(await canSeeSnaggingPage(ResourceType.SNAGGING_CLIENTS))) return <NoPageAccess page="Clients" />;
+
   return <ClientsAdmin initial={await firstPage()} />;
 }

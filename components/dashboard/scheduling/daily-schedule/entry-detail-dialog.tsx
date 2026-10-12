@@ -9,6 +9,9 @@ import {
   type ScheduleEntry,
   type ScheduleVersionStatus,
   type SchedulingConfig,
+  type CopyDayResult,
+  type CopyMode,
+  type CopyPriceQuote,
   type ShiftType,
   type TechnicianReference,
 } from "@/modules/scheduling";
@@ -16,10 +19,11 @@ import type { LeaveRecord } from "@/types/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Calendar } from "@/components/ui/calendar";
 import StatusBadge from "@/components/ui/status-badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dialog";
-import { AlertTriangle, ExternalLink, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { AlertTriangle, CalendarDays, ChevronDown, ExternalLink, Loader2, RefreshCw, Trash2, UsersRound } from "lucide-react";
 import TimeSelect, { formatTimeAmPm } from "@/components/ui/time-select";
 import { reachesOutsideUsualHours, fsmRecordUrl } from "./shift-utils";
 import {
@@ -31,6 +35,7 @@ import {
   addDaysToDateString,
   formatZonedDate,
   formatZonedTime,
+  todayInZone,
   zonedDateString,
   zonedHhmm,
   zonedTimeToUtc,
@@ -95,14 +100,47 @@ export default function EntryDetailDialog({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [startTime, setStartTime] = useState(toLocalHhmm(entry.start_at));
   const [endTime, setEndTime] = useState(toLocalHhmm(entry.end_at));
-  const [techFilter, setTechFilter] = useState("");
   const [selectedTechs, setSelectedTechs] = useState<string[]>(
     (entry.schedule_entry_assignments ?? []).map((a) => a.technician_fsm_id),
   );
+  // FR-14: a note's text and notes can be changed on a draft day.
+  const isNote = entry.entry_type === "free_text";
+  const [noteTitle, setNoteTitle] = useState(entry.title ?? "");
+  // FR-15 (notes): copy this note to later days.
+  const [copyOpen, setCopyOpen] = useState(false);
+  const [copyDates, setCopyDates] = useState<string[]>([]);
+  const [copying, setCopying] = useState(false);
+  const [duplicateDates, setDuplicateDates] = useState<string[] | null>(null);
+  // FR-15 (appointments): the price of a copy, shown before it is made, and
+  // whether the copy gets a new work order (the rule) or stays on the same
+  // one (only when the original released its lines; one day).
+  const [priceQuote, setPriceQuote] = useState<CopyPriceQuote | null>(null);
+  const [copyMode, setCopyMode] = useState<CopyMode>("new_work_order");
+  // FR-14: copy a note to other technicians (a separate note each), or add
+  // technicians to an appointment, from the same box.
+  const [copyTechs, setCopyTechs] = useState<string[]>([]);
+  const [copyingTechs, setCopyingTechs] = useState(false);
 
   const originalTechs = (entry.schedule_entry_assignments ?? []).map((a) => a.technician_fsm_id);
   const publishedLike = versionStatus !== null && PUBLISHED_LIKE.includes(versionStatus);
   const isSyncedAppointment = entry.entry_type !== "free_text" && Boolean(entry.fsm_appointment_id);
+  // FR-15 (appointments): any appointment with a work order can be copied to
+  // later days. Staying on the same work order is only offered when FSM
+  // reads the original as cancelled or cannot complete (its lines are free);
+  // the server checks FSM again before copying.
+  const canCopyAppointment = !isNote && Boolean(entry.fsm_work_order_id);
+  const sourceState = !isNote && entry.fsm_appointment_id ? resolveAppointmentState(entry.fsm_status) : null;
+  const sameWorkOrderPossible =
+    canCopyAppointment && (sourceState === "cancelled" || sourceState === "cannot_complete");
+  // Staying on the same work order is for one day only; with more days
+  // chosen the copy makes new work orders whatever the radio says.
+  const effectiveMode: CopyMode = sameWorkOrderPossible && copyDates.length === 1 ? copyMode : "new_work_order";
+  // A copy waiting for its own work order, or one that already got it.
+  const isWorkOrderCopy = Boolean(entry.fsm_create_work_order);
+  const copyPriceLabel =
+    entry.fsm_copy_price !== null && entry.fsm_copy_price !== undefined
+      ? `${entry.fsm_copy_currency ?? "AED"} ${Number(entry.fsm_copy_price).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : null;
 
   // Who can be edited here, and how the write happens:
   //  - Draft: local edit via updateEntry (no FSM write until approval).
@@ -124,7 +162,9 @@ export default function EntryDetailDialog({
   const isNewAppointment = entry.entry_type === "new_appointment";
   const existsInFsm = Boolean(entry.fsm_appointment_id);
   const workOrderId = entry.entry_type !== "free_text" ? entry.fsm_work_order_id : null;
-  const canEditLines = canEditDraft && isNewAppointment && !existsInFsm;
+  // A copy that gets its own work order on approval keeps the lines its
+  // price was confirmed for (FR-15): remove it and copy again to change them.
+  const canEditLines = canEditDraft && isNewAppointment && !existsInFsm && !entry.fsm_create_work_order;
   const originalLineIds = useMemo(() => entry.fsm_service_line_item_ids ?? [], [entry.fsm_service_line_item_ids]);
   const [selectedLineIds, setSelectedLineIds] = useState<string[]>(originalLineIds);
   const [woLines, setWoLines] = useState<FsmWorkOrderLines | null>(null);
@@ -147,7 +187,14 @@ export default function EntryDetailDialog({
   const lineOwners = useMemo(() => {
     const owners = new Map<string, string>();
     dayEntries
-      .filter((e) => e.id !== entry.id && e.entry_type === "new_appointment")
+      // A copy still waiting for its own work order names the source lines
+      // but does not hold them (FR-15).
+      .filter(
+        (e) =>
+          e.id !== entry.id &&
+          e.entry_type === "new_appointment" &&
+          !(e.fsm_create_work_order && !e.fsm_created_work_order_id),
+      )
       .forEach((e) =>
         (e.fsm_service_line_item_ids ?? []).forEach((lineId) =>
           owners.set(lineId, `another new appointment at ${formatTimeAmPm(toLocalHhmm(e.start_at))}`),
@@ -222,15 +269,12 @@ export default function EntryDetailDialog({
     selectedTechs.length !== originalTechs.length ||
     selectedTechs.some((t) => !originalTechs.includes(t));
   const timeChanged = startTime !== toLocalHhmm(entry.start_at) || endTime !== toLocalHhmm(entry.end_at);
-  const dirty = timeChanged || techsChanged || linesChanged;
+  const titleChanged = isNote && noteTitle.trim() !== (entry.title ?? "");
+  const dirty = timeChanged || techsChanged || linesChanged || titleChanged;
 
   const technicianNames = originalTechs
     .map((id) => technicians.find((t) => t.fsm_resource_id === id)?.display_name ?? id)
     .join(", ");
-
-  const filteredTechs = technicians
-    .filter((t) => t.is_active || selectedTechs.includes(t.fsm_resource_id))
-    .filter((t) => t.display_name.toLowerCase().includes(techFilter.toLowerCase()));
 
   const toggleTech = (id: string) => {
     if (onLeave.has(id)) return;
@@ -250,13 +294,18 @@ export default function EntryDetailDialog({
       toast.error("Select at least one technician");
       return;
     }
+    if (isNote && noteTitle.trim() === "") {
+      toast.error("A note needs some text");
+      return;
+    }
     if (canEditLines && selectedLineIds.length === 0) {
       toast.error("Select at least one service line");
       return;
     }
-    // Times that were not touched go back exactly as they came.
-    const startAt = startTime === toLocalHhmm(entry.start_at) ? entry.start_at : newStartAt.toISOString();
-    const endAt = endTime === toLocalHhmm(entry.end_at) ? entry.end_at : newEndAt.toISOString();
+    // Times that were not touched go back as they came, in the Z form the API
+    // accepts (the database hands them over with a +00:00 offset).
+    const startAt = startTime === toLocalHhmm(entry.start_at) ? new Date(entry.start_at).toISOString() : newStartAt.toISOString();
+    const endAt = endTime === toLocalHhmm(entry.end_at) ? new Date(entry.end_at).toISOString() : newEndAt.toISOString();
     setSaving(true);
     try {
       if (canEditPublished) {
@@ -276,6 +325,7 @@ export default function EntryDetailDialog({
           endAt,
           technicianFsmIds: selectedTechs,
           ...(linesChanged ? { serviceLineItemIds: selectedLineIds } : {}),
+          ...(titleChanged ? { title: noteTitle.trim() } : {}),
         });
         toast.success("Entry updated");
       }
@@ -284,6 +334,111 @@ export default function EntryDetailDialog({
       toast.error(error instanceof Error ? error.message : "Failed to save the change");
     } finally {
       setSaving(false);
+    }
+  };
+
+  // FR-15 (notes): one call for all chosen days; each day answers for itself.
+  // A day that already holds the same note asks once, then is sent again with
+  // the go-ahead.
+  const todayStr = todayInZone();
+  const tomorrow = addDaysToDateString(todayStr, 1);
+  const latestCopyDay = addDaysToDateString(todayStr, 14);
+  const toggleCopyDate = (d: string) =>
+    setCopyDates((prev) => (prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d].sort()));
+  // An appointment is copied in two steps: the first call only quotes the
+  // price (nothing is copied), the person confirms it, and the second call
+  // carries `priceConfirmed`.
+  const runCopy = async (dates: string[], confirmDuplicates: string[] = [], priceConfirmed = false) => {
+    if (dates.length === 0) return;
+    setCopying(true);
+    try {
+      if (!isNote && !priceConfirmed) {
+        const { quote } = await scheduleService.copyEntryToDays({ entryId: entry.id, dates, quoteOnly: true });
+        if (!quote) throw new Error("Could not read the price of this appointment from Zoho FSM");
+        if (effectiveMode === "same_work_order" && !quote.linesFree) {
+          setCopyMode("new_work_order");
+          toast.info("The original still holds its service lines in Zoho FSM, so the copy will be a new work order.");
+        }
+        setPriceQuote(quote);
+        return;
+      }
+      const { results } = await scheduleService.copyEntryToDays({
+        entryId: entry.id,
+        dates,
+        confirmDuplicates,
+        ...(isNote
+          ? {}
+          : {
+              mode: priceQuote && !priceQuote.linesFree ? "new_work_order" : effectiveMode,
+              priceConfirmed: true,
+              confirmedTotal: priceQuote?.total,
+            }),
+      });
+      const needs = results.filter((r) => r.status === "needs_confirmation").map((r) => r.date);
+      const copied = results.filter((r) => r.status === "copied");
+      const skipped = results.filter((r) => r.status === "skipped");
+      const dropped = copied.flatMap((r) => (r.droppedTechnicians ?? []).map((name) => `${name} (${dayLabel(r.date)})`));
+      if (copied.length > 0) {
+        toast.success(
+          `Copied to ${copied.map((r) => dayLabel(r.date)).join(", ")}${
+            dropped.length ? `. Left off because on leave: ${dropped.join(", ")}` : ""
+          }`,
+          { duration: 9000 },
+        );
+      }
+      skipped.forEach((r: CopyDayResult) => toast.warning(`${dayLabel(r.date)}: ${r.reason ?? "skipped"}`, { duration: 9000 }));
+      if (needs.length > 0) {
+        setDuplicateDates(needs);
+        return;
+      }
+      setCopyDates([]);
+      setCopyOpen(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : `Couldn’t copy the ${isNote ? "note" : "appointment"}`);
+    } finally {
+      setCopying(false);
+    }
+  };
+
+  const runCopyToTechnicians = async () => {
+    if (copyTechs.length === 0) return;
+    setCopyingTechs(true);
+    try {
+      if (isNote) {
+        if (!scheduleVersionId) throw new Error("This day cannot take new entries");
+        // One note per technician, as a Ctrl-drag copy makes.
+        for (const techId of copyTechs) {
+          await scheduleService.addEntry({
+            scheduleVersionId,
+            entryType: "free_text",
+            shift: entry.shift,
+            operatingDate: entry.operating_date,
+            startAt: new Date(entry.start_at).toISOString(),
+            endAt: new Date(entry.end_at).toISOString(),
+            technicianFsmIds: [techId],
+            title: entry.title ?? "Note",
+            notes: entry.notes ?? null,
+          });
+        }
+        toast.success(`Note copied to ${copyTechs.length} technician${copyTechs.length === 1 ? "" : "s"}`);
+      } else {
+        const technicianFsmIds = [...new Set([...originalTechs, ...copyTechs])];
+        const startAt = new Date(entry.start_at).toISOString();
+        const endAt = new Date(entry.end_at).toISOString();
+        if (canEditPublished) {
+          await scheduleService.editPublished({ entryId: entry.id, startAt, endAt, shift: entry.shift, technicianFsmIds });
+          toast.success("Technicians added and pushed to Zoho FSM");
+        } else {
+          await scheduleService.updateEntry({ id: entry.id, technicianFsmIds });
+          toast.success(`Added ${copyTechs.length} technician${copyTechs.length === 1 ? "" : "s"} to the appointment`);
+        }
+      }
+      setCopyTechs([]);
+      onChanged();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn’t copy to those technicians");
+    } finally {
+      setCopyingTechs(false);
     }
   };
 
@@ -376,6 +531,18 @@ export default function EntryDetailDialog({
                     appointmentLabel
                   )}
                 </Detail>
+                {isWorkOrderCopy && (
+                  <Detail label="Copy of">
+                    {entry.fsm_copy_source_appointment_name ?? "an appointment"} on{" "}
+                    {entry.fsm_copy_source_work_order_name ?? "its work order"}
+                    <span className="text-muted-foreground block text-xs">
+                      {entry.fsm_created_work_order_id
+                        ? `Work order ${entry.fsm_created_work_order_name ?? ""} was created in Zoho FSM for this copy.`
+                        : "A new work order with the same service lines is created in Zoho FSM when this day is approved."}
+                      {copyPriceLabel ? ` Price confirmed: ${copyPriceLabel}.` : ""}
+                    </span>
+                  </Detail>
+                )}
                 {entry.fsm_appointment_type && <Detail label="Type">{entry.fsm_appointment_type}</Detail>}
                 {entry.fsm_schedule_type && <Detail label="Schedule">{entry.fsm_schedule_type}</Detail>}
                 {entry.client_name && <Detail label="Client">{entry.client_name}</Detail>}
@@ -515,6 +682,19 @@ export default function EntryDetailDialog({
               <span className="text-xs font-medium">
                 {canEditPublished ? "Edit appointment (pushes to FSM)" : "Edit entry"}
               </span>
+              {isNote && canEditDraft && (
+                <>
+                  <label className="flex flex-col gap-1 text-xs">
+                    Text
+                    <Input
+                      value={noteTitle}
+                      onChange={(e) => setNoteTitle(e.target.value)}
+                      maxLength={200}
+                      aria-label="Note text"
+                    />
+                  </label>
+                </>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <label className="flex flex-col gap-1 text-xs">
                   Start
@@ -602,47 +782,160 @@ export default function EntryDetailDialog({
                 </div>
               )}
 
-              <div>
-                <span className="mb-1 block text-xs font-medium">
-                  Technicians{selectedTechs.length ? ` (${selectedTechs.length})` : ""}
-                </span>
-                <Input
-                  placeholder="Filter technicians..."
-                  value={techFilter}
-                  onChange={(e) => setTechFilter(e.target.value)}
-                  className="mb-2 h-8"
-                />
-                <div className="flex max-h-40 flex-col gap-0.5 overflow-y-auto rounded-md border p-2">
-                  {filteredTechs.map((t) => {
-                    const leave = onLeave.get(t.fsm_resource_id);
-                    return (
-                      <label
-                        key={t.fsm_resource_id}
-                        className={`flex items-center gap-2 rounded px-1 py-1 text-sm ${
-                          leave ? "cursor-not-allowed opacity-55" : "hover:bg-muted/50 cursor-pointer"
-                        }`}
-                        title={leave ? `On leave: ${leave.leave_type}` : undefined}
-                      >
-                        <Checkbox
-                          checked={selectedTechs.includes(t.fsm_resource_id)}
-                          disabled={!!leave}
-                          onCheckedChange={() => toggleTech(t.fsm_resource_id)}
-                        />
-                        <span className="flex-1">{t.display_name}</span>
-                        {leave && (
-                          <span className="rounded bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium text-warning">
-                            On leave
-                          </span>
-                        )}
-                      </label>
-                    );
-                  })}
-                  {filteredTechs.length === 0 && (
-                    <span className="text-muted-foreground px-1 py-2 text-xs">No technicians match.</span>
-                  )}
-                </div>
-              </div>
+              <TechnicianChecklist
+                label="Technicians"
+                technicians={technicians}
+                selected={selectedTechs}
+                onToggle={toggleTech}
+                onLeave={onLeave}
+                summary={
+                  selectedTechs.length === 0
+                    ? "None selected"
+                    : selectedTechs
+                        .map((id) => technicians.find((t) => t.fsm_resource_id === id)?.display_name ?? id)
+                        .join(", ")
+                }
+              />
 
+            </div>
+          )}
+
+          {/* Copy: to other days (FR-15) on the left, to other technicians
+              (FR-14) on the right. Copying an APPOINTMENT to other days waits
+              for the team's decisions on how a copy is made in Zoho FSM. */}
+          {!entry.carried_over && (
+            <div className="rounded-md border p-3">
+              <button
+                type="button"
+                onClick={() => setCopyOpen((v) => !v)}
+                className="flex w-full items-center gap-2 text-left text-xs font-medium"
+                aria-expanded={copyOpen}
+              >
+                <ChevronDown className={`size-3.5 shrink-0 transition-transform ${copyOpen ? "" : "-rotate-90"}`} />
+                Copy {isNote ? "this note" : "this appointment"}
+                <span className="text-muted-foreground font-normal">
+                  · to other days, or to other technicians
+                </span>
+              </button>
+              {copyOpen && (
+                <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                  <div className="flex flex-col gap-2">
+                    <span className="flex items-center gap-1.5 text-xs font-medium">
+                      <CalendarDays className="size-3.5 shrink-0" />
+                      To other days
+                    </span>
+                    {isNote || canCopyAppointment ? (
+                      <>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={copyDates.includes(tomorrow) ? "default" : "outline"}
+                          onClick={() => toggleCopyDate(tomorrow)}
+                        >
+                          Tomorrow, {dayLabel(tomorrow)}
+                        </Button>
+                        <Calendar
+                          mode="multiple"
+                          selected={copyDates.map((d) => new Date(`${d}T12:00:00`))}
+                          onSelect={(days) =>
+                            setCopyDates(
+                              (days ?? [])
+                                .map(
+                                  (d) =>
+                                    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`,
+                                )
+                                .filter((d) => d !== entry.operating_date)
+                                .sort(),
+                            )
+                          }
+                          disabled={(d) => {
+                            const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+                            return iso < todayStr || iso > latestCopyDay || iso === entry.operating_date;
+                          }}
+                          defaultMonth={new Date(`${tomorrow}T12:00:00`)}
+                        />
+                        <span className="text-muted-foreground text-xs">
+                          {copyDates.length === 0
+                            ? isNote
+                              ? "Same time, same technicians, up to 14 days ahead. An approved day is skipped; a technician on leave that day is left off."
+                              : "Same time, same technicians, up to 14 days ahead. Each copy is a pending appointment on its day; when that day is approved, a new work order is created in Zoho FSM with the same service lines and price, and the appointment on it. You will see the price before copying. The appointment is not dispatched."
+                            : `Copy to: ${copyDates.map(dayLabel).join(", ")}`}
+                        </span>
+                        {sameWorkOrderPossible && (
+                          <div className="flex flex-col gap-1 text-xs">
+                            <label className="flex cursor-pointer items-center gap-2">
+                              <input
+                                type="radio"
+                                name="copy-mode"
+                                checked={copyMode === "new_work_order"}
+                                onChange={() => setCopyMode("new_work_order")}
+                              />
+                              New work order for each copy
+                            </label>
+                            <label className="flex cursor-pointer items-center gap-2">
+                              <input
+                                type="radio"
+                                name="copy-mode"
+                                checked={copyMode === "same_work_order"}
+                                onChange={() => setCopyMode("same_work_order")}
+                                disabled={copyDates.length > 1}
+                              />
+                              Continue on the same work order (one day; the original released its lines)
+                            </label>
+                          </div>
+                        )}
+                        <div className="flex gap-2">
+                          <Button type="button" size="sm" onClick={() => runCopy(copyDates)} disabled={copying || copyDates.length === 0}>
+                            {copying && <Loader2 className="size-4 animate-spin" />}
+                            {isNote ? "Copy" : "Check price and copy"} to {copyDates.length || ""} day{copyDates.length === 1 ? "" : "s"}
+                          </Button>
+                          <Button type="button" size="sm" variant="ghost" onClick={() => setCopyDates([])} disabled={copying || copyDates.length === 0}>
+                            Clear
+                          </Button>
+                        </div>
+                      </>
+                    ) : (
+                      <span className="text-muted-foreground text-xs">
+                        This appointment has no work order in Zoho FSM, so it cannot be copied to other days.
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex min-w-0 flex-col gap-2">
+                    <span className="flex items-center gap-1.5 text-xs font-medium">
+                      <UsersRound className="size-3.5 shrink-0" />
+                      To other technicians
+                    </span>
+                    <span className="text-muted-foreground text-xs">
+                      {isNote
+                        ? "Each chosen technician gets their own copy of this note, same day and time."
+                        : "The chosen technicians are added to this appointment. Its time does not change."}
+                    </span>
+                    <TechnicianChecklist
+                      label="Technicians"
+                      technicians={technicians.filter((t) => !originalTechs.includes(t.fsm_resource_id))}
+                      selected={copyTechs}
+                      onToggle={(id) => setCopyTechs((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))}
+                      onLeave={onLeave}
+                      summary={copyTechs.length === 0 ? "None chosen yet" : `${copyTechs.length} chosen`}
+                      defaultOpen
+                    />
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={runCopyToTechnicians}
+                        disabled={copyingTechs || copyTechs.length === 0 || (!isNote && !canEdit) || (isNote && !scheduleVersionId)}
+                      >
+                        {copyingTechs && <Loader2 className="size-4 animate-spin" />}
+                        {isNote ? "Copy" : "Add"} to {copyTechs.length || ""} technician{copyTechs.length === 1 ? "" : "s"}
+                      </Button>
+                      <Button type="button" size="sm" variant="ghost" onClick={() => setCopyTechs([])} disabled={copyingTechs || copyTechs.length === 0}>
+                        Clear
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -688,6 +981,61 @@ export default function EntryDetailDialog({
         loading={removing}
         onConfirm={handleRemove}
       />
+
+      <ConfirmationAlertDialog
+        isOpen={duplicateDates !== null}
+        onOpenChange={(open) => !open && setDuplicateDates(null)}
+        title="Copy it again?"
+        description={
+          isNote
+            ? `A note with the same text is already on ${(duplicateDates ?? []).map(dayLabel).join(", ")} at this time. Add another copy there?`
+            : `A copy of this appointment is already on ${(duplicateDates ?? []).map(dayLabel).join(", ")}. Add another copy there? Each one becomes its own work order in Zoho FSM when the day is approved.`
+        }
+        confirmText="Copy again"
+        loading={copying}
+        onConfirm={async () => {
+          const dates = duplicateDates ?? [];
+          setDuplicateDates(null);
+          // Only the days that asked, with the go-ahead for each.
+          await runCopy(dates, dates, true);
+        }}
+      />
+
+      {/* FR-15 (appointments): the price is shown and confirmed every time. */}
+      <ConfirmationAlertDialog
+        isOpen={priceQuote !== null}
+        onOpenChange={(open) => !open && setPriceQuote(null)}
+        title={
+          effectiveMode === "same_work_order" && priceQuote?.linesFree
+            ? "Copy on the same work order?"
+            : `Create ${copyDates.length} new work order${copyDates.length === 1 ? "" : "s"} in Zoho FSM?`
+        }
+        description={
+          priceQuote
+            ? [
+                effectiveMode === "same_work_order" && priceQuote.linesFree
+                  ? `The copy stays on ${priceQuote.workOrderName ?? "the same work order"}; no new work order is created.`
+                  : `Each copy is a new work order with the same ${priceQuote.lines.length} service line${priceQuote.lines.length === 1 ? "" : "s"} and the same price as ${priceQuote.appointmentName ?? priceQuote.workOrderName ?? "the original"}; it is created when its day is approved.`,
+                `Price per copy: ${priceQuote.currency} ${priceQuote.total.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} including tax (${priceQuote.currency} ${priceQuote.subtotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} before tax).`,
+                `Lines: ${priceQuote.lines.map((l) => `${l.service ?? l.code} ×${l.quantity} (${priceQuote.currency} ${l.lineAmount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`).join("; ")}.`,
+                ...(priceQuote.parts.length > 0
+                  ? [`Parts: ${priceQuote.parts.map((p) => `${p.service ?? p.code} ×${p.quantity} (${priceQuote.currency} ${p.lineAmount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`).join("; ")}.`]
+                  : []),
+                `Days: ${copyDates.map(dayLabel).join(", ")}. The appointment is not dispatched by the portal.`,
+              ].join(" ")
+            : ""
+        }
+        confirmText={
+          effectiveMode === "same_work_order" && priceQuote?.linesFree
+            ? "Copy"
+            : `Create ${copyDates.length === 1 ? "work order" : `${copyDates.length} work orders`}`
+        }
+        loading={copying}
+        onConfirm={async () => {
+          setPriceQuote(null);
+          await runCopy(copyDates, [], true);
+        }}
+      />
     </>
   );
 }
@@ -697,6 +1045,89 @@ function Detail({ label, children }: { label: string; children: ReactNode }) {
     <div className="min-w-0">
       <span className="text-muted-foreground text-xs">{label}</span>
       <div className="break-words">{children}</div>
+    </div>
+  );
+}
+
+// A list of technicians with tick boxes that folds away, since the full roster
+// is long. Collapsed it shows a summary; open it has a filter and the list.
+function TechnicianChecklist({
+  label,
+  technicians,
+  selected,
+  onToggle,
+  onLeave,
+  summary,
+  defaultOpen = false,
+}: {
+  label: string;
+  technicians: TechnicianReference[];
+  selected: string[];
+  onToggle: (id: string) => void;
+  onLeave: Map<string, LeaveRecord>;
+  summary: string;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const [filter, setFilter] = useState("");
+  const shown = technicians
+    .filter((t) => t.is_active || selected.includes(t.fsm_resource_id))
+    .filter((t) => t.display_name.toLowerCase().includes(filter.toLowerCase()));
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-start gap-1.5 text-left"
+        aria-expanded={open}
+      >
+        <ChevronDown className={`mt-0.5 size-3.5 shrink-0 transition-transform ${open ? "" : "-rotate-90"}`} />
+        <span className="text-xs font-medium">
+          {label}
+          {selected.length ? ` (${selected.length})` : ""}
+        </span>
+        {!open && <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">{summary}</span>}
+      </button>
+      {open && (
+        <div className="mt-2">
+          <Input
+            placeholder="Filter technicians..."
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="mb-2 h-8"
+            aria-label={`Filter ${label.toLowerCase()}`}
+          />
+          <div className="flex max-h-40 flex-col gap-0.5 overflow-y-auto rounded-md border p-2">
+            {shown.map((t) => {
+              const leave = onLeave.get(t.fsm_resource_id);
+              return (
+                <label
+                  key={t.fsm_resource_id}
+                  className={`flex items-center gap-2 rounded px-1 py-1 text-sm ${
+                    leave ? "cursor-not-allowed opacity-55" : "hover:bg-muted/50 cursor-pointer"
+                  }`}
+                  title={leave ? `On leave: ${leave.leave_type}` : undefined}
+                >
+                  <Checkbox
+                    checked={selected.includes(t.fsm_resource_id)}
+                    disabled={!!leave}
+                    onCheckedChange={() => {
+                      if (!leave) onToggle(t.fsm_resource_id);
+                    }}
+                  />
+                  <span className="flex-1">{t.display_name}</span>
+                  {leave && (
+                    <span className="rounded bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium text-warning">
+                      On leave
+                    </span>
+                  )}
+                </label>
+              );
+            })}
+            {shown.length === 0 && <span className="text-muted-foreground px-1 py-2 text-xs">No technicians match.</span>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
