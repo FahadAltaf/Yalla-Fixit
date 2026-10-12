@@ -692,3 +692,84 @@ select resource, count(*) from public.role_access
 Expected: eight rows, each with a count equal to `amc_roles`.
 
 **Live check:** the live portal is unaffected (live `main` does not read these permissions). In the demo portal, open Permissions: AMC shows as one module with its pages under it. Turn a page off for a test role, and that role sees "You do not have access" on that page.
+
+
+## 17. Phase 10 migration: `20261012110000_amc_visit_job_sheets.sql`
+
+Apply after section 15 (it builds on `amc_visits` and `amc_visit_lines`). It is **live-safe**: `amc_submissions`, the live scheduling tables and the Snagging tables are not touched. What it adds:
+- `amc_visit_job_sheets`: one per visit (arrival, completion, crew, faults, consumables, additional work, pending works, quality concern, the client's signature name) with its review: submitted, returned with a comment, or closed by a supervisor;
+- `amc_visit_checklist_items` (per trade and asset) and `amc_visit_photos` (before, after, fault; files in the private `amc-documents` bucket under `visits/`);
+- on `amc_visit_lines`: the outcome's reason group (one of five) and reason, and `retry_of_line_id` for a trade planned again. The unique (service, occurrence) constraint becomes a unique index that leaves retries out, so an occurrence is still planned only once;
+- on `amc_visits`: closure, the service report and its 48-hour clock, the two notification stamps, and `remainder_of_visit_id` (source `remainder`);
+- `amc_send_log` accepts `service_report` (Email 3).
+
+All three new tables have RLS on and nothing granted to browser roles.
+
+**Pre-check** (read-only):
+```sql
+select to_regclass('public.amc_visit_job_sheets') as sheets, to_regclass('public.amc_visit_attempts') as attempts;
+select count(*) as visit_lines from public.amc_visit_lines;
+```
+Expected: `sheets` is `null` and `attempts` is present (section 15 applied). Note the line count.
+
+**Post-check** (read-only):
+```sql
+select c.relname, c.relrowsecurity from pg_class c
+ where c.oid in ('public.amc_visit_job_sheets'::regclass, 'public.amc_visit_checklist_items'::regclass, 'public.amc_visit_photos'::regclass);
+select table_name, grantee from information_schema.role_table_grants
+ where table_schema = 'public' and grantee in ('anon', 'authenticated')
+   and table_name in ('amc_visit_job_sheets', 'amc_visit_checklist_items', 'amc_visit_photos');
+select indexname from pg_indexes where tablename = 'amc_visit_lines' and indexname = 'idx_amc_visit_lines_occurrence';
+select count(*) as visit_lines from public.amc_visit_lines;
+```
+Expected:
+- `relrowsecurity = true` on all three;
+- the grants query returns **no rows**;
+- the occurrence index is present;
+- the same line count.
+
+**Live check:** open AMC Proposals in the live portal; it works as before. In the demo portal, open a placed visit on AMC → Visit board, fill in its Job sheet tab and submit it, then close it from AMC → Job reviews: the visit's status changes, its service report is stored, and Email 3 goes to the client.
+
+**After applying:** name the supervisors in AMC configuration → Scheduling (with none named, the level 1 approvers review). Check the hours before "Job sheet not submitted" there too. The daily AMC jobs now include `job_sheets`.
+
+
+## 18. Phase 11 migration: `20261012120000_amc_call_outs_additional_work_allowances.sql`
+
+Apply after section 17. It is **live-safe**: `amc_submissions`, the live scheduling tables and the Snagging tables are not touched. What it adds:
+- **Allowance reservations** on the existing usage ledger: kinds `reserve` and `release`, a `reservation_id` on the row that settles a reservation, and `amc_contract_entitlements.reserved_quantity`. The ledger trigger `amc_apply_entitlement_usage()` is replaced, under the same name. Consumption, adjustment and correction rows behave exactly as before, the correction guard included. A new check keeps used + reserved within what is included.
+- `amc_call_outs` covers the call out itself: priority, channel, issue, the coverage answer and any override, the SLA deadlines, slot and crew, attendance and resolution, and the misuse flag.
+- `amc_additional_works` keeps the finding apart from the quotation. It records the five parties and the nine statuses, and the database requires evidence for an approval and a number for an invoice.
+- `amc_work_photos` holds the photos of call outs and additional works.
+- Numbering functions for `CO-<year>-0001` and `AW-<year>-0001`.
+- `amc_send_log` accepts the call-out acknowledgement and the quotation.
+- **`role_access` (live): inserts only.** Two new AMC page permissions, `amc_call_outs` and `amc_additional_works`. Every role that can use AMC today gets View on both. A role with AMC Visits Create or Edit gets the same on both. Nothing is updated or deleted, and it is safe to run twice, as in section 16.
+
+All three new tables have RLS on and nothing granted to browser roles.
+
+**Pre-check** (read-only):
+```sql
+select to_regclass('public.amc_call_outs') as call_outs, to_regclass('public.amc_visit_job_sheets') as sheets;
+select coalesce(sum(used_quantity), 0) as used from public.amc_contract_entitlements;
+select count(*) as page_rows from public.role_access where resource in ('amc_call_outs', 'amc_additional_works');
+```
+Expected: `call_outs` is `null` and `sheets` is present (section 17 applied); note `used`; `page_rows = 0`.
+
+**Post-check** (read-only):
+```sql
+select c.relname, c.relrowsecurity from pg_class c
+ where c.oid in ('public.amc_call_outs'::regclass, 'public.amc_additional_works'::regclass, 'public.amc_work_photos'::regclass);
+select table_name, grantee from information_schema.role_table_grants
+ where table_schema = 'public' and grantee in ('anon', 'authenticated')
+   and table_name in ('amc_call_outs', 'amc_additional_works', 'amc_work_photos');
+select coalesce(sum(used_quantity), 0) as used, coalesce(sum(reserved_quantity), 0) as reserved from public.amc_contract_entitlements;
+select resource, action, count(*) from public.role_access where resource in ('amc_call_outs', 'amc_additional_works') group by 1, 2 order by 1, 2;
+```
+Expected:
+- `relrowsecurity = true` on all three;
+- the grants query returns **no rows**;
+- `used` is unchanged and `reserved = 0`;
+- View rows for both pages, one per role that uses AMC.
+
+**Live check:** open AMC Proposals in the live portal; it works as before. In the demo portal, open Permissions: AMC now lists Call outs and Additional work. Then open AMC → Call outs and log a non-emergency call out on an active contract. The coverage answer shows before you confirm, and the contract's Call outs tab shows the unit as booked.
+
+**After applying:** check AMC configuration → SLA (minutes and hours, the at-risk percent), Allowances (when the warning starts) and Additional work (the material handling fee). The daily AMC jobs now include `call_outs`.

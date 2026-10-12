@@ -1,13 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowUpRight, CalendarPlus, GripVertical, History } from "lucide-react";
+import { ArrowUpRight, CalendarPlus, GripVertical, History, PhoneCall } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CONFIRMATION_LABELS, type AccessStatus } from "@/lib/amc/visits";
 import { cn } from "@/lib/utils";
 import type { BoardData, BoardVisit } from "@/modules/amc-contracts/visits-service";
+
+export type BoardCallOut = BoardData["callOuts"][number];
 
 /**
  * Pieces the visit board's panel, grid and dialogs share: Dubai times,
@@ -248,5 +250,57 @@ export function ToPlaceCard({
         ) : null}
       </div>
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* The "Call outs to place" card (Phase 11)                            */
+/* ------------------------------------------------------------------ */
+
+const dueFormat = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Dubai" });
+
+/** An open call out without a slot: opening it schedules it from its own dialog. */
+export function CallOutToPlaceCard({ callOut, onOpen }: { callOut: BoardCallOut; onOpen: () => void }) {
+  const emergency = callOut.priority === "emergency";
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className={cn(
+        "bg-card hover:border-brand/40 w-full rounded-lg border p-3 text-left text-sm transition-colors",
+        emergency && "border-danger/30 bg-danger/5 hover:border-danger/50",
+      )}
+    >
+      <div className="flex items-start gap-2">
+        <PhoneCall className={cn("mt-0.5 size-4 shrink-0", emergency ? "text-danger" : "text-muted-foreground")} aria-hidden />
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <div>
+            <p className="truncate font-medium" title={callOut.customerName}>
+              {callOut.customerName || "Client"}
+            </p>
+            <p className="text-muted-foreground truncate text-xs">
+              {callOut.callOutNo}
+              {callOut.propertyLabel ? ` · ${callOut.propertyLabel}` : ""}
+            </p>
+          </div>
+          <p className="line-clamp-2 text-xs">{callOut.issue}</p>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Badge variant="secondary" className={cn("border-0 font-medium", emergency ? "bg-danger/10 text-danger" : "bg-mist text-ink-soft")}>
+              {emergency ? "Emergency" : "Non emergency"}
+            </Badge>
+            {callOut.coverage === "chargeable" ? (
+              <Badge variant="secondary" className="bg-warning/10 text-warning border-0 font-medium">
+                Chargeable
+              </Badge>
+            ) : null}
+            {callOut.dueAt ? (
+              <span className={cn("text-xs tabular-nums", emergency ? "text-danger font-medium" : "text-muted-foreground")}>
+                Due {dueFormat.format(new Date(callOut.dueAt))}
+              </span>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </button>
   );
 }

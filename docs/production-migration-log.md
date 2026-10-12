@@ -32,5 +32,7 @@ Rules: one file at a time; pre-check first; never `supabase db push` on producti
 | 22 | 20261008110000 | amc_ppm_schedule.sql (Phase 8) | | | | Post-check §14, open AMC Proposals | |
 | 23 | 20261008120000 | amc_visit_assignment_and_confirmation.sql (Phase 9) | | | | Post-check §15, open Scheduling and AMC Proposals | |
 | 24 | 20261012100000 | amc_per_page_permissions.sql (AMC per-page permissions; inserts into role_access) | | | | Post-check §16, open Permissions | Apply before using the AMC branch |
+| 25 | 20261012110000 | amc_visit_job_sheets.sql (Phase 10) | | | | Post-check §17, open AMC Proposals | |
+| 26 | 20261012120000 | amc_call_outs_additional_work_allowances.sql (Phase 11; inserts into role_access) | | | | Post-check §18, open Permissions and AMC Proposals | |
 
 **Held until release (Group B, do not apply):** 20261005160000, 20261005170000, 20261005180000, 20261006160000.

@@ -128,6 +128,8 @@ async function correctionsFor(admin: Admin, ids: string[]): Promise<Map<string, 
   return totals;
 }
 
+const USAGE_KINDS = ["consumption", "adjustment", "correction"] as const;
+
 /**
  * One page of a contract's usage, newest first, with each consumption's
  * corrected total. Entries are never edited or deleted: a mistake is
@@ -139,10 +141,12 @@ export async function loadUsagePage(
   { page, pageSize, entitlementId }: { page: number; pageSize: number; entitlementId?: string | null },
 ): Promise<{ rows: UsageEntry[]; totalCount: number }> {
   const run = (columns: string) => {
+    /* Bookings (reserve / release, Phase 11) are shown with the call outs, not as usage. */
     let q = admin
       .from("amc_entitlement_usage")
       .select(columns, { count: "exact" })
-      .eq("contract_id", contractId);
+      .eq("contract_id", contractId)
+      .in("kind", [...USAGE_KINDS]);
     if (entitlementId) q = q.eq("entitlement_id", entitlementId);
     return q
       .order("occurred_at", { ascending: false })
@@ -171,7 +175,8 @@ export async function usageStats(
     admin
       .from("amc_entitlement_usage")
       .select("id", { count: "exact", head: true })
-      .eq("contract_id", contractId),
+      .eq("contract_id", contractId)
+      .in("kind", [...USAGE_KINDS]),
     admin
       .from("amc_entitlement_usage")
       .select("occurred_at")

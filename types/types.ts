@@ -148,6 +148,9 @@ export enum ResourceType {
   AMC_REPORTS = "amc_reports",
   AMC_FSM_MAPPING = "amc_fsm_mapping",
   AMC_OPERATIONS_SETTINGS = "amc_operations_settings",
+  /* Phase 11 (20261012120000): View / Create / Edit; coverage overrides stay AMC Allowances (Approve). */
+  AMC_CALL_OUTS = "amc_call_outs",
+  AMC_ADDITIONAL_WORKS = "amc_additional_works",
   // Scheduling
   SCHEDULING = "scheduling",
   // Property Care / Snagging

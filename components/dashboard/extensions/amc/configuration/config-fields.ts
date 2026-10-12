@@ -173,6 +173,8 @@ export const SECTION_DEFS: SectionDef[] = [
       { key: "durationPerServiceMinutes", label: "Standard duration per service", kind: "number", unit: "minutes", min: 5, max: 1440 },
       { key: "durationPerExtraUnitMinutes", label: "Extra time per additional AC unit", kind: "number", unit: "minutes", min: 0, max: 600 },
       { key: "accessAlertDaysBefore", label: "Alert when access is not ready this close to a visit", kind: "number", unit: "days", min: 0, max: 60 },
+      { key: "supervisorUserIds", label: "Supervisors", kind: "users", hint: "They review and close job sheets. None named: the level 1 approvers." },
+      { key: "jobSheetGraceHours", label: "Job sheet not submitted after", kind: "number", unit: "hours", min: 1, max: 72 },
     ],
   },
   {

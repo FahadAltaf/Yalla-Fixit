@@ -139,6 +139,11 @@ const schedulingSchema = z
     durationPerServiceMinutes: int(5, 1440),
     durationPerExtraUnitMinutes: int(0, 600),
     accessAlertDaysBefore: int(0, 60),
+    /* Phase 10, defaulted so a scheduling section saved earlier still validates.
+       Supervisors review and close job sheets (to-do 5); none named = level 1 approvers. */
+    supervisorUserIds: uuidList.default([]),
+    /* "Job sheet not submitted" this many hours after the visit was due to end. */
+    jobSheetGraceHours: int(1, 72).default(4),
   })
   .strict();
 
@@ -322,6 +327,8 @@ export const AMC_CONFIG_DEFAULTS: AmcConfig = {
     durationPerServiceMinutes: 60,
     durationPerExtraUnitMinutes: 30,
     accessAlertDaysBefore: 2,
+    supervisorUserIds: [],
+    jobSheetGraceHours: 4,
   },
   sla: {
     emergencyLogMinutes: 60,

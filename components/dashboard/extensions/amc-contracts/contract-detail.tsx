@@ -64,6 +64,7 @@ import { AMC_VAT_PERCENT } from "@/lib/amc/pricing";
 import { amcContractsService, type ContractDetail as Detail } from "@/modules/amc-contracts/amc-contracts-service";
 
 import { CancelContractDialog } from "./cancel-contract-dialog";
+import { ContractCallOutsPanel } from "./contract-call-outs-panel";
 import { ContractCommercial } from "./contract-commercial";
 import { ContractCustomer } from "./contract-customer";
 import { ContractDocuments } from "./contract-documents";
@@ -91,7 +92,7 @@ import { UsageHistory } from "./usage-history";
 
 const LIST = "/extensions/amc-contracts";
 
-const TABS = ["overview", "coverage", "schedule", "usage", "fsm", "commercial", "payments", "renewal", "documents", "history"] as const;
+const TABS = ["overview", "coverage", "schedule", "call-outs", "usage", "fsm", "commercial", "payments", "renewal", "documents", "history"] as const;
 type Tab = (typeof TABS)[number];
 
 /**
@@ -508,6 +509,7 @@ function ContractView({
               <TabCount value={schedule.data?.progress.remaining} />
             )}
           </TabsTrigger>
+          <TabsTrigger value="call-outs">Call outs</TabsTrigger>
           <TabsTrigger value="usage">
             Usage
             <TabCount value={summary.usageEvents} />
@@ -675,6 +677,8 @@ function ContractView({
         )}
 
         {panel("schedule", <ContractSchedulePanel contractId={contract.id} schedule={schedule} />)}
+
+        {panel("call-outs", <ContractCallOutsPanel contractId={contract.id} contractOpen={status === "active" || status === "on_hold"} />)}
 
         {panel(
           "usage",

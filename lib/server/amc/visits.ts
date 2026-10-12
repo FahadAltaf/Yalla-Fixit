@@ -297,6 +297,28 @@ async function busyOn(admin: Admin, date: string, technicianIds: string[] | null
     }
   }
 
+  /* AMC call outs with a slot (Phase 11; absent before 20261012120000). */
+  let calls = admin
+    .from("amc_call_outs")
+    .select("id, call_out_no, priority, scheduled_start, scheduled_end, technician_ids, contract:amc_contracts!amc_call_outs_contract_id_fkey(customer_name)")
+    .lt("scheduled_start", end)
+    .gt("scheduled_end", start)
+    .not("status", "in", "(cancelled,closed,resolved)");
+  if (technicianIds?.length) calls = calls.overlaps("technician_ids", technicianIds);
+  const { data: callOuts } = await calls;
+  for (const c of (callOuts ?? []) as unknown as Row[]) {
+    for (const t of strings(c.technician_ids)) {
+      blocks.push({
+        technicianId: t,
+        start: String(c.scheduled_start),
+        end: String(c.scheduled_end),
+        kind: "amc",
+        title: `AMC call out ${String(c.call_out_no)}${c.priority === "emergency" ? " (emergency)" : ""}: ${String(one(c.contract)?.customer_name ?? "")}`,
+        visitId: String(c.id),
+      });
+    }
+  }
+
   /* The live board's current version for the day, read only. */
   const { data: versions } = await admin.from("schedule_versions").select("id").eq("schedule_date", date).eq("is_current", true);
   const versionIds = ((versions ?? []) as Row[]).map((v) => String(v.id));
@@ -333,6 +355,30 @@ function busyFor(blocks: BusyBlock[], technicianId: string, slot: { start: strin
     workloadMinutes: mine.filter((b) => b.kind !== "leave").reduce((m, b) => m + Math.max(0, (Date.parse(b.end) - Date.parse(b.start)) / 60_000), 0),
   };
 }
+
+/**
+ * Fit of technicians for a slot, for work other than a PPM visit (call
+ * outs, Phase 11): the same competence, leave, double-booking and access
+ * rules. All active technicians when none are named.
+ */
+export async function crewFitsForSlot(
+  admin: Admin,
+  need: VisitNeed,
+  slot: { start: string; end: string },
+  technicianIds: string[] | null,
+  ignoreIds: string[] = [],
+): Promise<TechnicianFit[]> {
+  const [techs, blocks] = await Promise.all([technicianFacts(admin, !technicianIds), busyOn(admin, need.date, technicianIds)]);
+  const chosen = technicianIds ? technicianIds.map((id) => techs.find((t) => t.fsmId === id)).filter((t): t is TechnicianRecord => Boolean(t)) : techs;
+  if (technicianIds && chosen.length !== technicianIds.length) throw new ContractError("A chosen technician is not on the FSM roster.", 400);
+  return chosen.map((t) => fitFor(t, need, busyFor(blocks, t.fsmId, slot, ignoreIds)));
+}
+
+/** A day and a time in Dubai, as an instant. */
+export const dubaiSlot = (date: string, time: string, minutes: number) => ({
+  start: slotIso(date, time),
+  end: new Date(Date.parse(slotIso(date, time)) + minutes * 60_000).toISOString(),
+});
 
 /* ------------------------------------------------------------------ */
 /* Suggestions (DEV-396)                                               */
@@ -430,6 +476,46 @@ export interface BoardData {
   busy: BusyBlock[];
   /** Planned visits not yet on the board, whose window is open or coming. */
   toPlace: BoardVisit[];
+  /** Open call outs without a slot, emergencies first (Phase 11). */
+  callOuts: BoardCallOut[];
+}
+
+export interface BoardCallOut {
+  id: string;
+  callOutNo: string;
+  contractId: string;
+  customerName: string;
+  propertyLabel: string;
+  priority: "emergency" | "non_emergency";
+  issue: string;
+  reportedAt: string;
+  dueAt: string | null;
+  coverage: "covered" | "chargeable";
+}
+
+async function openCallOuts(admin: Admin): Promise<BoardCallOut[]> {
+  const { data, error } = await admin
+    .from("amc_call_outs")
+    .select("id, call_out_no, contract_id, priority, issue, reported_at, sla_attend_due_at, sla_schedule_due_at, coverage, contract:amc_contracts!amc_call_outs_contract_id_fkey(customer_name, property_label)")
+    .is("scheduled_start", null)
+    .eq("status", "logged")
+    .order("reported_at")
+    .limit(100);
+  if (error) return [];
+  return ((data ?? []) as unknown as Row[])
+    .map((c) => ({
+      id: String(c.id),
+      callOutNo: String(c.call_out_no),
+      contractId: String(c.contract_id),
+      customerName: String(one(c.contract)?.customer_name ?? ""),
+      propertyLabel: String(one(c.contract)?.property_label ?? ""),
+      priority: c.priority as BoardCallOut["priority"],
+      issue: String(c.issue),
+      reportedAt: String(c.reported_at),
+      dueAt: str(c.sla_attend_due_at) ?? str(c.sla_schedule_due_at),
+      coverage: c.coverage as BoardCallOut["coverage"],
+    }))
+    .sort((a, b) => (a.priority === b.priority ? a.reportedAt.localeCompare(b.reportedAt) : a.priority === "emergency" ? -1 : 1));
 }
 
 export async function boardData(admin: Admin, date: string, now = new Date()): Promise<BoardData> {
@@ -439,10 +525,10 @@ export async function boardData(admin: Admin, date: string, now = new Date()): P
   try {
     techs = await technicianFacts(admin);
   } catch (error) {
-    if (error instanceof ContractError && error.status === 503) return { migrated: false, date, technicians: [], placed: [], busy: [], toPlace: [] };
+    if (error instanceof ContractError && error.status === 503) return { migrated: false, date, technicians: [], placed: [], busy: [], toPlace: [], callOuts: [] };
     throw error;
   }
-  const [placedResult, toPlaceResult, blocks] = await Promise.all([
+  const [placedResult, toPlaceResult, blocks, callOuts] = await Promise.all([
     admin.from("amc_visits").select(VISIT_COLUMNS).gte("scheduled_start", start).lt("scheduled_start", end).neq("status", "cancelled").order("scheduled_start"),
     admin
       .from("amc_visits")
@@ -453,6 +539,7 @@ export async function boardData(admin: Admin, date: string, now = new Date()): P
       .order("window_start")
       .limit(200),
     busyOn(admin, date, null),
+    openCallOuts(admin),
   ]);
   if (placedResult.error) throw fail(placedResult.error);
   if (toPlaceResult.error) throw fail(toPlaceResult.error);
@@ -464,6 +551,7 @@ export async function boardData(admin: Admin, date: string, now = new Date()): P
     placed: ((placedResult.data ?? []) as unknown as Row[]).filter(live).map(boardVisit),
     busy: blocks.filter((b) => b.kind !== "amc"),
     toPlace: ((toPlaceResult.data ?? []) as unknown as Row[]).filter((r) => one(r.contract)?.status === "active").map(boardVisit),
+    callOuts,
   };
 }
 

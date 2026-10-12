@@ -137,7 +137,8 @@ export function fitFor(t: TechnicianFacts, need: VisitNeed, busy: TechnicianBusy
   const notes: string[] = [];
   const covers = need.trades.filter((trade) => t.skills.some((s) => s.trade === trade && competent(s, need.date)));
   if (!t.active) blockers.push("Not active in FSM");
-  if (covers.length === 0) {
+  /* No trade named (a call out of an unknown kind): any free technician fits. */
+  if (need.trades.length > 0 && covers.length === 0) {
     const expired = need.trades.some((trade) => t.skills.some((s) => s.trade === trade && s.level !== "trainee" && s.certificateExpires && s.certificateExpires < need.date));
     blockers.push(expired ? "Certificate expired for this trade" : "Not confirmed for this trade");
   }

@@ -8,6 +8,8 @@ import { runContractExpirySweep, runUnsignedContractSweep } from "@/lib/server/a
 import { runPaymentSweep } from "@/lib/server/amc/payments";
 import { runPpmOverdueSweep } from "@/lib/server/amc/ppm";
 import { runVisitSweep } from "@/lib/server/amc/visits";
+import { runJobSheetSweep } from "@/lib/server/amc/job-sheets";
+import { runCallOutSweep } from "@/lib/server/amc/call-outs";
 import { runExpiryReminderSweep } from "@/lib/server/amc/reminders";
 import { escalateDueAmcTodos } from "@/lib/server/amc/todos";
 
@@ -82,6 +84,16 @@ export const AMC_JOBS: AmcJob[] = [
     key: "visits",
     label: "PPM confirmation to-dos, access alerts and the client reminder the day before",
     run: async ({ admin, config, now }) => ({ ...(await runVisitSweep(admin, config, now)) }),
+  },
+  {
+    key: "job_sheets",
+    label: "Job sheets not submitted after the visit, and service reports at risk of missing 48 hours",
+    run: async ({ admin, config, now }) => ({ ...(await runJobSheetSweep(admin, config, now)) }),
+  },
+  {
+    key: "call_outs",
+    label: "Call outs with the SLA at risk or missed (owner and supervisors)",
+    run: async ({ admin, config, now }) => ({ ...(await runCallOutSweep(admin, config, now)) }),
   },
   {
     key: "expiry_reminders",

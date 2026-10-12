@@ -31,6 +31,7 @@ import { clientProfileService } from "@/modules/amc-contracts/client-profile-ser
 import { visitsService, type VisitDetail, type VisitResponse, type VisitSuggestion } from "@/modules/amc-contracts/visits-service";
 
 import { formatContractDate, formatDateTime } from "./contract-status";
+import { JobSheetPanel } from "./job-sheet-panel";
 import {
   ACCESS_TONE,
   CHANNEL_LABELS,
@@ -48,7 +49,17 @@ import {
 
 type Working = "whatsapp" | "email" | "attempt" | "access" | "suggest" | "assign" | "pass" | null;
 
-type Tab = "confirmation" | "access" | "assignment";
+type Tab = "confirmation" | "access" | "assignment" | "job_sheet";
+
+/* Once the crew is on site, the job sheet is what the visit is about. */
+const JOB_SHEET_FIRST: readonly VisitDetail["status"][] = [
+  "in_progress",
+  "submitted",
+  "completed",
+  "completed_with_additional_work",
+  "partially_completed",
+  "not_completed",
+];
 
 /**
  * One AMC visit (Phase 9: DEV-396, 398, 399), opened from the contract's
@@ -62,13 +73,14 @@ export function VisitDetailDialog({
   open,
   onOpenChange,
   onChanged,
-  initialTab = "confirmation",
+  initialTab,
 }: {
   visitId: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** After any change, so the screen behind can reload. */
   onChanged?: () => unknown;
+  /** Left out: the job sheet once the visit is under way, else the confirmation. */
   initialTab?: Tab;
 }) {
   const [state, setState] = useState<{ id: string | null; data: VisitResponse | null; error: string | null }>({ id: null, data: null, error: null });
@@ -157,9 +169,11 @@ type BodyProps = {
   changed: () => Promise<void>;
 };
 
-function VisitBody({ initialTab, ...props }: BodyProps & { initialTab: Tab }) {
+function VisitBody({ initialTab, ...props }: BodyProps & { initialTab?: Tab }) {
   const { visit: v } = props;
-  const [tab, setTab] = useState<Tab>(initialTab);
+  const [tab, setTab] = useState<Tab>(() => initialTab ?? (JOB_SHEET_FIRST.includes(v.status) ? "job_sheet" : "confirmation"));
+  /* The job sheet loads on first open and then stays mounted, so switching tabs keeps unsaved entries. */
+  const [sheetOpened, setSheetOpened] = useState(tab === "job_sheet");
   const lead = v.technicians.find((t) => t.fsmId === v.leadTechnicianId) ?? v.technicians[0];
 
   return (
@@ -190,11 +204,18 @@ function VisitBody({ initialTab, ...props }: BodyProps & { initialTab: Tab }) {
         </div>
       </dl>
 
-      <Tabs value={tab} onValueChange={(next) => setTab(next as Tab)}>
+      <Tabs
+        value={tab}
+        onValueChange={(next) => {
+          setTab(next as Tab);
+          if (next === "job_sheet") setSheetOpened(true);
+        }}
+      >
         <TabsList className="h-auto w-full flex-wrap justify-start gap-1 group-data-horizontal/tabs:h-auto">
           <TabsTrigger value="confirmation">Confirmation</TabsTrigger>
           <TabsTrigger value="access">Access</TabsTrigger>
           <TabsTrigger value="assignment">Assignment</TabsTrigger>
+          <TabsTrigger value="job_sheet">Job sheet</TabsTrigger>
         </TabsList>
         <TabsContent value="confirmation" className="mt-4 grid gap-4">
           <ConfirmationSection {...props} />
@@ -205,6 +226,11 @@ function VisitBody({ initialTab, ...props }: BodyProps & { initialTab: Tab }) {
         <TabsContent value="assignment" className="mt-4 grid gap-4">
           <AssignmentSection {...props} />
         </TabsContent>
+        {sheetOpened ? (
+          <TabsContent value="job_sheet" forceMount className="mt-4 grid gap-4 data-[state=inactive]:hidden">
+            <JobSheetPanel visitId={v.id} onChanged={props.changed} />
+          </TabsContent>
+        ) : null}
       </Tabs>
     </div>
   );

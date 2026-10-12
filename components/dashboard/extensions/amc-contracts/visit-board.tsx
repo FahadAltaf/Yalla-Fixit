@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { CalendarCheck, CalendarClock, CalendarDays, Database, Inbox, Lock, Search, Trash2, Users, X } from "lucide-react";
+import { CalendarCheck, CalendarClock, CalendarDays, Database, Inbox, Lock, PhoneCall, Search, Trash2, Users, X } from "lucide-react";
 import { toast } from "sonner";
 
 import DateNav from "@/components/dashboard/scheduling/daily-schedule/date-nav";
@@ -20,10 +20,13 @@ import { todayInDubai } from "@/lib/amc/contracts";
 import { visitsService, type BoardVisit } from "@/modules/amc-contracts/visits-service";
 
 import { AmcNotificationsBell } from "./amc-notifications-bell";
+import { CallOutDetailDialog } from "./call-out-detail-dialog";
+import { useDialog } from "./profile/use-dialog";
 import { useAmcData } from "./use-amc-data";
 import { ConfirmChangeDialog, CrewDialog, MoveDialog, PlaceDialog, type ChangeRequest, type PlaceRequest } from "./visit-board-dialogs";
 import { VisitBoardGrid } from "./visit-board-grid";
 import {
+  CallOutToPlaceCard,
   DEFAULT_DURATION,
   ToPlaceCard,
   addDays,
@@ -31,6 +34,7 @@ import {
   hhmm,
   longDate,
   minutesInDay,
+  type BoardCallOut,
   type DragPayload,
 } from "./visit-board-shared";
 
@@ -96,6 +100,8 @@ export function VisitBoard() {
   const [change, setChange] = useState<ChangeRequest | null>(null);
   const closeDialog = (open: boolean) => !open && setOpenKind(null);
   const { confirm, dialog: confirmDialog } = useConfirm();
+  /* An open call out is scheduled from its own dialog (Phase 11). */
+  const callOut = useDialog<string>();
 
   const onDone = (message: string) => {
     toast.success(message);
@@ -205,6 +211,8 @@ export function VisitBoard() {
         <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
           <ToPlacePanel
             visits={data.toPlace}
+            callOuts={data.callOuts ?? []}
+            onOpenCallOut={(id) => callOut.show(id)}
             date={date}
             canEdit={canEdit}
             onPlace={(v) => openPlace(v)}
@@ -291,6 +299,7 @@ export function VisitBoard() {
       <MoveDialog open={openKind === "move"} onOpenChange={closeDialog} onDone={onDone} reload={reload} visits={targets} date={date} />
       <CrewDialog open={openKind === "crew"} onOpenChange={closeDialog} onDone={onDone} reload={reload} visits={targets} technicians={data?.technicians ?? []} />
       <ConfirmChangeDialog open={openKind === "change"} onOpenChange={closeDialog} onDone={onDone} reload={reload} request={change} />
+      <CallOutDetailDialog key={callOut.key} callOutId={callOut.target} open={callOut.open} onOpenChange={callOut.onOpenChange} onChanged={reload} />
       {confirmDialog}
     </div>
   );
@@ -336,6 +345,8 @@ function Legend() {
 
 function ToPlacePanel({
   visits,
+  callOuts,
+  onOpenCallOut,
   date,
   canEdit,
   onPlace,
@@ -343,6 +354,9 @@ function ToPlacePanel({
   onDragEnd,
 }: {
   visits: BoardVisit[];
+  /** Open call outs without a slot, emergencies first. */
+  callOuts: BoardCallOut[];
+  onOpenCallOut: (id: string) => void;
   date: string;
   canEdit: boolean;
   onPlace: (visit: BoardVisit) => void;
@@ -388,6 +402,20 @@ function ToPlacePanel({
         </div>
       </div>
       <div className="max-h-[calc(100vh-18rem)] min-h-40 space-y-4 overflow-y-auto border-t p-3">
+        {callOuts.length ? (
+          <section className="space-y-2">
+            <h3 className="text-muted-foreground flex items-center justify-between px-1 text-xs font-medium">
+              <span className="inline-flex items-center gap-1.5">
+                <PhoneCall className="size-3.5" />
+                Call outs to place
+              </span>
+              <span className="tabular-nums">{callOuts.length}</span>
+            </h3>
+            {callOuts.map((c) => (
+              <CallOutToPlaceCard key={c.id} callOut={c} onOpen={() => onOpenCallOut(c.id)} />
+            ))}
+          </section>
+        ) : null}
         {groups.length === 0 ? (
           filtered ? (
             <EmptyState
