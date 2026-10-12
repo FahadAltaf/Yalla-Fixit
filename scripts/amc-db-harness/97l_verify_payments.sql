@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
--- Phase 7 (20261008100000): payment schedule, cheques, receipts, the gate.
+-- Phase 7 (20261008100100): payment schedule, cheques, receipts, the gate.
 
 DO $$
 DECLARE

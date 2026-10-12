@@ -103,7 +103,8 @@ const resourceDisplayNameMap: Partial<Record<ResourceType, string>> =
   the permission to sign in to the inspector app on a phone.
 */
 const EXTRA_RESOURCE_NAMES: Partial<Record<ResourceType, string>> = {
-  [ResourceType.AMC]: "AMC Proposals",
+  /* The module itself: View opens AMC; Approve makes an approver of proposals. Its pages sit under it. */
+  [ResourceType.AMC]: "AMC (module; Approve = proposal approver)",
   [ResourceType.AMC_OPERATIONS]: "AMC Operations",
   [ResourceType.AMC_ENQUIRIES]: "AMC Enquiries",
   [ResourceType.AMC_RATE_CARD]: "AMC Rate Card",
@@ -156,6 +157,22 @@ export const RESOURCE_PARENT: Partial<Record<ResourceType, ResourceType>> = {
   [ResourceType.MOBILE_APP]: ResourceType.SNAGGING,
   [ResourceType.EXTENSIONS_BULK_DOWNLOAD]: ResourceType.EXTENSIONS,
   [ResourceType.EXTENSIONS_QUOTATION_TEMPLATES]: ResourceType.EXTENSIONS,
+  /* AMC: its pages, and the rights that decide what can be done on them. */
+  [ResourceType.AMC_ENQUIRIES]: ResourceType.AMC,
+  [ResourceType.AMC_PROPOSALS]: ResourceType.AMC,
+  [ResourceType.AMC_CONTRACTS]: ResourceType.AMC,
+  [ResourceType.AMC_PAYMENTS]: ResourceType.AMC,
+  [ResourceType.AMC_CLIENTS]: ResourceType.AMC,
+  [ResourceType.AMC_SITE_VISITS]: ResourceType.AMC,
+  [ResourceType.AMC_VISITS]: ResourceType.AMC,
+  [ResourceType.AMC_TECHNICIANS]: ResourceType.AMC,
+  [ResourceType.AMC_REPORTS]: ResourceType.AMC,
+  [ResourceType.AMC_RATE_CARD]: ResourceType.AMC,
+  [ResourceType.AMC_FSM_MAPPING]: ResourceType.AMC,
+  [ResourceType.AMC_OPERATIONS_SETTINGS]: ResourceType.AMC,
+  [ResourceType.AMC_CONFIG]: ResourceType.AMC,
+  [ResourceType.AMC_OPERATIONS]: ResourceType.AMC,
+  [ResourceType.AMC_ALLOWANCES]: ResourceType.AMC,
 };
 
 /** Modules with pages of their own, which is what makes a row expandable. */

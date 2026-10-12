@@ -132,6 +132,22 @@ export enum ResourceType {
   AMC_PAYMENTS = "amc_payments", // payments: View / Create / Edit; Approve = initial-payment gate override
   AMC_VISITS = "amc_visits", // visits: View / Create / Edit; Approve = supervisor closure
   AMC_ALLOWANCES = "amc_allowances", // allowances: View; Approve = override and reversal
+  /*
+    One permission per AMC page, as Snagging and Extensions have (main,
+    20261008100000): a role can be given Contracts without Reports. View
+    opens the page; what can be DONE there is still the rights above
+    (AMC Approve, AMC Operations, Payments, Visits...). Enquiries,
+    Payments, the Visit board (AMC Visits), Rate card and Configuration
+    open on their existing permission.
+  */
+  AMC_PROPOSALS = "amc_proposals",
+  AMC_CONTRACTS = "amc_contracts",
+  AMC_CLIENTS = "amc_clients",
+  AMC_SITE_VISITS = "amc_site_visits",
+  AMC_TECHNICIANS = "amc_technicians",
+  AMC_REPORTS = "amc_reports",
+  AMC_FSM_MAPPING = "amc_fsm_mapping",
+  AMC_OPERATIONS_SETTINGS = "amc_operations_settings",
   // Scheduling
   SCHEDULING = "scheduling",
   // Property Care / Snagging

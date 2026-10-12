@@ -168,7 +168,7 @@ export function PaymentsPage() {
           <Database className="text-warning" />
           <AlertTitle>Payments need a database update</AlertTitle>
           <AlertDescription>
-            The payments tables are not on this database yet (migration 20261008100000). Ask an admin to apply it.
+            The payments tables are not on this database yet (migration 20261008100100). Ask an admin to apply it.
           </AlertDescription>
         </Alert>
       ) : null}
@@ -594,7 +594,7 @@ export function ClientPaymentsPanel({ clientId }: { clientId: string }) {
       <Alert className="border-warning/30 bg-warning/5 items-start p-4">
         <Database className="text-warning" />
         <AlertTitle>Payments need a database update</AlertTitle>
-        <AlertDescription>The payments tables are not on this database yet (migration 20261008100000). Ask an admin to apply it.</AlertDescription>
+        <AlertDescription>The payments tables are not on this database yet (migration 20261008100100). Ask an admin to apply it.</AlertDescription>
       </Alert>
     );
   }

@@ -18,7 +18,8 @@ import { boardData, performBoardAction } from "@/lib/server/amc/visits";
 export async function GET(req: NextRequest) {
   const gate = await requireContractAccess();
   if (!gate.ok) return gate.response;
-  if (!gate.visits.view && !gate.visits.edit && !gate.seesAll) {
+  /* The Visit board page's permission (AMC Visits), the same one its page asks for. */
+  if (!gate.visits.view && !gate.visits.edit) {
     return NextResponse.json({ error: "The visit board needs AMC Visits (View)." }, { status: 403 });
   }
   const date = req.nextUrl.searchParams.get("date");

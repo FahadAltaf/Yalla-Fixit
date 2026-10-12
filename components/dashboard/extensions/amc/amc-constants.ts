@@ -342,6 +342,15 @@ export const AMC_MODULE_RESOURCES = [
   ResourceType.AMC_PAYMENTS,
   ResourceType.AMC_VISITS,
   ResourceType.AMC_ALLOWANCES,
+  /* The page permissions (as Snagging): a role with only one AMC page still reaches the module. */
+  ResourceType.AMC_PROPOSALS,
+  ResourceType.AMC_CONTRACTS,
+  ResourceType.AMC_CLIENTS,
+  ResourceType.AMC_SITE_VISITS,
+  ResourceType.AMC_TECHNICIANS,
+  ResourceType.AMC_REPORTS,
+  ResourceType.AMC_FSM_MAPPING,
+  ResourceType.AMC_OPERATIONS_SETTINGS,
 ] as const;
 
 /** Who may open AMC configuration (DEV-419): admins and AMC Configuration View. */

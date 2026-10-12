@@ -132,7 +132,7 @@ test("configuration: a payments section saved before Phase 7 still validates, wi
 });
 
 test("migration: branch-only tables, nine statuses, history kept, nothing on the live table", () => {
-  const sql = readFileSync(path.join(process.cwd(), "supabase/migrations/20261008100000_amc_payments.sql"), "utf8")
+  const sql = readFileSync(path.join(process.cwd(), "supabase/migrations/20261008100100_amc_payments.sql"), "utf8")
     .split(/\r?\n/)
     .filter((l) => !l.trim().startsWith("--"))
     .join("\n");

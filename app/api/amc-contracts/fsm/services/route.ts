@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { contractErrorResponse, requireContractAccess } from "@/lib/server/amc/contract-access";
 import { saveServiceMapping, serviceMappingOverview } from "@/lib/server/amc/fsm-integration";
+import { ActionType, ResourceType } from "@/types/types";
 
 /**
  * AMC service -> Zoho FSM service mapping. AMC users can see it; only AMC
@@ -11,6 +12,10 @@ import { saveServiceMapping, serviceMappingOverview } from "@/lib/server/amc/fsm
 export async function GET() {
   const gate = await requireContractAccess();
   if (!gate.ok) return gate.response;
+  /* The FSM mapping page's own permission (as Snagging's per-page permissions). */
+  if (!gate.can(ResourceType.AMC_FSM_MAPPING, ActionType.VIEW)) {
+    return NextResponse.json({ error: "Your role does not include AMC FSM mapping." }, { status: 403 });
+  }
   try {
     return NextResponse.json({ ...(await serviceMappingOverview(gate.admin)), canEdit: gate.canApprove });
   } catch (error) {
@@ -31,6 +36,9 @@ const schema = z
 export async function PUT(req: NextRequest) {
   const gate = await requireContractAccess();
   if (!gate.ok) return gate.response;
+  if (!gate.can(ResourceType.AMC_FSM_MAPPING, ActionType.VIEW)) {
+    return NextResponse.json({ error: "Your role does not include AMC FSM mapping." }, { status: 403 });
+  }
   if (!gate.canApprove) {
     return NextResponse.json({ error: "Only AMC approvers can change the FSM service mapping." }, { status: 403 });
   }

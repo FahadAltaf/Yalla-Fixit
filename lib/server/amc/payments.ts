@@ -43,7 +43,7 @@ type Admin = SupabaseClient;
 type Row = Record<string, unknown>;
 type Actor = { id: string | null; label: string | null };
 
-const NOT_MIGRATED = "Payments are not set up on this database yet (migration 20261008100000).";
+const NOT_MIGRATED = "Payments are not set up on this database yet (migration 20261008100100).";
 const notMigrated = (error: { code?: string } | null | undefined) =>
   isMissingTable(error) || error?.code === "42703" || error?.code === "PGRST204";
 function fail(error: { code?: string; message: string }): ContractError {

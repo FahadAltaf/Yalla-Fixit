@@ -559,7 +559,7 @@ Expected:
 **Live check:** in the live portal, open Snagging → Clients and a snagging job; both work as before. Open AMC Proposals; it works as before. In the demo portal, open AMC → Clients: the Snagging clients are listed.
 
 
-## 13. Phase 7 migration: `20261008100000_amc_payments.sql`
+## 13. Phase 7 migration: `20261008100100_amc_payments.sql`
 
 Apply after section 12. It is **live-safe**: every table it touches is branch-only (live `main` reads none of them), and `amc_submissions` is not touched. What it adds:
 - `amc_instalments`, the payment schedule with the nine statuses (Not Due … Waived);
@@ -664,3 +664,31 @@ Expected:
 **Live check:** open Scheduling (the board and Technicians & leave) and AMC Proposals in the live portal; both work as before. In the demo portal, open AMC → Technicians, give a technician the AC trade, then place a confirmed visit from AMC → Visit board.
 
 **After applying:** record each technician's trades in AMC → Technicians before the board can suggest anyone (nobody without a recorded skill is ever suggested or assignable). Check AMC configuration → Scheduling (confirmation lead days, attempts, durations, access alert days). The daily AMC jobs now include `visits`.
+
+
+## 16. AMC per-page permissions: `20261012100000_amc_per_page_permissions.sql`
+
+The same change as Snagging and Extensions (`20261008100000_per_page_permissions.sql` on `main`): each AMC page has its own permission. The new ones are `amc_proposals`, `amc_contracts`, `amc_clients`, `amc_site_visits`, `amc_technicians`, `amc_reports`, `amc_fsm_mapping` and `amc_operations_settings`. Enquiries, Payments, the Visit board, Rate card and Configuration keep the permission they already had.
+
+**Apply it before the AMC branch is used against this database** (the demo included). Each page opens on its own grant only, so until this runs, AMC pages close to everyone except admins. It is additive: it inserts View on the new pages for every role that can use AMC today, and changes and deletes nothing. It touches `role_access` (live), the same way the Snagging backfill did, and is safe to run twice.
+
+**Pre-check** (read-only):
+```sql
+select count(*) as amc_page_rows from public.role_access where resource like 'amc\_%' and resource in
+  ('amc_proposals', 'amc_contracts', 'amc_clients', 'amc_site_visits', 'amc_technicians', 'amc_reports', 'amc_fsm_mapping', 'amc_operations_settings');
+select count(distinct role_id) as amc_roles from public.role_access
+ where enabled is distinct from false
+   and ((resource = 'amc' and action in ('view', 'approve')) or (resource = 'amc_operations' and action in ('view', 'edit'))
+        or (resource in ('amc_enquiries', 'amc_rate_card', 'amc_config', 'amc_payments', 'amc_visits', 'amc_allowances') and action = 'view'));
+```
+Expected: `amc_page_rows = 0`; note `amc_roles`.
+
+**Post-check** (read-only):
+```sql
+select resource, count(*) from public.role_access
+ where resource in ('amc_proposals', 'amc_contracts', 'amc_clients', 'amc_site_visits', 'amc_technicians', 'amc_reports', 'amc_fsm_mapping', 'amc_operations_settings')
+ group by resource order by resource;
+```
+Expected: eight rows, each with a count equal to `amc_roles`.
+
+**Live check:** the live portal is unaffected (live `main` does not read these permissions). In the demo portal, open Permissions: AMC shows as one module with its pages under it. Turn a page off for a test role, and that role sees "You do not have access" on that page.

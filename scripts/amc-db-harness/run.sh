@@ -31,7 +31,7 @@ done
 
 for pass in 1 2; do
   echo "== hardening migrations, pass $pass"
-  for f in $(ls "$WT" | grep -E '^2026100[5-9][0-9]{6}_.*\.sql$' | sort); do
+  for f in $(ls "$WT" | grep -E '^20261(00[5-9]|0[1-3][0-9]|1[0-2][0-9])[0-9]{6}_.*\.sql$' | sort); do
     echo "   $f"; "${PSQL[@]}" -f "$WT/$f" >/dev/null
   done
 done

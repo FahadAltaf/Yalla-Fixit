@@ -3,6 +3,9 @@ import { Suspense } from "react";
 
 import { TablePageSkeleton } from "@/components/dashboard/snagging/route-skeletons";
 import { AmcSubmissionsPage } from "@/components/dashboard/extensions/amc/amc-submissions-page";
+import { NoPageAccess } from "@/components/dashboard/snagging/no-page-access";
+import { canSeeAmcPage } from "@/lib/server/amc/page-access";
+import { ResourceType } from "@/types/types";
 
 const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
 const title = "Proposals | AMC";
@@ -18,7 +21,9 @@ export const metadata: Metadata = {
   twitter: { card: "summary", title, description },
 };
 
-export default function AmcProposalsRoute() {
+export default async function AmcProposalsRoute() {
+  /* The page's own permission decides the page, not just the sidebar entry (as Snagging). */
+  if (!(await canSeeAmcPage(ResourceType.AMC_PROPOSALS))) return <NoPageAccess page="Proposals" />;
   // The filters live in the query string (?status=, ?scope=), which needs
   // Suspense under the App Router.
   return (

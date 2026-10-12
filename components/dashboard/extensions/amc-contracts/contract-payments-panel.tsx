@@ -98,7 +98,7 @@ export function ContractPaymentsPanel({
         <Database className="text-warning" />
         <AlertTitle>Payments need a database update</AlertTitle>
         <AlertDescription>
-          The payments tables are not on this database yet (migration 20261008100000). Ask an admin to apply it; until then no schedule is
+          The payments tables are not on this database yet (migration 20261008100100). Ask an admin to apply it; until then no schedule is
           made and nothing can be recorded.
         </AlertDescription>
       </Alert>

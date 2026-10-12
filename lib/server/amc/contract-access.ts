@@ -40,6 +40,8 @@ export type ContractGate =
       payments: { view: boolean; create: boolean; edit: boolean; approve: boolean };
       /** AMC Visits (Phase 9): the board, assignment, confirmation; Approve = supervisor closure (Phase 10). */
       visits: { view: boolean; create: boolean; edit: boolean; approve: boolean };
+      /** Any permission, e.g. an AMC page's own (as Snagging's per-page permissions). */
+      can: (resource: ResourceType, action: ActionType) => boolean;
     }
   | { ok: false; response: NextResponse };
 
@@ -89,6 +91,7 @@ export async function requireContractAccess(): Promise<ContractGate> {
       edit: hasResourceAction(access.accessUser, ResourceType.AMC_VISITS, ActionType.EDIT),
       approve: hasResourceAction(access.accessUser, ResourceType.AMC_VISITS, ActionType.APPROVE),
     },
+    can: (resource: ResourceType, action: ActionType) => hasResourceAction(access.accessUser, resource, action),
   };
 }
 

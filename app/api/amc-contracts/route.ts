@@ -27,6 +27,7 @@ import { readAmcConfig } from "@/lib/server/amc/config";
 import { gateAfterOneStepActivation } from "@/lib/server/amc/payments";
 import { fetchAllRowsById } from "@/lib/server/amc/paging";
 import { likeTerm, pageParams } from "@/lib/server/snagging/search";
+import { ActionType, ResourceType } from "@/types/types";
 
 /**
  * AMC contracts: the list (GET) and activation of a signed proposal (POST).
@@ -76,6 +77,10 @@ function managerNames(list: unknown): string[] {
 export async function GET(req: NextRequest) {
   const gate = await requireContractAccess();
   if (!gate.ok) return gate.response;
+  /* The Contracts page's own permission (the list); a contract's other routes keep their own rules. */
+  if (!gate.can(ResourceType.AMC_CONTRACTS, ActionType.VIEW)) {
+    return NextResponse.json({ error: "Your role does not include AMC Contracts." }, { status: 403 });
+  }
   const { admin, userId } = gate;
   /* Every contract for approvers and AMC Operations; otherwise your own. */
   const canApprove = gate.seesAll;

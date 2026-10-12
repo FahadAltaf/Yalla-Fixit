@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 
 import { CustomerDetail } from "@/components/dashboard/extensions/amc-contracts/customer-property-views";
+import { NoPageAccess } from "@/components/dashboard/snagging/no-page-access";
+import { canSeeAmcPage } from "@/lib/server/amc/page-access";
+import { ResourceType } from "@/types/types";
 
 export const metadata: Metadata = {
   title: "Client | AMC",
@@ -8,6 +11,8 @@ export const metadata: Metadata = {
 };
 
 export default async function Route({ params }: { params: Promise<{ customerId: string }> }) {
+  /* The page's own permission decides the page, not just the sidebar entry (as Snagging). */
+  if (!(await canSeeAmcPage(ResourceType.AMC_CLIENTS))) return <NoPageAccess page="Clients" />;
   const { customerId } = await params;
   return <CustomerDetail id={customerId} />;
 }

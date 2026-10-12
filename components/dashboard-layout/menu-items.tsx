@@ -167,13 +167,13 @@ export const baseSectionsItems: MenuItem[] = [
     canSee: canUseAmc,
     items: [
       { title: "Enquiries", url: "/extensions/amc-contracts/enquiries", canSee: canViewAmcEnquiries },
-      { title: "Proposals", url: "/extensions/amc", canSee: canUseAmc },
+      { title: "Proposals", url: "/extensions/amc", resource: ResourceType.AMC_PROPOSALS },
       {
         title: "Contracts",
         url: "/extensions/amc-contracts",
         /* A contract opens at /extensions/amc-contracts/<id>; the other
            sections claim longer prefixes, so this only wins on those. */
-        canSee: canUseAmc,
+        resource: ResourceType.AMC_CONTRACTS,
       },
       { title: "Payments", url: "/extensions/amc-contracts/payments", canSee: canViewAmcPayments },
       {
@@ -181,15 +181,15 @@ export const baseSectionsItems: MenuItem[] = [
         url: "/extensions/amc-contracts/customers",
         // A property page belongs to its client.
         match: ["/extensions/amc-contracts/properties"],
-        canSee: canUseAmc,
+        resource: ResourceType.AMC_CLIENTS,
       },
-      { title: "Site visits", url: "/extensions/amc-contracts/assessments", canSee: canUseAmc },
+      { title: "Site visits", url: "/extensions/amc-contracts/assessments", resource: ResourceType.AMC_SITE_VISITS },
       { title: "Visit board", url: "/extensions/amc-contracts/board", canSee: canViewAmcVisits },
-      { title: "Technicians", url: "/extensions/amc-contracts/technicians", canSee: canUseAmc },
-      { title: "Reports", url: "/extensions/amc-contracts/reports", canSee: canUseAmc },
+      { title: "Technicians", url: "/extensions/amc-contracts/technicians", resource: ResourceType.AMC_TECHNICIANS },
+      { title: "Reports", url: "/extensions/amc-contracts/reports", resource: ResourceType.AMC_REPORTS },
       { title: "Rate card", url: "/extensions/amc-contracts/rate-card", canSee: canViewAmcRateCard },
-      { title: "FSM mapping", url: "/extensions/amc-contracts/fsm-services", canSee: canUseAmc },
-      { title: "Operations settings", url: "/extensions/amc-contracts/settings", canSee: canUseAmc },
+      { title: "FSM mapping", url: "/extensions/amc-contracts/fsm-services", resource: ResourceType.AMC_FSM_MAPPING },
+      { title: "Operations settings", url: "/extensions/amc-contracts/settings", resource: ResourceType.AMC_OPERATIONS_SETTINGS },
       /* Admins also have it under Settings; this is for managers and
          department heads with AMC Configuration who are not admins. */
       { title: "Configuration", url: "/settings/amc/configuration", canSee: canViewAmcConfig },
