@@ -801,3 +801,42 @@ Expected: the list ends with `client_report`, and all three indexes are present.
 **Live check:** open AMC Proposals in the live portal; it works as before. In the demo portal, open AMC → Reports. Check the Dashboard, then Operations and Commercial for this month with a CSV export of one table. Then open an active contract, preview its client report, and send it.
 
 **After applying:** the opening and closing words of the client report are in AMC configuration → Client report (residential and commercial).
+
+
+## 20. Phase 13 migration: `20261012140000_amc_renewal_outcomes_and_amendments.sql`
+
+Apply after section 19. It is **live-safe**: `amc_submissions` and the live tables are not changed. The one exception is `role_access`, which gets **inserts only**, as in sections 16 and 18. What it adds:
+- on `amc_contracts`, all nullable:
+  - the renewal outcome (Renewed, Renewed with revised scope, Under negotiation, Not renewed, Lapsed) with its reason and who set it and when; Not renewed requires a reason;
+  - the reminder, escalation and last-activity stamps the renewals job keeps;
+  - a scheduled termination: the notice date, the effective date and the refund.
+- `amc_contract_amendments`: scope change, property change, hold, resume, transfer, early termination and cancellation. Each is requested with a reason and decided by someone who is not the requester (the database refuses a self-decision). A rejection needs a comment.
+- the **Renewals** page permission (`amc_renewals`): every role that can use AMC today gets View.
+
+**Pre-check** (read-only):
+```sql
+select to_regclass('public.amc_contract_amendments') as amendments;
+select count(*) as renewal_rows from public.role_access where resource = 'amc_renewals';
+```
+Expected: `amendments` is `null`, `renewal_rows = 0`.
+
+**Post-check** (read-only):
+```sql
+select relrowsecurity from pg_class where oid = 'public.amc_contract_amendments'::regclass;
+select grantee from information_schema.role_table_grants
+ where table_schema = 'public' and table_name = 'amc_contract_amendments' and grantee in ('anon', 'authenticated');
+select count(*) as with_outcome from public.amc_contracts where renewal_outcome is not null;
+select count(*) as renewal_rows from public.role_access where resource = 'amc_renewals';
+```
+Expected:
+- `relrowsecurity = true`;
+- the grants query returns **no rows**;
+- `with_outcome = 0`;
+- one View row per role that uses AMC.
+
+**Live check:** open AMC Proposals in the live portal; it works as before. In the demo portal:
+- open Permissions: AMC lists Renewals;
+- open AMC → Renewals;
+- on a contract, request a hold, approve it as another user, and apply it: the contract shows On hold.
+
+**After applying:** check AMC configuration → Renewals: the lead time (30 to 60 days), management copied, the idle days before escalation, and the escalation percent on the draft. The daily AMC jobs now include `renewals`. It takes over the 60- and 30-day expiry notices and carries out scheduled terminations, so leave the old expiry reminder setting (AMC notification settings, automatic reminders) off, or owners get both.

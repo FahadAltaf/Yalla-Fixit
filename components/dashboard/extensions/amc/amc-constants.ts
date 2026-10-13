@@ -353,6 +353,7 @@ export const AMC_MODULE_RESOURCES = [
   ResourceType.AMC_OPERATIONS_SETTINGS,
   ResourceType.AMC_CALL_OUTS,
   ResourceType.AMC_ADDITIONAL_WORKS,
+  ResourceType.AMC_RENEWALS,
 ] as const;
 
 /** Who may open AMC configuration (DEV-419): admins and AMC Configuration View. */

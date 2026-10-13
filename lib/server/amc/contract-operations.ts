@@ -521,11 +521,13 @@ export interface RenewalOverview {
     finalPrice: number;
     grandTotal: number;
     previousGrandTotal: number;
+    /* The escalation applied to last year's prices (Phase 13). */
+    escalationPercent: number;
   };
 }
 
 /** The renewal relationships and a preview of what a renewal would copy. */
-export async function renewalOverview(admin: Admin, contractId: string): Promise<RenewalOverview> {
+export async function renewalOverview(admin: Admin, contractId: string, escalationPercent = 0): Promise<RenewalOverview> {
   const { contract, entitlements } = await loadContract(admin, contractId);
   const [proposal, successor, predecessor] = await Promise.all([
     admin
@@ -583,6 +585,7 @@ export async function renewalOverview(admin: Admin, contractId: string): Promise
         entitlements,
       },
       offered.map((s) => s.id),
+      escalationPercent,
     );
     const priced = priceSubmission({
       services: draft.services,
@@ -601,6 +604,7 @@ export async function renewalOverview(admin: Admin, contractId: string): Promise
       finalPrice: priced.ok ? priced.final_price : 0,
       grandTotal: priced.ok ? grandTotalFromFinal(priced.final_price) : 0,
       previousGrandTotal: contract.grandTotal,
+      escalationPercent,
     };
   }
 

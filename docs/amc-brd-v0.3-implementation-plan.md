@@ -689,6 +689,21 @@ Three changes the user asked for before Phase 7:
 **Migration:** `…_amc_renewal_outcomes_and_amendments.sql` (SAFE).
 **Done when:** demo story step 15 works.
 
+**Status (12 Oct 2026):** done in code, migration `20261012140000_amc_renewal_outcomes_and_amendments.sql` not applied (log row 28, checks §20).
+
+- **Renewals job:** the daily `renewals` job sends the 60- and 30-day expiry notices. At the configured lead time it reminds the owner (and management when configured) and opens the to-do "Renewal due", carrying last year's summary and escalating after the idle days. Management hears when nothing happens for those idle days.
+- **Outcomes:** when the renewal contract starts, the job records Renewed or Renewed with revised scope, by comparing the services. It records Lapsed when a contract ends with nothing renewing it, unless it is under negotiation. The team records Under negotiation, Not renewed (with a reason) or Lapsed by hand.
+- **Renewals page:** AMC → Renewals lists contracts inside the lead time, idle ones and ones that ended without a renewal, each with the suggested escalated total.
+- **Renewal draft:** applies the configured escalation to last year's base prices. The contract's Renewal tab shows last year beside the draft: visits, call outs, additional work and allowance use.
+- **Amendments:** each one is requested with a reason, decided by an AMC approver who is not the requester, then applied:
+  - hold pauses the contract and its schedule; resume plans the visits that passed again;
+  - property change moves the contract to another address;
+  - transfer names the new owner or tenant;
+  - early termination takes effect 30 days after the notice, and the job carries it out on the date; the refund is pro-rata to the days served, only when the approver accepts the reason as valid;
+  - cancellation calls off a contract that has not started;
+  - scope change opens a new proposal through the normal flow, either for the extra services or as a full replacement, which ends this contract from the effective date.
+- **Not done:** paying the refund (Zoho Finance, Phase 15). The renewal proposal is sent with Email 1 and its renewal line as before; the WhatsApp renewal message is the existing template.
+
 ### Phase 14: Completion sweep and demo readiness
 
 | Jira | Work | Size |

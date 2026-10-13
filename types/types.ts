@@ -151,6 +151,8 @@ export enum ResourceType {
   /* Phase 11 (20261012120000): View / Create / Edit; coverage overrides stay AMC Allowances (Approve). */
   AMC_CALL_OUTS = "amc_call_outs",
   AMC_ADDITIONAL_WORKS = "amc_additional_works",
+  /* Phase 13 (20261012140000): the renewals due view. */
+  AMC_RENEWALS = "amc_renewals",
   // Scheduling
   SCHEDULING = "scheduling",
   // Property Care / Snagging

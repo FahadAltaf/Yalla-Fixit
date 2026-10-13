@@ -51,6 +51,8 @@ export interface RenewalDraft {
 export function buildRenewalDraft(
   source: RenewalSource,
   offeredServiceIds: ReadonlyArray<string>,
+  /* BRD 5.16: the configured escalation on last year's prices (AMC configuration → Renewals). */
+  escalationPercent = 0,
 ): RenewalDraft {
   const offered = new Set(offeredServiceIds);
   const term = Math.max(1, termMonthsBetween(source.startDate, source.endDate) ?? 12);
@@ -68,7 +70,7 @@ export function buildRenewalDraft(
       included: true,
       units: e.units,
       frequency: e.frequency,
-      basePrice: e.basePrice,
+      basePrice: e.basePrice === null ? null : Math.round(e.basePrice * (1 + escalationPercent / 100) * 100) / 100,
     }));
   const droppedServiceIds = source.entitlements
     .filter((e) => !offered.has(e.serviceId))

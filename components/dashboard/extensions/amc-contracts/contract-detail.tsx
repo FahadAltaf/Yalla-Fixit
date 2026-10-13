@@ -68,6 +68,7 @@ import { insightsService } from "@/modules/amc-contracts/insights-service";
 
 import { CancelContractDialog } from "./cancel-contract-dialog";
 import { SendClientReportDialog } from "./client-report-dialog";
+import { ContractAmendmentsPanel } from "./contract-amendments-panel";
 import { ContractCallOutsPanel } from "./contract-call-outs-panel";
 import { ContractCommercial } from "./contract-commercial";
 import { ContractCustomer } from "./contract-customer";
@@ -96,7 +97,7 @@ import { UsageHistory } from "./usage-history";
 
 const LIST = "/extensions/amc-contracts";
 
-const TABS = ["overview", "coverage", "schedule", "call-outs", "usage", "fsm", "commercial", "payments", "renewal", "documents", "history"] as const;
+const TABS = ["overview", "coverage", "schedule", "call-outs", "usage", "fsm", "commercial", "payments", "renewal", "amendments", "documents", "history"] as const;
 type Tab = (typeof TABS)[number];
 
 /**
@@ -543,6 +544,7 @@ function ContractView({
             </TabsTrigger>
           ) : null}
           <TabsTrigger value="renewal">Renewal</TabsTrigger>
+          <TabsTrigger value="amendments">Amendments</TabsTrigger>
           <TabsTrigger value="documents">Documents</TabsTrigger>
           <TabsTrigger value="history">
             History
@@ -767,6 +769,17 @@ function ContractView({
             />
             <RenewalReminders contractId={contract.id} cancelled={contract.status === "cancelled"} />
           </div>,
+        )}
+
+        {panel(
+          "amendments",
+          <ContractAmendmentsPanel
+            contractId={contract.id}
+            contractStatus={contract.status}
+            contractNumber={contract.lifecycle?.contractNumber ?? contract.proposalNumber}
+            propertyLabel={contract.propertyLabel}
+            onChanged={() => void load()}
+          />,
         )}
 
         {panel(

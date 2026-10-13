@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { BellPlus, BellRing, Repeat } from "lucide-react";
+import { BellPlus, BellRing, Flag, Repeat } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -16,8 +16,10 @@ import {
   type ReminderPlan,
   type RenewalOverview,
 } from "@/modules/amc-contracts/amc-contracts-service";
+import { renewalsService, type ContractRenewalResponse } from "@/modules/amc-contracts/renewals-service";
 
-import { formatContractDate } from "./contract-status";
+import { formatContractDate, formatDateTime } from "./contract-status";
+import { RecordOutcomeDialog, RenewalOutcomeBadge } from "./renewal-shared";
 
 /**
  * Renewal: where this contract sits in its chain (the contract it renewed,
@@ -37,6 +39,10 @@ export function ContractRenewal({
   onChanged: () => void;
 }) {
   const [data, setData] = useState<RenewalOverview | null>(null);
+  /* Phase 13: last year beside the draft, the outcome so far, and who may record it. */
+  const [extra, setExtra] = useState<Omit<ContractRenewalResponse, "renewal"> | null>(null);
+  const [outcomeOpen, setOutcomeOpen] = useState(false);
+  const [outcomeKey, setOutcomeKey] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -45,7 +51,9 @@ export function ContractRenewal({
   const load = useCallback(async () => {
     setError(null);
     try {
-      setData((await amcContractsService.renewal(contractId)).renewal);
+      const { renewal, ...rest } = await renewalsService.renewal(contractId);
+      setData(renewal);
+      setExtra(rest);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not load the renewal.");
     }
@@ -144,8 +152,34 @@ export function ContractRenewal({
           {data.blockedReason && !data.renewalProposal ? (
             <p className="text-muted-foreground text-xs">{data.blockedReason}</p>
           ) : null}
+          {data.preview?.escalationPercent ? (
+            <p className="bg-muted/40 rounded-md px-3 py-2 text-xs">
+              Escalation applied: <span className="font-medium">+{data.preview.escalationPercent}% on last year&apos;s prices</span>.
+            </p>
+          ) : null}
+          {extra ? (
+            <RenewalOutcomeBlock
+              outcome={extra.outcome}
+              canRecord={extra.canRecordOutcome}
+              onRecord={() => {
+                setOutcomeKey((k) => k + 1);
+                setOutcomeOpen(true);
+              }}
+            />
+          ) : null}
+          {extra ? <PastYearBlock pastYear={extra.pastYear} /> : null}
         </>
       )}
+
+      <RecordOutcomeDialog
+        key={outcomeKey}
+        open={outcomeOpen}
+        onOpenChange={setOutcomeOpen}
+        contractId={contractId}
+        contractNumber={proposalNumber}
+        current={extra?.outcome?.renewal_outcome ?? null}
+        onRecorded={() => void load()}
+      />
 
       <Dialog open={previewOpen} onOpenChange={(next) => !creating && setPreviewOpen(next)}>
         <ActionDialogContent busy={creating} className="max-h-[88vh] overflow-y-auto sm:max-w-lg">
@@ -186,6 +220,12 @@ export function ContractRenewal({
                   <dt className="text-muted-foreground text-xs">Renewal at today&apos;s settings</dt>
                   <dd className="font-medium"><Money value={data.preview.grandTotal} /></dd>
                 </div>
+                {data.preview.escalationPercent ? (
+                  <div className="col-span-2">
+                    <dt className="text-muted-foreground text-xs">Escalation</dt>
+                    <dd className="font-medium">+{data.preview.escalationPercent}% on last year&apos;s prices</dd>
+                  </div>
+                ) : null}
               </dl>
               <div>
                 <p className="mb-1 font-medium">Copied: client, property, account managers and these services</p>
@@ -241,6 +281,90 @@ export function ContractRenewal({
         </ActionDialogContent>
       </Dialog>
     </SectionCard>
+  );
+}
+
+/** The outcome so far (Phase 13: DEV-416), and recording one by hand. */
+function RenewalOutcomeBlock({
+  outcome,
+  canRecord,
+  onRecord,
+}: {
+  outcome: ContractRenewalResponse["outcome"];
+  canRecord: boolean;
+  onRecord: () => void;
+}) {
+  const current = outcome?.renewal_outcome ?? null;
+  const when = [
+    outcome?.renewal_outcome_at ? `Recorded ${formatDateTime(outcome.renewal_outcome_at)}` : null,
+    outcome?.renewal_reminded_at ? `Reminder sent ${formatDateTime(outcome.renewal_reminded_at)}` : null,
+  ].filter(Boolean);
+  return (
+    <div className="grid gap-2 rounded-lg border p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium">Outcome</span>
+          {current ? <RenewalOutcomeBadge outcome={current} /> : <span className="text-muted-foreground text-sm">Not recorded</span>}
+        </div>
+        {canRecord ? (
+          <Button size="sm" variant="outline" onClick={onRecord}>
+            <Flag className="size-4" />
+            Record outcome
+          </Button>
+        ) : null}
+      </div>
+      {outcome?.renewal_outcome_reason ? <p className="text-sm whitespace-pre-wrap">{outcome.renewal_outcome_reason}</p> : null}
+      <p className="text-muted-foreground text-xs">
+        {when.length
+          ? when.join(" · ")
+          : "Renewed is recorded when the renewal contract starts; Lapsed when it ends with nothing renewing it."}
+      </p>
+    </div>
+  );
+}
+
+/** Last year on this contract, beside the renewal (Phase 13: DEV-416). */
+function PastYearBlock({ pastYear }: { pastYear: ContractRenewalResponse["pastYear"] }) {
+  const { visits, callOuts, additionalWork, allowances } = pastYear;
+  return (
+    <div className="grid gap-3">
+      <p className="text-sm font-medium">Last year</p>
+      <dl className="grid grid-cols-1 gap-3 rounded-lg border p-3 text-sm sm:grid-cols-3">
+        <div>
+          <dt className="text-muted-foreground text-xs">Visits</dt>
+          <dd className="font-medium tabular-nums">
+            {visits.done} of {visits.planned} done
+          </dd>
+          {visits.notCompleted ? <dd className="text-warning text-xs tabular-nums">{visits.notCompleted} not completed</dd> : null}
+        </div>
+        <div>
+          <dt className="text-muted-foreground text-xs">Call outs</dt>
+          <dd className="font-medium tabular-nums">{callOuts.total}</dd>
+          <dd className="text-muted-foreground text-xs tabular-nums">
+            {callOuts.emergency} emergency · {callOuts.chargeable} chargeable
+          </dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground text-xs">Additional work</dt>
+          <dd className="font-medium tabular-nums">{additionalWork.count}</dd>
+          <dd className="text-muted-foreground flex flex-wrap items-center gap-1 text-xs">
+            <Money value={additionalWork.approved} dp={0} /> approved · <Money value={additionalWork.paid} dp={0} /> paid
+          </dd>
+        </div>
+      </dl>
+      {allowances.length ? (
+        <ul className="divide-y rounded-lg border text-sm">
+          {allowances.map((a, i) => (
+            <li key={`${a.service}-${i}`} className="flex justify-between gap-2 px-3 py-1.5">
+              <span>{a.service}</span>
+              <span className={a.included > 0 && a.used >= a.included ? "text-warning tabular-nums" : "text-muted-foreground tabular-nums"}>
+                {a.used} of {a.included} used
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
   );
 }
 

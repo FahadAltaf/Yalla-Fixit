@@ -10,6 +10,7 @@ import { runPpmOverdueSweep } from "@/lib/server/amc/ppm";
 import { runVisitSweep } from "@/lib/server/amc/visits";
 import { runJobSheetSweep } from "@/lib/server/amc/job-sheets";
 import { runCallOutSweep } from "@/lib/server/amc/call-outs";
+import { runRenewalSweep } from "@/lib/server/amc/renewals";
 import { runExpiryReminderSweep } from "@/lib/server/amc/reminders";
 import { escalateDueAmcTodos } from "@/lib/server/amc/todos";
 
@@ -94,6 +95,11 @@ export const AMC_JOBS: AmcJob[] = [
     key: "call_outs",
     label: "Call outs with the SLA at risk or missed (owner and supervisors)",
     run: async ({ admin, config, now }) => ({ ...(await runCallOutSweep(admin, config, now)) }),
+  },
+  {
+    key: "renewals",
+    label: "Expiry notices (60 and 30 days), renewal reminders and to-dos, idle escalation, renewed and lapsed outcomes, scheduled terminations",
+    run: async ({ admin, config, now }) => ({ ...(await runRenewalSweep(admin, config, now)) }),
   },
   {
     key: "expiry_reminders",

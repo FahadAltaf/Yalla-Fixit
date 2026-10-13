@@ -175,6 +175,7 @@ export const baseSectionsItems: MenuItem[] = [
            sections claim longer prefixes, so this only wins on those. */
         resource: ResourceType.AMC_CONTRACTS,
       },
+      { title: "Renewals", url: "/extensions/amc-contracts/renewals", resource: ResourceType.AMC_RENEWALS },
       { title: "Payments", url: "/extensions/amc-contracts/payments", canSee: canViewAmcPayments },
       {
         title: "Clients",

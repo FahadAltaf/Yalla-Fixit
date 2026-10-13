@@ -168,6 +168,7 @@ export const RESOURCE_PARENT: Partial<Record<ResourceType, ResourceType>> = {
   [ResourceType.AMC_TECHNICIANS]: ResourceType.AMC,
   [ResourceType.AMC_CALL_OUTS]: ResourceType.AMC,
   [ResourceType.AMC_ADDITIONAL_WORKS]: ResourceType.AMC,
+  [ResourceType.AMC_RENEWALS]: ResourceType.AMC,
   [ResourceType.AMC_REPORTS]: ResourceType.AMC,
   [ResourceType.AMC_RATE_CARD]: ResourceType.AMC,
   [ResourceType.AMC_FSM_MAPPING]: ResourceType.AMC,

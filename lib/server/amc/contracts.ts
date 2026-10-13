@@ -724,6 +724,8 @@ export async function createRenewalProposal(
   admin: Admin,
   contractId: string,
   actor: { id: string; label: string | null },
+  /* Phase 13: the configured price escalation on the renewal draft. */
+  escalationPercent = 0,
 ): Promise<{ submissionId: string; droppedServiceIds: string[] }> {
   const { contract, entitlements } = await loadContract(admin, contractId);
   const { data: openRenewal } = await admin
@@ -754,6 +756,7 @@ export async function createRenewalProposal(
       entitlements,
     },
     offered,
+    escalationPercent,
   );
 
   const priced = priceSubmission({
@@ -791,6 +794,7 @@ export async function createRenewalProposal(
         optionalSections: { supplyInstallPriceList: false, additionalFixedPriceServices: false },
         priceListRows: [],
         accountManagers: draft.accountManagers,
+        renewal: { escalationPercent, previousGrandTotal: contract.grandTotal },
       },
       services: allRows,
       discount_percent: priced.discount_percent,
@@ -826,5 +830,7 @@ export async function createRenewalProposal(
     payload: { renewalSubmissionId: data.id, droppedServiceIds: draft.droppedServiceIds },
   });
   await notifyContractEvent(admin, { event: "renewal_created", contractId, actor });
+  /* Renewal activity (Phase 13): the idle clock starts again; absent before 20261012140000. */
+  await admin.from("amc_contracts").update({ renewal_activity_at: new Date().toISOString() }).eq("id", contractId).then(() => undefined, () => undefined);
   return { submissionId: data.id, droppedServiceIds: draft.droppedServiceIds };
 }

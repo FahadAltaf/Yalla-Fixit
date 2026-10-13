@@ -43,6 +43,7 @@ const AMC_SECTIONS: Record<string, { label: string; href?: string }> = {
   "call-outs": { label: "Call outs" },
   "additional-works": { label: "Additional work" },
   technicians: { label: "Technicians" },
+  renewals: { label: "Renewals" },
 };
 const AMC_WORDS: Record<string, string> = { new: "New proposal", edit: "Edit" };
 
