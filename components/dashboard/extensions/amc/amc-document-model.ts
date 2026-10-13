@@ -132,6 +132,14 @@ export function detailsTable(rows: [string, Run[] | string][]): Block {
   };
 }
 
+/* The contract's material coverage, as the coverage table prints it. */
+const COVERAGE_MATERIAL_LABELS: Record<string, string> = {
+  none: "No materials",
+  consumables: "Consumables",
+  parts_within_limit: "Parts within the limit",
+  all: "All materials",
+};
+
 /* Blank-line separated settings text, with this proposal's figures in. */
 function fillBlocks(value: string, data: AmcComputedData): string[] {
   return textBlocks(fillAmcTokens(value ?? "", data.formData.serviceRows));
@@ -504,6 +512,50 @@ function contractBlocks(data: AmcComputedData): Block[] {
   const invoiceTerms = fillRef(settings.clauses.invoiceTerms);
 
   /*
+    What each service covers (BRD 5.7, DEV-373), printed under the scope
+    and frequency table. The terms are set on the contract and mirrored
+    into the proposal's document options; a contract without them (or one
+    made before they existed) prints nothing extra.
+  */
+  const terms = formData.entitlementTerms ?? {};
+  const coverageServiceIds = [
+    ...frequencyRows.map((row) => row.serviceId).filter((id) => id in terms),
+    ...selectedIds.filter((id) => id in terms && !frequencyRows.some((row) => row.serviceId === id)),
+  ].filter((id, index, all) => all.indexOf(id) === index);
+  const serviceLabelOf = (serviceId: string) =>
+    frequencyRows.find((row) => row.serviceId === serviceId)?.scope ??
+    servicesForProperty(settings, formData.unitType).find((service) => service.id === serviceId)?.label ??
+    serviceId;
+  const coverageBlocks: Block[] = coverageServiceIds.length
+    ? [
+        { kind: "label", text: "What each service covers" },
+        {
+          kind: "table",
+          widths: [32, 12, 20, 14, 22],
+          header: [
+            headerCell("SERVICE"),
+            headerCell("LABOUR COVERED", "center"),
+            headerCell("MATERIALS"),
+            headerCell("VALUE LIMIT (AED)", "right"),
+            headerCell("EXCLUSIONS"),
+          ],
+          rows: zebra(
+            coverageServiceIds.map((serviceId) => {
+              const term = terms[serviceId];
+              return [
+                cell(serviceLabelOf(serviceId)),
+                cell(term.labourCovered ? "Yes" : "No", { align: "center" }),
+                cell(COVERAGE_MATERIAL_LABELS[term.materialCoverage] ?? term.materialCoverage),
+                cell(term.valueLimitAed != null ? amount(term.valueLimitAed) : "—", { align: "right" }),
+                cell(term.exclusions?.trim() || "—"),
+              ];
+            }),
+          ),
+        },
+      ]
+    : [];
+
+  /*
     What a clause is called in the document.
 
     Three of them have never used a fixed title: 6.1 names the contract it
@@ -622,6 +674,7 @@ function contractBlocks(data: AmcComputedData): Block[] {
               ]),
             ),
           },
+          ...coverageBlocks,
         ];
       case "priceListIntro": {
         if (!formData.optionalSections?.supplyInstallPriceList) return [];

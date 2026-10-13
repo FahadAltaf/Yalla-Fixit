@@ -28,6 +28,32 @@ type Admin = SupabaseClient;
 type Row = Record<string, unknown>;
 type Actor = { id: string; label: string | null };
 
+/**
+ * BRD 5.2: a proposal for a category that needs a site visit (configuration:
+ * commercial by default) is flagged or blocked when no completed visit is
+ * linked to it, its enquiry or its property. Checked when the proposal is
+ * submitted, so a proposal started blank in the wizard follows the same
+ * rule as one opened from an enquiry.
+ */
+export async function siteVisitProblem(
+  admin: SupabaseClient,
+  submissionId: string,
+  config: AmcConfig,
+): Promise<{ block: string | null; warning: string | null }> {
+  const none = { block: null, warning: null };
+  const { data: p } = await admin.from("amc_submissions").select("id, property, property_id, assessment_id").eq("id", submissionId).maybeSingle<Row>();
+  if (!p) return none;
+  const property = (p.property ?? {}) as Row;
+  const category = typeof property.propertyCategory === "string" ? property.propertyCategory : null;
+  if (!siteVisitRequired(config, category)) return none;
+  const filters = [`submission_id.eq.${submissionId}`, ...(p.assessment_id ? [`id.eq.${String(p.assessment_id)}`] : []), ...(p.property_id ? [`property_id.eq.${String(p.property_id)}`] : [])];
+  const { data: visits, error } = await admin.from("amc_assessments").select("id").eq("status", "completed").or(filters.join(",")).limit(1);
+  if (error) return none; /* not migrated: nothing to check against */
+  if ((visits ?? []).length) return none;
+  const message = `A completed site visit is required for ${category} properties before a proposal goes for approval.`;
+  return config.proposals.siteVisitRule === "block" ? { block: message, warning: null } : { block: null, warning: message };
+}
+
 export interface ProposalFromEnquiry {
   submissionId: string;
   proposalNumber: string;

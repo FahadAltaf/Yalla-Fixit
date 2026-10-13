@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useState, type ReactNode } from "react";
-import { CalendarCheck, Copy, ExternalLink, FileText, Mail, MessageCircle, PhoneCall, Save, Search, ShieldCheck, Star } from "lucide-react";
+import { CalendarCheck, Copy, ExternalLink, FileText, FileUp, Mail, MessageCircle, PhoneCall, Save, Search, ShieldCheck, Star } from "lucide-react";
 import { toast } from "sonner";
 
 import { ActionDialogContent, ErrorState, FieldsSkeleton, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
@@ -15,7 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { TRADE_LABELS } from "@/lib/amc/client-profile";
+import { ACCESS_TYPE_LABELS, TRADE_LABELS, WEEKDAY_SHORT } from "@/lib/amc/client-profile";
 import { PLANNABLE_STATUSES, VISIT_STATUS_LABELS } from "@/lib/amc/ppm";
 import {
   ACCESS_STATUS_LABELS,
@@ -47,7 +47,7 @@ import {
   type ConfirmationState,
 } from "./visit-status";
 
-type Working = "whatsapp" | "email" | "attempt" | "access" | "suggest" | "assign" | "pass" | null;
+type Working = "whatsapp" | "email" | "attempt" | "access" | "upload" | "suggest" | "assign" | "pass" | null;
 
 type Tab = "confirmation" | "access" | "assignment" | "job_sheet";
 
@@ -528,7 +528,10 @@ function AccessSection({ visit: v, canEdit, working, setWorking, changed }: Body
   const [status, setStatus] = useState<AccessStatus>(v.accessStatus ?? (v.need.accessTypes.length ? "pending" : "not_required"));
   const [validUntil, setValidUntil] = useState(v.accessValidUntil ?? "");
   const [note, setNote] = useState(v.accessNote ?? "");
-  const ids = { status: useId(), until: useId(), note: useId() };
+  const [passFile, setPassFile] = useState<File | null>(null);
+  /* Bumped after an upload, so the file input starts empty again. */
+  const [fileKey, setFileKey] = useState(0);
+  const ids = { status: useId(), until: useId(), note: useId(), file: useId() };
 
   const openPass = (documentId: string) =>
     void run(
@@ -554,6 +557,34 @@ function AccessSection({ visit: v, canEdit, working, setWorking, changed }: Body
         await changed();
       },
       "Could not save the access.",
+    );
+
+  /* The pass goes to the visit's documents first, then the access is saved pointing at it. */
+  const uploadPass = () =>
+    void run(
+      "upload",
+      async () => {
+        if (!passFile) return;
+        const { document } = await clientProfileService.uploadDocument({
+          file: passFile,
+          level: "visit",
+          entityId: v.id,
+          category: "Gate pass",
+          title: `Gate pass, visit ${v.visitNo}`,
+        });
+        await visitsService.visitAction(v.id, {
+          action: "access",
+          status,
+          validUntil: status === "approved" && validUntil ? validUntil : null,
+          documentId: document.id,
+          note: note.trim() || null,
+        });
+        setPassFile(null);
+        setFileKey((k) => k + 1);
+        toast.success("Pass uploaded");
+        await changed();
+      },
+      "Could not upload the pass.",
     );
 
   /* A pass that runs out before the visit day is no pass for it. */
@@ -583,10 +614,19 @@ function AccessSection({ visit: v, canEdit, working, setWorking, changed }: Body
             <Muted>No pass on file</Muted>
           )}
         </AccessRow>
-        <AccessRow label="Property needs">
-          {v.need.accessTypes.length ? v.need.accessTypes.join(", ") : <Muted>No access rules</Muted>}
-        </AccessRow>
       </dl>
+
+      <Panel title="Property access rules" description="What the property asks for before a crew can get in: passes, permits, lifts and keys.">
+        {v.accessRules.length === 0 ? (
+          <p className="text-muted-foreground text-sm">No access rules on this property.</p>
+        ) : (
+          <ul className="grid gap-2">
+            {v.accessRules.map((r, index) => (
+              <AccessRuleItem key={`${r.accessType}-${index}`} rule={r} />
+            ))}
+          </ul>
+        )}
+      </Panel>
 
       {canEdit ? (
         <Panel title="Update access" description="Where the gate pass stands for this visit. Approved or not required closes the access to-do.">
@@ -616,7 +656,31 @@ function AccessSection({ visit: v, canEdit, working, setWorking, changed }: Body
           <Field id={ids.note} label="Note (optional)">
             <Textarea id={ids.note} rows={2} value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} />
           </Field>
-          <div className="flex justify-end">
+          <Field
+            id={ids.file}
+            label="Pass file (optional)"
+            hint={`${v.accessDocumentId ? "A new pass replaces the one on file. " : ""}Kept with the visit's documents; the status, date and note above are saved with it.`}
+          >
+            <Input
+              key={fileKey}
+              id={ids.file}
+              type="file"
+              accept=".pdf,.png,.jpg,.jpeg,.webp"
+              disabled={working !== null}
+              onChange={(e) => setPassFile(e.target.files?.[0] ?? null)}
+            />
+          </Field>
+          <div className="flex flex-wrap justify-end gap-2">
+            <SubmitButton
+              variant="outline"
+              pending={working === "upload"}
+              pendingLabel="Uploading…"
+              disabled={working !== null || !passFile}
+              icon={<FileUp className="size-4" />}
+              onClick={uploadPass}
+            >
+              Upload pass
+            </SubmitButton>
             <SubmitButton pending={working === "access"} pendingLabel="Saving…" disabled={working !== null} icon={<ShieldCheck className="size-4" />} onClick={save}>
               Save access
             </SubmitButton>
@@ -624,6 +688,32 @@ function AccessSection({ visit: v, canEdit, working, setWorking, changed }: Body
         </Panel>
       ) : null}
     </>
+  );
+}
+
+/* Stored as weekday numbers (0 = Sunday); none or all seven means any day. */
+const dayList = (days: string[]) =>
+  days.length === 0 || days.length === 7 ? "Any day" : days.map((d) => (/^[0-6]$/.test(d) ? WEEKDAY_SHORT[Number(d)] : d)).join(", ");
+const hhmm = (time: string | null) => (time ? time.slice(0, 5) : null);
+
+function AccessRuleItem({ rule: r }: { rule: VisitDetail["accessRules"][number] }) {
+  const from = hhmm(r.permittedFrom);
+  const to = hhmm(r.permittedTo);
+  const hours = from && to ? `, ${from}–${to}` : from ? `, from ${from}` : to ? `, until ${to}` : "";
+  const facts = [
+    r.issuer ? `Issued by ${r.issuer}` : null,
+    r.leadTimeDays !== null ? `${r.leadTimeDays} ${r.leadTimeDays === 1 ? "day" : "days"} notice` : null,
+    `${dayList(r.permittedDays)}${hours}`,
+    r.parking ? `Parking: ${r.parking}` : null,
+  ].filter(Boolean);
+  const contact = [r.contactName, r.contactPhone].filter(Boolean).join(" · ");
+  return (
+    <li className="grid gap-1 rounded-lg border px-3 py-2.5 text-sm">
+      <span className="font-medium">{ACCESS_TYPE_LABELS[r.accessType as keyof typeof ACCESS_TYPE_LABELS] ?? r.accessType}</span>
+      <span className="text-muted-foreground text-xs">{facts.join(" · ")}</span>
+      {contact ? <span className="text-xs">Contact: {contact}</span> : null}
+      {r.notes ? <span className="text-muted-foreground text-xs whitespace-pre-wrap">{r.notes}</span> : null}
+    </li>
   );
 }
 

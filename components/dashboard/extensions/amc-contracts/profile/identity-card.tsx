@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { BadgeCheck, IdCard, Megaphone } from "lucide-react";
+import { BadgeCheck, IdCard, Link2, Megaphone, Pencil } from "lucide-react";
 import { toast } from "sonner";
 
 import { SectionCard } from "@/components/dashboard/shared/kaizen";
@@ -15,6 +15,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { CHANNEL_LABELS, LIFECYCLE_LABELS, documentExpiryState } from "@/lib/amc/client-profile";
 import { todayInDubai } from "@/lib/amc/contracts";
 import type { CustomerRecord } from "@/modules/amc-contracts/amc-contracts-service";
+import { clientHistoryService } from "@/modules/amc-contracts/client-history-service";
 import { clientProfileService } from "@/modules/amc-contracts/client-profile-service";
 
 import { formatContractDate, formatDateTime } from "../contract-status";
@@ -31,6 +32,7 @@ export const LIFECYCLE_TONE: Record<CustomerRecord["lifecycle"], string> = {
 /** Identity (BRD 5.9: individual or company, trade licence, TRN), preferences, and marketing consent apart. */
 export function IdentityCard({ customer, canEdit, onChanged }: { customer: CustomerRecord; canEdit: boolean; onChanged: () => void }) {
   const consent = useDialog();
+  const fsm = useDialog();
   const licenceState = documentExpiryState(customer.tradeLicenseExpiry, todayInDubai(), 60);
   const company = customer.customerType !== "individual";
 
@@ -47,6 +49,20 @@ export function IdentityCard({ customer, canEdit, onChanged }: { customer: Custo
     { label: "Type", value: customer.customerType === "company" ? "Company" : customer.customerType === "individual" ? "Individual" : null },
     { label: "Preferred channel", value: customer.preferredChannel ? CHANNEL_LABELS[customer.preferredChannel] : null },
     { label: "Preferred language", value: customer.preferredLanguage },
+    {
+      label: "FSM customer (Contact id)",
+      value: (
+        <span className="inline-flex items-center gap-1">
+          {customer.fsmContactId ? <span className="font-mono text-xs">{customer.fsmContactId}</span> : <span className="text-muted-foreground font-normal">Not linked</span>}
+          {canEdit ? (
+            <Button size="icon" variant="ghost" className="size-7" onClick={() => fsm.show(true)} aria-label={customer.fsmContactId ? "Change the FSM contact id" : "Link an FSM contact id"}>
+              {customer.fsmContactId ? <Pencil className="size-3.5" /> : <Link2 className="size-3.5" />}
+            </Button>
+          ) : null}
+        </span>
+      ),
+      hint: customer.fsmContactId ? null : "Links FSM work orders to this client",
+    },
   ];
   const right = company
     ? [
@@ -107,7 +123,69 @@ export function IdentityCard({ customer, canEdit, onChanged }: { customer: Custo
           onChanged();
         }}
       />
+      <FsmContactDialog
+        key={`fsm-${fsm.key}`}
+        open={fsm.open}
+        onOpenChange={fsm.onOpenChange}
+        current={customer.fsmContactId}
+        onSave={async (fsmContactId) => {
+          await clientHistoryService.setFsmContact(customer, fsmContactId);
+          toast.success(fsmContactId ? "FSM customer linked" : "FSM customer unlinked");
+          onChanged();
+        }}
+      />
     </SectionCard>
+  );
+}
+
+/** The FSM customer (Contact id) behind the profile (BRD 5.9), entered by hand until FSM sync. */
+function FsmContactDialog({
+  open,
+  onOpenChange,
+  current,
+  onSave,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  current: string | null;
+  onSave: (fsmContactId: string | null) => Promise<void>;
+}) {
+  const [value, setValue] = useState(current ?? "");
+  const [busy, setBusy] = useState(false);
+  const next = value.trim() || null;
+  const save = async () => {
+    setBusy(true);
+    try {
+      await onSave(next);
+      onOpenChange(false);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not save the FSM customer.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog open={open} onOpenChange={(o) => !busy && onOpenChange(o)}>
+      <ActionDialogContent busy={busy} className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>FSM customer</DialogTitle>
+          <DialogDescription>The client&apos;s Contact id in FSM. AMC uses it to match FSM work orders and appointments to this client&apos;s contracts.</DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-1.5 py-2">
+          <Label htmlFor="fsm-contact-id">FSM customer (Contact id)</Label>
+          <Input id="fsm-contact-id" value={value} onChange={(e) => setValue(e.target.value)} maxLength={60} className="font-mono" placeholder="e.g. 3a6f0c2e-…" autoComplete="off" />
+          <p className="text-muted-foreground text-xs">Leave empty to unlink.</p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+            Cancel
+          </Button>
+          <SubmitButton onClick={() => void save()} pending={busy} pendingLabel="Saving…" icon={<Link2 className="size-4" />} disabled={next === (current ?? null)}>
+            Save
+          </SubmitButton>
+        </DialogFooter>
+      </ActionDialogContent>
+    </Dialog>
   );
 }
 

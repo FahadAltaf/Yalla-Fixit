@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Archive, ClipboardList, EllipsisVerticalIcon, KeyRound, Pencil, Plus, Power, Wrench } from "lucide-react";
+import { Archive, ClipboardList, EllipsisVerticalIcon, History, KeyRound, Pencil, Plus, Power, Wrench } from "lucide-react";
 import { toast } from "sonner";
 
 import { SectionCard } from "@/components/dashboard/shared/kaizen";
@@ -40,6 +40,7 @@ import { amcSettingsService } from "@/modules/amc-submissions/services/amc-setti
 
 import { formatContractDate } from "../contract-status";
 import { useAmcData } from "../use-amc-data";
+import { AssetHistoryDialog } from "./asset-history-dialog";
 import { useDialog } from "./use-dialog";
 
 const nul = (v: string | null | undefined) => (v && v.trim() ? v.trim() : null);
@@ -87,6 +88,7 @@ export function AssetsPanel({ propertyId, canEdit }: { propertyId: string; canEd
   const { data, error, loading, reload } = useAmcData(() => clientProfileService.assets(propertyId), `assets|${propertyId}`);
   const editing = useDialog<AssetRecord | "new">();
   const retiring = useDialog<AssetRecord>();
+  const history = useDialog<AssetRecord>();
   const [showRetired, setShowRetired] = useState(false);
   const canAdd = canEdit && data?.migrated !== false;
 
@@ -170,18 +172,24 @@ export function AssetsPanel({ propertyId, canEdit }: { propertyId: string; canEd
                     </Badge>
                   </TableCell>
                   <TableCell className="pr-5">
-                    {canEdit && a.status === "active" ? (
-                      <RowMenu label={`Actions for ${a.assetType}`}>
-                        <DropdownMenuItem onClick={() => editing.show(a)}>
-                          <Pencil className="size-4" />
-                          Edit
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => retiring.show(a)} className="text-destructive focus:text-destructive">
-                          <Archive className="size-4" />
-                          Retire
-                        </DropdownMenuItem>
-                      </RowMenu>
-                    ) : null}
+                    <RowMenu label={`Actions for ${a.assetType}`}>
+                      <DropdownMenuItem onClick={() => history.show(a)}>
+                        <History className="size-4" />
+                        History
+                      </DropdownMenuItem>
+                      {canEdit && a.status === "active" ? (
+                        <>
+                          <DropdownMenuItem onClick={() => editing.show(a)}>
+                            <Pencil className="size-4" />
+                            Edit
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => retiring.show(a)} className="text-destructive focus:text-destructive">
+                            <Archive className="size-4" />
+                            Retire
+                          </DropdownMenuItem>
+                        </>
+                      ) : null}
+                    </RowMenu>
                   </TableCell>
                 </TableRow>
               ))}
@@ -218,6 +226,7 @@ export function AssetsPanel({ propertyId, canEdit }: { propertyId: string; canEd
           reload();
         }}
       />
+      <AssetHistoryDialog key={`history-${history.key}`} open={history.open} onOpenChange={history.onOpenChange} propertyId={propertyId} asset={history.target} />
     </SectionCard>
   );
 }

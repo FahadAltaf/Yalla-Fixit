@@ -27,7 +27,7 @@ import { approversForLevel, type AmcConfig } from "@/lib/amc/config";
 import { isInForce, todayInDubai } from "@/lib/amc/contracts";
 import { templateText } from "@/lib/amc/message-templates";
 import { AMC_PHOTO_MAX_BYTES, PHOTO_EXTENSION, detectImageType } from "@/lib/amc/photos";
-import { assignmentProblems, type Trade } from "@/lib/amc/visits";
+import { assignmentProblems, suggestCrew, type Trade } from "@/lib/amc/visits";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { ContractError, isMissingTable } from "@/lib/server/amc/contracts";
 import { notifyEntitlementState, notifyUsers } from "@/lib/server/amc/notifications";
@@ -550,6 +550,24 @@ async function settleReservation(admin: Admin, row: Row, kind: "consumption" | "
   await notifyEntitlementState(admin, String(row.contract_id), entitlementId, actor);
 }
 
+/**
+ * What a call out needs of its crew: its trade, the area, and the property's
+ * security clearances (as a PPM visit: lib/server/amc/visits.ts).
+ */
+export async function callOutNeed(admin: Admin, row: Row, trades: Trade[], date: string) {
+  const { data: c } = await admin.from("amc_contracts").select("property, property_id").eq("id", String(row.contract_id)).maybeSingle<Row>();
+  const property = (c?.property ?? {}) as Row;
+  const { data: rules } = c?.property_id
+    ? await admin.from("amc_property_access_rules").select("access_type, issuer").eq("property_id", String(c.property_id)).eq("active", true)
+    : { data: [] as Row[] };
+  return {
+    trades,
+    date,
+    area: str(property.community) ?? str(property.propertyDetail) ?? null,
+    accessTypes: ((rules ?? []) as Row[]).filter((r) => r.access_type === "security_clearance").map((r) => str(r.issuer) ?? "Security clearance"),
+  };
+}
+
 export async function performCallOutAction(admin: Admin, id: string, action: CallOutAction, actor: Actor, config: AmcConfig) {
   const row = await loadCallOut(admin, id);
   const status = row.status as CallOutStatus;
@@ -563,16 +581,16 @@ export async function performCallOutAction(admin: Admin, id: string, action: Cal
       move("scheduled");
       const slot = dubaiSlot(action.date, action.time, action.durationMinutes);
       const trades = str(row.trade) ? [str(row.trade) as Trade] : [];
-      const property =(await admin.from("amc_contracts").select("property").eq("id", String(row.contract_id)).maybeSingle<Row>()).data?.property as Row | undefined;
-      const fits = await crewFitsForSlot(
-        admin,
-        { trades, date: action.date, area: str(property?.community) ?? str(property?.propertyDetail) ?? null, accessTypes: [] },
-        slot,
-        action.technicianIds,
-        [id],
-      );
+      const need = await callOutNeed(admin, row, trades, action.date);
+      const fits = await crewFitsForSlot(admin, need, slot, action.technicianIds, [id]);
       const problems = assignmentProblems(fits, trades);
       if (problems.length) throw new ContractError(problems.join(" "), 409);
+      /* The same rule as a PPM visit (BRD 5.13 / 5.11): another crew than the suggested one needs a reason. */
+      const suggested = suggestCrew(await crewFitsForSlot(admin, need, slot, null, [id]), trades).technicianIds;
+      const same = suggested.length === action.technicianIds.length && suggested.every((t) => action.technicianIds.includes(t));
+      if (suggested.length && !same && !action.overrideReason) {
+        throw new ContractError("This is not the suggested crew: say why it was chosen instead.", 400);
+      }
       await setStatus(admin, row, "scheduled", {
         scheduled_start: slot.start,
         scheduled_end: slot.end,
@@ -787,6 +805,14 @@ export async function runCallOutSweep(admin: Admin, config: AmcConfig, now = new
       .select("id");
     if (!claimed?.length) continue;
     const due = slaDueAt(c)!;
+    if (supervisors.length) {
+      const { data: link } = await admin.from("amc_todos").select("todo_id").eq("dedupe_key", `call_out:${c.id}`).maybeSingle<Row>();
+      if (link?.todo_id) {
+        await admin
+          .from("todo_assignees")
+          .upsert(supervisors.map((userId) => ({ todo_id: String(link.todo_id), user_id: userId })), { onConflict: "todo_id,user_id", ignoreDuplicates: true });
+      }
+    }
     await notifyUsers(admin, {
       event: "call_out_sla_at_risk",
       userIds: [c.ownerId, ...supervisors].filter((v): v is string => Boolean(v)),

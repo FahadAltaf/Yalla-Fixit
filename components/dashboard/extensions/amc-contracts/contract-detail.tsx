@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  AlarmClock,
   ArrowLeft,
   Ban,
   Banknote,
@@ -275,6 +276,13 @@ function ContractView({
       <DropdownMenuItem key="start" onClick={() => paymentDialogs.open(contract.id, { kind: "override_gate" })}>
         <Play className="size-4" />
         Start before payment
+      </DropdownMenuItem>
+    ) : null,
+    /* To-do 2 (BRD 6.8): the follow-up while the client signs or pays can wait a few days. */
+    permissions.canEditTerms && (status === "pending_client_signature" || awaitingFirst) ? (
+      <DropdownMenuItem key="snooze" onClick={() => lifecycleDialogs.open("snooze")}>
+        <AlarmClock className="size-4" />
+        Snooze follow-up
       </DropdownMenuItem>
     ) : null,
     permissions.canHold && status === "on_hold" ? (
@@ -788,6 +796,8 @@ function ContractView({
             submissionId={contract.submissionId}
             proposalSentAt={source?.proposal_sent_at ?? null}
             contractSentAt={source?.contract_sent_at ?? null}
+            contractId={contract.id}
+            canUpload={canOperate}
           />,
         )}
 

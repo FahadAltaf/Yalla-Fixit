@@ -277,6 +277,8 @@ export interface CustomerInput {
   trn?: string | null;
   preferredChannel?: string | null;
   preferredLanguage?: string | null;
+  /* BRD 5.9: the FSM customer (Contact id) behind the profile. */
+  fsmContactId?: string | null;
 }
 
 const blankToNull = (v: string | null | undefined) => (v && v.trim() ? v.trim() : null);
@@ -303,6 +305,7 @@ function clientProfileRow(input: CustomerInput): Record<string, unknown> {
     ...(input.trn !== undefined ? { trn: blankToNull(input.trn) } : {}),
     ...(input.preferredChannel !== undefined ? { preferred_channel: input.preferredChannel || null } : {}),
     ...(input.preferredLanguage !== undefined ? { preferred_language: blankToNull(input.preferredLanguage) } : {}),
+    ...(input.fsmContactId !== undefined ? { fsm_contact_id: blankToNull(input.fsmContactId) } : {}),
   };
 }
 

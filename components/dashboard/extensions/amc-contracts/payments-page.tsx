@@ -3,13 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Building2, CalendarClock, Database, Landmark, Lock, ScrollText, UserRound } from "lucide-react";
+import { Banknote, Building2, CalendarClock, Database, Landmark, Lock, ScrollText, UserRound } from "lucide-react";
 
 import { DataTable } from "@/components/data-table";
 import { IconText } from "@/components/data-table/columns/icon-text";
 import { PageHeading, SectionCard, StatCard, StatCardGrid, TabCount, type StatTone } from "@/components/dashboard/shared/kaizen";
-import { ErrorState, SectionSkeleton, StatGridSkeleton } from "@/components/dashboard/shared/kaizen-states";
+import { ErrorState, ListSkeleton, SectionSkeleton, StatGridSkeleton } from "@/components/dashboard/shared/kaizen-states";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IdentityCell } from "@/components/ui/entity-avatar";
@@ -18,7 +19,16 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/context/AuthContext";
 import { useDebounce } from "@/hooks/use-debounce";
-import { AGEING_LABELS, CHEQUE_STATUS_LABELS, CHEQUE_STATUSES, INSTALMENT_STATUS_LABELS, type AgeingBucket, type ChequeStatus } from "@/lib/amc/payments";
+import {
+  AGEING_LABELS,
+  CHEQUE_STATUS_LABELS,
+  CHEQUE_STATUSES,
+  INSTALMENT_STATUS_LABELS,
+  PAYMENT_MODE_LABELS,
+  type AgeingBucket,
+  type ChequeStatus,
+  type PaymentMode,
+} from "@/lib/amc/payments";
 import { hasResourceAction } from "@/lib/role-permissions";
 import type { InstalmentFilter } from "@/lib/server/amc/payments";
 import {
@@ -29,6 +39,7 @@ import {
   type InstalmentListRow,
   type PaymentPermissions,
 } from "@/modules/amc-contracts/payments-service";
+import { HistoryRequestError, clientHistoryService, type ClientPaymentReceived } from "@/modules/amc-contracts/client-history-service";
 import { ActionType, ResourceType } from "@/types/types";
 
 import { AmcNotificationsBell } from "./amc-notifications-bell";
@@ -545,9 +556,10 @@ function ChequesTable({
 }
 
 /**
- * A client's payments, on the client's page: their balance and every
- * instalment still open across their contracts. A row opens the contract's
- * Payments tab, where the money is recorded.
+ * A client's payments, on the client's page: their balance, every
+ * instalment still open across their contracts, their cheques and the
+ * money received. A row opens the contract's Payments tab, where the money
+ * is recorded.
  */
 export function ClientPaymentsPanel({ clientId }: { clientId: string }) {
   const router = useRouter();
@@ -669,6 +681,192 @@ export function ClientPaymentsPanel({ clientId }: { clientId: string }) {
           </div>
         )}
       </SectionCard>
+
+      <ClientCheques clientId={clientId} />
+      <ClientPaymentsReceived clientId={clientId} />
     </>
+  );
+}
+
+/** The client's cheques across their contracts (the cheque register, filtered to the client). */
+function ClientCheques({ clientId }: { clientId: string }) {
+  const router = useRouter();
+  const [data, setData] = useState<{ cheques: ChequeListRow[]; total: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await paymentsService.listCheques({ clientId, pageSize: CLIENT_ROWS });
+      setData({ cheques: r.cheques, total: r.total });
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not load the cheques.");
+    } finally {
+      setLoading(false);
+    }
+  }, [clientId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const cheques = data?.cheques ?? [];
+  return (
+    <SectionCard
+      title="Cheques"
+      description={
+        data && data.total > cheques.length
+          ? `The first ${cheques.length} of ${data.total}. Open a contract to deposit, clear or replace a cheque.`
+          : "Every cheque the client has given and where it stands. Open a contract to deposit, clear or replace one."
+      }
+      icon={<Landmark />}
+      bodyClassName={cheques.length ? "pb-2" : "border-t"}
+    >
+      {error && !data ? (
+        <div className="p-5">
+          <ErrorState title="Could not load the cheques" message={error} onRetry={() => void load()} retrying={loading} />
+        </div>
+      ) : !data ? (
+        <ListSkeleton rows={3} />
+      ) : cheques.length === 0 ? (
+        <EmptyState icon={<Landmark className="size-5" />} title="No cheques" description="Cheques recorded against this client's instalments appear here." />
+      ) : (
+        <div className="overflow-x-auto">
+          <Table className="min-w-[760px]">
+            <TableHeader>
+              <TableRow>
+                <TableHead className="pl-5">Cheque no.</TableHead>
+                <TableHead>Bank</TableHead>
+                <TableHead>Date</TableHead>
+                <TableHead>Contract</TableHead>
+                <TableHead className="text-right">Amount</TableHead>
+                <TableHead className="pr-5">Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {cheques.map((c) => (
+                <TableRow key={c.id} className="cursor-pointer" onClick={() => router.push(contractHref(c.contractId))}>
+                  <TableCell className="pl-5 text-sm font-medium tabular-nums">{c.chequeNo}</TableCell>
+                  <TableCell className="text-sm">{c.bank || "—"}</TableCell>
+                  <TableCell className="text-sm tabular-nums">{formatContractDate(c.chequeDate)}</TableCell>
+                  <TableCell>
+                    <div className="text-sm tabular-nums">{c.contract?.contractNumber || "Contract"}</div>
+                    {c.instalmentNo ? <div className="text-muted-foreground text-xs">Instalment {c.instalmentNo}</div> : null}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Money value={c.amount} className="text-sm font-medium" />
+                  </TableCell>
+                  <TableCell className="pr-5">
+                    <div className="space-y-0.5">
+                      <ChequeStatusBadge status={c.status} />
+                      {c.bounceReason ? <div className="text-muted-foreground max-w-[200px] truncate text-xs">{c.bounceReason}</div> : null}
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
+/**
+ * Money received from the client across their contracts, newest first;
+ * voided payments stay on the list, struck through. Hidden without AMC
+ * Payments (View).
+ */
+function ClientPaymentsReceived({ clientId }: { clientId: string }) {
+  const router = useRouter();
+  const [payments, setPayments] = useState<ClientPaymentReceived[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [forbidden, setForbidden] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      setPayments((await clientHistoryService.payments(clientId)).payments);
+      setError(null);
+    } catch (e) {
+      if (e instanceof HistoryRequestError && e.status === 403) setForbidden(true);
+      else setError(e instanceof Error ? e.message : "Could not load the payments received.");
+    } finally {
+      setLoading(false);
+    }
+  }, [clientId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  if (forbidden) return null;
+  const received = (payments ?? []).filter((p) => !p.voided).reduce((sum, p) => sum + p.amount, 0);
+  return (
+    <SectionCard
+      title="Payments received"
+      description={
+        payments?.length
+          ? `AED ${received.toLocaleString("en-AE", { minimumFractionDigits: 2 })} received across the client's contracts, newest first. Voided payments are struck through.`
+          : "Money received across the client's contracts, newest first."
+      }
+      icon={<Banknote />}
+      bodyClassName={payments?.length ? "pb-2" : "border-t"}
+    >
+      {error && !payments ? (
+        <div className="p-5">
+          <ErrorState title="Could not load the payments received" message={error} onRetry={() => void load()} retrying={loading} />
+        </div>
+      ) : !payments ? (
+        <ListSkeleton rows={3} />
+      ) : payments.length === 0 ? (
+        <EmptyState icon={<Banknote className="size-5" />} title="Nothing received yet" description="Payments recorded on the client's contracts appear here." />
+      ) : (
+        <div className="overflow-x-auto">
+          <Table className="min-w-[760px]">
+            <TableHeader>
+              <TableRow>
+                <TableHead className="pl-5">Date</TableHead>
+                <TableHead>Contract</TableHead>
+                <TableHead className="w-12">#</TableHead>
+                <TableHead>Mode</TableHead>
+                <TableHead className="text-right">Amount</TableHead>
+                <TableHead className="pr-5">Reference / receipt</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {payments.map((p) => {
+                const struck = p.voided ? "line-through" : "";
+                return (
+                  <TableRow key={p.id} className={`cursor-pointer ${p.voided ? "text-muted-foreground" : ""}`} onClick={() => router.push(contractHref(p.contractId))}>
+                    <TableCell className="pl-5 text-sm tabular-nums">
+                      <span className={struck}>{formatContractDate(p.receivedOn)}</span>
+                      {p.voided ? (
+                        <Badge variant="secondary" className="bg-mist text-ink-soft ml-2 border-0 font-medium">
+                          Voided
+                        </Badge>
+                      ) : null}
+                    </TableCell>
+                    <TableCell className={`text-sm tabular-nums ${struck}`}>{p.contractNumber || "Contract"}</TableCell>
+                    <TableCell className={`text-sm tabular-nums ${struck}`}>{p.instalmentNo ?? "—"}</TableCell>
+                    <TableCell className={`text-sm ${struck}`}>{PAYMENT_MODE_LABELS[p.mode as PaymentMode] ?? p.mode}</TableCell>
+                    <TableCell className={`text-right ${struck}`}>
+                      <Money value={p.amount} className="text-sm font-medium" />
+                    </TableCell>
+                    <TableCell className={`pr-5 text-sm ${struck}`}>
+                      <div className="max-w-[220px] truncate">{p.reference || "—"}</div>
+                      {p.receiptNo ? <div className="text-muted-foreground text-xs tabular-nums">Receipt {p.receiptNo}</div> : null}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </SectionCard>
   );
 }

@@ -11,9 +11,10 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Money } from "@/components/ui/money";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { PAYMENT_MODE_LABELS } from "@/lib/amc/payments";
-import { paymentsService, type ContractPaymentsResponse } from "@/modules/amc-contracts/payments-service";
+import { PAYMENT_MODE_LABELS, PAYMENT_MODES, type PaymentMode } from "@/lib/amc/payments";
+import { paymentsService, type ContractPaymentsResponse, type InstalmentRecord } from "@/modules/amc-contracts/payments-service";
 
 import { formatContractDate, formatDateTime } from "./contract-status";
 import { ChequeActions, InstalmentActions, ReceiptActions, type PaymentDialogs } from "./payment-dialogs";
@@ -63,6 +64,64 @@ export const openInstalmentCount = (data: ContractPaymentsResponse | null) =>
 
 /* A contract activated before payments existed has no schedule; Finance makes it (the route checks too). */
 const SCHEDULABLE = ["active", "on_hold"];
+
+const NOT_SET = "__none";
+
+/**
+ * How an instalment is expected to be paid (BRD 5.8). Whoever records
+ * payments changes it in place while something is still owed; otherwise it
+ * reads as text.
+ */
+function ExpectedModeCell({
+  contractId,
+  instalment,
+  editable,
+  onSaved,
+}: {
+  contractId: string;
+  instalment: InstalmentRecord;
+  editable: boolean;
+  onSaved: () => unknown;
+}) {
+  const [saving, setSaving] = useState(false);
+  const current = instalment.expectedMode;
+  if (!editable || isSettled(instalment.status)) {
+    return <span className={current ? "text-sm" : "text-muted-foreground text-sm"}>{current ? PAYMENT_MODE_LABELS[current] : "—"}</span>;
+  }
+  const change = async (value: string) => {
+    const mode = value === NOT_SET ? null : (value as PaymentMode);
+    if (mode === current) return;
+    setSaving(true);
+    try {
+      await paymentsService.paymentAction(contractId, { action: "set_expected_mode", instalmentId: instalment.id, mode });
+      toast.success(
+        mode
+          ? `Instalment ${instalment.instalmentNo} expected by ${PAYMENT_MODE_LABELS[mode].toLowerCase()}`
+          : `Instalment ${instalment.instalmentNo}: expected mode cleared`,
+      );
+      await onSaved();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not change the expected mode.");
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <Select value={current ?? NOT_SET} onValueChange={(v) => void change(v)} disabled={saving}>
+      <SelectTrigger size="sm" className="w-[150px]" aria-label={`Expected mode for instalment ${instalment.instalmentNo}`}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value={NOT_SET}>Not set</SelectItem>
+        {PAYMENT_MODES.map((m) => (
+          <SelectItem key={m} value={m}>
+            {PAYMENT_MODE_LABELS[m]}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
 
 export function ContractPaymentsPanel({
   contractId,
@@ -214,12 +273,13 @@ export function ContractPaymentsPanel({
         bodyClassName="pb-2"
       >
         <div className="overflow-x-auto">
-          <Table className="min-w-[860px]">
+          <Table className="min-w-[1000px]">
             <TableHeader>
               <TableRow>
                 <TableHead className="w-12 pl-5">#</TableHead>
                 <TableHead>Instalment</TableHead>
                 <TableHead>Due</TableHead>
+                <TableHead>Expected mode</TableHead>
                 <TableHead className="text-right">Total</TableHead>
                 <TableHead className="text-right">Received</TableHead>
                 <TableHead className="text-right">Outstanding</TableHead>
@@ -246,6 +306,9 @@ export function ContractPaymentsPanel({
                     ) : null}
                   </TableCell>
                   <TableCell className="text-sm tabular-nums">{formatContractDate(i.dueDate)}</TableCell>
+                  <TableCell>
+                    <ExpectedModeCell contractId={contractId} instalment={i} editable={permissions.canRecord} onSaved={reload} />
+                  </TableCell>
                   <TableCell className="text-right">
                     <Money value={i.total} className="text-sm" />
                   </TableCell>

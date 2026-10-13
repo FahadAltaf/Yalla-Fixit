@@ -516,7 +516,7 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
       const submissionId = form.getValues("submissionId");
       if (!submissionId) throw new Error("The draft hasn't been saved yet.");
 
-      const { outcome } = await amcSubmissionsService.decide({
+      const { outcome, warning } = await amcSubmissionsService.decide({
         action: "submit",
         id: submissionId,
       });
@@ -541,6 +541,8 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
               : "No approval needed. Share it with the client now."
           : "Sent for approval. Nothing goes to the client until the approver has reviewed it.",
       );
+      /* Submitted, but worth knowing (e.g. a commercial proposal without its site visit). */
+      if (warning) toast.warning(warning);
       // Its own page: what was sent, and where it stands now. The button
       // stays busy until that page replaces this one.
       leaving = true;

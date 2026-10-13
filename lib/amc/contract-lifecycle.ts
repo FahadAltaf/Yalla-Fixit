@@ -221,11 +221,21 @@ export const MATERIAL_LABELS = {
   all: "All materials",
 } as const;
 
+/* To-do 2 (BRD 6.8): snooze the contract follow-up for a few days, saying why. */
+export const snoozeFollowUpSchema = z
+  .object({
+    action: z.literal("snooze_follow_up"),
+    days: z.number().int().min(1).max(14),
+    reason: z.string().trim().min(3, "Say why it can wait").max(500),
+  })
+  .strict();
+
 export const lifecycleActionSchema = z.discriminatedUnion("action", [
   activationSchema,
   statusChangeSchema,
   scanSchema,
   signSchema,
   entitlementTermsSchema,
+  snoozeFollowUpSchema,
 ]);
 export type LifecycleAction = z.infer<typeof lifecycleActionSchema>;

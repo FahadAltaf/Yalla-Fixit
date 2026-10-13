@@ -204,6 +204,21 @@ interface VisitContext {
   durationMinutes: number;
   headcount: number;
   accessRuleCount: number;
+  accessRules: AccessRuleView[];
+}
+
+/** A property access rule, as the visit shows it: what is needed, from whom, how early, when. */
+export interface AccessRuleView {
+  accessType: string;
+  issuer: string | null;
+  leadTimeDays: number | null;
+  permittedDays: string[];
+  permittedFrom: string | null;
+  permittedTo: string | null;
+  parking: string | null;
+  contactName: string | null;
+  contactPhone: string | null;
+  notes: string | null;
 }
 
 async function loadVisitContext(admin: Admin, visitId: string, date: string | null, config: AmcConfig): Promise<VisitContext> {
@@ -219,7 +234,11 @@ async function loadVisitContext(admin: Admin, visitId: string, date: string | nu
       : Promise.resolve({ data: [] as Row[] }),
     propertyId ? admin.from("amc_scope_items").select("service_id, trade").eq("property_id", propertyId).eq("active", true) : Promise.resolve({ data: [] as Row[] }),
     propertyId
-      ? admin.from("amc_property_access_rules").select("access_type, issuer").eq("property_id", propertyId).eq("active", true)
+      ? admin
+          .from("amc_property_access_rules")
+          .select("access_type, issuer, lead_time_days, permitted_days, permitted_from, permitted_to, parking, contact_name, contact_phone, notes")
+          .eq("property_id", propertyId)
+          .eq("active", true)
       : Promise.resolve({ data: [] as Row[] }),
   ]);
   const unitsOf = new Map(((entitlements ?? []) as Row[]).map((e) => [String(e.id), Number(e.units) || 1]));
@@ -251,6 +270,18 @@ async function loadVisitContext(admin: Admin, visitId: string, date: string | nu
     durationMinutes: crew.durationMinutes,
     headcount: crew.headcount,
     accessRuleCount: ((rules ?? []) as Row[]).length,
+    accessRules: ((rules ?? []) as Row[]).map((r) => ({
+      accessType: String(r.access_type),
+      issuer: str(r.issuer),
+      leadTimeDays: r.lead_time_days === null || r.lead_time_days === undefined ? null : Number(r.lead_time_days),
+      permittedDays: strings(r.permitted_days),
+      permittedFrom: str(r.permitted_from),
+      permittedTo: str(r.permitted_to),
+      parking: str(r.parking),
+      contactName: str(r.contact_name),
+      contactPhone: str(r.contact_phone),
+      notes: str(r.notes),
+    })),
   };
 }
 
@@ -743,6 +774,8 @@ export interface VisitDetail extends BoardVisit {
   accessDocumentId: string | null;
   lines: VisitContext["lines"];
   need: { trades: Trade[]; durationMinutes: number; headcount: number; accessTypes: string[] };
+  /* Every access rule of the property (gate pass, permit, lift, keys...), not only the clearances. */
+  accessRules: AccessRuleView[];
   rule: { attemptCount: number; attemptIntervalDays: number; attemptChannels: string[] };
   attempts: Array<{ id: string; attemptNo: number; channel: string; outcome: AttemptOutcome; note: string | null; attemptedAt: string; actorLabel: string | null }>;
   attemptState: ReturnType<typeof attemptState>;
@@ -792,6 +825,7 @@ export async function visitDetail(admin: Admin, visitId: string, config: AmcConf
     accessDocumentId: str(v.access_document_id),
     lines: ctx.lines,
     need: { trades: ctx.need.trades, durationMinutes: ctx.durationMinutes, headcount: ctx.headcount, accessTypes: ctx.need.accessTypes },
+    accessRules: ctx.accessRules,
     rule,
     attempts: list,
     attemptState: attemptState(list, rule, now),
@@ -894,6 +928,17 @@ export async function performVisitAction(
       return { ok: true, outcome, message: msg.text, whatsapp: action.channel === "whatsapp" && msg.phone ? whatsappUrl(msg.phone, msg.text) : null };
     }
     case "attempt": {
+      if (action.outcome === "no_answer" || action.outcome === "message_sent") {
+        const { data: earlier } = await admin.from("amc_visit_attempts").select("outcome, attempted_at").eq("visit_id", visitId);
+        const before = attemptState(
+          ((earlier ?? []) as Row[]).map((a) => ({ outcome: a.outcome as AttemptOutcome, attemptedAt: String(a.attempted_at) })),
+          ruleOf(ctx.contract, config),
+          now,
+        );
+        if (before.nextAllowedAt) {
+          throw new ContractError(`The contract asks for ${ruleOf(ctx.contract, config).attemptIntervalDays} day(s) between attempts: the next one from ${fmtDate(before.nextAllowedAt.slice(0, 10))}.`, 409);
+        }
+      }
       await logAttempt(action.channel, action.outcome, action.note);
       const changes: Row = { updated_at: nowIso };
       if (action.outcome === "confirmed") {
@@ -948,6 +993,15 @@ export async function performVisitAction(
         const ok = doc && ((doc.level === "visit" && String(doc.entity_id) === visitId) || (doc.level === "contract" && String(doc.entity_id) === contractId));
         if (!ok) throw new ContractError("Upload the pass to this visit or its contract first.", 400);
       }
+      const waiting = ["scheduled", "rescheduled", "confirmed", "not_scheduled"].includes(String(v.status));
+      const statusChange =
+        action.status === "pending" || action.status === "rejected" || action.status === "expired"
+          ? waiting
+            ? { status: "pending_access" }
+            : {}
+          : v.status === "pending_access"
+            ? { status: v.client_confirmation === "confirmed" ? "confirmed" : v.scheduled_start ? "scheduled" : "not_scheduled" }
+            : {};
       const { error } = await admin
         .from("amc_visits")
         .update({
@@ -955,6 +1009,7 @@ export async function performVisitAction(
           access_valid_until: action.validUntil ?? null,
           access_document_id: action.documentId ?? str(v.access_document_id),
           access_note: action.note,
+          ...statusChange,
           updated_at: nowIso,
         })
         .eq("id", visitId);
@@ -1019,6 +1074,28 @@ export async function runVisitSweep(admin: Admin, config: AmcConfig, now = new D
           .update({ client_confirmation: str(v.client_confirmation) ?? "pending", access_status: accessStatus ?? "not_required" })
           .eq("id", visitId);
         v.access_status = accessStatus ?? "not_required";
+        /* To-do 3 (BRD 6.8): service, access rule and allowance balance in the to-do itself. */
+        const visitLines = ((v.lines ?? []) as Row[]).filter((l) => l.status !== "cancelled");
+        const [{ data: rulesForTodo }, { data: entsForTodo }] = await Promise.all([
+          c.property_id
+            ? admin.from("amc_property_access_rules").select("access_type, issuer, lead_time_days").eq("property_id", String(c.property_id)).eq("active", true)
+            : Promise.resolve({ data: [] as Row[] }),
+          visitLines.length
+            ? admin.from("amc_contract_entitlements").select("service_label, included_quantity, used_quantity, reserved_quantity").in("id", visitLines.map((l) => String(l.entitlement_id)))
+            : Promise.resolve({ data: [] as Row[] }),
+        ]);
+        const accessText = ((rulesForTodo ?? []) as Row[])
+          .map((r) => `${String(r.access_type).replace(/_/g, " ")}${str(r.issuer) ? ` (${str(r.issuer)})` : ""}${r.lead_time_days ? `, ${String(r.lead_time_days)} days ahead` : ""}`)
+          .join("; ");
+        const balanceText = ((entsForTodo ?? []) as Row[])
+          .filter((e) => e.included_quantity !== null && e.included_quantity !== undefined)
+          .map((e) => `${String(e.service_label)} ${Math.max(0, Number(e.included_quantity) - Number(e.used_quantity ?? 0) - Number(e.reserved_quantity ?? 0))} of ${String(e.included_quantity)} left`)
+          .join("; ");
+        const todoDetail = [
+          `Services: ${visitLines.map((l) => String(l.service_label)).join(", ") || "—"}.`,
+          `Access: ${accessText || "no rule recorded"}.`,
+          `Allowance: ${balanceText || "not counted"}.`,
+        ].join(" ");
         if (owner) {
           await openAmcTodo(
             admin,
@@ -1028,7 +1105,7 @@ export async function runVisitSweep(admin: Admin, config: AmcConfig, now = new D
               entityId: visitId,
               dedupeKey: `ppm_confirmation:${visitId}`,
               title: `Confirm PPM visit: ${label}`,
-              description: `${String(c.customer_name ?? "")}, ${String(c.property_label ?? "")}: window ${fmtDate(String(v.window_start))} to ${fmtDate(String(v.window_end))}. Send the confirmation request, log each attempt, confirm the date and time.`,
+              description: `${String(c.customer_name ?? "")}, ${String(c.property_label ?? "")}: window ${fmtDate(String(v.window_start))} to ${fmtDate(String(v.window_end))}. ${todoDetail} Send the confirmation request, log each attempt, confirm the date and time.`,
               ownerId: owner,
               assigneeIds: [owner],
               dueAt: new Date(Date.parse(`${String(v.window_start)}T08:00:00${DUBAI}`)).toISOString(),

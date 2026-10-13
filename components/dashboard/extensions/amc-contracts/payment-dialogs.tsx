@@ -9,6 +9,7 @@ import {
   EllipsisVertical,
   ExternalLink,
   HandCoins,
+  Megaphone,
   Landmark,
   Play,
   Replace,
@@ -34,8 +35,10 @@ import { Label } from "@/components/ui/label";
 import { Money } from "@/components/ui/money";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { DOCUMENT_CATEGORIES } from "@/lib/amc/client-profile";
 import { todayInDubai } from "@/lib/amc/contracts";
 import { PAYMENT_MODE_LABELS } from "@/lib/amc/payments";
+import { clientProfileService } from "@/modules/amc-contracts/client-profile-service";
 import {
   paymentsService,
   type ChequeRecord,
@@ -47,6 +50,7 @@ import {
 
 import { formatContractDate } from "./contract-status";
 import { isSettled } from "./payment-status";
+import { StaffSelect } from "./people-pickers";
 
 /**
  * Every AMC payment dialog (Phase 7), owned by whichever screen offers the
@@ -61,7 +65,7 @@ type ChequeTarget = Pick<ChequeRecord, "id" | "chequeNo" | "bank" | "amount" | "
 type PaymentTarget = Pick<PaymentRecord, "id" | "amount" | "mode" | "receivedOn">;
 
 export type PaymentDialogRequest =
-  | { kind: "record_payment" | "record_cheque" | "write_off" | "waive"; instalment: InstalmentTarget }
+  | { kind: "record_payment" | "record_cheque" | "write_off" | "waive" | "escalate"; instalment: InstalmentTarget }
   | { kind: "cheque_deposit" | "cheque_clear" | "cheque_bounce" | "cheque_replace" | "cheque_return"; cheque: ChequeTarget }
   | { kind: "void_payment" | "handover"; payment: PaymentTarget }
   | { kind: "override_gate" };
@@ -120,7 +124,14 @@ export function usePaymentDialogs(onChanged: () => unknown) {
 
   const dialogs = (
     <>
-      <RecordPaymentDialog open={openKind === "record_payment"} onOpenChange={close} instalment={instalment} submit={submit} />
+      <RecordPaymentDialog
+        open={openKind === "record_payment"}
+        onOpenChange={close}
+        contractId={current?.contractId ?? null}
+        instalment={instalment}
+        submit={submit}
+      />
+      <EscalateDialog open={openKind === "escalate"} onOpenChange={close} instalment={instalment} submit={submit} />
       <ChequeDialog
         open={openKind === "record_cheque" || openKind === "cheque_replace"}
         onOpenChange={close}
@@ -191,6 +202,8 @@ export function InstalmentActions({
 }) {
   if (isSettled(instalment.status)) return null;
   const collect = permissions.canRecord && instalment.outstanding > 0;
+  /* To-do 6 (BRD 6.8): a late or bounced instalment can go to management before the automatic escalation. */
+  const escalate = permissions.canRecord && (instalment.status === "overdue" || instalment.status === "bounced");
   if (!permissions.canRecord && !permissions.canApprove) return null;
   return (
     <RowMenu label={`Actions for instalment ${instalment.instalmentNo}`}>
@@ -210,6 +223,12 @@ export function InstalmentActions({
         <DropdownMenuItem disabled={dialogs.reminding === instalment.id} onClick={() => void dialogs.sendReminder(contractId, instalment)}>
           <BellRing className="size-4" />
           {dialogs.reminding === instalment.id ? "Sending…" : "Send reminder"}
+        </DropdownMenuItem>
+      ) : null}
+      {escalate ? (
+        <DropdownMenuItem onClick={() => dialogs.open(contractId, { kind: "escalate", instalment })}>
+          <Megaphone className="size-4" />
+          Escalate
         </DropdownMenuItem>
       ) : null}
       {permissions.canApprove ? (
@@ -404,7 +423,16 @@ function amountOk(value: string): boolean {
 const amountText = (n: number | undefined) => (n && n > 0 ? String(Math.round(n * 100) / 100) : "");
 const orNull = (v: string) => (v.trim() ? v.trim() : null);
 
-function RecordPaymentDialog({ open, onOpenChange, instalment, submit }: BaseProps & { instalment: InstalmentTarget | null }) {
+/* Payment proofs file under their own category once AMC Settings offers it; until then under Other. */
+const PROOF_CATEGORY = DOCUMENT_CATEGORIES.contract.includes("Payment proof") ? "Payment proof" : "Other";
+
+function RecordPaymentDialog({
+  open,
+  onOpenChange,
+  contractId,
+  instalment,
+  submit,
+}: BaseProps & { contractId: string | null; instalment: InstalmentTarget | null }) {
   const [mode, setMode] = useState<"cash" | "transfer" | "link">("transfer");
   const [amount, setAmount] = useState("");
   const [receivedOn, setReceivedOn] = useState(todayInDubai());
@@ -412,6 +440,11 @@ function RecordPaymentDialog({ open, onOpenChange, instalment, submit }: BasePro
   const [valueDate, setValueDate] = useState("");
   const [receiptNo, setReceiptNo] = useState("");
   const [notes, setNotes] = useState("");
+  /* Cash: who took it (left empty, whoever records it). Transfer: the client's proof, kept with the contract. */
+  const [collectorId, setCollectorId] = useState<string | null>(null);
+  const [proof, setProof] = useState<File | null>(null);
+  /* An upload that went through stays uploaded if the payment then fails, so a retry does not file it twice. */
+  const [uploaded, setUploaded] = useState<{ file: File; documentId: string } | null>(null);
   const { busy, run } = useSubmitting();
 
   useResetOnOpen(open, () => {
@@ -422,13 +455,32 @@ function RecordPaymentDialog({ open, onOpenChange, instalment, submit }: BasePro
     setValueDate("");
     setReceiptNo("");
     setNotes("");
+    setCollectorId(null);
+    setProof(null);
+    setUploaded(null);
   });
 
   const needsReference = mode === "transfer" && !reference.trim();
   const ready = !!instalment && amountOk(amount) && !!receivedOn && !needsReference;
   const save = () =>
-    run(() =>
-      submit(
+    run(async () => {
+      let proofDocumentId: string | null = null;
+      if (mode === "transfer" && proof && contractId) {
+        if (uploaded?.file === proof) {
+          proofDocumentId = uploaded.documentId;
+        } else {
+          const { document } = await clientProfileService.uploadDocument({
+            file: proof,
+            level: "contract",
+            entityId: contractId,
+            category: PROOF_CATEGORY,
+            title: `Payment proof, instalment ${instalment!.instalmentNo}${reference.trim() ? ` (${reference.trim()})` : ""}`,
+          });
+          proofDocumentId = document.id;
+          setUploaded({ file: proof, documentId: document.id });
+        }
+      }
+      await submit(
         {
           action: "record_payment",
           instalmentId: instalment!.id,
@@ -438,11 +490,13 @@ function RecordPaymentDialog({ open, onOpenChange, instalment, submit }: BasePro
           reference: orNull(reference),
           valueDate: valueDate || null,
           receiptNo: orNull(receiptNo),
+          collectorId: mode === "cash" ? collectorId : null,
+          proofDocumentId,
           notes: orNull(notes),
         },
         `Payment recorded against instalment ${instalment!.instalmentNo}`,
-      ),
-    );
+      );
+    });
 
   return (
     <Shell
@@ -497,6 +551,22 @@ function RecordPaymentDialog({ open, onOpenChange, instalment, submit }: BasePro
           <Input id="pay-receipt" value={receiptNo} onChange={(e) => setReceiptNo(e.target.value)} maxLength={60} />
         </Field>
       </div>
+      {mode === "cash" ? (
+        <Field id="pay-collector" label="Collected by" hint="Who took the cash from the client. They hand it over to Finance later.">
+          <StaffSelect id="pay-collector" value={collectorId} onChange={setCollectorId} noneLabel="You (recording it)" disabled={busy} />
+        </Field>
+      ) : null}
+      {mode === "transfer" ? (
+        <Field id="pay-proof" label="Proof of transfer (optional)" hint="The client's transfer slip or bank screenshot, kept with the contract's documents.">
+          <Input
+            id="pay-proof"
+            type="file"
+            accept=".pdf,.png,.jpg,.jpeg,.webp"
+            disabled={busy || !contractId}
+            onChange={(e) => setProof(e.target.files?.[0] ?? null)}
+          />
+        </Field>
+      ) : null}
       <Field id="pay-notes" label="Notes (optional)">
         <Textarea id="pay-notes" rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={500} />
       </Field>
@@ -849,6 +919,57 @@ function HandoverDialog({ open, onOpenChange, payment, submit }: BaseProps & { p
       ) : null}
       <Field id="handover-to" label="Handed to">
         <Input id="handover-to" value={to} onChange={(e) => setTo(e.target.value)} maxLength={120} placeholder="Name in Finance" />
+      </Field>
+    </Shell>
+  );
+}
+
+/** A late or bounced instalment sent up to management now, with an optional note for them. */
+function EscalateDialog({ open, onOpenChange, instalment, submit }: BaseProps & { instalment: InstalmentTarget | null }) {
+  const [note, setNote] = useState("");
+  const { busy, run } = useSubmitting();
+  useResetOnOpen(open, () => setNote(""));
+
+  return (
+    <Shell
+      open={open}
+      onOpenChange={onOpenChange}
+      busy={busy}
+      title={`Escalate instalment ${instalment?.instalmentNo ?? ""}`}
+      description="Management is told now and added to the overdue to-do, without waiting for the automatic escalation."
+      footer={
+        <SubmitButton
+          pending={busy}
+          pendingLabel="Escalating…"
+          icon={<Megaphone className="size-4" />}
+          disabled={!instalment}
+          onClick={() =>
+            void run(() =>
+              submit(
+                { action: "escalate", instalmentId: instalment!.id, note: orNull(note) },
+                `Instalment ${instalment!.instalmentNo} escalated to management`,
+              ),
+            )
+          }
+        >
+          Escalate
+        </SubmitButton>
+      }
+    >
+      {instalment ? (
+        <p className="text-muted-foreground text-sm">
+          <Money value={instalment.outstanding} /> owed, due {formatContractDate(instalment.dueDate)}.
+        </p>
+      ) : null}
+      <Field id="escalate-note" label="Note (optional)">
+        <Textarea
+          id="escalate-note"
+          rows={3}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          maxLength={500}
+          placeholder="e.g. Client not answering since the cheque bounced"
+        />
       </Field>
     </Shell>
   );

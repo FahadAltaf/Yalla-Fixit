@@ -31,6 +31,7 @@ import { CustomerDialog } from "./customers-page";
 import { ClientPaymentsPanel } from "./payments-page";
 import { PropertyFields, UNIT_TYPE_LABELS, cleanProperty } from "./customer-pickers";
 import { useAmcData } from "./use-amc-data";
+import { AdditionalWorkTotalsCard, ClientSchedulePanel, ServiceHistoryPanel } from "./profile/client-history-panels";
 import { CommunicationPanel } from "./profile/communication-panel";
 import { ContactsPanel } from "./profile/contacts-panel";
 import { DetailList } from "./profile/detail-list";
@@ -284,13 +285,13 @@ function StartAssessmentButton({ customerId, propertyId }: { customerId: string 
 
 /* ------------------------------------------------------------------ */
 
-const CUSTOMER_TABS = ["overview", "properties", "contracts", "payments", "visits", "contacts", "documents", "communication"] as const;
+const CUSTOMER_TABS = ["overview", "properties", "contracts", "schedule", "service", "payments", "visits", "contacts", "documents", "communication"] as const;
 
 /**
  * The client profile (BRD 5.9, DEV-379), one page per client like the
  * Snagging job page: a header card, the figures, then tabs kept in ?tab=,
- * each mounted once opened. Payments, the PPM schedule and service history
- * join as their phases land.
+ * each mounted once opened. The PPM schedule and the service history span
+ * all the client's contracts.
  */
 export function CustomerDetail({ id }: { id: string }) {
   const router = useRouter();
@@ -407,6 +408,8 @@ export function CustomerDetail({ id }: { id: string }) {
             Contracts
             <TabCount value={contracts.length} />
           </TabsTrigger>
+          <TabsTrigger value="schedule">Schedule</TabsTrigger>
+          <TabsTrigger value="service">Service history</TabsTrigger>
           {canViewPayments ? <TabsTrigger value="payments">Payments</TabsTrigger> : null}
           <TabsTrigger value="visits">
             Site visits
@@ -473,11 +476,14 @@ export function CustomerDetail({ id }: { id: string }) {
             <SectionCard title="Contracts" description="Each contract separately; a client can have several." icon={<ScrollText />} bodyClassName="border-t">
               <ContractsTable contracts={contracts} />
             </SectionCard>
+            <AdditionalWorkTotalsCard customerId={customer.id} />
             <SectionCard title="Additional-service quotes" icon={<Receipt />} bodyClassName="border-t">
               <QuotesList quotes={quotes} />
             </SectionCard>
           </>,
         )}
+        {panel("schedule", <ClientSchedulePanel customerId={customer.id} />)}
+        {panel("service", <ServiceHistoryPanel customerId={customer.id} />)}
         {canViewPayments ? panel("payments", <ClientPaymentsPanel clientId={customer.id} />) : null}
         {panel(
           "visits",

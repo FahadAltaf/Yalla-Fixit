@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import type { AmcConfig } from "@/lib/amc/config";
+import { approversForLevel, type AmcConfig } from "@/lib/amc/config";
 import { fillTemplate, whatsappUrl } from "@/lib/amc/approval-ladder";
 import { termMonthsBetween, todayInDubai } from "@/lib/amc/contracts";
 import { templateText } from "@/lib/amc/message-templates";
@@ -833,6 +833,36 @@ export async function performPaymentAction(
       const sent = await sendInstalmentReminder(admin, c, i, "manual", config, actor, now);
       return { ok: true, outcome: sent.outcome, message: sent.message, whatsapp: sent.whatsapp };
     }
+    case "escalate": {
+      const i = await instalmentOf(admin, contractId, action.instalmentId);
+      const management = approversForLevel(config, 2).length ? approversForLevel(config, 2) : approversForLevel(config, 1);
+      const { data: link } = await admin.from("amc_todos").select("id, todo_id").eq("dedupe_key", `installment_overdue:${action.instalmentId}`).maybeSingle<Row>();
+      if (link?.todo_id && management.length) {
+        await admin
+          .from("todo_assignees")
+          .upsert(management.map((userId) => ({ todo_id: String(link.todo_id), user_id: userId })), { onConflict: "todo_id,user_id", ignoreDuplicates: true });
+        await admin.from("amc_todos").update({ escalated_at: now.toISOString() }).eq("id", String(link.id)).is("escalated_at", null);
+      }
+      await notifyUsers(admin, {
+        event: "todo_escalated",
+        userIds: management.filter((id) => id !== actor.id),
+        title: `Escalated: instalment overdue on ${reference(c)}`,
+        body: `${String(c.customer_name ?? "")}: instalment ${String(i.instalment_no)}, AED ${aed(num(i.total) - num(i.received_amount))} owed, due ${fmtDate(String(i.due_date))}.${action.note ? ` ${action.note}` : ""}`,
+        link: contractLink(contractId),
+        entityType: "contract",
+        entityId: contractId,
+        contractId,
+        dedupeKey: `instalment_escalated:${action.instalmentId}:${now.toISOString().slice(0, 10)}`,
+      });
+      await audit("instalment_escalated", { instalmentId: action.instalmentId, note: action.note ?? null });
+      return { ok: true };
+    }
+    case "set_expected_mode": {
+      await instalmentOf(admin, contractId, action.instalmentId);
+      const { error } = await admin.from("amc_instalments").update({ expected_mode: action.mode, updated_at: now.toISOString() }).eq("id", action.instalmentId).eq("contract_id", contractId);
+      if (error) throw new ContractError(error.message, 400);
+      return { ok: true };
+    }
   }
 }
 
@@ -1024,6 +1054,10 @@ export async function runPaymentSweep(admin: Admin, config: AmcConfig, now = new
       });
       const owner = ownerOf(c);
       if (owner) {
+        const { data: chequesFor } = await admin.from("amc_cheques").select("cheque_no, bank, cheque_date, amount, status").eq("instalment_id", String(raw.id));
+        const chequeText = ((chequesFor ?? []) as Row[])
+          .map((ch) => `cheque ${String(ch.cheque_no)} (${String(ch.bank)}, ${fmtDate(String(ch.cheque_date))}, AED ${aed(num(ch.amount))}, ${String(ch.status)})`)
+          .join("; ");
         await openAmcTodo(
           admin,
           {
@@ -1032,7 +1066,7 @@ export async function runPaymentSweep(admin: Admin, config: AmcConfig, now = new
             entityId: String(raw.id),
             dedupeKey: `installment_overdue:${String(raw.id)}`,
             title: `Instalment overdue: ${reference(c)} #${String(row.instalment_no)}`,
-            description: `${String(c.customer_name ?? "")}: AED ${aed(owed)} was due on ${fmtDate(String(row.due_date))}. Send a reminder, record the payment, a bounce or a replacement, or escalate.`,
+            description: `${String(c.customer_name ?? "")}: AED ${aed(owed)} was due on ${fmtDate(String(row.due_date))} (${days} days overdue). ${chequeText ? `Cheques: ${chequeText}. ` : "No cheque recorded. "}Send a reminder, record the payment, a bounce or a replacement, or escalate.`,
             ownerId: owner,
             assigneeIds: who,
             dueAt: new Date(now.getTime() + 86_400_000).toISOString(),

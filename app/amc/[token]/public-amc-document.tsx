@@ -65,6 +65,7 @@ type PublicStatus = {
   finalPrice: number;
   signedByName: string | null;
   signedAt: string | null;
+  validUntil?: string | null;
 };
 
 type Action = "approve" | "reject" | "revision" | "sign";
@@ -303,7 +304,9 @@ export function PublicAmcDocument({ token }: { token: string }) {
         {
           label: period ? "Contract period" : "Sent",
           value: period ?? sentOn ?? "—",
-          hint: period && sentOn ? `Sent ${sentOn}` : undefined,
+          hint: [period && sentOn ? `Sent ${sentOn}` : null, doc.validUntil ? `Proposal valid until ${formatClientDate(doc.validUntil)}` : null]
+            .filter(Boolean)
+            .join(" · ") || undefined,
         },
       ]}
     >

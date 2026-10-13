@@ -521,6 +521,23 @@ export async function activateSignedContract(
   return { status: target, endDate };
 }
 
+/** Snoozes the open contract follow-up to-do: its deadline and escalation move on by the days given. */
+export async function snoozeContractFollowUp(admin: Admin, contractId: string, input: { days: number; reason: string }, actor: { id: string; label: string | null }) {
+  const { data: link } = await admin
+    .from("amc_todos")
+    .select("id, todo_id, escalate_at, due_at")
+    .eq("dedupe_key", `contract_follow_up:${contractId}`)
+    .is("closed_at", null)
+    .maybeSingle<Row>();
+  if (!link) throw new ContractError("There is no open follow-up to-do on this contract.", 409);
+  const shift = (iso: unknown) => new Date(Math.max(Date.parse(String(iso ?? new Date().toISOString())), Date.now()) + input.days * 86_400_000).toISOString();
+  const dueAt = shift(link.due_at);
+  await admin.from("amc_todos").update({ escalate_at: shift(link.escalate_at), due_at: dueAt, escalated_at: null }).eq("id", String(link.id));
+  if (link.todo_id) await admin.from("todos").update({ deadline_at: dueAt }).eq("id", String(link.todo_id));
+  await recordAmcAudit(admin, { entityType: "contract", entityId: contractId, eventType: "follow_up_snoozed", actorId: actor.id, actorLabel: actor.label, justification: input.reason, payload: { days: input.days, until: dueAt } });
+  return { ok: true as const, until: dueAt };
+}
+
 export async function changeContractStatus(admin: Admin, contractId: string, input: { to: ManualStatusTarget; reason: string }, actor: { id: string; label: string | null }) {
   const c = await contractRow(admin, { id: contractId });
   if (!c) throw new ContractError("Contract not found.", 404);
@@ -558,6 +575,37 @@ export async function updateEntitlementTerms(
   if (error) throw new ContractError(error.code === "42703" ? LIFECYCLE_NOT_MIGRATED : error.message, error.code === "42703" ? 503 : 500);
   if (!data?.length) throw new ContractError("Service not found on this contract.", 404);
   await recordAmcAudit(admin, { entityType: "contract", entityId: contractId, eventType: "entitlement_terms_changed", actorId: actor.id, actorLabel: actor.label, payload: input });
+  await mirrorTermsToDocument(admin, contractId, String(c.submission_id ?? ""));
+}
+
+/**
+ * The contract document prints what each service covers (BRD 5.7, DEV-373).
+ * The document is rendered from the proposal, so the terms are copied into
+ * its document options, keyed by service, every time they change before
+ * activation. Best effort: the contract entitlements stay the record.
+ */
+async function mirrorTermsToDocument(admin: Admin, contractId: string, submissionId: string) {
+  if (!submissionId) return;
+  const [{ data: ents }, { data: sub }] = await Promise.all([
+    admin.from("amc_contract_entitlements").select("service_id, labour_covered, material_coverage, value_limit_aed, exclusions").eq("contract_id", contractId),
+    admin.from("amc_submissions").select("document_options").eq("id", submissionId).maybeSingle<Row>(),
+  ]);
+  if (!ents || !sub) return;
+  const entitlementTerms = Object.fromEntries(
+    (ents as Row[]).map((e) => [
+      String(e.service_id),
+      {
+        labourCovered: e.labour_covered !== false,
+        materialCoverage: String(e.material_coverage ?? "consumables"),
+        valueLimitAed: e.value_limit_aed === null || e.value_limit_aed === undefined ? null : Number(e.value_limit_aed),
+        exclusions: typeof e.exclusions === "string" && e.exclusions.trim() ? e.exclusions : null,
+      },
+    ]),
+  );
+  await admin
+    .from("amc_submissions")
+    .update({ document_options: { ...((sub.document_options ?? {}) as Row), entitlementTerms } })
+    .eq("id", submissionId);
 }
 
 /* ------------------------------------------------------------------ */
@@ -594,8 +642,50 @@ const appUrl = () => (process.env.NEXT_PUBLIC_APP_URL ?? process.env.APP_URL ?? 
  * configured number of reminders. Each reminder is claimed before it is
  * sent, so overlapping runs send once.
  */
+/**
+ * A contract waiting for Yalla Fix It's own signature: the signatory whose
+ * turn it is hears every N unsigned days (the client's reminders are
+ * below). In-app; one per signatory per period.
+ */
+async function remindInternalSignatories(admin: Admin, config: AmcConfig, now: Date): Promise<number> {
+  const days = config.contracts.unsignedReminderDays;
+  const { data, error } = await admin
+    .from("amc_contracts")
+    .select("id, contract_number, customer_name, status_changed_at")
+    .eq("status", "pending_internal_signature")
+    .limit(200);
+  if (error) return 0;
+  let sent = 0;
+  for (const c of (data ?? []) as Row[]) {
+    const since = Date.parse(String(c.status_changed_at ?? now.toISOString()));
+    const waited = Math.floor((now.getTime() - since) / 86_400_000);
+    if (waited < days) continue;
+    const { signatories } = await listSignatories(admin, String(c.id));
+    const next = signatories.find((s) => s.party === "internal" && (s.status === "pending" || s.status === "waiting") && s.userId);
+    if (!next?.userId) continue;
+    const period = Math.floor(waited / days);
+    const n = await notifyUsers(admin, {
+      event: "contract_signature_needed",
+      userIds: [next.userId],
+      title: `Contract ${String(c.contract_number ?? "")} is waiting for your signature (${waited} days)`,
+      body: `${String(c.customer_name ?? "")}: the client has signed; it needs Yalla Fix It's signature.`,
+      link: `/extensions/amc-contracts/${String(c.id)}`,
+      entityType: "contract",
+      entityId: String(c.id),
+      contractId: String(c.id),
+      dedupeKey: `contract_signature_reminder:${String(c.id)}:${next.id}:${period}`,
+    });
+    if (n) sent += 1;
+  }
+  return sent;
+}
+
 export async function runUnsignedContractSweep(admin: Admin, config: AmcConfig, now = new Date()) {
-  const result = { checked: 0, reminded: 0, followUps: 0, skipped: null as string | null };
+  const result = { checked: 0, reminded: 0, followUps: 0, internalReminders: 0, skipped: null as string | null };
+  result.internalReminders = await remindInternalSignatories(admin, config, now).catch((e) => {
+    console.error("[amc:contract] internal signatory reminders failed:", e instanceof Error ? e.message : e);
+    return 0;
+  });
   const { data, error } = await admin
     .from("amc_contracts")
     .select(
@@ -630,7 +720,7 @@ export async function runUnsignedContractSweep(admin: Admin, config: AmcConfig, 
           title: `Contract ${String(c.contract_number ?? "")} not signed (${unsignedDays} days)`,
           description: `${String(c.customer_name ?? "")}: resend the contract, upload a signed scan, or record why it is waiting.`,
           ownerId,
-          assigneeIds: [ownerId],
+          assigneeIds: [ownerId, ...config.payments.financeUserIds],
           dueAt: new Date(now.getTime() + 86_400_000).toISOString(),
           escalateAt: new Date(now.getTime() + days * 86_400_000).toISOString(),
         },

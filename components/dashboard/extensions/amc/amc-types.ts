@@ -64,6 +64,19 @@ export const amcAccountManagerSchema = z.object({
   phone: z.string(),
 });
 
+/*
+  What each service covers on the contract (BRD 5.7, DEV-373), keyed by
+  service id. Set on the contract and mirrored into the proposal's
+  document options so the contract document can print it; absent on
+  proposals and on contracts made before it.
+*/
+export const amcEntitlementTermSchema = z.object({
+  labourCovered: z.boolean(),
+  materialCoverage: z.enum(["none", "consumables", "parts_within_limit", "all"]),
+  valueLimitAed: z.number().nullable(),
+  exclusions: z.string().nullable(),
+});
+
 export const amcServiceRowSchema = z.object({
   serviceId: z.string().min(1),
   included: z.boolean(),
@@ -146,6 +159,8 @@ export const amcFormSchema = z
     /* DEV-366: the payment plan; paymentTerms above is kept as its legacy reading. */
     paymentPlan: z.enum(PAYMENT_PLANS).optional(),
     paymentPlanCustom: customPlanSchema.nullable().optional(),
+    /* Read from document_options; only the contract document prints it. */
+    entitlementTerms: z.record(z.string(), amcEntitlementTermSchema).optional(),
     /* Allocated by the server on first save (step 1.7), so the user is
        never asked for it and cannot collide it. Empty until then. */
     proposalNumber: z.string(),
@@ -268,6 +283,7 @@ export type AmcServiceRow = z.infer<typeof amcServiceRowSchema>;
 export type AmcOptionalSections = z.infer<typeof amcOptionalSectionsSchema>;
 export type AmcPriceListRow = z.infer<typeof amcPriceListRowSchema>;
 export type AmcAccountManager = z.infer<typeof amcAccountManagerSchema>;
+export type AmcEntitlementTerm = z.infer<typeof amcEntitlementTermSchema>;
 export type AmcFormData = z.infer<typeof amcFormSchema>;
 
 export type AmcServiceFrequencyType =
@@ -413,6 +429,8 @@ export interface AmcSubmissionDocumentOptions {
   optionalSections: AmcOptionalSections;
   priceListRows: AmcPriceListRow[];
   accountManagers: [AmcAccountManager, AmcAccountManager];
+  /* Mirrored from the contract's entitlements (server side) for the contract document. */
+  entitlementTerms?: Record<string, AmcEntitlementTerm>;
 }
 
 export interface AmcSubmissionCustomer {

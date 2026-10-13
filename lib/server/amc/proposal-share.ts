@@ -51,9 +51,15 @@ export async function proposalShareTexts(
   const plan = (row.payment_plan as PaymentPlan | null) ?? planFromLegacyTerms(customer.paymentTerms as string | undefined);
 
   let renewalLine: string | null = null;
+  let oldContract: { number: string; expiry: string } | null = null;
   if (row.renewal_of_contract_id) {
-    const { data } = await admin.from("amc_contracts").select("proposal_number, end_date").eq("id", String(row.renewal_of_contract_id)).maybeSingle<Row>();
-    if (data?.end_date) renewalLine = `Your contract ${String(data.proposal_number ?? "")} expires on ${fmtDate(String(data.end_date))}.`;
+    /* BRD 6.1: "Your contract {Old contract no} expires on {Expiry date}." The contract number (20261007160000), else the proposal number. */
+    const first = await admin.from("amc_contracts").select("contract_number, proposal_number, end_date").eq("id", String(row.renewal_of_contract_id)).maybeSingle<Row>();
+    const data = first.error ? (await admin.from("amc_contracts").select("proposal_number, end_date").eq("id", String(row.renewal_of_contract_id)).maybeSingle<Row>()).data : first.data;
+    if (data?.end_date) {
+      oldContract = { number: String(data.contract_number ?? data.proposal_number ?? ""), expiry: fmtDate(String(data.end_date)) };
+      renewalLine = `Your contract ${oldContract.number} expires on ${oldContract.expiry}.`;
+    }
   }
 
   const values = {
@@ -72,9 +78,14 @@ export async function proposalShareTexts(
     "Approval link": input.link,
     "Coordinator name": input.owner.name,
     "Coordinator phone": input.owner.phone || input.settings.provider.contactNo,
+    /* The renewal message (BRD 6.3). */
+    "Client name": String(customer.customerName ?? "").trim() || "customer",
+    "Old contract no": oldContract?.number ?? "",
+    "Expiry date": oldContract?.expiry ?? "",
   };
   const email = templateText("emailProposalShared", input.config.templates)!;
-  const whatsapp = templateText("messageProposalShared", input.config.templates)!;
+  /* A renewal is shared with its own message (BRD 6.3: renewal proposal). */
+  const whatsapp = templateText(oldContract ? "messageRenewalProposal" : "messageProposalShared", input.config.templates)!;
   return {
     subject: fillTemplate(email.subject ?? "", values),
     body: fillTemplate(email.body, values),
@@ -116,6 +127,47 @@ export async function recordSend(admin: Admin, entry: SendLogEntry): Promise<voi
     sent_by: entry.sentBy,
   });
   if (error && !isMissingTable(error)) console.error("[amc:share] send not logged:", error.message);
+  if (entry.outcome === "sent" || entry.outcome === "prepared") await logClientCommunication(admin, entry);
+}
+
+const SEND_SUBJECTS: Record<SendLogEntry["document"], string> = {
+  proposal: "Proposal shared (Email 1)",
+  contract: "Contract for signature (Email 2)",
+  instalment_reminder: "Instalment reminder (Email 4)",
+  visit_confirmation: "Appointment confirmation request",
+  visit_reminder: "Appointment reminder",
+  service_report: "Service report (Email 3)",
+  call_out_acknowledgement: "Call out acknowledgement",
+  additional_work_quotation: "Additional work quotation",
+  client_report: "Client report",
+};
+
+/**
+ * What the portal sends a client is in the client's communication log too
+ * (BRD 5.9), as a system entry beside what the team logs by hand. Best
+ * effort: a client not yet linked has no log to write to.
+ */
+async function logClientCommunication(admin: Admin, entry: SendLogEntry) {
+  const [{ data: p }, { data: c }] = await Promise.all([
+    admin.from("amc_submissions").select("customer_id, property_id").eq("id", entry.submissionId).maybeSingle<Row>(),
+    admin.from("amc_contracts").select("id, customer_id, property_id").eq("submission_id", entry.submissionId).maybeSingle<Row>(),
+  ]);
+  const customerId = (c?.customer_id ?? p?.customer_id ?? null) as string | null;
+  if (!customerId) return;
+  const to = entry.recipients.map((r) => r.address).filter(Boolean).join(", ");
+  const { error } = await admin.from("amc_communication_log").insert({
+    customer_id: customerId,
+    property_id: (c?.property_id ?? p?.property_id ?? null) as string | null,
+    contract_id: (c?.id ?? null) as string | null,
+    submission_id: entry.submissionId,
+    channel: entry.channel === "link" ? "portal" : entry.channel,
+    direction: "outbound",
+    subject: SEND_SUBJECTS[entry.document],
+    summary: `${entry.outcome === "prepared" ? "Prepared for sending" : "Sent"}${to ? ` to ${to}` : ""}${entry.detail ? `: ${entry.detail}` : ""}`.slice(0, 1000),
+    source: "system",
+    logged_by: entry.sentBy,
+  });
+  if (error && !isMissingTable(error) && error.code !== "42703") console.warn("[amc:share] communication not logged:", error.message);
 }
 
 export interface SendLogRow {

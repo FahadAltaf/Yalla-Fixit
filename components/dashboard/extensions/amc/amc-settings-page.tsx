@@ -349,7 +349,7 @@ const PROVIDER_TEXT_FIELDS: {
     { key: "address", label: "Company address", wide: true },
     { key: "standardResponseTime", label: "Standard response time", hint: "Printed in the proposal's commercial offer." },
     { key: "emergencyResponseTime", label: "Emergency response time", hint: "Printed in the proposal's commercial offer." },
-    { key: "proposalValidity", label: "Proposal validity", hint: "Kept for reference. Not printed on proposals yet; each proposal gets its own validity date in a later update." },
+    { key: "proposalValidity", label: "Proposal validity", hint: "Kept for reference only. Each proposal now gets its own valid-until date when it is shared (AMC configuration → Proposals → validity days), shown in Email 1 and on the client page; the client link stops accepting answers after it." },
   ];
 
 type View = "values" | "clauses" | "scopes" | "approvers" | "history";

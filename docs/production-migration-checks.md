@@ -840,3 +840,26 @@ Expected:
 - on a contract, request a hold, approve it as another user, and apply it: the contract shows On hold.
 
 **After applying:** check AMC configuration → Renewals: the lead time (30 to 60 days), management copied, the idle days before escalation, and the escalation percent on the draft. The daily AMC jobs now include `renewals`. It takes over the 60- and 30-day expiry notices and carries out scheduled terminations, so leave the old expiry reminder setting (AMC notification settings, automatic reminders) off, or owners get both.
+
+
+## 21. Phase 14 migration: `20261013100000_amc_status_history_triggers.sql`
+
+Apply after section 20 (it needs `amc_visits` from §14, `amc_instalments`/`amc_cheques` from §13 and `amc_visit_job_sheets` from §17). It is **live-safe**: four triggers and one function on AMC tables only.
+
+What it adds:
+- Every status change of a visit, job sheet, instalment or cheque writes a `status_changed` row to `amc_audit_events`, the same event the server writes for enquiries, proposals, contracts, call outs, additional works and amendments (BRD 6.9: who changed each status and when).
+- The actor comes from the row where it records one: `closed_by`, `reviewed_by`/`submitted_by`, `status_changed_by`, `recorded_by`. Otherwise it is recorded as the system.
+
+**Pre-check** (read-only):
+```sql
+select tgname from pg_trigger where tgname like 'amc_%status_history';
+```
+Expected: no rows.
+
+**Post-check** (read-only):
+```sql
+select tgname, tgrelid::regclass from pg_trigger where tgname like 'amc_%status_history' order by 1;
+```
+Expected: four triggers, on amc_cheques, amc_instalments, amc_visit_job_sheets and amc_visits.
+
+**Live check:** open AMC Proposals in the live portal; it works as before. In the demo portal, move a visit, for example by placing it on the board. Its contract's status history then shows the change.

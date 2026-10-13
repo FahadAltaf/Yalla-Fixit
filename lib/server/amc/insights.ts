@@ -20,6 +20,8 @@ import {
   signedValue,
   utilisation,
   visitBacklog,
+  visitsByMonth,
+  visitsByTechnician,
   workRevenue,
   workingDaysIn,
   type AllowanceFact,
@@ -202,6 +204,18 @@ export async function operationalReport(admin: Admin, who: Who, period: Period, 
     busyBlocks(admin, s.ids, period),
     admin.from("technician_reference").select("fsm_resource_id, display_name").eq("is_active", true).order("display_name"),
   ]);
+  /* Visits by month and technician (BRD 6.9), for visits whose target date is in the period. */
+  const periodVisits = await forContracts(admin, "amc_visits", "id, status, target_date, technician_ids", s.ids, (q) => q.gte("target_date", period.from).lte("target_date", period.to));
+  const attempts = new Map<string, number>();
+  const visitIds = periodVisits.map((v) => String(v.id));
+  for (let i = 0; i < visitIds.length; i += 200) {
+    const { data } = await admin.from("amc_visit_attempts").select("visit_id").in("visit_id", visitIds.slice(i, i + 200));
+    for (const a of (data ?? []) as Row[]) attempts.set(String(a.visit_id), (attempts.get(String(a.visit_id)) ?? 0) + 1);
+  }
+  const statusFacts = periodVisits
+    .filter((v) => v.status !== "cancelled")
+    .map((v) => ({ month: String(v.target_date).slice(0, 7), status: String(v.status), technicianIds: strings(v.technician_ids), attempts: attempts.get(String(v.id)) ?? 0 }));
+  const techNames = new Map(((techs ?? []) as Row[]).map((t) => [String(t.fsm_resource_id), String(t.display_name ?? t.fsm_resource_id)]));
   const chargeable = new Map<string, number>();
   for (const c of callOuts) if (c.coverage === "chargeable") chargeable.set(c.contractId, (chargeable.get(c.contractId) ?? 0) + 1);
   const workingDays = workingDaysIn(period.from, period.to, config.calendar.weekendDays, config.calendar.holidays.map((h) => h.date));
@@ -222,6 +236,8 @@ export async function operationalReport(admin: Admin, who: Who, period: Period, 
       workingDays,
     ).filter((t) => t.jobs > 0 || who.canApprove),
     workingDays,
+    visitsByMonth: visitsByMonth(statusFacts),
+    visitsByTechnician: visitsByTechnician(statusFacts, techNames),
     allowances: allowanceUse(s.entitlements, chargeable),
     accessFailures: accessFailures(
       lines.map((l) => ({ community: s.community.get(String(l.contract_id)) ?? null, outcomeGroup: str(l.outcome_group), outcomeReason: str(l.outcome_reason) })),

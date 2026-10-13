@@ -56,6 +56,7 @@ import {
 import type { BoardVisit } from "@/modules/amc-contracts/visits-service";
 
 import { formatContractDate, formatDateTime } from "./contract-status";
+import { StaffSelect } from "./people-pickers";
 import { VisitDetailDialog } from "./visit-detail-dialog";
 import {
   ACCESS_TONE,
@@ -980,8 +981,10 @@ function RulesDialog({ open, onOpenChange, rules, submit }: BaseProps & { rules:
   const [attemptCount, setAttemptCount] = useState("");
   const [intervalDays, setIntervalDays] = useState("");
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [escalationUserId, setEscalationUserId] = useState<string | null>(null);
   const { busy, run } = useSubmitting();
   useResetOnOpen(open, () => {
+    setEscalationUserId(rules.escalationUserId);
     setWindowDefault(!rules.own.windowDays);
     setWindowDays(String(rules.windowDays));
     setAttemptsDefault(!rules.own.attempts);
@@ -1007,8 +1010,7 @@ function RulesDialog({ open, onOpenChange, rules, submit }: BaseProps & { rules:
     attemptCount: attemptsDefault ? null : Number(attemptCount),
     attemptIntervalDays: attemptsDefault ? null : Number(intervalDays),
     attemptChannels: attemptsDefault ? null : channels,
-    /* No picker here yet: whoever is set stays set. */
-    escalationUserId: rules.escalationUserId,
+    escalationUserId,
   });
 
   return (
@@ -1096,6 +1098,13 @@ function RulesDialog({ open, onOpenChange, rules, submit }: BaseProps & { rules:
           </div>
           {!attemptsDefault && channels.length === 0 ? <p className="text-warning text-xs">Choose at least one channel.</p> : null}
         </div>
+        <Field
+          id="ppm-escalation-user"
+          label="Escalate no-answer to"
+          hint="Told, with the contract's owner, when every attempt is used up and the client still has not confirmed."
+        >
+          <StaffSelect id="ppm-escalation-user" value={escalationUserId} onChange={setEscalationUserId} noneLabel="Only the owner" disabled={busy} />
+        </Field>
       </div>
     </Shell>
   );

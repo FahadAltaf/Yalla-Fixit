@@ -47,6 +47,8 @@ export interface PublicStatus {
   finalPrice: number;
   signedByName: string | null;
   signedAt: string | null;
+  /* BRD 5.4: the proposal's validity (null for a contract, or before 20261007140000). */
+  validUntil: string | null;
 }
 
 export function toPublicStatus(row: PublicRow, kind: LinkKind): PublicStatus {
@@ -79,6 +81,7 @@ export function toPublicStatus(row: PublicRow, kind: LinkKind): PublicStatus {
     /* The signer sees their own signature recorded, nothing else. */
     signedByName: signed ? str(row.signed_by_name) : null,
     signedAt: signed ? str(row.signed_at) : null,
+    validUntil: open && kind === "proposal" ? str(row.valid_until) : null,
   };
 }
 

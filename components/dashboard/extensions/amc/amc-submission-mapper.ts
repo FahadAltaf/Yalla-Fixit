@@ -118,6 +118,10 @@ export function submissionToFormData(submission: AmcDocumentSource): AmcFormData
       { name: "", phone: "" },
       { name: "", phone: "" },
     ],
+    /* The contract's coverage terms, for the contract document only. */
+    ...(submission.document_options?.entitlementTerms
+      ? { entitlementTerms: submission.document_options.entitlementTerms }
+      : {}),
     customerName: submission.customer.customerName,
     customerId: submission.customer.customerId ?? "",
     customerPhone: submission.customer.customerPhone,

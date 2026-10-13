@@ -74,8 +74,9 @@ export const amcSubmissionsService = {
 
   decide: async (
     input: AmcApprovalAction,
-  ): Promise<{ submission: AmcSubmission; outcome?: AmcApprovalOutcome }> =>
-    executeRESTBackend<{ submission: AmcSubmission; outcome?: AmcApprovalOutcome }>(
+  ): Promise<{ submission: AmcSubmission; outcome?: AmcApprovalOutcome; warning?: string }> =>
+    /* warning: on submit, something worth knowing that did not stop it (BRD 5.2: a commercial proposal without its site visit). */
+    executeRESTBackend<{ submission: AmcSubmission; outcome?: AmcApprovalOutcome; warning?: string }>(
       "/api/amc-submissions/approval",
       { method: "POST", body: input as unknown as Record<string, unknown> },
     ),

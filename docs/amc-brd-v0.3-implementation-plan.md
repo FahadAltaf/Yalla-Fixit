@@ -719,6 +719,31 @@ Three changes the user asked for before Phase 7:
 
 **Done when:** the full demo runs in the demo app without errors, and the updated gap analysis shows no non-deferred gaps.
 
+**Status (13 Oct 2026):** done in code, migration `20261013100000_amc_status_history_triggers.sql` not applied (log row 29, checks §21).
+
+- **Completion sweep:**
+  - The four emails match BRD 6.1 word for word. Email 3's free non-emergency count and the renewal opening line's contract number were corrected.
+  - All 27 notifications are present.
+  - All 8 messages are used; the renewal message now has its own template.
+  - All 8 to-dos are opened, with the BRD's details, assignees, Snooze and Escalate actions, and links from the Todos screen.
+  - Status history covers every entity: database triggers for visits, job sheets, instalments and cheques.
+  - 6.9 visits are reported by month and technician with attempts.
+- **Gap analysis re-run** (`docs/amc-brd-v0.3-gap-analysis.md`, 13 Oct), line by line over all 542 rows:
+  - 495 implemented, 0 partial and 0 not implemented;
+  - 23 blocked on Phase 15 external systems, 8 on business decisions, 16 provided by FSM;
+  - so there are no non-deferred gaps.
+- **Rows closed in this phase (35):**
+  - asset and client service history; client schedule, cheques and payments received; additional-work totals per client;
+  - the FSM contact on the client profile; contract and visit documents;
+  - the site-visit rule and the minimum term checked on submit; validity enforced on the client link; approval escalation that the next level can decide, climbing;
+  - internal-signatory reminders; the coverage table in the contract document;
+  - payment collector, proof and expected mode;
+  - attempt interval, all access rules on the visit, Pending Access, the escalation recipient;
+  - call-out crew rules; the technician picker on additional work;
+  - portal sends in the communication log; to-do details.
+- **Demo script:** `docs/amc-demo-script.md` (roles, preparation through the app, the 16-step story).
+- **Not done:** the demo records themselves, which are created through the app with a login, following the script; nothing is seeded with SQL. The formal workbook test cases are Phase 15.
+
 ### Phase 15: Blocked items (last, after their answers arrive) and release
 
 | Jira | Needs first | Work once answered |

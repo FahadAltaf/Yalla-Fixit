@@ -21,6 +21,7 @@ import {
   CirclePause,
   Clock,
   Copy,
+  ExternalLink,
   LayoutGrid,
   List,
   ListTodo,
@@ -32,6 +33,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import Link from "next/link";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -151,6 +153,27 @@ function fromDatetimeLocal(value: string) {
 function getTodoLink(todo: Todo) {
   if (typeof window === "undefined") return `/todos?todo=${encodeURIComponent(todo.todo_key)}`;
   return `${window.location.origin}/todos?todo=${encodeURIComponent(todo.todo_key)}`;
+}
+
+/*
+  AMC to-dos carry the record they are about as related_type "amc_<kind>"
+  and its id. Where that record has a page of its own, "Open" goes there;
+  visits and instalments open their list (the record is in a dialog there).
+*/
+const AMC_RECORD_LINKS: Record<string, (id: string) => string> = {
+  amc_submission: (id) => `/extensions/amc/${id}`,
+  amc_contract: (id) => `/extensions/amc-contracts/${id}`,
+  amc_visit: () => "/extensions/amc-contracts/board",
+  amc_instalment: () => "/extensions/amc-contracts/payments",
+  amc_call_out: (id) => `/extensions/amc-contracts/call-outs?open=${encodeURIComponent(id)}`,
+  amc_additional_work: (id) => `/extensions/amc-contracts/additional-works?open=${encodeURIComponent(id)}`,
+  amc_enquiry: (id) => `/extensions/amc-contracts/enquiries/${id}`,
+};
+
+function amcRecordHref(todo: Pick<Todo, "related_type" | "related_id">): string | null {
+  const type = String(todo.related_type ?? "");
+  if (!type.startsWith("amc_") || !todo.related_id) return null;
+  return AMC_RECORD_LINKS[type]?.(todo.related_id) ?? null;
 }
 
 function formatDateTime(value?: string | null) {
@@ -389,6 +412,16 @@ function TodosListView({
                   <div className="max-w-[160px] whitespace-normal">
                     {[todo.related_type?.replace("_", " "), todo.related_id].filter(Boolean).join(" ") || "-"}
                   </div>
+                  {amcRecordHref(todo) ? (
+                    <Link
+                      href={amcRecordHref(todo)!}
+                      className="text-primary mt-1 inline-flex items-center gap-1 text-xs font-medium hover:underline"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <ExternalLink className="size-3" />
+                      Open
+                    </Link>
+                  ) : null}
                 </TableCell>
                 <TableCell className="align-top">
                   <div className="flex max-w-[200px] flex-wrap gap-1">
@@ -1322,6 +1355,14 @@ export default function TodosPage() {
                 </DialogTitle>
               </div>
               <div className="flex shrink-0 gap-2 sm:pr-2">
+                {editingTodo && amcRecordHref(editingTodo) && (
+                  <Button type="button" variant="outline" size="sm" asChild>
+                    <Link href={amcRecordHref(editingTodo)!}>
+                      <ExternalLink className="size-4 sm:mr-2" />
+                      <span className="hidden sm:inline">Open</span>
+                    </Link>
+                  </Button>
+                )}
                 {editingTodo && (
                   <Button type="button" variant="outline" size="sm" onClick={() => copyTodoLink(editingTodo)}>
                     <Copy className="size-4 sm:mr-2" />

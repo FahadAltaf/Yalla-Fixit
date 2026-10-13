@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { CheckCircle2, Circle, Clock, FileUp, PenLine, Play, Save, ScrollText } from "lucide-react";
+import { AlarmClock, CheckCircle2, Circle, Clock, FileUp, PenLine, Play, Save, ScrollText } from "lucide-react";
 import { toast } from "sonner";
 
 import { SectionCard } from "@/components/dashboard/shared/kaizen";
@@ -36,7 +36,7 @@ async function lifecycle(contractId: string, action: LifecycleAction) {
 const METHOD_LABELS: Record<string, string> = { link: "Signed on the link", portal: "Signed in the portal", scan: "Signed scan", zoho_sign: "Zoho Sign" };
 
 export type StatusTarget = "on_hold" | "active" | "terminated" | "cancelled";
-type LifecycleDialog = "sign" | "scan" | "activate" | "status" | null;
+type LifecycleDialog = "sign" | "scan" | "activate" | "status" | "snooze" | null;
 
 /**
  * The contract from the client's approval to activation and after (BRD
@@ -129,6 +129,7 @@ export function useLifecycleDialogs(data: ContractDetail, onChanged: () => void)
       <ScanDialog open={dialog === "scan"} onOpenChange={close} data={data} onDone={done} />
       <ActivateDialog open={dialog === "activate"} onOpenChange={close} data={data} onDone={done} />
       <StatusDialog open={dialog === "status"} onOpenChange={close} contractId={data.contract.id} to={statusTo} onDone={done} />
+      <SnoozeDialog open={dialog === "snooze"} onOpenChange={close} contractId={data.contract.id} onDone={done} />
     </>
   );
 
@@ -442,6 +443,67 @@ function StatusDialog({ open, onOpenChange, contractId, to, onDone }: DialogProp
       <div className="grid gap-2">
         <Label htmlFor="status-reason">Reason</Label>
         <Textarea id="status-reason" rows={3} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={1000} />
+      </div>
+    </DialogShell>
+  );
+}
+
+/*
+  To-do 2 (BRD 6.8): the follow-up to-do while the client signs or pays
+  moves on by a few days, with the reason recorded. A 409 (no open
+  follow-up) is shown as the server words it.
+*/
+function SnoozeDialog({ open, onOpenChange, contractId, onDone }: DialogProps & { contractId: string }) {
+  const [days, setDays] = useState("3");
+  const [reason, setReason] = useState("");
+  const { busy, run } = useAction();
+
+  useResetOnOpen(open, () => {
+    setDays("3");
+    setReason("");
+  });
+
+  const n = Number(days);
+  const daysOk = /^\d+$/.test(days.trim()) && n >= 1 && n <= 14;
+  return (
+    <DialogShell
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Snooze the follow-up"
+      description="The follow-up to-do and its escalation move on by the days you choose. The reason is recorded."
+      busy={busy}
+      footer={
+        <SubmitButton
+          pending={busy}
+          pendingLabel="Snoozing…"
+          icon={<AlarmClock className="size-4" />}
+          disabled={!daysOk || reason.trim().length < 3}
+          onClick={() =>
+            void run(
+              async () => (await lifecycle(contractId, { action: "snooze_follow_up", days: n, reason: reason.trim() })) as { until?: string },
+              (result) => (result?.until ? `Follow-up snoozed until ${formatDateTime(result.until)}` : "Follow-up snoozed"),
+              onDone,
+            )
+          }
+        >
+          Snooze
+        </SubmitButton>
+      }
+    >
+      <div className="grid gap-2">
+        <Label htmlFor="snooze-days">Days (1 to 14)</Label>
+        <Input id="snooze-days" type="number" min={1} max={14} value={days} onChange={(e) => setDays(e.target.value)} />
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor="snooze-reason">Reason</Label>
+        <Textarea
+          id="snooze-reason"
+          rows={3}
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          maxLength={500}
+          placeholder="e.g. The client is travelling until next week"
+        />
       </div>
     </DialogShell>
   );

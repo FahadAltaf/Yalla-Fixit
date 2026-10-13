@@ -5,6 +5,7 @@ import { UUID } from "@/lib/server/amc/business-schemas";
 import { listDocuments, uploadDocument, type DocumentRecord } from "@/lib/server/amc/client-profile";
 import { contractErrorResponse, requireContractAccess, requireManagedContract, type ContractGate } from "@/lib/server/amc/contract-access";
 import { refuseCustomerEdit } from "@/lib/server/amc/customer-access";
+import { ActionType, ResourceType } from "@/types/types";
 
 /**
  * The AMC document store (BRD 5.9, DEV-381): files per client, property and
@@ -66,6 +67,24 @@ async function authorise(
     const canWrite = isOwner || gate.canApprove || gate.actor.ops.edit;
     if (!(mode === "read" ? canRead : canWrite)) return notFound;
     return { ok: true, customerId: data.customer_id };
+  }
+  if (level === "visit" || level === "call_out") {
+    /* A visit's or call out's documents (gate pass, permit, service report) follow its contract; AMC Visits / Call outs rights also write. */
+    const table = level === "visit" ? "amc_visits" : "amc_call_outs";
+    const { data } = await gate.admin.from(table).select("contract_id").eq("id", entityId).maybeSingle<{ contract_id: string }>();
+    if (!data) return { ok: false, response: NextResponse.json({ error: level === "visit" ? "Visit not found." : "Call out not found." }, { status: 404 }) };
+    const fieldRight =
+      level === "visit"
+        ? mode === "read"
+          ? gate.visits.view
+          : gate.visits.create || gate.visits.edit
+        : gate.can(ResourceType.AMC_CALL_OUTS, mode === "read" ? ActionType.VIEW : ActionType.EDIT);
+    if (!fieldRight) {
+      const managed = await requireManagedContract(gate, data.contract_id, mode);
+      if (!managed.ok) return managed;
+    }
+    const { data: c } = await gate.admin.from("amc_contracts").select("customer_id").eq("id", data.contract_id).maybeSingle<{ customer_id: string | null }>();
+    return { ok: true, customerId: c?.customer_id ?? null };
   }
   return { ok: false, response: NextResponse.json({ error: "Documents for this kind of record arrive in a later phase." }, { status: 400 }) };
 }

@@ -468,6 +468,7 @@ function CallOutBody({ data, working, setWorking, changed }: BodyProps) {
         callOutId={c.id}
         initialFinding={[c.diagnosis, c.partsNeeded ? `Parts needed: ${c.partsNeeded}` : null].filter(Boolean).join("\n")}
         initialTrade={c.trade}
+        initialTechnicianId={c.technicianIds[0] ?? null}
         context={`call out ${c.callOutNo}`}
         onRaised={async (w) => {
           setSuggestWork(false);
@@ -526,6 +527,9 @@ function ScheduleSection({ callOut: c, canEdit, working, setWorking, changed }: 
   const fresh = suggestion?.key === slotKey ? suggestion.data : null;
   const suggestedIds = fresh?.suggested.technicianIds ?? [];
   const differs = fresh !== null && !sameSet(picked, suggestedIds);
+  /* The server refuses a crew other than the suggested one without a reason (when there was a suggestion). */
+  const reasonRequired = differs && suggestedIds.length > 0;
+  const reasonMissing = reasonRequired && override.trim().length < 3;
   const fits = fresh ? [...fresh.fits].sort((x, y) => x.blockers.length - y.blockers.length || y.score - x.score) : [];
 
   const find = () =>
@@ -657,20 +661,33 @@ function ScheduleSection({ callOut: c, canEdit, working, setWorking, changed }: 
             </div>
           )}
           {differs && picked.length ? (
-            <Field id={ids.override} label="Why this crew (optional)" hint="Not the suggested crew: say why, for the record.">
-              <Textarea id={ids.override} rows={2} maxLength={500} value={override} onChange={(e) => setOverride(e.target.value)} />
+            <Field
+              id={ids.override}
+              label={reasonRequired ? "Why this crew" : "Why this crew (optional)"}
+              hint={reasonRequired ? "Not the suggested crew: say why. Needed to save." : "Say why, for the record."}
+            >
+              <Textarea
+                id={ids.override}
+                rows={2}
+                maxLength={500}
+                value={override}
+                aria-invalid={reasonMissing && override.length > 0 ? true : undefined}
+                onChange={(e) => setOverride(e.target.value)}
+              />
             </Field>
           ) : null}
           <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-3">
             <p className="text-muted-foreground text-xs">
-              {picked.length
-                ? `${picked.length} ${picked.length === 1 ? "technician" : "technicians"} chosen${picked.length > 1 ? "; the first is the lead" : ""}.`
-                : "Choose at least one technician."}
+              {picked.length === 0
+                ? "Choose at least one technician."
+                : reasonMissing
+                  ? "Say why this crew was chosen instead of the suggested one."
+                  : `${picked.length} ${picked.length === 1 ? "technician" : "technicians"} chosen${picked.length > 1 ? "; the first is the lead" : ""}.`}
             </p>
             <SubmitButton
               pending={working === "schedule"}
               pendingLabel="Saving…"
-              disabled={working !== null || picked.length === 0 || picked.length > 10}
+              disabled={working !== null || picked.length === 0 || picked.length > 10 || reasonMissing}
               icon={<CalendarCheck className="size-4" />}
               onClick={save}
             >

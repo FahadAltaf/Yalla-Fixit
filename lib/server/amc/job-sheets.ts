@@ -716,12 +716,13 @@ async function reportFacts(admin: Admin, visitId: string) {
     admin.from("amc_visit_checklist_items").select("label, result, note, sort_order").eq("job_sheet_id", String(sheet.id)).order("sort_order"),
     admin.from("amc_visit_photos").select("kind, caption, storage_path").eq("job_sheet_id", String(sheet.id)).order("created_at"),
     admin.from("amc_visits").select("status").eq("contract_id", String(visit.contract_id)).neq("status", "cancelled"),
-    admin.from("amc_contract_entitlements").select("entitlement_type, frequency_type, included_quantity, used_quantity").eq("contract_id", String(visit.contract_id)),
+    admin.from("amc_contract_entitlements").select("service_id, call_out_class, entitlement_type, included_quantity, used_quantity").eq("contract_id", String(visit.contract_id)),
     ownerId ? admin.from("user_profile").select("full_name, email").eq("id", ownerId).maybeSingle<Row>() : Promise.resolve({ data: null }),
   ]);
   const visits = (all ?? []) as Row[];
   const done = visits.filter((v) => v.status === "completed" || v.status === "completed_with_additional_work" || v.status === "partially_completed").length;
-  const handyman = ((ents ?? []) as Row[]).filter((e) => e.frequency_type === "handyman" || e.entitlement_type === "hours");
+  /* Email 3: "Free non emergency visits used: {Used} of {Allowed}" -- the non-emergency call-out allowance. */
+  const nonEmergency = ((ents ?? []) as Row[]).filter((e) => e.call_out_class === "non_emergency" || e.service_id === "non-emergency");
   return {
     visit,
     contract,
@@ -734,8 +735,8 @@ async function reportFacts(admin: Admin, visitId: string) {
     total: visits.length,
     completed: done,
     remaining: Math.max(0, visits.length - done - visits.filter((v) => v.status === "not_completed").length),
-    used: handyman.reduce((s, e) => s + Number(e.used_quantity ?? 0), 0),
-    allowed: handyman.reduce((s, e) => s + Number(e.included_quantity ?? 0), 0),
+    used: nonEmergency.reduce((s, e) => s + Number(e.used_quantity ?? 0), 0),
+    allowed: nonEmergency.reduce((s, e) => s + Number(e.included_quantity ?? 0), 0),
   };
 }
 

@@ -62,6 +62,7 @@ import {
   useActionForm,
 } from "./call-out-shared";
 import { formatContractDate, formatDateTime } from "./contract-status";
+import { TechnicianSelect, useTechnicianName } from "./people-pickers";
 import { PartiesEditor, partiesInput, partiesProblem, partyDrafts, type PartyDrafts } from "./raise-additional-work-dialog";
 
 const NONE = "__none";
@@ -207,7 +208,8 @@ function WorkBody({
   const [finding, setFinding] = useState(w.finding);
   const [risk, setRisk] = useState<WorkRisk>(w.risk);
   const [trade, setTrade] = useState<Trade | null>((w.trade as Trade | null) ?? null);
-  const [technicianId, setTechnicianId] = useState(w.technicianId ?? "");
+  const [technicianId, setTechnicianId] = useState<string | null>(w.technicianId ?? null);
+  const technicianName = useTechnicianName();
   const [parties, setParties] = useState<PartyDrafts>(() => partyDrafts(w.parties));
   const [drafts, setDrafts] = useState<LineDraft[]>(() => (w.quotationLines.length ? toDrafts(w.quotationLines) : [{ key: lineKey(), description: "", kind: "labour", quantity: "1", unitPrice: "" }]));
   const ids = { finding: useId(), risk: useId(), trade: useId(), technician: useId() };
@@ -240,7 +242,7 @@ function WorkBody({
     void run(
       "finding",
       async () => {
-        await post({ action: "update", finding: finding.trim(), risk, trade, technicianId: technicianId.trim() || null }, "Finding saved");
+        await post({ action: "update", finding: finding.trim(), risk, trade, technicianId: technicianId?.trim() || null }, "Finding saved");
       },
       "Could not save the finding.",
     );
@@ -499,8 +501,8 @@ function WorkBody({
                   </SelectContent>
                 </Select>
               </Field>
-              <Field id={ids.technician} label="Technician ID">
-                <Input id={ids.technician} maxLength={40} value={technicianId} onChange={(e) => setTechnicianId(e.target.value)} />
+              <Field id={ids.technician} label="Technician">
+                <TechnicianSelect id={ids.technician} value={technicianId} onChange={setTechnicianId} disabled={busy} />
               </Field>
             </div>
             <div className="flex justify-end">
@@ -521,7 +523,7 @@ function WorkBody({
             <ReadText value={w.finding} />
             <dl className="grid gap-x-8 gap-y-2 text-sm sm:grid-cols-2">
               <Fact label="Trade">{w.trade ? (TRADE_LABELS[w.trade as Trade] ?? w.trade) : <Muted>Not set</Muted>}</Fact>
-              <Fact label="Technician">{w.technicianId ?? <Muted>—</Muted>}</Fact>
+              <Fact label="Technician">{technicianName(w.technicianId) ?? <Muted>—</Muted>}</Fact>
             </dl>
           </>
         )}

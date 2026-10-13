@@ -611,6 +611,19 @@ const CALL_OUT_COLUMNS: Col<CallOutRow>[] = [
   { key: "misuse", label: "Misuse", kind: "number", value: (r) => r.misuse },
 ];
 
+type VisitMonthRow = OperationalReport["visitsByMonth"][number];
+type VisitTechRow = OperationalReport["visitsByTechnician"][number];
+const VISIT_COUNT_COLUMNS = <R extends { total: number; done: number; partial: number; notCompleted: number; open: number; attempts: number }>(): Col<R>[] => [
+  { key: "total", label: "Visits", kind: "number", value: (r) => r.total },
+  { key: "done", label: "Completed", kind: "number", value: (r) => r.done },
+  { key: "partial", label: "Partial", kind: "number", value: (r) => r.partial },
+  { key: "notCompleted", label: "Not completed", kind: "number", value: (r) => r.notCompleted },
+  { key: "open", label: "Open", kind: "number", value: (r) => r.open },
+  { key: "attempts", label: "Confirmation attempts", kind: "number", value: (r) => r.attempts },
+];
+const VISIT_MONTH_COLUMNS: Col<VisitMonthRow>[] = [{ key: "month", label: "Month", value: (r) => r.month }, ...VISIT_COUNT_COLUMNS<VisitMonthRow>()];
+const VISIT_TECH_COLUMNS: Col<VisitTechRow>[] = [{ key: "name", label: "Technician", value: (r) => r.name }, ...VISIT_COUNT_COLUMNS<VisitTechRow>()];
+
 const AT_RISK_COLUMNS: Col<AtRiskRow>[] = [
   {
     key: "contract",
@@ -734,6 +747,31 @@ function OperationsBody({ r }: { r: OperationalReport }) {
             empty="No reasons recorded."
           />
         </SectionCard>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-2">
+        <ReportTable
+          title="Visits by month"
+          description="Visits planned in the period by status, with the confirmation attempts made (BRD 6.9)."
+          icon={<CalendarCheck />}
+          name="visits-by-month"
+          columns={VISIT_MONTH_COLUMNS}
+          rows={r.visitsByMonth}
+          rowKey={(x) => x.month}
+          empty="No visits planned in this period."
+          minWidth="min-w-[640px]"
+        />
+        <ReportTable
+          title="Visits by technician"
+          description="A visit counts for each technician on its crew."
+          icon={<CalendarClock />}
+          name="visits-by-technician"
+          columns={VISIT_TECH_COLUMNS}
+          rows={r.visitsByTechnician}
+          rowKey={(x) => x.fsmId}
+          empty="No visit had a crew in this period."
+          minWidth="min-w-[640px]"
+        />
       </div>
 
       <ReportTable

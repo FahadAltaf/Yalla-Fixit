@@ -19,6 +19,9 @@ import { notifyProposalEvent } from "@/lib/server/amc/notifications";
 import { decideStep, shareProposal } from "@/lib/server/amc/approval-ladder";
 import { readAmcConfig } from "@/lib/server/amc/config";
 import { ContractError } from "@/lib/server/amc/contracts";
+import { siteVisitProblem } from "@/lib/server/amc/enquiry-proposal";
+import { checkTerm } from "@/lib/amc/contract-lifecycle";
+import { termMonthsBetween } from "@/lib/amc/contracts";
 
 /**
  * The internal half of the approval flow (FR5.1–FR5.3, FR5.9).
@@ -123,6 +126,7 @@ export async function POST(req: NextRequest) {
 
   let update: Record<string, unknown>;
   let eventType: string;
+  let siteVisitWarning: string | null = null;
 
   /* FR3.4, FR5.2, FR5.3: who may move it, and from where. */
   const legacyAction = body.action === "reject" ? "send_back" : body.action;
@@ -131,6 +135,19 @@ export async function POST(req: NextRequest) {
     if (!check.ok) return NextResponse.json({ error: check.error }, { status: check.status });
     const problem = submittableProblem(existing.services ?? []) ?? (await submissionRateProblem(admin, existing.id));
     if (problem) return NextResponse.json({ error: problem }, { status: 400 });
+    const submitConfig = await readAmcConfig(admin);
+    /* BRD 5.7: the contract term, against the configured minimum, before it goes for approval. */
+    const { data: dates } = await admin.from("amc_submissions").select("customer").eq("id", existing.id).maybeSingle<{ customer: { startDate?: string; endDate?: string } | null }>();
+    const term = dates?.customer?.startDate && dates.customer.endDate ? termMonthsBetween(dates.customer.startDate, dates.customer.endDate) : null;
+    const termProblem = term !== null ? checkTerm(term, submitConfig.contracts) : null;
+    if (termProblem) return NextResponse.json({ error: `${termProblem} This proposal runs ${term} months.` }, { status: 400 });
+    /* BRD 5.2: the site visit a commercial proposal needs (flag or block, from configuration). */
+    const visit = await siteVisitProblem(admin, existing.id, submitConfig);
+    if (visit.block) return NextResponse.json({ error: visit.block }, { status: 409 });
+    siteVisitWarning = visit.warning;
+    if (visit.warning) {
+      await recordAmcAudit(admin, { entityType: "submission", entityId: existing.id, eventType: "site_visit_missing", actorId: profile.id, actorLabel, justification: visit.warning });
+    }
   }
 
   /* Phase 5: the ladder. */
@@ -143,6 +160,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({
           submission: { id: body.id, status: shared.outcome === "pending" ? "awaiting_approval" : "approved" },
           outcome: shared,
+          ...(siteVisitWarning ? { warning: siteVisitWarning } : {}),
         });
       }
     } else {

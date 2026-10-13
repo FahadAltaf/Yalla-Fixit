@@ -17,6 +17,7 @@ import {
 import { resolveLink, type LinkRow } from "@/lib/server/amc/link-resolution";
 import { clientSignedOnLink, createContractFromApproval } from "@/lib/server/amc/contract-lifecycle";
 import { readAmcConfig } from "@/lib/server/amc/config";
+import { todayInDubai } from "@/lib/amc/contracts";
 
 /**
  * The client's page (FR5.5, FR5.7, NFR4).
@@ -88,7 +89,7 @@ async function findByToken(token: string) {
         .maybeSingle();
     const missing = (e: { code?: string } | null) => !!e && (e.code === "42703" || e.code === "PGRST204");
     /* The payment plan and property type (Phase 4) first, then without them, then without the contract copy. */
-    let { data, error } = await query(`${PUBLIC_SELECT}, contract_settings_snapshot, payment_plan, payment_plan_custom, property_type, client_answer`);
+    let { data, error } = await query(`${PUBLIC_SELECT}, contract_settings_snapshot, payment_plan, payment_plan_custom, property_type, client_answer, valid_until`);
     if (missing(error)) ({ data, error } = await query(`${PUBLIC_SELECT}, contract_settings_snapshot`));
     if (missing(error)) ({ data, error } = await query(PUBLIC_SELECT));
     if (error) throw new Error(error.message);
@@ -235,6 +236,14 @@ export async function POST(
     */
     const check = clientTransition(body.action, kind, row.status);
     const expected = kind === "contract" ? "contract_sent" : "proposal_sent";
+    /* BRD 5.4: a proposal is answered within its validity; after it, the coordinator sends an updated one. */
+    const validUntil = kind === "proposal" && typeof row.valid_until === "string" ? row.valid_until : null;
+    if (validUntil && validUntil < todayInDubai()) {
+      return NextResponse.json(
+        { error: `This proposal was valid until ${new Date(`${validUntil}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}. Please ask your coordinator for an updated proposal.` },
+        { status: 410 },
+      );
+    }
     if (!check.ok && check.status === 400) {
       return NextResponse.json({ error: check.error }, { status: 400 });
     }

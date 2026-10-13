@@ -359,6 +359,10 @@ export const paymentActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("override_gate"), reason: reason }).strict(),
   z.object({ action: z.literal("generate_schedule") }).strict(),
   z.object({ action: z.literal("send_reminder"), instalmentId: uuid }).strict(),
+  /* To-do 6 (BRD 6.8): escalate an overdue instalment by hand, before the automatic escalation. */
+  z.object({ action: z.literal("escalate"), instalmentId: uuid, note: optionalText(500) }).strict(),
+  /* BRD 5.8: how each instalment is expected to be paid. */
+  z.object({ action: z.literal("set_expected_mode"), instalmentId: uuid, mode: z.enum(PAYMENT_MODES).nullable() }).strict(),
 ]);
 export type PaymentAction = z.infer<typeof paymentActionSchema>;
 

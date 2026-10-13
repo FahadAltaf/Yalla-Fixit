@@ -28,6 +28,7 @@ import { cn } from "@/lib/utils";
 import { additionalWorksService } from "@/modules/amc-contracts/additional-works-service";
 
 import { ContractPicker, Field, errorText, type PickedContract } from "./call-out-shared";
+import { TechnicianSelect } from "./people-pickers";
 
 const NONE = "__none";
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -146,6 +147,7 @@ export function RaiseAdditionalWorkDialog({
   callOutId,
   initialFinding,
   initialTrade,
+  initialTechnicianId,
   context,
   onRaised,
 }: {
@@ -158,6 +160,8 @@ export function RaiseAdditionalWorkDialog({
   callOutId?: string | null;
   initialFinding?: string;
   initialTrade?: string | null;
+  /** The visit's or call out's lead technician, when there is one. */
+  initialTechnicianId?: string | null;
   /** "Call out CO-0012", "Visit 3": where it was found. */
   context?: string;
   onRaised?: (work: { id: string; workNo: string }) => unknown;
@@ -166,7 +170,7 @@ export function RaiseAdditionalWorkDialog({
   const [finding, setFinding] = useState(initialFinding ?? "");
   const [risk, setRisk] = useState<WorkRisk>("low");
   const [trade, setTrade] = useState<Trade | null>(initialTrade && (TRADES as readonly string[]).includes(initialTrade) ? (initialTrade as Trade) : null);
-  const [technicianId, setTechnicianId] = useState("");
+  const [technicianId, setTechnicianId] = useState<string | null>(initialTechnicianId ?? null);
   const [parties, setParties] = useState<PartyDrafts>(() => partyDrafts());
   const [partiesOpen, setPartiesOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -188,7 +192,7 @@ export function RaiseAdditionalWorkDialog({
         source,
         visitId: source === "visit" ? visitId : null,
         callOutId: source === "call_out" ? callOutId : null,
-        technicianId: technicianId.trim() || null,
+        technicianId: technicianId?.trim() || null,
         trade,
         finding: finding.trim(),
         risk,
@@ -253,8 +257,8 @@ export function RaiseAdditionalWorkDialog({
                 </SelectContent>
               </Select>
             </Field>
-            <Field id={ids.technician} label="Technician ID (optional)">
-              <Input id={ids.technician} maxLength={40} placeholder="FSM ID" value={technicianId} onChange={(e) => setTechnicianId(e.target.value)} />
+            <Field id={ids.technician} label="Technician (optional)">
+              <TechnicianSelect id={ids.technician} value={technicianId} onChange={setTechnicianId} disabled={busy} />
             </Field>
           </div>
 

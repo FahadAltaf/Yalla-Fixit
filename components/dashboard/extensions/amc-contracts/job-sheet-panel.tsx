@@ -605,6 +605,7 @@ function SheetBody({
         visitId={visitId}
         initialFinding={raising.target?.description}
         initialTrade={raising.target?.trade}
+        initialTechnicianId={v.technicianIds[0] ?? sheet.technicianIds[0] ?? null}
         context={`visit ${v.visitNo}`}
       />
       {confirmDialog}

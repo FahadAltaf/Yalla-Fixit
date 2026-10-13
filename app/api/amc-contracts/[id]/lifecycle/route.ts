@@ -9,6 +9,7 @@ import {
   recordSignedScan,
   signInternally,
   updateEntitlementTerms,
+  snoozeContractFollowUp,
 } from "@/lib/server/amc/contract-lifecycle";
 
 /**
@@ -51,6 +52,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       case "entitlement":
         await updateEntitlementTerms(gate.admin, id, body, actor);
         return NextResponse.json({ ok: true });
+      case "snooze_follow_up":
+        return NextResponse.json(await snoozeContractFollowUp(gate.admin, id, body, actor));
       case "status":
         if ((body.to === "terminated" || body.to === "cancelled") && !gate.canApprove) {
           return NextResponse.json({ error: "Only an AMC approver can terminate or call off a contract." }, { status: 403 });

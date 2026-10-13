@@ -128,6 +128,37 @@ export function contractsAtRisk(contracts: ContractFact[], visits: VisitFact[], 
     .sort((a, b) => a.daysLeft - b.daysLeft);
 }
 
+export interface VisitStatusFact {
+  /** The month the visit belongs to (its target date). */
+  month: string;
+  status: string;
+  technicianIds: string[];
+  attempts: number;
+}
+
+const visitCounts = (list: VisitStatusFact[]) => ({
+  total: list.length,
+  done: list.filter((v) => v.status === "completed" || v.status === "completed_with_additional_work").length,
+  partial: list.filter((v) => v.status === "partially_completed").length,
+  notCompleted: list.filter((v) => v.status === "not_completed").length,
+  open: list.filter((v) => OPEN_VISIT.includes(v.status)).length,
+  attempts: list.reduce((s, v) => s + v.attempts, 0),
+});
+
+/** BRD 6.9: visits by status per month, with the confirmation attempts made. */
+export function visitsByMonth(visits: VisitStatusFact[]) {
+  const months = [...new Set(visits.map((v) => v.month))].sort();
+  return months.map((month) => ({ month, ...visitCounts(visits.filter((v) => v.month === month)) }));
+}
+
+/** BRD 6.9: visits by status per technician (a visit counts for each technician on its crew). */
+export function visitsByTechnician(visits: VisitStatusFact[], names: Map<string, string>) {
+  const ids = [...new Set(visits.flatMap((v) => v.technicianIds))];
+  return ids
+    .map((id) => ({ fsmId: id, name: names.get(id) ?? id, ...visitCounts(visits.filter((v) => v.technicianIds.includes(id))) }))
+    .sort((a, b) => b.total - a.total);
+}
+
 export interface BusyFact {
   technicianId: string;
   start: string;

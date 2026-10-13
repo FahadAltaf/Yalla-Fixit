@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { callOutActionSchema } from "@/lib/amc/call-outs";
 import { suggestCrew } from "@/lib/amc/visits";
-import { callOutDetail, callOutOwner, performCallOutAction } from "@/lib/server/amc/call-outs";
+import { callOutDetail, callOutNeed, callOutOwner, performCallOutAction } from "@/lib/server/amc/call-outs";
 import { readAmcConfig } from "@/lib/server/amc/config";
 import { contractErrorResponse, requireContractAccess } from "@/lib/server/amc/contract-access";
 import { UUID, fieldWorkRights } from "@/lib/server/amc/field-work-access";
@@ -35,7 +35,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       const duration = Math.min(720, Math.max(15, Number(params.get("duration")) || 120));
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) return NextResponse.json({ error: "Use a date and a time." }, { status: 400 });
       const trades = detail.callOut.trade ? [detail.callOut.trade] : [];
-      const fits = await crewFitsForSlot(gate.admin, { trades, date, area: null, accessTypes: [] }, dubaiSlot(date, time, duration), null, [id]);
+      const need = await callOutNeed(gate.admin, { contract_id: detail.callOut.contractId }, trades, date);
+      const fits = await crewFitsForSlot(gate.admin, need, dubaiSlot(date, time, duration), null, [id]);
       return NextResponse.json({ fits, suggested: suggestCrew(fits, trades) });
     }
     return NextResponse.json({ ...detail, canEdit: rights.edit, canOverride: rights.override }, { headers: { "Cache-Control": "no-store" } });

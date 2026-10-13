@@ -162,12 +162,49 @@ export async function closeAmcTodos(
 export function escalationRecipients(kind: AmcTodoKind, config: AmcConfig, level: number, dedupeKey?: string | null): string[] {
   switch (kind) {
     case "proposal_approval": {
-      /* The approval level is in the key (…:l<level>, Phase 5): escalate one level up, level 3 to itself. */
+      /* The approval level is in the key (…:l<level>, Phase 5); each escalation climbs one level more, level 3 at most. */
       const approvalLevel = Number(/:l([1-3])$/.exec(dedupeKey ?? "")?.[1] ?? 0);
-      return approversForLevel(config, Math.min((approvalLevel || level) + 1, 3));
+      return approversForLevel(config, Math.min((approvalLevel || 1) + level, 3));
     }
+    case "call_out":
+    case "job_closure_review":
+      /* The supervisors (named, else the level 1 approvers): BRD 6.8, "Supervisor when the SLA is at risk". */
+      return config.scheduling.supervisorUserIds.length ? config.scheduling.supervisorUserIds : approversForLevel(config, 1);
     default:
       return approversForLevel(config, 2);
+  }
+}
+
+/**
+ * An open proposal approval that escalates hands the step to the next
+ * level too (BRD 5.5): the escalated approvers can decide it, not only
+ * see the to-do. Below level 3 the to-do is armed again, so an approval
+ * nobody takes keeps climbing one level per escalation period.
+ */
+async function escalateApprovalStep(
+  admin: Admin,
+  row: { id: string; entity_id: string; escalation_level: number; dedupe_key: string | null },
+  recipients: string[],
+  config: AmcConfig,
+  now: Date,
+) {
+  const { data: step } = await admin
+    .from("amc_approval_steps")
+    .select("id, approver_ids, submission:amc_submissions!amc_approval_steps_submission_id_fkey(owner_id)")
+    .eq("submission_id", row.entity_id)
+    .eq("status", "pending")
+    .maybeSingle<{ id: string; approver_ids: string[] | null; submission: { owner_id?: string } | Array<{ owner_id?: string }> | null }>();
+  if (step) {
+    const owner = (Array.isArray(step.submission) ? step.submission[0] : step.submission)?.owner_id ?? null;
+    const approvers = [...new Set([...(step.approver_ids ?? []), ...recipients.filter((id) => id !== owner)])];
+    await admin.from("amc_approval_steps").update({ approver_ids: approvers }).eq("id", step.id).eq("status", "pending");
+  }
+  const approvalLevel = Number(/:l([1-3])$/.exec(row.dedupe_key ?? "")?.[1] ?? 1);
+  if (approvalLevel + row.escalation_level + 1 < 3) {
+    await admin
+      .from("amc_todos")
+      .update({ escalated_at: null, escalate_at: new Date(now.getTime() + config.approvals.escalateAfterHours * 3_600_000).toISOString() })
+      .eq("id", row.id);
   }
 }
 
@@ -210,6 +247,7 @@ export async function escalateDueAmcTodos(admin: Admin, config: AmcConfig, now =
     if (!claimed || claimed.length === 0) continue;
 
     const recipients = escalationRecipients(row.kind, config, row.escalation_level + 1, row.dedupe_key);
+    if (row.kind === "proposal_approval" && recipients.length > 0) await escalateApprovalStep(admin, row, recipients, config, now);
     if (row.todo_id && recipients.length > 0) {
       await admin
         .from("todo_assignees")

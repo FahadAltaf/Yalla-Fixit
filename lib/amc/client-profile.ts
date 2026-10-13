@@ -106,7 +106,7 @@ export type DocumentLevel = (typeof DOCUMENT_LEVELS)[number];
 export const DOCUMENT_CATEGORIES: Record<DocumentLevel, string[]> = {
   customer: ["Trade licence", "Emirates ID / passport", "TRN certificate", "Correspondence", "Other"],
   property: ["Title deed", "Tenancy contract", "Floor plan", "Access pass", "Photos", "Other"],
-  contract: ["Signed contract", "Signed scan", "Amendment", "Correspondence", "Other"],
+  contract: ["Signed contract", "Signed scan", "Amendment", "Payment proof", "Correspondence", "Other"],
   proposal: ["Proposal PDF", "Client decision evidence", "Other"],
   enquiry: ["Site visit photos", "Correspondence", "Other"],
   visit: ["Gate pass", "Job sheet", "Service report", "Photos", "Other"],
@@ -141,6 +141,8 @@ export const customerProfileFields = {
     .or(z.literal("")),
   preferredChannel: z.enum(PREFERRED_CHANNELS).nullable().optional(),
   preferredLanguage: text(40),
+  /* BRD 5.9: the FSM customer (Contact id) behind the profile, linked by hand until FSM sync (Phase 15). */
+  fsmContactId: text(60),
 };
 
 export const consentSchema = z
