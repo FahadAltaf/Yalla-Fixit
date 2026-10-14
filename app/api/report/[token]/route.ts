@@ -113,12 +113,9 @@ async function assembleReport(admin: Admin, jobId: string) {
   const unapproved = (row: Record<string, unknown>) =>
     typeof row.visit_id === "string" && unapprovedVisits.has(row.visit_id);
 
-  const [{ data: checklistRows }, allSnagRows] = await Promise.all([
-    admin
-      .from("snagging_job_checklist")
-      .select("id, code, group_name, label, mandatory, status, reason, sort_order, visit_id")
-      .eq("job_id", jobId)
-      .order("sort_order", { ascending: true }),
+  // The inspection checklist is internal and never reaches the client
+  // (SNG-134), so it is not read here at all.
+  const [allSnagRows] = await Promise.all([
     /*
       Paged, because a report must never quietly leave defects out.
 
@@ -148,11 +145,6 @@ async function assembleReport(admin: Admin, jobId: string) {
 
   const snagRows = allSnagRows.filter(
     (row) => !unapproved(row as Record<string, unknown>),
-  );
-  const checklist = (checklistRows ?? []).map((row) =>
-    unapproved(row as Record<string, unknown>)
-      ? { ...row, status: "not_checked", reason: null }
-      : row,
   );
 
   const signedSnags = await signMediaPaths(admin, snagRows, PHOTO_TTL_SECONDS);
@@ -238,7 +230,7 @@ async function assembleReport(admin: Admin, jobId: string) {
       areas,
       assignees,
       snags,
-      checklist: checklist ?? [],
+      checklist: [],
       submissions,
     },
     quotation,

@@ -376,7 +376,7 @@ function SnagRow({
         onCheckedChange={onToggle}
         aria-label={`Carry ${snag.defect_label ?? "this snag"}`}
       />
-      <SnagIndex index={index} severity={snag.severity} />
+      <SnagIndex index={index} severity={snag.severity} code={snag.snag_code} />
       {/*
         The defect itself opens, as it does from the Snags tab: its
         photos, its pin and what has been said about it are what decides

@@ -7,6 +7,7 @@ import Link from "next/link";
 import {
   ArrowLeft,
   Check,
+  CircleDot,
   ChevronDown,
   Copy,
   Download,
@@ -14,9 +15,13 @@ import {
   FileText,
   Mail,
   MessageCircle,
+  Pencil,
+  Info,
   Plus,
   Send,
+  StickyNote,
   TriangleAlert,
+  UserRound,
   X,
 } from "lucide-react";
 import { saveAs } from "file-saver";
@@ -58,8 +63,50 @@ import {
   SubmitButton,
   useConfirm,
   ActionDialogContent,
+  DataRow,
+  formatLocalDateTime,
+  SectionCard,
 } from "./shared";
+import { ChangeHistoryCard } from "./change-history-card";
 import { QuotationBodySkeleton } from "@/components/dashboard/snagging/route-skeletons";
+
+/**
+ * One line of the quotation's record: who, as a person row, with what they
+ * did and when underneath (SNG-037).
+ */
+function RecordRow({
+  label,
+  name,
+  at,
+  empty = "Not recorded",
+}: {
+  label: string;
+  name?: string | null;
+  at?: string | null;
+  empty?: string;
+}) {
+  const known = Boolean(name || at);
+  return (
+    <DataRow
+      icon={<UserRound />}
+      title={
+        known ? (
+          (name ?? "Unknown user")
+        ) : (
+          <span className="text-muted-foreground font-normal">{empty}</span>
+        )
+      }
+      subtitle={label}
+      trailing={
+        known && at ? (
+          <span className="text-muted-foreground text-xs tabular-nums">
+            {formatLocalDateTime(at)}
+          </span>
+        ) : null
+      }
+    />
+  );
+}
 
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -111,6 +158,8 @@ export default function QuotationDetail({ id }: { id: string }) {
   const [sendOpen, setSendOpen] = useState(false);
   const [recipient, setRecipient] = useState("");
   const [approvalUrl, setApprovalUrl] = useState<string | null>(null);
+  // Bumped after an action here, so the change history shows it (SNG-037).
+  const [historyNonce, setHistoryNonce] = useState(0);
 
   /*
     WHICH action is running, not merely that one is.
@@ -167,12 +216,19 @@ export default function QuotationDetail({ id }: { id: string }) {
   const applyResult = useCallback((result: SnaggingQuotation) => {
     setQuote((prev) => {
       if (!prev) return result;
-      const next: SnaggingQuotation = { ...prev, ...result };
+      const next: SnaggingQuotation = {
+        ...prev,
+        ...result,
+        // The action just taken is the newest change (SNG-037).
+        modified_by_name: userProfile?.full_name ?? prev.modified_by_name ?? null,
+        modified_at: new Date().toISOString(),
+      };
       // Kept in its own state, and never part of the loaded shape.
       delete next.approval_url;
       return next;
     });
-  }, []);
+    setHistoryNonce((n) => n + 1);
+  }, [userProfile?.full_name]);
 
   const doc: SnaggingQuoteDoc | null = quote
     ? {
@@ -351,6 +407,11 @@ export default function QuotationDetail({ id }: { id: string }) {
   const isDecided =
     quote?.status === "approved" || quote?.status === "rejected";
   const isDesnag = quote?.quote_kind === "desnag";
+  // Editable until approved, for a quotation priced from the property form.
+  const canChangeInputs =
+    Boolean(quote?.id) &&
+    quote?.status !== "approved" &&
+    (quote?.quote_kind ?? "inspection") === "inspection";
   const needsJob = quote?.status === "approved" && !quote?.job_id;
 
   return (
@@ -367,8 +428,6 @@ export default function QuotationDetail({ id }: { id: string }) {
 
         {quote && doc ? (
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <QuotationStatusBadge status={quote.status} />
-
             {/* The job this quotation turned into, one click away. */}
             {quote.job_id ? (
               <Button
@@ -411,6 +470,41 @@ export default function QuotationDetail({ id }: { id: string }) {
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
+
+                {/*
+                  Edit what the quotation is priced from, until the client
+                  approves it (Sami, Oct 2026). A de-snag or a visit is
+                  priced from its job, so it is changed there instead.
+                */}
+                {canChangeInputs ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => {
+                      const editUrl = `/snagging/quotations/${quote.id}/edit`;
+                      if (quote.status === "draft") {
+                        router.push(editUrl);
+                        return;
+                      }
+                      void confirm({
+                        title:
+                          quote.status === "sent"
+                            ? "Edit a quotation the client has?"
+                            : "Revise the rejected quotation?",
+                        description:
+                          "Saving your changes moves it back to Draft and reprices it. The link the client was sent stops working, so you will need to send the revised quotation again.",
+                        confirmText: "Edit quotation",
+                        action: async () => {
+                          router.push(editUrl);
+                        },
+                      });
+                    }}
+                  >
+                    <Pencil className="size-4" />
+                    Edit
+                  </Button>
+                ) : null}
 
                 {/* A de-snag is priced at the amount chosen for it, not
                     from the property, so it is never regenerated. */}
@@ -621,19 +715,92 @@ export default function QuotationDetail({ id }: { id: string }) {
             ) : null}
 
             {/*
-              The document itself, from the template the PDF is built from.
-              Centred and sized to the page it represents (794px = A4 at
-              96dpi) rather than stretched against the left edge of a
-              full-width card.
+              The document with its history, and beside it what the team
+              needs to follow it up: who raised it, who last changed it,
+              who picked the rate, and the office note (SNG-022, SNG-037).
+              The details sit in a side column rather than a full-width
+              strip above a page-wide sheet, as on the other detail pages;
+              below xl they stack under the document.
             */}
-            <Card className="mx-auto w-fit max-w-full overflow-x-auto p-0">
-              <YallaClassicTemplate
-                data={snaggingQuoteToTemplateData(doc)}
-                hideDiscount
-                type="review"
-                sectionStyle={SNAGGING_QUOTATION_SECTION_STYLE}
-              />
-            </Card>
+            <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
+              <div className="flex min-w-0 flex-col gap-4">
+                {/*
+                  The document itself, from the template the PDF is built from.
+                  Centred and sized to the page it represents (794px = A4 at
+                  96dpi) rather than stretched against the left edge of a
+                  full-width card.
+                */}
+                <Card className="mx-auto w-fit max-w-full overflow-x-auto p-0">
+                  <YallaClassicTemplate
+                    data={snaggingQuoteToTemplateData(doc)}
+                    hideDiscount
+                    type="review"
+                    sectionStyle={SNAGGING_QUOTATION_SECTION_STYLE}
+                  />
+                </Card>
+              </div>
+
+              {/* Scrolls with the page: a sticky column with its height capped
+                  squeezed the cards and cut their content off. */}
+              <aside className="flex min-w-0 flex-col gap-4">
+                <SectionCard
+                  title="Details"
+                  icon={<Info />}
+                  description="Where it stands, and who raised and changed it."
+                  bodyClassName="divide-y border-t"
+                >
+                  <DataRow
+                    icon={<CircleDot />}
+                    title="Status"
+                    subtitle={quote.quote_number}
+                    trailing={<QuotationStatusBadge status={quote.status} />}
+                  />
+                  <RecordRow
+                    label="Created by"
+                    name={quote.created_by_name}
+                    at={quote.created_at}
+                  />
+                  <RecordRow
+                    label="Last modified by"
+                    name={quote.modified_by_name}
+                    at={quote.modified_at}
+                    empty="No changes yet"
+                  />
+                  {quote.rate_chosen_by_name ? (
+                    <RecordRow
+                      label="Rate picked by"
+                      name={quote.rate_chosen_by_name}
+                      at={quote.rate_chosen_at}
+                    />
+                  ) : null}
+                </SectionCard>
+
+                <SectionCard
+                  title="Office notes"
+                  icon={<StickyNote />}
+                  description="Copied to the job and shown to the inspector."
+                  bodyClassName="border-t px-5 py-4"
+                >
+                  {quote.notes?.trim() ? (
+                    <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">
+                      {quote.notes}
+                    </p>
+                  ) : (
+                    <p className="text-muted-foreground text-sm">No office notes.</p>
+                  )}
+                </SectionCard>
+
+                {quote.id ? (
+                  <ChangeHistoryCard
+                    key={historyNonce}
+                    scope="quotation"
+                    id={quote.id}
+                    variant="timeline"
+                    description="Who changed it, and when."
+                  />
+                ) : null}
+              </aside>
+            </div>
           </div>
         ) : null}
       </DataState>

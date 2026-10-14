@@ -24,7 +24,8 @@ const DOCUMENT_TYPES = ["proposal", "contract"] as const;
 const coordinationContactSchema = z.object({
   name: z.string(),
   phone: z.string(),
-  designation: z.enum(["owner", "tenant", "representative"]),
+  // One of the presets, or the client's own title for them (AMC-099).
+  designation: z.string().trim().max(60),
 });
 
 const serviceRowSchema = z.object({
@@ -68,7 +69,7 @@ const submissionPayloadSchema = z.object({
     customerId: z.string().optional(),
     customerPhone: z.string(),
     customerEmail: z.string(),
-    coordinationContacts: z.tuple([coordinationContactSchema, coordinationContactSchema]),
+    coordinationContacts: z.array(coordinationContactSchema).min(1).max(10),
     startDate: z.string(),
     endDate: z.string(),
     paymentTerms: z.enum(["monthly", "quarterly", "annual"]),
@@ -83,6 +84,8 @@ const submissionPayloadSchema = z.object({
         additionalFixedPriceServices: z.boolean(),
       }),
       priceListRows: z.array(priceListRowSchema),
+      // Clause 6.3's rates for this proposal (AMC-057).
+      fixedPriceRates: z.array(z.string().max(300)).max(20).optional(),
       accountManagers: z.tuple([accountManagerSchema, accountManagerSchema]),
     })
     .optional(),

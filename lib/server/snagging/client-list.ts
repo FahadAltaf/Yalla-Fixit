@@ -58,8 +58,13 @@ export async function listClients(admin: SupabaseClient, params: URLSearchParams
     client_email: "email",
     created_at: "created_at",
   };
-  const sortColumn = SORTABLE[params.get("sortBy") ?? ""] ?? "name";
-  const ascending = params.get("sortDirection") !== "desc";
+  /*
+    With no column sort chosen, the Clients page lists the newest first;
+    the pickers keep A-Z, where a name is what is being looked for.
+  */
+  const chosen = SORTABLE[params.get("sortBy") ?? ""];
+  const sortColumn = chosen ?? (paged ? "created_at" : "name");
+  const ascending = chosen ? params.get("sortDirection") !== "desc" : !paged;
 
   let query = admin
     .from("snagging_clients")

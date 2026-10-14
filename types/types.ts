@@ -607,6 +607,8 @@ export interface SnaggingSnag {
   created_at?: string;
   updated_at?: string;
   photos?: SnaggingPhoto[];
+  /** How many photos it has; set on the light summary, where photos is empty. */
+  photo_count?: number;
   area?: Pick<SnaggingArea, "id" | "name"> | null;
 }
 
@@ -768,6 +770,10 @@ export interface SnaggingTask {
    * holds assignment back.
    */
   quotation_status?: string | null;
+  /** As quoted (SNG-100): furnished or not. Null when no quotation says. */
+  furnished?: boolean | null;
+  /** Booked outside working hours, as quoted. Null when no quotation says. */
+  out_of_hours?: boolean | null;
   gatepass_path?: string | null;
   gatepass_url?: string | null;
   /** False where the database has no gate pass column yet. */
@@ -795,6 +801,17 @@ export interface SnaggingAuditEvent {
   justification?: string | null;
   payload?: Record<string, unknown> | null;
   created_at: string;
+}
+
+/** One change on a quotation or in the Snagging settings (SNG-037). */
+export interface SnaggingChangeHistoryItem {
+  id: number;
+  eventType: string;
+  actorId: string | null;
+  actorName: string | null;
+  createdAt: string;
+  justification: string | null;
+  payload: Record<string, unknown> | null;
 }
 
 /** The inspector's on-site sign-off for a visit (FR-2.08). */

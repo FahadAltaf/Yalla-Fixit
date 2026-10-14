@@ -292,6 +292,10 @@ export function PublicQuotation({ token }: { token: string }) {
                 </Label>
                 <Input
                   id="approver-name"
+                  name="approver-name"
+                  // A person's name, so the browser does not take it for the
+                  // name on a card and warn about payment autofill.
+                  autoComplete="name"
                   value={name}
                   autoFocus
                   onChange={(e) => setName(e.target.value)}

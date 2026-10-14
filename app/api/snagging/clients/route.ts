@@ -4,6 +4,7 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { listClients, toOption } from "@/lib/server/snagging/client-list";
+import { CLIENT_PHONE_REQUIRED, isUsablePhone } from "@/lib/snagging/client-phone";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
@@ -73,6 +74,10 @@ export async function POST(req: NextRequest) {
     const email = emptyToNull(body?.client_email ?? body?.email);
     const phone = emptyToNull(body?.client_phone ?? body?.phone);
     const company = emptyToNull(body?.company);
+    // Required wherever a client is saved, as on the quotation form (SNG-008).
+    if (!isUsablePhone(phone)) {
+      return NextResponse.json({ error: CLIENT_PHONE_REQUIRED }, { status: 400 });
+    }
 
     const admin = await createAdminServerClient();
 
@@ -156,7 +161,13 @@ export async function PATCH(req: NextRequest) {
     const emailKey = sent("client_email", "email");
     if (emailKey) updates.email = emptyToNull(body[emailKey]);
     const phoneKey = sent("client_phone", "phone");
-    if (phoneKey) updates.phone = emptyToNull(body[phoneKey]);
+    if (phoneKey) {
+      // A client cannot be left without a phone (SNG-008).
+      if (!isUsablePhone(body[phoneKey])) {
+        return NextResponse.json({ error: CLIENT_PHONE_REQUIRED }, { status: 400 });
+      }
+      updates.phone = emptyToNull(body[phoneKey]);
+    }
     if (body?.company !== undefined)
       updates.company = emptyToNull(body.company);
     if (body?.notes !== undefined) updates.notes = emptyToNull(body.notes);

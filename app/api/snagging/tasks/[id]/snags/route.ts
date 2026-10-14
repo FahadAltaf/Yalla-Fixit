@@ -3,11 +3,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import { loadJobSnags } from "@/lib/server/snagging/job-detail-sections";
+import { loadJobSnagSummary, loadJobSnags } from "@/lib/server/snagging/job-detail-sections";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
  * GET /api/snagging/tasks/[id]/snags -- the snags this record shows, photos signed.
+ * With ?view=summary, the same snags light (no photos signed, a photo count).
  *
  * One section of the job detail, fetched on its own so it renders as soon
  * as it arrives and a failure here cannot take another section down. See
@@ -29,7 +30,12 @@ export async function GET(
     const { id } = await ctx.params;
     const admin = await createAdminServerClient();
 
-    return NextResponse.json({ data: await loadJobSnags(admin, id) });
+    // ?view=summary: every snag light, for the header counts and the plan
+    // pins; the list pages through /snags/page and a snag opens /snags/[snagId].
+    const summary = new URL(req.url).searchParams.get("view") === "summary";
+    return NextResponse.json({
+      data: summary ? await loadJobSnagSummary(admin, id) : await loadJobSnags(admin, id),
+    });
   } catch (error) {
     console.error("Snagging task snags GET error:", error);
     return NextResponse.json(

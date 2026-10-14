@@ -308,7 +308,12 @@ export function JobDetailProvider({
     [taskId],
   );
   const fetchSnags = useCallback(
-    (signal: AbortSignal) => snaggingService.getTaskSnags(taskId, { signal }),
+    /*
+      Light: every snag's facts and a photo count, nothing signed. The
+      header counts and the plan pins need no more; the snag list pages
+      through the server and a snag opens in full on its own request.
+    */
+    (signal: AbortSignal) => snaggingService.getTaskSnagSummary(taskId, { signal }),
     [taskId],
   );
   const fetchFloorPlans = useCallback(

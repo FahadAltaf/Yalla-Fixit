@@ -12,6 +12,7 @@ import { useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { snaggingService } from "@/modules/snagging";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Hint } from "@/components/ui/hint";
 import { cn } from "@/lib/utils";
 import type { SnaggingChecklistItem, SnaggingTask } from "@/types/types";
 
@@ -206,10 +207,12 @@ export function ChecklistPanel({
                       <span className="min-w-0 flex-1">
                         {item.label}
                         {item.mandatory ? (
-                          <span className="text-danger" title="Mandatory">
-                            {" "}
-                            *
-                          </span>
+                          <Hint label="Mandatory">
+                            <span className="text-danger">
+                              {" "}
+                              *
+                            </span>
+                          </Hint>
                         ) : null}
                         <span className="text-muted-foreground block text-xs">
                           {item.group_name}
@@ -238,10 +241,12 @@ export function ChecklistPanel({
                         <span className="min-w-0 flex-1">
                           {item.label}
                           {item.mandatory ? (
-                            <span className="text-danger" title="Mandatory">
-                              {" "}
-                              *
-                            </span>
+                            <Hint label="Mandatory">
+                              <span className="text-danger">
+                                {" "}
+                                *
+                              </span>
+                            </Hint>
                           ) : null}
                           {item.status === "not_checked"
                             ? reasonLine(item, "Not checked. ")

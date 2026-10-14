@@ -293,6 +293,10 @@ function contractBlocks(data: AmcComputedData): Block[] {
      what left a gap where clause 8 should have been. */
   const PROPOSAL_ONLY = new Set(["proposalNotes", "proposalAcceptance"]);
   const priceList = buildPriceListRows(formData.priceListRows ?? []);
+  /* Clause 6.3's rates as entered on this proposal (AMC-057). */
+  const fixedRates = (formData.fixedPriceRates ?? [])
+    .map((rate) => rate.trim())
+    .filter(Boolean);
 
   /*
     A clause that prints nothing takes no number with it.
@@ -315,7 +319,13 @@ function contractBlocks(data: AmcComputedData): Block[] {
       return fill(clause.body ?? "").length <= 1 && priceList.length === 0;
     }
     if (clause.role === "handymanRates") {
-      return fill(clause.body ?? "").length <= 1;
+      /*
+        Off, it takes no number: it used to be numbered whenever the
+        settings held rates, then drop out when drawn, leaving a gap in
+        the sequence after it (AMC-057).
+      */
+      if (!formData.optionalSections?.additionalFixedPriceServices) return true;
+      return fixedRates.length === 0 && fill(clause.body ?? "").length <= 1;
     }
     /*
       The call-out definitions only where the call-out is bought (Sharon,
@@ -657,8 +667,10 @@ function contractBlocks(data: AmcComputedData): Block[] {
       }
       case "handymanRates": {
         if (!formData.optionalSections?.additionalFixedPriceServices) return [];
-        /* The first block is the title; then one rate per block. */
-        const [, ...rates] = fillRef(clause.body);
+        /* The first block is the title; then one rate per block, unless
+           this proposal entered its own rates (AMC-057). */
+        const [, ...standard] = fillRef(clause.body);
+        const rates = fixedRates.length ? fixedRates.map(refText) : standard;
         if (!rates.length) return [];
         /*
           These read "A." and "B." in the wording shipped before, and some

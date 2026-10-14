@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { shortSnagId } from "@/lib/snagging/snag-id";
+
 import type { ReportData, ReportArea, ReportSnag } from "./report-data";
 
 /**
@@ -195,8 +197,16 @@ function beforeAfter(snag: ReportSnag, round: number): string {
   </div>`;
 }
 
-/** Each snag's number, straight through the document, as its pin shows it. */
-type Numbering = Map<string, number>;
+/**
+ * Each snag's ID as the plan pin and the list show it (SNG-097).
+ *
+ * The snag's own code is the one ID: the app shows it, the portal shows it,
+ * and so does the report, in full beside the defect ("UNIT-1904-S004") and
+ * by its last part on the pin and the list badge ("S004"), which is that
+ * same code shortened to fit a dot. A snag recorded without a code falls
+ * back to its place in the list.
+ */
+type Numbering = Map<string, string>;
 
 function snagBlock(snag: ReportSnag, round: number | null = null, numbering?: Numbering): string {
   // Only a defect carried INTO the round has a before; one found on it is new.
@@ -211,15 +221,16 @@ function snagBlock(snag: ReportSnag, round: number | null = null, numbering?: Nu
   );
 }
 
-function snagShell(snag: ReportSnag, evidence: string, number?: number): string {
-  return `<article class="snag">
+function snagShell(snag: ReportSnag, evidence: string, number?: string): string {
+  return `<article class="snag" data-pdf-block>
     <header class="snag__head">
       <div class="snag__title">
-        ${number ? `<span class="snag__num">${number}</span>` : ""}
+        ${number ? `<span class="snag__num">${esc(number)}</span>` : ""}
         <span class="snag__defect">${esc(snag.defect ?? "Defect")}</span>
         ${snag.subCategory ? `<span class="snag__sub">${esc(snag.subCategory)}</span>` : ""}
       </div>
       <div class="snag__meta">
+        ${snag.code ? `<span class="snag__code mono">${esc(snag.code)}</span>` : ""}
         ${severityChip(snag.severity)}
       </div>
     </header>
@@ -256,7 +267,7 @@ function areaSection(area: ReportArea, round: number | null = null, numbering?: 
     : "";
 
   return `<section class="area">
-    <h3 class="area__name">
+    <h3 class="area__name" data-pdf-block>
       ${esc(area.name)}
       <span class="area__count">${area.snags.length} ${area.snags.length === 1 ? "defect" : "defects"}</span>
     </h3>
@@ -284,10 +295,10 @@ function planSection(data: ReportData, numbering: Numbering): string {
       const dots = pins
         .map((snag) => {
           const tone = SEVERITY_TONE[snag.severity] ?? SEVERITY_TONE.low;
-          return `<span class="plan__pin" style="left:${(snag.pin!.x * 100).toFixed(2)}%;top:${(snag.pin!.y * 100).toFixed(2)}%;background:${tone.fg}">${numbering.get(snag.id) ?? ""}</span>`;
+          return `<span class="plan__pin" style="left:${(snag.pin!.x * 100).toFixed(2)}%;top:${(snag.pin!.y * 100).toFixed(2)}%;background:${tone.fg}">${esc(numbering.get(snag.id) ?? "")}</span>`;
         })
         .join("");
-      return `<figure class="plan">
+      return `<figure class="plan" data-pdf-block>
         ${plans.length > 1 ? `<figcaption class="plan__label">${esc(plan.label)}</figcaption>` : ""}
         <div class="plan__frame">
           <img src="${esc(plan.url)}" alt="${esc(plan.label)}" />
@@ -304,10 +315,15 @@ function planSection(data: ReportData, numbering: Numbering): string {
   </section>`;
 }
 
-/** FR-7.06 — what the inspection did not cover, said plainly. */
+/**
+ * FR-7.06 — what the inspection did not cover, said plainly.
+ *
+ * Rooms only. The inspection checklist is internal and is not shown to the
+ * client at all, not its items and not its count (SNG-134).
+ */
 function coverageSection(data: ReportData): string {
-  const { areas, checklist } = data.coverage;
-  if (areas.length === 0 && checklist.length === 0) return "";
+  const { areas } = data.coverage;
+  if (areas.length === 0) return "";
 
   /*
     Name and reason read as one sentence -- "Family room — Key not provided" --
@@ -316,7 +332,7 @@ function coverageSection(data: ReportData): string {
   */
   const areaRows = areas
     .map(
-      (area) => `<li>
+      (area) => `<li data-pdf-block>
         <div class="gap__head">
           <span class="gap__name">
             <strong>${esc(area.name)}</strong>
@@ -335,19 +351,6 @@ function coverageSection(data: ReportData): string {
     )
     .join("");
 
-  const checkRows = checklist
-    .map(
-      (item) => `<li>
-        <div class="gap__head">
-          <strong>${esc(item.label)}</strong>
-          <span class="chip chip--warn">${item.status === "not_checked" ? "Not checked" : "Not answered"}</span>
-        </div>
-        ${item.groupName ? `<p class="gap__reason">${esc(item.groupName)}</p>` : ""}
-        ${item.reason ? `<p class="gap__reason">${esc(item.reason)}</p>` : ""}
-      </li>`,
-    )
-    .join("");
-
   return `<section class="block">
     <h2 class="section">Areas not fully inspected</h2>
     <p class="block__lead">
@@ -355,8 +358,7 @@ function coverageSection(data: ReportData): string {
       listed so nothing is assumed to have passed simply because no defect is
       recorded against it.
     </p>
-    ${areas.length > 0 ? `<h4 class="gap__title">Areas</h4><ul class="gaps">${areaRows}</ul>` : ""}
-    ${checklist.length > 0 ? `<h4 class="gap__title">Checks</h4><ul class="gaps">${checkRows}</ul>` : ""}
+    <ul class="gaps">${areaRows}</ul>
   </section>`;
 }
 
@@ -391,11 +393,11 @@ function coverBlock(data: ReportData, version: number | null): string {
     cover.totalSnags > 0 && (severityChart || categoryChart)
       ? `<h2 class="section">What was found</h2>
          <div class="found">
-           <section class="card chart">
+           <section class="card chart" data-pdf-block>
              <h3 class="chart__title">By severity</h3>
              <ol class="chart__rows">${severityChart}</ol>
            </section>
-           <section class="card chart">
+           <section class="card chart" data-pdf-block>
              <h3 class="chart__title">By category</h3>
              <ol class="chart__rows">${categoryChart}</ol>
            </section>
@@ -404,7 +406,7 @@ function coverBlock(data: ReportData, version: number | null): string {
 
   const affected = cover.mostAffectedSubCategories
     .map(
-      (row, index) => `<li>
+      (row, index) => `<li data-pdf-block>
         <span class="rank">${index + 1}</span>
         <span class="rank__label">${esc(row.label)}</span>
         <span class="bar"><span class="bar__fill" style="width:${Math.max(4, Math.round((row.count / total) * 100))}%"></span></span>
@@ -461,7 +463,7 @@ function coverBlock(data: ReportData, version: number | null): string {
   </section>
 
   <h2 class="section">Summary</h2>
-  <section class="summary">
+  <section class="summary" data-pdf-block>
     <div class="stat">
       <span class="stat__value">${cover.totalSnags}</span>
       <span class="stat__label">Total snags</span>
@@ -480,10 +482,6 @@ function coverBlock(data: ReportData, version: number | null): string {
       <span class="stat__label">Areas walked</span>
     </div>`
     }
-    <div class="stat">
-      <span class="stat__value">${data.tally.checklistDone}/${data.tally.checklistTotal}</span>
-      <span class="stat__label">Checklist</span>
-    </div>
   </section>
 
   ${found}
@@ -521,10 +519,10 @@ export function renderReportHtml(
 
   // A de-snag shows its carried defects as before-and-after pairs.
   const round = data.visitType === "desnag" ? data.roundNumber : null;
-  // One number per snag, straight through the list, shared with the plan page.
+  // One ID per snag, shared by the list and the plan page (SNG-097).
   const numbering: Numbering = new Map();
   for (const snag of [...data.areas.flatMap((area) => area.snags), ...data.unassignedSnags]) {
-    numbering.set(snag.id, numbering.size + 1);
+    numbering.set(snag.id, shortSnagId(snag.code) ?? String(numbering.size + 1));
   }
   const areas = data.areas.map((area) => areaSection(area, round, numbering)).join("");
   const unassigned =
@@ -612,7 +610,7 @@ export function renderReportHtml(
   }
   .visitbar b { font-weight: 700; }
 
-  .summary { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-bottom: 16px; }
+  .summary { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 16px; }
   .stat { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; text-align: center; }
   .stat__value { display: block; font-size: ${print ? "20px" : "28px"}; font-weight: 800; line-height: 1.1; }
   .stat__label { display: block; font-size: ${print ? "7.5px" : "11px"}; text-transform: uppercase; letter-spacing: 0.5px; color: var(--sub); margin-top: 2px; }
@@ -684,6 +682,7 @@ export function renderReportHtml(
   .plan__pin { position: absolute; transform: translate(-50%, -50%); min-width: ${print ? "14px" : "20px"}; height: ${print ? "14px" : "20px"}; padding: 0 3px; border-radius: 999px; border: 2px solid #fff; color: #fff; font-size: ${print ? "7px" : "10px"}; font-weight: 700; display: flex; align-items: center; justify-content: center; box-shadow: 0 1px 2px rgba(0,0,0,.35); }
   .snag__sub { color: var(--sub); font-size: ${print ? "9.5px" : "13px"}; margin-left: 6px; }
   .snag__meta { display: flex; align-items: center; gap: 8px; font-size: ${print ? "8.5px" : "12px"}; color: var(--faint); }
+  .snag__code { color: var(--sub); font-size: ${print ? "8px" : "12px"}; letter-spacing: 0.2px; }
   .snag__desc { margin: 4px 0 0; color: var(--sub); font-size: ${print ? "9.5px" : "14px"}; }
   .snag__note { margin: 6px 0 0; font-size: ${print ? "9.5px" : "14px"}; }
   .snag__none { margin: 6px 0 0; color: var(--faint); font-size: ${print ? "9px" : "13px"}; font-style: italic; }
@@ -756,7 +755,7 @@ export function renderReportHtml(
     data.signOff.signedAt
       ? `<section class="block">
            <h2>Sign-off</h2>
-           <div class="signoff">
+           <div class="signoff" data-pdf-block>
              <div>
                <span class="label">Signed by</span>
                <strong>${esc(data.signOff.signerName ?? "—")}</strong>

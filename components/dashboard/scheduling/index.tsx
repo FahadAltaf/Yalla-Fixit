@@ -80,6 +80,7 @@ import {
   Unset,
 } from "./technician-cells";
 import TimeSelect from "@/components/ui/time-select";
+import { Hint } from "@/components/ui/hint";
 
 type Props = { technicians: TechnicianReference[] };
 
@@ -883,21 +884,22 @@ function RoleColorPicker({
 
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          disabled={disabled}
-          className="relative size-6 shrink-0 cursor-pointer overflow-hidden rounded border disabled:cursor-not-allowed disabled:opacity-50"
-          style={{ backgroundColor: value ?? "transparent" }}
-          title={value ? `Highlight colour ${value}` : "No highlight colour — click to choose"}
-          aria-label={`Highlight colour for ${name}`}
-        >
-          {!value && (
-            // A diagonal slash reads as "none" at a glance.
-            <span className="bg-muted-foreground/50 absolute top-1/2 left-1/2 h-px w-[130%] -translate-x-1/2 -translate-y-1/2 -rotate-45" />
-          )}
-        </button>
-      </PopoverTrigger>
+      <Hint label={value ? `Highlight colour ${value}` : "No highlight colour — click to choose"}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            disabled={disabled}
+            className="relative size-6 shrink-0 cursor-pointer overflow-hidden rounded border disabled:cursor-not-allowed disabled:opacity-50"
+            style={{ backgroundColor: value ?? "transparent" }}
+            aria-label={`Highlight colour for ${name}`}
+          >
+            {!value && (
+              // A diagonal slash reads as "none" at a glance.
+              <span className="bg-muted-foreground/50 absolute top-1/2 left-1/2 h-px w-[130%] -translate-x-1/2 -translate-y-1/2 -rotate-45" />
+            )}
+          </button>
+        </PopoverTrigger>
+      </Hint>
       <PopoverContent align="end" className="w-72">
         <PopoverHeader>
           <PopoverTitle>Colour for {name}</PopoverTitle>
@@ -1370,9 +1372,13 @@ function ManageTechnicianDialog({
                   <StatusBadge status={record.status} />
                 </div>
                 {record.status === "active" && (
-                  <Button size="icon" variant="ghost" disabled={cancellingId === record.id} onClick={() => handleCancelLeave(record.id)} title="Cancel leave">
-                    <X className="size-4" />
-                  </Button>
+                  <Hint label="Cancel leave">
+                    <span tabIndex={0} className="inline-flex">
+                      <Button aria-label="Cancel leave" size="icon" variant="ghost" disabled={cancellingId === record.id} onClick={() => handleCancelLeave(record.id)}>
+                        <X className="size-4" />
+                      </Button>
+                    </span>
+                  </Hint>
                 )}
               </div>
             ))}
@@ -1448,21 +1454,22 @@ function ColumnFilter({
         if (!next) setQuery("");
       }}
     >
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={cn(
-            "rounded p-0.5 transition-colors",
-            active
-              ? "bg-primary/15 text-primary"
-              : "text-muted-foreground/60 hover:bg-muted hover:text-foreground",
-          )}
-          title={active ? `${label}: ${selected!.size} of ${options.length} values shown. Click to change.` : `Filter by ${label}`}
-          aria-label={`Filter by ${label}`}
-        >
-          <ListFilter className="size-3.5" />
-        </button>
-      </PopoverTrigger>
+      <Hint label={active ? `${label}: ${selected!.size} of ${options.length} values shown. Click to change.` : `Filter by ${label}`}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className={cn(
+              "rounded p-0.5 transition-colors",
+              active
+                ? "bg-primary/15 text-primary"
+                : "text-muted-foreground/60 hover:bg-muted hover:text-foreground",
+            )}
+            aria-label={`Filter by ${label}`}
+          >
+            <ListFilter className="size-3.5" />
+          </button>
+        </PopoverTrigger>
+      </Hint>
       <PopoverContent align="start" className="w-64 gap-2">
         <div className="flex items-center justify-between text-xs">
           <span className="font-medium">{label}</span>

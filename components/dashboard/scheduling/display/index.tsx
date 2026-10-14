@@ -31,6 +31,7 @@ import {
   placeRange,
 } from "@/lib/scheduling/board-layout";
 import { cn } from "@/lib/actions/utils";
+import { Hint } from "@/components/ui/hint";
 
 // Wall-display view of the day's schedule.
 //
@@ -361,26 +362,26 @@ export default function ScheduleDisplay() {
                             ? entry.title || "Note"
                             : entry.fsm_work_order_name || entry.fsm_appointment_name || "Appointment";
                         return (
-                          <div
-                            key={entry.id}
-                            className={cn(
-                              "absolute flex h-10 items-center gap-2 overflow-hidden rounded-md px-2.5 ring-1",
-                              styles.bar,
-                            )}
-                            style={{
-                              left: `${pos.left}%`,
-                              width: `${pos.width}%`,
-                              top: `${(laneOf.get(entry.id) ?? 0) * 3}rem`,
-                            }}
-                            title={`${label} · ${stateLabel} · ${hhmm(pos.start)} – ${hhmm(pos.end)}`}
-                          >
-                            {pos.startsEarlier && <ChevronsLeft className="-ml-1 size-4 shrink-0" />}
-                            <span className="truncate text-sm font-semibold">{label}</span>
-                            <span className="ml-auto flex shrink-0 items-center gap-1 text-xs font-medium tabular-nums opacity-90">
-                              {pos.startsEarlier ? `until ${hhmm(pos.end)}` : hhmm(pos.start)}
-                              {pos.runsOn && <ChevronsRight className="-mr-1 size-4" />}
-                            </span>
-                          </div>
+                          <Hint key={entry.id} label={`${label} · ${stateLabel} · ${hhmm(pos.start)} – ${hhmm(pos.end)}`}>
+                            <div
+                              className={cn(
+                                "absolute flex h-10 items-center gap-2 overflow-hidden rounded-md px-2.5 ring-1",
+                                styles.bar,
+                              )}
+                              style={{
+                                left: `${pos.left}%`,
+                                width: `${pos.width}%`,
+                                top: `${(laneOf.get(entry.id) ?? 0) * 3}rem`,
+                              }}
+                            >
+                              {pos.startsEarlier && <ChevronsLeft className="-ml-1 size-4 shrink-0" />}
+                              <span className="truncate text-sm font-semibold">{label}</span>
+                              <span className="ml-auto flex shrink-0 items-center gap-1 text-xs font-medium tabular-nums opacity-90">
+                                {pos.startsEarlier ? `until ${hhmm(pos.end)}` : hhmm(pos.start)}
+                                {pos.runsOn && <ChevronsRight className="-mr-1 size-4" />}
+                              </span>
+                            </div>
+                          </Hint>
                         );
                       })}
                     </div>

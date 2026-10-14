@@ -44,6 +44,7 @@ import { IconText } from "@/components/data-table/columns/icon-text";
 import { IdentityCell } from "@/components/ui/entity-avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Hint } from "@/components/ui/hint";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -1484,26 +1485,28 @@ function TextLibrary({
                           aria-hidden
                         />
                       ) : null}
-                      <button
-                        type="button"
-                        onClick={() => setSelectedId(item.id)}
-                        title={item.label}
-                        className={cn(
-                          "focus-visible:ring-ring min-w-0 flex-1 rounded-md py-2.5 pe-2 ps-3 text-left text-sm transition-colors focus-visible:ring-2 focus-visible:outline-none",
-                          active && "font-medium",
-                        )}
-                      >
-                        {/* Two lines before it gives up, rather than cutting
-                            "Materials, Spare Parts, Consumables & Labor" off
-                            at the comma with half the row still empty. */}
-                        <span className="line-clamp-2 break-words">{item.label}</span>
-                      </button>
+                      <Hint label={item.label}>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedId(item.id)}
+                          className={cn(
+                            "focus-visible:ring-ring min-w-0 flex-1 rounded-md py-2.5 pe-2 ps-3 text-left text-sm transition-colors focus-visible:ring-2 focus-visible:outline-none",
+                            active && "font-medium",
+                          )}
+                        >
+                          {/* Two lines before it gives up, rather than cutting
+                              "Materials, Spare Parts, Consumables & Labor" off
+                              at the comma with half the row still empty. */}
+                          <span className="line-clamp-2 break-words">{item.label}</span>
+                        </button>
+                      </Hint>
                       {changed ? (
-                        <span
-                          className="bg-warning me-2 size-2 shrink-0 rounded-full transition-opacity group-hover/row:opacity-0"
-                          title="Customised"
-                          aria-label="Customised"
-                        />
+                        <Hint label="Customised">
+                          <span
+                            className="bg-warning me-2 size-2 shrink-0 rounded-full transition-opacity group-hover/row:opacity-0"
+                            aria-label="Customised"
+                          />
+                        </Hint>
                       ) : null}
                       {/* The row's own actions. Laid over the end of the row
                           rather than beside it, on the row's own background,
@@ -1512,30 +1515,32 @@ function TextLibrary({
                       {onDelete || onRename ? (
                         <span className="absolute end-1 top-1/2 flex shrink-0 -translate-y-1/2 items-center rounded-md bg-inherit ps-3 opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100">
                           {onRename ? (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="text-muted-foreground hover:text-foreground size-7"
-                              aria-label={`Edit ${item.label}`}
-                              title="Edit"
-                              onClick={() => openRename(item)}
-                            >
-                              <Pencil className="size-3.5" />
-                            </Button>
+                            <Hint label="Edit">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="text-muted-foreground hover:text-foreground size-7"
+                                aria-label={`Edit ${item.label}`}
+                                onClick={() => openRename(item)}
+                              >
+                                <Pencil className="size-3.5" />
+                              </Button>
+                            </Hint>
                           ) : null}
                           {onDelete ? (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="text-muted-foreground hover:text-destructive size-7"
-                              aria-label={`Remove ${item.label}`}
-                              title="Remove"
-                              onClick={() => void removeItem(item)}
-                            >
-                              <Trash2 className="size-3.5" />
-                            </Button>
+                            <Hint label="Remove">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="text-muted-foreground hover:text-destructive size-7"
+                                aria-label={`Remove ${item.label}`}
+                                onClick={() => void removeItem(item)}
+                              >
+                                <Trash2 className="size-3.5" />
+                              </Button>
+                            </Hint>
                           ) : null}
                         </span>
                       ) : null}
@@ -1568,30 +1573,32 @@ function TextLibrary({
                   order is part of the document. */}
               {onReorder ? (
                 <>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    className="size-8"
-                    aria-label="Move up"
-                    title="Move up"
-                    disabled={selectedIndex <= 0}
-                    onClick={() => onReorder(selected.id, items[selectedIndex - 1]?.id ?? null)}
-                  >
-                    <ArrowUp className="size-4" />
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    className="size-8"
-                    aria-label="Move down"
-                    title="Move down"
-                    disabled={selectedIndex < 0 || selectedIndex >= items.length - 1}
-                    onClick={() => onReorder(selected.id, items[selectedIndex + 2]?.id ?? null)}
-                  >
-                    <ArrowDown className="size-4" />
-                  </Button>
+                  <Hint label="Move up">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="size-8"
+                      aria-label="Move up"
+                      disabled={selectedIndex <= 0}
+                      onClick={() => onReorder(selected.id, items[selectedIndex - 1]?.id ?? null)}
+                    >
+                      <ArrowUp className="size-4" />
+                    </Button>
+                  </Hint>
+                  <Hint label="Move down">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="size-8"
+                      aria-label="Move down"
+                      disabled={selectedIndex < 0 || selectedIndex >= items.length - 1}
+                      onClick={() => onReorder(selected.id, items[selectedIndex + 2]?.id ?? null)}
+                    >
+                      <ArrowDown className="size-4" />
+                    </Button>
+                  </Hint>
                 </>
               ) : null}
               {customised ? (

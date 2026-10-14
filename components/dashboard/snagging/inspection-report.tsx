@@ -10,6 +10,7 @@ import YallaFixit from "@/public/yalla-fixit.png";
 import type { SnaggingQuotation } from "@/modules/snagging";
 import type { SnaggingPhoto, SnaggingSnag, SnaggingTask } from "@/types/types";
 import { isVideo } from "./evidence-media";
+import { shortSnagId } from "@/lib/snagging/snag-id";
 import CompanyLogo from "@/public/amc/brand/logo-trimmed.png";
 
 /**
@@ -893,7 +894,8 @@ function DefectCard({
   beforeAfter = false,
 }: {
   reference: string;
-  number: number;
+  /** The snag's short ID ("S004"), or its place in the list. */
+  number: number | string;
   /** The defect itself, e.g. "Ceiling plaster damaged". */
   title: string;
   /** The catalogue path above it, e.g. "Ceiling plaster · Plaster". */
@@ -971,7 +973,11 @@ function DefectCard({
               lineHeight: 1.35,
             }}
           >
-            <span style={{ color: tone.fg }}>{number}.</span> {title}
+            <span style={{ color: tone.fg }}>
+              {number}
+              {typeof number === "number" ? "." : ""}
+            </span>{" "}
+            {title}
           </div>
           <div
             style={{
@@ -2093,7 +2099,7 @@ export const InspectionReport = forwardRef<
                             marginTop: forPDF ? -4 : 0,
                           }}
                         >
-                          {defectNumber.get(snag.id)}
+                          {shortSnagId(snag.snag_code) ?? defectNumber.get(snag.id)}
                         </span>
                       </span>
                     ))}
@@ -2188,10 +2194,15 @@ export const InspectionReport = forwardRef<
                     return (
                       <DefectCard
                         key={snag.id}
-                        reference={`${String(running).padStart(3, "0")}-${letter}-${String(
-                          index + 1,
-                        ).padStart(2, "0")}`}
-                        number={running}
+                        // The snag's own code (SNG-097): the app and the
+                        // portal call the defect by it, so the report does.
+                        reference={
+                          snag.snag_code ??
+                          `${String(running).padStart(3, "0")}-${letter}-${String(
+                            index + 1,
+                          ).padStart(2, "0")}`
+                        }
+                        number={shortSnagId(snag.snag_code) ?? running}
                         /* The defect as the heading, and the catalogue
                                category and sub-category as its path (P1). A
                                snag captured before the restructure has fewer

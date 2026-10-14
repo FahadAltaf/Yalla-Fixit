@@ -207,13 +207,11 @@ export function InspectionHeaderCard({
   const accessIssues = areas.filter(
     (area) => area.access_state && area.access_state !== "accessible",
   );
-  const photoTotal = snags.reduce(
-    (sum, snag) => sum + (snag.photos?.length ?? 0),
-    0,
-  );
-  const snagsWithPhoto = snags.filter(
-    (snag) => (snag.photos?.length ?? 0) > 0,
-  ).length;
+  // The page holds the light summary, which counts photos without them.
+  const photosOf = (snag: (typeof snags)[number]) =>
+    snag.photo_count ?? snag.photos?.length ?? 0;
+  const photoTotal = snags.reduce((sum, snag) => sum + photosOf(snag), 0);
+  const snagsWithPhoto = snags.filter((snag) => photosOf(snag) > 0).length;
 
   const awaitingDecision =
     task.status === "submitted" || task.status === "in_review";

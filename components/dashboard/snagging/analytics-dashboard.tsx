@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/popover";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Hint } from "@/components/ui/hint";
 import { DataTable } from "@/components/data-table";
 import {
   getSnaggingDeveloperColumns,
@@ -896,12 +897,11 @@ function StatusTrend({ value }: { value: number | null }) {
   }
   const Icon = value > 0 ? TrendingUp : TrendingDown;
   return (
-    <span
-      className="text-muted-foreground inline-flex items-center gap-1 text-xs tabular-nums"
-      title={`${value > 0 ? "+" : ""}${value} vs the previous period`}
-    >
-      <Icon className="size-3" aria-hidden />
-      {value > 0 ? `+${value}` : value}
-    </span>
+    <Hint label={`${value > 0 ? "+" : ""}${value} vs the previous period`}>
+      <span className="text-muted-foreground inline-flex items-center gap-1 text-xs tabular-nums">
+        <Icon className="size-3" aria-hidden />
+        {value > 0 ? `+${value}` : value}
+      </span>
+    </Hint>
   );
 }

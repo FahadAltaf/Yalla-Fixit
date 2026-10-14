@@ -12,7 +12,9 @@ import {
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Hint } from "@/components/ui/hint";
 import { TASK_STATUS_LABELS } from "@/lib/snagging/status-labels";
+import { shortSnagId } from "@/lib/snagging/snag-id";
 import { cn } from "@/lib/utils";
 import {
   REJECTION_LABELS as REJECTION_RULES,
@@ -69,19 +71,24 @@ import type {
  */
 
 /**
- * A snag's position in the walk, in a circle tinted by its severity.
+ * A snag's ID in the walk, in a pill tinted by its severity.
  *
- * The number is the point: severity is never carried by colour alone
- * anywhere in this module, so the circle reads as an index first and a
- * severity cue second.
+ * The ID is the point: severity is never carried by colour alone anywhere
+ * in this module, so the pill reads as an ID first and a severity cue
+ * second. It is the snag's own code, shortened ("S004"), so the portal, the
+ * app and the report name a snag the same way (SNG-097); a snag without a
+ * code shows its place in the list.
  */
 export function SnagIndex({
   index,
   severity,
+  code,
 }: {
   index: number;
   severity: SnaggingSeverity;
+  code?: string | null;
 }) {
+  const label = shortSnagId(code) ?? String(index);
   const tone =
     severity === "high"
       ? "bg-danger text-on-tone"
@@ -90,15 +97,17 @@ export function SnagIndex({
         : "bg-ink/25 text-ink";
 
   return (
-    <span
-      className={cn(
-        "inline-flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold tabular-nums",
-        tone,
-      )}
-      aria-label={`${SEVERITY_LABELS[severity]} severity, item ${index}`}
-    >
-      {index}
-    </span>
+    <Hint label={code ?? undefined}>
+      <span
+        className={cn(
+          "inline-flex h-7 min-w-7 shrink-0 items-center justify-center rounded-full px-1.5 text-xs font-semibold tabular-nums",
+          tone,
+        )}
+        aria-label={`${SEVERITY_LABELS[severity]} severity, snag ${code ?? label}`}
+      >
+        {label}
+      </span>
+    </Hint>
   );
 }
 

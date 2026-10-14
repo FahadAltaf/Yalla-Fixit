@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
@@ -147,7 +147,8 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
       const [visitDetail, job] = await Promise.all([
         snaggingService.getVisit(taskId, visitId),
         // The snag list's sections; not visit status or the de-snag quotation.
-        snaggingService.getTask(taskId, {}, ["snags", "checklist", "floor_plans"]),
+        // The snags light: the counts read them, the list pages on its own.
+        snaggingService.getTask(taskId, {}, ["snag_summary", "checklist", "floor_plans"]),
       ]);
       setDetail(visitDetail);
       setTask(job);
@@ -364,9 +365,14 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
     list shows only what the return trip added, which is what this page
     is about.
   */
-  const visitTask: SnaggingTask | null = task
-    ? { ...task, snags: (task.snags ?? []).filter((snag) => snag.visit_id === visitId) }
-    : null;
+  // Memoised: the snag list reads again whenever its snags change identity.
+  const visitTask: SnaggingTask | null = useMemo(
+    () =>
+      task
+        ? { ...task, snags: (task.snags ?? []).filter((snag) => snag.visit_id === visitId) }
+        : null,
+    [task, visitId],
+  );
 
   const snags = detail?.snags ?? [];
   const highCount = snags.filter((snag) => snag.severity === "high").length;
@@ -587,6 +593,7 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
                 {visitTask ? (
                   <SnagWalkList
                     task={visitTask}
+                    visitId={visitId}
                     canEdit={canEdit}
                     onSnagsChanged={() => void load()}
                     onAreasChanged={() => void load()}

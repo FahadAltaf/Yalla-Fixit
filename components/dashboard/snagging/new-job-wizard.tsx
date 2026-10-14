@@ -35,6 +35,11 @@ import { toast } from "sonner";
 import { useDebounce } from "@/hooks/use-debounce";
 
 import { compressImage, readImageSize } from "@/lib/media/compress-image";
+import { toPinnablePlan } from "@/lib/snagging/pinnable-plan";
+import {
+  requiredPropertyErrors,
+  type RequiredPropertyKey,
+} from "@/lib/snagging/quotation-required";
 import {
   zoneLabelPoint,
   type ZonePoint,
@@ -70,6 +75,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Hint } from "@/components/ui/hint";
 import { cn } from "@/lib/utils";
 import { pickRateForSize } from "@/lib/server/snagging/pricing";
 import {
@@ -131,8 +137,10 @@ type Draft = {
   building_name: string;
   community: string;
   developer_name: string;
-  property_type: SnaggingPropertyType;
-  bedrooms: number; // 0 = studio; ignored for commercial
+  /* Empty until chosen, so a quotation cannot go out on a default the
+     coordinator never looked at (SNG-017). */
+  property_type: SnaggingPropertyType | "";
+  bedrooms: number | null; // 0 = studio; ignored for commercial
   built_up_area: string; // sqft
   plot_area: string; // villa / townhouse
   external_areas_in_scope: boolean;
@@ -245,7 +253,7 @@ const ALL_STEPS = [
   { key: "assign", label: "Assign", icon: Users },
 ] as const;
 
-type PropertyErrorKey = "client" | "unit_label" | "built_up_area";
+type PropertyErrorKey = "client" | RequiredPropertyKey;
 
 /**
  * The property-step rules, expressed as the sentence the coordinator
@@ -266,17 +274,18 @@ function propertyErrors(draft: Draft): Partial<Record<PropertyErrorKey, string>>
       "This client has no usable phone number. Change the client, or add one with the + button.";
   }
 
-  if (draft.unit_label.trim().length === 0) {
-    errors.unit_label = "The inspector finds the property by this reference, so it is required.";
-  }
-
-  if (!(Number(draft.built_up_area) > 0)) {
-    errors.built_up_area = draft.built_up_area.trim()
-      ? "Enter the area as a number greater than 0."
-      : "The quotation is priced from this, so it is required.";
-  }
-
-  return errors;
+  // Unit, project, type, bedrooms and built-up area (SNG-017): the same
+  // rule the API refuses with.
+  return {
+    ...errors,
+    ...requiredPropertyErrors({
+      unit_label: draft.unit_label,
+      building_name: draft.building_name,
+      property_type: draft.property_type,
+      bedrooms: draft.bedrooms,
+      built_up_area: draft.built_up_area,
+    }),
+  };
 }
 
 const AREAS_ERROR =
@@ -342,6 +351,9 @@ export default function NewJobWizard({
   );
   const [quotationError, setQuotationError] = useState<string | null>(null);
   const [quotationLabel, setQuotationLabel] = useState<string | null>(null);
+  // The status of the quotation being edited: a sent or rejected one goes
+  // back to Draft when it is saved, and the form says so.
+  const [editingStatus, setEditingStatus] = useState<string | null>(null);
   /*
     Whether an inspector may be picked while the job is being created:
     always, once the form has settled. A job raised from an approved
@@ -370,8 +382,8 @@ export default function NewJobWizard({
     building_name: "",
     community: "",
     developer_name: "",
-    property_type: "apartment",
-    bedrooms: 2,
+    property_type: "",
+    bedrooms: null,
     built_up_area: "",
     plot_area: "",
     external_areas_in_scope: false,
@@ -492,6 +504,9 @@ export default function NewJobWizard({
           title_deed_path: text(prop.title_deed_path),
           noc_required: Boolean(prop.noc_required),
           noc_path: text(prop.noc_path),
+          // The office note typed on the quotation (SNG-022), so it reaches
+          // the job's Setup tab and the inspector's phone.
+          notes: current.notes || text(quote.notes),
           areas: areasTouched.current ? current.areas : [],
         }));
         setQuotationLabel(quote.quote_number);
@@ -534,14 +549,13 @@ export default function NewJobWizard({
         const quote = await snaggingService.getQuotationById(editQuotationId);
         if (cancelled) return;
 
-        if (quote.status !== "draft") {
+        if (quote.status === "approved") {
           setQuotationError(
-            quote.status === "sent"
-              ? "That quotation has already been sent to the client, so it can no longer be edited."
-              : "That quotation has been decided, so it can no longer be edited.",
+            "That quotation has been approved, so it can no longer be edited.",
           );
           return;
         }
+        setEditingStatus(quote.status);
 
         const prop = (quote.property ?? {}) as Record<string, unknown>;
         const snap = (quote.property_snapshot ?? {}) as Record<string, unknown>;
@@ -587,6 +601,7 @@ export default function NewJobWizard({
           // alone saves the same figure rather than resuggesting one.
           rate_per_sqft: text(quote.rate_per_sqft),
           external_rate_per_sqft: text(quote.external_rate_per_sqft),
+          notes: text(quote.notes),
           areas: areasTouched.current ? current.areas : [],
         }));
         setQuotationLabel(quote.quote_number);
@@ -809,9 +824,11 @@ export default function NewJobWizard({
             client_email: draft.client_email,
             client_phone: draft.client_phone,
             developer_name: draft.developer_name,
-            property_type: draft.property_type,
+            property_type: draft.property_type || undefined,
             bedrooms:
-              draft.property_type === "commercial" ? undefined : draft.bedrooms,
+              draft.property_type === "commercial"
+                ? undefined
+                : (draft.bedrooms ?? undefined),
             built_up_area_sqft: num0(draft.built_up_area),
             plot_area_sqft: num0(draft.plot_area),
             external_areas_in_scope: draft.external_areas_in_scope,
@@ -837,6 +854,8 @@ export default function NewJobWizard({
           out_of_hours: draft.out_of_hours,
           rate_per_sqft: num0(draft.rate_per_sqft),
           external_rate_per_sqft: num0(draft.external_rate_per_sqft),
+          // Office notes (SNG-022): kept on the quotation, copied to its job.
+          notes: draft.notes,
         };
 
         /*
@@ -911,9 +930,10 @@ export default function NewJobWizard({
           client_email: draft.client_email,
           client_phone: draft.client_phone,
           developer_name: draft.developer_name,
-          property_type: draft.property_type,
+          property_type: draft.property_type || "apartment",
           city: "Dubai",
-          bedrooms: draft.property_type === "commercial" ? undefined : draft.bedrooms,
+          bedrooms:
+            draft.property_type === "commercial" ? undefined : (draft.bedrooms ?? undefined),
           built_up_area_sqft: num(draft.built_up_area),
           plot_area_sqft: num(draft.plot_area),
           external_areas_in_scope: draft.external_areas_in_scope,
@@ -1114,7 +1134,7 @@ export default function NewJobWizard({
         }
         description={
           isEdit
-            ? "Correct the details while it is still a draft. Saving reprices the document and updates the client and property records."
+            ? "Change what the quotation is priced from until the client approves it. Saving reprices the document and updates the client and property records."
             : quoteOnly
               ? "Price a client's property. The job is raised once they approve it."
               : quotationLabel
@@ -1158,6 +1178,20 @@ export default function NewJobWizard({
             Loading the quotation…
           </p>
         </Card>
+      ) : isEdit && (editingStatus === "sent" || editingStatus === "rejected") ? (
+        <Alert>
+          <AlertTriangle />
+          <AlertTitle>
+            {editingStatus === "sent"
+              ? "This quotation is with the client"
+              : "The client rejected this quotation"}
+          </AlertTitle>
+          <AlertDescription>
+            Saving your changes moves it back to Draft and reprices it. The
+            link the client was sent stops working, so send the revised
+            quotation again from its page.
+          </AlertDescription>
+        </Alert>
       ) : quotationError ? (
         <Alert variant="destructive">
           <AlertTriangle />
@@ -1196,8 +1230,8 @@ export default function NewJobWizard({
               />
             ) : STEPS[step].key === "plan_areas" ? (
               <PlanAreasStep
-                propertyType={draft.property_type}
-                bedrooms={draft.bedrooms}
+                propertyType={draft.property_type || "apartment"}
+                bedrooms={draft.bedrooms ?? 0}
                 areas={draft.areas}
                 setAreas={setAreas}
                 plans={plans}
@@ -1443,16 +1477,17 @@ function ClientPicker({
           />
           <ChevronDown className="text-muted-foreground pointer-events-none absolute top-1/2 right-3 size-4 -translate-y-1/2" />
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          onClick={() => setAddOpen(true)}
-          aria-label="Add a new client"
-          title="Add a new client"
-        >
-          <Plus className="size-4" />
-        </Button>
+        <Hint label="Add a new client">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            onClick={() => setAddOpen(true)}
+            aria-label="Add a new client"
+          >
+            <Plus className="size-4" />
+          </Button>
+        </Hint>
       </div>
 
       {open ? (
@@ -2045,7 +2080,7 @@ function PropertyStep({
               placeholder="e.g. Unit 1904"
             />
           </Field>
-          <Field label="Project / tower" required>
+          <Field label="Project / tower" required error={errors.building_name}>
             <Input
               value={draft.building_name}
               onChange={(event) => set("building_name", event.target.value)}
@@ -2066,13 +2101,13 @@ function PropertyStep({
               placeholder="e.g. Emaar"
             />
           </Field>
-          <Field label="Property type" required>
+          <Field label="Property type" required error={errors.property_type}>
             <Select
               value={draft.property_type}
               onValueChange={(value) => setPropertyType(value as SnaggingPropertyType)}
             >
-              <SelectTrigger className="w-full">
-                <SelectValue />
+              <SelectTrigger className="w-full" aria-invalid={Boolean(errors.property_type)}>
+                <SelectValue placeholder="Choose the type" />
               </SelectTrigger>
               <SelectContent>
                 {Object.entries(PROPERTY_TYPE_LABELS).map(([value, label]) => (
@@ -2085,10 +2120,13 @@ function PropertyStep({
           </Field>
 
           {!isCommercial ? (
-            <Field label="Bedrooms" required>
-              <Select value={String(draft.bedrooms)} onValueChange={(v) => setBedrooms(Number(v))}>
-                <SelectTrigger className="w-full">
-                  <SelectValue />
+            <Field label="Bedrooms" required error={errors.bedrooms}>
+              <Select
+                value={draft.bedrooms == null ? "" : String(draft.bedrooms)}
+                onValueChange={(v) => setBedrooms(Number(v))}
+              >
+                <SelectTrigger className="w-full" aria-invalid={Boolean(errors.bedrooms)}>
+                  <SelectValue placeholder="Choose bedrooms" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="0">Studio</SelectItem>
@@ -2307,8 +2345,8 @@ function PlanAreasStep({
 
   const activePlan =
     plans.find((plan) => plan.id === activePlanId) ?? plans[0] ?? null;
-  // Only an image can be clicked for a coordinate. A PDF plan still
-  // uploads and still reaches the inspector; it just cannot be pinned here.
+  // Only an image can be clicked for a coordinate. A PDF is converted to
+  // one when it is picked, so this only fails for a file that never loaded.
   const canPin = Boolean(activePlan?.file.type.startsWith("image/"));
 
   /*
@@ -2366,9 +2404,27 @@ function PlanAreasStep({
         The preview, the dimensions stored against the plan, and the bytes
         that eventually upload then all describe one image. Doing it at
         submit instead would mean the pin coordinates were measured against
-        a picture the job never receives.
+        a picture the job never receives. A PDF is rendered to an image
+        here too, so every plan can be pinned and drawn on (SNG-055).
       */
-      const { file: prepared, width, height } = await compressImage(file);
+      const isPdf = file.type === "application/pdf";
+      const toastId = isPdf ? toast.loading(`Converting ${file.name}…`) : undefined;
+      let pinnable: Awaited<ReturnType<typeof toPinnablePlan>>;
+      try {
+        pinnable = await toPinnablePlan(file);
+        if (isPdf) toast.success("PDF converted to an image", { id: toastId });
+      } catch (error) {
+        toast.error(
+          isPdf
+            ? "Could not read that PDF. Upload the plan as an image (PNG or JPG)."
+            : error instanceof Error
+              ? error.message
+              : "Could not add that plan",
+          { id: toastId },
+        );
+        continue;
+      }
+      const { file: prepared, width, height } = pinnable;
       const url = URL.createObjectURL(prepared);
       const dims =
         width && height
@@ -2385,7 +2441,8 @@ function PlanAreasStep({
     }
 
     setPlans((current) => [...current, ...next]);
-    if (next.length > 0 && !activePlanId) setActivePlanId(next[0].id);
+    // The plan just added opens, ready to place rooms on.
+    if (next.length > 0) setActivePlanId(next[0].id);
   }
 
   function rename(id: string, label: string) {
@@ -2545,7 +2602,7 @@ function PlanAreasStep({
               <Upload className="text-muted-foreground size-6" />
               <span className="font-medium">Add plan images</span>
               <span className="text-muted-foreground text-sm">
-                PNG, JPG, WEBP or PDF, up to 15MB, one per floor
+                PNG, JPG, WEBP or PDF, up to 15MB, one per floor. A PDF uses its first page.
               </span>
             </button>
           ) : (
@@ -2577,24 +2634,26 @@ function PlanAreasStep({
                       >
                         {name}
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => setRenaming({ id: plan.id, label: plan.label })}
-                        aria-label={`Rename ${name}`}
-                        title="Rename"
-                        className="rounded-full p-1 opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100"
-                      >
-                        <Pencil className="size-3" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => remove(plan.id)}
-                        aria-label={`Remove ${name}`}
-                        title="Remove"
-                        className="hover:text-destructive mr-1 rounded-full p-1 opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100"
-                      >
-                        <X className="size-3" />
-                      </button>
+                      <Hint label="Rename">
+                        <button
+                          type="button"
+                          onClick={() => setRenaming({ id: plan.id, label: plan.label })}
+                          aria-label={`Rename ${name}`}
+                          className="rounded-full p-1 opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100"
+                        >
+                          <Pencil className="size-3" />
+                        </button>
+                      </Hint>
+                      <Hint label="Remove">
+                        <button
+                          type="button"
+                          onClick={() => remove(plan.id)}
+                          aria-label={`Remove ${name}`}
+                          className="hover:text-destructive mr-1 rounded-full p-1 opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100"
+                        >
+                          <X className="size-3" />
+                        </button>
+                      </Hint>
                     </div>
                   );
                 })}
@@ -2612,9 +2671,8 @@ function PlanAreasStep({
               {activePlan ? (
                 <>
                   {/*
-                    Pin or outline (BA change 6). Only offered on an image —
-                    a PDF plan still uploads and still reaches the inspector,
-                    it just cannot be drawn on here.
+                    Pin or outline (BA change 6). Every plan is an image by
+                    now: a PDF is converted when it is picked (SNG-055).
                   */}
                   {canPin ? (
                     <div className="bg-muted/40 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-2 py-1.5">
@@ -2705,9 +2763,8 @@ function PlanAreasStep({
                     <div className="border-border bg-mist-soft text-muted-foreground flex flex-col items-center justify-center gap-2 rounded-lg border px-6 py-16 text-center">
                       <ImageIcon className="size-6" />
                       <p className="max-w-sm text-sm">
-                        A PDF plan still uploads with the job, but it cannot be
-                        drawn on here. Add the floor as an image to place rooms
-                        on it.
+                        This plan could not be shown. Remove it and add the
+                        floor as an image (PNG or JPG) to place rooms on it.
                       </p>
                     </div>
                   )}
@@ -2744,17 +2801,18 @@ function PlanAreasStep({
                   <ListChecks className="text-brand size-4" />
                   Areas to inspect
                 </h3>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  className="size-7 shrink-0"
-                  onClick={() => setAddOpen(true)}
-                  aria-label="Add an area"
-                  title="Add an area"
-                >
-                  <Plus className="size-4" />
-                </Button>
+                <Hint label="Add an area">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="size-7 shrink-0"
+                    onClick={() => setAddOpen(true)}
+                    aria-label="Add an area"
+                  >
+                    <Plus className="size-4" />
+                  </Button>
+                </Hint>
               </div>
 
               <div className="flex items-center justify-between gap-2">
@@ -2863,32 +2921,32 @@ function PlanAreasStep({
                       the list, so the placed rooms can be counted in one
                       pass, and the names start at the same x.
                     */}
-                    <span
-                      className={cn(
-                        "flex size-7 shrink-0 items-center justify-center rounded-md border [&_svg]:size-3.5",
-                        placed
-                          ? "border-brand/30 bg-brand-50 text-brand"
-                          : "text-muted-foreground bg-muted/50",
-                      )}
-                      title={
-                        drawn ? "Drawn as a room" : placed ? "Pinned" : "Not on the plan"
-                      }
-                    >
-                      {drawn ? <Shapes /> : placed ? <MapPin /> : <Crosshair />}
-                    </span>
+                    <Hint label={drawn ? "Drawn as a room" : placed ? "Pinned" : "Not on the plan"}>
+                      <span
+                        className={cn(
+                          "flex size-7 shrink-0 items-center justify-center rounded-md border [&_svg]:size-3.5",
+                          placed
+                            ? "border-brand/30 bg-brand-50 text-brand"
+                            : "text-muted-foreground bg-muted/50",
+                        )}
+                      >
+                        {drawn ? <Shapes /> : placed ? <MapPin /> : <Crosshair />}
+                      </span>
+                    </Hint>
 
                     {chosen && canPin && placed ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="text-muted-foreground hover:text-destructive size-7 shrink-0"
-                        onClick={() => clearPlacement(option.name)}
-                        aria-label={`Take ${option.name} off the plan`}
-                        title="Take off the plan"
-                      >
-                        <Eraser className="size-3.5" />
-                      </Button>
+                      <Hint label="Take off the plan">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="text-muted-foreground hover:text-destructive size-7 shrink-0"
+                          onClick={() => clearPlacement(option.name)}
+                          aria-label={`Take ${option.name} off the plan`}
+                        >
+                          <Eraser className="size-3.5" />
+                        </Button>
+                      </Hint>
                     ) : null}
                   </div>
                 );
@@ -3045,7 +3103,9 @@ function QuotePricingBlock({
   pricing: SnaggingPricingConfig | null;
 }) {
   const isCommercial = draft.property_type === "commercial";
-  const row = pricing?.rate_card?.types?.[draft.property_type] ?? null;
+  const row = draft.property_type
+    ? (pricing?.rate_card?.types?.[draft.property_type] ?? null)
+    : null;
   const area = Number(draft.built_up_area) || 0;
 
   /*

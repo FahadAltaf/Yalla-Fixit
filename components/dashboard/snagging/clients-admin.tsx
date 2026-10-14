@@ -32,8 +32,10 @@ import { PhoneInput } from "@/components/ui/phone-input";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Hint } from "@/components/ui/hint";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
+import { CLIENT_PHONE_REQUIRED, isUsablePhone } from "@/lib/snagging/client-phone";
 import {
   snaggingService,
   type SnaggingClientOption,
@@ -255,20 +257,21 @@ export default function ClientsAdmin({
         // One action, so one icon rather than a menu holding it.
         cell: ({ row }) =>
           canEdit ? (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-8"
-              onClick={(event) => {
-                event.stopPropagation();
-                setCreating(false);
-                setEditing(row.original);
-              }}
-              aria-label={`Edit ${row.original.client_name}`}
-              title="Edit details"
-            >
-              <Pencil className="size-4" />
-            </Button>
+            <Hint label="Edit details">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setCreating(false);
+                  setEditing(row.original);
+                }}
+                aria-label={`Edit ${row.original.client_name}`}
+              >
+                <Pencil className="size-4" />
+              </Button>
+            </Hint>
           ) : null,
       },
     ],
@@ -465,7 +468,10 @@ function ClientDialog({
   }, [client]);
 
   const nameError = name.trim().length > 0 && name.trim().length < 2;
-  const canSave = name.trim().length >= 2 && !saving;
+  // Required here as on the quotation form (SNG-008). Said once something
+  // has been typed, so an empty new dialog does not open on an error.
+  const phoneError = phone.trim().length > 0 && !isUsablePhone(phone);
+  const canSave = name.trim().length >= 2 && isUsablePhone(phone) && !saving;
 
   async function save() {
     if (!client || !canSave) return;
@@ -509,13 +515,13 @@ function ClientDialog({
           </DialogTitle>
           <DialogDescription>
             {creating
-              ? "Only the name is required. The rest can be filled in later."
+              ? "The name and phone are required. The rest can be filled in later."
               : "Quotations already issued keep the details they were raised with — this changes what future documents carry."}
           </DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-4">
-          <Field label="Name" htmlFor="client-name" error={nameError ? "A name needs at least two characters." : undefined}>
+          <Field label="Name" htmlFor="client-name" required error={nameError ? "A name needs at least two characters." : undefined}>
             <Input
               id="client-name"
               value={name}
@@ -526,7 +532,18 @@ function ClientDialog({
           </Field>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Phone" htmlFor="client-phone">
+            <Field
+              label="Phone"
+              htmlFor="client-phone"
+              required
+              error={
+                phoneError
+                  ? "Enter the full number, with at least six digits."
+                  : !creating && !phone.trim()
+                    ? CLIENT_PHONE_REQUIRED
+                    : undefined
+              }
+            >
               <PhoneInput id="client-phone" value={phone} onChange={setPhone} />
             </Field>
             <Field label="Email" htmlFor="client-email">
@@ -584,17 +601,20 @@ function Field({
   label,
   htmlFor,
   error,
+  required,
   children,
 }: {
   label: string;
   htmlFor: string;
   error?: string;
+  required?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <div className="space-y-1.5">
       <Label htmlFor={htmlFor} className="text-muted-foreground text-xs font-medium">
         {label}
+        {required ? <span className="text-brand"> *</span> : null}
       </Label>
       {children}
       {error ? <p className="text-destructive text-xs">{error}</p> : null}

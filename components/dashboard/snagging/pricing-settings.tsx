@@ -2,6 +2,7 @@
 
 import { DirhamIcon } from "@/components/ui/dirham-icon";
 import { ScopeView, TermsView } from "./quote-text-view";
+import { ChangeHistoryCard } from "./change-history-card";
 import { Money } from "@/components/ui/money";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
@@ -235,7 +236,7 @@ type ChargesDraft = {
  * The rates and the preview both need a rate card; the scope and terms do
  * not, which is why a database without one still has something to show.
  */
-type SettingsView = "rates" | "preview" | "terms";
+type SettingsView = "rates" | "preview" | "terms" | "history";
 
 export default function PricingSettings() {
   const { userProfile } = useAuth();
@@ -336,7 +337,7 @@ export default function PricingSettings() {
     does not have.
   */
   const activeView: SettingsView =
-    config?.rate_card || view === "terms" ? view : "terms";
+    config?.rate_card || view === "terms" || view === "history" ? view : "terms";
 
   /**
    * Writes the whole config back.
@@ -531,8 +532,12 @@ export default function PricingSettings() {
                       { value: "rates" as const, label: "Rate card", count: visible.length },
                       { value: "preview" as const, label: "Quote preview" },
                       { value: "terms" as const, label: "Scope & terms" },
+                      { value: "history" as const, label: "Change history" },
                     ]
-                  : [{ value: "terms" as const, label: "Scope & terms" }]
+                  : [
+                      { value: "terms" as const, label: "Scope & terms" },
+                      { value: "history" as const, label: "Change history" },
+                    ]
               }
             />
 
@@ -629,6 +634,9 @@ export default function PricingSettings() {
             {activeView === "preview" && config.rate_card ? (
               <QuotePreview config={config} />
             ) : null}
+
+            {/* Who changed the settings, and when (SNG-037). */}
+            {activeView === "history" ? <ChangeHistoryCard scope="settings" /> : null}
 
             {activeView === "terms" ? (
               <SectionCard

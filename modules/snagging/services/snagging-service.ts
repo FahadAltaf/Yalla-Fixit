@@ -10,6 +10,7 @@ import type {
   SnaggingAnalyticsMetric,
   SnaggingArea,
   SnaggingAuditEvent,
+  SnaggingChangeHistoryItem,
   SnaggingFloorPlan,
   SnaggingProperty,
   SnaggingPropertyType,
@@ -200,6 +201,36 @@ export interface SnaggingVisitDetail {
   }>;
 }
 
+/** What the snag list asks the server for (GET /tasks/[id]/snags/page). */
+export interface SnagPageQuery {
+  page: number;
+  pageSize: number;
+  sort: "newest" | "oldest";
+  /** "own" (default) is what this record found; "context" the earlier rows it shows. */
+  scope?: "own" | "context";
+  severity?: string | null;
+  status?: string | null;
+  /** "walk" or a visit id. */
+  source?: string | null;
+  areaId?: string | null;
+}
+
+/** One page of snags, with the counts the list's controls show. */
+export interface SnagPageResult {
+  rows: NonNullable<SnaggingTask["snags"]>;
+  total: number;
+  page: number;
+  pageSize: number;
+  /** Severity counts under the other filters. */
+  counts: { all: number; high: number; medium: number; low: number };
+  /** Status counts under the other filters. */
+  statusCounts: Record<string, number>;
+  /** Snags per room, over the whole scope. */
+  areaCounts: Record<string, number>;
+  /** The visits that found any snag. */
+  sources: string[];
+}
+
 export interface SnaggingQuotation {
   /** Null on a preview: nothing has been written for it yet. */
   id: string | null;
@@ -260,6 +291,19 @@ export interface SnaggingQuotation {
    */
   can_approve_rate?: boolean;
 
+  /** Office notes typed on the form; copied to the job (SNG-022). */
+  notes?: string | null;
+
+  /* ── Who did what (SNG-037). From the quotation page's own read. ── */
+
+  created_by_name?: string | null;
+  /** The person behind the newest change after creation. */
+  modified_by_name?: string | null;
+  modified_at?: string | null;
+  /** Who picked the rate, and when. */
+  rate_chosen_by_name?: string | null;
+  rate_chosen_at?: string | null;
+
   /**
    * The live client and property behind the document, beside the frozen
    * snapshot the PDF renders from.
@@ -316,6 +360,8 @@ function toParams(
 export type TaskSection =
   | "checklist"
   | "snags"
+  /** The snags light (no photos signed), for counts and pins. */
+  | "snag_summary"
   | "floor_plans"
   | "visit_status"
   | "desnag_quotation";
@@ -363,7 +409,11 @@ export const snaggingService = {
     const [core, checklist, snags, floorPlans, visitStatus, desnag] = await Promise.all([
       snaggingService.getTaskCore(id, init),
       want.has("checklist") ? snaggingService.getTaskChecklist(id, init) : undefined,
-      want.has("snags") ? snaggingService.getTaskSnags(id, init) : undefined,
+      want.has("snags")
+        ? snaggingService.getTaskSnags(id, init)
+        : want.has("snag_summary")
+          ? snaggingService.getTaskSnagSummary(id, init)
+          : undefined,
       want.has("floor_plans") ? snaggingService.listFloorPlans(id, init) : undefined,
       want.has("visit_status") ? snaggingService.getTaskVisitStatus(id, init) : undefined,
       want.has("desnag_quotation") ? snaggingService.getTaskDesnagQuotation(id, init) : undefined,
@@ -405,6 +455,52 @@ export const snaggingService = {
       method: "GET",
       signal: init.signal,
     }),
+
+  /**
+   * The same snags light: no photos signed (photos is empty), with
+   * photo_count. What the job page's header and plan pins read; the list
+   * pages through getTaskSnagPage and a snag opens through getTaskSnag.
+   */
+  getTaskSnagSummary: async (
+    id: string,
+    init: { signal?: AbortSignal } = {},
+  ): Promise<NonNullable<SnaggingTask["snags"]>> =>
+    executeRESTBackend<NonNullable<SnaggingTask["snags"]>>(
+      `/api/snagging/tasks/${id}/snags?view=summary`,
+      { method: "GET", signal: init.signal },
+    ),
+
+  /** One page of the snag list, filtered and sorted on the server. */
+  getTaskSnagPage: async (
+    id: string,
+    query: SnagPageQuery,
+    init: { signal?: AbortSignal } = {},
+  ): Promise<SnagPageResult> => {
+    const params = new URLSearchParams({
+      page: String(query.page),
+      pageSize: String(query.pageSize),
+      sort: query.sort,
+    });
+    if (query.scope) params.set("scope", query.scope);
+    if (query.severity) params.set("severity", query.severity);
+    if (query.status) params.set("status", query.status);
+    if (query.source) params.set("source", query.source);
+    if (query.areaId) params.set("area", query.areaId);
+    return executeRESTBackend<SnagPageResult>(
+      `/api/snagging/tasks/${id}/snags/page?${params.toString()}`,
+      { method: "GET", signal: init.signal },
+    );
+  },
+
+  /** One snag in full, as this job shows it (for the detail opened from the plan). */
+  getTaskSnag: async (
+    id: string,
+    snagId: string,
+  ): Promise<NonNullable<SnaggingTask["snags"]>[number]> =>
+    executeRESTBackend<NonNullable<SnaggingTask["snags"]>[number]>(
+      `/api/snagging/tasks/${id}/snags/${snagId}`,
+      { method: "GET" },
+    ),
 
   /** Corrects the reason on a checklist item from the portal; empty clears it. */
   updateChecklistReason: async (
@@ -530,6 +626,16 @@ export const snaggingService = {
     ),
 
   // ── Quotation (F1-F13) ────────────────────────────────────────────────
+  /** Who changed what on a quotation or in the Snagging settings (SNG-037). */
+  getChangeHistory: async (
+    scope: "quotation" | "settings",
+    id?: string,
+  ): Promise<SnaggingChangeHistoryItem[]> =>
+    executeRESTBackend<SnaggingChangeHistoryItem[]>(
+      `/api/snagging/history?scope=${scope}${id ? `&id=${encodeURIComponent(id)}` : ""}`,
+      { method: "GET" },
+    ),
+
   getPricing: async (): Promise<SnaggingPricingConfig> =>
     executeRESTBackend<SnaggingPricingConfig>("/api/snagging/pricing", {
       method: "GET",

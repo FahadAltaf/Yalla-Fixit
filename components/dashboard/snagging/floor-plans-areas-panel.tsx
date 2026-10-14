@@ -18,7 +18,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { compressImage } from "@/lib/media/compress-image";
+import { toPinnablePlan } from "@/lib/snagging/pinnable-plan";
+import { shortSnagId } from "@/lib/snagging/snag-id";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -56,6 +57,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/actions/utils";
 import MultipleSelector, { type Option } from "@/components/ui/multiselect";
+import { Hint } from "@/components/ui/hint";
 import AddFloorPlanDialog from "./add-floor-plan-dialog";
 import { PlanZoneCanvas } from "./plan-zone-canvas";
 import { zoneLabelPoint, type ZonePoint } from "@/lib/snagging/zone-geometry";
@@ -74,63 +76,6 @@ import {
 
 import { EvidenceViewer } from "./evidence-media";
 import { SnagDetailDialog } from "./snag-walk-list";
-
-/**
- * Prepares a file for upload. Images pass through with their natural size read.
- * A PDF is rendered (page 1) to a PNG so the plan is pinnable everywhere —
- * never silently stored as a non-viewable PDF (FR-3.05 #7).
- */
-async function toPinnablePlan(
-  file: File,
-): Promise<{ file: File; width?: number; height?: number }> {
-  if (file.type.startsWith("image/")) {
-    // Downscaled and re-encoded before it leaves the device. The returned
-    // dimensions are the ones actually uploaded, so the pin coordinates the
-    // panel stores are relative to the image the report will show.
-    const compressed = await compressImage(file);
-    return {
-      file: compressed.file,
-      width: compressed.width ?? undefined,
-      height: compressed.height ?? undefined,
-    };
-  }
-
-  if (file.type === "application/pdf") {
-    const pdfjs = await import("pdfjs-dist");
-    // Point the worker at the bundled module worker.
-    pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-      "pdfjs-dist/build/pdf.worker.min.mjs",
-      import.meta.url,
-    ).toString();
-    const buffer = await file.arrayBuffer();
-    const pdf = await pdfjs.getDocument({ data: buffer }).promise;
-    const page = await pdf.getPage(1);
-    const viewport = page.getViewport({ scale: 2 });
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.floor(viewport.width);
-    canvas.height = Math.floor(viewport.height);
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("Could not render the PDF");
-    await page.render({ canvasContext: ctx, viewport }).promise;
-    const blob = await new Promise<Blob | null>((res) =>
-      canvas.toBlob(res, "image/png"),
-    );
-    if (!blob) throw new Error("Could not convert the PDF to an image");
-    // A page rasterised at scale 2 is a large PNG; run it through the same
-    // compressor so a PDF plan does not cost several times an image one.
-    const png = new File([blob], file.name.replace(/\.pdf$/i, ".png"), {
-      type: "image/png",
-    });
-    const compressed = await compressImage(png);
-    return {
-      file: compressed.file,
-      width: compressed.width ?? canvas.width,
-      height: compressed.height ?? canvas.height,
-    };
-  }
-
-  throw new Error("Floor plans must be an image (PNG/JPG) or a PDF");
-}
 
 /* A job is past its inspection from submission on (point 7). */
 const INSPECTED_STATUSES = new Set(["submitted", "in_review", "approved", "delivered"]);
@@ -259,6 +204,19 @@ export function FloorPlansAreasPanel({
   const [activeAreaId, setActiveAreaId] = useState<string | null>(null);
   /* The defect opened from a pin, and a photo of it opened full size. */
   const [detailSnag, setDetailSnag] = useState<Snag | null>(null);
+  /*
+    The pins come from the light summary, so a snag opens with its facts at
+    once and its photos and people follow from its own request.
+  */
+  async function openSnag(snag: Snag) {
+    setDetailSnag(snag);
+    try {
+      const full = await snaggingService.getTaskSnag(taskId, snag.id);
+      setDetailSnag((current) => (current?.id === snag.id ? full : current));
+    } catch {
+      // The facts are already on screen; the photos just do not arrive.
+    }
+  }
   const [photo, setPhoto] = useState<SnaggingPhoto | null>(null);
   const [placeMode, setPlaceMode] = useState<"pin" | "zone">("pin");
   const [addAreaOpen, setAddAreaOpen] = useState(false);
@@ -372,13 +330,17 @@ export function FloorPlansAreasPanel({
       },
       async () => {
         const prepared = await toPinnablePlan(file);
-        await snaggingService.uploadFloorPlan(taskId, prepared.file, {
+        const created = await snaggingService.uploadFloorPlan(taskId, prepared.file, {
           // The dialog requires a label, so there is no "Floor N"
           // fallback producing plans nobody can tell apart.
           label: planLabel,
           width: prepared.width,
           height: prepared.height,
         });
+        /* The plan just added opens, ready to place rooms on: it is the
+           one being worked on, and the old plan staying on screen made
+           the upload look as though nothing had happened. */
+        if (created?.id) setActivePlanId(created.id);
         setAddOpen(false);
       },
     );
@@ -897,40 +859,41 @@ export function FloorPlansAreasPanel({
                           "ring-brand/50 ring-2",
                         )}
                       >
-                        <button
-                          type="button"
-                          className="py-1 pl-3 pr-2"
-                          onClick={() => setActivePlanId(plan.id)}
-                          onDoubleClick={() => {
-                            if (!canEdit || busy) return;
-                            setRenamingPlan({ id: plan.id, label: plan.label });
-                          }}
-                          onKeyDown={(event) => {
-                            if (!canEdit || busy) return;
-                            // Reordering has to be reachable without a
-                            // mouse; dragging never is.
-                            if (event.key === "ArrowLeft" && event.ctrlKey) {
-                              event.preventDefault();
-                              void move(i, -1);
-                            }
-                            if (event.key === "ArrowRight" && event.ctrlKey) {
-                              event.preventDefault();
-                              void move(i, 1);
-                            }
-                            if (event.key === "F2") {
-                              event.preventDefault();
+                        <Hint label={canEdit ? "Drag to reorder" : plan.label}>
+                          <button
+                            type="button"
+                            className="py-1 pl-3 pr-2"
+                            onClick={() => setActivePlanId(plan.id)}
+                            onDoubleClick={() => {
+                              if (!canEdit || busy) return;
                               setRenamingPlan({ id: plan.id, label: plan.label });
-                            }
-                          }}
-                          title={canEdit ? "Drag to reorder" : plan.label}
-                        >
-                          {plan.label.trim() || "Untitled plan"}
-                          {pins > 0 ? (
-                            <span className="ml-1.5 opacity-60 tabular-nums">
-                              {pins}
-                            </span>
-                          ) : null}
-                        </button>
+                            }}
+                            onKeyDown={(event) => {
+                              if (!canEdit || busy) return;
+                              // Reordering has to be reachable without a
+                              // mouse; dragging never is.
+                              if (event.key === "ArrowLeft" && event.ctrlKey) {
+                                event.preventDefault();
+                                void move(i, -1);
+                              }
+                              if (event.key === "ArrowRight" && event.ctrlKey) {
+                                event.preventDefault();
+                                void move(i, 1);
+                              }
+                              if (event.key === "F2") {
+                                event.preventDefault();
+                                setRenamingPlan({ id: plan.id, label: plan.label });
+                              }
+                            }}
+                          >
+                            {plan.label.trim() || "Untitled plan"}
+                            {pins > 0 ? (
+                              <span className="ml-1.5 opacity-60 tabular-nums">
+                                {pins}
+                              </span>
+                            ) : null}
+                          </button>
+                        </Hint>
 
                         {/*
                           Removal on the chip rather than behind a menu,
@@ -942,19 +905,20 @@ export function FloorPlansAreasPanel({
                           and F2 still work; nobody found them.
                         */}
                         {canEdit ? (
-                          <button
-                            type="button"
-                            className={cn(
-                              "rounded-full p-1 opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100",
-                              !active && "mr-1.5",
-                            )}
-                            disabled={busy}
-                            aria-label={`Rename ${plan.label}`}
-                            title="Rename"
-                            onClick={() => setRenamingPlan({ id: plan.id, label: plan.label })}
-                          >
-                            <Pencil className="size-3" />
-                          </button>
+                          <Hint label="Rename">
+                            <button
+                              type="button"
+                              className={cn(
+                                "rounded-full p-1 opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100",
+                                !active && "mr-1.5",
+                              )}
+                              disabled={busy}
+                              aria-label={`Rename ${plan.label}`}
+                              onClick={() => setRenamingPlan({ id: plan.id, label: plan.label })}
+                            >
+                              <Pencil className="size-3" />
+                            </button>
+                          </Hint>
                         ) : null}
                         {canEdit && active ? (
                           <button
@@ -1110,7 +1074,8 @@ export function FloorPlansAreasPanel({
                             key: snag.id,
                             x: snag.pin_x as number,
                             y: snag.pin_y as number,
-                            label: String(index + 1),
+                            // The snag's own ID, as the list and the report show it (SNG-097).
+                            label: shortSnagId(snag.snag_code) ?? String(index + 1),
                             tone: MARKER_TONE[snag.status] ?? MARKER_TONE.open,
                             /*
                               What the defect is, not its code: the job's
@@ -1125,7 +1090,7 @@ export function FloorPlansAreasPanel({
                             ]
                               .filter(Boolean)
                               .join(" · "),
-                            onSelect: () => setDetailSnag(snag),
+                            onSelect: () => void openSnag(snag),
                           }))
                       : []
                   }
@@ -1181,17 +1146,18 @@ export function FloorPlansAreasPanel({
                 count={areas.length}
                 action={
                   canEdit ? (
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      className="size-7 shrink-0"
-                      onClick={() => setAddAreaOpen(true)}
-                      disabled={busy}
-                      aria-label="Add an area"
-                      title="Add an area"
-                    >
-                      <Plus className="size-4" />
-                    </Button>
+                    <Hint label="Add an area">
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="size-7 shrink-0"
+                        onClick={() => setAddAreaOpen(true)}
+                        disabled={busy}
+                        aria-label="Add an area"
+                      >
+                        <Plus className="size-4" />
+                      </Button>
+                    </Hint>
                   ) : null
                 }
               >
@@ -1274,17 +1240,18 @@ export function FloorPlansAreasPanel({
                         start at the same x. It reads rather than acts —
                         selecting the row is what the row itself does.
                       */}
-                      <span
-                        className={cn(
-                          "flex size-7 shrink-0 items-center justify-center rounded-md border [&_svg]:size-3.5",
-                          placed
-                            ? "border-brand/30 bg-brand-50 text-brand"
-                            : "text-muted-foreground bg-muted/50",
-                        )}
-                        title={state}
-                      >
-                        <Marker />
-                      </span>
+                      <Hint label={state}>
+                        <span
+                          className={cn(
+                            "flex size-7 shrink-0 items-center justify-center rounded-md border [&_svg]:size-3.5",
+                            placed
+                              ? "border-brand/30 bg-brand-50 text-brand"
+                              : "text-muted-foreground bg-muted/50",
+                          )}
+                        >
+                          <Marker />
+                        </span>
+                      </Hint>
 
                       {/*
                         One menu, not four icons.

@@ -582,6 +582,61 @@ export function AmcBrochurePage({ brochure, pdf = false }: { brochure: AmcBrochu
           ) : (
             <div style={{ fontSize: "12px", marginTop: "16px" }}>No services selected.</div>
           )}
+          {/* The supply and installation price list, as the contract's
+              clause prints it, when this proposal has one (AMC-057). */}
+          {brochure.priceList.length ? (
+            <div
+              style={{
+                marginTop: "20px",
+                backgroundColor: C.white,
+                border: `1px solid ${C.line}`,
+                borderRadius: "10px",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  backgroundColor: C.plan,
+                  color: C.white,
+                  padding: "10px 14px",
+                  fontSize: "13px",
+                  fontWeight: 700,
+                  lineHeight: "18px",
+                }}
+              >
+                Supply and installation price list
+                <div style={{ fontSize: "9px", fontWeight: 400, opacity: 0.9, marginTop: "2px" }}>
+                  Predefined prices for this property, each subject to your approval. Excl. VAT.
+                </div>
+              </div>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <th style={{ ...planHead, width: "8%" }}>NO.</th>
+                    <th style={{ ...planHead, textAlign: "left", width: "22%" }}>CATEGORY</th>
+                    <th style={{ ...planHead, textAlign: "left" }}>DESCRIPTION</th>
+                    <th style={{ ...planHead, textAlign: "left", width: "16%" }}>BRAND</th>
+                    <th style={{ ...planHead, textAlign: "right", width: "16%" }}>PRICE (AED)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {brochure.priceList.map((row, index) => {
+                    const last = index === brochure.priceList.length - 1;
+                    const cell = last ? { ...planCell, borderBottom: "none" } : planCell;
+                    return (
+                      <tr key={`${row.no}-${index}`}>
+                        <td style={cell}>{row.no}</td>
+                        <td style={{ ...cell, textAlign: "left" }}>{row.category}</td>
+                        <td style={{ ...cell, textAlign: "left" }}>{row.description}</td>
+                        <td style={{ ...cell, textAlign: "left" }}>{row.brand}</td>
+                        <td style={{ ...cell, textAlign: "right", fontWeight: 700 }}>{row.price}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
           {copy.servicesNote ? (
             <div style={{ fontSize: "11px", lineHeight: "15px", fontStyle: "italic", marginTop: "16px" }}>{copy.servicesNote}</div>
           ) : null}

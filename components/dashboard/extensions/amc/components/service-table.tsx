@@ -28,7 +28,13 @@ import {
   isFrequencyEditable,
 } from "../amc-constants";
 import { calculateAmcTotals, computeServiceRowPrice } from "../amc-pricing";
-import type { AmcFormData } from "../amc-types";
+import { BASE_PRICE_MESSAGE, type AmcFormData } from "../amc-types";
+
+/* "A", "A and B", "A, B and C". */
+function listNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
 
 interface ServiceTableProps {
   form: UseFormReturn<AmcFormData>;
@@ -41,6 +47,14 @@ export function ServiceTable({ form }: ServiceTableProps) {
   const formValues = form.watch();
   const totals = calculateAmcTotals(formValues);
   const availableServices = getServicesForUnitType(unitType);
+  // Ticked, not free, and no price yet: what the base price error is about.
+  const unpriced = availableServices
+    .filter((service) => {
+      const row = serviceRows.find((r) => r.serviceId === service.id);
+      return Boolean(row?.included && !row.free && row.basePrice === undefined);
+    })
+    .map((service) => service.label);
+  const flagUnpriced = form.formState.errors.serviceRows?.message === BASE_PRICE_MESSAGE;
 
   const updateRow = (
     serviceId: string,
@@ -219,6 +233,11 @@ export function ServiceTable({ form }: ServiceTableProps) {
                               placeholder="0.00"
                               disabled={!row.included}
                               aria-label={`Base price for ${service.label}`}
+                              aria-invalid={
+                                flagUnpriced && row.included && row.basePrice === undefined
+                                  ? true
+                                  : undefined
+                              }
                               value={row.basePrice ?? ""}
                               onChange={(event) =>
                                 updateRow(service.id, {
@@ -244,7 +263,21 @@ export function ServiceTable({ form }: ServiceTableProps) {
                 </TableBody>
               </Table>
             </div>
-            <FormMessage />
+            {/*
+              Names the services still waiting for a price (AMC-057). The
+              bare "every selected service" sent people hunting, and a
+              free service with no price confused the team until Free
+              was ticked.
+            */}
+            {form.formState.errors.serviceRows?.message === BASE_PRICE_MESSAGE &&
+            unpriced.length > 0 ? (
+              <p className="text-destructive text-sm">
+                Enter a base price for {listNames(unpriced)}, or tick Free if{" "}
+                {unpriced.length === 1 ? "it is" : "they are"} included at no charge.
+              </p>
+            ) : (
+              <FormMessage />
+            )}
           </FormItem>
         )}
       />

@@ -104,6 +104,17 @@ export async function approveQuotation(
     origin: opts.origin === "client" ? "system" : "portal",
     payload: { quote_number: quote.quote_number, by: opts.name ?? null, origin: opts.origin },
   });
+  // Against the quotation as well, so its own change history shows the
+  // decision even before it has a job (SNG-037).
+  await recordAudit(admin, {
+    entityType: "quotation",
+    entityId: quote.id,
+    eventType: "quotation_approved",
+    actorId: opts.actorId ?? null,
+    actorLabel: opts.origin === "client" ? (opts.name ?? "Client") : null,
+    origin: opts.origin === "client" ? "system" : "portal",
+    payload: { quote_number: quote.quote_number, by: opts.name ?? null, origin: opts.origin },
+  });
 
   return data;
 }
@@ -143,6 +154,16 @@ export async function rejectQuotation(
     entityType: "task",
     entityId: quote.job_id,
     taskId: quote.job_id,
+    eventType: "quotation_rejected",
+    actorId: opts.actorId ?? null,
+    actorLabel: opts.origin === "client" ? (opts.name ?? "Client") : null,
+    origin: opts.origin === "client" ? "system" : "portal",
+    justification: opts.reason,
+    payload: { quote_number: quote.quote_number, origin: opts.origin },
+  });
+  await recordAudit(admin, {
+    entityType: "quotation",
+    entityId: quote.id,
     eventType: "quotation_rejected",
     actorId: opts.actorId ?? null,
     actorLabel: opts.origin === "client" ? (opts.name ?? "Client") : null,

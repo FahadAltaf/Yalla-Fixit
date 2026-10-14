@@ -25,6 +25,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dialog";
 import { AlertTriangle, CalendarDays, ChevronDown, ExternalLink, Loader2, RefreshCw, Trash2, UsersRound } from "lucide-react";
 import TimeSelect, { formatTimeAmPm } from "@/components/ui/time-select";
+import { Hint } from "@/components/ui/hint";
 import { reachesOutsideUsualHours, fsmRecordUrl } from "./shift-utils";
 import {
   APPOINTMENT_STATE_LABELS,
@@ -738,33 +739,33 @@ export default function EntryDetailDialog({
                         const takenElsewhere = Boolean(owner) && !selected;
                         const nowInFsm = line.scheduled ? line.appointments[0]?.name : null;
                         return (
-                          <label
-                            key={line.id}
-                            className={`flex items-start gap-2 rounded px-1 py-1 text-sm ${
-                              takenElsewhere ? "cursor-not-allowed opacity-55" : "hover:bg-muted/50 cursor-pointer"
-                            }`}
-                            title={takenElsewhere ? `Already on ${owner}` : undefined}
-                          >
-                            <Checkbox
-                              checked={selected}
-                              disabled={takenElsewhere}
-                              onCheckedChange={() => toggleLine(line.id)}
-                              className="mt-0.5"
-                            />
-                            <span className="flex-1">
-                              <span className="font-medium">{line.name}</span>
-                              {line.serviceName && <span className="text-muted-foreground"> · {line.serviceName}</span>}
-                              {takenElsewhere && (
-                                <span className="text-muted-foreground block text-[11px]">On {owner}</span>
-                              )}
-                              {nowInFsm && (
-                                <span className="block text-[11px] text-warning">
-                                  Booked on {nowInFsm} in Zoho FSM since this draft was made — it will be left off
-                                  this appointment when approved
-                                </span>
-                              )}
-                            </span>
-                          </label>
+                          <Hint key={line.id} label={takenElsewhere ? `Already on ${owner}` : undefined}>
+                            <label
+                              className={`flex items-start gap-2 rounded px-1 py-1 text-sm ${
+                                takenElsewhere ? "cursor-not-allowed opacity-55" : "hover:bg-muted/50 cursor-pointer"
+                              }`}
+                            >
+                              <Checkbox
+                                checked={selected}
+                                disabled={takenElsewhere}
+                                onCheckedChange={() => toggleLine(line.id)}
+                                className="mt-0.5"
+                              />
+                              <span className="flex-1">
+                                <span className="font-medium">{line.name}</span>
+                                {line.serviceName && <span className="text-muted-foreground"> · {line.serviceName}</span>}
+                                {takenElsewhere && (
+                                  <span className="text-muted-foreground block text-[11px]">On {owner}</span>
+                                )}
+                                {nowInFsm && (
+                                  <span className="block text-[11px] text-warning">
+                                    Booked on {nowInFsm} in Zoho FSM since this draft was made — it will be left off
+                                    this appointment when approved
+                                  </span>
+                                )}
+                              </span>
+                            </label>
+                          </Hint>
                         );
                       })}
                       {editableLines.length === 0 && (
@@ -1101,27 +1102,27 @@ function TechnicianChecklist({
             {shown.map((t) => {
               const leave = onLeave.get(t.fsm_resource_id);
               return (
-                <label
-                  key={t.fsm_resource_id}
-                  className={`flex items-center gap-2 rounded px-1 py-1 text-sm ${
-                    leave ? "cursor-not-allowed opacity-55" : "hover:bg-muted/50 cursor-pointer"
-                  }`}
-                  title={leave ? `On leave: ${leave.leave_type}` : undefined}
-                >
-                  <Checkbox
-                    checked={selected.includes(t.fsm_resource_id)}
-                    disabled={!!leave}
-                    onCheckedChange={() => {
-                      if (!leave) onToggle(t.fsm_resource_id);
-                    }}
-                  />
-                  <span className="flex-1">{t.display_name}</span>
-                  {leave && (
-                    <span className="rounded bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium text-warning">
-                      On leave
-                    </span>
-                  )}
-                </label>
+                <Hint key={t.fsm_resource_id} label={leave ? `On leave: ${leave.leave_type}` : undefined}>
+                  <label
+                    className={`flex items-center gap-2 rounded px-1 py-1 text-sm ${
+                      leave ? "cursor-not-allowed opacity-55" : "hover:bg-muted/50 cursor-pointer"
+                    }`}
+                  >
+                    <Checkbox
+                      checked={selected.includes(t.fsm_resource_id)}
+                      disabled={!!leave}
+                      onCheckedChange={() => {
+                        if (!leave) onToggle(t.fsm_resource_id);
+                      }}
+                    />
+                    <span className="flex-1">{t.display_name}</span>
+                    {leave && (
+                      <span className="rounded bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium text-warning">
+                        On leave
+                      </span>
+                    )}
+                  </label>
+                </Hint>
               );
             })}
             {shown.length === 0 && <span className="text-muted-foreground px-1 py-2 text-xs">No technicians match.</span>}

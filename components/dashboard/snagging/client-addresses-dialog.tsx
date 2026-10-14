@@ -34,6 +34,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Hint } from "@/components/ui/hint";
 import { compressImage } from "@/lib/media/compress-image";
 import { cn } from "@/lib/utils";
 import { snaggingService, type SnaggingClientOption } from "@/modules/snagging";
@@ -184,16 +185,17 @@ export function ClientAddressesDialog({
                       subtitle={<AddressSummary row={row} />}
                       trailing={
                         canEdit ? (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="size-8"
-                            onClick={() => setEditing(row)}
-                            aria-label={`Edit ${addressTitle(row)}`}
-                            title="Edit address"
-                          >
-                            <Pencil className="size-4" />
-                          </Button>
+                          <Hint label="Edit address">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-8"
+                              onClick={() => setEditing(row)}
+                              aria-label={`Edit ${addressTitle(row)}`}
+                            >
+                              <Pencil className="size-4" />
+                            </Button>
+                          </Hint>
                         ) : null
                       }
                     />
@@ -770,17 +772,18 @@ function DocumentRow({
             </Button>
           ) : null}
           {file ? (
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              className="size-8"
-              onClick={() => onPick(null)}
-              aria-label={`Remove the chosen ${label.toLowerCase()}`}
-              title="Remove"
-            >
-              <X className="size-4" />
-            </Button>
+            <Hint label="Remove">
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="size-8"
+                onClick={() => onPick(null)}
+                aria-label={`Remove the chosen ${label.toLowerCase()}`}
+              >
+                <X className="size-4" />
+              </Button>
+            </Hint>
           ) : null}
           <Button
             type="button"

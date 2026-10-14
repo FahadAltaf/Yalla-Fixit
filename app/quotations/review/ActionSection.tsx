@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactElement } from "react";
 import { toast } from "sonner";
 import { CheckCircle2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Hint } from "@/components/ui/hint";
 import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { emailService } from "@/lib/email-service";
@@ -32,6 +33,29 @@ interface Props {
   customerName?: string;
   customerEmail?: string;
   quotationDate?: string;
+}
+
+/*
+  The reason a button cannot be used. A disabled button takes no pointer
+  events, so the hint goes on a focusable span around it, and that span
+  carries the button's flex sizing. With no reason the button is returned
+  alone, exactly as before.
+*/
+function UnavailableHint({
+  label,
+  children,
+}: {
+  label?: string;
+  children: ReactElement;
+}) {
+  if (!label) return children;
+  return (
+    <Hint label={label}>
+      <span tabIndex={0} className="inline-flex flex-1 sm:flex-none">
+        {children}
+      </span>
+    </Hint>
+  );
 }
 
 export function ActionSection({
@@ -146,6 +170,9 @@ export function ActionSection({
 
   const disabledApprove = !estimateId || !!isLoading;
   const disabledReject = !estimateId || !!isLoading;
+  const unavailableHint = estimateId
+    ? undefined
+    : "This quotation cannot be answered online. Please contact Yalla Fix It.";
 
   /*
     Buttons only: they sit in the client page navbar (ClientDocumentShell),
@@ -154,25 +181,27 @@ export function ActionSection({
   */
   return (
     <>
-      <Button
-        className="flex-1 sm:flex-none"
-        variant="outline"
-        disabled={disabledReject}
-        onClick={() => handleAction("reject")}
-        title={estimateId ? undefined : "This quotation cannot be answered online. Please contact Yalla Fix It."}
-      >
-        {isLoading === "reject" ? <Loader2 className="size-4 animate-spin" /> : <XCircle className="size-4" />}
-        {isLoading === "reject" ? "Rejecting…" : "Reject"}
-      </Button>
-      <Button
-        className="flex-1 sm:flex-none"
-        disabled={disabledApprove}
-        onClick={() => handleAction("approve")}
-        title={estimateId ? undefined : "This quotation cannot be answered online. Please contact Yalla Fix It."}
-      >
-        {isLoading === "approve" ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
-        {isLoading === "approve" ? "Approving…" : "Approve quotation"}
-      </Button>
+      <UnavailableHint label={unavailableHint}>
+        <Button
+          className="flex-1 sm:flex-none"
+          variant="outline"
+          disabled={disabledReject}
+          onClick={() => handleAction("reject")}
+        >
+          {isLoading === "reject" ? <Loader2 className="size-4 animate-spin" /> : <XCircle className="size-4" />}
+          {isLoading === "reject" ? "Rejecting…" : "Reject"}
+        </Button>
+      </UnavailableHint>
+      <UnavailableHint label={unavailableHint}>
+        <Button
+          className="flex-1 sm:flex-none"
+          disabled={disabledApprove}
+          onClick={() => handleAction("approve")}
+        >
+          {isLoading === "approve" ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
+          {isLoading === "approve" ? "Approving…" : "Approve quotation"}
+        </Button>
+      </UnavailableHint>
 
       <ConfirmationAlertDialog
         isOpen={isDialogOpen}
