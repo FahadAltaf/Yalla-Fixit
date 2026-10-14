@@ -5,6 +5,7 @@ import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
 import { hasQuotationNotes } from "@/lib/server/snagging/columns";
+import { queueFsmSync } from "@/lib/server/snagging/fsm-quotation-sync";
 import { resolveClient } from "@/lib/server/snagging/client";
 import { PROPERTY_COLUMNS, resolveProperty } from "@/lib/server/snagging/property";
 import {
@@ -271,6 +272,9 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    // Into Zoho FSM, once the coordinator has the quotation on screen.
+    queueFsmSync(admin, row.id, profile.id);
+
     /* With the address it was raised for, so the form can attach the
        documents picked on it (there is no job yet to hang them on). */
     return NextResponse.json(
@@ -451,6 +455,7 @@ async function desnagQuotation(
       source_job: job.code,
     },
   });
+  queueFsmSync(admin, row.id, userId);
 
   return NextResponse.json({ data: toWire(row) }, { status: 201 });
 }

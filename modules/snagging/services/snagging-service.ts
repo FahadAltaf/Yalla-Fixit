@@ -231,6 +231,44 @@ export interface SnagPageResult {
   sources: string[];
 }
 
+/** An approved job's Zoho FSM sync, as the report page shows it. */
+export interface SnaggingJobFsm {
+  enabled: boolean;
+  ready: boolean;
+  job: {
+    status: string;
+    fsm_work_order_id: string | null;
+    fsm_work_order_number: string | null;
+    fsm_status: string | null;
+    fsm_report_version: number | null;
+    fsm_synced_at: string | null;
+    fsm_error: string | null;
+  } | null;
+  log: SnaggingQuotationFsm["log"];
+}
+
+/** A quotation's Zoho FSM sync, as its page shows it. */
+export interface SnaggingQuotationFsm {
+  enabled: boolean;
+  ready: boolean;
+  quotation: {
+    fsm_estimate_id: string | null;
+    fsm_estimate_number: string | null;
+    fsm_status: string | null;
+    fsm_synced_at: string | null;
+    fsm_error: string | null;
+  } | null;
+  log: {
+    id: number;
+    action: string;
+    status: "success" | "failed" | "skipped";
+    fsm_record_id: string | null;
+    message: string | null;
+    created_at: string;
+    actor: { full_name: string | null; email: string | null } | null;
+  }[];
+}
+
 export interface SnaggingQuotation {
   /** Null on a preview: nothing has been written for it yet. */
   id: string | null;
@@ -635,6 +673,40 @@ export const snaggingService = {
       `/api/snagging/history?scope=${scope}${id ? `&id=${encodeURIComponent(id)}` : ""}`,
       { method: "GET" },
     ),
+
+  /** A quotation in Zoho FSM: its estimate, the last error, and the sync log. */
+  getQuotationFsm: async (id: string): Promise<SnaggingQuotationFsm> =>
+    executeRESTBackend<SnaggingQuotationFsm>(`/api/snagging/quotations/${id}/fsm`, { method: "GET" }),
+
+  /** Syncs a quotation with Zoho FSM now (the Retry button). */
+  syncQuotationFsm: async (id: string): Promise<{ ok: boolean; message: string }> =>
+    executeRESTBackend<{ ok: boolean; message: string }>(`/api/snagging/quotations/${id}/fsm`, {
+      method: "POST",
+    }),
+
+  /** An approved job in Zoho FSM: its work order, report and sync log (SNG-189). */
+  getTaskFsm: async (taskId: string): Promise<SnaggingJobFsm> =>
+    executeRESTBackend<SnaggingJobFsm>(`/api/snagging/tasks/${taskId}/fsm`, { method: "GET" }),
+
+  /** Syncs an approved job with Zoho FSM now. */
+  syncTaskFsm: async (taskId: string): Promise<{ ok: boolean; message: string }> =>
+    executeRESTBackend<{ ok: boolean; message: string }>(`/api/snagging/tasks/${taskId}/fsm`, {
+      method: "POST",
+    }),
+
+  /** Attaches the report PDF built on the report page to the job's FSM work order. */
+  attachReportToFsm: async (
+    taskId: string,
+    pdf: Blob,
+    fileName: string,
+  ): Promise<{ ok: boolean; message: string }> => {
+    const form = new FormData();
+    form.append("file", pdf, fileName);
+    const response = await fetch(`/api/snagging/tasks/${taskId}/fsm/report`, { method: "POST", body: form });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok && !payload?.data) throw new Error(payload?.error ?? "Could not attach the report in FSM");
+    return payload.data;
+  },
 
   getPricing: async (): Promise<SnaggingPricingConfig> =>
     executeRESTBackend<SnaggingPricingConfig>("/api/snagging/pricing", {

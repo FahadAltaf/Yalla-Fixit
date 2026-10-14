@@ -37,9 +37,11 @@ import { Label } from "@/components/ui/label";
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
 import { useAuth } from "@/context/AuthContext";
 import { snaggingService, type SnaggingQuotation } from "@/modules/snagging";
-import { type SnaggingTask } from "@/types/types";
+import { ActionType, ResourceType, type SnaggingTask } from "@/types/types";
+import { hasResourceAction } from "@/lib/role-permissions";
 
 import { InspectionReport } from "./inspection-report";
+import { FsmJobCard } from "./fsm-job-card";
 import { ActionDialogContent, ErrorState, SubmitButton } from "./shared";
 import { ReportSkeleton } from "@/components/dashboard/snagging/route-skeletons";
 
@@ -337,6 +339,17 @@ export function ReportView({ taskId }: { taskId: string }) {
         794px (A4 at 96dpi), so it is centred inside the scroller rather
         than left in a wide column with dead space beside it.
       */}
+      {/* SNG-189: the completed job in Zoho FSM, with this report for finance. */}
+      {task.status === "approved" || task.status === "delivered" ? (
+        <div className="snag-report-noprint mx-auto w-full max-w-[794px]">
+          <FsmJobCard
+            task={task}
+            quotation={quotation}
+            canEdit={hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.EDIT)}
+          />
+        </div>
+      ) : null}
+
       <div className="overflow-x-auto">
         <div className="snag-report-print mx-auto w-fit rounded-lg border bg-white shadow-sm">
           <InspectionReport ref={reportRef} task={task} quotation={quotation} />

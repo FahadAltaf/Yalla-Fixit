@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { queueJobQuotationSync } from "@/lib/server/snagging/fsm-quotation-sync";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
@@ -92,10 +93,16 @@ export async function POST(
       body.furnished === undefined ? null : Boolean(body.furnished);
     const admin = await createAdminServerClient();
 
+    // Zoho FSM follows the job's quotation once each of these has answered.
+    const thenSync = async (pending: Promise<NextResponse> | NextResponse) => {
+      const res = await pending;
+      if (res.ok) queueJobQuotationSync(admin, id, profile.id);
+      return res;
+    };
     if (action === "generate")
-      return generate(admin, id, profile.id, declaredFurnished);
-    if (action === "send") return send(admin, id, profile.id, body);
-    if (action === "share_link") return shareLink(admin, id, profile.id);
+      return thenSync(generate(admin, id, profile.id, declaredFurnished));
+    if (action === "send") return thenSync(send(admin, id, profile.id, body));
+    if (action === "share_link") return thenSync(shareLink(admin, id, profile.id));
     if (action === "approve")
       return approve(admin, id, profile.id, {
         name: body.approved_by_name ?? null,

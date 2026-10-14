@@ -8,6 +8,7 @@ import { loadJobFamily, readOnRoot } from "@/lib/server/snagging/job-family";
 import { signPaths } from "@/lib/server/snagging/media";
 import { generateReportPdf } from "@/lib/server/snagging/report-generate";
 import { issueReportVersion } from "@/lib/server/snagging/report-versions";
+import { queueJobFsmSync } from "@/lib/server/snagging/fsm-job-sync";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
@@ -204,6 +205,8 @@ export async function POST(
         actorId: profile.id,
         actorLabel: profile.full_name ?? profile.email,
       });
+      // A regenerated report goes to the FSM work order too (SNG-189).
+      if (result.ok) queueJobFsmSync(admin, id, profile.id);
       return NextResponse.json(
         result.ok
           ? {
@@ -259,6 +262,8 @@ export async function POST(
       actorId: profile.id,
       actorLabel: profile.full_name ?? profile.email,
     });
+    // The new version goes to the FSM work order too (SNG-189).
+    if (result.ok) queueJobFsmSync(admin, id, profile.id);
 
     return NextResponse.json(
       result.ok
