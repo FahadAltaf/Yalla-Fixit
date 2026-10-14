@@ -11,6 +11,7 @@ import {
   quotationAuthorship,
 } from "@/lib/server/snagging/change-history";
 import { hasQuotationNotes } from "@/lib/server/snagging/columns";
+import { queueFsmSync } from "@/lib/server/snagging/fsm-quotation-sync";
 import { resolveClient } from "@/lib/server/snagging/client";
 import {
   PROPERTY_COLUMNS,
@@ -291,11 +292,16 @@ export async function POST(
     }
 
     try {
-      if (action === "send") return await send(admin, quote, profile.id, body);
+      // Zoho FSM follows each of these once it has answered (sent, or repriced).
+      const thenSync = (res: NextResponse) => {
+        if (res.ok) queueFsmSync(admin, id, profile.id);
+        return res;
+      };
+      if (action === "send") return thenSync(await send(admin, quote, profile.id, body));
       if (action === "share_link")
-        return await shareLink(admin, quote, profile.id);
+        return thenSync(await shareLink(admin, quote, profile.id));
       if (action === "regenerate")
-        return await regenerate(admin, quote, profile.id);
+        return thenSync(await regenerate(admin, quote, profile.id));
       if (action === "approve") {
         const data = await approveQuotation(admin, ref, {
           name: body.approved_by_name ?? null,
@@ -600,6 +606,8 @@ export async function PATCH(
           : {}),
       },
     });
+    // The FSM estimate follows: updated while a draft there, revised after.
+    queueFsmSync(admin, id, profile.id);
 
     return NextResponse.json({
       data: {

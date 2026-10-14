@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { recordAudit } from "@/lib/server/snagging/audit";
+import { queueFsmSync } from "@/lib/server/snagging/fsm-quotation-sync";
 
 /**
  * Quotation decisioning (FR-2.06, FR-2.07). Shared by the internal
@@ -115,6 +116,8 @@ export async function approveQuotation(
     origin: opts.origin === "client" ? "system" : "portal",
     payload: { quote_number: quote.quote_number, by: opts.name ?? null, origin: opts.origin },
   });
+  // The FSM estimate follows (Approve), once the caller has its answer.
+  queueFsmSync(admin, quote.id, opts.actorId ?? null);
 
   return data;
 }
@@ -171,6 +174,8 @@ export async function rejectQuotation(
     justification: opts.reason,
     payload: { quote_number: quote.quote_number, origin: opts.origin },
   });
+  // The FSM estimate follows (Reject, with the reason as its notes).
+  queueFsmSync(admin, quote.id, opts.actorId ?? null);
 
   return data;
 }

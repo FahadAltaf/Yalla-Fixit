@@ -68,6 +68,7 @@ import {
   SectionCard,
 } from "./shared";
 import { ChangeHistoryCard } from "./change-history-card";
+import { FsmSyncCard } from "./fsm-sync-card";
 import { QuotationBodySkeleton } from "@/components/dashboard/snagging/route-skeletons";
 
 /**
@@ -789,6 +790,11 @@ export default function QuotationDetail({ id }: { id: string }) {
                     <p className="text-muted-foreground text-sm">No office notes.</p>
                   )}
                 </SectionCard>
+
+                {/* The quotation as an estimate in Zoho FSM, with its sync log. */}
+                {quote.id ? (
+                  <FsmSyncCard quotationId={quote.id} canEdit={canEdit} refreshKey={historyNonce} />
+                ) : null}
 
                 {quote.id ? (
                   <ChangeHistoryCard

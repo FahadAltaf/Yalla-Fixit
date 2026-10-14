@@ -6,6 +6,8 @@ import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
 import { generateReportPdf } from "@/lib/server/snagging/report-generate";
 import { issueReportVersion } from "@/lib/server/snagging/report-versions";
+import { syncJobToFsm } from "@/lib/server/snagging/fsm-job-sync";
+import { fsmSyncEnabled } from "@/lib/server/snagging/fsm-quotation-sync";
 import {
   assertTransition,
   isDesignatedApprovalManager,
@@ -219,6 +221,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
               payload: { code: job.code, report_version: reportVersion?.version ?? null },
             });
           }
+        }
+        /*
+          SNG-189: the completed job into Zoho FSM, with the report the
+          step above produced, so finance can invoice from FSM. Not for an
+          additional visit, which is billed on its own visit quotation.
+        */
+        if (job.visit_type !== "additional" && fsmSyncEnabled()) {
+          await syncJobToFsm(admin, id, { actorId: profile.id });
         }
       } catch (backgroundError) {
         console.error("Post-approval work failed:", backgroundError);

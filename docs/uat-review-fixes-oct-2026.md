@@ -53,7 +53,17 @@ Each item is ticked when it is done in code and checked (lint, types, tests wher
 
 ## D. Zoho FSM sync (SNG-187 to 191)
 
-- [ ] **Deferred: taken out before this push.** A first version (quotations as FSM estimates, and the completed job as a work order with the report) is saved outside the repo in `Prohelp-Work/Yalla-Fixit-FSM-WIP/` and will be reworked against *YFI Snagging - Zoho FSM APIs for Quotations* after this release, without the Settings > Zoho FSM tab.
+Built from *YFI Snagging - Zoho FSM APIs for Quotations*, through the portal backend and the shared FSM client (`fsmFetch`, `fsmGetRecord`), with no edge functions. Off until `SNAGGING_FSM_SYNC=on`.
+
+- [x] **The client (calls 1-4, SNG-187):** searched in FSM by email, or by mobile then phone when there is no email; created when not found (Last_Name and Email, plus First_Name, Mobile and the property as Service_Address, billing reusing it). A business gets its Company, linked on the contact and the quotation. The FSM contact id is kept on the client, and the contact read back for its address ids.
+- [x] **The services (call 5):** on the first sync FSM's Services and Parts are read, the snagging items found by name ("Snagging Inspection", and optionally external areas, minimum charge, out of hours, de-snagging, additional visit) and their ids saved. Only the inspection service is required; other lines go under it when FSM has no item of their own. No Settings page.
+- [x] **The quotation (call 6, SNG-188):** created as an FSM estimate, one service line per portal line; its FSM id and number are kept and shown on the quotation page.
+- [x] **Status (calls 7-8):** sent, approved and rejected follow in FSM (reject with the reason as its notes).
+- [x] **Void and revision (calls 9-10):** editing a sent or rejected quotation in the portal voids it: the FSM estimate is cancelled and a revised one created with Root_Quotation_Number__C, Previous_Quotation_Number__C, Revision_Type__C, Quotation_Type__C and Reason__C. An estimate still in Draft in FSM is updated instead.
+- [x] **Sync log (SNG-191):** every FSM call is logged with its outcome and Zoho's reason; a failure never blocks the portal action, shows on the quotation page and can be retried.
+- [x] **No FSM appointment for snagging (SNG-190):** nothing in the sync creates one.
+- [x] **Completed job with the report (SNG-189):** on approval the job becomes an FSM work order (Type Inspection) for the same contact with the quotation's lines, is completed (forced: there is no FSM appointment to complete it from), and the report PDF is uploaded and attached. The report page's **Zoho FSM** card has **Attach report** for when the server could not make the PDF; a re-issued version is attached too. Additional visits are not sent as work orders.
+- Set up: apply `20261014100000_snagging_fsm_quotation_sync.sql`, make sure FSM has a service named "Snagging Inspection" (or containing snagging and inspection), check the token's scopes, and set `SNAGGING_FSM_SYNC=on`.
 
 ## E. Follow-ups asked for during testing
 
