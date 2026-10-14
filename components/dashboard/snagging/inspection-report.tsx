@@ -1152,10 +1152,21 @@ function Card({
   );
 }
 
+/** "apartment" -> "Apartment": the report shows stored words in sentence case. */
+function upperFirst(value: string | null | undefined): string | null {
+  const text = (value ?? "").trim();
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : null;
+}
+
 export const InspectionReport = forwardRef<
   HTMLDivElement,
   {
     task: SnaggingTask;
+    /**
+     * Still passed by the callers, but the report carries no prices: the
+     * commercial summary was taken out (UAT, Oct 2026). The quotation is
+     * its own document.
+     */
     quotation?: SnaggingQuotation | null;
     generatedAt?: string;
     /**
@@ -1166,7 +1177,7 @@ export const InspectionReport = forwardRef<
     forPDF?: boolean;
   }
 >(function InspectionReport(
-  { task, quotation, generatedAt, forPDF = false },
+  { task, generatedAt, forPDF = false },
   ref,
 ) {
   const property = task.property;
@@ -1511,7 +1522,7 @@ export const InspectionReport = forwardRef<
                 label="Report prepared by/date"
                 value={fmtDate(generatedAt ?? new Date().toISOString())}
                 label2="Property type"
-                value2={property?.property_type ?? "—"}
+                value2={upperFirst(property?.property_type) ?? "—"}
               />
               {/* <tr>
                 <Cell label colSpan={8}>
@@ -1609,7 +1620,7 @@ export const InspectionReport = forwardRef<
           }}
         >
           <Heading>Property description:</Heading>
-          <Para>{propertyDescription}</Para>
+          <Para>{upperFirst(propertyDescription)}</Para>
 
           {/* The rooms walked, lettered as the defect sections letter them. */}
           <div
@@ -1650,6 +1661,14 @@ export const InspectionReport = forwardRef<
             perspective, assuming the contractor follows the design given by the
             consultant of the project.
           </Para>
+          <Para>
+            The inspection is limited to the parts of the building which are
+            visible and/or accessible. YALLA FIX IT have not removed any
+            panelling, furniture or floor coverings. External features are
+            viewed and inspected from available areas at ground level; therefore
+            we are not able to report on any unexposed or inaccessible areas of
+            the property to confirm their condition.
+          </Para>
         </div>
 
         {/*
@@ -1673,15 +1692,6 @@ export const InspectionReport = forwardRef<
             paddingBottom: forPDF ? "24px" : "12px",
           }}
         >
-          <Para>
-            The inspection is limited to the parts of the building which are
-            visible and/or accessible. YALLA FIX IT have not removed any
-            panelling, furniture or floor coverings. External features are
-            viewed and inspected from available areas at ground level; therefore
-            we are not able to report on any unexposed or inaccessible areas of
-            the property to confirm their condition.
-          </Para>
-
           <Heading>Overview:</Heading>
           <Para>
             During the inspection, {propertyDescription.toLowerCase()}{" "}
@@ -2256,104 +2266,6 @@ export const InspectionReport = forwardRef<
             );
           })()
         )}
-
-        {/* ── Commercial summary ── */}
-        {quotation ? (
-          <div data-pdf-block>
-            <Heading>Commercial summary</Heading>
-            <Card style={{ ...pad(forPDF, 8, 14), breakInside: "avoid" }}>
-              <table
-                style={{
-                  width: "100%",
-                  borderCollapse: "collapse",
-                  fontSize: 9.5,
-                }}
-              >
-                <tbody>
-                  {quotation.lines.map((line, i) => (
-                    <tr key={i} style={{ borderBottom: `1px solid ${C.line}` }}>
-                      <td style={{ ...pad(forPDF, 4, 0) }}>
-                        {line.description}
-                      </td>
-                      <td
-                        style={{
-                          ...pad(forPDF, 4, 0),
-                          textAlign: "right",
-                          color: C.sub,
-                        }}
-                      >
-                        {line.qty} {line.unit}
-                      </td>
-                      <td
-                        style={{
-                          ...pad(forPDF, 4, 0),
-                          textAlign: "right",
-                          fontWeight: 600,
-                        }}
-                      >
-                        {quotation.currency} {line.amount.toLocaleString()}
-                      </td>
-                    </tr>
-                  ))}
-                  <tr>
-                    <td
-                      style={{
-                        ...pad(forPDF, 4, 0),
-                        textAlign: "right",
-                        color: C.sub,
-                      }}
-                      colSpan={2}
-                    >
-                      Subtotal
-                    </td>
-                    <td style={{ ...pad(forPDF, 4, 0), textAlign: "right" }}>
-                      {quotation.currency} {quotation.subtotal.toLocaleString()}
-                    </td>
-                  </tr>
-                  <tr>
-                    <td
-                      style={{
-                        ...pad(forPDF, 4, 0),
-                        textAlign: "right",
-                        color: C.sub,
-                      }}
-                      colSpan={2}
-                    >
-                      Tax ({quotation.tax_rate}%)
-                    </td>
-                    <td style={{ ...pad(forPDF, 4, 0), textAlign: "right" }}>
-                      {quotation.currency}{" "}
-                      {quotation.tax_amount.toLocaleString()}
-                    </td>
-                  </tr>
-                  <tr style={{ borderTop: `1.5px solid ${C.ink}` }}>
-                    <td
-                      style={{
-                        ...pad(forPDF, 6, 0),
-                        textAlign: "right",
-                        fontWeight: 800,
-                        fontSize: 10.5,
-                      }}
-                      colSpan={2}
-                    >
-                      Total
-                    </td>
-                    <td
-                      style={{
-                        ...pad(forPDF, 6, 0),
-                        textAlign: "right",
-                        fontWeight: 800,
-                        fontSize: 10.5,
-                      }}
-                    >
-                      {quotation.currency} {quotation.total.toLocaleString()}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </Card>
-          </div>
-        ) : null}
 
         {/*
           ── Outlines: the report's closing page ──

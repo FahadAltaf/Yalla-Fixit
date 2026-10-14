@@ -602,6 +602,24 @@ export const snaggingService = {
       },
     }),
 
+  /** One page of clients for a picker, newest first: no counts, for scrolling through. */
+  pickClientsPage: async (query: {
+    search?: string;
+    page: number;
+    pageSize: number;
+  }): Promise<{ data: SnaggingClientOption[]; totalCount: number }> =>
+    executeRESTBackend<{ data: SnaggingClientOption[]; totalCount: number }>(
+      "/api/snagging/clients",
+      {
+        method: "GET",
+        params: {
+          ...(query.search ? { search: query.search } : {}),
+          page: String(query.page),
+          pageSize: String(query.pageSize),
+        },
+      },
+    ),
+
   /** One page of the Clients table, with each client's job count. */
   listClientsPage: async (query: {
     search?: string;

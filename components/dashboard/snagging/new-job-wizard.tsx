@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { LucideIcon } from "lucide-react";
@@ -63,6 +63,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import TimeSelect, { formatTimeAmPm } from "@/components/ui/time-select";
 import { PhoneInput } from "@/components/ui/phone-input";
 import { Label } from "@/components/ui/label";
@@ -1358,6 +1359,9 @@ function Field({
  * Clients come from the distinct client rows on existing properties, so
  * there is no second table to keep in step.
  */
+/** Clients loaded per page in the picker; scrolling to the end loads the next page. */
+const CLIENT_PAGE_SIZE = 10;
+
 function ClientPicker({
   draft,
   set,
@@ -1371,29 +1375,79 @@ function ClientPicker({
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
-  const [clients, setClients] = useState<SnaggingClientOption[]>([]);
-  // The search the list on screen answers; loading until it is the current one.
-  const [fetchedFor, setFetchedFor] = useState<string | null>(null);
-  const boxRef = useRef<HTMLDivElement>(null);
   /*
-    The server searches every client and sends the best few. The picker
-    used to load the first 400 and filter those here, so anyone after
-    them could not be found.
+    The list on screen: the pages loaded so far for one search. The server
+    searches every client (name, email, phone, company), newest first, and
+    sends ten at a time; scrolling to the end of the list asks for the next
+    ten, until every match is loaded. Nothing is filtered here.
   */
+  const [list, setList] = useState<{
+    search: string | null;
+    rows: SnaggingClientOption[];
+    total: number;
+    pages: number;
+  }>({ search: null, rows: [], total: 0, pages: 0 });
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
   const debouncedSearch = useDebounce(search.trim(), 250);
-  const loading = fetchedFor !== debouncedSearch;
+  // Loading until the list answers the search in the box.
+  const loading = list.search !== debouncedSearch;
+  const hasMore = !loading && list.rows.length < list.total;
+  // Only the latest request may fill the list: a slow reply for an older search is dropped.
+  const ticket = useRef(0);
 
   useEffect(() => {
-    let active = true;
+    const mine = ++ticket.current;
     snaggingService
-      .searchClients(debouncedSearch || undefined, { limit: 8 })
-      .then((rows) => active && setClients(rows))
-      .catch(() => undefined)
-      .finally(() => active && setFetchedFor(debouncedSearch));
-    return () => {
-      active = false;
-    };
+      .pickClientsPage({ search: debouncedSearch || undefined, page: 0, pageSize: CLIENT_PAGE_SIZE })
+      .then((result) => {
+        if (mine !== ticket.current) return;
+        setList({ search: debouncedSearch, rows: result.data, total: result.totalCount, pages: 1 });
+        setListError(null);
+      })
+      .catch((err) => {
+        if (mine !== ticket.current) return;
+        setList({ search: debouncedSearch, rows: [], total: 0, pages: 0 });
+        setListError(err instanceof Error ? err.message : "Could not load clients");
+      });
   }, [debouncedSearch]);
+
+  async function loadMore() {
+    if (!hasMore || loadingMore) return;
+    const mine = ticket.current;
+    setLoadingMore(true);
+    try {
+      const result = await snaggingService.pickClientsPage({
+        search: list.search || undefined,
+        page: list.pages,
+        pageSize: CLIENT_PAGE_SIZE,
+      });
+      if (mine !== ticket.current) return;
+      setList((current) => {
+        // A client added since the first page can shift the pages by one: never list anyone twice.
+        const seen = new Set(current.rows.map((row) => row.id));
+        return {
+          ...current,
+          rows: [...current.rows, ...result.data.filter((row) => !seen.has(row.id))],
+          total: result.totalCount,
+          pages: current.pages + 1,
+        };
+      });
+    } catch (err) {
+      if (mine === ticket.current) {
+        setListError(err instanceof Error ? err.message : "Could not load more clients");
+      }
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+
+  // Near the end of the list, the next page.
+  function onListScroll(event: UIEvent<HTMLDivElement>) {
+    const el = event.currentTarget;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 48) void loadMore();
+  }
 
   useEffect(() => {
     function onClick(event: MouseEvent) {
@@ -1403,7 +1457,7 @@ function ClientPicker({
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
 
-  const matches = clients;
+  const matches = list.rows;
 
   function choose(client: SnaggingClientOption) {
     releaseProperty();
@@ -1493,9 +1547,18 @@ function ClientPicker({
       {open ? (
         <div className="relative">
           <div className="bg-popover absolute z-50 mt-1 w-full overflow-hidden rounded-[12px] border shadow-md">
-            <div className="max-h-64 overflow-y-auto py-1">
+            <div className="max-h-64 overflow-y-auto py-1" onScroll={onListScroll}>
               {loading ? (
-                <p className="text-muted-foreground px-3 py-2 text-sm">Loading clients…</p>
+                <div className="space-y-1 px-3 py-2" aria-label="Loading clients">
+                  {Array.from({ length: 4 }, (_, i) => (
+                    <div key={i} className="space-y-1.5 py-1.5">
+                      <Skeleton className="h-3.5 w-1/3" />
+                      <Skeleton className="h-3 w-1/2" />
+                    </div>
+                  ))}
+                </div>
+              ) : listError && matches.length === 0 ? (
+                <p className="text-destructive px-3 py-2 text-sm">{listError}</p>
               ) : matches.length === 0 ? (
                 <p className="text-muted-foreground px-3 py-2 text-sm">
                   No client on file matches. Use the + button to add a new one.
@@ -1503,7 +1566,7 @@ function ClientPicker({
               ) : (
                 matches.map((client) => (
                   <button
-                    key={`${client.client_name}-${client.client_email ?? ""}`}
+                    key={client.id ?? `${client.client_name}-${client.client_email ?? ""}`}
                     type="button"
                     onClick={() => choose(client)}
                     className="hover:bg-mist-soft flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm"
@@ -1524,6 +1587,29 @@ function ClientPicker({
                   </button>
                 ))
               )}
+              {!loading && matches.length > 0 ? (
+                <div className="text-muted-foreground px-3 py-2 text-xs">
+                  {loadingMore ? (
+                    <span className="inline-flex items-center gap-2">
+                      <Loader2 className="size-3.5 animate-spin" />
+                      Loading more clients…
+                    </span>
+                  ) : hasMore ? (
+                    <button
+                      type="button"
+                      onClick={() => void loadMore()}
+                      className="hover:text-foreground underline-offset-2 hover:underline"
+                    >
+                      Showing {matches.length} of {list.total}. Scroll for more
+                    </button>
+                  ) : (
+                    <span>
+                      {list.total === 1 ? "1 client" : `All ${list.total} clients`}
+                      {list.search ? " matching your search" : ""}
+                    </span>
+                  )}
+                </div>
+              ) : null}
             </div>
             <button
               type="button"

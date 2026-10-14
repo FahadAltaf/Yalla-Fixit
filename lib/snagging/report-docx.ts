@@ -443,9 +443,20 @@ function factCells(label: string, value: string, widths: [number, number]) {
   ];
 }
 
+/** "apartment" -> "Apartment": stored words in sentence case, as the PDF shows them. */
+function upperFirst(value: string | null | undefined): string {
+  const text = (value ?? "").trim();
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : "";
+}
+
+/*
+  The quotation is still passed by the callers, but the report carries no
+  prices: the commercial summary was taken out (UAT, Oct 2026), as in the PDF.
+*/
 export async function generateInspectionReportDocx(
   task: SnaggingTask,
-  quotation?: SnaggingQuotation | null,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept for the callers
+  _quotation?: SnaggingQuotation | null,
 ): Promise<Blob> {
   const property = task.property;
   const areas = task.areas ?? [];
@@ -677,7 +688,7 @@ export async function generateInspectionReportDocx(
         new TableRow({
           children: [
             ...factCells("Report prepared by/date", fmtDate(new Date().toISOString()), w),
-            ...factCells("Property type", property?.property_type ?? "—", w),
+            ...factCells("Property type", upperFirst(property?.property_type) || "—", w),
           ],
         }),
       ],
@@ -701,7 +712,7 @@ export async function generateInspectionReportDocx(
     .join(" ");
 
   body.push(heading("Property description"));
-  body.push(para(description || "—"));
+  body.push(para(upperFirst(description) || "—"));
   areas.forEach((area, index) => {
     body.push(
       new Paragraph({
@@ -1313,86 +1324,6 @@ export async function generateInspectionReportDocx(
       body.push(new Paragraph({ children: [], spacing: { after: 120 } }));
     }
   });
-
-  /* ── Commercial summary ── */
-  if (quotation) {
-    body.push(heading("Commercial summary"));
-    const money = (value: number | string | null | undefined) =>
-      `${quotation.currency} ${Number(value ?? 0).toLocaleString()}`;
-    const cw = [Math.round(CONTENT_W * 0.6), Math.round(CONTENT_W * 0.18), 0];
-    cw[2] = CONTENT_W - 200 - cw[0] - cw[1];
-    const line = (color: string = C.line, size = 4) => ({ style: BorderStyle.SINGLE, size, color });
-    const row = (
-      cells: [string, string, string],
-      options: { bold?: boolean; size?: number; top?: ReturnType<typeof line>; bottom?: ReturnType<typeof line>; mutedMiddle?: boolean } = {},
-    ) =>
-      new TableRow({
-        children: cells.map((value, index) =>
-          cell(
-            [
-              para(
-                [
-                  {
-                    text: value,
-                    bold: options.bold || (index === 2 && !options.mutedMiddle && cells[0] !== ""),
-                    size: options.size ?? 9.5,
-                    color: index === 1 && options.mutedMiddle !== false ? C.sub : C.ink,
-                  },
-                ],
-                { align: index === 0 ? AlignmentType.LEFT : AlignmentType.RIGHT },
-              ),
-            ],
-            {
-              width: cw[index],
-              borders: cellBorders({
-                left: NO_BORDER,
-                right: NO_BORDER,
-                top: options.top ?? NO_BORDER,
-                bottom: options.bottom ?? NO_BORDER,
-              }),
-            },
-          ),
-        ),
-      });
-    const lines = (quotation.lines ?? []).map((l) =>
-      row(
-        [l.description ?? "—", `${l.qty ?? ""} ${l.unit ?? ""}`.trim(), money(l.amount)],
-        { bottom: line() },
-      ),
-    );
-    body.push(
-      table(
-        [
-          new TableRow({
-            children: [
-              cell(
-                [
-                  new Table({
-                    width: { size: CONTENT_W - 200, type: WidthType.DXA },
-                    columnWidths: cw,
-                    borders: BARE,
-                    rows: [
-                      ...lines,
-                      row(["", "Subtotal", money(quotation.subtotal)], { mutedMiddle: true }),
-                      row(["", `Tax (${quotation.tax_rate}%)`, money(quotation.tax_amount)], { mutedMiddle: true }),
-                      row(["", "Total", money(quotation.total)], {
-                        bold: true,
-                        size: 10.5,
-                        top: line(C.ink, 10),
-                        mutedMiddle: false,
-                      }),
-                    ],
-                  }),
-                ],
-                { width: CONTENT_W },
-              ),
-            ],
-          }),
-        ],
-        [CONTENT_W],
-      ),
-    );
-  }
 
   /* ── Outlines: the closing page ── */
   body.push(heading("Outlines"));
