@@ -37,6 +37,7 @@ const ACTION_META: Record<string, { label: string; Icon: LucideIcon }> = {
   contact_update: { label: "Client updated in FSM", Icon: Pencil },
   company_create: { label: "Company created in FSM", Icon: Building2 },
   address_create: { label: "Address added in FSM", Icon: MapPin },
+  address_update: { label: "Address updated in FSM", Icon: MapPin },
   services_lookup: { label: "FSM services found", Icon: ListChecks },
   estimate_build: { label: "Estimate prepared", Icon: FileText },
   estimate_create: { label: "Estimate created", Icon: FilePlus2 },

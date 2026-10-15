@@ -11,6 +11,7 @@ import {
   getContact,
   listContactAddresses,
   listContacts,
+  updateContactAddress,
   searchContacts,
   updateContact,
   type FsmAddress,
@@ -541,7 +542,7 @@ export async function ensurePropertyInFsm(
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const { data: property } = await admin
         .from("snagging_properties")
-        .select("id, client_id, unit_label, building_name, community, fsm_address_id")
+        .select("id, client_id, unit_label, building_name, community, location_lat, location_lng, fsm_address_id")
         .eq("id", propertyId)
         .maybeSingle();
       const row = property as Row | null;
@@ -576,7 +577,11 @@ export async function ensurePropertyInFsm(
       }
 
       const token = await getFsmAccessToken(admin);
-      const addressId = await addContactAddress(token, contactId, { street1: line });
+      const addressId = await addContactAddress(token, contactId, {
+        street1: line,
+        lat: (row.location_lat as number | null) ?? null,
+        lng: (row.location_lng as number | null) ?? null,
+      });
       await admin.from("snagging_properties").update({ fsm_address_id: addressId }).eq("id", propertyId);
       claimed = null;
       await log(admin, {
@@ -606,6 +611,84 @@ export async function ensurePropertyInFsm(
       actorId,
     });
     return null;
+  }
+}
+
+/**
+ * A property edited in the portal, corrected on its address in FSM: the
+ * address line (community, building, unit) and the map pin. A property not
+ * in FSM yet is added instead. Nothing happens while the integration is off
+ * or the client is not in FSM. Logged either way; never throws.
+ */
+export async function syncPropertyEditToFsm(
+  admin: Admin,
+  propertyId: string,
+  actorId: string | null,
+): Promise<void> {
+  let clientId: string | null = null;
+  let addressId: string | null = null;
+  try {
+    if (!(await fsmClientsReady(admin))) return;
+    const { data: property } = await admin
+      .from("snagging_properties")
+      .select("id, client_id, unit_label, building_name, community, location_lat, location_lng, fsm_address_id")
+      .eq("id", propertyId)
+      .maybeSingle();
+    const row = property as Row | null;
+    if (!row?.client_id) return;
+    clientId = row.client_id as string;
+    if (!isRealAddressId(row.fsm_address_id)) {
+      // Not in FSM yet (or being added right now): adding it carries the edit.
+      if (!row.fsm_address_id) await ensurePropertyInFsm(admin, propertyId, actorId);
+      return;
+    }
+    addressId = row.fsm_address_id;
+    const { data: client } = await admin
+      .from("snagging_clients")
+      .select("fsm_contact_id")
+      .eq("id", row.client_id)
+      .maybeSingle();
+    const contactId = (client as Row | null)?.fsm_contact_id as string | null | undefined;
+    const line = propertyToAddressLine(row);
+    if (!contactId || !line) return;
+
+    const token = await getFsmAccessToken(admin);
+    await updateContactAddress(token, contactId, addressId, {
+      street1: line,
+      lat: (row.location_lat as number | null) ?? null,
+      lng: (row.location_lng as number | null) ?? null,
+    });
+    await log(admin, {
+      quotationId: null,
+      clientId,
+      action: "address_update",
+      status: "success",
+      recordId: addressId,
+      message: `Address updated in FSM: "${line}"`,
+      actorId,
+    });
+  } catch (err) {
+    console.error("FSM address update failed:", err);
+    await log(admin, {
+      quotationId: null,
+      clientId,
+      action: "address_update",
+      status: "failed",
+      recordId: addressId ?? undefined,
+      message: err instanceof Error ? err.message : "Could not update the address in Zoho FSM",
+      detail: err instanceof FsmApiError ? err.detail : undefined,
+      actorId,
+    });
+  }
+}
+
+/** Sends a property's edit to FSM once the caller has answered. */
+export function queuePropertyEditToFsm(admin: Admin, propertyId: string, actorId: string | null) {
+  const run = () => syncPropertyEditToFsm(admin, propertyId, actorId);
+  try {
+    after(run);
+  } catch {
+    void run();
   }
 }
 

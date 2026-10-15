@@ -11,6 +11,8 @@ import {
   quotationAuthorship,
 } from "@/lib/server/snagging/change-history";
 import { hasColumn, hasQuotationNotes } from "@/lib/server/snagging/columns";
+import { signMediaPaths } from "@/lib/server/snagging/media";
+import { fsmClientsReady, updateClientWithFsm } from "@/lib/server/snagging/fsm-clients";
 import { queueFsmSync, syncQuotationNow } from "@/lib/server/snagging/fsm-quotation-sync";
 import { resolveClient } from "@/lib/server/snagging/client";
 import {
@@ -113,7 +115,7 @@ export async function GET(
         `${await loadColumns(admin)},
          job_ref:job_id(approval_manager_id),
          property_rec:property_id(${PROPERTY_COLUMNS}),
-         client_rec:client_id(id, name, email, phone)`,
+         client_rec:client_id(${await detailClientColumns(admin)})`,
       )
       .eq("id", id)
       .maybeSingle();
@@ -142,12 +144,13 @@ export async function GET(
       (SNG-037). The rate chooser's id stays off the wire; their name is
       what the page shows.
     */
-    const [authorship, chooser] = await Promise.all([
+    const [authorship, chooser, property] = await Promise.all([
       quotationAuthorship(admin, {
         id: String(quote.id),
         created_by: (quote.created_by as string | null) ?? null,
       }),
       actorNames(admin, quote.rate_chosen_by ? [String(quote.rate_chosen_by)] : []),
+      withDocumentLinks(admin, one(property_rec)),
     ]);
     delete sent.created_by;
     return NextResponse.json({
@@ -170,7 +173,7 @@ export async function GET(
           reports the unit as it was rather than as it is. An edit form
           filled from it would quietly revert whatever it could not see.
         */
-        property: one(property_rec),
+        property,
         client: one(client_rec),
       },
     });
@@ -457,16 +460,51 @@ export async function PATCH(
       clientId = picked;
     } else if (previous) {
       clientId = previous;
-      const { error: clientError } = await admin
-        .from("snagging_clients")
-        .update({
-          name: String(p.client_name ?? "").trim() || null,
-          email: text(p.client_email),
-          phone: text(p.client_phone),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", previous);
-      if (clientError) throw new Error(clientError.message);
+      const next = {
+        name: String(p.client_name ?? "").trim() || null,
+        email: text(p.client_email),
+        phone: text(p.client_phone),
+      };
+      /*
+        A client linked to Zoho FSM is corrected there as well, the way the
+        Clients page corrects one: FSM first, then the portal's copy. Only
+        when something actually changed, so an edit that leaves the client
+        alone costs no FSM call. If FSM refuses, the portal copy is still
+        saved below -- a Zoho problem never blocks editing a quotation.
+      */
+      let savedThroughFsm = false;
+      if (await fsmClientsReady(admin)) {
+        const { data: current } = await admin
+          .from("snagging_clients")
+          .select("name, email, phone, fsm_contact_id")
+          .eq("id", previous)
+          .maybeSingle();
+        const changed =
+          current &&
+          ((current.name ?? null) !== next.name ||
+            (current.email ?? null) !== next.email ||
+            (current.phone ?? null) !== next.phone);
+        if (current?.fsm_contact_id && changed) {
+          try {
+            await updateClientWithFsm(
+              admin,
+              { id: previous },
+              { name: next.name ?? undefined, email: next.email, phone: next.phone },
+              profile.id,
+            );
+            savedThroughFsm = true;
+          } catch (fsmError) {
+            console.error("The client could not be updated in Zoho FSM:", fsmError);
+          }
+        }
+      }
+      if (!savedThroughFsm) {
+        const { error: clientError } = await admin
+          .from("snagging_clients")
+          .update({ ...next, updated_at: new Date().toISOString() })
+          .eq("id", previous);
+        if (clientError) throw new Error(clientError.message);
+      }
     } else {
       clientId = await resolveClient(admin, {
         clientId: null,
@@ -639,10 +677,7 @@ async function records(admin: Admin, quote: Record<string, unknown>) {
   const propertyId = quote.property_id as string | null;
   const clientId = quote.client_id as string | null;
 
-  // The client as the Details tab shows it; the Maher ID once its column is in.
-  const clientColumns = (await hasColumn(admin, "snagging_clients", "maher_id"))
-    ? "id, name, email, phone, company, maher_id"
-    : "id, name, email, phone, company";
+  const clientColumns = await detailClientColumns(admin);
   const [property, client] = await Promise.all([
     propertyId
       ? admin
@@ -662,7 +697,35 @@ async function records(admin: Admin, quote: Record<string, unknown>) {
       : Promise.resolve(null),
   ]);
 
-  return { property, client };
+  return { property: await withDocumentLinks(admin, property), client };
+}
+
+/** The client as the Details tab shows it: with the company, and the Maher ID once its column is in. */
+async function detailClientColumns(admin: Admin): Promise<string> {
+  return (await hasColumn(admin, "snagging_clients", "maher_id"))
+    ? "id, name, email, phone, company, maher_id"
+    : "id, name, email, phone, company";
+}
+
+/**
+ * The property with its title deed and NOC as links the Details tab and the
+ * edit form can open. Both sit in the private bucket, so a stored path is no
+ * use to a browser; they are signed here in one call, as the job page signs
+ * them. A signing failure costs the links, not the read.
+ */
+async function withDocumentLinks(admin: Admin, property: unknown): Promise<Record<string, unknown> | null> {
+  if (!property) return null;
+  const record = property as Record<string, unknown>;
+  const docs = [
+    { id: "title_deed", storage_path: (record.title_deed_path as string | null) ?? null },
+    { id: "noc", storage_path: (record.noc_path as string | null) ?? null },
+  ].filter((doc) => doc.storage_path);
+  const signed = (await signMediaPaths(admin, docs).catch(() => [])) as Array<{
+    id: string;
+    signed_url?: string | null;
+  }>;
+  const urlOf = (id: string) => signed.find((doc) => doc.id === id)?.signed_url ?? null;
+  return { ...record, title_deed_url: urlOf("title_deed"), noc_url: urlOf("noc") };
 }
 
 /**

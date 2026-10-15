@@ -9,6 +9,7 @@ import {
   ArrowLeft,
   Building2,
   CalendarIcon,
+  CheckCircle2,
   ChevronDown,
   Crosshair,
   Eraser,
@@ -92,6 +93,7 @@ import { templateFor } from "@/lib/snagging/area-templates";
 import type { SnaggingProperty, SnaggingPropertyType } from "@/types/types";
 
 import {
+  ActionDialogContent,
   ErrorState,
   PROPERTY_TYPE_LABELS,
   PageHeading,
@@ -176,6 +178,18 @@ type Draft = {
   approval_manager_id: string;
   reviewer_id: string;
 };
+
+/** The signed links a quotation read carries for its address's documents, by stored path. */
+function linksOf(prop: Record<string, unknown>): Record<string, string> {
+  const links: Record<string, string> = {};
+  for (const [path, url] of [
+    [prop.title_deed_path, prop.title_deed_url],
+    [prop.noc_path, prop.noc_url],
+  ]) {
+    if (typeof path === "string" && path && typeof url === "string" && url) links[path] = url;
+  }
+  return links;
+}
 
 /** The draft with a saved property's fields laid over it; null returns to "new". */
 function withProperty(current: Draft, prop: SnaggingProperty | null, areasTouched: boolean): Draft {
@@ -365,12 +379,27 @@ export default function NewJobWizard({
   const canAssignInspector = !quotationLoading;
   const [step, setStep] = useState(0);
   const [submitting, setSubmitting] = useState(false);
+  /*
+    Create asks first, then shows its progress in the same popup: each step
+    of the save as it runs (the record, the plans, the documents), ticked
+    off as it finishes, rather than one toast in the corner.
+  */
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [saveSteps, setSaveSteps] = useState<Array<{ label: string; detail?: string; done: boolean }> | null>(
+    null,
+  );
   const [users, setUsers] = useState<AssignableUser[]>([]);
   const [usersLoading, setUsersLoading] = useState(true);
   const [usersError, setUsersError] = useState<string | null>(null);
   const [plans, setPlans] = useState<PendingPlan[]>([]);
   const [titleDeedFile, setTitleDeedFile] = useState<File | null>(null);
   const [nocFile, setNocFile] = useState<File | null>(null);
+  /*
+    Links to the title deed and NOC already on the address, by their stored
+    path, from the quotation read (it signs them). Keyed by path so a link
+    is only offered while the form still points at that same file.
+  */
+  const [docLinks, setDocLinks] = useState<Record<string, string>>({});
   const [gatepassFile, setGatepassFile] = useState<File | null>(null);
 
   const [draft, setDraft] = useState<Draft>({
@@ -595,7 +624,11 @@ export default function NewJobWizard({
           floors: text(prop.floors),
           location_lat: text(prop.location_lat),
           location_lng: text(prop.location_lng),
+          // The files already on the address, so the form shows them and
+          // saving without touching them keeps them.
+          title_deed_path: text(prop.title_deed_path),
           noc_required: Boolean(prop.noc_required),
+          noc_path: text(prop.noc_path),
           furnished: Boolean(quote.furnished ?? snap.furnished),
           out_of_hours: quote.out_of_hours === true,
           // The rate this document was priced at, so leaving the field
@@ -606,6 +639,7 @@ export default function NewJobWizard({
           areas: areasTouched.current ? current.areas : [],
         }));
         setQuotationLabel(quote.quote_number);
+        setDocLinks(linksOf(prop));
       } catch (error) {
         if (!cancelled) {
           setQuotationError(
@@ -794,16 +828,18 @@ export default function NewJobWizard({
       for all of it, with no sign of how far along it was. The same toast
       becomes the success or the error at the end.
     */
-    const progress = toast.loading(
-      quoteOnly
-        ? editQuotationId
-          ? "Saving the quotation…"
-          : "Creating the quotation…"
-        : "Creating the job…",
-      { description: "This can take a few seconds." },
-    );
+    setSaveSteps([
+      {
+        label: quoteOnly ? (editQuotationId ? "Saving the quotation" : "Creating the quotation") : "Creating the job",
+        done: false,
+      },
+    ]);
+    // Ticks off what was running and starts the next step.
     const stage = (message: string, description?: string) =>
-      toast.loading(message, { id: progress, description });
+      setSaveSteps((prev) => [
+        ...(prev ?? []).map((step) => ({ ...step, done: true })),
+        { label: message.replace(/…$/, ""), detail: description, done: false },
+      ]);
     try {
       /*
         Quote-only: write the quotation and stop (BA v2, changes 1-2).
@@ -895,20 +931,16 @@ export default function NewJobWizard({
         if (editQuotationId) {
           const saved = await snaggingService.updateQuotation(editQuotationId, payload);
           await attachDocuments(saved.property_id ?? draft.property_id);
-          toast.success(`Quotation ${quotationLabel ?? ""} saved`.replace("  ", " "), {
-            id: progress,
-            description: undefined,
-          });
+          stage("Opening the quotation…");
+          toast.success(`Quotation ${quotationLabel ?? ""} saved`.replace("  ", " "));
           router.push(`/snagging/quotations/${editQuotationId}`);
           return;
         }
 
         const quote = await snaggingService.createQuotation(payload);
         await attachDocuments(quote.property_id ?? draft.property_id);
-        toast.success(`Quotation ${quote.quote_number} created`, {
-          id: progress,
-          description: "Opening it now.",
-        });
+        stage("Opening the quotation…");
+        toast.success(`Quotation ${quote.quote_number} created`);
         router.push(`/snagging/quotations/${quote.id}`);
         return;
       }
@@ -1093,7 +1125,8 @@ export default function NewJobWizard({
         }
       }
 
-      toast.success("Job created", { id: progress, description: "Opening the job now." });
+      stage("Opening the job…");
+      toast.success("Job created");
       router.push(`/snagging/${created.id}`);
     } catch (error) {
       toast.error(
@@ -1103,15 +1136,84 @@ export default function NewJobWizard({
             : "Could not create the quotation"
           : "Could not create the job",
         {
-          id: progress,
           description: error instanceof Error ? error.message : "Please try again.",
         },
       );
+      setSaveSteps(null);
       setSubmitting(false);
     }
   }
 
   const isLast = step === STEPS.length - 1;
+
+  const saveVerb = isEdit ? "Save changes" : quoteOnly ? "Create quotation" : "Create job";
+  const saveDialog = (
+    <Dialog
+      open={confirmOpen || saveSteps !== null}
+      onOpenChange={(open) => {
+        // Nothing closes it while the save runs; it goes when the page opens.
+        if (!open && !submitting) setConfirmOpen(false);
+      }}
+    >
+      <ActionDialogContent busy={submitting} className="sm:max-w-md">
+        {saveSteps === null ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>
+                {isEdit ? "Save these changes?" : quoteOnly ? "Create this quotation?" : "Create this job?"}
+              </DialogTitle>
+              <DialogDescription>
+                {isEdit
+                  ? "The quotation is updated with what is on the form, and the client and address records with it."
+                  : quoteOnly
+                    ? `A quotation for ${draft.client_name || "the client"}${
+                        draft.unit_label ? ` at ${draft.unit_label}${draft.building_name ? `, ${draft.building_name}` : ""}` : ""
+                      } is numbered and saved as a draft. Nothing reaches the client until you share it.`
+                    : "The job is created with its areas, floor plans and documents."}
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setConfirmOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => {
+                  setConfirmOpen(false);
+                  void submit();
+                }}
+              >
+                {saveVerb}
+              </Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <>
+            <DialogHeader>
+              <DialogTitle>
+                {isEdit ? "Saving the quotation" : quoteOnly ? "Creating the quotation" : "Creating the job"}
+              </DialogTitle>
+              <DialogDescription>Keep this page open. It takes a few seconds.</DialogDescription>
+            </DialogHeader>
+            <ol className="space-y-3 py-1">
+              {saveSteps.map((entry, index) => (
+                <li key={`${entry.label}-${index}`} className="flex items-start gap-3 text-sm">
+                  {entry.done ? (
+                    <CheckCircle2 className="text-success mt-0.5 size-4 shrink-0" aria-label="Done" />
+                  ) : (
+                    <Loader2 className="text-muted-foreground mt-0.5 size-4 shrink-0 animate-spin" aria-label="In progress" />
+                  )}
+                  <span className="min-w-0">
+                    <span className={cn(entry.done ? "text-muted-foreground" : "font-medium")}>{entry.label}</span>
+                    {entry.detail ? <span className="text-muted-foreground block text-xs">{entry.detail}</span> : null}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </>
+        )}
+      </ActionDialogContent>
+    </Dialog>
+  );
 
   return (
     <div className="flex flex-col gap-6">
@@ -1227,6 +1329,7 @@ export default function NewJobWizard({
                 setTitleDeedFile={setTitleDeedFile}
                 nocFile={nocFile}
                 setNocFile={setNocFile}
+                docLinks={docLinks}
                 errors={fieldErrors}
               />
             ) : STEPS[step].key === "plan_areas" ? (
@@ -1289,15 +1392,11 @@ export default function NewJobWizard({
               </Button>
               {isLast ? (
                 <SubmitButton
-                  onClick={() => attempt(() => void submit())}
+                  onClick={() => attempt(() => setConfirmOpen(true))}
                   pending={submitting}
                   pendingLabel={isEdit ? "Saving…" : "Creating…"}
                 >
-                  {isEdit
-                    ? "Save changes"
-                    : quoteOnly
-                      ? "Create quotation"
-                      : "Create job"}
+                  {saveVerb}
                 </SubmitButton>
               ) : (
                 <Button onClick={() => attempt(() => setStep(step + 1))}>
@@ -1308,6 +1407,7 @@ export default function NewJobWizard({
           </div>
         </Card>
       )}
+      {saveDialog}
     </div>
   );
 }
@@ -1807,11 +1907,14 @@ function DocumentField({
   hint,
   file,
   onPick,
+  onFile = null,
 }: {
   label: string;
   hint?: string;
   file: File | null;
   onPick: (file: File | null) => void;
+  /** A file already on the address: shown with View and Replace until one is picked. */
+  onFile?: { url: string | null } | null;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
@@ -1872,6 +1975,31 @@ function DocumentField({
             aria-label={`Remove ${file.name}`}
           >
             <X className="size-4" />
+          </Button>
+        </div>
+      ) : onFile ? (
+        <div className="border-border bg-muted/30 flex items-center gap-3 rounded-lg border px-3 py-3">
+          <span className="bg-background text-muted-foreground flex size-10 shrink-0 items-center justify-center rounded-md border">
+            <FileText className="size-5" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium">{label}</p>
+            <p className="text-muted-foreground text-xs">Uploaded to this address</p>
+          </div>
+          {onFile.url ? (
+            <Button asChild type="button" variant="ghost" size="sm">
+              <a href={onFile.url} target="_blank" rel="noopener noreferrer">
+                View
+              </a>
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => inputRef.current?.click()}
+          >
+            Replace
           </Button>
         </div>
       ) : (
@@ -1999,6 +2127,7 @@ function PropertyStep({
   setTitleDeedFile,
   nocFile,
   setNocFile,
+  docLinks,
   errors,
 }: {
   draft: Draft;
@@ -2016,6 +2145,8 @@ function PropertyStep({
   setTitleDeedFile: (file: File | null) => void;
   nocFile: File | null;
   setNocFile: (file: File | null) => void;
+  /** Links to the files already on the address, by stored path. */
+  docLinks: Record<string, string>;
   /** Shown under their fields once someone has tried to continue. */
   errors: Partial<Record<PropertyErrorKey, string>>;
 }) {
@@ -2466,23 +2597,25 @@ function PropertyStep({
           <DocumentField
             label="Title deed"
             hint={
-              draft.title_deed_path
-                ? "One is on file for this address. Choose a file to replace it."
+              draft.title_deed_path && !titleDeedFile
+                ? "On file for this address. Replace it to upload a new one."
                 : "Optional. Confirms the unit and its area."
             }
             file={titleDeedFile}
             onPick={setTitleDeedFile}
+            onFile={draft.title_deed_path ? { url: docLinks[draft.title_deed_path] ?? null } : null}
           />
           {draft.noc_required ? (
             <DocumentField
               label="NOC / authorization letter"
               hint={
-                draft.noc_path
-                  ? "One is on file for this address. Choose a file to replace it."
+                draft.noc_path && !nocFile
+                  ? "On file for this address. Replace it to upload a new one."
                   : "Optional. Never blocks the job."
               }
               file={nocFile}
               onPick={setNocFile}
+              onFile={draft.noc_path ? { url: docLinks[draft.noc_path] ?? null } : null}
             />
           ) : null}
         </div>

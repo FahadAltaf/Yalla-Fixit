@@ -305,6 +305,9 @@ export type FsmAddressInput = {
   street1: string;
   street2?: string | null;
   city?: string | null;
+  /** The map pin, where the property has one. FSM keeps both as numbers. */
+  lat?: number | null;
+  lng?: number | null;
 };
 
 function addressBody(address: FsmAddressInput) {
@@ -315,7 +318,31 @@ function addressBody(address: FsmAddressInput) {
     City: address.city ?? "Dubai",
     State: "Dubai",
     Country: "United Arab Emirates",
+    ...(address.lat != null && address.lng != null
+      ? { Latitude: String(address.lat), Longitude: String(address.lng) }
+      : {}),
   };
+}
+
+/**
+ * Corrects an address already on a contact, in place.
+ *
+ * The same PUT /Contacts/{id} that adds an address, with the address's id in
+ * the Service_Address: FSM then updates that address rather than adding a
+ * second one (checked against a test contact on 15 Oct 2026 -- the field
+ * changed, the address count did not).
+ */
+export async function updateContactAddress(
+  token: string,
+  contactId: string,
+  addressId: string,
+  address: FsmAddressInput,
+): Promise<void> {
+  const res = await fsmFetch(token, `/Contacts/${encodeURIComponent(contactId)}`, {
+    method: "PUT",
+    body: JSON.stringify({ data: [{ Service_Address: { id: addressId, ...addressBody(address) } }] }),
+  });
+  if (!res.ok) throw new FsmApiError(fsmMessage(res.json, res.status), res.status, res.json);
 }
 
 /** Creates a contact (POST /Contacts: Last_Name and Email are mandatory). */

@@ -1,10 +1,11 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { Building2, FileText, ShieldCheck, StickyNote } from "lucide-react";
+import { Building2, ExternalLink, FileText, ShieldCheck, StickyNote } from "lucide-react";
 
 import { DataRow, SectionCard, StatCard, StatCardGrid, SubHeading } from "@/components/dashboard/shared/kaizen";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Money } from "@/components/ui/money";
 import { cn } from "@/lib/utils";
 import type { SnaggingQuotation } from "@/modules/snagging";
@@ -198,17 +199,17 @@ export function QuotationDetailsTab({ quote }: { quote: SnaggingQuotation }) {
         bodyClassName="px-5 pb-5"
       >
         <div className="divide-y overflow-hidden rounded-lg border">
+          {/* Each file opens in a new tab from a link signed when the quotation was read. */}
           <DataRow
             className="py-3"
             icon={<FileText aria-hidden />}
-            active={deedOnFile}
             title="Title deed"
             subtitle={deedOnFile ? "On file on the property record" : "Not uploaded."}
+            trailing={<ViewDocument url={text(property.title_deed_url)} onFile={deedOnFile} />}
           />
           <DataRow
             className="py-3"
             icon={<FileText aria-hidden />}
-            active={nocOnFile}
             title="No objection certificate"
             subtitle={
               nocOnFile
@@ -217,10 +218,29 @@ export function QuotationDetailsTab({ quote }: { quote: SnaggingQuotation }) {
                   ? "Not uploaded. Access may be refused on the day."
                   : "Not uploaded. This unit does not require one."
             }
+            trailing={<ViewDocument url={text(property.noc_url)} onFile={nocOnFile} />}
           />
         </div>
       </SectionCard>
     </div>
+  );
+}
+
+/**
+ * Opens a document on the property in a new tab. Nothing is drawn for a file
+ * that is not there; a file whose link could not be signed says so rather
+ * than offering a button that goes nowhere.
+ */
+function ViewDocument({ url, onFile }: { url: string | null; onFile: boolean }) {
+  if (!onFile) return null;
+  if (!url) return <span className="text-muted-foreground text-xs">Link unavailable</span>;
+  return (
+    <Button asChild size="sm" variant="outline">
+      <a href={url} target="_blank" rel="noopener noreferrer">
+        <ExternalLink className="size-3.5" />
+        View
+      </a>
+    </Button>
   );
 }
 

@@ -6,6 +6,7 @@ import {
   CloudUpload,
   FileText,
   FileUp,
+  History,
   Paperclip,
   RefreshCw,
   Wrench,
@@ -31,7 +32,16 @@ import { SubmitButton, formatLocalDateTime } from "./shared";
  * to FSM: it loads the full report first, because the job page holds only
  * a summary of the snags.
  */
-export function FsmJobCard({ taskId, canEdit }: { taskId: string; canEdit: boolean }) {
+export function FsmJobCard({
+  taskId,
+  canEdit,
+  jobStatus,
+}: {
+  taskId: string;
+  canEdit: boolean;
+  /** The job's status: the work order only exists once it is approved. */
+  jobStatus?: string | null;
+}) {
   const [state, setState] = useState<SnaggingJobFsm | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<null | "sync" | "attach">(null);
@@ -98,6 +108,13 @@ export function FsmJobCard({ taskId, canEdit }: { taskId: string; canEdit: boole
   const job = state?.job ?? null;
   const estimate = state?.estimate ?? null;
   const problem = job?.fsm_error ?? estimate?.fsm_error ?? null;
+  /*
+    The work order is made when the inspection is approved (SNG-189), so
+    before then there is nothing to send: the card says what will happen,
+    not that something is missing.
+  */
+  const approved = jobStatus === "approved" || jobStatus === "delivered";
+  const workOrder = Boolean(job?.fsm_work_order_id);
   const badge = !state
     ? null
     : !state.enabled
@@ -106,124 +123,152 @@ export function FsmJobCard({ taskId, canEdit }: { taskId: string; canEdit: boole
         ? { label: "Not set up", tone: "bg-muted text-muted-foreground" }
         : problem
           ? { label: "Needs attention", tone: "bg-destructive/10 text-destructive" }
-          : job?.fsm_work_order_id && job.fsm_report_version
+          : workOrder && job?.fsm_report_version
             ? { label: "Ready to invoice", tone: "bg-success/10 text-success" }
-            : job?.fsm_work_order_id
+            : workOrder
               ? { label: "Report missing", tone: "bg-warning/10 text-warning" }
-              : { label: "Not synced", tone: "bg-warning/10 text-warning" };
+              : approved
+                ? { label: "Work order not created", tone: "bg-warning/10 text-warning" }
+                : estimate?.fsm_estimate_id
+                  ? { label: "Inspection not approved yet", tone: "bg-muted text-muted-foreground" }
+                  : { label: "Not in FSM yet", tone: "bg-muted text-muted-foreground" };
+  // Send only once there is something it would create: an approved job with no work order.
+  const canSend = canEdit && (Boolean(problem) || (approved && !workOrder));
+  const canAttach = canEdit && workOrder;
 
   const log = state?.log ?? [];
   const total = state?.logTotal ?? 0;
+  const live = Boolean(state && state.enabled && state.ready && !error);
 
   return (
-    <SectionCard
-      title="Zoho FSM"
-      icon={<CloudUpload />}
-      description="This job's quotation and work order in Zoho FSM, and every call made for them."
-      action={badge ? <Badge className={`border-0 ${badge.tone}`}>{badge.label}</Badge> : null}
-      bodyClassName="border-t"
-    >
-      {error ? (
-        <p className="text-destructive p-5 text-sm">{error}</p>
-      ) : !state ? (
-        <div className="space-y-3 p-5">
-          <Skeleton className="h-9 w-2/3" />
-          <Skeleton className="h-9 w-1/2" />
-        </div>
-      ) : !state.enabled ? (
-        <p className="text-muted-foreground p-5 text-sm">
-          Syncing with Zoho FSM is switched off. It starts once SNAGGING_FSM_SYNC is set to
-          &quot;on&quot;.
-        </p>
-      ) : !state.ready ? (
-        <p className="text-muted-foreground p-5 text-sm">
-          The Zoho FSM sync needs its database migration applied first.
-        </p>
-      ) : (
-        <>
-          {/* Where each record stands in FSM, one row each, like the History rows. */}
-          <ul className="divide-y">
-            <li>
-              <DataRow
-                icon={<FileText aria-hidden />}
-                title={
-                  estimate?.fsm_estimate_id
-                    ? `Estimate ${estimate.fsm_estimate_number ?? estimate.fsm_estimate_id}`
-                    : "Estimate"
-                }
-                subtitle={estimate?.fsm_estimate_id ? (estimate.fsm_status ?? "—") : "Not in FSM yet"}
-              />
-            </li>
-            <li>
-              <DataRow
-                icon={<Wrench aria-hidden />}
-                title={
-                  job?.fsm_work_order_id
-                    ? `Work order ${job.fsm_work_order_number ?? job.fsm_work_order_id}`
-                    : "Work order"
-                }
-                subtitle={job?.fsm_work_order_id ? (job.fsm_status ?? "—") : "Not created yet"}
-                trailing={
-                  job?.fsm_synced_at ? (
-                    <span className="text-muted-foreground text-xs">
-                      Synced {formatLocalDateTime(job.fsm_synced_at)}
-                    </span>
-                  ) : null
-                }
-              />
-            </li>
-            <li>
-              <DataRow
-                icon={<Paperclip aria-hidden />}
-                title="Inspection report"
-                subtitle={
-                  job?.fsm_report_version
-                    ? `Attached to the work order (version ${job.fsm_report_version})`
-                    : "Not attached to the work order"
-                }
-              />
-            </li>
-          </ul>
+    <div className="flex flex-col gap-4">
+      {/* Where each record stands in FSM. */}
+      <SectionCard
+        title="Zoho FSM"
+        icon={<CloudUpload />}
+        description="This job's estimate, work order and report in Zoho FSM."
+        action={badge ? <Badge className={`border-0 ${badge.tone}`}>{badge.label}</Badge> : null}
+        bodyClassName="border-t"
+      >
+        {error ? (
+          <p className="text-destructive p-5 text-sm">{error}</p>
+        ) : !state ? (
+          <div className="space-y-3 p-5">
+            <Skeleton className="h-9 w-2/3" />
+            <Skeleton className="h-9 w-1/2" />
+          </div>
+        ) : !state.enabled ? (
+          <p className="text-muted-foreground p-5 text-sm">
+            Syncing with Zoho FSM is switched off. It starts once SNAGGING_FSM_SYNC is set to
+            &quot;on&quot;.
+          </p>
+        ) : !state.ready ? (
+          <p className="text-muted-foreground p-5 text-sm">
+            The Zoho FSM sync needs its database migration applied first.
+          </p>
+        ) : (
+          <>
+            <ul className="divide-y">
+              <li>
+                <DataRow
+                  icon={<FileText aria-hidden />}
+                  title={
+                    estimate?.fsm_estimate_id
+                      ? `Estimate ${estimate.fsm_estimate_number ?? estimate.fsm_estimate_id}`
+                      : "Estimate"
+                  }
+                  subtitle={estimate?.fsm_estimate_id ? (estimate.fsm_status ?? "—") : "Not in FSM yet"}
+                />
+              </li>
+              <li>
+                <DataRow
+                  icon={<Wrench aria-hidden />}
+                  title={
+                    workOrder
+                      ? `Work order ${job?.fsm_work_order_number ?? job?.fsm_work_order_id}`
+                      : "Work order"
+                  }
+                  subtitle={
+                    workOrder
+                      ? (job?.fsm_status ?? "—")
+                      : approved
+                        ? "Not created yet"
+                        : "Created when the inspection is approved"
+                  }
+                  trailing={
+                    job?.fsm_synced_at ? (
+                      <span className="text-muted-foreground text-xs">
+                        Synced {formatLocalDateTime(job.fsm_synced_at)}
+                      </span>
+                    ) : null
+                  }
+                />
+              </li>
+              <li>
+                <DataRow
+                  icon={<Paperclip aria-hidden />}
+                  title="Inspection report"
+                  subtitle={
+                    job?.fsm_report_version
+                      ? `Attached to the work order (version ${job.fsm_report_version})`
+                      : workOrder
+                        ? "Not attached to the work order"
+                        : "Attached to the work order once it is created"
+                  }
+                />
+              </li>
+            </ul>
 
-          {problem ? (
-            <div className="bg-destructive/5 border-destructive/20 mx-5 mb-1 flex gap-2 rounded-md border p-3 text-sm">
-              <AlertTriangle className="text-destructive mt-0.5 size-4 shrink-0" />
-              <p className="break-words">{problem}</p>
-            </div>
-          ) : null}
+            {problem ? (
+              <div className="bg-destructive/5 border-destructive/20 mx-5 mb-3 flex gap-2 rounded-md border p-3 text-sm">
+                <AlertTriangle className="text-destructive mt-0.5 size-4 shrink-0" />
+                <p className="break-words">{problem}</p>
+              </div>
+            ) : null}
 
-          {canEdit ? (
-            <div className="flex flex-wrap gap-2 px-5 py-3">
-              <SubmitButton
-                variant="outline"
-                size="sm"
-                onClick={() => void sync()}
-                disabled={busy !== null}
-                pending={busy === "sync"}
-                pendingLabel="Syncing…"
-                icon={<RefreshCw className="size-4" />}
-              >
-                {problem ? "Retry" : "Sync now"}
-              </SubmitButton>
-              {job?.fsm_work_order_id ? (
-                <SubmitButton
-                  variant={job.fsm_report_version ? "outline" : "default"}
-                  size="sm"
-                  onClick={() => void attachReport()}
-                  disabled={busy !== null}
-                  pending={busy === "attach"}
-                  pendingLabel="Attaching…"
-                  icon={<FileUp className="size-4" />}
-                >
-                  {job.fsm_report_version ? "Attach the report again" : "Attach report"}
-                </SubmitButton>
-              ) : null}
-            </div>
-          ) : null}
+            {canSend || canAttach ? (
+              <div className="flex flex-wrap gap-2 border-t px-5 py-3">
+                {canSend ? (
+                  <SubmitButton
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void sync()}
+                    disabled={busy !== null}
+                    pending={busy === "sync"}
+                    pendingLabel="Syncing…"
+                    icon={<RefreshCw className="size-4" />}
+                  >
+                    {problem ? "Retry" : "Create the work order"}
+                  </SubmitButton>
+                ) : null}
+                {canAttach ? (
+                  <SubmitButton
+                    variant={job?.fsm_report_version ? "outline" : "default"}
+                    size="sm"
+                    onClick={() => void attachReport()}
+                    disabled={busy !== null}
+                    pending={busy === "attach"}
+                    pendingLabel="Attaching…"
+                    icon={<FileUp className="size-4" />}
+                  >
+                    {job?.fsm_report_version ? "Attach the report again" : "Attach report"}
+                  </SubmitButton>
+                ) : null}
+              </div>
+            ) : null}
+          </>
+        )}
+      </SectionCard>
 
-          {/* Every FSM call linked to the job, newest first: the same rows and pager as History. */}
+      {/* Every FSM call for the job, its quotations and its client: a card of its own. */}
+      {live ? (
+        <SectionCard
+          title="FSM activity"
+          icon={<History />}
+          description="Every call made to Zoho FSM for this job, its quotations and its client, newest first."
+          bodyClassName="border-t"
+        >
           <FsmEventList
-            className="border-t"
             log={log}
             total={total}
             page={page}
@@ -232,8 +277,8 @@ export function FsmJobCard({ taskId, canEdit }: { taskId: string; canEdit: boole
             onPageChange={setPage}
             onPageSizeChange={setPageSize}
           />
-        </>
-      )}
-    </SectionCard>
+        </SectionCard>
+      ) : null}
+    </div>
   );
 }

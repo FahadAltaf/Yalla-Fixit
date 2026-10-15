@@ -334,7 +334,9 @@ export function DataTable<TData, TValue>({
                   <TableCell
                     colSpan={columns.length}
                     className={cn(
-                      emptyState ? "p-0" : "h-24 text-center"
+                      // A table cell does not wrap by default; an empty state's
+                      // sentence must, or it runs past the table off-centre.
+                      emptyState ? "p-0 whitespace-normal" : "h-24 text-center"
                     )}
                   >
                     {emptyState ?? "No results."}

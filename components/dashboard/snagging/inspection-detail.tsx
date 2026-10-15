@@ -501,7 +501,7 @@ function InspectionDetailView() {
             {/* Every inspector's signature, kept internally. */}
             <SignoffsCard signoffs={task.signoffs} clientSigner={task.submissions?.[0]?.signer_name} />
             {/* Zoho FSM and the change history, each its own tab, each fetched when opened. */}
-            <JobActivityTabs taskId={task.id} canEdit={canEditSnags} />
+            <JobActivityTabs taskId={task.id} canEdit={canEditSnags} jobStatus={task.status} />
           </>,
         )}
       </Tabs>
@@ -565,7 +565,15 @@ function formatClock(at: number): string {
  * stays mounted after, so neither is fetched until it is looked at and
  * going back to one asks for nothing.
  */
-function JobActivityTabs({ taskId, canEdit }: { taskId: string; canEdit: boolean }) {
+function JobActivityTabs({
+  taskId,
+  canEdit,
+  jobStatus,
+}: {
+  taskId: string;
+  canEdit: boolean;
+  jobStatus?: string | null;
+}) {
   const [sub, setSubState] = useState<"fsm" | "history">("fsm");
   const [opened, setOpened] = useState<Set<string>>(() => new Set(["fsm"]));
   const setSub = useCallback((next: "fsm" | "history") => {
@@ -584,7 +592,7 @@ function JobActivityTabs({ taskId, canEdit }: { taskId: string; canEdit: boolean
       />
       {opened.has("fsm") ? (
         <div hidden={sub !== "fsm"}>
-          <FsmJobCard taskId={taskId} canEdit={canEdit} />
+          <FsmJobCard taskId={taskId} canEdit={canEdit} jobStatus={jobStatus} />
         </div>
       ) : null}
       {opened.has("history") ? (

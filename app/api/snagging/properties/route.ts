@@ -8,6 +8,7 @@ import { propertyColumns } from "@/lib/server/snagging/property";
 import {
   fsmClientsReady,
   fsmOnlyAddresses,
+  queuePropertyEditToFsm,
   queuePropertyToFsm,
 } from "@/lib/server/snagging/fsm-clients";
 import { propertyUpsertSchema } from "@/modules/snagging/schemas";
@@ -196,6 +197,8 @@ export async function PATCH(req: NextRequest) {
       .select(SELECT)
       .single();
     if (error) throw new Error(error.message);
+    // The address in Zoho FSM follows the edit (line and map pin).
+    queuePropertyEditToFsm(admin, id, profile.id);
     return NextResponse.json({ data });
   } catch (error) {
     console.error("Snagging properties PATCH error:", error);
