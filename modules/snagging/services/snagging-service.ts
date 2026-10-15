@@ -244,7 +244,18 @@ export interface SnaggingJobFsm {
     fsm_synced_at: string | null;
     fsm_error: string | null;
   } | null;
+  /** The job's quotation as an FSM estimate. */
+  estimate: {
+    quote_number: string;
+    fsm_estimate_id: string | null;
+    fsm_estimate_number: string | null;
+    fsm_status: string | null;
+    fsm_error: string | null;
+  } | null;
+  /** One page of every FSM call linked to the job, newest first. */
   log: SnaggingQuotationFsm["log"];
+  /** How many FSM calls there are in all, for the pager. */
+  logTotal: number;
 }
 
 /** A quotation's Zoho FSM sync, as its page shows it. */
@@ -267,6 +278,8 @@ export interface SnaggingQuotationFsm {
     created_at: string;
     actor: { full_name: string | null; email: string | null } | null;
   }[];
+  /** How many FSM calls there are in all, for the pager. */
+  logTotal?: number;
 }
 
 export interface SnaggingQuotation {
@@ -357,12 +370,18 @@ export interface SnaggingQuotation {
     name: string | null;
     email: string | null;
     phone: string | null;
+    company?: string | null;
+    maher_id?: string | null;
   } | null;
 }
 
 export interface SnaggingClientOption {
   /** Present for persisted clients (from snagging_clients). */
   id?: string;
+  /** The Zoho FSM contact. A client listed from FSM and not used yet has only this. */
+  fsm_contact_id?: string | null;
+  /** Maher ID, which Zoho FSM requires on a client (Maher_Id__C). */
+  maher_id?: string | null;
   client_name: string;
   client_email: string | null;
   client_phone: string | null;
@@ -640,6 +659,42 @@ export const snaggingService = {
       },
     }),
 
+  /**
+   * One page of clients from Zoho FSM, newest first, or matching a search
+   * (the portal's own clients when the FSM integration is off). FSM gives
+   * no total, so the page says whether there are more.
+   */
+  listFsmClients: async (query: {
+    search?: string;
+    page: number;
+    pageSize: number;
+  }): Promise<{ data: SnaggingClientOption[]; hasMore: boolean; source: "fsm" | "portal" }> =>
+    executeRESTBackend<{ data: SnaggingClientOption[]; hasMore: boolean; source: "fsm" | "portal" }>(
+      "/api/snagging/fsm/contacts",
+      {
+        method: "GET",
+        params: {
+          ...(query.search ? { search: query.search } : {}),
+          page: String(query.page),
+          pageSize: String(query.pageSize),
+        },
+      },
+    ),
+
+  /** The portal's client for an FSM contact, made the first time it is used. */
+  linkFsmClient: async (fsmContactId: string): Promise<SnaggingClientOption> =>
+    executeRESTBackend<SnaggingClientOption>("/api/snagging/fsm/contacts/link", {
+      method: "POST",
+      body: { fsm_contact_id: fsmContactId },
+    }),
+
+  /** The portal's property for one of the client's FSM addresses, made when it is picked. */
+  linkFsmAddress: async (clientId: string, fsmAddressId: string): Promise<SnaggingProperty> =>
+    executeRESTBackend<SnaggingProperty>("/api/snagging/fsm/addresses/link", {
+      method: "POST",
+      body: { client_id: clientId, fsm_address_id: fsmAddressId },
+    }),
+
   /** One page of clients for a picker, newest first: no counts, for scrolling through. */
   pickClientsPage: async (query: {
     search?: string;
@@ -686,15 +741,27 @@ export const snaggingService = {
   getChangeHistory: async (
     scope: "quotation" | "settings",
     id?: string,
-  ): Promise<SnaggingChangeHistoryItem[]> =>
-    executeRESTBackend<SnaggingChangeHistoryItem[]>(
-      `/api/snagging/history?scope=${scope}${id ? `&id=${encodeURIComponent(id)}` : ""}`,
-      { method: "GET" },
-    ),
+    paging: { page: number; pageSize: number } = { page: 0, pageSize: 10 },
+  ): Promise<{ data: SnaggingChangeHistoryItem[]; totalCount: number }> =>
+    executeRESTBackend<{ data: SnaggingChangeHistoryItem[]; totalCount: number }>("/api/snagging/history", {
+      method: "GET",
+      params: {
+        scope,
+        ...(id ? { id } : {}),
+        page: String(paging.page),
+        pageSize: String(paging.pageSize),
+      },
+    }),
 
   /** A quotation in Zoho FSM: its estimate, the last error, and the sync log. */
-  getQuotationFsm: async (id: string): Promise<SnaggingQuotationFsm> =>
-    executeRESTBackend<SnaggingQuotationFsm>(`/api/snagging/quotations/${id}/fsm`, { method: "GET" }),
+  getQuotationFsm: async (
+    id: string,
+    paging: { page: number; pageSize: number } = { page: 0, pageSize: 10 },
+  ): Promise<SnaggingQuotationFsm> =>
+    executeRESTBackend<SnaggingQuotationFsm>(`/api/snagging/quotations/${id}/fsm`, {
+      method: "GET",
+      params: { page: String(paging.page), pageSize: String(paging.pageSize) },
+    }),
 
   /** Syncs a quotation with Zoho FSM now (the Retry button). */
   syncQuotationFsm: async (id: string): Promise<{ ok: boolean; message: string }> =>
@@ -703,8 +770,14 @@ export const snaggingService = {
     }),
 
   /** An approved job in Zoho FSM: its work order, report and sync log (SNG-189). */
-  getTaskFsm: async (taskId: string): Promise<SnaggingJobFsm> =>
-    executeRESTBackend<SnaggingJobFsm>(`/api/snagging/tasks/${taskId}/fsm`, { method: "GET" }),
+  getTaskFsm: async (
+    taskId: string,
+    paging: { page: number; pageSize: number } = { page: 0, pageSize: 10 },
+  ): Promise<SnaggingJobFsm> =>
+    executeRESTBackend<SnaggingJobFsm>(`/api/snagging/tasks/${taskId}/fsm`, {
+      method: "GET",
+      params: { page: String(paging.page), pageSize: String(paging.pageSize) },
+    }),
 
   /** Syncs an approved job with Zoho FSM now. */
   syncTaskFsm: async (taskId: string): Promise<{ ok: boolean; message: string }> =>
@@ -887,6 +960,8 @@ export const snaggingService = {
     client_email?: string;
     client_phone?: string;
     company?: string;
+    /** Required when clients are kept in Zoho FSM (Maher_Id__C). */
+    maher_id?: string;
   }): Promise<SnaggingClientOption> =>
     executeRESTBackend<SnaggingClientOption>("/api/snagging/clients", {
       method: "POST",
@@ -895,11 +970,14 @@ export const snaggingService = {
 
   /** Corrects a client's details (FR-1.11). Only what is sent changes. */
   updateClient: async (input: {
-    id: string;
+    /** The portal client; absent for an FSM contact not used in the portal yet. */
+    id?: string;
+    fsm_contact_id?: string | null;
     client_name?: string;
     client_email?: string | null;
     client_phone?: string | null;
     company?: string | null;
+    maher_id?: string | null;
     notes?: string | null;
   }): Promise<SnaggingClientOption> =>
     executeRESTBackend<SnaggingClientOption>("/api/snagging/clients", {
@@ -909,10 +987,23 @@ export const snaggingService = {
 
   // ── Properties (BR-1) ──────────────────────────────────────────────────
   listProperties: async (clientId?: string): Promise<SnaggingProperty[]> =>
-    executeRESTBackend<SnaggingProperty[]>("/api/snagging/properties", {
+    executeRESTBackend<SnaggingProperty[] | { data: SnaggingProperty[] }>("/api/snagging/properties", {
       method: "GET",
       params: clientId ? { client_id: clientId } : {},
-    }),
+    }).then((result) => (Array.isArray(result) ? result : result.data)),
+
+  /**
+   * A client's addresses: the portal's, then those in Zoho FSM it has no row
+   * for yet (source "fsm", id "fsm:…"). fsmError says FSM could not be read,
+   * so the list may be missing some.
+   */
+  listClientAddresses: async (
+    clientId: string,
+  ): Promise<{ data: SnaggingProperty[]; fsmError: string | null }> =>
+    executeRESTBackend<{ data: SnaggingProperty[]; fsmError?: string | null }>("/api/snagging/properties", {
+      method: "GET",
+      params: { client_id: clientId },
+    }).then((result) => ({ data: result.data ?? [], fsmError: result.fsmError ?? null })),
 
   createProperty: async (
     input: SnaggingPropertyInput,

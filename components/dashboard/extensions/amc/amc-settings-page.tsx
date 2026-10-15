@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import {
   ArrowDown,
   ArrowUp,
@@ -397,19 +397,21 @@ export function AmcSettingsPage() {
   const [history, setHistory] = useState<AmcSettingsHistoryItem[]>([]);
   const [amcUsers, setAmcUsers] = useState<AmcUser[]>([]);
   // The view is kept in the address (?view=clauses), so a reload stays on it.
-  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const viewParam = searchParams.get("view");
-  const view: View = (["values", "clauses", "scopes", "approvers", "history"] as const).includes(
-    viewParam as View,
-  )
-    ? (viewParam as View)
-    : "values";
+  const [view, setViewState] = useState<View>(() => {
+    const viewParam = searchParams.get("view");
+    return (["values", "clauses", "scopes", "approvers", "history"] as const).includes(viewParam as View)
+      ? (viewParam as View)
+      : "values";
+  });
   const setView = (next: View) => {
-    const params = new URLSearchParams(searchParams.toString());
+    setViewState(next);
+    const params = new URLSearchParams(window.location.search);
     params.set("view", next);
-    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+    // The router's own state, so Next leaves the entry alone: a new ?view=
+    // through the router re-keys the page and remounts it, reloading the settings.
+    window.history.replaceState(window.history.state, "", `${pathname}?${params.toString()}`);
   };
 
   const load = useCallback(async () => {

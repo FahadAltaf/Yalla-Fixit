@@ -16,10 +16,12 @@ import {
   fsmReason,
   fsmSyncEnabled,
   fsmSyncReady,
-  lineKind,
   log,
+  convertEstimate,
+  quotationAddress,
   resolveServiceMap,
-  serviceFor,
+  serviceLineItems,
+  serviceTaxes,
   syncQuotationToFsm,
 } from "@/lib/server/snagging/fsm-quotation-sync";
 
@@ -122,10 +124,26 @@ async function attachToWorkOrder(token: string, workOrderId: string, fileName: s
   if (!upload.ok || !fileId) {
     throw new SyncError(fsmReason(uploaded, upload.status), "report_upload", uploaded);
   }
+  /*
+    FSM keeps attachments on a note: the uploaded file goes onto the work
+    order as a note carrying it ("Create a Note": $attachments takes the
+    file ids). There is no attachment call on the work order itself.
+  */
   const attach = await fsmFetch(
     token,
-    `/Work_Orders/${encodeURIComponent(workOrderId)}/Attachments`,
-    { method: "POST", body: JSON.stringify({ data: [{ File_Id: String(fileId), File_Name: fileName }] }) },
+    `/Work_Orders/${encodeURIComponent(workOrderId)}/Notes`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        data: [
+          {
+            Note_Title: "Snagging inspection report",
+            Note_Content: `The client report for this inspection: ${fileName}`,
+            $attachments: [String(fileId)],
+          },
+        ],
+      }),
+    },
     { retry: false },
   );
   if (!attach.ok) throw new SyncError(fsmReason(attach.json, attach.status), "report_attach", attach.json);
@@ -153,6 +171,27 @@ async function workOrderTransition(
     body: JSON.stringify({ blueprint: [{ transition_id: String(match.id), ...(data ? { data } : {}) }] }),
   });
   return res.ok ? { done: true } : { done: false, reason: fsmReason(res.json, res.status), detail: res.json };
+}
+
+/**
+ * The work order FSM made from this estimate: among the contact's work
+ * orders, newest first, the one whose Estimate links back to it. A
+ * converted work order carries that link (seen on the office's own).
+ */
+async function workOrderOfEstimate(token: string, contactId: string, estimateId: string): Promise<Row | null> {
+  const res = await fsmFetch(
+    token,
+    `/Contacts/${encodeURIComponent(contactId)}/Work_Orders?per_page=50`,
+  );
+  if (!res.ok) return null;
+  const rows = ((res.json?.data ?? []) as Row[]).sort((a, b) =>
+    String(b.Created_Time ?? "").localeCompare(String(a.Created_Time ?? "")),
+  );
+  for (const row of rows.slice(0, 10)) {
+    const linked = row.Estimate?.id ?? (await readWorkOrder(token, String(row.id)))?.Estimate?.id;
+    if (String(linked ?? "") === estimateId) return row;
+  }
+  return null;
 }
 
 async function readWorkOrder(token: string, id: string): Promise<Row | null> {
@@ -235,7 +274,7 @@ async function syncJobOnce(
     let status = job.fsm_status as string | null;
 
     if (!workOrderId) {
-      const [{ data: client }, { data: property }] = await Promise.all([
+      const [{ data: client }, { data: property }, { data: quoteFsm }] = await Promise.all([
         admin
           .from("snagging_clients")
           .select("id, name, email, phone, company, fsm_contact_id, fsm_company_id")
@@ -244,41 +283,85 @@ async function syncJobOnce(
         job.property_id
           ? admin.from("snagging_properties").select("unit_label, building_name, community").eq("id", job.property_id).maybeSingle()
           : Promise.resolve({ data: null }),
+        admin.from("snagging_quotations").select("fsm_estimate_id").eq("id", quote.id).maybeSingle(),
       ]);
       if (!client) throw new SyncError("The job has no client to send to FSM", "work_order_build");
       const contact = await ensureContact(admin, token, client as Row, property as Row | null, quote.id, actorId);
-      const contactRecord = (await fsmGetRecord(token, "Contacts", contact.contactId)).record ?? null;
-      const services = await resolveServiceMap(admin, token, { quotationId: quote.id, jobId, actorId });
-      const lines = (quote.lines ?? []) as { description: string; qty: number; unit_price: number }[];
-      const where = [job.unit_label, job.building_name].filter(Boolean).join(", ");
-      const serviceAddress = estimateAddress(contactRecord?.Service_Address, "Service");
-      const billingAddress = estimateAddress(contactRecord?.Billing_Address, "Billing");
+      const estimateId = ((quoteFsm as Row | null)?.fsm_estimate_id as string | null) ?? null;
 
-      const body = {
-        data: [
-          {
-            Summary: `${job.code} · Snagging inspection${where ? ` · ${where}` : ""} · ${quote.quote_number}`.slice(0, 250),
-            Type: "Inspection",
-            Contact: contact.contactId,
-            Company: contact.companyId ?? null,
-            ...(serviceAddress ? { Service_Address: { id: serviceAddress.id } } : {}),
-            ...(billingAddress ? { Billing_Address: { id: billingAddress.id } } : {}),
-            Service_Line_Items: lines.map((line, index) => {
-              return {
-                Service: serviceFor(services, lineKind(line.description)),
-                Description: line.description,
-                Quantity: Number(line.qty) || 1,
-                List_Price: Number(line.unit_price) || 0,
-                Sequence: index + 1,
-              };
-            }),
-          },
-        ],
-      };
-      const created = await fsmFetch(token, "/Work_Orders", { method: "POST", body: JSON.stringify(body) }, { retry: false });
-      if (!created.ok) throw new SyncError(fsmReason(created.json, created.status), "work_order_create", created.json);
-      workOrderId = String(created.json?.data?.Work_Orders?.[0]?.id ?? "");
-      if (!workOrderId) throw new SyncError("FSM created the work order but sent no id back", "work_order_create", created.json);
+      /*
+        The work order is made the way the office makes one, and linked to
+        the approved estimate, which is what finance invoices from: the
+        estimate is marked "Converted to Work Order" (its "Convert To Work
+        Order" step only changes its status through the API), and the work
+        order is created carrying the estimate in its Estimate field.
+
+        A work order already linked to the estimate (a retry after it was
+        made) is used rather than a second one.
+      */
+      const existing = estimateId ? await workOrderOfEstimate(token, contact.contactId, estimateId) : null;
+      if (existing) {
+        workOrderId = String(existing.id);
+      } else {
+        if (estimateId) {
+          const converted = await convertEstimate(token, estimateId, `Inspection ${job.code} approved in the portal.`);
+          // Not offered once it is already converted: nothing to log then.
+          if (converted.done || !/convert/i.test(String(converted.reason ?? ""))) {
+            await log(admin, {
+              quotationId: quote.id,
+              jobId,
+              action: "work_order_convert",
+              status: converted.done ? "success" : "skipped",
+              recordId: estimateId,
+              message: converted.done
+                ? `Estimate ${quote.quote_number} marked converted to work order in FSM`
+                : `Estimate not marked converted: ${converted.reason}`,
+              detail: converted.detail,
+              actorId,
+            });
+          }
+        }
+
+        const contactRecord = (await fsmGetRecord(token, "Contacts", contact.contactId)).record ?? null;
+        const services = await resolveServiceMap(admin, token, { quotationId: quote.id, jobId, actorId });
+        const taxes = await serviceTaxes(token, services);
+        const where = [job.unit_label, job.building_name].filter(Boolean).join(", ");
+        // The unit inspected, when FSM has it (added there first if new); else the contact default.
+        const jobAddress = await quotationAddress(admin, token, contact.contactId, job.property_id, actorId);
+        const serviceAddress = estimateAddress(jobAddress ?? contactRecord?.Service_Address, "Service");
+        // No billing address on the contact: bill the service address, as on the estimate.
+        const billingAddress = estimateAddress(
+          contactRecord?.Billing_Address ?? jobAddress ?? contactRecord?.Service_Address,
+          "Billing",
+        );
+
+        const body = {
+          data: [
+            {
+              Summary: `${job.code} · Snagging inspection${where ? ` · ${where}` : ""} · ${quote.quote_number}`.slice(0, 250),
+              Type: "Inspection",
+              Contact: contact.contactId,
+              Company: contact.companyId ?? null,
+              ...(estimateId ? { Estimate: estimateId } : {}),
+              ...(contactRecord?.Email ? { Email: contactRecord.Email } : {}),
+              // FSM requires Phone, as on the estimate.
+              ...(contactRecord?.Phone || contactRecord?.Mobile
+                ? { Phone: contactRecord.Phone ?? contactRecord.Mobile }
+                : {}),
+              ...(serviceAddress ? { Service_Address: { id: serviceAddress.id } } : {}),
+              ...(billingAddress ? { Billing_Address: { id: billingAddress.id } } : {}),
+              ...(jobAddress?.Territory?.id ? { Territory: String(jobAddress.Territory.id) } : {}),
+              // With the unit and the VAT, as on the estimate: without the tax FSM refuses it.
+              Service_Line_Items: serviceLineItems(quote, services, taxes),
+            },
+          ],
+        };
+        const created = await fsmFetch(token, "/Work_Orders", { method: "POST", body: JSON.stringify(body) }, { retry: false });
+        if (!created.ok) throw new SyncError(fsmReason(created.json, created.status), "work_order_create", created.json);
+        workOrderId = String(created.json?.data?.Work_Orders?.[0]?.id ?? "");
+        if (!workOrderId) throw new SyncError("FSM created the work order but sent no id back", "work_order_create", created.json);
+      }
+
       const record = await readWorkOrder(token, workOrderId);
       status = (record?.Status as string | undefined) ?? null;
       await admin
@@ -295,12 +378,21 @@ async function syncJobOnce(
         action: "work_order_create",
         status: "success",
         recordId: workOrderId,
-        message: `Work order ${record?.Name ?? workOrderId} created in FSM`,
+        message: existing
+          ? `Work order ${record?.Name ?? workOrderId} found, linked to estimate ${quote.quote_number}`
+          : `Work order ${record?.Name ?? workOrderId} created in FSM${estimateId ? ` from estimate ${quote.quote_number}` : ""}`,
         actorId,
       });
     }
 
-    // Completed: forced, as snagging keeps its appointments in the portal.
+    /*
+      Completed in FSM, when FSM allows it. This account completes a work
+      order only through its service appointment ("Manage Appointment"
+      leads there), and snagging creates none in FSM (SNG-190), so FSM
+      offers no "Complete" on a new work order. That is logged and the
+      report is still attached: the work order is linked to its estimate
+      and carries the inspection report, which is what finance needs.
+    */
     if (!status || !DONE_STATUSES.test(status)) {
       const done = await workOrderTransition(token, workOrderId, /^complete/i, {
         $force_complete: true,
@@ -310,14 +402,15 @@ async function syncJobOnce(
         quotationId: quote.id,
         jobId,
         action: "work_order_complete",
-        status: done.done ? "success" : "failed",
+        status: done.done ? "success" : "skipped",
         recordId: workOrderId,
-        message: done.done ? "Work order completed in FSM" : done.reason,
+        message: done.done
+          ? "Work order completed in FSM"
+          : `Not completed in FSM: ${done.reason}. FSM completes a work order through its appointment.`,
         detail: done.detail,
         actorId,
       });
-      if (!done.done) throw new SyncError(done.reason ?? "FSM could not complete the work order", "work_order_complete");
-      status = ((await readWorkOrder(token, workOrderId))?.Status as string | undefined) ?? status;
+      if (done.done) status = ((await readWorkOrder(token, workOrderId))?.Status as string | undefined) ?? status;
     }
 
     // The report, for finance: the newest version not attached yet.
@@ -360,7 +453,8 @@ async function syncJobOnce(
       .from("snagging_jobs")
       .update({ fsm_status: status, fsm_synced_at: new Date().toISOString(), fsm_error: null })
       .eq("id", jobId);
-    return { ok: true, message: `Completed in FSM as work order ${job.fsm_work_order_number ?? workOrderId}.${reportNote}` };
+    const number = ((await readWorkOrder(token, workOrderId))?.Name as string | undefined) ?? workOrderId;
+    return { ok: true, message: `In FSM as work order ${number} (${status ?? "status unknown"}).${reportNote}` };
   } catch (err) {
     const message =
       err instanceof FsmConfigError

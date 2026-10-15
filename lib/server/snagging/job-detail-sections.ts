@@ -935,13 +935,14 @@ export async function loadJobDesnagQuotation(admin: Admin, id: string) {
   What the visits tab, the visit alerts and the edit dialog read, plus
   quotation_id to join the visit's quotation. The review fields
   (submitted_at, review_note) came with 20260918100000_visit_review, which
-  every environment now has; the audit columns (created_by, updated_at,
+  every environment now has; the other audit columns (created_by,
   reviewed_by, ...) have no reader here.
 */
 const VISIT_COLUMNS =
   "id, visit_number, status, scheduled_date, appointment_at, inspector_id, charge, " +
   "charge_method, payment_reference, quotation_id, started_at, submitted_at, review_note, " +
-  "notes, created_at, inspector:inspector_id(id, full_name, email), " +
+  // updated_at for the table's Updated column.
+  "notes, created_at, updated_at, inspector:inspector_id(id, full_name, email), " +
   // The visit's quotation, embedded rather than fetched in a second round trip.
   "quotation_ref:quotation_id(id, quote_number, status)";
 

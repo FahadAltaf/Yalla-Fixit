@@ -247,12 +247,142 @@ export function WizardSkeleton() {
   );
 }
 
-/** A quotation: the way back and its actions, then the document. */
-export function QuotationBodySkeleton() {
+/** The filled tab row a page's TabsList draws. */
+function TabBarSkeleton({ count }: { count: number }) {
+  return (
+    <div className="bg-muted flex w-full items-center gap-1 rounded-lg p-1">
+      {Array.from({ length: count }).map((_, i) => (
+        <Skeleton key={i} className="bg-background/60 h-7 flex-1 rounded-md" />
+      ))}
+    </div>
+  );
+}
+
+/** A row of PillTabs, as the Activity tabs draw them. */
+export function PillTabsSkeleton({ count = 2 }: { count?: number }) {
+  const widths = ["w-24", "w-32", "w-28", "w-20"];
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {Array.from({ length: count }).map((_, i) => (
+        <Skeleton key={i} className={cn("h-8 rounded-full", widths[i % widths.length])} />
+      ))}
+    </div>
+  );
+}
+
+/** Label-and-value rows: the label on the left, the value right-aligned. */
+function DetailRowsSkeleton({ rows }: { rows: number }) {
+  const widths = ["w-20", "w-28", "w-24", "w-16", "w-32"];
+  return (
+    <div className="divide-y">
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} className="flex items-center justify-between gap-4 py-2.5">
+          <Skeleton className="h-3.5 w-24" />
+          <Skeleton className={cn("h-3.5", widths[i % widths.length])} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The "Property & client" card the job's Setup tab and the quotation's
+ * Details tab both open with: the lists on the left, the map on the right.
+ */
+export function PropertyClientCardSkeleton() {
+  return (
+    <Card className="gap-0 overflow-hidden p-0">
+      <div className="space-y-2 px-5 pt-5 pb-4">
+        <Skeleton className="h-5 w-44" />
+        <Skeleton className="h-3.5 w-72 max-w-full" />
+      </div>
+      <div className="grid gap-6 px-5 pb-5 lg:grid-cols-2">
+        <div className="space-y-6">
+          <div className="space-y-3">
+            <Skeleton className="h-3 w-20" />
+            <DetailRowsSkeleton rows={8} />
+          </div>
+          <div className="space-y-3">
+            <Skeleton className="h-3 w-16" />
+            <DetailRowsSkeleton rows={3} />
+          </div>
+        </div>
+        <div className="flex flex-col gap-3">
+          <Skeleton className="h-3 w-20" />
+          <Skeleton className="min-h-72 w-full flex-1 rounded-lg" />
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+/** A titled card of event rows: an Activity panel whose code is still loading. */
+export function SectionLoadingSkeleton() {
+  return (
+    <SectionSkeleton>
+      <ListSkeleton rows={5} />
+    </SectionSkeleton>
+  );
+}
+
+/** An Activity tab: its two pill tabs, then a card of events. */
+export function ActivityTabSkeleton() {
   return (
     <div className="flex flex-col gap-4">
-      <Skeleton className="h-9 w-64" />
-      <Skeleton className="h-[28rem] w-full" />
+      <PillTabsSkeleton count={2} />
+      <SectionSkeleton>
+        <ListSkeleton rows={5} />
+      </SectionSkeleton>
+    </div>
+  );
+}
+
+/**
+ * The quotation's Details tab: the stat cards, the property card, then the
+ * Office notes and Documents cards.
+ */
+export function QuotationDetailsSkeleton() {
+  return (
+    <div className="flex flex-col gap-4">
+      <StatGridSkeleton count={4} />
+      <PropertyClientCardSkeleton />
+      <SectionSkeleton>
+        <div className="space-y-2 p-5">
+          <Skeleton className="h-4 w-3/5" />
+          <Skeleton className="h-4 w-2/5" />
+        </div>
+      </SectionSkeleton>
+      <SectionSkeleton>
+        <div className="p-5">
+          <div className="rounded-lg border">
+            <ListSkeleton rows={2} />
+          </div>
+        </div>
+      </SectionSkeleton>
+    </div>
+  );
+}
+
+/** The quotation document itself, as the Quotation tab shows it. */
+function QuotationDocumentSkeleton() {
+  return <Skeleton className="mx-auto h-[28rem] w-full max-w-[794px]" />;
+}
+
+/**
+ * A quotation: its three tabs, then the body of whichever one is open --
+ * so a page opened on ?tab=activity does not flash a document first.
+ */
+export function QuotationBodySkeleton({ tab = "details" }: { tab?: string | null }) {
+  return (
+    <div className="flex flex-col gap-4">
+      <TabBarSkeleton count={3} />
+      {tab === "quotation" ? (
+        <QuotationDocumentSkeleton />
+      ) : tab === "activity" ? (
+        <ActivityTabSkeleton />
+      ) : (
+        <QuotationDetailsSkeleton />
+      )}
     </div>
   );
 }
@@ -274,17 +404,28 @@ export function QuotationDetailSkeleton() {
 }
 
 /**
- * A job before it arrives: the tab row as the filled bar it is, and one
- * panel shaped like the snag list most jobs open on.
+ * A job before it arrives: the tab row as the filled bar it is, and the
+ * body of the tab it is opening on -- the Setup card, the Activity tab,
+ * the visits table -- or the snag list most jobs open on.
  */
-export function JobTabsSkeleton() {
+export function JobTabsSkeleton({ tab }: { tab?: string | null } = {}) {
   return (
     <>
-      <div className="bg-muted flex w-full items-center gap-1 rounded-lg p-1">
-        {Array.from({ length: 6 }).map((_, i) => (
-          <Skeleton key={i} className="bg-background/60 h-7 flex-1 rounded-md" />
-        ))}
-      </div>
+      <TabBarSkeleton count={7} />
+      {tab === "setup" ? (
+        <PropertyClientCardSkeleton />
+      ) : tab === "history" ? (
+        <div className="flex flex-col gap-4">
+          <SectionSkeleton>
+            <ListSkeleton rows={2} />
+          </SectionSkeleton>
+          <ActivityTabSkeleton />
+        </div>
+      ) : tab === "visits" || tab === "checklist" || tab === "areas" || tab === "quotation" ? (
+        <SectionSkeleton>
+          <ListSkeleton rows={5} />
+        </SectionSkeleton>
+      ) : (
       <Card className="gap-0 overflow-hidden p-0">
         <div className="space-y-2 px-5 pt-5 pb-4">
           <Skeleton className="h-5 w-44" />
@@ -307,6 +448,7 @@ export function JobTabsSkeleton() {
           ))}
         </div>
       </Card>
+      )}
     </>
   );
 }

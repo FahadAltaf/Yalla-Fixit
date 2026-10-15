@@ -17,7 +17,7 @@ import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { ActionType, ResourceType } from "@/types/types";
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
-import { TabCount } from "@/components/dashboard/shared/kaizen";
+import { PillTabs, TabCount } from "@/components/dashboard/shared/kaizen";
 
 import { ErrorState } from "./shared";
 import { SignoffsCard } from "./signoffs-card";
@@ -27,7 +27,11 @@ import { InspectionHeaderCard } from "./inspection-header-card";
 import { JobDetailProvider, useJobDetail, type JobDetailInitial } from "./job-detail-context";
 import { SnagWalkList } from "./snag-walk-list";
 import { VisitActivityAlerts } from "./visit-activity-alerts";
-import { JobTabsSkeleton } from "@/components/dashboard/snagging/route-skeletons";
+import {
+  JobTabsSkeleton,
+  PropertyClientCardSkeleton,
+  SectionLoadingSkeleton,
+} from "@/components/dashboard/snagging/route-skeletons";
 
 /*
   The tabs the page does not open on are split into their own chunks and
@@ -45,7 +49,7 @@ const ChecklistPanel = dynamic(
 );
 const JobSetupPanel = dynamic(
   () => import("./job-setup-panel").then((m) => m.JobSetupPanel),
-  { loading: PanelLoading },
+  { loading: PropertyClientCardSkeleton },
 );
 const QuotationPanel = dynamic(
   () => import("./quotation-panel").then((m) => m.QuotationPanel),
@@ -57,7 +61,11 @@ const AdditionalVisitsPanel = dynamic(
 );
 const AuditTimeline = dynamic(
   () => import("./audit-timeline").then((m) => m.AuditTimeline),
-  { loading: PanelLoading },
+  { loading: SectionLoadingSkeleton },
+);
+const FsmJobCard = dynamic(
+  () => import("./fsm-job-card").then((m) => m.FsmJobCard),
+  { loading: SectionLoadingSkeleton },
 );
 
 /**
@@ -174,7 +182,9 @@ function InspectionDetailView() {
     setOpened((prev) => (prev.has(next) ? prev : new Set(prev).add(next)));
     const query = new URLSearchParams(window.location.search);
     query.set("tab", next);
-    window.history.replaceState(null, "", `?${query.toString()}`);
+    // The router's own state, so Next leaves the entry alone: a new ?tab=
+    // through Next re-keys the page and remounts it, refetching everything.
+    window.history.replaceState(window.history.state, "", `?${query.toString()}`);
   }, []);
   /*
     The tab asked for, if this job actually has it.
@@ -260,7 +270,7 @@ function InspectionDetailView() {
       <div className="flex flex-col gap-4">
         {toolbar}
         {visitList.length > 0 ? <VisitActivityAlerts taskId={taskId} visits={visitList} /> : null}
-        <JobTabsSkeleton />
+        <JobTabsSkeleton tab={tab} />
       </div>
     );
   }
@@ -371,8 +381,9 @@ function InspectionDetailView() {
               <TabBusy on={visits.refreshing} />
             </TabsTrigger>
           ) : null}
+          {/* Sign-offs, then Zoho FSM and the change history: everything that happened to the job. */}
           <TabsTrigger value="history">
-            History
+            Activity
             <TabBusy on={auditRefreshing} />
           </TabsTrigger>
         </TabsList>
@@ -489,7 +500,8 @@ function InspectionDetailView() {
           <>
             {/* Every inspector's signature, kept internally. */}
             <SignoffsCard signoffs={task.signoffs} clientSigner={task.submissions?.[0]?.signer_name} />
-            <AuditTimeline />
+            {/* Zoho FSM and the change history, each its own tab, each fetched when opened. */}
+            <JobActivityTabs taskId={task.id} canEdit={canEditSnags} />
           </>,
         )}
       </Tabs>
@@ -546,6 +558,44 @@ function formatClock(at: number): string {
  * app — and changes with it.
  */
 /** A small spinner on a tab whose data is being re-read; the data stays. */
+/**
+ * The Activity tab's own two tabs: this job in Zoho FSM (its quotation,
+ * work order and report, with every call a page at a time from the server)
+ * and the job's change history. Each mounts the first time it is opened and
+ * stays mounted after, so neither is fetched until it is looked at and
+ * going back to one asks for nothing.
+ */
+function JobActivityTabs({ taskId, canEdit }: { taskId: string; canEdit: boolean }) {
+  const [sub, setSubState] = useState<"fsm" | "history">("fsm");
+  const [opened, setOpened] = useState<Set<string>>(() => new Set(["fsm"]));
+  const setSub = useCallback((next: "fsm" | "history") => {
+    setSubState(next);
+    setOpened((prev) => (prev.has(next) ? prev : new Set(prev).add(next)));
+  }, []);
+  return (
+    <div className="flex flex-col gap-4">
+      <PillTabs<"fsm" | "history">
+        value={sub}
+        onChange={setSub}
+        tabs={[
+          { value: "fsm", label: "Zoho FSM" },
+          { value: "history", label: "Change history" },
+        ]}
+      />
+      {opened.has("fsm") ? (
+        <div hidden={sub !== "fsm"}>
+          <FsmJobCard taskId={taskId} canEdit={canEdit} />
+        </div>
+      ) : null}
+      {opened.has("history") ? (
+        <div hidden={sub !== "history"}>
+          <AuditTimeline />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function TabBusy({ on }: { on: boolean }) {
   if (!on) return null;
   return <Loader2 className="text-muted-foreground ml-1 size-3 animate-spin" aria-label="Refreshing" />;

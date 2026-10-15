@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 import {
   ArrowLeftRight,
   Ban,
+  Bug,
+  Clock,
   CalendarCheck,
   ClipboardCheck,
   CalendarClock,
@@ -22,14 +24,10 @@ import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { IdentityCell } from "@/components/ui/entity-avatar";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { IconText } from "@/components/data-table/columns/icon-text";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import type { ColumnDef } from "@tanstack/react-table";
+import { DataTable } from "@/components/data-table";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -62,6 +60,7 @@ import {
   FieldsSkeleton,
   SubmitButton,
   formatLocalDateTime,
+  timeAgo,
   useConfirm,
   ActionDialogContent,
 } from "./shared";
@@ -479,6 +478,203 @@ export function AdditionalVisitsPanel({ task }: { task: SnaggingTask }) {
 
   // Newest first: the visit being worked is the one looked for.
   const newestFirst = [...visits].sort((a, b) => b.visit_number - a.visit_number);
+
+  /* The columns, in the shape every house table takes (column-snagging-job). */
+  const stop = (event: React.MouseEvent) => event.stopPropagation();
+  const visitColumns: ColumnDef<VisitRow>[] = [
+    {
+      id: "visit",
+      header: "Visit",
+      enableSorting: false,
+      cell: ({ row }) => (
+        <div className="min-w-36">
+          <IdentityCell
+            title={`Visit ${row.original.visit_number}`}
+            subtitle={`Raised ${fmtDate(row.original.created_at)}`}
+            icon={CalendarClock}
+          />
+        </div>
+      ),
+    },
+    {
+      /*
+        As the Jobs table shows it: the first inspector and a count, with
+        everyone on hover. A visit can take any number of inspectors, and
+        listing them all made one row taller than the rest.
+      */
+      id: "inspector",
+      header: "Inspector",
+      enableSorting: false,
+      cell: ({ row }) => {
+        const visit = row.original;
+        const names = (visit.inspectors?.length ? visit.inspectors : visit.inspector ? [visit.inspector] : [])
+          .map((person) => person.full_name ?? person.email)
+          .filter((name): name is string => Boolean(name));
+        if (names.length === 0) {
+          return (
+            <IconText icon={UserRound} muted>
+              Unassigned
+            </IconText>
+          );
+        }
+        const extra = names.length - 1;
+        const cell = (
+          <IconText icon={UserRound}>
+            <span className="truncate">{names[0]}</span>
+            {extra > 0 ? <span className="text-muted-foreground shrink-0"> +{extra}</span> : null}
+          </IconText>
+        );
+        // No tooltip when there is nothing it could add.
+        if (extra === 0) return cell;
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="block min-w-0 cursor-default">{cell}</span>
+            </TooltipTrigger>
+            <TooltipContent>
+              {names.map((name) => (
+                <p key={name}>{name}</p>
+              ))}
+            </TooltipContent>
+          </Tooltip>
+        );
+      },
+    },
+    {
+      id: "status",
+      header: "Status",
+      enableSorting: false,
+      cell: ({ row }) => (
+        <Badge
+          variant="secondary"
+          className={cn(
+            "rounded-sm border-none font-medium",
+            VISIT_TONE[row.original.status] ?? "bg-mist text-ink-soft",
+          )}
+        >
+          {VISIT_LABEL[row.original.status] ?? row.original.status}
+        </Badge>
+      ),
+    },
+    {
+      /*
+        Change 26 -- the amount, and how it is being paid for under it: the
+        quotation and where it stands, or the payment link.
+      */
+      id: "charge",
+      header: "Charge",
+      enableSorting: false,
+      cell: ({ row }) => {
+        const visit = row.original;
+        const quote = visit.quotation;
+        return (
+          <div className="flex flex-col gap-0.5">
+            <span className="whitespace-nowrap tabular-nums">
+              {visit.charge ? (
+                <>
+                  <Money value={visit.charge} dp={0} /> + VAT
+                </>
+              ) : (
+                "—"
+              )}
+            </span>
+            <span className="text-muted-foreground flex items-center gap-1.5 text-xs whitespace-nowrap">
+              {visit.charge_method === "payment_link" ? (
+                <>
+                  <CreditCard className="size-3.5 shrink-0" aria-hidden />
+                  Payment link
+                  {visit.payment_reference ? (
+                    <span className="font-mono">· {visit.payment_reference}</span>
+                  ) : null}
+                </>
+              ) : quote ? (
+                <>
+                  <FileText className="size-3.5 shrink-0" aria-hidden />
+                  <button
+                    type="button"
+                    className="text-foreground font-mono underline-offset-2 hover:underline"
+                    onClick={(event) => {
+                      stop(event);
+                      router.push(`/snagging/${task.id}/visits/${visit.id}?tab=quotation`);
+                    }}
+                  >
+                    {quote.quote_number ?? "Quotation"}
+                  </button>
+                  <Badge
+                    variant="secondary"
+                    className={cn(
+                      "h-4 rounded-sm border-none px-1.5 text-[11px] font-medium capitalize",
+                      QUOTE_TONE[quote.status] ?? "bg-mist text-ink-soft",
+                    )}
+                  >
+                    {quote.status}
+                  </Badge>
+                </>
+              ) : (
+                <>
+                  <FileText className="size-3.5 shrink-0" aria-hidden />
+                  <span className="text-warning">Quotation not raised</span>
+                </>
+              )}
+            </span>
+          </div>
+        );
+      },
+    },
+    {
+      id: "appointment",
+      header: "Appointment",
+      enableSorting: false,
+      cell: ({ row }) => {
+        const visit = row.original;
+        const when = visit.appointment_at
+          ? formatLocalDateTime(visit.appointment_at)
+          : visit.scheduled_date
+            ? fmtDate(visit.scheduled_date)
+            : null;
+        return when ? (
+          <IconText icon={CalendarCheck}>{when}</IconText>
+        ) : (
+          <IconText icon={CalendarCheck} muted>
+            Not booked
+          </IconText>
+        );
+      },
+    },
+    {
+      id: "snags",
+      header: "Snags",
+      enableSorting: false,
+      cell: ({ row }) => (
+        <IconText icon={Bug} muted={!row.original.snag_count}>
+          <span className="tabular-nums">{row.original.snag_count ?? 0}</span>
+        </IconText>
+      ),
+    },
+    {
+      id: "updated_at",
+      header: "Updated",
+      enableSorting: false,
+      cell: ({ row }) => (
+        <IconText icon={Clock} muted>
+          {timeAgo(row.original.updated_at)}
+        </IconText>
+      ),
+    },
+    {
+      id: "actions",
+      header: () => "Actions",
+      enableHiding: false,
+      enableSorting: false,
+      cell: ({ row }) => (
+        // The row opens the visit; its buttons do their own thing.
+        <div className="flex items-center justify-end gap-2" onClick={stop}>
+          {nextAction(row.original)}
+          {rowMenu(row.original)}
+        </div>
+      ),
+    },
+  ];
   return (
     <div className="flex flex-col gap-6">
       <SectionCard
@@ -495,179 +691,35 @@ export function AdditionalVisitsPanel({ task }: { task: SnaggingTask }) {
           ) : null
         }
       >
-        {visits.length === 0 ? (
-          <EmptyState
-            icon={<CalendarClock className="size-6" />}
-            title="No additional visits"
-            description={
-              canCreate
-                ? "Add one when an area could not be inspected and the client is paying for a return trip, by quotation or by payment link."
-                : "A return trip is raised by whoever books the work. None has been on this job."
-            }
-          />
-        ) : (
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader className="bg-muted/50">
-                <TableRow className="hover:bg-transparent">
-                  <TableHead className="h-10 ps-5">Visit</TableHead>
-                  <TableHead className="h-10">Status</TableHead>
-                  <TableHead className="h-10">Charge</TableHead>
-                  <TableHead className="h-10">Appointment</TableHead>
-                  <TableHead className="h-10">Inspector</TableHead>
-                  <TableHead className="h-10 text-right">Snags</TableHead>
-                  <TableHead className="h-10 pe-5 text-right">
-                    <span className="sr-only">Actions</span>
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {newestFirst.map((visit) => {
-                  const quote = visit.quotation;
-                  const when = visit.appointment_at
-                    ? formatLocalDateTime(visit.appointment_at)
-                    : visit.scheduled_date
-                      ? fmtDate(visit.scheduled_date)
-                      : null;
-                  return (
-                    <TableRow key={visit.id}>
-                      <TableCell className="ps-5">
-                        <button
-                          type="button"
-                          className="group flex flex-col items-start text-left"
-                          onClick={() => openVisit(visit)}
-                        >
-                          <span className="font-medium underline-offset-2 group-hover:underline">
-                            Visit {visit.visit_number}
-                          </span>
-                          <span className="text-muted-foreground text-xs">
-                            Raised {fmtDate(visit.created_at)}
-                          </span>
-                        </button>
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          variant="secondary"
-                          className={cn(
-                            "rounded-sm border-none font-medium",
-                            VISIT_TONE[visit.status] ?? "bg-mist text-ink-soft",
-                          )}
-                        >
-                          {VISIT_LABEL[visit.status] ?? visit.status}
-                        </Badge>
-                      </TableCell>
-                      {/*
-                        Change 26 -- the amount, and how it is being paid
-                        for under it: the quotation and where it stands, or
-                        the payment link. "No quotation yet" is only a
-                        blocker on the quotation route.
-                      */}
-                      <TableCell>
-                        <div className="flex flex-col gap-0.5">
-                          <span className="whitespace-nowrap tabular-nums">
-                            {visit.charge ? (
-                              <>
-                                <Money value={visit.charge} dp={0} /> + VAT
-                              </>
-                            ) : (
-                              "—"
-                            )}
-                          </span>
-                          <span className="text-muted-foreground flex items-center gap-1.5 text-xs whitespace-nowrap">
-                            {visit.charge_method === "payment_link" ? (
-                              <>
-                                <CreditCard className="size-3.5 shrink-0" aria-hidden />
-                                Payment link
-                                {visit.payment_reference ? (
-                                  <span className="font-mono">· {visit.payment_reference}</span>
-                                ) : null}
-                              </>
-                            ) : quote ? (
-                              <>
-                                <FileText className="size-3.5 shrink-0" aria-hidden />
-                                <button
-                                  type="button"
-                                  className="text-foreground font-mono underline-offset-2 hover:underline"
-                                  onClick={() =>
-                                    router.push(`/snagging/${task.id}/visits/${visit.id}?tab=quotation`)
-                                  }
-                                >
-                                  {quote.quote_number ?? "Quotation"}
-                                </button>
-                                <Badge
-                                  variant="secondary"
-                                  className={cn(
-                                    "h-4 rounded-sm border-none px-1.5 text-[11px] font-medium capitalize",
-                                    QUOTE_TONE[quote.status] ?? "bg-mist text-ink-soft",
-                                  )}
-                                >
-                                  {quote.status}
-                                </Badge>
-                              </>
-                            ) : (
-                              <>
-                                <FileText className="size-3.5 shrink-0" aria-hidden />
-                                <span className="text-warning">Quotation not raised</span>
-                              </>
-                            )}
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        {when ? (
-                          <span className="flex items-center gap-1.5">
-                            <CalendarClock className="text-muted-foreground size-3.5 shrink-0" aria-hidden />
-                            {when}
-                          </span>
-                        ) : (
-                          <span className="text-muted-foreground">Not booked</span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {visit.inspector ? (
-                          <IdentityCell
-                            title={visit.inspector.full_name ?? visit.inspector.email ?? "Inspector"}
-                            /*
-                              Who else is going, rather than the first
-                              inspector's email: a visit is attended by a
-                              set now, and the row named only one of them.
-                            */
-                            subtitle={
-                              (visit.inspectors?.length ?? 0) > 1
-                                ? `with ${(visit.inspectors ?? [])
-                                    .slice(1)
-                                    .map((person) => person.full_name ?? person.email)
-                                    .filter(Boolean)
-                                    .join(", ")}`
-                                : visit.inspector.full_name
-                                  ? visit.inspector.email
-                                  : null
-                            }
-                            seed={visit.inspector.id}
-                          />
-                        ) : (
-                          <span className="text-muted-foreground flex items-center gap-1.5 whitespace-nowrap">
-                            <UserRound className="size-3.5 shrink-0" aria-hidden />
-                            Not assigned
-                          </span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {visit.snag_count ?? 0}
-                      </TableCell>
-                      <TableCell className="pe-5">
-                        <div className="flex items-center justify-end gap-2">
-                          {nextAction(visit)}
-                          {rowMenu(visit)}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </div>
-        )}
+        {/*
+          The house table (the shared DataTable the Jobs and Quotations
+          lists use), not a table of its own: the same header row, row
+          hover, empty state and footer as every other list.
+        */}
+        <DataTable
+          columns={visitColumns}
+          data={newestFirst}
+          loading={false}
+          rowCount={newestFirst.length}
+          pageSize={Math.max(newestFirst.length, 1)}
+          currentPage={0}
+          onPageChange={() => undefined}
+          onPageSizeChange={() => undefined}
+          onGlobalFilterChange={() => undefined}
+          handleRowClick={(visit) => openVisit(visit)}
+          emptyState={
+            <EmptyState
+              className="border-0"
+              icon={<CalendarClock className="size-6" />}
+              title="No additional visits"
+              description={
+                canCreate
+                  ? "Add one when an area could not be inspected and the client is paying for a return trip, by quotation or by payment link."
+                  : "A return trip is raised by whoever books the work. None has been on this job."
+              }
+            />
+          }
+        />
       </SectionCard>
 
       <Dialog

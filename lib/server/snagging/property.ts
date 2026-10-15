@@ -1,5 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { queuePropertyToFsm } from "@/lib/server/snagging/fsm-clients";
+
 /**
  * The property record (BR-1): snagging_clients -> snagging_properties -> jobs.
  *
@@ -134,5 +136,7 @@ export async function resolveProperty(
     .select("id")
     .single();
   if (error) throw new Error(error.message);
+  // A new address goes to the client's contact in Zoho FSM too.
+  queuePropertyToFsm(admin, data.id, opts.createdBy);
   return { id: data.id, columns };
 }

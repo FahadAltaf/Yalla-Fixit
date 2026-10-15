@@ -478,6 +478,12 @@ export interface SnaggingProperty {
   title_deed_url?: string | null;
   created_at?: string;
   updated_at?: string;
+  /** The Zoho FSM address this is (AD-…), when it is one. */
+  fsm_address_id?: string | null;
+  fsm_address_code?: string | null;
+  fsm_address_label?: string | null;
+  /** "fsm": in Zoho FSM only, not saved in the portal yet (its id is "fsm:…"). */
+  source?: "portal" | "fsm";
 }
 
 export interface SnaggingArea {

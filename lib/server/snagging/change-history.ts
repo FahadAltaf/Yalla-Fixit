@@ -39,39 +39,48 @@ const COLUMNS = "id, event_type, actor_id, actor_label, justification, payload, 
     terms, catalogue entries and checklist items). */
 const SETTINGS_ENTITY = "catalogue";
 
+/**
+ * One page of the history, newest first, and how many entries there are in
+ * all: read a page at a time, never the whole trail.
+ */
 export async function loadChangeHistory(
   admin: SupabaseClient,
   scope: ChangeHistoryScope,
-  options: { id?: string; limit?: number } = {},
-): Promise<ChangeHistoryItem[]> {
-  const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
+  options: { id?: string; page?: number; pageSize?: number } = {},
+): Promise<{ items: ChangeHistoryItem[]; total: number }> {
+  const pageSize = Math.min(Math.max(options.pageSize ?? 10, 1), 100);
+  const from = Math.max(options.page ?? 0, 0) * pageSize;
   let query = admin
     .from("snagging_audit_events")
-    .select(COLUMNS)
+    .select(COLUMNS, { count: "exact" })
     .order("created_at", { ascending: false })
-    .limit(limit);
+    .order("id", { ascending: false })
+    .range(from, from + pageSize - 1);
   if (scope === "quotation") {
-    if (!options.id) return [];
+    if (!options.id) return { items: [], total: 0 };
     query = query.eq("entity_type", "quotation").eq("entity_id", options.id);
   } else {
     query = query.eq("entity_type", SETTINGS_ENTITY);
   }
-  const { data, error } = await query;
+  const { data, error, count } = await query;
   if (error) throw new Error(error.message);
   const rows = (data ?? []) as AuditRow[];
   const names = await actorNames(
     admin,
     rows.filter((row) => !row.actor_label && row.actor_id).map((row) => row.actor_id as string),
   );
-  return rows.map((row) => ({
-    id: row.id,
-    eventType: row.event_type,
-    actorId: row.actor_id,
-    actorName: row.actor_label ?? (row.actor_id ? (names.get(row.actor_id) ?? null) : null),
-    createdAt: row.created_at,
-    justification: row.justification,
-    payload: row.payload,
-  }));
+  return {
+    items: rows.map((row) => ({
+      id: row.id,
+      eventType: row.event_type,
+      actorId: row.actor_id,
+      actorName: row.actor_label ?? (row.actor_id ? (names.get(row.actor_id) ?? null) : null),
+      createdAt: row.created_at,
+      justification: row.justification,
+      payload: row.payload,
+    })),
+    total: count ?? rows.length,
+  };
 }
 
 /** Names for a set of user ids, in one read. */

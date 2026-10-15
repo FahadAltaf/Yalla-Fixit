@@ -8,7 +8,8 @@ import { ActionType, ResourceType } from "@/types/types";
 
 /**
  * The change history of a quotation (`?scope=quotation&id=`) or of the
- * Snagging settings (`?scope=settings`), newest first (SNG-037).
+ * Snagging settings (`?scope=settings`), newest first (SNG-037), a page at
+ * a time (`&page=&pageSize=`), with the total for the pager.
  *
  * Read-only; the events are written by the routes that make the changes.
  * Settings history follows the settings' own permission, the quotation's
@@ -38,11 +39,12 @@ export async function GET(req: NextRequest) {
     }
 
     const admin = await createAdminServerClient();
-    const data = await loadChangeHistory(admin, scope, {
+    const { items, total } = await loadChangeHistory(admin, scope, {
       id,
-      limit: Number(url.searchParams.get("limit")) || undefined,
+      page: Number(url.searchParams.get("page")) || 0,
+      pageSize: Number(url.searchParams.get("pageSize")) || undefined,
     });
-    return NextResponse.json({ data });
+    return NextResponse.json({ data: items, totalCount: total });
   } catch (error) {
     console.error("Snagging history GET error:", error);
     return NextResponse.json({ error: "Failed to load the history" }, { status: 500 });

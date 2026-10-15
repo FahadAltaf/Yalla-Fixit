@@ -10,8 +10,8 @@ import {
   actorNames,
   quotationAuthorship,
 } from "@/lib/server/snagging/change-history";
-import { hasQuotationNotes } from "@/lib/server/snagging/columns";
-import { queueFsmSync } from "@/lib/server/snagging/fsm-quotation-sync";
+import { hasColumn, hasQuotationNotes } from "@/lib/server/snagging/columns";
+import { queueFsmSync, syncQuotationNow } from "@/lib/server/snagging/fsm-quotation-sync";
 import { resolveClient } from "@/lib/server/snagging/client";
 import {
   PROPERTY_COLUMNS,
@@ -606,8 +606,12 @@ export async function PATCH(
           : {}),
       },
     });
-    // The FSM estimate follows: updated while a draft there, revised after.
-    queueFsmSync(admin, id, profile.id);
+    /*
+      The FSM estimate follows now, before answering: updated while it is
+      unsent there, revised after (and the revision's number taken).
+    */
+    const fsmNumber = await syncQuotationNow(admin, id, profile.id);
+    if (fsmNumber) data.quote_number = fsmNumber;
 
     return NextResponse.json({
       data: {
@@ -635,6 +639,10 @@ async function records(admin: Admin, quote: Record<string, unknown>) {
   const propertyId = quote.property_id as string | null;
   const clientId = quote.client_id as string | null;
 
+  // The client as the Details tab shows it; the Maher ID once its column is in.
+  const clientColumns = (await hasColumn(admin, "snagging_clients", "maher_id"))
+    ? "id, name, email, phone, company, maher_id"
+    : "id, name, email, phone, company";
   const [property, client] = await Promise.all([
     propertyId
       ? admin
@@ -647,7 +655,7 @@ async function records(admin: Admin, quote: Record<string, unknown>) {
     clientId
       ? admin
           .from("snagging_clients")
-          .select("id, name, email, phone")
+          .select(clientColumns)
           .eq("id", clientId)
           .maybeSingle()
           .then((r) => r.data)

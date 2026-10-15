@@ -2,7 +2,9 @@ import { after } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { FsmConfigError, fsmFetch, fsmGetRecord, getFsmAccessToken } from "@/lib/server/zoho/fsm-client";
+import { fsmMessage } from "@/lib/server/zoho/fsm-contacts";
 import { hasColumn, hasTable } from "@/lib/server/snagging/columns";
+import { ensurePropertyInFsm, isRealAddressId } from "@/lib/server/snagging/fsm-clients";
 
 /**
  * Snagging quotations in Zoho FSM, as "YFI Snagging - Zoho FSM APIs for
@@ -83,7 +85,11 @@ export type LogEntry = {
 export async function log(admin: Admin, entry: LogEntry) {
   const { error } = await admin.from("snagging_fsm_sync_log").insert({
     quotation_id: entry.quotationId,
-    job_id: entry.jobId ?? null,
+    /*
+      Only named when there is a job: a database with the first copy of the
+      FSM migration has no job_id, and naming it failed every log write.
+    */
+    ...(entry.jobId ? { job_id: entry.jobId } : {}),
     client_id: entry.clientId ?? null,
     action: entry.action,
     status: entry.status,
@@ -97,14 +103,7 @@ export async function log(admin: Admin, entry: LogEntry) {
 
 /** Zoho's own reason, readable, from a failed response. */
 export function fsmReason(json: any, status: number): string {
-  const first = Array.isArray(json?.data) ? json.data[0] : json?.data;
-  const message =
-    json?.message ??
-    first?.message ??
-    json?.error ??
-    (typeof json?.code === "string" ? json.code : null);
-  const field = first?.details?.api_name ?? json?.details?.api_name;
-  return `${message ?? `FSM answered ${status}`}${field ? ` (${field})` : ""}`;
+  return fsmMessage(json, status);
 }
 
 export class SyncError extends Error {
@@ -156,7 +155,19 @@ async function ensureCompany(
     const created = await fsmFetch(
       token,
       "/Companies",
-      { method: "POST", body: JSON.stringify({ data: [{ Company_Name: name }] }) },
+      {
+        method: "POST",
+        // A new company needs a Phone in this FSM account: the client's own, and their email.
+        body: JSON.stringify({
+          data: [
+            {
+              Company_Name: name,
+              ...(client.phone ? { Phone: String(client.phone) } : {}),
+              ...(client.email ? { Email: String(client.email) } : {}),
+            },
+          ],
+        }),
+      },
       { retry: false },
     );
     if (!created.ok) {
@@ -299,12 +310,19 @@ export function estimateAddress(address: Row | null | undefined, prefix: "Servic
   and price still say what it is.
 */
 const SERVICE_NAMES: Record<FsmLineKind, RegExp[]> = {
-  inspection: [/^snagging inspection$/i, /snag.*inspection|inspection.*snag/i, /^snagging$/i],
-  external: [/external area/i],
-  minimum: [/minimum charge/i],
-  out_of_hours: [/out[s-]*of[s-]*hours|after[s-]*hours/i],
-  desnag: [/de-?s*snag/i],
-  visit: [/additional visit/i, /snag.*visit/i],
+  // e.g. "Residential Property Handover Snagging Inspection and Report".
+  inspection: [/^snagging inspection$/i, /snag\w*.*inspection|inspection.*snag/i],
+  /*
+    The rest only take an item made for snagging. A general "External area
+    cleaning" or a "De-Snagging – 1-Bedroom Royal Suite" priced for one unit
+    size is the wrong item, so without a snagging one the line goes under
+    the inspection service.
+  */
+  external: [/snag.*external|external.*snag/i],
+  minimum: [/snag.*minimum|minimum.*snag/i],
+  out_of_hours: [/snag.*(out[\s-]*of[\s-]*hours|after[\s-]*hours)|(out[\s-]*of[\s-]*hours|after[\s-]*hours).*snag/i],
+  desnag: [/^de-?\s*snag(ging)?(\s+(visit|inspection))?$/i],
+  visit: [/^(snagging\s+)?additional\s+visit$/i, /snag.*additional visit|additional visit.*snag/i],
 };
 
 export type ServiceMap = Partial<Record<FsmLineKind, string>>;
@@ -322,7 +340,7 @@ async function savedServiceMap(admin: Admin): Promise<ServiceMap> {
 /** FSM's active services and parts (call 5). */
 async function listFsmServices(token: string): Promise<FsmService[]> {
   const out: FsmService[] = [];
-  for (let page = 1; page <= 10; page += 1) {
+  for (let page = 1; page <= 30; page += 1) {
     const res = await fsmFetch(token, `/Service_And_Parts?page=${page}&per_page=200`);
     if (res.status === 204) break;
     if (!res.ok) throw new SyncError(fsmReason(res.json, res.status), "services_lookup", res.json);
@@ -419,6 +437,71 @@ export async function serviceTaxes(token: string, services: ServiceMap): Promise
   return new Map(entries);
 }
 
+/** What the quotation is for, as the estimate's summary says it. */
+function summaryFor(quote: Row, property: Row | null): string {
+  const kind =
+    quote.quote_kind === "desnag"
+      ? "De-snagging"
+      : quote.quote_kind === "visit"
+        ? "Snagging additional visit"
+        : "Snagging inspection";
+  const where = [property?.unit_label, property?.building_name].filter(Boolean).join(", ");
+  return `${kind}${where ? ` · ${where}` : ""}`.slice(0, 250);
+}
+
+/**
+ * The FSM address the quotation is for: its own property's, added to FSM
+ * first when it is new, with the territory FSM gave it. Null falls back to
+ * the contact's default service address.
+ */
+export async function quotationAddress(
+  admin: Admin,
+  token: string,
+  contactId: string,
+  propertyId: string | null | undefined,
+  actorId: string | null,
+): Promise<Row | null> {
+  if (!propertyId || !(await hasColumn(admin, "snagging_properties", "fsm_address_id"))) return null;
+  const addressId = await ensurePropertyInFsm(admin, propertyId, actorId);
+  if (!isRealAddressId(addressId)) return null;
+  const res = await fsmFetch(token, `/Contacts/${encodeURIComponent(contactId)}/Addresses?per_page=200`);
+  if (!res.ok) return null;
+  return ((res.json?.data ?? []) as Row[]).find((a) => String(a.id) === addressId) ?? null;
+}
+
+/**
+ * The quotation's lines as FSM service lines: the service, the unit and,
+ * when the quotation carries VAT, the tax the service has in FSM. The same
+ * for an estimate and a work order; a work order without the tax is refused
+ * ("Unable to Update Grand Total") in an account registered for VAT.
+ */
+export function serviceLineItems(quote: Row, services: ServiceMap, taxes: Map<string, Row | null>) {
+  const lines = (quote.lines ?? []) as QuoteLine[];
+  return lines.map((line, index) => {
+    const service = serviceFor(services, lineKind(line.description)) as string;
+    const tax = Number(quote.tax_rate) > 0 ? taxes.get(service) : null;
+    return {
+      Service: service,
+      Description: line.description,
+      Quantity: Number(line.qty) || 1,
+      Unit: line.unit || null,
+      List_Price: Number(line.unit_price) || 0,
+      Sequence: index + 1,
+      ...(tax
+        ? {
+            Tax: {
+              Tax_Id: tax.Tax_Id,
+              Tax_Name: tax.Tax_Name ?? null,
+              Tax_Percentage: tax.Tax_Percentage ?? Number(quote.tax_rate),
+              Tax_Exemption_Id: null,
+              Tax_Exemption_Code: null,
+            },
+          }
+        : {}),
+    };
+  });
+}
+
 function estimateBody(
   quote: Row,
   property: Row | null,
@@ -426,43 +509,29 @@ function estimateBody(
   services: ServiceMap,
   taxes: Map<string, Row | null>,
   revision?: { rootRef: string; previousRef: string },
+  address?: Row | null,
 ) {
-  const lines = (quote.lines ?? []) as QuoteLine[];
-  const where = [property?.unit_label, property?.building_name].filter(Boolean).join(", ");
   return {
     data: [
       {
-        // The portal's number leads, so the office can find one from the other.
-        Summary: `${quote.quote_number} · Snagging${where ? ` · ${where}` : ""}`.slice(0, 250),
+        Summary: summaryFor(quote, property),
         Contact: contact.contactId,
         ...(contact.companyId ? { Company: contact.companyId } : {}),
         ...(contact.record?.Email ? { Email: contact.record.Email } : {}),
+        // FSM requires Phone on an estimate; a contact may hold its number in either field.
+        ...(contact.record?.Phone || contact.record?.Mobile
+          ? { Phone: contact.record.Phone ?? contact.record.Mobile }
+          : {}),
         ...(contact.record?.Mobile ? { Mobile: contact.record.Mobile } : {}),
-        Service_Address: estimateAddress(contact.record?.Service_Address, "Service"),
-        Billing_Address: estimateAddress(contact.record?.Billing_Address, "Billing"),
-        Service_Line_Items: lines.map((line, index) => {
-          const service = serviceFor(services, lineKind(line.description)) as string;
-          const tax = Number(quote.tax_rate) > 0 ? taxes.get(service) : null;
-          return {
-            Service: service,
-            Description: line.description,
-            Quantity: Number(line.qty) || 1,
-            Unit: line.unit || null,
-            List_Price: Number(line.unit_price) || 0,
-            Sequence: index + 1,
-            ...(tax
-              ? {
-                  Tax: {
-                    Tax_Id: tax.Tax_Id,
-                    Tax_Name: tax.Tax_Name ?? null,
-                    Tax_Percentage: tax.Tax_Percentage ?? Number(quote.tax_rate),
-                    Tax_Exemption_Id: null,
-                    Tax_Exemption_Code: null,
-                  },
-                }
-              : {}),
-          };
-        }),
+        // The unit this quotation is for, when FSM has it; else the contact's default.
+        Service_Address: estimateAddress(address ?? contact.record?.Service_Address, "Service"),
+        // A contact created without an address has no billing one: bill the service address.
+        Billing_Address: estimateAddress(
+          contact.record?.Billing_Address ?? address ?? contact.record?.Service_Address,
+          "Billing",
+        ),
+        ...(address?.Territory?.id ? { Territory: String(address.Territory.id) } : {}),
+        Service_Line_Items: serviceLineItems(quote, services, taxes),
         ...(revision
           ? {
               Root_Quotation_Number__C: revision.rootRef,
@@ -471,7 +540,7 @@ function estimateBody(
               Quotation_Type__C: "Revision",
               Reason__C: "Revised in the portal after it was sent to the client",
             }
-          : {}),
+          : { Quotation_Type__C: "Standard" }),
       },
     ],
   };
@@ -499,10 +568,17 @@ async function createEstimate(token: string, body: unknown) {
 
 /* ── 7-9: the estimate's status ───────────────────────────────────────── */
 
-const TRANSITION: Record<"mark_as_sent" | "approve" | "reject" | "cancel", RegExp> = {
-  mark_as_sent: /^mark\s*as\s*sent$|^send$/i,
-  approve: /^approve/i,
-  reject: /^reject/i,
+/*
+  FSM's own names, as the live account shows them from "New": "Mark as
+  Sent", "Mark as Approved", "Cancel" (and "Send Estimate", which emails the
+  client from FSM and is never used: the portal sends the quotation).
+*/
+const TRANSITION: Record<"mark_as_sent" | "approve" | "reject" | "cancel" | "convert", RegExp> = {
+  // From "Approved": how the office turns an estimate into its work order.
+  convert: /^convert\s*to\s*work\s*order$/i,
+  mark_as_sent: /^mark\s*as\s*sent$/i,
+  approve: /^(mark\s*as\s*)?approved?$/i,
+  reject: /^(mark\s*as\s*)?reject(ed)?$/i,
   cancel: /^cancel/i,
 };
 
@@ -538,7 +614,47 @@ async function transition(
   return res.ok ? { done: true } : { done: false, reason: fsmReason(res.json, res.status), detail: res.json };
 }
 
+/**
+ * Turns an approved estimate into its work order ("Convert To Work Order"),
+ * the way the office does: FSM copies the lines, the tax and the addresses,
+ * and links the work order back to the estimate. Returns whether FSM
+ * accepted it, and why not.
+ */
+export async function convertEstimate(token: string, estimateId: string, notes: string) {
+  return transition(token, estimateId, "convert", notes);
+}
+
 /* ── the sync ─────────────────────────────────────────────────────────── */
+
+/* An estimate not sent yet: FSM calls it "New" (older accounts "Draft"). */
+const NOT_SENT = /^(new|draft)$/i;
+
+/**
+ * The quotation takes FSM's estimate number as its own (Sami, Oct 2026), so
+ * the portal and FSM show the same number. Only while it is a draft: a
+ * number the client has already seen never changes. An edit after sending
+ * puts the quotation back to draft and FSM issues the revision a new
+ * number, which it then takes, before it is sent again.
+ */
+async function adoptFsmNumber(admin: Admin, quote: Row, number: string | null, actorId: string | null) {
+  if (!number || quote.status !== "draft" || quote.quote_number === number) return;
+  const { error } = await admin
+    .from("snagging_quotations")
+    .update({ quote_number: number, updated_at: new Date().toISOString() })
+    .eq("id", quote.id)
+    .eq("status", "draft");
+  await log(admin, {
+    quotationId: quote.id as string,
+    action: "number_adopt",
+    status: error ? "failed" : "success",
+    recordId: number,
+    message: error
+      ? `Could not use FSM's number ${number}: ${error.message}`
+      : `Quotation ${quote.quote_number} is now ${number}, FSM's number`,
+    actorId,
+  });
+  if (!error) quote.quote_number = number;
+}
 
 const QUOTE_COLUMNS =
   "id, quote_number, status, quote_kind, client_id, property_id, currency, subtotal, tax_rate, tax_amount, total, lines, rejected_reason, fsm_estimate_id, fsm_estimate_number, fsm_root_ref, fsm_status, fsm_synced_hash";
@@ -616,7 +732,7 @@ async function syncOnce(
       quote.property_id
         ? admin
             .from("snagging_properties")
-            .select("unit_label, building_name, community")
+            .select("id, unit_label, building_name, community")
             .eq("id", quote.property_id)
             .maybeSingle()
         : Promise.resolve({ data: null }),
@@ -626,6 +742,8 @@ async function syncOnce(
     const hash = contentHash(quote);
     let estimateId = quote.fsm_estimate_id as string | null;
     let fsmStatus = quote.fsm_status as string | null;
+    // The estimate number to report: changes when one is created or revised below.
+    let estimateNumber = (quote.fsm_estimate_number as string | null) ?? null;
 
     // 6 / 9-10: create the estimate, or carry an edit across.
     if (!estimateId || quote.fsm_synced_hash !== hash) {
@@ -633,9 +751,10 @@ async function syncOnce(
       const contactRecord = (await fsmGetRecord(token, "Contacts", contact.contactId)).record ?? null;
       const services = await resolveServiceMap(admin, token, { quotationId, actorId });
       const taxes = await serviceTaxes(token, services);
+      const address = await quotationAddress(admin, token, contact.contactId, quote.property_id, actorId);
 
       if (!estimateId) {
-        const body = estimateBody(quote, property as Row | null, { ...contact, record: contactRecord }, services, taxes);
+        const body = estimateBody(quote, property as Row | null, { ...contact, record: contactRecord }, services, taxes, undefined, address);
         const created = await createEstimate(token, body);
         estimateId = created.id;
         fsmStatus = created.status;
@@ -643,12 +762,13 @@ async function syncOnce(
           .from("snagging_quotations")
           .update({
             fsm_estimate_id: created.id,
-            fsm_estimate_number: created.number,
+            fsm_estimate_number: (estimateNumber = created.number),
             fsm_root_ref: created.number ? `${created.id}_${created.number}` : created.id,
             fsm_status: created.status,
             fsm_synced_hash: hash,
           })
           .eq("id", quotationId);
+        await adoptFsmNumber(admin, quote, created.number, actorId);
         await log(admin, {
           quotationId,
           clientId: client.id,
@@ -661,12 +781,24 @@ async function syncOnce(
       } else {
         const current = await readEstimate(token, estimateId);
         fsmStatus = (current?.Status as string | undefined) ?? fsmStatus;
-        if (!fsmStatus || /^draft$/i.test(fsmStatus)) {
-          // Still a draft in FSM: update it in place.
-          const body = estimateBody(quote, property as Row | null, { ...contact, record: contactRecord }, services, taxes);
+        if (!fsmStatus || NOT_SENT.test(fsmStatus)) {
+          // Not sent yet in FSM ("New"): update it in place.
+          const body = estimateBody(quote, property as Row | null, { ...contact, record: contactRecord }, services, taxes, undefined, address);
+          /*
+            A line sent without an id is added, not swapped in: the edit used
+            to leave the old line beside the new one (total doubled). The
+            estimate's current lines are deleted in the same call ("Edit an
+            Estimate": "$fsm_delete": true on each by its id).
+          */
+          const oldLines = ((current?.Service_Line_Items ?? []) as Row[])
+            .filter((line) => line?.id)
+            .map((line) => ({ id: String(line.id), $fsm_delete: true }));
+          const payload = {
+            data: [{ ...body.data[0], Service_Line_Items: [...oldLines, ...body.data[0].Service_Line_Items] }],
+          };
           const res = await fsmFetch(token, `/Estimates/${encodeURIComponent(estimateId)}`, {
             method: "PUT",
-            body: JSON.stringify(body),
+            body: JSON.stringify(payload),
           });
           if (!res.ok) throw new SyncError(fsmReason(res.json, res.status), "estimate_update", res.json);
           await log(admin, {
@@ -698,10 +830,15 @@ async function syncOnce(
             detail: cancelled.detail,
             actorId,
           });
-          const body = estimateBody(quote, property as Row | null, { ...contact, record: contactRecord }, services, taxes, {
-            rootRef: (quote.fsm_root_ref as string | null) ?? previousRef,
-            previousRef,
-          });
+          const body = estimateBody(
+            quote,
+            property as Row | null,
+            { ...contact, record: contactRecord },
+            services,
+            taxes,
+            { rootRef: (quote.fsm_root_ref as string | null) ?? previousRef, previousRef },
+            address,
+          );
           const created = await createEstimate(token, body);
           estimateId = created.id;
           fsmStatus = created.status;
@@ -709,10 +846,11 @@ async function syncOnce(
             .from("snagging_quotations")
             .update({
               fsm_estimate_id: created.id,
-              fsm_estimate_number: created.number,
+              fsm_estimate_number: (estimateNumber = created.number),
               fsm_status: created.status,
             })
             .eq("id", quotationId);
+          await adoptFsmNumber(admin, quote, created.number, actorId);
           await log(admin, {
             quotationId,
             clientId: client.id,
@@ -733,7 +871,20 @@ async function syncOnce(
       the office can see it rather than finding it on the invoice.
     */
     if (estimateId && quote.fsm_synced_hash !== hash) {
-      const current = await readEstimate(token, estimateId);
+      const differs = (row: Row | null) => {
+        const total = Number(row?.Grand_Total);
+        return Number.isFinite(total) && Math.abs(total - Number(quote.total)) > 0.01;
+      };
+      let current = await readEstimate(token, estimateId);
+      /*
+        FSM recalculates an edited estimate's total a moment after answering:
+        read straight away it still showed the old lines. Asked once more
+        before calling it a difference.
+      */
+      if (differs(current)) {
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+        current = await readEstimate(token, estimateId);
+      }
       const fsmTotal = Number(current?.Grand_Total);
       if (Number.isFinite(fsmTotal) && Math.abs(fsmTotal - Number(quote.total)) > 0.01) {
         await log(admin, {
@@ -759,9 +910,10 @@ async function syncOnce(
     const reached = (s: string | null, step: keyof typeof TRANSITION) =>
       !!s &&
       (step === "mark_as_sent"
-        ? !/^draft$/i.test(s)
+        ? !NOT_SENT.test(s)
         : step === "approve"
-          ? /approved/i.test(s)
+          ? // Converted to its work order is past approved.
+            /approved|convert/i.test(s)
           : step === "reject"
             ? /rejected/i.test(s)
             : /cancel/i.test(s));
@@ -791,7 +943,7 @@ async function syncOnce(
       .from("snagging_quotations")
       .update({ fsm_status: fsmStatus, fsm_synced_at: new Date().toISOString(), fsm_error: null })
       .eq("id", quotationId);
-    return { ok: true, message: `In step with FSM estimate ${quote.fsm_estimate_number ?? estimateId}.` };
+    return { ok: true, message: `In step with FSM estimate ${estimateNumber ?? estimateId}.` };
   } catch (err) {
     const message =
       err instanceof FsmConfigError
@@ -810,6 +962,46 @@ async function syncOnce(
     });
     return { ok: false, message };
   }
+}
+
+/**
+ * Syncs a quotation now rather than after the answer, for a new or edited
+ * one: it then comes back with FSM's number as its own (adoptFsmNumber).
+ * Returns the quotation's number afterwards, or null when the sync is off.
+ * Never throws; an FSM failure leaves the portal number and is logged, and
+ * a Retry before sending gives it FSM's.
+ */
+export async function syncQuotationNow(
+  admin: Admin,
+  quotationId: string,
+  actorId: string | null,
+): Promise<string | null> {
+  if (!fsmSyncEnabled()) return null;
+  try {
+    await syncQuotationToFsm(admin, quotationId, { actorId });
+  } catch (err) {
+    console.error("FSM quotation sync failed:", err);
+  }
+  const { data } = await admin
+    .from("snagging_quotations")
+    .select("quote_number")
+    .eq("id", quotationId)
+    .maybeSingle();
+  return ((data as Row | null)?.quote_number as string | undefined) ?? null;
+}
+
+/** The same for the job's own quotation (the newest one on the job). */
+export async function syncJobQuotationNow(admin: Admin, jobId: string, actorId: string | null) {
+  if (!fsmSyncEnabled()) return;
+  const { data } = await admin
+    .from("snagging_quotations")
+    .select("id")
+    .eq("job_id", jobId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const id = (data as Row | null)?.id as string | undefined;
+  if (id) await syncQuotationNow(admin, id, actorId);
 }
 
 /**

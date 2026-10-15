@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { queueJobQuotationSync } from "@/lib/server/snagging/fsm-quotation-sync";
+import { queueJobQuotationSync, syncJobQuotationNow } from "@/lib/server/snagging/fsm-quotation-sync";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
@@ -99,8 +99,12 @@ export async function POST(
       if (res.ok) queueJobQuotationSync(admin, id, profile.id);
       return res;
     };
-    if (action === "generate")
-      return thenSync(generate(admin, id, profile.id, declaredFurnished));
+    if (action === "generate") {
+      // Synced before answering, so the tab reloads it with FSM's number.
+      const res = await generate(admin, id, profile.id, declaredFurnished);
+      if (res.ok) await syncJobQuotationNow(admin, id, profile.id);
+      return res;
+    }
     if (action === "send") return thenSync(send(admin, id, profile.id, body));
     if (action === "share_link") return thenSync(shareLink(admin, id, profile.id));
     if (action === "approve")

@@ -6,6 +6,10 @@ import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
+  ChevronDown,
+  Mail,
+  MessageCircle,
+  Send,
   CalendarCheck,
   Check,
   ClipboardList,
@@ -24,6 +28,12 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
@@ -140,6 +150,8 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
   // the app lands on this visit's quotation rather than a separate page.
   const params = useSearchParams();
   const [tab, setTab] = useState(params.get("tab") ?? "snags");
+  /* The header's Share, handed to the quotation panel that does the work. */
+  const [shareRequest, setShareRequest] = useState<{ method: "whatsapp" | "email"; at: number } | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -319,11 +331,35 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
       );
     }
     if (byQuote && quote && (quote.status === "draft" || quote.status === "sent")) {
+      /*
+        Share, as on the quotation page: WhatsApp or email, straight from
+        the header. The Quotation tab opens with it, so the document being
+        shared is on screen while it goes.
+      */
+      const share = (method: "whatsapp" | "email") => {
+        setTab("quotation");
+        setShareRequest({ method, at: Date.now() });
+      };
       return (
-        <Button onClick={() => setTab("quotation")}>
-          <FileText className="size-4" />
-          {quote.status === "draft" ? "Send quotation" : "View quotation"}
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button>
+              <Send className="size-4" />
+              {quote.status === "sent" ? "Share again" : "Share"}
+              <ChevronDown className="size-3.5" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => share("whatsapp")}>
+              <MessageCircle className="size-4" />
+              Share on WhatsApp
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => share("email")}>
+              <Mail className="size-4" />
+              {quote.status === "sent" ? "Resend by email" : "Send by email"}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       );
     }
     /*
@@ -665,6 +701,9 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
                     quotationId={quote.id}
                     visitNumber={visit.visit_number}
                     onChanged={load}
+                    // Share is in the header; the tab is the document alone.
+                    hideActions
+                    shareRequest={shareRequest}
                   />
                 ) : (
                   <SectionCard

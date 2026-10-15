@@ -1376,39 +1376,49 @@ function ClientPicker({
   const [open, setOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   /*
-    The list on screen: the pages loaded so far for one search. The server
-    searches every client (name, email, phone, company), newest first, and
-    sends ten at a time; scrolling to the end of the list asks for the next
-    ten, until every match is loaded. Nothing is filtered here.
+    The list on screen: the pages loaded so far for one search. Clients are
+    kept in Zoho FSM (Sami, 14 Oct 2026) and searched there, newest first,
+    ten at a time; scrolling to the end of the list asks for the next ten.
+    FSM gives no total, so the list goes on while FSM says there are more.
   */
   const [list, setList] = useState<{
     search: string | null;
     rows: SnaggingClientOption[];
-    total: number;
+    more: boolean;
     pages: number;
-  }>({ search: null, rows: [], total: 0, pages: 0 });
+    source: "fsm" | "portal";
+  }>({ search: null, rows: [], more: false, pages: 0, source: "fsm" });
   const [loadingMore, setLoadingMore] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
+  // The FSM contact being linked to the portal after it was picked.
+  const [linking, setLinking] = useState<string | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const debouncedSearch = useDebounce(search.trim(), 250);
   // Loading until the list answers the search in the box.
   const loading = list.search !== debouncedSearch;
-  const hasMore = !loading && list.rows.length < list.total;
+  const hasMore = !loading && list.more;
+  const fromFsm = list.source === "fsm";
   // Only the latest request may fill the list: a slow reply for an older search is dropped.
   const ticket = useRef(0);
 
   useEffect(() => {
     const mine = ++ticket.current;
     snaggingService
-      .pickClientsPage({ search: debouncedSearch || undefined, page: 0, pageSize: CLIENT_PAGE_SIZE })
+      .listFsmClients({ search: debouncedSearch || undefined, page: 0, pageSize: CLIENT_PAGE_SIZE })
       .then((result) => {
         if (mine !== ticket.current) return;
-        setList({ search: debouncedSearch, rows: result.data, total: result.totalCount, pages: 1 });
+        setList({
+          search: debouncedSearch,
+          rows: result.data,
+          more: result.hasMore,
+          pages: 1,
+          source: result.source,
+        });
         setListError(null);
       })
       .catch((err) => {
         if (mine !== ticket.current) return;
-        setList({ search: debouncedSearch, rows: [], total: 0, pages: 0 });
+        setList((current) => ({ ...current, search: debouncedSearch, rows: [], more: false, pages: 0 }));
         setListError(err instanceof Error ? err.message : "Could not load clients");
       });
   }, [debouncedSearch]);
@@ -1418,7 +1428,7 @@ function ClientPicker({
     const mine = ticket.current;
     setLoadingMore(true);
     try {
-      const result = await snaggingService.pickClientsPage({
+      const result = await snaggingService.listFsmClients({
         search: list.search || undefined,
         page: list.pages,
         pageSize: CLIENT_PAGE_SIZE,
@@ -1426,11 +1436,12 @@ function ClientPicker({
       if (mine !== ticket.current) return;
       setList((current) => {
         // A client added since the first page can shift the pages by one: never list anyone twice.
-        const seen = new Set(current.rows.map((row) => row.id));
+        const key = (row: SnaggingClientOption) => row.fsm_contact_id ?? row.id;
+        const seen = new Set(current.rows.map(key));
         return {
           ...current,
-          rows: [...current.rows, ...result.data.filter((row) => !seen.has(row.id))],
-          total: result.totalCount,
+          rows: [...current.rows, ...result.data.filter((row) => !seen.has(key(row)))],
+          more: result.hasMore,
           pages: current.pages + 1,
         };
       });
@@ -1459,7 +1470,24 @@ function ClientPicker({
 
   const matches = list.rows;
 
-  function choose(client: SnaggingClientOption) {
+  /*
+    A client from FSM that the portal has not used yet gets its portal row
+    now (linked to the FSM contact), so the quotation has a client to point
+    at. One already used, or a portal client, is taken as it is.
+  */
+  async function choose(picked: SnaggingClientOption) {
+    let client = picked;
+    if (!client.id && client.fsm_contact_id) {
+      setLinking(client.fsm_contact_id);
+      try {
+        client = await snaggingService.linkFsmClient(client.fsm_contact_id);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Could not use this client");
+        return;
+      } finally {
+        setLinking(null);
+      }
+    }
     releaseProperty();
     set("client_id", client.id ?? "");
     set("property_id", "");
@@ -1509,7 +1537,7 @@ function ClientPicker({
             Change
           </Button>
         </div>
-        <AddClientDialog open={addOpen} onOpenChange={setAddOpen} onSave={saveNew} />
+        <AddClientDialog open={addOpen} onOpenChange={setAddOpen} onSave={saveNew} requireEmail={fromFsm} />
       </>
     );
   }
@@ -1526,7 +1554,7 @@ function ClientPicker({
               setOpen(true);
             }}
             onFocus={() => setOpen(true)}
-            placeholder="Search clients on file"
+            placeholder={fromFsm ? "Search clients in Zoho FSM" : "Search clients on file"}
             className="pr-9 pl-9"
           />
           <ChevronDown className="text-muted-foreground pointer-events-none absolute top-1/2 right-3 size-4 -translate-y-1/2" />
@@ -1561,15 +1589,18 @@ function ClientPicker({
                 <p className="text-destructive px-3 py-2 text-sm">{listError}</p>
               ) : matches.length === 0 ? (
                 <p className="text-muted-foreground px-3 py-2 text-sm">
-                  No client on file matches. Use the + button to add a new one.
+                  {fromFsm
+                    ? "No client in Zoho FSM matches. FSM searches the last name, email and phone. Use + to add a new one."
+                    : "No client on file matches. Use the + button to add a new one."}
                 </p>
               ) : (
                 matches.map((client) => (
                   <button
-                    key={client.id ?? `${client.client_name}-${client.client_email ?? ""}`}
+                    key={client.fsm_contact_id ?? client.id ?? `${client.client_name}-${client.client_email ?? ""}`}
                     type="button"
-                    onClick={() => choose(client)}
-                    className="hover:bg-mist-soft flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm"
+                    disabled={linking !== null}
+                    onClick={() => void choose(client)}
+                    className="hover:bg-mist-soft flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm disabled:opacity-60"
                   >
                     <span className="min-w-0">
                       <span className="block truncate font-medium">{client.client_name}</span>
@@ -1579,10 +1610,10 @@ function ClientPicker({
                         </span>
                       ) : null}
                     </span>
-                    {client.property_count ? (
-                      <span className="text-muted-foreground shrink-0 text-xs">
-                        {client.property_count} job{client.property_count === 1 ? "" : "s"}
-                      </span>
+                    {linking !== null && linking === client.fsm_contact_id ? (
+                      <Loader2 className="text-muted-foreground size-4 shrink-0 animate-spin" />
+                    ) : client.client_phone ? (
+                      <span className="text-muted-foreground shrink-0 text-xs">{client.client_phone}</span>
                     ) : null}
                   </button>
                 ))
@@ -1600,11 +1631,11 @@ function ClientPicker({
                       onClick={() => void loadMore()}
                       className="hover:text-foreground underline-offset-2 hover:underline"
                     >
-                      Showing {matches.length} of {list.total}. Scroll for more
+                      Showing {matches.length}. Scroll for more
                     </button>
                   ) : (
                     <span>
-                      {list.total === 1 ? "1 client" : `All ${list.total} clients`}
+                      {matches.length === 1 ? "1 client" : `All ${matches.length} clients`}
                       {list.search ? " matching your search" : ""}
                     </span>
                   )}
@@ -1631,22 +1662,26 @@ function ClientPicker({
         onOpenChange={setAddOpen}
         initialName={search.trim()}
         onSave={saveNew}
+        requireEmail={fromFsm}
       />
     </div>
   );
 }
 
-/** Collects a brand-new client: name (required), email, phone. */
+/** Collects a brand-new client: name and phone (required), email. */
 function AddClientDialog({
   open,
   onOpenChange,
   initialName = "",
   onSave,
+  requireEmail = false,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initialName?: string;
   onSave: (client: SnaggingClientOption) => void;
+  /** Zoho FSM keeps every client with an email, so a new one needs one. */
+  requireEmail?: boolean;
 }) {
   // The dialog content unmounts when closed, so these initialisers run
   // fresh on each open — seeding the name from whatever was typed in the
@@ -1655,14 +1690,18 @@ function AddClientDialog({
   const [name, setName] = useState(initialName);
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
+  const [company, setCompany] = useState("");
+  // Zoho FSM requires a Maher ID on every client (Sami, Oct 2026: its own field).
+  const [maherId, setMaherId] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // D1/D2: name and phone are required (phone in any international format);
-  // email is optional and must never block the record.
+  // D1/D2: name and phone are required (phone in any international format).
+  // The email too once clients are kept in Zoho FSM, which requires one.
+  const emailOk = /.+@.+\..+/.test(email.trim());
   const valid =
     name.trim().length >= 2 &&
     /[0-9]{6,}/.test(phone.replace(/[^0-9]/g, "")) &&
-    (email === "" || /.+@.+\..+/.test(email));
+    (requireEmail ? emailOk && maherId.trim().length > 0 : email === "" || emailOk);
 
   // Persist the client now, so it is genuinely on file (and reusable) the
   // moment it is added, rather than only when the job is finally created.
@@ -1674,6 +1713,8 @@ function AddClientDialog({
         client_name: name.trim(),
         client_email: email.trim() || undefined,
         client_phone: phone.trim() || undefined,
+        company: company.trim() || undefined,
+        maher_id: maherId.trim() || undefined,
       });
       onSave(created);
       toast.success(`${created.client_name} added`);
@@ -1690,7 +1731,9 @@ function AddClientDialog({
         <DialogHeader>
           <DialogTitle>Add a client</DialogTitle>
           <DialogDescription>
-            The client receives the report. Only the name is required.
+            {requireEmail
+              ? "The client receives the report. They are added in Zoho FSM too, which needs their email and Maher ID."
+              : "The client receives the report. Only the name is required."}
           </DialogDescription>
         </DialogHeader>
 
@@ -1706,12 +1749,28 @@ function AddClientDialog({
           <Field label="Phone" required hint="Any country code works.">
             <PhoneInput value={phone} onChange={setPhone} />
           </Field>
-          <Field label="Email" hint="Optional.">
+          <Field label="Email" required={requireEmail} hint={requireEmail ? "Zoho FSM requires it." : "Optional."}>
             <Input
               type="email"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               placeholder="name@example.com"
+            />
+          </Field>
+          {requireEmail ? (
+            <Field label="Maher ID" required hint="Zoho FSM requires it.">
+              <Input
+                value={maherId}
+                onChange={(event) => setMaherId(event.target.value)}
+                placeholder="e.g. C0354059"
+              />
+            </Field>
+          ) : null}
+          <Field label="Company" hint="Optional. The agency or business, if any; linked in Zoho FSM.">
+            <Input
+              value={company}
+              onChange={(event) => setCompany(event.target.value)}
+              placeholder="e.g. Driven Properties"
             />
           </Field>
         </div>
@@ -1983,7 +2042,11 @@ function PropertyStep({
     clientId: string | null;
     state: "loading" | "ready" | "error";
     rows: SnaggingProperty[];
+    /** Zoho FSM could not be read: the list holds the portal's addresses only. */
+    fsmError?: string | null;
   }>({ clientId: null, state: "loading", rows: [] });
+  // The FSM address being saved to the portal after it was picked.
+  const [linkingAddress, setLinkingAddress] = useState(false);
 
   const fresh = Boolean(draft.client_id) && lookup.clientId === draft.client_id;
   const propertiesState: "idle" | "loading" | "ready" | "error" = !draft.client_id
@@ -1993,15 +2056,48 @@ function PropertyStep({
       : "loading";
   const clientProperties = fresh ? lookup.rows : [];
 
+  /*
+    An address only in Zoho FSM (source "fsm") has no portal row yet: picking
+    it makes one, linked to the FSM address, so the quotation can point at it.
+  */
+  const linkAddress = useCallback(
+    async (clientId: string, row: SnaggingProperty): Promise<SnaggingProperty | null> => {
+      if (row.source !== "fsm") return row;
+      setLinkingAddress(true);
+      try {
+        const linked = await snaggingService.linkFsmAddress(
+          clientId,
+          row.fsm_address_id ?? row.id.replace(/^fsm:/, ""),
+        );
+        setLookup((current) =>
+          current.clientId === clientId
+            ? { ...current, rows: current.rows.map((r) => (r.id === row.id ? { ...linked, source: "portal" } : r)) }
+            : current,
+        );
+        return linked;
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Could not use that address");
+        return null;
+      } finally {
+        setLinkingAddress(false);
+      }
+    },
+    [],
+  );
+
   const loadClientProperties = useCallback((clientId: string) => {
     let active = true;
     snaggingService
-      .listProperties(clientId)
-      .then((rows) => {
+      .listClientAddresses(clientId)
+      .then(async ({ data: rows, fsmError }) => {
         if (!active) return;
-        setLookup({ clientId, state: "ready", rows });
-        // Newest first, so the first is the address they were last quoted for.
-        autofillProperty(clientId, rows[0]);
+        setLookup({ clientId, state: "ready", rows, fsmError });
+        // Newest first (the portal's own, then FSM's), so the first is the
+        // address they were last quoted for.
+        const first = rows[0];
+        if (!first) return;
+        const usable = first.source === "fsm" ? await linkAddress(clientId, first) : first;
+        if (active && usable) autofillProperty(clientId, usable);
       })
       .catch(() => {
         // Not the same as "this client has none": an empty list here would
@@ -2011,7 +2107,7 @@ function PropertyStep({
     return () => {
       active = false;
     };
-  }, [autofillProperty]);
+  }, [autofillProperty, linkAddress]);
 
   useEffect(() => {
     if (!draft.client_id) return;
@@ -2106,6 +2202,12 @@ function PropertyStep({
           </Field>
         ) : null}
 
+        {draft.client_id && propertiesState === "ready" && lookup.fsmError ? (
+          <p className="text-warning text-xs">
+            Zoho FSM could not be read, so this client&apos;s addresses there are not listed.
+          </p>
+        ) : null}
+
         {draft.client_id && propertiesState === "ready" && clientProperties.length === 0 ? (
           <p className="text-muted-foreground text-xs">
             No address on file for this client yet. The details below will be
@@ -2124,10 +2226,21 @@ function PropertyStep({
           >
             <Select
               value={draft.property_id || "new"}
+              disabled={linkingAddress}
               onValueChange={(value) => {
                 // "New property" starts from an empty address, not a copy of the saved one.
-                if (value === "new") releaseProperty();
-                else applyProperty(clientProperties.find((p) => p.id === value) ?? null);
+                if (value === "new") {
+                  releaseProperty();
+                  return;
+                }
+                const row = clientProperties.find((p) => p.id === value) ?? null;
+                if (!row || row.source !== "fsm") {
+                  applyProperty(row);
+                  return;
+                }
+                void linkAddress(draft.client_id, row).then((linked) => {
+                  if (linked) applyProperty(linked);
+                });
               }}
             >
               <SelectTrigger className="w-full">
@@ -2137,8 +2250,10 @@ function PropertyStep({
                 <SelectItem value="new">New property</SelectItem>
                 {clientProperties.map((p) => (
                   <SelectItem key={p.id} value={p.id}>
-                    {[p.unit_label, p.building_name, p.community].filter(Boolean).join(", ") ||
-                      p.unit_label}
+                    {p.source === "fsm"
+                      ? `${p.fsm_address_label ?? p.unit_label} · Zoho FSM`
+                      : [p.unit_label, p.building_name, p.community].filter(Boolean).join(", ") ||
+                        p.unit_label}
                   </SelectItem>
                 ))}
               </SelectContent>

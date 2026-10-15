@@ -487,7 +487,9 @@ export function SubmissionDetails({
     setOpened((prev) => (prev.has(next) ? prev : new Set(prev).add(next)));
     const query = new URLSearchParams(window.location.search);
     query.set("tab", next);
-    window.history.replaceState(null, "", `?${query.toString()}`);
+    // The router's own state, so Next leaves the entry alone: a new ?tab=
+    // through Next re-keys the page and remounts it, refetching everything.
+    window.history.replaceState(window.history.state, "", `?${query.toString()}`);
   }, []);
   /* A stale or mistyped ?tab= falls back to the record rather than
      leaving the page below the tab bar empty. */

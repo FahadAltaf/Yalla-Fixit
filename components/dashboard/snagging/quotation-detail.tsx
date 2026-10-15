@@ -1,13 +1,13 @@
 "use client";
 
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
-import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import dynamic from "next/dynamic";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft,
   Check,
-  CircleDot,
   ChevronDown,
   Copy,
   Download,
@@ -16,12 +16,9 @@ import {
   Mail,
   MessageCircle,
   Pencil,
-  Info,
   Plus,
   Send,
-  StickyNote,
   TriangleAlert,
-  UserRound,
   X,
 } from "lucide-react";
 import { saveAs } from "file-saver";
@@ -46,6 +43,11 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PillTabs } from "@/components/dashboard/shared/kaizen";
+
+/** The Activity tab's own tabs. */
+type ActivityView = "fsm" | "history";
 import { YallaClassicTemplate } from "@/components/dashboard/extensions/quotation-templates/templates/YallaClassicTemplate";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
@@ -59,55 +61,21 @@ import { ActionType, ResourceType } from "@/types/types";
 
 import {
   DataState,
-  QuotationStatusBadge,
   SubmitButton,
   useConfirm,
   ActionDialogContent,
-  DataRow,
-  formatLocalDateTime,
-  SectionCard,
 } from "./shared";
 import { ChangeHistoryCard } from "./change-history-card";
-import { FsmSyncCard } from "./fsm-sync-card";
-import { QuotationBodySkeleton } from "@/components/dashboard/snagging/route-skeletons";
+import { QuotationDetailsTab } from "./quotation-details-tab";
 
-/**
- * One line of the quotation's record: who, as a person row, with what they
- * did and when underneath (SNG-037).
- */
-function RecordRow({
-  label,
-  name,
-  at,
-  empty = "Not recorded",
-}: {
-  label: string;
-  name?: string | null;
-  at?: string | null;
-  empty?: string;
-}) {
-  const known = Boolean(name || at);
-  return (
-    <DataRow
-      icon={<UserRound />}
-      title={
-        known ? (
-          (name ?? "Unknown user")
-        ) : (
-          <span className="text-muted-foreground font-normal">{empty}</span>
-        )
-      }
-      subtitle={label}
-      trailing={
-        known && at ? (
-          <span className="text-muted-foreground text-xs tabular-nums">
-            {formatLocalDateTime(at)}
-          </span>
-        ) : null
-      }
-    />
-  );
-}
+/* Only loaded when its tab is first opened. */
+const FsmQuotationCard = dynamic(() => import("./fsm-quotation-card").then((m) => m.FsmQuotationCard), {
+  loading: SectionLoadingSkeleton,
+});
+import {
+  QuotationBodySkeleton,
+  SectionLoadingSkeleton,
+} from "@/components/dashboard/snagging/route-skeletons";
 
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -161,6 +129,41 @@ export default function QuotationDetail({ id }: { id: string }) {
   const [approvalUrl, setApprovalUrl] = useState<string | null>(null);
   // Bumped after an action here, so the change history shows it (SNG-037).
   const [historyNonce, setHistoryNonce] = useState(0);
+
+  /*
+    The tab lives in the URL (?tab=) so a link can point at one and a
+    refresh keeps it. Each tab mounts the first time it is opened and stays
+    mounted, hidden, after: going back to it shows it as it was, with no
+    request. The Activity tab's own two tabs work the same way.
+  */
+  const params = useSearchParams();
+  const [tab, setTabState] = useState<string>(() => {
+    const asked = params.get("tab");
+    return asked === "quotation" || asked === "activity" ? asked : "details";
+  });
+  const [opened, setOpened] = useState<Set<string>>(() => new Set([tab]));
+  const setTab = useCallback((next: string) => {
+    setTabState(next);
+    setOpened((prev) => (prev.has(next) ? prev : new Set(prev).add(next)));
+    const query = new URLSearchParams(window.location.search);
+    query.set("tab", next);
+    // The router's own state, so Next leaves the entry alone: a new ?tab=
+    // through Next re-keys the page and remounts it, refetching everything.
+    window.history.replaceState(window.history.state, "", `?${query.toString()}`);
+  }, []);
+  const activeTab = tab;
+  const [activitySub, setActivitySubState] = useState<ActivityView>("fsm");
+  const [subOpened, setSubOpened] = useState<Set<ActivityView>>(() => new Set<ActivityView>(["fsm"]));
+  const setActivitySub = useCallback((next: ActivityView) => {
+    setActivitySubState(next);
+    setSubOpened((prev) => (prev.has(next) ? prev : new Set(prev).add(next)));
+  }, []);
+  const panel = (value: string, children: ReactNode) =>
+    opened.has(value) ? (
+      <TabsContent value={value} forceMount className="mt-4 data-[state=inactive]:hidden">
+        {children}
+      </TabsContent>
+    ) : null;
 
   /*
     WHICH action is running, not merely that one is.
@@ -589,7 +592,7 @@ export default function QuotationDetail({ id }: { id: string }) {
         onRetry={() => void load()}
         retrying={loading}
         errorTitle="Could not load the quotation"
-        skeleton={<QuotationBodySkeleton />}
+        skeleton={<QuotationBodySkeleton tab={activeTab} />}
       >
         {quote && doc ? (
           <div className="flex flex-col gap-4">
@@ -716,21 +719,29 @@ export default function QuotationDetail({ id }: { id: string }) {
             ) : null}
 
             {/*
-              The document with its history, and beside it what the team
-              needs to follow it up: who raised it, who last changed it,
-              who picked the rate, and the office note (SNG-022, SNG-037).
-              The details sit in a side column rather than a full-width
-              strip above a page-wide sheet, as on the other detail pages;
-              below xl they stack under the document.
+              Three tabs, as on the job page: what it was raised with, the
+              document, and what happened to it. Each tab mounts the first
+              time it is opened and asks for its own data then -- the
+              details come with the quotation, the FSM calls and the change
+              history a page at a time from the server -- and stays mounted
+              after, so going back to it fetches nothing.
             */}
-            <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
-              <div className="flex min-w-0 flex-col gap-4">
-                {/*
-                  The document itself, from the template the PDF is built from.
-                  Centred and sized to the page it represents (794px = A4 at
-                  96dpi) rather than stretched against the left edge of a
-                  full-width card.
-                */}
+            <Tabs value={activeTab} onValueChange={setTab}>
+              <TabsList className="h-auto w-full flex-wrap justify-start gap-1 group-data-horizontal/tabs:h-auto">
+                <TabsTrigger value="details">Details</TabsTrigger>
+                <TabsTrigger value="quotation">Quotation</TabsTrigger>
+                <TabsTrigger value="activity">Activity</TabsTrigger>
+              </TabsList>
+
+              {panel("details", <QuotationDetailsTab quote={quote} />)}
+
+              {panel(
+                "quotation",
+                /*
+                  The document itself, from the template the PDF is built
+                  from, centred and sized to the page it represents (794px =
+                  A4 at 96dpi).
+                */
                 <Card className="mx-auto w-fit max-w-full overflow-x-auto p-0">
                   <YallaClassicTemplate
                     data={snaggingQuoteToTemplateData(doc)}
@@ -738,75 +749,40 @@ export default function QuotationDetail({ id }: { id: string }) {
                     type="review"
                     sectionStyle={SNAGGING_QUOTATION_SECTION_STYLE}
                   />
-                </Card>
-              </div>
+                </Card>,
+              )}
 
-              {/* Scrolls with the page: a sticky column with its height capped
-                  squeezed the cards and cut their content off. */}
-              <aside className="flex min-w-0 flex-col gap-4">
-                <SectionCard
-                  title="Details"
-                  icon={<Info />}
-                  description="Where it stands, and who raised and changed it."
-                  bodyClassName="divide-y border-t"
-                >
-                  <DataRow
-                    icon={<CircleDot />}
-                    title="Status"
-                    subtitle={quote.quote_number}
-                    trailing={<QuotationStatusBadge status={quote.status} />}
+              {panel(
+                "activity",
+                /* Zoho FSM and the change history, each its own tab, each fetched when opened. */
+                <div className="flex flex-col gap-4">
+                  <PillTabs<ActivityView>
+                    value={activitySub}
+                    onChange={setActivitySub}
+                    tabs={[
+                      { value: "fsm", label: "Zoho FSM" },
+                      { value: "history", label: "Change history" },
+                    ]}
                   />
-                  <RecordRow
-                    label="Created by"
-                    name={quote.created_by_name}
-                    at={quote.created_at}
-                  />
-                  <RecordRow
-                    label="Last modified by"
-                    name={quote.modified_by_name}
-                    at={quote.modified_at}
-                    empty="No changes yet"
-                  />
-                  {quote.rate_chosen_by_name ? (
-                    <RecordRow
-                      label="Rate picked by"
-                      name={quote.rate_chosen_by_name}
-                      at={quote.rate_chosen_at}
-                    />
+                  {quote.id && subOpened.has("fsm") ? (
+                    <div hidden={activitySub !== "fsm"}>
+                      <FsmQuotationCard key={historyNonce} quotationId={quote.id} canEdit={canEdit} />
+                    </div>
                   ) : null}
-                </SectionCard>
-
-                <SectionCard
-                  title="Office notes"
-                  icon={<StickyNote />}
-                  description="Copied to the job and shown to the inspector."
-                  bodyClassName="border-t px-5 py-4"
-                >
-                  {quote.notes?.trim() ? (
-                    <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">
-                      {quote.notes}
-                    </p>
-                  ) : (
-                    <p className="text-muted-foreground text-sm">No office notes.</p>
-                  )}
-                </SectionCard>
-
-                {/* The quotation as an estimate in Zoho FSM, with its sync log. */}
-                {quote.id ? (
-                  <FsmSyncCard quotationId={quote.id} canEdit={canEdit} refreshKey={historyNonce} />
-                ) : null}
-
-                {quote.id ? (
-                  <ChangeHistoryCard
-                    key={historyNonce}
-                    scope="quotation"
-                    id={quote.id}
-                    variant="timeline"
-                    description="Who changed it, and when."
-                  />
-                ) : null}
-              </aside>
-            </div>
+                  {quote.id && subOpened.has("history") ? (
+                    <div hidden={activitySub !== "history"}>
+                      <ChangeHistoryCard
+                        key={historyNonce}
+                        scope="quotation"
+                        id={quote.id}
+                        variant="timeline"
+                        description="Who changed it, and when."
+                      />
+                    </div>
+                  ) : null}
+                </div>,
+              )}
+            </Tabs>
           </div>
         ) : null}
       </DataState>

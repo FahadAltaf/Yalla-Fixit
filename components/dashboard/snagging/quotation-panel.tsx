@@ -18,8 +18,9 @@ import {
 import { saveAs } from "file-saver";
 import { toast } from "sonner";
 
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -52,7 +53,6 @@ import { YallaClassicTemplate } from "@/components/dashboard/extensions/quotatio
 
 import {
   DataState,
-  SectionCard,
   SubmitButton,
   formatLocalDateTime,
   useConfirm,
@@ -121,6 +121,8 @@ export function QuotationPanel({
   visitNumber,
   onChanged,
   source,
+  hideActions = false,
+  shareRequest = null,
 }: {
   /* Only these two are read, so a visit page can pass them without the
      whole job record. */
@@ -158,6 +160,18 @@ export function QuotationPanel({
     error: string | null;
     reload: () => void | Promise<unknown>;
   };
+  /**
+   * Leave out the Download / Share row, for a page that puts Share in its
+   * own header (the visit page) and wants the document on its own.
+   */
+  hideActions?: boolean;
+  /**
+   * Share from outside the panel: the page's own Share button sets this,
+   * with a fresh `at` each click, and the panel runs that share once the
+   * quotation is loaded -- the same WhatsApp hand-over and email dialog
+   * its own Share menu opens.
+   */
+  shareRequest?: { method: "whatsapp" | "email"; at: number } | null;
 }) {
   const { userProfile } = useAuth();
   const canEdit = hasResourceAction(
@@ -370,6 +384,29 @@ export function QuotationPanel({
    * Downloads the PDF and mints the link in one go, because doing either
    * alone leaves the job half done.
    */
+  /** The email dialog, filled with the client's address. */
+  function openEmail() {
+    if (!quote) return;
+    const snap = (quote.property_snapshot ?? {}) as Record<string, unknown>;
+    setRecipient((snap.client_email as string) ?? quote.sent_to ?? "");
+    setSendOpen(true);
+  }
+
+  /*
+    A share asked for from outside (the visit page's header), run once the
+    quotation is here. The latest handlers are read through a ref so the
+    effect fires on the request alone, never twice for one click.
+  */
+  const shareHandlers = useRef({ whatsapp: () => {}, email: () => {} });
+  shareHandlers.current = { whatsapp: () => void shareByHand(), email: openEmail };
+  const handledShare = useRef<number | null>(null);
+  const shareReady = Boolean(quote && !quote.preview && !loading);
+  useEffect(() => {
+    if (!shareRequest || !shareReady || handledShare.current === shareRequest.at) return;
+    handledShare.current = shareRequest.at;
+    shareHandlers.current[shareRequest.method]();
+  }, [shareRequest, shareReady]);
+
   async function shareByHand() {
     if (!quote) return;
     if (
@@ -436,48 +473,102 @@ export function QuotationPanel({
   const isDecided =
     quote?.status === "approved" || quote?.status === "rejected";
 
+  /* One Download button with the two formats, as on the quotation page and on AMC proposals. */
+  const downloadMenu = (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <SubmitButton
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            pending={downloading || downloadingWord}
+            pendingLabel="Preparing…"
+            icon={<Download className="size-4" />}
+          >
+            Download
+            <ChevronDown className="size-3.5" />
+          </SubmitButton>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onClick={() => void download()}>
+            <FileText className="size-4" />
+            PDF
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => void downloadWord()}>
+            <FileType2 className="size-4" />
+            Word (.docx)
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+  );
+  /* Which status card is up, if any: the client's answer, or that one is awaited. */
+  const statusCard =
+    quote && !loading && (quote.status === "sent" || quote.status === "approved" || quote.status === "rejected");
+  /* Download inside that card, on the right, where the visit page has not asked for no actions. */
+  const cardDownload =
+    quote && !isPreview && !hideActions ? (
+      <AlertAction className="static col-start-2 mt-2 justify-self-start sm:absolute sm:top-1/2 sm:right-3 sm:mt-0 sm:-translate-y-1/2">{downloadMenu}</AlertAction>
+    ) : null;
+
   return (
-    <SectionCard
-      title="Quotation"
-      icon={<FileText />}
-      description={
-        error
-          ? "The quotation could not be loaded."
-          : generating
-            ? "Raising a quotation for this job."
-            : loading
-              ? "Loading the quotation."
-              : quote
-                ? `Quotation ${quote.quote_number}`
-                : task.status === "draft"
-                  ? "This job is a draft. Generate and send a quotation to the client to proceed."
-                  : "No quotation on this job."
-      }
-      /*
-        The document's one universal action sits in the header, where the
-        status badge was.
+    /*
+      Laid out as the quotation page lays it out: the document's actions in
+      a row along the top, then the quotation itself as a sheet of paper in
+      the middle of the page -- not a titled card with the sheet framed
+      inside it, which read as a preview of a document rather than the
+      document.
+    */
+    <div className="flex flex-col gap-4">
+      {/* Where it stands with the client, first thing on the tab. */}
+      {quote && !loading && quote.status === "sent" ? (
+        <Alert className="has-data-[slot=alert-action]:pr-2.5 sm:has-data-[slot=alert-action]:pr-36">
+          <Clock />
+          <AlertTitle>Awaiting the client&apos;s decision</AlertTitle>
+          <AlertDescription>
+            Sent to {quote.sent_to}
+            {quote.sent_at
+              ? ` on ${formatLocalDateTime(quote.sent_at)}`
+              : ""}
+            .
+          </AlertDescription>
+          {cardDownload}
+        </Alert>
+      ) : null}
+      {quote && !loading && quote.status === "approved" ? (
+        <Alert className="border-success/30 has-data-[slot=alert-action]:pr-2.5 sm:has-data-[slot=alert-action]:pr-36 [&>svg]:text-success">
+          <CheckCircle2 />
+          <AlertTitle>Approved by the client</AlertTitle>
+          <AlertDescription>
+            {quote.approved_by_name
+              ? `${quote.approved_by_name} approved this`
+              : "Approved"}
+            {quote.decided_at
+              ? ` on ${formatLocalDateTime(quote.decided_at)}`
+              : ""}
+            {quotationId
+              ? `. Visit ${visitNumber ?? ""} can be booked.`.replace("  ", " ")
+              : ". Inspector assignment is unlocked."}
+          </AlertDescription>
+          {cardDownload}
+        </Alert>
+      ) : null}
+      {quote && !loading && quote.status === "rejected" ? (
+        <Alert variant="destructive" className="border-destructive/30 has-data-[slot=alert-action]:pr-2.5 sm:has-data-[slot=alert-action]:pr-36">
+          <XCircle />
+          <AlertTitle>Rejected by the client</AlertTitle>
+          <AlertDescription>
+            {quote.approved_by_name
+              ? `${quote.approved_by_name}: `
+              : ""}
+            {quote.rejected_reason || "No reason was given."}
+          </AlertDescription>
+          {cardDownload}
+        </Alert>
+      ) : null}
 
-        A decided quotation showed its status three times — the badge
-        here, a grey "Approved by client, locked" pill beside Download, and
-        the green alert over the document — with the one thing a
-        coordinator actually does with an approved quotation, download it,
-        tucked between them. The alert already says approved, and says who
-        and when; the header now carries the PDF. An undecided quotation
-        keeps its badge beside it, because nothing else on the page says
-        draft or sent.
-      */
-      /*
-        Every action on the document, in the header beside Download.
-
-        They were split: Download up here beside a Draft badge, and Share
-        on WhatsApp / Send by email in a row of their own under it. The
-        badge said nothing the page does not (a sent quotation has its own
-        "Awaiting the client" note below), so it is gone and the actions
-        sit together. Nothing is offered once the client has decided but
-        the PDF.
-      */
-      action={
-        quote && !isPreview ? (
+      {/* Only the document's actions, right-aligned; the alert above already says where it stands. */}
+      <div className="flex flex-wrap items-center justify-end gap-3 empty:hidden">
+        {quote && !isPreview && !loading && !hideActions && (!statusCard || (canEdit && !isDecided)) ? (
           <div className="flex flex-wrap items-center justify-end gap-2">
             {canEdit && !isDecided && quote.status === "draft" && !quotationId ? (
               <Button
@@ -490,33 +581,8 @@ export function QuotationPanel({
               </Button>
             ) : null}
 
-            {/* One Download button with the two formats, as on the
-                quotation page and on AMC proposals. */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <SubmitButton
-                  variant="outline"
-                  size="sm"
-                  disabled={busy}
-                  pending={downloading || downloadingWord}
-                  pendingLabel="Preparing…"
-                  icon={<Download className="size-4" />}
-                >
-                  Download
-                  <ChevronDown className="size-3.5" />
-                </SubmitButton>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => void download()}>
-                  <FileText className="size-4" />
-                  PDF
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => void downloadWord()}>
-                  <FileType2 className="size-4" />
-                  Word (.docx)
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            {/* A quotation with a status card carries Download there instead. */}
+            {statusCard ? null : downloadMenu}
 
             {/*
               One Share button with the two ways out, because the team uses
@@ -543,13 +609,7 @@ export function QuotationPanel({
                     <MessageCircle className="size-4" />
                     Share on WhatsApp
                   </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => {
-                      const snap = (quote.property_snapshot ?? {}) as Record<string, unknown>;
-                      setRecipient((snap.client_email as string) ?? quote.sent_to ?? "");
-                      setSendOpen(true);
-                    }}
-                  >
+                  <DropdownMenuItem onClick={openEmail}>
                     <Mail className="size-4" />
                     {quote.status === "sent" ? "Resend by email" : "Send by email"}
                   </DropdownMenuItem>
@@ -557,11 +617,10 @@ export function QuotationPanel({
               </DropdownMenu>
             ) : null}
           </div>
-        ) : null
-      }
-      bodyClassName="border-t"
-    >
-      <div className="space-y-4 p-5">
+        ) : null}
+      </div>
+
+      <div className="space-y-4">
         <DataState
           loading={loading || generating}
           error={error}
@@ -578,47 +637,11 @@ export function QuotationPanel({
                 </p>
               ) : null}
 
-              {/* The quote number and date sit above the table. */}
-              <div className="flex items-start justify-between gap-4">
-                <Skeleton className="h-4 w-40" />
-                <Skeleton className="h-4 w-24" />
-              </div>
-
-              <div className="overflow-hidden rounded-lg border">
-                <div className="bg-muted/50 flex items-center gap-4 border-b px-4 py-2.5">
-                  <Skeleton className="h-3 flex-1" />
-                  <Skeleton className="h-3 w-14" />
-                  <Skeleton className="h-3 w-16" />
-                  <Skeleton className="h-3 w-20" />
-                </div>
-                {Array.from({ length: 2 }).map((_, index) => (
-                  <div
-                    key={index}
-                    className="flex items-center gap-4 border-b px-4 py-3.5"
-                  >
-                    <Skeleton className="h-4 flex-1" />
-                    <Skeleton className="h-4 w-14" />
-                    <Skeleton className="h-4 w-16" />
-                    <Skeleton className="h-4 w-20" />
-                  </div>
-                ))}
-                {/* Totals are right-aligned under the table, and the grand
-                    total sits on a filled band. */}
-                <div className="space-y-2.5 px-4 py-3">
-                  {[0, 1].map((index) => (
-                    <div key={index} className="flex justify-end gap-4">
-                      <Skeleton className="h-3 w-20" />
-                      <Skeleton className="h-3 w-20" />
-                    </div>
-                  ))}
-                  <div className="flex justify-end">
-                    <Skeleton className="h-8 w-56 rounded-md" />
-                  </div>
-                </div>
-              </div>
+              <QuotationSheetSkeleton />
             </div>
           }
           empty={
+            <Card className="p-0">
             <EmptyState
               icon={<FileText className="size-6" />}
               title="No quotation yet"
@@ -631,6 +654,7 @@ export function QuotationPanel({
               // when the tab opens, so a button here would be a second
               // way to number the same document.
             />
+            </Card>
           }
         >
           {quote ? (
@@ -652,50 +676,6 @@ export function QuotationPanel({
                 <p className="text-muted-foreground pb-2 text-right text-xs">
                   Preview only. This quotation has not been numbered yet.
                 </p>
-              ) : null}
-
-              {/* Where it stands with the client. */}
-              {quote.status === "sent" ? (
-                <Alert>
-                  <Clock />
-                  <AlertTitle>Awaiting the client&apos;s decision</AlertTitle>
-                  <AlertDescription>
-                    Sent to {quote.sent_to}
-                    {quote.sent_at
-                      ? ` on ${formatLocalDateTime(quote.sent_at)}`
-                      : ""}
-                    .
-                  </AlertDescription>
-                </Alert>
-              ) : null}
-              {quote.status === "approved" ? (
-                <Alert className="border-success/30 [&>svg]:text-success">
-                  <CheckCircle2 />
-                  <AlertTitle>Approved by the client</AlertTitle>
-                  <AlertDescription>
-                    {quote.approved_by_name
-                      ? `${quote.approved_by_name} approved this`
-                      : "Approved"}
-                    {quote.decided_at
-                      ? ` on ${formatLocalDateTime(quote.decided_at)}`
-                      : ""}
-                    {quotationId
-                      ? `. Visit ${visitNumber ?? ""} can be booked.`.replace("  ", " ")
-                      : ". Inspector assignment is unlocked."}
-                  </AlertDescription>
-                </Alert>
-              ) : null}
-              {quote.status === "rejected" ? (
-                <Alert variant="destructive" className="border-destructive/30">
-                  <XCircle />
-                  <AlertTitle>Rejected by the client</AlertTitle>
-                  <AlertDescription>
-                    {quote.approved_by_name
-                      ? `${quote.approved_by_name}: `
-                      : ""}
-                    {quote.rejected_reason || "No reason was given."}
-                  </AlertDescription>
-                </Alert>
               ) : null}
 
               {approvalUrl ? (
@@ -729,21 +709,15 @@ export function QuotationPanel({
                 reading the same totals twice in two different shapes.
               */}
               <div className="space-y-2">
-                {/* <SubHeading>
-                  {isPreview
-                    ? "Draft preview — not yet generated"
-                    : "Document preview"}
-                </SubHeading> */}
-                <div className="bg-muted/40 overflow-x-auto rounded-lg border p-4">
-                  <div className="mx-auto w-fit bg-white shadow-sm">
-                    <YallaClassicTemplate
-                      data={snaggingQuoteToTemplateData(toDocData(quote))}
-                      hideDiscount
-                      sectionStyle={SNAGGING_QUOTATION_SECTION_STYLE}
-                    />
-                  </div>
-                </div>
-                <p className="text-muted-foreground text-xs">
+                <Card className="mx-auto w-fit max-w-full overflow-x-auto p-0">
+                  <YallaClassicTemplate
+                    data={snaggingQuoteToTemplateData(toDocData(quote))}
+                    hideDiscount
+                    type="review"
+                    sectionStyle={SNAGGING_QUOTATION_SECTION_STYLE}
+                  />
+                </Card>
+                <p className="text-muted-foreground text-center text-xs">
                   {isPreview
                     ? "Priced by the same rules the generated quotation uses, but nothing is saved until you generate it."
                     : "Rendered from the same template as the PDF. Download it for the exact file the client is sent."}
@@ -827,6 +801,62 @@ export function QuotationPanel({
           </DialogFooter>
         </ActionDialogContent>
       </Dialog>
-    </SectionCard>
+    </div>
+  );
+}
+
+/**
+ * The quotation sheet before it arrives: the masthead, the customer and
+ * address boxes, the line table and the totals, on the same centred A4
+ * sheet the document renders on.
+ */
+function QuotationSheetSkeleton() {
+  return (
+    <Card className="mx-auto w-full max-w-[794px] gap-6 p-6">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <Skeleton className="size-16 rounded-md" />
+          <div className="space-y-2">
+            <Skeleton className="h-5 w-28" />
+            <Skeleton className="h-3 w-56" />
+            <Skeleton className="h-3 w-36" />
+          </div>
+        </div>
+        <div className="flex flex-col items-end gap-2">
+          <Skeleton className="h-4 w-20" />
+          <Skeleton className="h-4 w-14" />
+          <Skeleton className="h-3 w-20" />
+        </div>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        {[0, 1].map((index) => (
+          <div key={index} className="space-y-2 rounded-lg border p-4">
+            <Skeleton className="h-4 w-24" />
+            <Skeleton className="h-3.5 w-36" />
+            <Skeleton className="h-3.5 w-28" />
+          </div>
+        ))}
+      </div>
+      <div className="overflow-hidden rounded-md border">
+        <Skeleton className="h-10 w-full rounded-none" />
+        {Array.from({ length: 2 }).map((_, index) => (
+          <div key={index} className="flex items-center gap-4 border-t px-4 py-3.5">
+            <Skeleton className="h-4 flex-1" />
+            <Skeleton className="h-4 w-10" />
+            <Skeleton className="h-4 w-16" />
+            <Skeleton className="h-4 w-20" />
+          </div>
+        ))}
+      </div>
+      <div className="ml-auto w-full max-w-xs space-y-2.5">
+        {[0, 1].map((index) => (
+          <div key={index} className="flex justify-between gap-4">
+            <Skeleton className="h-3 w-20" />
+            <Skeleton className="h-3 w-16" />
+          </div>
+        ))}
+        <Skeleton className="h-11 w-full rounded-md" />
+      </div>
+    </Card>
   );
 }

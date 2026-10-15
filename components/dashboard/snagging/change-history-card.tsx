@@ -15,6 +15,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { snaggingService } from "@/modules/snagging";
 import type { SnaggingChangeHistoryItem } from "@/types/types";
 
+import { ListPager } from "./shared";
+
 /** What each audited change is called on screen. */
 const EVENT_LABELS: Record<string, string> = {
   quotation_generated: "Quotation created",
@@ -251,20 +253,27 @@ export function ChangeHistoryCard({
   variant?: "table" | "timeline";
 }) {
   const [items, setItems] = useState<SnaggingChangeHistoryItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  /* A page at a time from the server, never the whole trail. */
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
+  // The page the rows on screen answer; loading until it is the current one.
+  const [shownPage, setShownPage] = useState<string | null>(null);
+  const loading = shownPage !== `${page}:${pageSize}`;
 
   const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
     try {
-      setItems(await snaggingService.getChangeHistory(scope, id));
+      const result = await snaggingService.getChangeHistory(scope, id, { page, pageSize });
+      setItems(result.data);
+      setTotal(result.totalCount);
+      setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load the history");
     } finally {
-      setLoading(false);
+      setShownPage(`${page}:${pageSize}`);
     }
-  }, [scope, id]);
+  }, [scope, id, page, pageSize]);
 
   useEffect(() => {
     void load();
@@ -290,17 +299,37 @@ export function ChangeHistoryCard({
           </Button>
         </div>
       ) : variant === "timeline" ? (
-        <HistoryTimeline items={items} loading={loading} scope={scope} />
+        <>
+          <HistoryTimeline items={items} loading={loading} scope={scope} />
+          {total > 0 ? (
+            <ListPager
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onPageChange={setPage}
+              onPageSizeChange={(size) => {
+                setPageSize(size);
+                setPage(0);
+              }}
+              noun="changes"
+              className="border-t"
+            />
+          ) : null}
+        </>
       ) : (
         <DataTable
           columns={COLUMNS}
           data={items}
           loading={loading}
-          rowCount={items.length}
-          pageSize={Math.max(items.length, 1)}
-          currentPage={0}
-          onPageChange={() => undefined}
-          onPageSizeChange={() => undefined}
+          rowCount={total}
+          pageSize={pageSize}
+          currentPage={page}
+          isPagination
+          onPageChange={setPage}
+          onPageSizeChange={(size) => {
+            setPageSize(size);
+            setPage(0);
+          }}
           onGlobalFilterChange={() => undefined}
           emptyState={
             <EmptyState

@@ -5,7 +5,7 @@ import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
 import { hasQuotationNotes } from "@/lib/server/snagging/columns";
-import { queueFsmSync } from "@/lib/server/snagging/fsm-quotation-sync";
+import { syncQuotationNow } from "@/lib/server/snagging/fsm-quotation-sync";
 import { resolveClient } from "@/lib/server/snagging/client";
 import { PROPERTY_COLUMNS, resolveProperty } from "@/lib/server/snagging/property";
 import {
@@ -272,8 +272,12 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Into Zoho FSM, once the coordinator has the quotation on screen.
-    queueFsmSync(admin, row.id, profile.id);
+    /*
+      Into Zoho FSM now, before answering: the quotation takes FSM's
+      estimate number as its own, so it opens showing that number.
+    */
+    const fsmNumber = await syncQuotationNow(admin, row.id, profile.id);
+    if (fsmNumber) row.quote_number = fsmNumber;
 
     /* With the address it was raised for, so the form can attach the
        documents picked on it (there is no job yet to hang them on). */
@@ -455,7 +459,9 @@ async function desnagQuotation(
       source_job: job.code,
     },
   });
-  queueFsmSync(admin, row.id, userId);
+  // Into Zoho FSM now, so it comes back with FSM's number.
+  const fsmNumber = await syncQuotationNow(admin, row.id, userId);
+  if (fsmNumber) row.quote_number = fsmNumber;
 
   return NextResponse.json({ data: toWire(row) }, { status: 201 });
 }
