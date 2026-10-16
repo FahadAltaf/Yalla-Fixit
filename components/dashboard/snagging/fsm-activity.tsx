@@ -52,6 +52,7 @@ const ACTION_META: Record<string, { label: string; Icon: LucideIcon }> = {
   work_order_build: { label: "Work order prepared", Icon: Wrench },
   work_order_convert: { label: "Estimate converted to work order", Icon: RotateCcw },
   work_order_create: { label: "Work order created", Icon: Wrench },
+  work_order_unlinked: { label: "Created without the estimate link", Icon: Wrench },
   work_order_update: { label: "Work order updated", Icon: Pencil },
   work_order_complete: { label: "Work order completion", Icon: CheckCircle2 },
   report_upload: { label: "Report uploaded", Icon: FileUp },

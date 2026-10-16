@@ -174,11 +174,17 @@ async function workOrderTransition(
 }
 
 /**
- * The work order FSM made from this estimate: among the contact's work
- * orders, newest first, the one whose Estimate links back to it. A
- * converted work order carries that link (seen on the office's own).
+ * The work order already made for this job: among the contact's work
+ * orders, newest first, the one whose Estimate links back to the estimate,
+ * or one the portal made without that link (see the create below), which
+ * it names starting with the job's code.
  */
-async function workOrderOfEstimate(token: string, contactId: string, estimateId: string): Promise<Row | null> {
+async function workOrderOfEstimate(
+  token: string,
+  contactId: string,
+  estimateId: string | null,
+  jobCode: string | null,
+): Promise<Row | null> {
   const res = await fsmFetch(
     token,
     `/Contacts/${encodeURIComponent(contactId)}/Work_Orders?per_page=50`,
@@ -187,9 +193,13 @@ async function workOrderOfEstimate(token: string, contactId: string, estimateId:
   const rows = ((res.json?.data ?? []) as Row[]).sort((a, b) =>
     String(b.Created_Time ?? "").localeCompare(String(a.Created_Time ?? "")),
   );
+  const prefix = jobCode ? `${jobCode} ·` : null;
   for (const row of rows.slice(0, 10)) {
-    const linked = row.Estimate?.id ?? (await readWorkOrder(token, String(row.id)))?.Estimate?.id;
-    if (String(linked ?? "") === estimateId) return row;
+    if (prefix && String(row.Summary ?? "").startsWith(prefix)) return row;
+    if (!estimateId) continue;
+    const full = row.Estimate?.id ? row : await readWorkOrder(token, String(row.id));
+    if (String(full?.Estimate?.id ?? "") === estimateId) return row;
+    if (prefix && String(full?.Summary ?? "").startsWith(prefix)) return row;
   }
   return null;
 }
@@ -299,7 +309,7 @@ async function syncJobOnce(
         A work order already linked to the estimate (a retry after it was
         made) is used rather than a second one.
       */
-      const existing = estimateId ? await workOrderOfEstimate(token, contact.contactId, estimateId) : null;
+      const existing = await workOrderOfEstimate(token, contact.contactId, estimateId, (job.code as string | null) ?? null);
       if (existing) {
         workOrderId = String(existing.id);
       } else {
@@ -356,7 +366,38 @@ async function syncJobOnce(
             },
           ],
         };
-        const created = await fsmFetch(token, "/Work_Orders", { method: "POST", body: JSON.stringify(body) }, { retry: false });
+        let created = await fsmFetch(token, "/Work_Orders", { method: "POST", body: JSON.stringify(body) }, { retry: false });
+        /*
+          FSM can refuse to link a work order to its estimate, answering
+          "The record is in waiting for approval" although the estimate is
+          approved and converted (seen on 18052, 15 Oct 2026: the same work
+          order went through the moment the Estimate link was left out, and
+          no rule or record in the account was waiting for anything). The
+          work order is what finance invoices from, so it is made without
+          the link rather than not at all: same contact, address, lines and
+          total, and the quotation number in its summary. Logged, so the
+          activity says why the link is missing.
+        */
+        if (
+          !created.ok &&
+          estimateId &&
+          /waiting for approval/i.test(fsmReason(created.json, created.status))
+        ) {
+          const unlinked = { data: [{ ...body.data[0] }] };
+          delete (unlinked.data[0] as Row).Estimate;
+          created = await fsmFetch(token, "/Work_Orders", { method: "POST", body: JSON.stringify(unlinked) }, { retry: false });
+          if (created.ok) {
+            await log(admin, {
+              quotationId: quote.id,
+              jobId,
+              action: "work_order_unlinked",
+              status: "success",
+              recordId: estimateId,
+              message: `FSM would not link the work order to estimate ${quote.quote_number} ("waiting for approval"), so it was created without the link; the quotation number is in its summary`,
+              actorId,
+            });
+          }
+        }
         if (!created.ok) throw new SyncError(fsmReason(created.json, created.status), "work_order_create", created.json);
         workOrderId = String(created.json?.data?.Work_Orders?.[0]?.id ?? "");
         if (!workOrderId) throw new SyncError("FSM created the work order but sent no id back", "work_order_create", created.json);
@@ -379,7 +420,9 @@ async function syncJobOnce(
         status: "success",
         recordId: workOrderId,
         message: existing
-          ? `Work order ${record?.Name ?? workOrderId} found, linked to estimate ${quote.quote_number}`
+          ? estimateId && String(record?.Estimate?.id ?? "") === estimateId
+            ? `Work order ${record?.Name ?? workOrderId} found, linked to estimate ${quote.quote_number}`
+            : `Work order ${record?.Name ?? workOrderId} found for this job (not linked to estimate ${quote.quote_number})`
           : `Work order ${record?.Name ?? workOrderId} created in FSM${estimateId ? ` from estimate ${quote.quote_number}` : ""}`,
         actorId,
       });

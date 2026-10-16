@@ -56,7 +56,9 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       quotations' (estimates, numbers, revisions, status), and its client's
       that belong to no quotation or job (contact, company, addresses).
     */
-    const quoteIds = (quotes ?? []).map((q) => q.id as string);
+    // A de-snag quotation points at the job it de-snags through source_job_id, not job_id.
+    const { data: desnags } = await admin.from("snagging_quotations").select("id").eq("source_job_id", id);
+    const quoteIds = [...(quotes ?? []), ...(desnags ?? [])].map((q) => q.id as string);
     const clientId = (job as { client_id?: string | null }).client_id ?? null;
     const linked = [
       `job_id.eq.${id}`,
