@@ -799,6 +799,28 @@ export const snaggingService = {
     return payload.data;
   },
 
+  /**
+   * A report version's PDF, made in the browser in the report page's design:
+   * stored as the version's file and sent to the job's FSM work order. 409
+   * (thrown with `status`) while the job has no version yet.
+   */
+  uploadReportPdf: async (
+    taskId: string,
+    pdf: Blob,
+    fileName: string,
+    versionId?: string | null,
+  ): Promise<{ versionId: string; version: number }> => {
+    const form = new FormData();
+    form.append("file", pdf, fileName);
+    if (versionId) form.append("versionId", versionId);
+    const response = await fetch(`/api/snagging/tasks/${taskId}/report/pdf`, { method: "POST", body: form });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw Object.assign(new Error(payload?.error ?? "Could not store the report PDF"), { status: response.status });
+    }
+    return payload.data;
+  },
+
   getPricing: async (): Promise<SnaggingPricingConfig> =>
     executeRESTBackend<SnaggingPricingConfig>("/api/snagging/pricing", {
       method: "GET",
@@ -1233,6 +1255,12 @@ export const snaggingService = {
       method: "POST",
       body: input as unknown as Record<string, unknown>,
     }),
+
+  /** The job's report versions, with whether each has its PDF yet. */
+  listReportVersions: async (id: string) =>
+    executeRESTBackend<
+      Array<{ id: string; version: number; generation_status: string; pdf_url: string | null }>
+    >(`/api/snagging/tasks/${id}/report/versions`, { method: "GET" }),
 
   /** Renders a report version's PDF again, after a failed or stuck render. */
   retryReportVersion: async (id: string, versionId: string) =>

@@ -62,9 +62,11 @@ import {
   StatCard,
   StatCardGrid,
   SubmitButton,
+  formatLocalDate,
   formatLocalDateTime,
   useConfirm,
 } from "./shared";
+import { publishReportPdf } from "./report-publish";
 import { SnagWalkList } from "./snag-walk-list";
 import { VisitEditDialog } from "./visit-edit-dialog";
 import { VisitBodySkeleton } from "@/components/dashboard/snagging/route-skeletons";
@@ -255,15 +257,34 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
     });
     if (!ok) return;
 
-    if (outcome.generated?.status === "failed") {
+    if (outcome.generated?.status === "failed" || !outcome.generated) {
       toast.warning(`Visit ${visit.visit_number} approved`, {
         description: "The new report version could not be issued.",
       });
-    } else {
-      toast.success(`Visit ${visit.visit_number} approved`, {
-        description: outcome.generated
-          ? `Report version ${outcome.generated.version} is being generated.`
-          : undefined,
+      return;
+    }
+
+    /*
+      The new version's PDF, made here in the report page's design (the job's
+      report with this visit merged in) and saved as its file, which also puts
+      it on the Zoho FSM work order.
+    */
+    const keepOpen = "Keep this page open while the report is saved and sent to Zoho FSM.";
+    const progress = toast.loading(`Visit ${visit.visit_number} approved. Preparing report version ${outcome.generated.version}…`, {
+      description: keepOpen,
+    });
+    try {
+      await publishReportPdf(taskId, {
+        onStage: (stage) => toast.loading(`${stage}…`, { id: progress, description: keepOpen }),
+      });
+      toast.success(`Visit ${visit.visit_number} approved and report version ${outcome.generated.version} saved`, {
+        id: progress,
+        description: "It is attached to the Zoho FSM work order.",
+      });
+    } catch (error) {
+      toast.error(`Visit ${visit.visit_number} approved, but the report was not saved`, {
+        id: progress,
+        description: `${error instanceof Error ? error.message : "Something went wrong"}. Opening the job's report saves it.`,
       });
     }
   }
@@ -468,7 +489,9 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
                       detail.job?.building_name,
                       visit.appointment_at
                         ? formatLocalDateTime(visit.appointment_at)
-                        : visit.scheduled_date ?? "no date yet",
+                        : visit.scheduled_date
+                          ? formatLocalDate(visit.scheduled_date)
+                          : "no date yet",
                       // Everyone attending, not just the first of them.
                       visit.inspectors?.length
                         ? `${visit.inspectors.length === 1 ? "inspector" : "inspectors"} ${visit.inspectors

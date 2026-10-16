@@ -19,6 +19,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { snaggingService, type SnaggingJobFsm } from "@/modules/snagging";
 
 import { FsmEventList } from "./fsm-activity";
+import { publishReportPdf } from "./report-publish";
 import { SubmitButton, formatLocalDateTime } from "./shared";
 
 /**
@@ -86,17 +87,15 @@ export function FsmJobCard({
     setBusy("attach");
     const id = toast.loading("Preparing the report for FSM…");
     try {
-      // The whole report, as the report page loads it.
-      const [{ buildInspectionReportPdf }, task, quotation] = await Promise.all([
-        import("./report-pdf-download"),
-        snaggingService.getTask(taskId, {}, ["snags", "checklist", "floor_plans", "visit_status"]),
-        snaggingService.getQuotation(taskId).catch(() => null),
-      ]);
-      const { blob, filename } = await buildInspectionReportPdf(task, quotation);
-      toast.loading("Attaching it to the work order…", { id });
-      const result = await snaggingService.attachReportToFsm(taskId, blob, filename);
-      if (result.ok) toast.success(result.message, { id });
-      else toast.error(result.message, { id });
+      /*
+        The report page's PDF, saved as the report version's file -- the one
+        the client gets -- and sent to the work order from there, so FSM and
+        the client always hold the same document.
+      */
+      const saved = await publishReportPdf(taskId, {
+        onStage: (stage) => toast.loading(`${stage}…`, { id }),
+      });
+      toast.success(`Report version ${saved.version} saved and sent to the work order`, { id });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not attach the report", { id });
     } finally {

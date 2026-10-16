@@ -1,24 +1,22 @@
 import type { Metadata } from "next";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
-import { renderReportHtml } from "@/lib/server/snagging/report-html";
 import {
-  loadLinkedReport,
   recordReportOpen,
   validateReportToken,
   type ReportDenial,
 } from "@/lib/server/snagging/report-link";
-import { LocalDates } from "@/components/report/local-dates";
-import { ReportDownloadBar } from "@/components/report/report-download-bar";
-import { reportFileName } from "@/lib/snagging/report-file-name";
+import { loadReportTask } from "@/lib/server/snagging/report-task";
+import { ClientReportView } from "@/components/report/client-report-view";
+import { AMC_BRAND_IMAGES } from "@/components/dashboard/extensions/amc/templates/amc-doc/amc-doc-theme";
 
 /**
  * The client's report, at a secure link (FR-7.04, FR-7.05).
  *
- * Rendered on the server from the same `buildReportData()` the PDF is built
- * from, through the same template in `web` mode -- so the two cannot report
- * different totals, and the page is responsive rather than a fixed A4 sheet
- * scaled down on a phone.
+ * The job's report page, read-only: the same React component the portal's
+ * report page renders, on the same data, cut to what the client may see. So
+ * the page, its Download PDF and Word, the PDF on the Zoho FSM work order and
+ * the office's own copy are all one design.
  *
  * The token is the only credential. It is validated, checked for revocation
  * and expiry, and its open recorded before anything is rendered; an invalid
@@ -77,9 +75,12 @@ function DenialPage({ reason }: { reason: Denial }) {
           textAlign: "center",
         }}
       >
-        <div style={{ fontSize: 20, fontWeight: 800, color: "#8c1d24" }}>
-          Yalla Fix It
-        </div>
+        {/* eslint-disable-next-line @next/next/no-img-element -- static brand asset */}
+        <img
+          src={AMC_BRAND_IMAGES.logoTrimmed}
+          alt="Yalla Fix It Facility Management"
+          style={{ height: 56, width: "auto", margin: "0 auto", display: "block" }}
+        />
         <h1 style={{ fontSize: 20, margin: "16px 0 8px", color: "#17191b" }}>{title}</h1>
         <p style={{ margin: 0, color: "#5b5f63", lineHeight: 1.6, fontSize: 15 }}>
           {body}
@@ -105,39 +106,7 @@ export default async function PublicReportPage({
   // page still counts as having opened it.
   await recordReportOpen(admin, link);
 
-  const report = await loadLinkedReport(admin, link);
-  if (!report) return <DenialPage reason="invalid" />;
-
-  // Fragment: this is embedded in the app shell, so it carries its own
-  // styles but no second <html> document.
-  const html = renderReportHtml(report.data, {
-    mode: "web",
-    version: report.version,
-    reportType: report.reportType,
-    fragment: true,
-  });
-
-  /*
-    Always a Download PDF, and a Print (SNG-140). The stored PDF when this
-    version has one; otherwise the browser prints this same report's A4
-    layout to a file, so the client can always save what they are reading.
-  */
-  const place = [report.data.cover.project, report.data.cover.unit]
-    .filter(Boolean)
-    .join(", ");
-  return (
-    <>
-      <style>{"@media print { .report-download-bar { display: none !important; } }"}</style>
-      <div dangerouslySetInnerHTML={{ __html: html }} />
-      <div className="report-download-bar">
-        <ReportDownloadBar
-          documentUrl={`/report/${encodeURIComponent(token)}/document`}
-          pdfUrl={report.pdfUrl}
-          fileName={reportFileName(report.data.cover.unit, "pdf")}
-          place={place || null}
-        />
-      </div>
-      <LocalDates />
-    </>
-  );
+  const task = await loadReportTask(admin, link.job_id);
+  if (!task) return <DenialPage reason="invalid" />;
+  return <ClientReportView task={task} />;
 }

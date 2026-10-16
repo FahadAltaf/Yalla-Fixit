@@ -29,6 +29,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { snaggingService } from "@/modules/snagging";
+import { publishReportPdf } from "./report-publish";
 import { ActionType, ResourceType, type SnaggingTask } from "@/types/types";
 
 import { AdditionalVisitDialog } from "./additional-visit-dialog";
@@ -354,9 +355,34 @@ export function InspectionHeaderCard({
     });
     if (!ok) return;
 
-    toast.success(
-      "Inspection approved. Open the report to send it to the client.",
-    );
+    // A de-snag round issues no report of its own; nothing to make.
+    if (task.visit_type === "desnag") {
+      toast.success("Inspection approved. Open the report to send it to the client.");
+      return;
+    }
+
+    /*
+      The report's PDF, made here in the report page's design and saved as
+      the version's file, which also puts it on the Zoho FSM work order.
+      The server no longer renders its own copy, so this is the step that
+      gives the approved job its document.
+    */
+    const keepOpen = "Keep this page open while the report is saved and sent to Zoho FSM.";
+    const progress = toast.loading("Inspection approved. Preparing the report…", { description: keepOpen });
+    try {
+      await publishReportPdf(task.id, {
+        onStage: (stage) => toast.loading(`${stage}…`, { id: progress, description: keepOpen }),
+      });
+      toast.success("Inspection approved and the report saved", {
+        id: progress,
+        description: "It is attached to the Zoho FSM work order. Open the report to send it to the client.",
+      });
+    } catch (error) {
+      toast.error("Inspection approved, but the report was not saved", {
+        id: progress,
+        description: `${error instanceof Error ? error.message : "Something went wrong"}. Opening the report saves it.`,
+      });
+    }
   }
 
   /*

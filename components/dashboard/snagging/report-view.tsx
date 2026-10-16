@@ -37,9 +37,11 @@ import { Label } from "@/components/ui/label";
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
 import { useAuth } from "@/context/AuthContext";
 import { snaggingService, type SnaggingQuotation } from "@/modules/snagging";
-import { type SnaggingTask } from "@/types/types";
+import { hasResourceAction } from "@/lib/role-permissions";
+import { ActionType, ResourceType, type SnaggingTask } from "@/types/types";
 
 import { InspectionReport } from "./inspection-report";
+import { approvedOnly, publishReportPdf } from "./report-publish";
 import { ActionDialogContent, ErrorState, SubmitButton } from "./shared";
 import { ReportSkeleton } from "@/components/dashboard/snagging/route-skeletons";
 
@@ -106,6 +108,39 @@ export function ReportView({ taskId }: { taskId: string }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  /*
+    A version left without its PDF -- the approving manager closed the page
+    before it was saved -- gets one now, made from this page's own design,
+    saved as the version's file and sent to the Zoho FSM work order. Once
+    per visit to the page, by someone who may edit, on an approved job.
+  */
+  const published = useRef(false);
+  const canEdit = hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.EDIT);
+  useEffect(() => {
+    if (published.current || !task || !canEdit) return;
+    if (task.status !== "approved" && task.status !== "delivered") return;
+    published.current = true;
+    void (async () => {
+      try {
+        const versions = await snaggingService.listReportVersions(taskId);
+        const newest = [...(versions ?? [])].sort((a, b) => b.version - a.version)[0];
+        if (!newest || newest.generation_status === "generated") return;
+        const progress = toast.loading(`Saving report version ${newest.version}…`);
+        try {
+          await publishReportPdf(taskId, { versionId: newest.id });
+          toast.success(`Report version ${newest.version} saved and sent to Zoho FSM`, { id: progress });
+        } catch (err) {
+          toast.error(`Report version ${newest.version} was not saved`, {
+            id: progress,
+            description: err instanceof Error ? err.message : undefined,
+          });
+        }
+      } catch {
+        // No versions to read (older environment): nothing to fill in.
+      }
+    })();
+  }, [task, canEdit, taskId]);
 
   /*
     Delivering runs through the same guard as approving: the one person
@@ -409,31 +444,3 @@ export function ReportView({ taskId }: { taskId: string }) {
   );
 }
 
-/**
- * The job as the client's report may show it: without anything recorded
- * by a visit the manager has not approved.
- *
- * A submitted visit's snags, the room it added and its checklist answers
- * went straight into this preview -- and into the PDF downloaded from it
- * -- before anybody had reviewed them. The server-built report applies the
- * same rule (report-data.ts), so the preview and the delivered document
- * agree.
- */
-function approvedOnly(task: SnaggingTask): SnaggingTask {
-  const pending = new Set(task.unapproved_visit_ids ?? []);
-  if (pending.size === 0) return task;
-  const unapproved = (visitId?: string | null) =>
-    Boolean(visitId && pending.has(visitId));
-  return {
-    ...task,
-    snags: (task.snags ?? []).filter((snag) => !unapproved(snag.visit_id)),
-    areas: (task.areas ?? []).filter((area) => !unapproved(area.visit_id)),
-    // A visit answers an item the walk could not; until it is approved the
-    // report says what the walk did -- not checked.
-    checklist: (task.checklist ?? []).map((item) =>
-      unapproved(item.visit_id)
-        ? { ...item, status: "not_checked", reason: null }
-        : item,
-    ),
-  };
-}

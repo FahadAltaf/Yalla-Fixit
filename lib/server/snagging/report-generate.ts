@@ -33,6 +33,25 @@ function stripSignedUrl<T extends { url: string | null }>(photo: T): Omit<T, "ur
   return rest;
 }
 
+/** The report data a version keeps, with the expiring URLs taken out. */
+function snapshotOf(data: NonNullable<Awaited<ReturnType<typeof buildReportData>>>) {
+  return {
+    ...data,
+    areas: data.areas.map((area) => ({
+      ...area,
+      snags: area.snags.map((snag) => ({
+        ...snag,
+        photos: snag.photos.map(stripSignedUrl),
+      })),
+    })),
+    unassignedSnags: data.unassignedSnags.map((snag) => ({
+      ...snag,
+      photos: snag.photos.map(stripSignedUrl),
+    })),
+    signOff: { ...data.signOff, signatureUrl: null },
+  };
+}
+
 export type GenerateResult =
   | { ok: true; versionId: string; version: number; pdfPath: string; durationMs: number }
   | { ok: false; versionId: string | null; error: string };
@@ -133,21 +152,7 @@ export async function generateReportPdf(
       -- is kept, so a later catalogue edit or snag change cannot rewrite an
       issued report.
     */
-    const snapshot = {
-      ...data,
-      areas: data.areas.map((area) => ({
-        ...area,
-        snags: area.snags.map((snag) => ({
-          ...snag,
-          photos: snag.photos.map(stripSignedUrl),
-        })),
-      })),
-      unassignedSnags: data.unassignedSnags.map((snag) => ({
-        ...snag,
-        photos: snag.photos.map(stripSignedUrl),
-      })),
-      signOff: { ...data.signOff, signatureUrl: null },
-    };
+    const snapshot = snapshotOf(data);
 
     const totalMs = Date.now() - started;
     const { error: doneError } = await admin
@@ -221,6 +226,87 @@ export async function generateReportPdf(
     });
 
     console.error("Report generation failed:", version.job_id, message);
+    return { ok: false, versionId, error: message };
+  }
+}
+
+/**
+ * Stores a report PDF the browser made, as one version's document.
+ *
+ * The job's report page is the report's one design, and it exists only as a
+ * React component, so its PDF is made where that component runs: in the
+ * browser, exactly as Download makes it. The approving manager's browser
+ * builds it and hands it here (and so do the report page and the FSM card
+ * when a version has none yet). This keeps it as the version's file -- the
+ * one the FSM work order and the client receive -- with the same snapshot
+ * the server path kept, so the version still records what it said.
+ *
+ * Replaces the version's PDF if it already has one: the content is the
+ * version's own, only the rendering is the report page's.
+ */
+export async function storeReportPdf(
+  admin: Admin,
+  versionId: string,
+  pdf: Uint8Array,
+  options: { actorId?: string | null; actorLabel?: string | null } = {},
+): Promise<GenerateResult> {
+  const { data: version, error: loadError } = await admin
+    .from("snagging_report_versions")
+    .select("id, job_id, version, report_type")
+    .eq("id", versionId)
+    .maybeSingle();
+  if (loadError) return { ok: false, versionId, error: loadError.message };
+  if (!version) return { ok: false, versionId, error: "Report version not found" };
+
+  const scope: ReportScope =
+    version.report_type === "round"
+      ? "round"
+      : version.report_type === "cumulative"
+        ? "cumulative"
+        : "inspection";
+  const started = Date.now();
+  try {
+    const data = await buildReportData(admin, version.job_id, scope);
+    if (!data) throw new Error("The inspection behind this report no longer exists");
+
+    const path = pdfPathFor(version.job_id, version.version, version.report_type);
+    const { error: uploadError } = await admin.storage
+      .from(BUCKET)
+      .upload(path, pdf, { contentType: "application/pdf", upsert: true });
+    if (uploadError) throw new Error(`Could not store the PDF: ${uploadError.message}`);
+
+    const { error: doneError } = await admin
+      .from("snagging_report_versions")
+      .update({
+        generation_status: "generated",
+        generation_error: null,
+        generated_ms: Date.now() - started,
+        pdf_path: path,
+        snag_count: data.cover.totalSnags,
+        snapshot: snapshotOf(data),
+      })
+      .eq("id", versionId);
+    if (doneError) throw new Error(doneError.message);
+
+    await recordAudit(admin, {
+      entityType: "report",
+      entityId: versionId,
+      taskId: version.job_id,
+      eventType: "report_generated",
+      actorId: options.actorId ?? null,
+      actorLabel: options.actorLabel ?? "System",
+      origin: "portal",
+      payload: {
+        version: version.version,
+        report_type: version.report_type,
+        snags: data.cover.totalSnags,
+        source: "report page",
+      },
+    });
+    return { ok: true, versionId, version: version.version, pdfPath: path, durationMs: Date.now() - started };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "The report PDF could not be stored";
+    console.error("Report PDF store failed:", version.job_id, message);
     return { ok: false, versionId, error: message };
   }
 }

@@ -520,10 +520,16 @@ async function syncJobOnce(
 }
 
 /** Asks for the job's sync once the caller has its answer. A no-op when off. */
-export function queueJobFsmSync(admin: Admin, jobId: string, actorId?: string | null) {
+export function queueJobFsmSync(
+  admin: Admin,
+  jobId: string,
+  actorId?: string | null,
+  /** A report just stored for the job: attached even when its version is already on the work order. */
+  pdf?: { bytes: Uint8Array; version: number | null },
+) {
   if (!fsmSyncEnabled()) return;
   const run = () =>
-    syncJobToFsm(admin, jobId, { actorId }).catch((err) => console.error("FSM job sync failed:", err));
+    syncJobToFsm(admin, jobId, { actorId, pdf }).catch((err) => console.error("FSM job sync failed:", err));
   try {
     after(run);
   } catch {

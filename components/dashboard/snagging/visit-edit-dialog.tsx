@@ -85,7 +85,9 @@ export function VisitEditDialog({
             ? [visit.inspector_id]
             : [],
       );
-      setDate(split.date || visit.scheduled_date || "");
+      // scheduled_date is a timestamp column ("2026-10-18T00:00:00+00:00"); the
+      // picker and the API both take the date alone.
+      setDate(split.date || (visit.scheduled_date ?? "").slice(0, 10));
       setTime(split.time || "09:00");
       setNotes(visit.notes ?? "");
     }

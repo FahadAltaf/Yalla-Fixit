@@ -6,9 +6,7 @@ import { refuseUnlessApprovalManager } from "@/lib/server/snagging/decision-gate
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { loadJobFamily, readOnRoot } from "@/lib/server/snagging/job-family";
 import { signPaths } from "@/lib/server/snagging/media";
-import { generateReportPdf } from "@/lib/server/snagging/report-generate";
 import { issueReportVersion } from "@/lib/server/snagging/report-versions";
-import { queueJobFsmSync } from "@/lib/server/snagging/fsm-job-sync";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
@@ -200,25 +198,13 @@ export async function POST(
           .eq("generation_status", "generating");
       }
 
-      const result = await generateReportPdf(admin, body.versionId, {
-        force: true,
-        actorId: profile.id,
-        actorLabel: profile.full_name ?? profile.email,
-      });
-      // A regenerated report goes to the FSM work order too (SNG-189).
-      if (result.ok) queueJobFsmSync(admin, id, profile.id);
-      return NextResponse.json(
-        result.ok
-          ? {
-              data: {
-                status: "generated",
-                version: result.version,
-                duration_ms: result.durationMs,
-              },
-            }
-          : { error: result.error },
-        { status: result.ok ? 200 : 422 },
-      );
+      // The PDF is made in the browser, in the report page's design, and
+      // sent to /report/pdf (which also hands it to the FSM work order).
+      await admin
+        .from("snagging_report_versions")
+        .update({ generation_status: "pending", generation_error: null })
+        .eq("id", target.id);
+      return NextResponse.json({ data: { status: "pending", versionId: target.id } });
     }
 
     // FR-7.07 — a round or cumulative report for this job.
@@ -258,26 +244,10 @@ export async function POST(
       );
     }
 
-    const result = await generateReportPdf(admin, issued.id, {
-      actorId: profile.id,
-      actorLabel: profile.full_name ?? profile.email,
+    // Its PDF is made in the browser and sent to /report/pdf, as on approval.
+    return NextResponse.json({
+      data: { status: "pending", versionId: issued.id, version: issued.version, report_type: action },
     });
-    // The new version goes to the FSM work order too (SNG-189).
-    if (result.ok) queueJobFsmSync(admin, id, profile.id);
-
-    return NextResponse.json(
-      result.ok
-        ? {
-            data: {
-              status: "generated",
-              version: issued.version,
-              report_type: action,
-              duration_ms: result.durationMs,
-            },
-          }
-        : { error: result.error },
-      { status: result.ok ? 200 : 422 },
-    );
   } catch (error) {
     console.error("Report version POST error:", error);
     return NextResponse.json(
