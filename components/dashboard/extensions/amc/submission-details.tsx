@@ -456,7 +456,15 @@ export function SubmissionDetails({
   const sendable =
     onSend && submission.is_own !== false ? sendableDocument(submission) : null;
   const resend = sendable ? lastSentAt(submission, sendable) : null;
-  const stage = STAGE[submission.status] ?? { next: "", tone: "neutral" as const };
+  const baseStage = STAGE[submission.status] ?? { next: "", tone: "neutral" as const };
+  // Only the owner sends to the client: on somebody else's proposal, name who does.
+  const sender = submission.is_own === false ? submission.owner_name || "the owner" : null;
+  const stage =
+    sender && submission.status === "approved"
+      ? { ...baseStage, next: `Approved. ${sender} sends it to the client` }
+      : sender && submission.status === "proposal_approved"
+        ? { ...baseStage, next: `Client accepted. ${sender} sends the contract` }
+        : baseStage;
   const months = termMonths(form.startDate, form.endDate);
   /* Oldest first is how a trail is read; newest first is how it is
      checked. The job page offers both, so this does too. */

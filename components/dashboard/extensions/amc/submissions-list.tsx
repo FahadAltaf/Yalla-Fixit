@@ -60,7 +60,7 @@ import {
   type AmcSubmissionStatus,
 } from "./amc-types";
 
-type Scope = "all" | "mine";
+type Scope = "all" | "mine" | "others";
 
 function getErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error && error.message) {
@@ -85,7 +85,6 @@ export function SubmissionsList() {
   /* The current page's rows only; the server does the paging. */
   const [submissions, setSubmissions] = useState<AmcSubmission[]>([]);
   const [total, setTotal] = useState(0);
-  const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [canApprove, setCanApprove] = useState(false);
@@ -101,7 +100,7 @@ export function SubmissionsList() {
     : "all";
   const scopeParam = searchParams.get("scope");
   /* Approvers see everyone's submitted proposals as well as their own. */
-  const scope: Scope = scopeParam === "mine" ? "mine" : "all";
+  const scope: Scope = scopeParam === "mine" || scopeParam === "others" ? scopeParam : "all";
 
   /* A filter is a change of address, so Back and a reload keep it. */
   const setFilter = useCallback(
@@ -144,7 +143,6 @@ export function SubmissionsList() {
       if (mine !== ticket.current) return;
       setSubmissions(response.submissions);
       setTotal(response.totalCount ?? 0);
-      setStatusCounts(response.counts ?? {});
       /* FR3.2 — the server decides this from role_access; the list just
          reflects it, so approval rights are never inferred client-side. */
       setCanApprove(Boolean(response.canApprove));
@@ -485,19 +483,21 @@ export function SubmissionsList() {
                         <SelectContent>
                           <SelectItem value="all">All submissions</SelectItem>
                           <SelectItem value="mine">Mine only</SelectItem>
+                          {/* Raised by other people, for this approver to decide. */}
+                          <SelectItem value="others">Submitted by others</SelectItem>
                         </SelectContent>
                       </Select>
                     ) : null}
-                    {/* Where they stand, with how many are in each. */}
+                    {/* Where they stand. */}
                     <Select value={status} onValueChange={(value) => setFilter("status", value)}>
                       <SelectTrigger className="w-[200px]" aria-label="Filter by status">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="all">All statuses ({statusCounts.all ?? 0})</SelectItem>
+                        <SelectItem value="all">All statuses</SelectItem>
                         {AMC_STATUSES.map((value) => (
                           <SelectItem key={value} value={value}>
-                            {AMC_STATUS_LABELS[value]} ({statusCounts[value] ?? 0})
+                            {AMC_STATUS_LABELS[value]}
                           </SelectItem>
                         ))}
                       </SelectContent>

@@ -101,7 +101,6 @@ export default function QuotationsAdmin({
   const [pageSize, setPageSize] = useState(10);
   const [desnagOpen, setDesnagOpen] = useState(false);
   const [total, setTotal] = useState(initial?.totalCount ?? 0);
-  const [counts, setCounts] = useState<Record<string, number>>(initial?.counts ?? {});
   // Searched on the server, a moment after typing stops.
   const debouncedSearch = useDebounce(search.trim(), 300);
 
@@ -126,7 +125,6 @@ export default function QuotationsAdmin({
       if (mine !== ticket.current) return;
       setRows(result.data);
       setTotal(result.totalCount);
-      setCounts(result.counts ?? {});
     } catch (err) {
       if (mine !== ticket.current) return;
       setError(err instanceof Error ? err.message : "Could not load quotations");
@@ -150,16 +148,14 @@ export default function QuotationsAdmin({
     coordinator filters far more often than they search, and a count on
     each pill answers "how much is waiting" without applying the filter.
   */
-  const statusTabs = useMemo(() => {
-    const count = (value: string) => counts[value] ?? 0;
-    return [
-      { value: "all", label: "All", count: count("all") },
-      { value: "draft", label: "Draft", count: count("draft") },
-      { value: "sent", label: "Sent", count: count("sent") },
-      { value: "approved", label: "Approved", count: count("approved") },
-      { value: "rejected", label: "Rejected", count: count("rejected") },
-    ];
-  }, [counts]);
+  // The statuses alone, without a count beside each.
+  const statusTabs = [
+    { value: "all", label: "All" },
+    { value: "draft", label: "Draft" },
+    { value: "sent", label: "Sent" },
+    { value: "approved", label: "Approved" },
+    { value: "rejected", label: "Rejected" },
+  ];
 
   /* The whole point of the section: approved, and nobody has raised it yet. */
   const awaitingJob = useMemo(

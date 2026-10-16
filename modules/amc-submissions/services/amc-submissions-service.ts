@@ -69,7 +69,7 @@ export const amcSubmissionsService = {
   /* One page of the proposals list, filtered and searched on the server. */
   listSubmissions: async (filters: {
     status?: string;
-    scope?: "all" | "mine";
+    scope?: "all" | "mine" | "others";
     search?: string;
     page: number;
     pageSize: number;
@@ -80,7 +80,7 @@ export const amcSubmissionsService = {
         method: "GET",
         params: {
           ...(filters.status && filters.status !== "all" ? { status: filters.status } : {}),
-          ...(filters.scope === "mine" ? { scope: "mine" } : {}),
+          ...(filters.scope && filters.scope !== "all" ? { scope: filters.scope } : {}),
           ...(filters.search ? { search: filters.search } : {}),
           page: String(filters.page),
           pageSize: String(filters.pageSize),

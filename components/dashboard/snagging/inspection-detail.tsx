@@ -238,38 +238,27 @@ function InspectionDetailView() {
   }
 
   /*
-    The header row renders straight away, before any data: the way back,
-    and the Refresh control. It never waits on the job.
+    Refresh, in the header card's button row beside Report and the decision
+    buttons (the page has no separate top row: the breadcrumb is the way
+    back). When the job was last read is on hover.
   */
-  const toolbar = (
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <BackToJobs />
-      <div className="flex items-center gap-3">
-        {job.lastFetchedAt ? (
-          <span className="text-muted-foreground hidden text-xs sm:inline">
-            Updated {formatClock(job.lastFetchedAt)}
-          </span>
-        ) : null}
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => void refreshEverything()}
-          disabled={job.loading || refreshing}
-          aria-label="Refresh this job"
-        >
-          <RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />
-          <span className="hidden sm:inline">Refresh</span>
-        </Button>
-      </div>
-    </div>
+  const refreshButton = (
+    <Button
+      variant="outline"
+      onClick={() => void refreshEverything()}
+      disabled={job.loading || refreshing}
+      aria-label="Refresh this job"
+      title={job.lastFetchedAt ? `Updated ${formatClock(job.lastFetchedAt)}` : undefined}
+    >
+      <RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />
+      Refresh
+    </Button>
   );
 
   // The job has not arrived yet: the shape of the page, not a spinner.
   if (!task && job.loading) {
     return (
       <div className="flex flex-col gap-4">
-        {toolbar}
-        {visitList.length > 0 ? <VisitActivityAlerts taskId={taskId} visits={visitList} /> : null}
         <JobTabsSkeleton tab={tab} />
       </div>
     );
@@ -278,7 +267,6 @@ function InspectionDetailView() {
   if (!task && job.error) {
     return (
       <div className="flex flex-col gap-4">
-        {toolbar}
         <ErrorState
           title="Could not load this inspection"
           message={job.error}
@@ -327,14 +315,22 @@ function InspectionDetailView() {
 
   return (
     <div className="flex flex-col gap-4">
-      {toolbar}
-
       {/*
-        Above the tabs, so it is read whichever tab the job opens on: a
-        visit waiting for review is the most urgent thing on the page.
-        Drawn from the visits alone, so it appears as soon as they do.
+        The job at a glance and what can be done with it, above the tabs as
+        on the AMC proposal page, so the title, status and decision buttons
+        stay put whichever tab is open. Any live additional visit says where
+        it stands in a band along the card's bottom edge -- the most urgent
+        thing on the page, read before any tab.
       */}
-      <VisitActivityAlerts taskId={task.id} visits={visitList} />
+      <InspectionHeaderCard
+        task={task}
+        part="header"
+        onChanged={jobChanged}
+        onVisitsChanged={visitsChanged}
+        pending={{ snags: snags.data === null, desnag: desnag.lastFetchedAt === null }}
+        notice={<VisitActivityAlerts taskId={task.id} visits={visitList} variant="band" />}
+        actions={refreshButton}
+      />
 
       <Tabs value={activeTab} onValueChange={setTab}>
         {/* Wraps onto a second line on a narrow screen rather than
@@ -410,10 +406,10 @@ function InspectionDetailView() {
                 }, 120);
               }}
             />
-            {/* The counts and the Approve / Send back decision sit with
-                the snags they are about. */}
+            {/* The four figures sit with the snags they count. */}
             <InspectionHeaderCard
               task={task}
+              part="stats"
               onChanged={jobChanged}
               onVisitsChanged={visitsChanged}
               pending={{ snags: snags.data === null, desnag: desnag.lastFetchedAt === null }}

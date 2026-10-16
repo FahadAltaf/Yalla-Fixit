@@ -131,13 +131,26 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
       it, which stays open the same way while this runs.
     */
     if (action === "approve") {
+      /*
+        Only the proposal's owner sends it to the client, so approving
+        somebody else's says who does rather than promising a Send button
+        the approver will not have.
+      */
+      const sender =
+        submission.is_own === false ? (submission.owner_name || "The owner") : null;
       const done = await confirm({
         title: "Approve this proposal?",
-        description: `${submission.customer.customerName || "This proposal"}${submission.customer.proposalNumber ? ` (${submission.customer.proposalNumber})` : ""} will be approved and can then be sent to the client. It can't be edited after this.`,
+        description: `${submission.customer.customerName || "This proposal"}${submission.customer.proposalNumber ? ` (${submission.customer.proposalNumber})` : ""} will be approved and can then be sent to the client${sender ? ` by ${sender}` : ""}. It can't be edited after this.`,
         confirmText: "Approve",
         action: run,
       });
-      if (done) toast.success("Approved. You can now send it to the client.");
+      if (done) {
+        toast.success(
+          sender
+            ? `Approved. ${sender} can now send it to the client.`
+            : "Approved. You can now send it to the client.",
+        );
+      }
       return;
     }
 

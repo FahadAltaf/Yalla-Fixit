@@ -543,9 +543,6 @@ export interface AmcSubmissionListResponse {
   submissions: AmcSubmission[];
   /* Every proposal matching the filters and search, across all pages. */
   totalCount: number;
-  /* How many match in each status (and "all"), ignoring the status
-     filter itself, for the status picker's counts. */
-  counts?: Record<string, number>;
   /* FR3.2 — set when the caller holds amc/approve, so the list can show
      the review queue as well as their own submissions. */
   canApprove?: boolean;

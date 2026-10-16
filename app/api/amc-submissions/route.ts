@@ -314,6 +314,8 @@ export async function GET(req: NextRequest) {
     ? (statusParam as AmcSubmissionStatus)
     : null;
   const mineOnly = params.get("scope") === "mine";
+  // An approver's "Submitted by others": the proposals they decide on.
+  const othersOnly = params.get("scope") === "others";
   const term = likeTerm(params.get("search"));
 
   /* FR5.3: the approvers chosen in AMC Settings, or the role permission
@@ -331,8 +333,20 @@ export async function GET(req: NextRequest) {
     else's once it has left draft. Null means "only mine", applied as a
     plain equality rather than an `or`.
   */
+  const reviewing = canApprove && othersOnly;
   const visibilityClauses =
-    canApprove && !mineOnly ? [`owner_id.eq.${profile.id}`, "status.neq.draft"] : null;
+    canApprove && !mineOnly && !reviewing ? [`owner_id.eq.${profile.id}`, "status.neq.draft"] : null;
+  /*
+    Which rows, before the search: anyone's past draft plus mine (the or
+    above), only mine, or -- for an approver's "Submitted by others" --
+    everyone else's that has left draft.
+  */
+  const scoped = <Q extends { eq: (c: string, v: string) => Q; neq: (c: string, v: string) => Q }>(query: Q): Q =>
+    reviewing
+      ? query.neq("owner_id", profile.id).neq("status", "draft")
+      : visibilityClauses
+        ? query
+        : query.eq("owner_id", profile.id);
 
   /*
     The search box: the customer, the proposal number, the address -- and,
@@ -392,42 +406,11 @@ export async function GET(req: NextRequest) {
     .order("created_at", { ascending: false })
     .order("id")
     .range(from, to);
-  if (!visibilityClauses) pageQuery = pageQuery.eq("owner_id", profile.id);
+  pageQuery = scoped(pageQuery);
   if (orFilter) pageQuery = pageQuery.or(orFilter);
   if (status) pageQuery = pageQuery.eq("status", status);
 
-  /*
-    How many proposals sit in each status, for the status filter's counts.
-    They follow the scope and the search but not the status picked, so the
-    other options still say how many they would show.
-  */
-  const countFor = async (value: AmcSubmissionStatus | null) => {
-    let counter = admin
-      .from("amc_submissions")
-      .select("id", { count: "exact", head: true });
-    if (!visibilityClauses) counter = counter.eq("owner_id", profile.id);
-    if (orFilter) counter = counter.or(orFilter);
-    if (value) counter = counter.eq("status", value);
-    const { count, error: countError } = await counter;
-    if (countError) throw new Error(countError.message);
-    return count ?? 0;
-  };
-
-  let results;
-  try {
-    results = await Promise.all([
-      pageQuery,
-      countFor(null),
-      ...AMC_STATUSES.map((value) => countFor(value)),
-    ]);
-  } catch (countError) {
-    return NextResponse.json(
-      { error: countError instanceof Error ? countError.message : "Could not count proposals" },
-      { status: 500 },
-    );
-  }
-
-  const [{ data, error, count }, all, ...byStatus] = results;
+  const { data, error, count } = await pageQuery;
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
@@ -457,10 +440,6 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     submissions,
     totalCount: count ?? 0,
-    counts: {
-      all,
-      ...Object.fromEntries(AMC_STATUSES.map((value, i) => [value, byStatus[i]])),
-    } as Record<string, number>,
     canApprove,
   });
 }
