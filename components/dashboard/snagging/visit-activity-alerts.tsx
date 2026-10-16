@@ -44,9 +44,15 @@ type VisitNotice = {
 export function VisitActivityAlerts({
   taskId,
   visits,
+  variant = "alerts",
 }: {
   taskId: string;
   visits: SnaggingJobVisit[];
+  /**
+   * "band": each notice as a strip along the bottom of the card it sits in
+   * (the job header), like the AMC proposal's "Waiting for your decision".
+   */
+  variant?: "alerts" | "band";
 }) {
   const notices = visits
     .map((visit) => describe(taskId, visit))
@@ -54,6 +60,42 @@ export function VisitActivityAlerts({
     .sort((a, b) => a.rank - b.rank || a.visit.visit_number - b.visit.visit_number);
 
   if (notices.length === 0) return null;
+
+  if (variant === "band") {
+    return (
+      <>
+        {notices.map((notice) => {
+          const Icon = notice.icon;
+          return (
+            <div
+              key={notice.visit.id}
+              className={cn(
+                "flex flex-wrap items-center justify-between gap-3 border-t px-5 py-3",
+                notice.tone === "action" ? "border-warning/30 bg-warning/5" : "bg-muted/30",
+              )}
+            >
+              <div className="flex min-w-0 items-start gap-3">
+                <Icon
+                  className={cn(
+                    "mt-0.5 size-4 shrink-0",
+                    notice.tone === "action" ? "text-warning" : "text-muted-foreground",
+                  )}
+                  aria-hidden
+                />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">{notice.title}</p>
+                  <p className="text-muted-foreground mt-0.5 text-sm">{notice.body}</p>
+                </div>
+              </div>
+              <Button asChild size="sm" variant={notice.tone === "action" ? "default" : "outline"}>
+                <Link href={notice.cta.href}>{notice.cta.label}</Link>
+              </Button>
+            </div>
+          );
+        })}
+      </>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-3">

@@ -5,6 +5,12 @@ import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { signPaths } from "@/lib/server/snagging/media";
 import { propertyColumns } from "@/lib/server/snagging/property";
+import {
+  fsmClientsReady,
+  fsmOnlyAddresses,
+  queuePropertyEditToFsm,
+  queuePropertyToFsm,
+} from "@/lib/server/snagging/fsm-clients";
 import { propertyUpsertSchema } from "@/modules/snagging/schemas";
 import { ActionType, ResourceType } from "@/types/types";
 
@@ -34,11 +40,14 @@ export async function GET(req: NextRequest) {
     const clientId = req.nextUrl.searchParams.get("client_id");
     const id = req.nextUrl.searchParams.get("id");
     const admin = await createAdminServerClient();
+    // The link to the Zoho FSM address, once its migration is in.
+    const fsmReady = await fsmClientsReady(admin);
+    const select = fsmReady ? `${SELECT}, fsm_address_id` : SELECT;
 
     if (id) {
       const { data, error } = await admin
         .from("snagging_properties")
-        .select(SELECT)
+        .select(select)
         .eq("id", id)
         .maybeSingle();
       if (error) throw new Error(error.message);
@@ -50,7 +59,7 @@ export async function GET(req: NextRequest) {
     // was never twice in the same place.
     let query = admin
       .from("snagging_properties")
-      .select(SELECT)
+      .select(select)
       .order("created_at", { ascending: false })
       .limit(200);
     if (clientId) query = query.eq("client_id", clientId);
@@ -71,12 +80,32 @@ export async function GET(req: NextRequest) {
       .flatMap((row) => [row.title_deed_path, row.noc_path])
       .filter((path): path is string => Boolean(path));
     const signed = await signPaths(admin, paths);
+
+    /*
+      The client's addresses in Zoho FSM that the portal has no row for yet
+      follow its own (Sami: "if client and address exist on Zoho they should
+      be selectable"). Each has an "fsm:" id; picking one makes its row.
+    */
+    const fsm = fsmReady
+      ? await fsmOnlyAddresses(
+          admin,
+          clientId,
+          new Set(rows.map((row) => row.fsm_address_id as string | null).filter((v): v is string => Boolean(v))),
+        )
+      : { rows: [], error: null };
+
     return NextResponse.json({
-      data: rows.map((row) => ({
-        ...row,
-        title_deed_url: row.title_deed_path ? (signed.get(row.title_deed_path) ?? null) : null,
-        noc_url: row.noc_path ? (signed.get(row.noc_path) ?? null) : null,
-      })),
+      data: [
+        ...rows.map((row) => ({
+          ...row,
+          source: "portal",
+          title_deed_url: row.title_deed_path ? (signed.get(row.title_deed_path) ?? null) : null,
+          noc_url: row.noc_path ? (signed.get(row.noc_path) ?? null) : null,
+        })),
+        ...fsm.rows,
+      ],
+      totalCount: rows.length + fsm.rows.length,
+      fsmError: fsm.error,
     });
   } catch (error) {
     console.error("Snagging properties GET error:", error);
@@ -115,6 +144,8 @@ export async function POST(req: NextRequest) {
       .select(SELECT)
       .single();
     if (error) throw new Error(error.message);
+    // Added to the client's contact in Zoho FSM too, once this has answered.
+    queuePropertyToFsm(admin, (data as unknown as { id: string }).id, profile.id);
     return NextResponse.json({ data }, { status: 201 });
   } catch (error) {
     console.error("Snagging properties POST error:", error);
@@ -166,6 +197,8 @@ export async function PATCH(req: NextRequest) {
       .select(SELECT)
       .single();
     if (error) throw new Error(error.message);
+    // The address in Zoho FSM follows the edit (line and map pin).
+    queuePropertyEditToFsm(admin, id, profile.id);
     return NextResponse.json({ data });
   } catch (error) {
     console.error("Snagging properties PATCH error:", error);

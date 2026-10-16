@@ -89,6 +89,12 @@ interface DataTableProps<TData, TValue> {
    * here and offer the action that fills it.
    */
   emptyState?: React.ReactNode;
+  /**
+   * For a source that gives no total (Zoho FSM): whether there is a page
+   * after this one. When set, rowCount is ignored, the footer reads
+   * "Showing 11 to 20" without "of N", and Next follows this.
+   */
+  hasMore?: boolean;
 }
 
 export function DataTable<TData, TValue>({
@@ -104,7 +110,13 @@ export function DataTable<TData, TValue>({
   isPagination,
   emptyState,
   handleRowClick,
+  hasMore,
 }: DataTableProps<TData, TValue>) {
+  const openEnded = hasMore !== undefined;
+  // Without a total, the pages known are those up to this one, and the next if there is one.
+  const knownRows = openEnded
+    ? currentPage * pageSize + data.length + (hasMore ? 1 : 0)
+    : rowCount;
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [sortingState, setSortingState] = useState<SortingState>([]);
 
@@ -142,7 +154,7 @@ export function DataTable<TData, TValue>({
     enableSortingRemoval: false,
   });
 
-  const totalPages = rowCount > 0 ? Math.ceil(rowCount / pageSize) : 0;
+  const totalPages = knownRows > 0 ? Math.ceil(knownRows / pageSize) : 0;
   const { pages, showLeftEllipsis, showRightEllipsis } = usePagination({
     currentPage: currentPage + 1,
     totalPages,
@@ -162,12 +174,23 @@ export function DataTable<TData, TValue>({
     showRightEllipsis && !showLastPageSeparately;
   const adjustedShowLeftEllipsis = showLeftEllipsis && !showFirstPageSeparately;
 
-  const pageStart = rowCount === 0 ? 0 : currentPage * pageSize + 1;
-  const pageEnd =
-    rowCount === 0 ? 0 : Math.min((currentPage + 1) * pageSize, rowCount);
+  const pageStart = openEnded
+    ? data.length === 0
+      ? 0
+      : currentPage * pageSize + 1
+    : rowCount === 0
+      ? 0
+      : currentPage * pageSize + 1;
+  const pageEnd = openEnded
+    ? currentPage * pageSize + data.length
+    : rowCount === 0
+      ? 0
+      : Math.min((currentPage + 1) * pageSize, rowCount);
 
   const canGoPrevious = currentPage > 0;
-  const canGoNext = totalPages > 0 && currentPage < totalPages - 1;
+  const canGoNext = openEnded
+    ? Boolean(hasMore)
+    : totalPages > 0 && currentPage < totalPages - 1;
 
   return (
     <div className="w-full">
@@ -311,7 +334,9 @@ export function DataTable<TData, TValue>({
                   <TableCell
                     colSpan={columns.length}
                     className={cn(
-                      emptyState ? "p-0" : "h-24 text-center"
+                      // A table cell does not wrap by default; an empty state's
+                      // sentence must, or it runs past the table off-centre.
+                      emptyState ? "p-0 whitespace-normal" : "h-24 text-center"
                     )}
                   >
                     {emptyState ?? "No results."}
@@ -331,8 +356,13 @@ export function DataTable<TData, TValue>({
           Showing{" "}
           <span>
             {pageStart} to {pageEnd}
-          </span>{" "}
-          of <span>{rowCount.toString()} entries</span>
+          </span>
+          {openEnded ? null : (
+            <>
+              {" "}
+              of <span>{rowCount.toString()} entries</span>
+            </>
+          )}
         </p>
 
         <div>

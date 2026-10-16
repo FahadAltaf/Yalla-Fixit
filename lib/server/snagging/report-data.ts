@@ -682,7 +682,10 @@ export async function buildReportData(
       address:
         [job.building_name, job.community, "Dubai"].filter(Boolean).join(", ") ||
         null,
-      propertyType: job.property_type ?? null,
+      // "apartment" -> "Apartment", as the PDF and Word reports show it.
+      propertyType: job.property_type
+        ? String(job.property_type).charAt(0).toUpperCase() + String(job.property_type).slice(1)
+        : null,
       client: {
         name: client?.name ?? null,
         email: client?.email ?? null,

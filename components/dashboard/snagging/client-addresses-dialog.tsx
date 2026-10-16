@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Building2,
   Download,
+  Loader2,
   FileText,
   MapPin,
   Pencil,
@@ -34,6 +35,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Hint } from "@/components/ui/hint";
 import { compressImage } from "@/lib/media/compress-image";
 import { cn } from "@/lib/utils";
 import { snaggingService, type SnaggingClientOption } from "@/modules/snagging";
@@ -81,6 +83,10 @@ export function ClientAddressesDialog({
   const [error, setError] = useState<string | null>(null);
   /** The address in the form: a saved one, "new", or none (the list). */
   const [editing, setEditing] = useState<SnaggingProperty | "new" | null>(null);
+  /** Set when Zoho FSM could not be read: the list then holds the portal's rows only. */
+  const [fsmError, setFsmError] = useState<string | null>(null);
+  /** The FSM address being saved to the portal before its form opens. */
+  const [linking, setLinking] = useState<string | null>(null);
 
   // A clean list whenever another client opens.
   const [shownFor, setShownFor] = useState<string | null>(null);
@@ -88,6 +94,7 @@ export function ClientAddressesDialog({
     setShownFor(clientId);
     setRows([]);
     setError(null);
+    setFsmError(null);
     setEditing(null);
     setLoading(Boolean(clientId));
   }
@@ -97,7 +104,9 @@ export function ClientAddressesDialog({
     setLoading(true);
     setError(null);
     try {
-      setRows(await snaggingService.listProperties(clientId));
+      const result = await snaggingService.listClientAddresses(clientId);
+      setRows(result.data);
+      setFsmError(result.fsmError);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Could not load the addresses",
@@ -111,6 +120,32 @@ export function ClientAddressesDialog({
     void load();
   }, [load]);
 
+  /*
+    An address that is only in Zoho FSM has no portal row yet, and the form
+    edits a portal row (with its size, pin and paperwork). It is saved to
+    the portal first, linked to the FSM address, then opened.
+  */
+  async function openRow(row: SnaggingProperty) {
+    if (row.source !== "fsm" || !clientId) {
+      setEditing(row);
+      return;
+    }
+    setLinking(row.id);
+    try {
+      const linked = await snaggingService.linkFsmAddress(
+        clientId,
+        row.fsm_address_id ?? row.id.replace(/^fsm:/, ""),
+      );
+      setRows((current) => current.map((r) => (r.id === row.id ? { ...linked, source: "portal" } : r)));
+      setEditing(linked);
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not open that address");
+    } finally {
+      setLinking(null);
+    }
+  }
+
   return (
     <Dialog open={client !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
@@ -122,8 +157,9 @@ export function ClientAddressesDialog({
             {client?.client_name ?? "Client"} · addresses
           </DialogTitle>
           <DialogDescription>
-            The units this client has on file. Picking the client on a quotation
-            or a job fills in the newest one, so it is not typed again.
+            The units this client has on file, here and in Zoho FSM. Picking the
+            client on a quotation or a job fills in the newest one, so it is not
+            typed again. A new address is added in Zoho FSM too.
           </DialogDescription>
         </DialogHeader>
 
@@ -167,6 +203,12 @@ export function ClientAddressesDialog({
             </div>
           ) : (
             <div className="space-y-4">
+              {fsmError ? (
+                <p className="bg-warning/10 text-warning rounded-md px-3 py-2 text-sm">
+                  Zoho FSM could not be read, so only the addresses saved in the portal are
+                  shown. {fsmError}
+                </p>
+              ) : null}
               {rows.length === 0 ? (
                 <EmptyState
                   icon={<MapPin />}
@@ -184,16 +226,22 @@ export function ClientAddressesDialog({
                       subtitle={<AddressSummary row={row} />}
                       trailing={
                         canEdit ? (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="size-8"
-                            onClick={() => setEditing(row)}
-                            aria-label={`Edit ${addressTitle(row)}`}
-                            title="Edit address"
-                          >
-                            <Pencil className="size-4" />
-                          </Button>
+                          <Hint label={row.source === "fsm" ? "Add details (size, pin, documents)" : "Edit address"}>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-8"
+                              disabled={linking !== null}
+                              onClick={() => void openRow(row)}
+                              aria-label={`Edit ${addressTitle(row)}`}
+                            >
+                              {linking === row.id ? (
+                                <Loader2 className="size-4 animate-spin" />
+                              ) : (
+                                <Pencil className="size-4" />
+                              )}
+                            </Button>
+                          </Hint>
                         ) : null
                       }
                     />
@@ -217,6 +265,8 @@ export function ClientAddressesDialog({
 
 /** "Unit 1904, Riviera Tower 3": the line a coordinator recognises the unit by. */
 function addressTitle(row: SnaggingProperty): string {
+  // An FSM-only address reads as FSM writes it, "DAMAC MERANO TOWER, 601".
+  if (row.source === "fsm" && row.fsm_address_label) return row.fsm_address_label;
   return (
     [row.unit_label, row.building_name].filter(Boolean).join(", ") ||
     "Unnamed unit"
@@ -251,11 +301,28 @@ function AddressSummary({ row }: { row: SnaggingProperty }) {
   ].filter(Boolean);
   const pinned = row.location_lat != null && row.location_lng != null;
 
+  // Only in FSM so far: it has a line and a pin, none of the portal's details yet.
+  if (row.source === "fsm") {
+    return (
+      <span className="block space-y-1.5 whitespace-normal">
+        {row.community ? <span className="block">{row.community}</span> : null}
+        <span className="flex flex-wrap gap-1.5">
+          <Tag on>Zoho FSM{row.fsm_address_code ? ` · ${row.fsm_address_code}` : ""}</Tag>
+          <Tag on={pinned}>{pinned ? "Location pinned" : "No location pin"}</Tag>
+          <Tag>Size and documents not added yet</Tag>
+        </span>
+      </span>
+    );
+  }
+
   return (
     // The row's subtitle is one truncated line by default; this one wraps.
     <span className="block space-y-1.5 whitespace-normal">
       <span className="block">{facts.join(" · ")}</span>
       <span className="flex flex-wrap gap-1.5">
+        {row.fsm_address_id ? (
+          <Tag on>{row.fsm_address_id.startsWith("pending:") ? "Adding to Zoho FSM…" : "In Zoho FSM"}</Tag>
+        ) : null}
         <Tag on={pinned}>{pinned ? "Location pinned" : "No location pin"}</Tag>
         {row.external_areas_in_scope ? (
           <Tag on>External areas in scope</Tag>
@@ -770,17 +837,18 @@ function DocumentRow({
             </Button>
           ) : null}
           {file ? (
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              className="size-8"
-              onClick={() => onPick(null)}
-              aria-label={`Remove the chosen ${label.toLowerCase()}`}
-              title="Remove"
-            >
-              <X className="size-4" />
-            </Button>
+            <Hint label="Remove">
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="size-8"
+                onClick={() => onPick(null)}
+                aria-label={`Remove the chosen ${label.toLowerCase()}`}
+              >
+                <X className="size-4" />
+              </Button>
+            </Hint>
           ) : null}
           <Button
             type="button"

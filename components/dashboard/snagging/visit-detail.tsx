@@ -1,11 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
+  ChevronDown,
+  Mail,
+  MessageCircle,
+  Send,
   CalendarCheck,
   Check,
   ClipboardList,
@@ -24,6 +28,12 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
@@ -52,9 +62,11 @@ import {
   StatCard,
   StatCardGrid,
   SubmitButton,
+  formatLocalDate,
   formatLocalDateTime,
   useConfirm,
 } from "./shared";
+import { publishReportPdf } from "./report-publish";
 import { SnagWalkList } from "./snag-walk-list";
 import { VisitEditDialog } from "./visit-edit-dialog";
 import { VisitBodySkeleton } from "@/components/dashboard/snagging/route-skeletons";
@@ -140,6 +152,8 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
   // the app lands on this visit's quotation rather than a separate page.
   const params = useSearchParams();
   const [tab, setTab] = useState(params.get("tab") ?? "snags");
+  /* The header's Share, handed to the quotation panel that does the work. */
+  const [shareRequest, setShareRequest] = useState<{ method: "whatsapp" | "email"; at: number } | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -147,7 +161,8 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
       const [visitDetail, job] = await Promise.all([
         snaggingService.getVisit(taskId, visitId),
         // The snag list's sections; not visit status or the de-snag quotation.
-        snaggingService.getTask(taskId, {}, ["snags", "checklist", "floor_plans"]),
+        // The snags light: the counts read them, the list pages on its own.
+        snaggingService.getTask(taskId, {}, ["snag_summary", "checklist", "floor_plans"]),
       ]);
       setDetail(visitDetail);
       setTask(job);
@@ -242,15 +257,34 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
     });
     if (!ok) return;
 
-    if (outcome.generated?.status === "failed") {
+    if (outcome.generated?.status === "failed" || !outcome.generated) {
       toast.warning(`Visit ${visit.visit_number} approved`, {
         description: "The new report version could not be issued.",
       });
-    } else {
-      toast.success(`Visit ${visit.visit_number} approved`, {
-        description: outcome.generated
-          ? `Report version ${outcome.generated.version} is being generated.`
-          : undefined,
+      return;
+    }
+
+    /*
+      The new version's PDF, made here in the report page's design (the job's
+      report with this visit merged in) and saved as its file, which also puts
+      it on the Zoho FSM work order.
+    */
+    const keepOpen = "Keep this page open while the report is saved and sent to Zoho FSM.";
+    const progress = toast.loading(`Visit ${visit.visit_number} approved. Preparing report version ${outcome.generated.version}…`, {
+      description: keepOpen,
+    });
+    try {
+      await publishReportPdf(taskId, {
+        onStage: (stage) => toast.loading(`${stage}…`, { id: progress, description: keepOpen }),
+      });
+      toast.success(`Visit ${visit.visit_number} approved and report version ${outcome.generated.version} saved`, {
+        id: progress,
+        description: "It is attached to the Zoho FSM work order.",
+      });
+    } catch (error) {
+      toast.error(`Visit ${visit.visit_number} approved, but the report was not saved`, {
+        id: progress,
+        description: `${error instanceof Error ? error.message : "Something went wrong"}. Opening the job's report saves it.`,
       });
     }
   }
@@ -318,11 +352,35 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
       );
     }
     if (byQuote && quote && (quote.status === "draft" || quote.status === "sent")) {
+      /*
+        Share, as on the quotation page: WhatsApp or email, straight from
+        the header. The Quotation tab opens with it, so the document being
+        shared is on screen while it goes.
+      */
+      const share = (method: "whatsapp" | "email") => {
+        setTab("quotation");
+        setShareRequest({ method, at: Date.now() });
+      };
       return (
-        <Button onClick={() => setTab("quotation")}>
-          <FileText className="size-4" />
-          {quote.status === "draft" ? "Send quotation" : "View quotation"}
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button>
+              <Send className="size-4" />
+              {quote.status === "sent" ? "Share again" : "Share"}
+              <ChevronDown className="size-3.5" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => share("whatsapp")}>
+              <MessageCircle className="size-4" />
+              Share on WhatsApp
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => share("email")}>
+              <Mail className="size-4" />
+              {quote.status === "sent" ? "Resend by email" : "Send by email"}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       );
     }
     /*
@@ -364,9 +422,14 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
     list shows only what the return trip added, which is what this page
     is about.
   */
-  const visitTask: SnaggingTask | null = task
-    ? { ...task, snags: (task.snags ?? []).filter((snag) => snag.visit_id === visitId) }
-    : null;
+  // Memoised: the snag list reads again whenever its snags change identity.
+  const visitTask: SnaggingTask | null = useMemo(
+    () =>
+      task
+        ? { ...task, snags: (task.snags ?? []).filter((snag) => snag.visit_id === visitId) }
+        : null,
+    [task, visitId],
+  );
 
   const snags = detail?.snags ?? [];
   const highCount = snags.filter((snag) => snag.severity === "high").length;
@@ -426,7 +489,9 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
                       detail.job?.building_name,
                       visit.appointment_at
                         ? formatLocalDateTime(visit.appointment_at)
-                        : visit.scheduled_date ?? "no date yet",
+                        : visit.scheduled_date
+                          ? formatLocalDate(visit.scheduled_date)
+                          : "no date yet",
                       // Everyone attending, not just the first of them.
                       visit.inspectors?.length
                         ? `${visit.inspectors.length === 1 ? "inspector" : "inspectors"} ${visit.inspectors
@@ -587,6 +652,7 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
                 {visitTask ? (
                   <SnagWalkList
                     task={visitTask}
+                    visitId={visitId}
                     canEdit={canEdit}
                     onSnagsChanged={() => void load()}
                     onAreasChanged={() => void load()}
@@ -658,6 +724,9 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
                     quotationId={quote.id}
                     visitNumber={visit.visit_number}
                     onChanged={load}
+                    // Share is in the header; the tab is the document alone.
+                    hideActions
+                    shareRequest={shareRequest}
                   />
                 ) : (
                   <SectionCard

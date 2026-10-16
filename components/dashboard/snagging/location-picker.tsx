@@ -6,25 +6,37 @@ import { Crosshair, Loader2, MapPin, Search, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  GOOGLE_MAPS_BROWSER_KEY,
+  loadGoogleMaps,
+  type GoogleMap,
+  type GoogleMapsApi,
+  type GoogleMarker,
+} from "@/lib/google-maps-loader";
 import { cn } from "@/lib/utils";
 
 /**
- * Click-to-place location picker on OpenStreetMap tiles.
+ * Click-to-place location picker.
  *
- * Leaflet is loaded on demand rather than imported at the top: it
- * touches `window` on import, so pulling it into the module graph would
- * break the server render of any page the wizard sits on. It is also a
- * few hundred kilobytes that only matters on one step of one form.
+ * On Google Maps whenever the portal has a Google Maps key (the team asked
+ * for Google's map everywhere a map is shown), with search through Google's
+ * geocoder. Without a key it falls back to Leaflet on OpenStreetMap tiles
+ * and Nominatim search, so a local checkout with no key still works.
  *
- * Search goes through Nominatim, which is free and needs no key, but is
- * rate-limited and asks callers not to hammer it — so it only runs when
- * the coordinator submits the box, never per keystroke.
+ * Both map libraries load on demand rather than at the top: Leaflet touches
+ * `window` on import, and either one would otherwise weigh down every page
+ * the wizard sits on for one step of one form. Search only runs when the
+ * coordinator submits the box, never per keystroke.
  */
 
 /** Dubai, so an empty picker opens somewhere useful rather than mid-ocean. */
 const FALLBACK: [number, number] = [25.0772, 55.1345];
 
+const BRAND = "#9F2B23";
+
 type SearchHit = { label: string; lat: number; lng: number };
+
+const round6 = (value: number) => Number(value.toFixed(6));
 
 export function LocationPicker({
   lat,
@@ -37,13 +49,18 @@ export function LocationPicker({
   onPick: (lat: number, lng: number) => void;
   onClear: () => void;
 }) {
+  const useGoogle = GOOGLE_MAPS_BROWSER_KEY.length > 0;
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<LeafletMap | null>(null);
   const markerRef = useRef<Marker | null>(null);
+  const googleRef = useRef<GoogleMapsApi | null>(null);
+  const gMapRef = useRef<GoogleMap | null>(null);
+  const gMarkerRef = useRef<GoogleMarker | null>(null);
   const onPickRef = useRef(onPick);
   onPickRef.current = onPick;
 
   const [ready, setReady] = useState(false);
+  const [mapError, setMapError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [hits, setHits] = useState<SearchHit[]>([]);
@@ -54,8 +71,44 @@ export function LocationPicker({
   // Build the map once, on the client.
   useEffect(() => {
     let cancelled = false;
-    let map: LeafletMap | null = null;
 
+    if (useGoogle) {
+      void loadGoogleMaps()
+        .then((maps) => {
+          if (cancelled || !containerRef.current || gMapRef.current) return;
+          googleRef.current = maps;
+          const map = new maps.Map(containerRef.current, {
+            center: hasPin ? { lat, lng } : { lat: FALLBACK[0], lng: FALLBACK[1] },
+            zoom: hasPin ? 17 : 11,
+            mapTypeControl: true,
+            streetViewControl: false,
+            fullscreenControl: true,
+            clickableIcons: false,
+            // A map inside a scrolling form should not swallow the page
+            // scroll; Ctrl + scroll (or two fingers) zooms it.
+            gestureHandling: "cooperative",
+          });
+          map.addListener("click", (event) => {
+            const at = event.latLng;
+            if (at) onPickRef.current(round6(at.lat()), round6(at.lng()));
+          });
+          gMapRef.current = map;
+          setReady(true);
+        })
+        .catch((error: unknown) => {
+          if (!cancelled) {
+            setMapError(error instanceof Error ? error.message : "The map could not load.");
+          }
+        });
+      return () => {
+        cancelled = true;
+        gMarkerRef.current?.setMap(null);
+        gMarkerRef.current = null;
+        gMapRef.current = null;
+      };
+    }
+
+    let map: LeafletMap | null = null;
     void (async () => {
       const L = await import("leaflet");
       if (cancelled || !containerRef.current || mapRef.current) return;
@@ -69,32 +122,9 @@ export function LocationPicker({
         attribution: "&copy; OpenStreetMap contributors",
       }).addTo(map);
 
-      // Leaflet's default marker images do not survive bundling, so the
-      // pin is drawn as markup instead — which also lets it match the
-      // brand rather than shipping a stock blue teardrop.
-      const icon = L.divIcon({
-        className: "",
-        html:
-          '<span style="display:block;width:18px;height:18px;border-radius:9999px;' +
-          'background:#9F2B23;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)"></span>',
-        iconSize: [18, 18],
-        iconAnchor: [9, 9],
-      });
-
       map.on("click", (event: { latlng: { lat: number; lng: number } }) => {
-        onPickRef.current(
-          Number(event.latlng.lat.toFixed(6)),
-          Number(event.latlng.lng.toFixed(6)),
-        );
+        onPickRef.current(round6(event.latlng.lat), round6(event.latlng.lng));
       });
-
-      if (hasPin) {
-        markerRef.current = L.marker([lat, lng], { icon, draggable: true }).addTo(map);
-        markerRef.current.on("dragend", () => {
-          const p = markerRef.current?.getLatLng();
-          if (p) onPickRef.current(Number(p.lat.toFixed(6)), Number(p.lng.toFixed(6)));
-        });
-      }
 
       mapRef.current = map;
       // Tiles come up grey if the container was measured while hidden.
@@ -115,9 +145,49 @@ export function LocationPicker({
   // Keep the marker following the value, wherever it was changed —
   // the map, the search results, or the two number fields beside it.
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !ready) return;
+    if (!ready) return;
 
+    if (useGoogle) {
+      const maps = googleRef.current;
+      const map = gMapRef.current;
+      if (!maps || !map) return;
+      if (!hasPin) {
+        gMarkerRef.current?.setMap(null);
+        gMarkerRef.current = null;
+        return;
+      }
+      const position = { lat, lng };
+      if (gMarkerRef.current) {
+        gMarkerRef.current.setPosition(position);
+      } else {
+        const marker = new maps.Marker({
+          position,
+          map,
+          draggable: true,
+          title: "Property location",
+          // The brand dot rather than the stock red teardrop.
+          icon: {
+            path: maps.SymbolPath.CIRCLE,
+            scale: 9,
+            fillColor: BRAND,
+            fillOpacity: 1,
+            strokeColor: "#ffffff",
+            strokeWeight: 3,
+          },
+        });
+        marker.addListener("dragend", () => {
+          const p = marker.getPosition();
+          if (p) onPickRef.current(round6(p.lat()), round6(p.lng()));
+        });
+        gMarkerRef.current = marker;
+      }
+      map.panTo(position);
+      map.setZoom(Math.max(map.getZoom() ?? 0, 16));
+      return;
+    }
+
+    const map = mapRef.current;
+    if (!map) return;
     void (async () => {
       const L = await import("leaflet");
       if (!hasPin) {
@@ -125,11 +195,13 @@ export function LocationPicker({
         markerRef.current = null;
         return;
       }
+      // Leaflet's default marker images do not survive bundling, so the
+      // pin is drawn as markup instead, in the brand colour.
       const icon = L.divIcon({
         className: "",
         html:
-          '<span style="display:block;width:18px;height:18px;border-radius:9999px;' +
-          'background:#9F2B23;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)"></span>',
+          `<span style="display:block;width:18px;height:18px;border-radius:9999px;` +
+          `background:${BRAND};border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)"></span>`,
         iconSize: [18, 18],
         iconAnchor: [9, 9],
       });
@@ -140,12 +212,31 @@ export function LocationPicker({
         markerRef.current = L.marker([lat, lng], { icon, draggable: true }).addTo(map);
         markerRef.current.on("dragend", () => {
           const p = markerRef.current?.getLatLng();
-          if (p) onPickRef.current(Number(p.lat.toFixed(6)), Number(p.lng.toFixed(6)));
+          if (p) onPickRef.current(round6(p.lat), round6(p.lng));
         });
       }
       map.setView([lat, lng], Math.max(map.getZoom(), 16));
     })();
-  }, [lat, lng, hasPin, ready]);
+  }, [lat, lng, hasPin, ready, useGoogle]);
+
+  /** Nominatim: free and keyless, used when Google is not available. */
+  const searchNominatim = useCallback(async (term: string): Promise<SearchHit[]> => {
+    const url =
+      "https://nominatim.openstreetmap.org/search?format=json&limit=5&q=" +
+      encodeURIComponent(term);
+    const response = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error(`Search failed (${response.status})`);
+    const rows = (await response.json()) as Array<{
+      display_name: string;
+      lat: string;
+      lon: string;
+    }>;
+    return rows.map((row) => ({
+      label: row.display_name,
+      lat: Number(row.lat),
+      lng: Number(row.lon),
+    }));
+  }, []);
 
   const runSearch = useCallback(async () => {
     const term = query.trim();
@@ -154,27 +245,32 @@ export function LocationPicker({
     setSearchError(null);
     setHits([]);
     try {
-      const url =
-        "https://nominatim.openstreetmap.org/search?format=json&limit=5&q=" +
-        encodeURIComponent(term);
-      const response = await fetch(url, { headers: { Accept: "application/json" } });
-      if (!response.ok) throw new Error(`Search failed (${response.status})`);
-      const rows = (await response.json()) as Array<{
-        display_name: string;
-        lat: string;
-        lon: string;
-      }>;
-      if (rows.length === 0) {
+      let found: SearchHit[] = [];
+      const maps = googleRef.current;
+      if (maps) {
+        try {
+          // Biased to the UAE, where every property is.
+          const { results } = await new maps.Geocoder().geocode({
+            address: term,
+            region: "ae",
+          });
+          found = results.slice(0, 5).map((result) => ({
+            label: result.formatted_address,
+            lat: round6(result.geometry.location.lat()),
+            lng: round6(result.geometry.location.lng()),
+          }));
+        } catch {
+          // Geocoding not enabled on the key, or no match: try Nominatim.
+          found = await searchNominatim(term);
+        }
+      } else {
+        found = await searchNominatim(term);
+      }
+      if (found.length === 0) {
         setSearchError("No match. Try the building or community name.");
         return;
       }
-      setHits(
-        rows.map((row) => ({
-          label: row.display_name,
-          lat: Number(row.lat),
-          lng: Number(row.lon),
-        })),
-      );
+      setHits(found);
     } catch (error) {
       setSearchError(
         error instanceof Error ? error.message : "Could not search right now.",
@@ -182,7 +278,7 @@ export function LocationPicker({
     } finally {
       setSearching(false);
     }
-  }, [query]);
+  }, [query, searchNominatim]);
 
   function useMyLocation() {
     if (!navigator.geolocation) {
@@ -190,8 +286,7 @@ export function LocationPicker({
       return;
     }
     navigator.geolocation.getCurrentPosition(
-      (pos) =>
-        onPick(Number(pos.coords.latitude.toFixed(6)), Number(pos.coords.longitude.toFixed(6))),
+      (pos) => onPick(round6(pos.coords.latitude), round6(pos.coords.longitude)),
       () => setSearchError("Location permission was refused."),
     );
   }
@@ -248,9 +343,9 @@ export function LocationPicker({
       {searchError ? <p className="text-destructive text-xs">{searchError}</p> : null}
 
       {/*
-        The element Leaflet owns must keep a CONSTANT className. Leaflet
-        adds its own classes to it on init (leaflet-container and
-        friends), and React rewrites className on every re-render — so a
+        The element the map library owns must keep a CONSTANT className.
+        Leaflet adds its own classes to it on init (leaflet-container and
+        friends), and React rewrites className on every re-render -- so a
         conditional class here silently stripped them. Losing
         leaflet-container in particular takes out Leaflet's own
         `.leaflet-container img { max-width: none }` guard, and Tailwind
@@ -261,11 +356,16 @@ export function LocationPicker({
       */}
       <div
         className={cn(
-          "bg-muted isolate h-72 w-full overflow-hidden rounded-lg border",
-          !ready && "animate-pulse",
+          "bg-muted relative isolate h-72 w-full overflow-hidden rounded-lg border",
+          !ready && !mapError && "animate-pulse",
         )}
       >
         <div ref={containerRef} className="h-full w-full" />
+        {mapError ? (
+          <p className="text-muted-foreground absolute inset-0 flex items-center justify-center p-4 text-center text-sm">
+            {mapError} Search for the address or use your location to set the pin.
+          </p>
+        ) : null}
       </div>
 
       <div className="text-muted-foreground flex flex-wrap items-center justify-between gap-2 text-xs">

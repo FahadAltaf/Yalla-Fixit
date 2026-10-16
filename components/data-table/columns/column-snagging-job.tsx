@@ -10,6 +10,7 @@ import { Clock, UserRound } from "lucide-react";
 
 import { IconText } from "@/components/data-table/columns/icon-text";
 import { IdentityCell } from "@/components/ui/entity-avatar";
+import { Hint } from "@/components/ui/hint";
 import {
   SeverityCounts,
   TaskStatusBadge,
@@ -136,7 +137,11 @@ export function getSnaggingJobColumns(): ColumnDef<SnaggingTaskSummary>[] {
       id: "severity",
       // Severity is never carried by colour alone: the header names the
       // order the three numbers are read in.
-      header: () => <span title="High / medium / low">H / M / L</span>,
+      header: () => (
+        <Hint label="High / medium / low">
+          <span>H / M / L</span>
+        </Hint>
+      ),
       cell: ({ row }) => (
         <SeverityCounts
           high={row.original.high_severity_count}

@@ -9,12 +9,32 @@ import type { AmcSettings } from "./amc-settings";
 export const propertyCategorySchema = z.enum(["residential", "commercial"]);
 export const unitTypeSchema = z.enum(["villa", "apartment", "office"]);
 export const paymentTermsSchema = z.enum(["monthly", "quarterly", "annual"]);
-export const designationSchema = z.enum(["owner", "tenant", "representative"]);
+/*
+  A contact's designation: one of the usual three, or whatever the client
+  calls them (Sharon, UAT AMC-099: "Operation Manager"). Stored as typed;
+  the presets keep their old values so saved proposals read the same.
+*/
+export const DESIGNATION_PRESETS = [
+  { value: "owner", label: "Owner" },
+  { value: "tenant", label: "Tenant" },
+  { value: "representative", label: "Representative" },
+] as const;
+export const designationSchema = z
+  .string()
+  .trim()
+  .max(60, "Keep the designation under 60 characters");
+
+/* The service table names the services this refers to (AMC-057). */
+export const BASE_PRICE_MESSAGE =
+  "Enter a base price for every selected service, or tick Free";
+
+/* How many coordination contacts a proposal can name (AMC-099). */
+export const MAX_COORDINATION_CONTACTS = 6;
 
 export const coordinationContactSchema = z.object({
   name: z.string().min(1, "Name is required"),
   phone: z.string().min(1, "Phone is required"),
-  designation: designationSchema,
+  designation: designationSchema.min(1, "Choose or type a designation"),
 });
 
 /*
@@ -139,6 +159,12 @@ export const amcFormSchema = z
     discountPercent: z.coerce.number().min(0).max(100).default(0),
     optionalSections: amcOptionalSectionsSchema,
     priceListRows: z.array(amcPriceListRowSchema),
+    /*
+      Clause 6.3's rates for this proposal (UAT AMC-057): asked for when the
+      Additional fixed price services switch is on, starting from the rates
+      in AMC Settings. Empty means the standard rates.
+    */
+    fixedPriceRates: z.array(z.string().max(300)).max(20),
     accountManagers: z.tuple([
       amcAccountManagerSchema,
       amcAccountManagerSchema,
@@ -149,10 +175,11 @@ export const amcFormSchema = z
     customerId: z.string().min(1, "Customer ID is required"),
     customerPhone: z.string().min(1, "Client phone is required"),
     customerEmail: z.string().email("Invalid email address"),
-    coordinationContacts: z.tuple([
-      coordinationContactSchema,
-      optionalCoordinationContactSchema,
-    ]),
+    /* The first is required; the rest are optional, all or nothing (AMC-099). */
+    coordinationContacts: z
+      .array(optionalCoordinationContactSchema)
+      .min(1, "Add the contact the team coordinates with")
+      .max(MAX_COORDINATION_CONTACTS),
     startDate: z.string().min(1, "Start date is required"),
     endDate: z.string().min(1, "End date is required"),
     paymentTerms: paymentTermsSchema,
@@ -187,7 +214,7 @@ export const amcFormSchema = z
       if (row.basePrice === undefined || Number.isNaN(row.basePrice)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: "Enter a base price for every selected service",
+          message: BASE_PRICE_MESSAGE,
           path: ["serviceRows"],
         });
         break;
@@ -210,6 +237,18 @@ export const amcFormSchema = z
       }
     }
 
+    if (
+      data.optionalSections.additionalFixedPriceServices &&
+      !data.fixedPriceRates.some((rate) => rate.trim())
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "Enter at least one rate, or switch the additional fixed price services off",
+        path: ["fixedPriceRates"],
+      });
+    }
+
     if (data.optionalSections.supplyInstallPriceList) {
       const filled = data.priceListRows.filter(
         (row) =>
@@ -229,26 +268,28 @@ export const amcFormSchema = z
     }
 
     /*
-      The optional second contact, all or nothing.
-
-      A name with no number is worse than no contact at all: it prints on
-      the contract as somebody the engineer cannot reach.
+      The first contact is required in full. Every other one is all or
+      nothing: a name with no number is worse than no contact at all, as
+      it prints on the contract as somebody the engineer cannot reach.
     */
-    const second = data.coordinationContacts[1];
-    if (second.name.trim() && !second.phone.trim()) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Add a number for the second contact, or clear their name",
-        path: ["coordinationContacts", 1, "phone"],
-      });
-    }
-    if (second.phone.trim() && !second.name.trim()) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Add a name for the second contact, or clear their number",
-        path: ["coordinationContacts", 1, "name"],
-      });
-    }
+    data.coordinationContacts.forEach((contact, index) => {
+      const first = index === 0;
+      const issue = (field: "name" | "phone" | "designation", message: string) =>
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message,
+          path: ["coordinationContacts", index, field],
+        });
+      const hasName = Boolean(contact.name.trim());
+      const hasPhone = Boolean(contact.phone.trim());
+      if (first && !hasName) issue("name", "Name is required");
+      if (first && !hasPhone) issue("phone", "Phone is required");
+      if (!first && hasName && !hasPhone) issue("phone", "Add a number for this contact, or clear their name");
+      if (!first && hasPhone && !hasName) issue("name", "Add a name for this contact, or clear their number");
+      if ((first || hasName || hasPhone) && !contact.designation.trim()) {
+        issue("designation", "Choose or type a designation");
+      }
+    });
 
     if (data.paymentPlan === "custom" && !data.paymentPlanCustom?.length) {
       ctx.addIssue({
@@ -428,6 +469,8 @@ export interface AmcSubmissionProperty {
 export interface AmcSubmissionDocumentOptions {
   optionalSections: AmcOptionalSections;
   priceListRows: AmcPriceListRow[];
+  /* Clause 6.3's rates for this proposal; absent on older ones (AMC-057). */
+  fixedPriceRates?: string[];
   accountManagers: [AmcAccountManager, AmcAccountManager];
   /* Mirrored from the contract's entitlements (server side) for the contract document. */
   entitlementTerms?: Record<string, AmcEntitlementTerm>;
@@ -438,7 +481,8 @@ export interface AmcSubmissionCustomer {
   customerId?: string;
   customerPhone: string;
   customerEmail: string;
-  coordinationContacts: [CoordinationContact, OptionalCoordinationContact];
+  /* The first is required, the rest optional (AMC-099). */
+  coordinationContacts: OptionalCoordinationContact[];
   startDate: string;
   endDate: string;
   paymentTerms: PaymentTerms;
@@ -572,9 +616,6 @@ export interface AmcSubmissionListResponse {
   submissions: AmcSubmission[];
   /* Every proposal matching the filters and search, across all pages. */
   totalCount: number;
-  /* How many match in each status (and "all"), ignoring the status
-     filter itself, for the status picker's counts. */
-  counts?: Record<string, number>;
   /* FR3.2 — set when the caller holds amc/approve, so the list can show
      the review queue as well as their own submissions. */
   canApprove?: boolean;

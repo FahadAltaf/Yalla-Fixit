@@ -52,6 +52,10 @@ export const hasVerdictNote = (admin: SupabaseClient) =>
 export const hasGatepass = (admin: SupabaseClient) =>
   hasColumn(admin, "snagging_jobs", "gatepass_path");
 
+/** Office notes on a quotation (20261013150000_snagging_quotation_office_notes). */
+export const hasQuotationNotes = (admin: SupabaseClient) =>
+  hasColumn(admin, "snagging_quotations", "notes");
+
 /** The reviewer's note to the inspector (20260922110000_snag_review_note). */
 export const hasReviewNote = (admin: SupabaseClient) =>
   hasColumn(admin, "snagging_snags", "review_note");

@@ -12,6 +12,8 @@ import {
 import { loadJobFamily, readOnRoot } from "@/lib/server/snagging/job-family";
 import { listReportVersions } from "@/lib/server/snagging/report-versions";
 import { signMediaPaths } from "@/lib/server/snagging/media";
+import { readAllRows } from "@/lib/server/snagging/read-all";
+import { furnishedByJob } from "@/lib/server/snagging/furnished";
 import { loadSignoffRecords } from "@/lib/server/snagging/signoffs";
 
 /*
@@ -66,6 +68,8 @@ const JOB_COLUMNS = [
   "client_id", "property_id", "inspector_id", "approval_manager_id", "reviewer_id", "reviewed_at",
   "scheduled_date", "appointment_at",
   "developer_contact_name", "developer_contact_phone", "client_contact_name", "client_contact_phone",
+  // Office notes (SNG-022): shown and edited on the Setup tab.
+  "notes",
   "locked", "submitted_at", "delivered_at", "delivery_channel", "delivery_recipient",
   "rejection_reason", "rejection_category", "rejection_count", "remediation_due_at",
   "signed_at", "signer_name", "signature_path",
@@ -90,8 +94,9 @@ const CHECKLIST_COLUMNS =
   "id, status, label, group_name, mandatory, reason, visit_id, created_at, sort_order";
 /* job_id stays: it decides from_earlier_visit. locked has no reader today
    but is kept as a business-rule field. */
+/* snag_code is the snag's one ID, shown as in the app and the report (SNG-097). */
 const SNAG_COLUMNS =
-  "id, job_id, area_id, category_label, element_label, defect_label, severity, note, " +
+  "id, job_id, area_id, snag_code, category_label, element_label, defect_label, severity, note, " +
   "pin_x, pin_y, floor_plan_id, status, round_created, visit_id, created_at, locked";
 /* Photo metadata the lightbox shows (gps, exif, marker, size) stays;
    bytes and the ids that repeat the parent do not. */
@@ -166,7 +171,9 @@ export async function loadJobCore(admin: Admin, id: string) {
     */
     admin
       .from("snagging_quotations")
-      .select("status")
+      // The status, and two things the client declared on it that the
+      // Setup tab shows: furnished, and booked out of hours.
+      .select("status, furnished, out_of_hours:pricing_snapshot->out_of_hours")
       .eq("job_id", id)
       .neq("quote_kind", "visit")
       .order("created_at", { ascending: false })
@@ -364,6 +371,15 @@ export async function loadJobCore(admin: Admin, id: string) {
     property: propertyWithDocs,
     /* Null when the job has no quotation of its own (raised from scratch). */
     quotation_status: (inspectionQuote?.status as string | undefined) ?? null,
+    /*
+      As quoted (SNG-100): furnished or not, and booked out of hours. A
+      de-snag round or visit takes its original job's; null when no
+      quotation says.
+    */
+    furnished: inspectionQuote
+      ? Boolean((inspectionQuote as Row).furnished)
+      : ((await furnishedByJob(admin, [{ id, parent_job_id: job.parent_job_id ?? null }])).get(id) ?? null),
+    out_of_hours: inspectionQuote ? (inspectionQuote as Row).out_of_hours === true : null,
     gatepass_path: gatepassPath,
     gatepass_url: (gatepassSigned[0] as { signed_url?: string } | undefined)?.signed_url ?? null,
     /* False where the column is not there yet, so the page can hide the upload. */
@@ -634,6 +650,230 @@ export async function loadJobSnags(admin: Admin, id: string) {
   });
 }
 
+/*
+  ─── The snags, a page at a time ───────────────────────────────────────
+
+  loadJobSnags reads every snag with every photo signed and every person
+  resolved, and the job page used to fetch that for its header, its plan
+  pins and its snag list alike -- then filter and page it in the browser.
+  The cost grows with the job, and most of it (signing, people) was spent
+  on rows nobody was looking at.
+
+  Split by what each part of the page needs:
+  - the summary: every snag's light facts and a photo count, nothing
+    signed -- the header's counts and the plan's pins;
+  - a page: the rows one screen of the list shows, filtered, sorted and
+    cut on the server, enriched in full, with the facets beside it;
+  - one snag: everything about a single defect, for its detail dialog.
+
+  Which rows a record shows is decided once, by snagScope, the same way
+  loadJobSnags decides it, so the three cannot disagree with it.
+*/
+
+/** The jobs whose snags a record shows: its own, and the ones shown for context. */
+async function snagScope(admin: Admin, id: string) {
+  const family = await loadJobFamily(admin, id);
+  const isAdditionalVisit = id !== family.rootId && family.additionalVisitIds.includes(id);
+  const contextIds =
+    id === family.rootId
+      ? family.additionalVisitIds
+      : isAdditionalVisit
+        ? [family.rootId]
+        : [];
+  return { family, contextIds };
+}
+
+/** Category, recorder, people and signed photos for rows already chosen. */
+async function enrichSnagRows(
+  admin: Admin,
+  family: Awaited<ReturnType<typeof loadJobFamily>>,
+  viewingId: string,
+  rows: Row[],
+) {
+  if (rows.length === 0) return [];
+  const signed = await signMediaPaths(
+    admin,
+    await attachPeople(
+      admin,
+      family.allIds,
+      family.roundOf,
+      await fillFromOriginals(admin, family.allIds, rows),
+    ),
+  );
+  return signed.map((snag) => ({
+    ...(snag as Row),
+    from_earlier_visit: (snag as Row).job_id !== viewingId,
+  }));
+}
+
+const SUMMARY_SELECT = `${SNAG_COLUMNS},
+  area:snagging_areas(id, name),
+  photo_rows:snagging_snag_photos(count)`;
+
+/**
+ * Every snag this record shows, light: no photos signed, no people. With
+ * a photo count, which is all the header asks of the photos. The plan
+ * pins and the counts read this; the list and the detail fetch their own.
+ */
+export async function loadJobSnagSummary(admin: Admin, id: string) {
+  const { contextIds } = await snagScope(admin, id);
+  const jobIds = [id, ...contextIds];
+  const rows = await readAllRows<Row>(
+    (from, to) =>
+      admin
+        .from("snagging_snags")
+        .select<string, Row>(SUMMARY_SELECT)
+        .in("job_id", jobIds)
+        // Withdrawn snags are out of the job's count, as on the jobs table
+        // and the inspector's app; the list can still show them on request.
+        .neq("status", "withdrawn")
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: true })
+        .range(from, to),
+    "job snag summary",
+  );
+  return rows.map(({ photo_rows, ...row }) => ({
+    ...row,
+    photos: [],
+    photo_count: Number((firstOf(photo_rows as Row[] | Row | null) as Row | null)?.count ?? 0),
+    from_earlier_visit: row.job_id !== id,
+  }));
+}
+
+export type SnagPageQuery = {
+  page: number;
+  pageSize: number;
+  /** "own" is what this record found; "context" the earlier rows it shows for context. */
+  scope: "own" | "context";
+  severity?: string | null;
+  status?: string | null;
+  /** "walk" (the original walk), or a visit id. */
+  source?: string | null;
+  areaId?: string | null;
+  sort: "newest" | "oldest";
+};
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * One page of the snag list, filtered and sorted in the database, with the
+ * facets the list's controls show: the severity counts and the status
+ * counts under the other filters, the snags per room, and the visits that
+ * found any.
+ */
+export async function loadJobSnagPage(admin: Admin, id: string, q: SnagPageQuery) {
+  const { family, contextIds } = await snagScope(admin, id);
+  const jobIds = q.scope === "context" ? contextIds : [id];
+  const empty = {
+    rows: [] as Row[],
+    total: 0,
+    page: q.page,
+    pageSize: q.pageSize,
+    counts: { all: 0, high: 0, medium: 0, low: 0 },
+    statusCounts: {} as Record<string, number>,
+    areaCounts: {} as Record<string, number>,
+    sources: [] as string[],
+  };
+  if (jobIds.length === 0) return empty;
+
+  type Filterable = {
+    eq(column: string, value: unknown): Filterable;
+    is(column: string, value: null): Filterable;
+  };
+  const bySource = <T extends Filterable>(query: T): T => {
+    if (q.source === "walk") return query.is("visit_id", null) as T;
+    if (q.source && UUID.test(q.source)) return query.eq("visit_id", q.source) as T;
+    return query;
+  };
+  const byArea = <T extends Filterable>(query: T): T =>
+    q.areaId && UUID.test(q.areaId) ? (query.eq("area_id", q.areaId) as T) : query;
+
+  const select = snagsSelect(await hasVerdictNote(admin), await hasReviewNote(admin));
+  const from = q.page * q.pageSize;
+
+  const [pageResult, facets] = await Promise.all([
+    (async () => {
+      let query = admin
+        .from("snagging_snags")
+        .select<string, Row>(select, { count: "exact" })
+        .in("job_id", jobIds);
+      query = byArea(bySource(query));
+      if (q.severity) query = query.eq("severity", q.severity);
+      // Withdrawn snags only when asked for, as the jobs table counts.
+      query = q.status ? query.eq("status", q.status) : query.neq("status", "withdrawn");
+      return query
+        .order("created_at", { ascending: q.sort === "oldest" })
+        .order("id", { ascending: true })
+        .range(from, from + q.pageSize - 1);
+    })(),
+    // Four small columns for every row in scope: the facets, in one read.
+    readAllRows<{ severity: string; status: string; area_id: string | null; visit_id: string | null }>(
+      (start, end) =>
+        admin
+          .from("snagging_snags")
+          .select("severity, status, area_id, visit_id")
+          .in("job_id", jobIds)
+          .order("id", { ascending: true })
+          .range(start, end),
+      "snag facets",
+    ),
+  ]);
+  if (pageResult.error) throw new Error(pageResult.error.message);
+
+  const inSource = (r: { visit_id: string | null }) =>
+    q.source === "walk" ? !r.visit_id : q.source && UUID.test(q.source) ? r.visit_id === q.source : true;
+  const inArea = (r: { area_id: string | null }) =>
+    q.areaId && UUID.test(q.areaId) ? r.area_id === q.areaId : true;
+
+  const counts = { all: 0, high: 0, medium: 0, low: 0 };
+  const statusCounts: Record<string, number> = {};
+  const areaCounts: Record<string, number> = {};
+  const sources = new Set<string>();
+  for (const r of facets) {
+    const withdrawn = r.status === "withdrawn";
+    if (r.area_id && !withdrawn) areaCounts[r.area_id] = (areaCounts[r.area_id] ?? 0) + 1;
+    if (r.visit_id && !withdrawn) sources.add(r.visit_id);
+    if (!inSource(r) || !inArea(r)) continue;
+    // Severity counts under the status filter (withdrawn only when that is
+    // the filter); status counts under severity, withdrawn included so it
+    // can be chosen.
+    if (q.status ? r.status === q.status : !withdrawn) {
+      counts.all += 1;
+      if (r.severity in counts) counts[r.severity as "high" | "medium" | "low"] += 1;
+    }
+    if (!q.severity || r.severity === q.severity) {
+      statusCounts[r.status] = (statusCounts[r.status] ?? 0) + 1;
+    }
+  }
+
+  return {
+    rows: await enrichSnagRows(admin, family, id, pageResult.data ?? []),
+    total: pageResult.count ?? 0,
+    page: q.page,
+    pageSize: q.pageSize,
+    counts,
+    statusCounts,
+    areaCounts,
+    sources: [...sources],
+  };
+}
+
+/** One snag in full, as the record viewing it shows it; null when it is not one of its rows. */
+export async function loadJobSnag(admin: Admin, id: string, snagId: string) {
+  const { family, contextIds } = await snagScope(admin, id);
+  const select = snagsSelect(await hasVerdictNote(admin), await hasReviewNote(admin));
+  const { data, error } = await admin
+    .from("snagging_snags")
+    .select<string, Row>(select)
+    .eq("id", snagId)
+    .in("job_id", [id, ...contextIds])
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) return null;
+  const [snag] = await enrichSnagRows(admin, family, id, [data]);
+  return snag ?? null;
+}
+
 /** Which of the family's additional visits the manager has not approved. */
 export async function loadJobVisitStatus(admin: Admin, id: string) {
 
@@ -695,13 +935,14 @@ export async function loadJobDesnagQuotation(admin: Admin, id: string) {
   What the visits tab, the visit alerts and the edit dialog read, plus
   quotation_id to join the visit's quotation. The review fields
   (submitted_at, review_note) came with 20260918100000_visit_review, which
-  every environment now has; the audit columns (created_by, updated_at,
+  every environment now has; the other audit columns (created_by,
   reviewed_by, ...) have no reader here.
 */
 const VISIT_COLUMNS =
   "id, visit_number, status, scheduled_date, appointment_at, inspector_id, charge, " +
   "charge_method, payment_reference, quotation_id, started_at, submitted_at, review_note, " +
-  "notes, created_at, inspector:inspector_id(id, full_name, email), " +
+  // updated_at for the table's Updated column.
+  "notes, created_at, updated_at, inspector:inspector_id(id, full_name, email), " +
   // The visit's quotation, embedded rather than fetched in a second round trip.
   "quotation_ref:quotation_id(id, quote_number, status)";
 

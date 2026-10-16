@@ -25,6 +25,9 @@ import {
 
 import { ServiceTable } from "../components/service-table";
 import { emptyPriceListRow } from "../amc-constants";
+import { CLAUSE_6_3_HANDYMAN, stripListMarker } from "../amc-contract-content";
+import { Button } from "@/components/ui/button";
+import { Hint } from "@/components/ui/hint";
 import type { AmcSettings } from "../amc-settings";
 import {
   Select,
@@ -37,7 +40,6 @@ import {
 import type { AmcFormData, AmcPriceListRow } from "../amc-types";
 import { servicesForProperty, type AmcServiceDefinition } from "../amc-settings";
 import { calculateAmcTotals } from "../amc-pricing";
-import { Button } from "@/components/ui/button";
 import { applyPackage, packagesFor } from "@/lib/amc/rate-card";
 import {
   PAYMENT_PLAN_LABELS,
@@ -88,6 +90,26 @@ const MANAGER_KEPT = "__kept__";
  * §5.1 also puts the optional sections and the placeholder fields on this
  * step, which is why they are below rather than on Review.
  */
+/*
+  Clause 6.3's standard rates, from AMC Settings: what the Additional fixed
+  price services rows start from when the switch is turned on (AMC-057).
+  The first paragraph of the clause is its title, the rest one rate each.
+*/
+function standardFixedPriceRates(settings: AmcSettings | null | undefined): string[] {
+  const body =
+    settings?.clauseList?.find((clause) => clause.role === "handymanRates")?.body ??
+    settings?.clauses?.handymanRates ??
+    "";
+  const rates = body
+    .split(/\n\s*\n/)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .slice(1)
+    .map((rate) => stripListMarker(rate).trim())
+    .filter(Boolean);
+  return rates.length > 0 ? rates : CLAUSE_6_3_HANDYMAN.rates.map((rate) => rate.text);
+}
+
 export function ServicesPricingStep({ form, catalogue, settings, rules }: StepProps) {
   const card = rules?.rateCard ?? null;
   const packages = card ? packagesFor(card.card, form.watch("unitType")) : [];
@@ -108,6 +130,22 @@ export function ServicesPricingStep({ form, catalogue, settings, rules }: StepPr
     .map((service) => service.label.replace(/\s*\(.*?\)\s*/g, " ").trim());
   const showPriceList = form.watch("optionalSections.supplyInstallPriceList");
   const priceListRows = form.watch("priceListRows") ?? [];
+  const showFixedRates = form.watch("optionalSections.additionalFixedPriceServices");
+  const fixedPriceRates = form.watch("fixedPriceRates") ?? [];
+
+  const setFixedRates = (next: string[]) =>
+    form.setValue("fixedPriceRates", next, { shouldValidate: true });
+
+  /* A row that is not wanted can go (AMC-057); one row always stays, so
+     the table never disappears while the section is on. */
+  const removePriceListRow = (index: number) =>
+    form.setValue(
+      "priceListRows",
+      priceListRows.length > 1
+        ? priceListRows.filter((_, i) => i !== index)
+        : [emptyPriceListRow()],
+      { shouldValidate: true },
+    );
 
   const updatePriceListRow = (
     index: number,
@@ -288,6 +326,9 @@ export function ServicesPricingStep({ form, catalogue, settings, rules }: StepPr
                           <TableHead>Description</TableHead>
                           <TableHead className="w-[130px]">Brand</TableHead>
                           <TableHead className="w-[120px]">Price (AED)</TableHead>
+                          <TableHead className="w-10">
+                            <span className="sr-only">Remove</span>
+                          </TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -318,13 +359,27 @@ export function ServicesPricingStep({ form, catalogue, settings, rules }: StepPr
                                 />
                               </TableCell>
                             ))}
+                            <TableCell className="px-1">
+                              <Hint label="Remove this row">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="text-muted-foreground hover:text-destructive size-8"
+                                  onClick={() => removePriceListRow(index)}
+                                  aria-label={`Remove price list row ${index + 1}`}
+                                >
+                                  <Trash2 className="size-4" />
+                                </Button>
+                              </Hint>
+                            </TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
                     </Table>
                   </div>
-                  {/* Blank rows are dropped when the contract renders, so
-                      three empty rows cost nothing but an unused row. */}
+                  {/* Blank rows are dropped when the contract renders, and
+                      any row can be removed with its bin. */}
                   <button
                     type="button"
                     className="text-primary mt-2 text-xs font-medium hover:underline"
@@ -361,13 +416,93 @@ export function ServicesPricingStep({ form, catalogue, settings, rules }: StepPr
                 <FormControl>
                   <Switch
                     checked={field.value}
-                    onCheckedChange={field.onChange}
+                    onCheckedChange={(checked) => {
+                      field.onChange(checked);
+                      /* On, it asks for the rates, starting from the
+                         standard ones in AMC Settings (AMC-057). */
+                      if (checked && !fixedPriceRates.some((rate) => rate.trim())) {
+                        setFixedRates(standardFixedPriceRates(settings));
+                      }
+                    }}
                     aria-label="Include additional fixed price services"
                   />
                 </FormControl>
               </FormItem>
             )}
           />
+
+          {showFixedRates && (
+            <FormField
+              control={form.control}
+              name="fixedPriceRates"
+              render={() => (
+                <FormItem>
+                  <div className="space-y-2 rounded-md border p-3">
+                    <p className="text-muted-foreground text-xs">
+                      One rate per line, as it prints in clause 6.3 of the
+                      contract. These start from the standard rates in AMC
+                      Settings and apply to this proposal only.
+                    </p>
+                    {fixedPriceRates.map((rate, index) => (
+                      <div key={index} className="flex items-center gap-2">
+                        <span className="text-muted-foreground w-5 text-right text-xs tabular-nums">
+                          {index + 1}.
+                        </span>
+                        <Input
+                          className="h-8 text-xs"
+                          value={rate}
+                          maxLength={300}
+                          placeholder="e.g. First hour: 199.00 AED + VAT"
+                          aria-label={`Fixed price rate ${index + 1}`}
+                          onChange={(event) =>
+                            setFixedRates(
+                              fixedPriceRates.map((r, i) =>
+                                i === index ? event.target.value : r,
+                              ),
+                            )
+                          }
+                        />
+                        <Hint label="Remove this rate">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="text-muted-foreground hover:text-destructive size-8 shrink-0"
+                            onClick={() =>
+                              setFixedRates(fixedPriceRates.filter((_, i) => i !== index))
+                            }
+                            aria-label={`Remove fixed price rate ${index + 1}`}
+                          >
+                            <Trash2 className="size-4" />
+                          </Button>
+                        </Hint>
+                      </div>
+                    ))}
+                    <div className="flex flex-wrap items-center gap-3 pt-1">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={fixedPriceRates.length >= 20}
+                        onClick={() => setFixedRates([...fixedPriceRates, ""])}
+                      >
+                        <Plus className="size-4" />
+                        Add a rate
+                      </Button>
+                      <button
+                        type="button"
+                        className="text-primary text-xs font-medium hover:underline"
+                        onClick={() => setFixedRates(standardFixedPriceRates(settings))}
+                      >
+                        Reset to the standard rates
+                      </button>
+                    </div>
+                  </div>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          )}
         </div>
       </section>
     </div>

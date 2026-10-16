@@ -34,9 +34,13 @@ import {
 } from "@/components/ui/dialog";
 import { snaggingService } from "@/modules/snagging";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Hint } from "@/components/ui/hint";
 import { cn } from "@/lib/utils";
 import { coverPhoto, splitEvidence } from "@/lib/snagging/evidence";
 import { EvidenceThumbnail, EvidenceViewer } from "./evidence-media";
+import { useSnagPage } from "./use-snag-page";
+import { shortSnagId } from "@/lib/snagging/snag-id";
+import { Skeleton } from "@/components/ui/skeleton";
 
 import { NoteEditButton, NoteEditDialog } from "./note-edit";
 import { SnagHistory } from "./snag-history";
@@ -59,6 +63,7 @@ import {
   SeverityBadge,
   SnagIndex,
   SnagStatusBadge,
+  SNAG_STATUS_LABELS,
   formatLocalDateTime,
 } from "./shared";
 
@@ -138,11 +143,14 @@ type SortMode = "newest" | "oldest";
 export function SnagWalkList({
   task,
   visitNumbers,
+  visitId,
   canEdit = false,
   onSnagsChanged,
   onAreasChanged,
 }: {
   task: SnaggingTask;
+  /** A visit's own page: the list shows only what that visit found. */
+  visitId?: string;
   /** The reader may correct a snag's note (SNAGGING/EDIT). */
   canEdit?: boolean;
   /** Re-read the snags after an edit, so every view of them agrees. */
@@ -182,6 +190,8 @@ export function SnagWalkList({
   const [editingReason, setEditingReason] = useState<string | null>(null);
   const [savedReasons, setSavedReasons] = useState<Record<string, string | null>>({});
   const [severity, setSeverity] = useState<SeverityFilter>("all");
+  /* "all", or one snag status. */
+  const [status, setStatus] = useState<string>("all");
   /* "all", "walk" (the original inspection), or a visit id. */
   const [source, setSource] = useState<string>("all");
   const [sort, setSort] = useState<SortMode>("newest");
@@ -255,42 +265,62 @@ export function SnagWalkList({
     return [...seen.entries()].sort((a, b) => a[1] - b[1]);
   }, [snags, visitNumbers]);
 
-  const visible = useMemo(() => {
-    const bySource =
-      source === "all"
-        ? snags
-        : source === "walk"
-          ? snags.filter((snag) => !snag.visit_id)
-          : snags.filter((snag) => snag.visit_id === source);
-    const filtered =
-      severity === "all"
-        ? bySource
-        : bySource.filter((snag) => snag.severity === severity);
+  /*
+    The page on screen, from the server.
 
-    // Sorted here rather than trusted from the API: the walk arrives with
-    // the task and nothing downstream guarantees its order.
-    return [...filtered].sort((a, b) => {
-      const left = new Date(a.created_at ?? 0).getTime();
-      const right = new Date(b.created_at ?? 0).getTime();
-      return sort === "newest" ? right - left : left - right;
-    });
-  }, [snags, severity, sort, source]);
-
-  // A page that no longer exists (the filter shrank the list under it)
-  // would render empty with no way back, so it clamps.
-  const pageCount = Math.max(1, Math.ceil(visible.length / pageSize));
-  const safePage = Math.min(page, pageCount - 1);
-  const pageRows = visible.slice(
-    safePage * pageSize,
-    (safePage + 1) * pageSize,
+    Filtering, sorting and paging all happen in the database now
+    (GET /tasks/[id]/snags/page): each change asks for exactly the rows
+    that page shows, and only their photos are signed. The page reads
+    again whenever the job's snags change (task.snags is the light summary
+    the job page keeps), so an edit anywhere on the page shows here.
+  */
+  const list = useSnagPage(
+    task.id,
+    {
+      page,
+      pageSize,
+      sort,
+      severity: severity === "all" ? null : severity,
+      status: status === "all" ? null : status,
+      source: visitId ?? (source === "all" ? null : source),
+    },
+    task.snags,
   );
+  const total = list.data?.total ?? 0;
+  const pageRows = useMemo(
+    () =>
+      (list.data?.rows ?? []).map((snag) => ({
+        ...snag,
+        ...(snag.id in savedNotes ? { note: savedNotes[snag.id] } : {}),
+        ...(snag.id in savedVerdicts ? { verdict_note: savedVerdicts[snag.id] } : {}),
+        ...(snag.id in savedReviews ? { review_note: savedReviews[snag.id] } : {}),
+      })),
+    [list.data, savedNotes, savedVerdicts, savedReviews],
+  );
+  // A page that no longer exists (snags were removed under it) would
+  // render empty with no way back, so it steps back to the last one.
+  if (list.data && !list.loading && page > 0) {
+    const last = Math.max(0, Math.ceil(list.data.total / pageSize) - 1);
+    if (page > last) setPage(last);
+  }
 
+  // The server's counts follow the other filters; before the first page
+  // arrives, the summary's stand in.
+  const shownCounts = list.data?.counts ?? counts;
   const severityTabs = [
-    { value: "all" as const, label: "All", count: counts.all },
-    { value: "high" as const, label: "High", count: counts.high },
-    { value: "medium" as const, label: "Medium", count: counts.medium },
-    { value: "low" as const, label: "Low", count: counts.low },
+    { value: "all" as const, label: "All", count: shownCounts.all },
+    { value: "high" as const, label: "High", count: shownCounts.high },
+    { value: "medium" as const, label: "Medium", count: shownCounts.medium },
+    { value: "low" as const, label: "Low", count: shownCounts.low },
   ];
+  // The statuses on this list, for the status filter, in label order.
+  const statusOptions = Object.entries(list.data?.statusCounts ?? {})
+    .filter(([key]) => key in SNAG_STATUS_LABELS)
+    .sort(([a], [b]) =>
+      (SNAG_STATUS_LABELS[a as keyof typeof SNAG_STATUS_LABELS] ?? a).localeCompare(
+        SNAG_STATUS_LABELS[b as keyof typeof SNAG_STATUS_LABELS] ?? b,
+      ),
+    );
   // Rooms the inspector could not fully reach (R1-R6/J3). Surfaced so a
   // coordinator sees why an area carries no snags — a locked door, not a
   // clean pass — before approving.
@@ -447,7 +477,32 @@ export function SnagWalkList({
               />
               <div className="ml-auto flex items-center gap-1.5">
                 {/* Which pass found it: the original walk or a visit. */}
-                {visitSources.length > 0 ? (
+                {/* What state each snag is in: open, fixed, closed... */}
+                <Select
+                  value={status}
+                  onValueChange={(value) => {
+                    setStatus(value);
+                    setPage(0);
+                  }}
+                >
+                  <SelectTrigger size="sm" className="w-[170px]" aria-label="Filter by status">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All statuses</SelectItem>
+                    {statusOptions.map(([key, count]) => (
+                      <SelectItem key={key} value={key}>
+                        {SNAG_STATUS_LABELS[key as keyof typeof SNAG_STATUS_LABELS]} ({count})
+                      </SelectItem>
+                    ))}
+                    {status !== "all" && !statusOptions.some(([key]) => key === status) ? (
+                      <SelectItem value={status}>
+                        {SNAG_STATUS_LABELS[status as keyof typeof SNAG_STATUS_LABELS] ?? status} (0)
+                      </SelectItem>
+                    ) : null}
+                  </SelectContent>
+                </Select>
+                {!visitId && visitSources.length > 0 ? (
                   <Select
                     value={source}
                     onValueChange={(value) => {
@@ -496,11 +551,38 @@ export function SnagWalkList({
               </div>
             </div>
 
-            {pageRows.length === 0 ? (
+            {list.error && !list.data ? (
+              <div className="flex items-center justify-between gap-3 px-5 py-4 text-sm">
+                <span className="text-destructive">{list.error}</span>
+                <button
+                  type="button"
+                  onClick={list.reload}
+                  className="text-primary font-medium hover:underline"
+                >
+                  Try again
+                </button>
+              </div>
+            ) : !list.data || list.loading ? (
+              // A skeleton the size of the page being asked for, on every
+              // load -- a filter, a sort, a page turn -- not only the first.
+              <ul aria-busy="true">
+                {Array.from({ length: Math.min(pageSize, 6) }, (_, i) => (
+                  <li key={i} className="flex items-start gap-3 border-b px-5 py-4 last:border-b-0">
+                    <Skeleton className="size-7 shrink-0 rounded-full" />
+                    <div className="flex-1 space-y-2">
+                      <Skeleton className="h-4 w-2/3" />
+                      <Skeleton className="h-3 w-1/3" />
+                      <Skeleton className="size-12 rounded-md" />
+                    </div>
+                    <Skeleton className="h-5 w-24 rounded-full" />
+                  </li>
+                ))}
+              </ul>
+            ) : pageRows.length === 0 ? (
               <EmptyState
                 icon={<CheckCircle2 className="size-6" />}
-                title="No snags at this severity"
-                description="Nothing on this walk was recorded at that level. Choose All to see every defect."
+                title="No snags match these filters"
+                description="Nothing on this walk matches the severity and status chosen. Choose All to see every defect."
               />
             ) : (
               <ul>
@@ -532,8 +614,9 @@ export function SnagWalkList({
                       {/* Numbered by position in the whole filtered walk, so a
                       snag keeps its number across page turns. */}
                       <SnagIndex
-                        index={safePage * pageSize + index + 1}
+                        index={page * pageSize + index + 1}
                         severity={snag.severity}
+                        code={snag.snag_code}
                       />
 
                       <div className="min-w-48 flex-1">
@@ -702,15 +785,16 @@ export function SnagWalkList({
 
                       <div className="flex items-center gap-2">
                         {pinned ? (
-                          <span
-                            className="text-muted-foreground inline-flex items-center gap-1 text-xs"
-                            title={`Pinned at ${Math.round(Number(snag.pin_x) * 100)}%, ${Math.round(
+                          <Hint
+                            label={`Pinned at ${Math.round(Number(snag.pin_x) * 100)}%, ${Math.round(
                               Number(snag.pin_y) * 100,
                             )}% on the plan`}
                           >
-                            <MapPin className="size-3.5" aria-hidden />
-                            On plan
-                          </span>
+                            <span className="text-muted-foreground inline-flex items-center gap-1 text-xs">
+                              <MapPin className="size-3.5" aria-hidden />
+                              On plan
+                            </span>
+                          </Hint>
                         ) : (
                           <span className="text-muted-foreground/70 text-xs">
                             Not pinned
@@ -746,11 +830,14 @@ export function SnagWalkList({
             )}
 
             <ListPager
-              page={safePage}
+              page={page}
               pageSize={pageSize}
-              total={visible.length}
+              total={total}
               onPageChange={setPage}
-              onPageSizeChange={setPageSize}
+              onPageSizeChange={(size) => {
+                setPageSize(size);
+                setPage(0);
+              }}
               noun="snags"
               className="border-t"
             />
@@ -874,8 +961,10 @@ export function SnagWalkList({
       />
 
       <AreaSnagsDialog
+        taskId={task.id}
+        refreshSignal={task.snags}
+        visitId={visitId}
         area={areas.find((area) => area.id === openAreaId) ?? null}
-        snags={snags.filter((snag) => (snag.area?.id ?? snag.area_id) === openAreaId)}
         onClose={() => setOpenAreaId(null)}
         onOpenSnag={(snag) => setDetail(snag)}
         onOpenPhoto={(photo) => setPreview(photo)}
@@ -1017,6 +1106,12 @@ export function SnagDetailDialog({
             <DialogTitle className="text-lg">{snag?.defect_label ?? "Snag"}</DialogTitle>
             {snag ? (
               <>
+                {/* The snag's one ID, as the app and the report show it (SNG-097). */}
+                {snag.snag_code ? (
+                  <span className="bg-muted text-muted-foreground rounded-md px-2 py-0.5 font-mono text-xs">
+                    {snag.snag_code}
+                  </span>
+                ) : null}
                 <SeverityBadge severity={snag.severity} />
                 {/* The §5.2 label, not the database value. */}
                 <SnagStatusBadge status={snag.status} />
@@ -1341,16 +1436,22 @@ function SnagPlanPin({
         unoptimized
         className="object-fill"
       />
+      {/* The full view names the snag by its code on the pin (SNG-097);
+          the row preview is too small for text and keeps a dot. */}
       <span
         className={cn(
-          "border-background bg-danger absolute -translate-x-1/2 -translate-y-1/2 rounded-full border-2 shadow",
-          compact ? "size-2.5 border" : "size-4",
+          "border-background bg-danger absolute flex -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 shadow",
+          compact
+            ? "size-2.5 border"
+            : "h-5 min-w-5 px-1 text-[0.625rem] leading-none font-semibold whitespace-nowrap text-white tabular-nums",
         )}
         style={{ left: `${Number(x) * 100}%`, top: `${Number(y) * 100}%` }}
-        aria-label={`Defect pinned at ${Math.round(Number(x) * 100)}%, ${Math.round(
+        aria-label={`${snag.snag_code ?? "Defect"} pinned at ${Math.round(Number(x) * 100)}%, ${Math.round(
           Number(y) * 100,
         )}%`}
-      />
+      >
+        {compact ? null : (shortSnagId(snag.snag_code) ?? "")}
+      </span>
     </div>
   );
 }
@@ -1380,16 +1481,21 @@ const AREA_PAGE_SIZE = 5;
  * its full detail over this list, and closing the detail comes back here.
  */
 function AreaSnagsDialog({
+  taskId,
+  refreshSignal,
+  visitId,
   area,
-  snags,
   onClose,
   onOpenSnag,
   onOpenPhoto,
   onEditNote,
   onEditSnagNote,
 }: {
+  taskId: string;
+  /** Changes when the job's snags change, so the open room reads again. */
+  refreshSignal?: unknown;
+  visitId?: string;
   area: NonNullable<SnaggingTask["areas"]>[number] | null;
-  snags: Snag[];
   onClose: () => void;
   onOpenSnag: (snag: Snag) => void;
   onOpenPhoto: (photo: SnaggingPhoto) => void;
@@ -1407,14 +1513,17 @@ function AreaSnagsDialog({
     setPage(0);
   }
 
-  // Newest first, as the main list opens.
-  const ordered = useMemo(
-    () => [...snags].sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? "")),
-    [snags],
+  // That room's snags, a page at a time from the server, newest first.
+  const roomPage = useSnagPage(
+    taskId,
+    { page, pageSize, sort: "newest", areaId: area?.id ?? null, source: visitId ?? null },
+    refreshSignal,
+    Boolean(area),
   );
-  const pages = Math.max(1, Math.ceil(ordered.length / pageSize));
-  const safePage = Math.min(page, pages - 1);
-  const shown = ordered.slice(safePage * pageSize, safePage * pageSize + pageSize);
+  const total = area ? (roomPage.data?.total ?? 0) : 0;
+  const shown = area ? (roomPage.data?.rows ?? []) : [];
+  const safePage = page;
+  const ordered = { length: total };
 
   return (
     <Dialog open={Boolean(area)} onOpenChange={(open) => !open && onClose()}>
@@ -1441,7 +1550,21 @@ function AreaSnagsDialog({
           ) : null}
         </DialogHeader>
 
-        {ordered.length === 0 ? (
+        {!roomPage.data || roomPage.loading ? (
+          <ul className="border-t" aria-busy="true">
+            {Array.from({ length: 3 }, (_, i) => (
+              <li key={i} className="flex items-start gap-3 border-b px-6 py-4 last:border-b-0">
+                <Skeleton className="size-7 shrink-0 rounded-full" />
+                <div className="flex-1 space-y-2">
+                  <Skeleton className="h-4 w-2/3" />
+                  <Skeleton className="h-3 w-1/3" />
+                  <Skeleton className="size-16 rounded-md" />
+                </div>
+                <Skeleton className="h-5 w-20 rounded-full" />
+              </li>
+            ))}
+          </ul>
+        ) : ordered.length === 0 ? (
           <EmptyState
             icon={<CheckCircle2 className="size-6" />}
             title="No defects recorded"
@@ -1456,7 +1579,11 @@ function AreaSnagsDialog({
                   key={snag.id}
                   className="hover:bg-mist-soft/60 flex items-start gap-3 border-b px-6 py-4 transition-colors last:border-b-0"
                 >
-                  <SnagIndex index={safePage * pageSize + index + 1} severity={snag.severity} />
+                  <SnagIndex
+                    index={safePage * pageSize + index + 1}
+                    severity={snag.severity}
+                    code={snag.snag_code}
+                  />
                   <div className="min-w-0 flex-1">
                     {/* The title opens the snag; the note beside it edits in place. */}
                     <button

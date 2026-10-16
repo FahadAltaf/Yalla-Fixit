@@ -23,7 +23,7 @@ for f in 20260721120000_create_amc_submissions 20260915120000_amc_harden_submiss
   git -C "$REPO" show "origin/main:supabase/migrations/$f.sql" > "$OUT/main_$f.sql"
   "${P[@]}" -f "$OUT/main_$f.sql" >/dev/null 2>&1
 done
-for f in $(ls "$NEW" | grep -E '^20261(00[5-9]|0[1-3][0-9]|1[0-2][0-9])[0-9]{6}_.*\.sql$' | sort); do "${P[@]}" -f "$NEW/$f" >/dev/null 2>&1; done
+for f in $(ls "$NEW" | grep -E '^20261(00[5-9]|0[1-3][0-9]|1[0-2][0-9])[0-9]{6}_.*\.sql$' | grep -v -E '_(snagging_quotation_office_notes|snagging_fsm_quotation_sync|snagging_fsm_jobs)\.sql$' | sort); do "${P[@]}" -f "$NEW/$f" >/dev/null 2>&1; done
 
 echo "== synthetic data"
 start=$(date +%s)

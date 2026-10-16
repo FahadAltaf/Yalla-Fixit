@@ -4,8 +4,9 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
-import { generateReportPdf } from "@/lib/server/snagging/report-generate";
 import { issueReportVersion } from "@/lib/server/snagging/report-versions";
+import { syncJobToFsm } from "@/lib/server/snagging/fsm-job-sync";
+import { fsmSyncEnabled } from "@/lib/server/snagging/fsm-quotation-sync";
 import {
   assertTransition,
   isDesignatedApprovalManager,
@@ -173,23 +174,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           }
 
           /*
-            FR-7.01 — the PDF is produced here, on the server, not when somebody
-            next opens the portal. A failure is recorded on the version as a
-            retryable state; it never undoes the approval.
+            The version's PDF is not made here. The report page is the
+            report's one design and exists only as a React component, so the
+            approving manager's browser builds the PDF straight after this
+            answers, exactly as Download does, and hands it to
+            /report/pdf, which stores it and sends it to the FSM work order.
+            Until then the version is "pending"; the report page and the FSM
+            card fill in any version left without one.
           */
-          if (reportVersion) {
-            try {
-              const generated = await generateReportPdf(admin, reportVersion.id, {
-                actorId: profile.id,
-                actorLabel: profile.full_name ?? profile.email,
-              });
-              if (!generated.ok) {
-                console.error("Report PDF generation failed:", generated.error);
-              }
-            } catch (generateError) {
-              console.error("Report PDF generation failed:", generateError);
-            }
-          }
 
           if (reportVersion?.created) {
             await recordAudit(admin, {
@@ -219,6 +211,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
               payload: { code: job.code, report_version: reportVersion?.version ?? null },
             });
           }
+        }
+        /*
+          SNG-189: the completed job into Zoho FSM, with the report the
+          step above produced, so finance can invoice from FSM. Not for an
+          additional visit, which is billed on its own visit quotation.
+        */
+        if (job.visit_type !== "additional" && fsmSyncEnabled()) {
+          await syncJobToFsm(admin, id, { actorId: profile.id });
         }
       } catch (backgroundError) {
         console.error("Post-approval work failed:", backgroundError);

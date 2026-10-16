@@ -1,8 +1,9 @@
 "use client";
 
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
-import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import dynamic from "next/dynamic";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -14,6 +15,7 @@ import {
   FileText,
   Mail,
   MessageCircle,
+  Pencil,
   Plus,
   Send,
   TriangleAlert,
@@ -41,6 +43,11 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PillTabs } from "@/components/dashboard/shared/kaizen";
+
+/** The Activity tab's own tabs. */
+type ActivityView = "fsm" | "history";
 import { YallaClassicTemplate } from "@/components/dashboard/extensions/quotation-templates/templates/YallaClassicTemplate";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
@@ -54,12 +61,21 @@ import { ActionType, ResourceType } from "@/types/types";
 
 import {
   DataState,
-  QuotationStatusBadge,
   SubmitButton,
   useConfirm,
   ActionDialogContent,
 } from "./shared";
-import { QuotationBodySkeleton } from "@/components/dashboard/snagging/route-skeletons";
+import { ChangeHistoryCard } from "./change-history-card";
+import { QuotationDetailsTab } from "./quotation-details-tab";
+
+/* Only loaded when its tab is first opened. */
+const FsmQuotationCard = dynamic(() => import("./fsm-quotation-card").then((m) => m.FsmQuotationCard), {
+  loading: SectionLoadingSkeleton,
+});
+import {
+  QuotationBodySkeleton,
+  SectionLoadingSkeleton,
+} from "@/components/dashboard/snagging/route-skeletons";
 
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -111,6 +127,43 @@ export default function QuotationDetail({ id }: { id: string }) {
   const [sendOpen, setSendOpen] = useState(false);
   const [recipient, setRecipient] = useState("");
   const [approvalUrl, setApprovalUrl] = useState<string | null>(null);
+  // Bumped after an action here, so the change history shows it (SNG-037).
+  const [historyNonce, setHistoryNonce] = useState(0);
+
+  /*
+    The tab lives in the URL (?tab=) so a link can point at one and a
+    refresh keeps it. Each tab mounts the first time it is opened and stays
+    mounted, hidden, after: going back to it shows it as it was, with no
+    request. The Activity tab's own two tabs work the same way.
+  */
+  const params = useSearchParams();
+  const [tab, setTabState] = useState<string>(() => {
+    const asked = params.get("tab");
+    return asked === "quotation" || asked === "activity" ? asked : "details";
+  });
+  const [opened, setOpened] = useState<Set<string>>(() => new Set([tab]));
+  const setTab = useCallback((next: string) => {
+    setTabState(next);
+    setOpened((prev) => (prev.has(next) ? prev : new Set(prev).add(next)));
+    const query = new URLSearchParams(window.location.search);
+    query.set("tab", next);
+    // The router's own state, so Next leaves the entry alone: a new ?tab=
+    // through Next re-keys the page and remounts it, refetching everything.
+    window.history.replaceState(window.history.state, "", `?${query.toString()}`);
+  }, []);
+  const activeTab = tab;
+  const [activitySub, setActivitySubState] = useState<ActivityView>("fsm");
+  const [subOpened, setSubOpened] = useState<Set<ActivityView>>(() => new Set<ActivityView>(["fsm"]));
+  const setActivitySub = useCallback((next: ActivityView) => {
+    setActivitySubState(next);
+    setSubOpened((prev) => (prev.has(next) ? prev : new Set(prev).add(next)));
+  }, []);
+  const panel = (value: string, children: ReactNode) =>
+    opened.has(value) ? (
+      <TabsContent value={value} forceMount className="mt-4 data-[state=inactive]:hidden">
+        {children}
+      </TabsContent>
+    ) : null;
 
   /*
     WHICH action is running, not merely that one is.
@@ -167,12 +220,19 @@ export default function QuotationDetail({ id }: { id: string }) {
   const applyResult = useCallback((result: SnaggingQuotation) => {
     setQuote((prev) => {
       if (!prev) return result;
-      const next: SnaggingQuotation = { ...prev, ...result };
+      const next: SnaggingQuotation = {
+        ...prev,
+        ...result,
+        // The action just taken is the newest change (SNG-037).
+        modified_by_name: userProfile?.full_name ?? prev.modified_by_name ?? null,
+        modified_at: new Date().toISOString(),
+      };
       // Kept in its own state, and never part of the loaded shape.
       delete next.approval_url;
       return next;
     });
-  }, []);
+    setHistoryNonce((n) => n + 1);
+  }, [userProfile?.full_name]);
 
   const doc: SnaggingQuoteDoc | null = quote
     ? {
@@ -351,6 +411,11 @@ export default function QuotationDetail({ id }: { id: string }) {
   const isDecided =
     quote?.status === "approved" || quote?.status === "rejected";
   const isDesnag = quote?.quote_kind === "desnag";
+  // Editable until approved, for a quotation priced from the property form.
+  const canChangeInputs =
+    Boolean(quote?.id) &&
+    quote?.status !== "approved" &&
+    (quote?.quote_kind ?? "inspection") === "inspection";
   const needsJob = quote?.status === "approved" && !quote?.job_id;
 
   return (
@@ -367,8 +432,6 @@ export default function QuotationDetail({ id }: { id: string }) {
 
         {quote && doc ? (
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <QuotationStatusBadge status={quote.status} />
-
             {/* The job this quotation turned into, one click away. */}
             {quote.job_id ? (
               <Button
@@ -411,6 +474,41 @@ export default function QuotationDetail({ id }: { id: string }) {
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
+
+                {/*
+                  Edit what the quotation is priced from, until the client
+                  approves it (Sami, Oct 2026). A de-snag or a visit is
+                  priced from its job, so it is changed there instead.
+                */}
+                {canChangeInputs ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => {
+                      const editUrl = `/snagging/quotations/${quote.id}/edit`;
+                      if (quote.status === "draft") {
+                        router.push(editUrl);
+                        return;
+                      }
+                      void confirm({
+                        title:
+                          quote.status === "sent"
+                            ? "Edit a quotation the client has?"
+                            : "Revise the rejected quotation?",
+                        description:
+                          "Saving your changes moves it back to Draft and reprices it. The link the client was sent stops working, so you will need to send the revised quotation again.",
+                        confirmText: "Edit quotation",
+                        action: async () => {
+                          router.push(editUrl);
+                        },
+                      });
+                    }}
+                  >
+                    <Pencil className="size-4" />
+                    Edit
+                  </Button>
+                ) : null}
 
                 {/* A de-snag is priced at the amount chosen for it, not
                     from the property, so it is never regenerated. */}
@@ -494,7 +592,7 @@ export default function QuotationDetail({ id }: { id: string }) {
         onRetry={() => void load()}
         retrying={loading}
         errorTitle="Could not load the quotation"
-        skeleton={<QuotationBodySkeleton />}
+        skeleton={<QuotationBodySkeleton tab={activeTab} />}
       >
         {quote && doc ? (
           <div className="flex flex-col gap-4">
@@ -621,19 +719,70 @@ export default function QuotationDetail({ id }: { id: string }) {
             ) : null}
 
             {/*
-              The document itself, from the template the PDF is built from.
-              Centred and sized to the page it represents (794px = A4 at
-              96dpi) rather than stretched against the left edge of a
-              full-width card.
+              Three tabs, as on the job page: what it was raised with, the
+              document, and what happened to it. Each tab mounts the first
+              time it is opened and asks for its own data then -- the
+              details come with the quotation, the FSM calls and the change
+              history a page at a time from the server -- and stays mounted
+              after, so going back to it fetches nothing.
             */}
-            <Card className="mx-auto w-fit max-w-full overflow-x-auto p-0">
-              <YallaClassicTemplate
-                data={snaggingQuoteToTemplateData(doc)}
-                hideDiscount
-                type="review"
-                sectionStyle={SNAGGING_QUOTATION_SECTION_STYLE}
-              />
-            </Card>
+            <Tabs value={activeTab} onValueChange={setTab}>
+              <TabsList className="h-auto w-full flex-wrap justify-start gap-1 group-data-horizontal/tabs:h-auto">
+                <TabsTrigger value="details">Details</TabsTrigger>
+                <TabsTrigger value="quotation">Quotation</TabsTrigger>
+                <TabsTrigger value="activity">Activity</TabsTrigger>
+              </TabsList>
+
+              {panel("details", <QuotationDetailsTab quote={quote} />)}
+
+              {panel(
+                "quotation",
+                /*
+                  The document itself, from the template the PDF is built
+                  from, centred and sized to the page it represents (794px =
+                  A4 at 96dpi).
+                */
+                <Card className="mx-auto w-fit max-w-full overflow-x-auto p-0">
+                  <YallaClassicTemplate
+                    data={snaggingQuoteToTemplateData(doc)}
+                    hideDiscount
+                    type="review"
+                    sectionStyle={SNAGGING_QUOTATION_SECTION_STYLE}
+                  />
+                </Card>,
+              )}
+
+              {panel(
+                "activity",
+                /* Zoho FSM and the change history, each its own tab, each fetched when opened. */
+                <div className="flex flex-col gap-4">
+                  <PillTabs<ActivityView>
+                    value={activitySub}
+                    onChange={setActivitySub}
+                    tabs={[
+                      { value: "fsm", label: "Zoho FSM" },
+                      { value: "history", label: "Change history" },
+                    ]}
+                  />
+                  {quote.id && subOpened.has("fsm") ? (
+                    <div hidden={activitySub !== "fsm"}>
+                      <FsmQuotationCard key={historyNonce} quotationId={quote.id} canEdit={canEdit} />
+                    </div>
+                  ) : null}
+                  {quote.id && subOpened.has("history") ? (
+                    <div hidden={activitySub !== "history"}>
+                      <ChangeHistoryCard
+                        key={historyNonce}
+                        scope="quotation"
+                        id={quote.id}
+                        variant="timeline"
+                        description="Who changed it, and when."
+                      />
+                    </div>
+                  ) : null}
+                </div>,
+              )}
+            </Tabs>
           </div>
         ) : null}
       </DataState>

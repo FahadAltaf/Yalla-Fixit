@@ -276,10 +276,14 @@ export function formatPaymentTermsLabel(
   }
 }
 
-export function formatDesignationLabel(
-  designation: AmcFormData["coordinationContacts"][0]["designation"],
-): string {
-  switch (designation) {
+/*
+  A contact's designation as the contract prints it: the three usual ones
+  by their label, anything the client calls them as typed (AMC-099), all in
+  the contract's capitals.
+*/
+export function formatDesignationLabel(designation: string | null | undefined): string {
+  const value = (designation ?? "").trim();
+  switch (value) {
     case "owner":
       return "OWNER";
     case "tenant":
@@ -287,7 +291,7 @@ export function formatDesignationLabel(
     case "representative":
       return "REPRESENTATIVE";
     default:
-      return "OWNER";
+      return value ? value.toUpperCase() : "—";
   }
 }
 

@@ -1,4 +1,4 @@
-import { after, NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
@@ -6,7 +6,6 @@ import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
 import { loadJobFamily } from "@/lib/server/snagging/job-family";
-import { generateReportPdf } from "@/lib/server/snagging/report-generate";
 import { issueReportVersion } from "@/lib/server/snagging/report-versions";
 import { isDesignatedApprovalManager } from "@/lib/server/snagging/workflow";
 import { ActionType, ResourceType } from "@/types/types";
@@ -175,18 +174,9 @@ export async function POST(
         reason: `Additional visit ${visit.visit_number} approved`,
       });
       if (version) {
+        // Its PDF comes from the approving browser, in the report page's
+        // design (see the approve route); "pending" until it arrives.
         generation = { status: "pending", version: version.version };
-        after(async () => {
-          try {
-            const generated = await generateReportPdf(admin, version.id, {
-              actorId: profile.id,
-              actorLabel: profile.full_name ?? profile.email,
-            });
-            if (!generated.ok) console.error("Visit report PDF failed:", generated.error);
-          } catch (generateError) {
-            console.error("Visit report PDF failed:", generateError);
-          }
-        });
       }
     } catch (versionError) {
       console.error("Visit report version could not be issued:", versionError);

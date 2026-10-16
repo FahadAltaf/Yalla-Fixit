@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
-import { Building2, UserRound, Users } from "lucide-react";
-import type { UseFormReturn } from "react-hook-form";
+import { useEffect, useMemo, useState } from "react";
+import { Building2, Plus, Trash2, UserRound, Users } from "lucide-react";
+import { useFieldArray, type UseFormReturn } from "react-hook-form";
+
+import { Button } from "@/components/ui/button";
 
 import {
   FormControl,
@@ -29,7 +31,11 @@ import { rateModelFor } from "@/lib/amc/proposal-rules";
 import { MODEL_LABELS } from "@/lib/amc/rate-card";
 import { isEndDateBeforeStartDate } from "../amc-date-utils";
 import { DatePickerField } from "../components/date-picker-field";
-import type { AmcFormData } from "../amc-types";
+import {
+  DESIGNATION_PRESETS,
+  MAX_COORDINATION_CONTACTS,
+  type AmcFormData,
+} from "../amc-types";
 
 /**
  * What the wizard means by a required field.
@@ -403,32 +409,68 @@ export function PropertyCustomerStep({ form }: StepProps) {
         </div>
       </section>
 
-      <section className="space-y-4">
-        <div>
-          <h3 className="flex items-center gap-2 text-base font-semibold">
-            <Users className="text-brand size-4" />
-            Coordination contacts
-          </h3>
-          <p className="text-muted-foreground mt-0.5 text-sm">
-            Who the team coordinates with day to day. One is enough; add a
-            second only if the client has one.
-          </p>
-        </div>
-        <div className="space-y-6">
-          <div className="space-y-4">
-            <h4 className="text-sm font-medium text-muted-foreground">
-              Contact Person 1
-            </h4>
+      <CoordinationContacts form={form} />
+    </div>
+  );
+}
+
+/**
+ * Who the team coordinates with day to day (AMC-099).
+ *
+ * The first contact is required; more can be added, up to six, for the
+ * clients who give a facility manager, a site supervisor and an owner's
+ * representative. Each designation is one of the usual three or whatever
+ * the client calls the person, typed in.
+ */
+function CoordinationContacts({ form }: StepProps) {
+  const { fields, append, remove } = useFieldArray({
+    control: form.control,
+    name: "coordinationContacts",
+  });
+
+  return (
+    <section className="space-y-4">
+      <div>
+        <h3 className="flex items-center gap-2 text-base font-semibold">
+          <Users className="text-brand size-4" />
+          Coordination contacts
+        </h3>
+        <p className="text-muted-foreground mt-0.5 text-sm">
+          Who the team coordinates with day to day. One is enough; add more
+          only if the client has them.
+        </p>
+      </div>
+      <div className="space-y-6">
+        {fields.map((item, index) => (
+          <div key={item.id} className="space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <h4 className="text-muted-foreground text-sm font-medium">
+                Contact person {index + 1}
+                {index > 0 ? <span className="font-normal"> (optional)</span> : null}
+              </h4>
+              {index > 0 ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="text-muted-foreground hover:text-destructive h-7 px-2"
+                  onClick={() => remove(index)}
+                  aria-label={`Remove contact person ${index + 1}`}
+                >
+                  <Trash2 className="size-3.5" />
+                  Remove
+                </Button>
+              ) : null}
+            </div>
             <div className="grid gap-4 sm:grid-cols-3">
               <FormField
                 control={form.control}
-                name="coordinationContacts.0.name"
+                name={`coordinationContacts.${index}.name`}
                 render={({ field }) => (
                   <FormItem className="flex flex-col">
-
                     <FormLabel>
                       Name
-                      <RequiredMark />
+                      {index === 0 ? <RequiredMark /> : null}
                     </FormLabel>
                     <FormControl>
                       <Input placeholder="Contact person name" {...field} />
@@ -439,21 +481,20 @@ export function PropertyCustomerStep({ form }: StepProps) {
               />
               <FormField
                 control={form.control}
-                name="coordinationContacts.0.phone"
+                name={`coordinationContacts.${index}.phone`}
                 render={({ field }) => (
                   <FormItem className="flex flex-col">
-
                     <FormLabel>
                       Phone
-                      <RequiredMark />
+                      {index === 0 ? <RequiredMark /> : null}
                     </FormLabel>
                     <FormControl>
                       <AmcPhoneInput
-                      id={field.name}
-                      value={field.value}
-                      onChange={field.onChange}
-                      disabled={field.disabled}
-                    />
+                        id={field.name}
+                        value={field.value}
+                        onChange={field.onChange}
+                        disabled={field.disabled}
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -461,100 +502,95 @@ export function PropertyCustomerStep({ form }: StepProps) {
               />
               <FormField
                 control={form.control}
-                name="coordinationContacts.0.designation"
+                name={`coordinationContacts.${index}.designation`}
                 render={({ field }) => (
                   <FormItem className="flex flex-col">
-
                     <FormLabel>Designation</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
-                      <FormControl className="w-full">
-                        <SelectTrigger className="w-full">
-                          <SelectValue placeholder="Select designation" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="owner">Owner</SelectItem>
-                        <SelectItem value="tenant">Tenant</SelectItem>
-                        <SelectItem value="representative">
-                          Representative
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <DesignationInput
+                      id={field.name}
+                      value={field.value ?? ""}
+                      onChange={field.onChange}
+                    />
                     <FormMessage />
                   </FormItem>
                 )}
               />
             </div>
           </div>
+        ))}
+        {fields.length < MAX_COORDINATION_CONTACTS ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => append({ name: "", phone: "", designation: "owner" })}
+          >
+            <Plus className="size-4" />
+            Add another contact
+          </Button>
+        ) : null}
+      </div>
+    </section>
+  );
+}
 
-          <div className="space-y-4">
-            <h4 className="text-sm font-medium text-muted-foreground">
-              Contact Person 2{" "}
-              <span className="font-normal">(optional)</span>
-            </h4>
-            <div className="grid gap-4 sm:grid-cols-3">
-              <FormField
-                control={form.control}
-                name="coordinationContacts.1.name"
-                render={({ field }) => (
-                  <FormItem className="flex flex-col">
+const OTHER = "__other";
 
-                    <FormLabel>Name</FormLabel>
-                    <FormControl>
-                      <Input placeholder="Contact person name" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="coordinationContacts.1.phone"
-                render={({ field }) => (
-                  <FormItem className="flex flex-col">
+/**
+ * Owner, tenant, representative, or the client's own title for the person
+ * ("Operation Manager"), typed in when Other is chosen.
+ */
+function DesignationInput({
+  id,
+  value,
+  onChange,
+}: {
+  id: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const preset = DESIGNATION_PRESETS.some((option) => option.value === value);
+  const [typing, setTyping] = useState(!preset && value.trim() !== "");
+  const selected = preset && !typing ? value : typing ? OTHER : "";
 
-                    <FormLabel>Phone</FormLabel>
-                    <FormControl>
-                      <AmcPhoneInput
-                      id={field.name}
-                      value={field.value}
-                      onChange={field.onChange}
-                      disabled={field.disabled}
-                    />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="coordinationContacts.1.designation"
-                render={({ field }) => (
-                  <FormItem className="flex flex-col">
-
-                    <FormLabel>Designation</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
-                      <FormControl className="w-full">
-                        <SelectTrigger className="w-full">
-                          <SelectValue placeholder="Select designation" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="owner">Owner</SelectItem>
-                        <SelectItem value="tenant">Tenant</SelectItem>
-                        <SelectItem value="representative">
-                          Representative
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-          </div>
-        </div>
-      </section>
+  return (
+    <div className="space-y-2">
+      <Select
+        value={selected}
+        onValueChange={(next) => {
+          if (next === OTHER) {
+            setTyping(true);
+            onChange("");
+            return;
+          }
+          setTyping(false);
+          onChange(next);
+        }}
+      >
+        <FormControl className="w-full">
+          <SelectTrigger id={id} className="w-full">
+            <SelectValue placeholder="Select designation" />
+          </SelectTrigger>
+        </FormControl>
+        <SelectContent>
+          {DESIGNATION_PRESETS.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+          <SelectItem value={OTHER}>Other (type it)</SelectItem>
+        </SelectContent>
+      </Select>
+      {typing ? (
+        <Input
+          autoFocus
+          value={value}
+          maxLength={60}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder="e.g. Operation Manager"
+          aria-label="Designation"
+        />
+      ) : null}
     </div>
   );
 }

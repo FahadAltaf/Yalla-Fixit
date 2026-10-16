@@ -52,6 +52,7 @@ export function formDataToSubmissionPayload(
   const documentOptions = {
     optionalSections: data.optionalSections,
     priceListRows: data.priceListRows,
+    fixedPriceRates: data.fixedPriceRates,
     accountManagers: data.accountManagers,
   };
 
@@ -114,6 +115,7 @@ export function submissionToFormData(submission: AmcDocumentSource): AmcFormData
     priceListRows: submission.document_options?.priceListRows?.length
       ? submission.document_options.priceListRows
       : [emptyPriceListRow(), emptyPriceListRow(), emptyPriceListRow()],
+    fixedPriceRates: submission.document_options?.fixedPriceRates ?? [],
     accountManagers: submission.document_options?.accountManagers ?? [
       { name: "", phone: "" },
       { name: "", phone: "" },

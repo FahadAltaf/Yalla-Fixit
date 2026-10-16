@@ -10,6 +10,7 @@ import type {
   SnaggingAnalyticsMetric,
   SnaggingArea,
   SnaggingAuditEvent,
+  SnaggingChangeHistoryItem,
   SnaggingFloorPlan,
   SnaggingProperty,
   SnaggingPropertyType,
@@ -200,6 +201,87 @@ export interface SnaggingVisitDetail {
   }>;
 }
 
+/** What the snag list asks the server for (GET /tasks/[id]/snags/page). */
+export interface SnagPageQuery {
+  page: number;
+  pageSize: number;
+  sort: "newest" | "oldest";
+  /** "own" (default) is what this record found; "context" the earlier rows it shows. */
+  scope?: "own" | "context";
+  severity?: string | null;
+  status?: string | null;
+  /** "walk" or a visit id. */
+  source?: string | null;
+  areaId?: string | null;
+}
+
+/** One page of snags, with the counts the list's controls show. */
+export interface SnagPageResult {
+  rows: NonNullable<SnaggingTask["snags"]>;
+  total: number;
+  page: number;
+  pageSize: number;
+  /** Severity counts under the other filters. */
+  counts: { all: number; high: number; medium: number; low: number };
+  /** Status counts under the other filters. */
+  statusCounts: Record<string, number>;
+  /** Snags per room, over the whole scope. */
+  areaCounts: Record<string, number>;
+  /** The visits that found any snag. */
+  sources: string[];
+}
+
+/** An approved job's Zoho FSM sync, as the report page shows it. */
+export interface SnaggingJobFsm {
+  enabled: boolean;
+  ready: boolean;
+  job: {
+    status: string;
+    fsm_work_order_id: string | null;
+    fsm_work_order_number: string | null;
+    fsm_status: string | null;
+    fsm_report_version: number | null;
+    fsm_synced_at: string | null;
+    fsm_error: string | null;
+  } | null;
+  /** The job's quotation as an FSM estimate. */
+  estimate: {
+    quote_number: string;
+    fsm_estimate_id: string | null;
+    fsm_estimate_number: string | null;
+    fsm_status: string | null;
+    fsm_error: string | null;
+  } | null;
+  /** One page of every FSM call linked to the job, newest first. */
+  log: SnaggingQuotationFsm["log"];
+  /** How many FSM calls there are in all, for the pager. */
+  logTotal: number;
+}
+
+/** A quotation's Zoho FSM sync, as its page shows it. */
+export interface SnaggingQuotationFsm {
+  enabled: boolean;
+  ready: boolean;
+  quotation: {
+    fsm_estimate_id: string | null;
+    fsm_estimate_number: string | null;
+    fsm_status: string | null;
+    fsm_synced_at: string | null;
+    fsm_error: string | null;
+  } | null;
+  log: {
+    id: number;
+    action: string;
+    status: "success" | "failed" | "skipped";
+    fsm_record_id: string | null;
+    message: string | null;
+    created_at: string;
+    actor: { full_name: string | null; email: string | null } | null;
+  }[];
+  /** How many FSM calls there are in all, for the pager. */
+  logTotal?: number;
+}
+
 export interface SnaggingQuotation {
   /** Null on a preview: nothing has been written for it yet. */
   id: string | null;
@@ -260,6 +342,19 @@ export interface SnaggingQuotation {
    */
   can_approve_rate?: boolean;
 
+  /** Office notes typed on the form; copied to the job (SNG-022). */
+  notes?: string | null;
+
+  /* ── Who did what (SNG-037). From the quotation page's own read. ── */
+
+  created_by_name?: string | null;
+  /** The person behind the newest change after creation. */
+  modified_by_name?: string | null;
+  modified_at?: string | null;
+  /** Who picked the rate, and when. */
+  rate_chosen_by_name?: string | null;
+  rate_chosen_at?: string | null;
+
   /**
    * The live client and property behind the document, beside the frozen
    * snapshot the PDF renders from.
@@ -275,12 +370,18 @@ export interface SnaggingQuotation {
     name: string | null;
     email: string | null;
     phone: string | null;
+    company?: string | null;
+    maher_id?: string | null;
   } | null;
 }
 
 export interface SnaggingClientOption {
   /** Present for persisted clients (from snagging_clients). */
   id?: string;
+  /** The Zoho FSM contact. A client listed from FSM and not used yet has only this. */
+  fsm_contact_id?: string | null;
+  /** Maher ID, which Zoho FSM requires on a client (Maher_Id__C). */
+  maher_id?: string | null;
   client_name: string;
   client_email: string | null;
   client_phone: string | null;
@@ -316,6 +417,8 @@ function toParams(
 export type TaskSection =
   | "checklist"
   | "snags"
+  /** The snags light (no photos signed), for counts and pins. */
+  | "snag_summary"
   | "floor_plans"
   | "visit_status"
   | "desnag_quotation";
@@ -363,7 +466,11 @@ export const snaggingService = {
     const [core, checklist, snags, floorPlans, visitStatus, desnag] = await Promise.all([
       snaggingService.getTaskCore(id, init),
       want.has("checklist") ? snaggingService.getTaskChecklist(id, init) : undefined,
-      want.has("snags") ? snaggingService.getTaskSnags(id, init) : undefined,
+      want.has("snags")
+        ? snaggingService.getTaskSnags(id, init)
+        : want.has("snag_summary")
+          ? snaggingService.getTaskSnagSummary(id, init)
+          : undefined,
       want.has("floor_plans") ? snaggingService.listFloorPlans(id, init) : undefined,
       want.has("visit_status") ? snaggingService.getTaskVisitStatus(id, init) : undefined,
       want.has("desnag_quotation") ? snaggingService.getTaskDesnagQuotation(id, init) : undefined,
@@ -405,6 +512,52 @@ export const snaggingService = {
       method: "GET",
       signal: init.signal,
     }),
+
+  /**
+   * The same snags light: no photos signed (photos is empty), with
+   * photo_count. What the job page's header and plan pins read; the list
+   * pages through getTaskSnagPage and a snag opens through getTaskSnag.
+   */
+  getTaskSnagSummary: async (
+    id: string,
+    init: { signal?: AbortSignal } = {},
+  ): Promise<NonNullable<SnaggingTask["snags"]>> =>
+    executeRESTBackend<NonNullable<SnaggingTask["snags"]>>(
+      `/api/snagging/tasks/${id}/snags?view=summary`,
+      { method: "GET", signal: init.signal },
+    ),
+
+  /** One page of the snag list, filtered and sorted on the server. */
+  getTaskSnagPage: async (
+    id: string,
+    query: SnagPageQuery,
+    init: { signal?: AbortSignal } = {},
+  ): Promise<SnagPageResult> => {
+    const params = new URLSearchParams({
+      page: String(query.page),
+      pageSize: String(query.pageSize),
+      sort: query.sort,
+    });
+    if (query.scope) params.set("scope", query.scope);
+    if (query.severity) params.set("severity", query.severity);
+    if (query.status) params.set("status", query.status);
+    if (query.source) params.set("source", query.source);
+    if (query.areaId) params.set("area", query.areaId);
+    return executeRESTBackend<SnagPageResult>(
+      `/api/snagging/tasks/${id}/snags/page?${params.toString()}`,
+      { method: "GET", signal: init.signal },
+    );
+  },
+
+  /** One snag in full, as this job shows it (for the detail opened from the plan). */
+  getTaskSnag: async (
+    id: string,
+    snagId: string,
+  ): Promise<NonNullable<SnaggingTask["snags"]>[number]> =>
+    executeRESTBackend<NonNullable<SnaggingTask["snags"]>[number]>(
+      `/api/snagging/tasks/${id}/snags/${snagId}`,
+      { method: "GET" },
+    ),
 
   /** Corrects the reason on a checklist item from the portal; empty clears it. */
   updateChecklistReason: async (
@@ -506,6 +659,60 @@ export const snaggingService = {
       },
     }),
 
+  /**
+   * One page of clients from Zoho FSM, newest first, or matching a search
+   * (the portal's own clients when the FSM integration is off). FSM gives
+   * no total, so the page says whether there are more.
+   */
+  listFsmClients: async (query: {
+    search?: string;
+    page: number;
+    pageSize: number;
+  }): Promise<{ data: SnaggingClientOption[]; hasMore: boolean; source: "fsm" | "portal" }> =>
+    executeRESTBackend<{ data: SnaggingClientOption[]; hasMore: boolean; source: "fsm" | "portal" }>(
+      "/api/snagging/fsm/contacts",
+      {
+        method: "GET",
+        params: {
+          ...(query.search ? { search: query.search } : {}),
+          page: String(query.page),
+          pageSize: String(query.pageSize),
+        },
+      },
+    ),
+
+  /** The portal's client for an FSM contact, made the first time it is used. */
+  linkFsmClient: async (fsmContactId: string): Promise<SnaggingClientOption> =>
+    executeRESTBackend<SnaggingClientOption>("/api/snagging/fsm/contacts/link", {
+      method: "POST",
+      body: { fsm_contact_id: fsmContactId },
+    }),
+
+  /** The portal's property for one of the client's FSM addresses, made when it is picked. */
+  linkFsmAddress: async (clientId: string, fsmAddressId: string): Promise<SnaggingProperty> =>
+    executeRESTBackend<SnaggingProperty>("/api/snagging/fsm/addresses/link", {
+      method: "POST",
+      body: { client_id: clientId, fsm_address_id: fsmAddressId },
+    }),
+
+  /** One page of clients for a picker, newest first: no counts, for scrolling through. */
+  pickClientsPage: async (query: {
+    search?: string;
+    page: number;
+    pageSize: number;
+  }): Promise<{ data: SnaggingClientOption[]; totalCount: number }> =>
+    executeRESTBackend<{ data: SnaggingClientOption[]; totalCount: number }>(
+      "/api/snagging/clients",
+      {
+        method: "GET",
+        params: {
+          ...(query.search ? { search: query.search } : {}),
+          page: String(query.page),
+          pageSize: String(query.pageSize),
+        },
+      },
+    ),
+
   /** One page of the Clients table, with each client's job count. */
   listClientsPage: async (query: {
     search?: string;
@@ -530,6 +737,90 @@ export const snaggingService = {
     ),
 
   // ── Quotation (F1-F13) ────────────────────────────────────────────────
+  /** Who changed what on a quotation or in the Snagging settings (SNG-037). */
+  getChangeHistory: async (
+    scope: "quotation" | "settings",
+    id?: string,
+    paging: { page: number; pageSize: number } = { page: 0, pageSize: 10 },
+  ): Promise<{ data: SnaggingChangeHistoryItem[]; totalCount: number }> =>
+    executeRESTBackend<{ data: SnaggingChangeHistoryItem[]; totalCount: number }>("/api/snagging/history", {
+      method: "GET",
+      params: {
+        scope,
+        ...(id ? { id } : {}),
+        page: String(paging.page),
+        pageSize: String(paging.pageSize),
+      },
+    }),
+
+  /** A quotation in Zoho FSM: its estimate, the last error, and the sync log. */
+  getQuotationFsm: async (
+    id: string,
+    paging: { page: number; pageSize: number } = { page: 0, pageSize: 10 },
+  ): Promise<SnaggingQuotationFsm> =>
+    executeRESTBackend<SnaggingQuotationFsm>(`/api/snagging/quotations/${id}/fsm`, {
+      method: "GET",
+      params: { page: String(paging.page), pageSize: String(paging.pageSize) },
+    }),
+
+  /** Syncs a quotation with Zoho FSM now (the Retry button). */
+  syncQuotationFsm: async (id: string): Promise<{ ok: boolean; message: string }> =>
+    executeRESTBackend<{ ok: boolean; message: string }>(`/api/snagging/quotations/${id}/fsm`, {
+      method: "POST",
+    }),
+
+  /** An approved job in Zoho FSM: its work order, report and sync log (SNG-189). */
+  getTaskFsm: async (
+    taskId: string,
+    paging: { page: number; pageSize: number } = { page: 0, pageSize: 10 },
+  ): Promise<SnaggingJobFsm> =>
+    executeRESTBackend<SnaggingJobFsm>(`/api/snagging/tasks/${taskId}/fsm`, {
+      method: "GET",
+      params: { page: String(paging.page), pageSize: String(paging.pageSize) },
+    }),
+
+  /** Syncs an approved job with Zoho FSM now. */
+  syncTaskFsm: async (taskId: string): Promise<{ ok: boolean; message: string }> =>
+    executeRESTBackend<{ ok: boolean; message: string }>(`/api/snagging/tasks/${taskId}/fsm`, {
+      method: "POST",
+    }),
+
+  /** Attaches the report PDF built on the report page to the job's FSM work order. */
+  attachReportToFsm: async (
+    taskId: string,
+    pdf: Blob,
+    fileName: string,
+  ): Promise<{ ok: boolean; message: string }> => {
+    const form = new FormData();
+    form.append("file", pdf, fileName);
+    const response = await fetch(`/api/snagging/tasks/${taskId}/fsm/report`, { method: "POST", body: form });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok && !payload?.data) throw new Error(payload?.error ?? "Could not attach the report in FSM");
+    return payload.data;
+  },
+
+  /**
+   * A report version's PDF, made in the browser in the report page's design:
+   * stored as the version's file and sent to the job's FSM work order. 409
+   * (thrown with `status`) while the job has no version yet.
+   */
+  uploadReportPdf: async (
+    taskId: string,
+    pdf: Blob,
+    fileName: string,
+    versionId?: string | null,
+  ): Promise<{ versionId: string; version: number }> => {
+    const form = new FormData();
+    form.append("file", pdf, fileName);
+    if (versionId) form.append("versionId", versionId);
+    const response = await fetch(`/api/snagging/tasks/${taskId}/report/pdf`, { method: "POST", body: form });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw Object.assign(new Error(payload?.error ?? "Could not store the report PDF"), { status: response.status });
+    }
+    return payload.data;
+  },
+
   getPricing: async (): Promise<SnaggingPricingConfig> =>
     executeRESTBackend<SnaggingPricingConfig>("/api/snagging/pricing", {
       method: "GET",
@@ -691,6 +982,8 @@ export const snaggingService = {
     client_email?: string;
     client_phone?: string;
     company?: string;
+    /** Required when clients are kept in Zoho FSM (Maher_Id__C). */
+    maher_id?: string;
   }): Promise<SnaggingClientOption> =>
     executeRESTBackend<SnaggingClientOption>("/api/snagging/clients", {
       method: "POST",
@@ -699,11 +992,14 @@ export const snaggingService = {
 
   /** Corrects a client's details (FR-1.11). Only what is sent changes. */
   updateClient: async (input: {
-    id: string;
+    /** The portal client; absent for an FSM contact not used in the portal yet. */
+    id?: string;
+    fsm_contact_id?: string | null;
     client_name?: string;
     client_email?: string | null;
     client_phone?: string | null;
     company?: string | null;
+    maher_id?: string | null;
     notes?: string | null;
   }): Promise<SnaggingClientOption> =>
     executeRESTBackend<SnaggingClientOption>("/api/snagging/clients", {
@@ -713,10 +1009,23 @@ export const snaggingService = {
 
   // ── Properties (BR-1) ──────────────────────────────────────────────────
   listProperties: async (clientId?: string): Promise<SnaggingProperty[]> =>
-    executeRESTBackend<SnaggingProperty[]>("/api/snagging/properties", {
+    executeRESTBackend<SnaggingProperty[] | { data: SnaggingProperty[] }>("/api/snagging/properties", {
       method: "GET",
       params: clientId ? { client_id: clientId } : {},
-    }),
+    }).then((result) => (Array.isArray(result) ? result : result.data)),
+
+  /**
+   * A client's addresses: the portal's, then those in Zoho FSM it has no row
+   * for yet (source "fsm", id "fsm:…"). fsmError says FSM could not be read,
+   * so the list may be missing some.
+   */
+  listClientAddresses: async (
+    clientId: string,
+  ): Promise<{ data: SnaggingProperty[]; fsmError: string | null }> =>
+    executeRESTBackend<{ data: SnaggingProperty[]; fsmError?: string | null }>("/api/snagging/properties", {
+      method: "GET",
+      params: { client_id: clientId },
+    }).then((result) => ({ data: result.data ?? [], fsmError: result.fsmError ?? null })),
 
   createProperty: async (
     input: SnaggingPropertyInput,
@@ -946,6 +1255,12 @@ export const snaggingService = {
       method: "POST",
       body: input as unknown as Record<string, unknown>,
     }),
+
+  /** The job's report versions, with whether each has its PDF yet. */
+  listReportVersions: async (id: string) =>
+    executeRESTBackend<
+      Array<{ id: string; version: number; generation_status: string; pdf_url: string | null }>
+    >(`/api/snagging/tasks/${id}/report/versions`, { method: "GET" }),
 
   /** Renders a report version's PDF again, after a failed or stuck render. */
   retryReportVersion: async (id: string, versionId: string) =>

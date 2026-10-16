@@ -90,6 +90,7 @@ const STEP_FIELDS: Partial<Record<number, (keyof AmcFormData)[]>> = {
     "discountPercent",
     "optionalSections",
     "priceListRows",
+    "fixedPriceRates",
     "accountManagers",
   ],
 };

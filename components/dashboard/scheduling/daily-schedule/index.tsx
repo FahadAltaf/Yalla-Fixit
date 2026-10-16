@@ -112,6 +112,7 @@ import RejectDialog from "./reject-dialog";
 import HistoryDialog from "./history-dialog";
 import TimeSelect, { formatTimeAmPm, TIME_STEP_MINUTES } from "@/components/ui/time-select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Hint } from "@/components/ui/hint";
 
 type Props = {
   technicians: TechnicianReference[];
@@ -1264,45 +1265,59 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
               onToday={() => setDate(todayIso())}
               isToday={date === todayIso()}
             />
-            <Button variant="ghost" size="icon" onClick={handleRefresh} disabled={refreshing} title="Refresh from FSM">
-              <RefreshCw className={cn("size-4", refreshing && "animate-spin")} />
-            </Button>
+            <Hint label="Refresh from FSM">
+              <span tabIndex={0} className="inline-flex">
+                <Button aria-label="Refresh from FSM" variant="ghost" size="icon" onClick={handleRefresh} disabled={refreshing}>
+                  <RefreshCw className={cn("size-4", refreshing && "animate-spin")} />
+                </Button>
+              </span>
+            </Hint>
           </div>
 
           {/* Wraps on narrow screens so the toolbar never widens the page. */}
           <div className="flex flex-wrap items-center gap-2">
             {/* Zoom widens the time track so entry text stops being clipped. */}
             <div className="flex items-center gap-0.5 rounded-md border px-1">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-7"
-                onClick={() => changeZoom(-1)}
-                disabled={zoomIndex === 0}
-                title="Zoom out"
-              >
-                <ZoomOut className="size-4" />
-              </Button>
+              <Hint label="Zoom out">
+                <span tabIndex={0} className="inline-flex">
+                  <Button
+                    aria-label="Zoom out"
+                    variant="ghost"
+                    size="icon"
+                    className="size-7"
+                    onClick={() => changeZoom(-1)}
+                    disabled={zoomIndex === 0}
+                  >
+                    <ZoomOut className="size-4" />
+                  </Button>
+                </span>
+              </Hint>
               <span className="text-muted-foreground w-11 text-center text-xs tabular-nums">
                 {Math.round(zoom * 100)}%
               </span>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-7"
-                onClick={() => changeZoom(1)}
-                disabled={zoomIndex === ZOOM_STEPS.length - 1}
-                title="Zoom in"
-              >
-                <ZoomIn className="size-4" />
-              </Button>
+              <Hint label="Zoom in">
+                <span tabIndex={0} className="inline-flex">
+                  <Button
+                    aria-label="Zoom in"
+                    variant="ghost"
+                    size="icon"
+                    className="size-7"
+                    onClick={() => changeZoom(1)}
+                    disabled={zoomIndex === ZOOM_STEPS.length - 1}
+                  >
+                    <ZoomIn className="size-4" />
+                  </Button>
+                </span>
+              </Hint>
             </div>
             {/* E3: eye menu — show/hide row fields on the board (and in PDF). */}
             <div className="relative">
-              <Button variant="outline" size="sm" onClick={() => setFieldMenuOpen((v) => !v)} title="Show / hide fields">
-                <Eye className="size-4" />
-                Fields
-              </Button>
+              <Hint label="Show / hide fields">
+                <Button variant="outline" size="sm" onClick={() => setFieldMenuOpen((v) => !v)}>
+                  <Eye className="size-4" />
+                  Fields
+                </Button>
+              </Hint>
               {fieldMenuOpen && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setFieldMenuOpen(false)} />
@@ -1325,10 +1340,12 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
             </div>
 
             {/* E4: export the current view as a PDF. */}
-            <Button variant="outline" size="sm" onClick={() => setExportOpen(true)} title="Export as PDF">
-              <Printer className="size-4" />
-              Export
-            </Button>
+            <Hint label="Export as PDF">
+              <Button variant="outline" size="sm" onClick={() => setExportOpen(true)}>
+                <Printer className="size-4" />
+                Export
+              </Button>
+            </Hint>
 
             {version && <StatusBadge status={STATUS_LABELS[version.status] ?? version.status} />}
             {version && <span className="text-muted-foreground text-xs">v{version.version_number}</span>}
@@ -1363,15 +1380,18 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
 
             {/* Inverse toggle (#1): flips the role/service/tag filters to show
                 everyone who does NOT match. */}
-            <Button
-              size="sm"
-              variant={inverseFilter ? "default" : "outline"}
-              onClick={() => setInverseFilter((v) => !v)}
-              disabled={!anyCategoryFilter}
-              title="Show technicians who do NOT match the selected filters"
-            >
-              {inverseFilter ? "Excluding matches" : "Invert filter"}
-            </Button>
+            <Hint label="Show technicians who do NOT match the selected filters">
+              <span tabIndex={0} className="inline-flex">
+                <Button
+                  size="sm"
+                  variant={inverseFilter ? "default" : "outline"}
+                  onClick={() => setInverseFilter((v) => !v)}
+                  disabled={!anyCategoryFilter}
+                >
+                  {inverseFilter ? "Excluding matches" : "Invert filter"}
+                </Button>
+              </span>
+            </Hint>
 
             <Button
               size="sm"
@@ -1380,14 +1400,15 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
             >
               Hide on-leave
             </Button>
-            <Button
-              size="sm"
-              variant={onlyUnscheduled ? "default" : "outline"}
-              onClick={() => setOnlyUnscheduled((v) => !v)}
-              title="Show only technicians with no scheduled work today"
-            >
-              No scheduled work
-            </Button>
+            <Hint label="Show only technicians with no scheduled work today">
+              <Button
+                size="sm"
+                variant={onlyUnscheduled ? "default" : "outline"}
+                onClick={() => setOnlyUnscheduled((v) => !v)}
+              >
+                No scheduled work
+              </Button>
+            </Hint>
 
             {/* Sort is one choice out of four, so it is a select rather than
                 four competing buttons -- those read as filters you can
@@ -1413,9 +1434,11 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
                 </SelectContent>
               </Select>
               {viewCustomised && (
-                <Button size="sm" variant="ghost" onClick={resetView} title="Return to the default view">
-                  Reset view
-                </Button>
+                <Hint label="Return to the default view">
+                  <Button size="sm" variant="ghost" onClick={resetView}>
+                    Reset view
+                  </Button>
+                </Hint>
               )}
             </div>
           </div>
@@ -1942,30 +1965,32 @@ function HoursControl({
 
   if (!canEdit) {
     return (
-      <span
-        className="text-muted-foreground flex shrink-0 items-center gap-1.5 text-xs"
-        title={bounds.stretched ? `Usual hours ${usual}. Shown wider today so every job fits.` : `Usual hours ${usual}`}
-      >
-        {label}
-      </span>
+      <Hint label={bounds.stretched ? `Usual hours ${usual}. Shown wider today so every job fits.` : `Usual hours ${usual}`}>
+        <span
+          className="text-muted-foreground flex shrink-0 items-center gap-1.5 text-xs"
+        >
+          {label}
+        </span>
+      </Hint>
     );
   }
 
   return (
     <Popover open={open} onOpenChange={openWith}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={cn(
-            "hover:bg-muted hover:text-foreground flex shrink-0 items-center gap-1.5 rounded px-1.5 py-0.5 text-xs",
-            bounds.stretched ? "text-foreground font-medium" : "text-muted-foreground",
-          )}
-          title={`Usual hours ${usual}. Click to change the hours this grid shows.`}
-        >
-          {label}
-          <ChevronDown className="size-3 shrink-0 opacity-70" />
-        </button>
-      </PopoverTrigger>
+      <Hint label={`Usual hours ${usual}. Click to change the hours this grid shows.`}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className={cn(
+              "hover:bg-muted hover:text-foreground flex shrink-0 items-center gap-1.5 rounded px-1.5 py-0.5 text-xs",
+              bounds.stretched ? "text-foreground font-medium" : "text-muted-foreground",
+            )}
+          >
+            {label}
+            <ChevronDown className="size-3 shrink-0 opacity-70" />
+          </button>
+        </PopoverTrigger>
+      </Hint>
       <PopoverContent align="end" className="w-80">
         <div className="text-sm font-medium">{title} hours</div>
         <p className="text-muted-foreground text-xs">
@@ -2824,20 +2849,21 @@ function ShiftSection({
           collapsed ? "rounded-md" : "rounded-t-md border-b",
         )}
       >
-        <button
-          type="button"
-          onClick={toggleCollapsed}
-          aria-expanded={!collapsed}
-          className="hover:text-primary -ml-1 flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 text-left"
-          title={collapsed ? `Show the ${title}` : `Hide the ${title}`}
-        >
-          <ChevronDown className={cn("size-4 shrink-0 transition-transform", collapsed && "-rotate-90")} />
-          <span className="text-sm font-semibold">{title}</span>
-          <span className="text-muted-foreground truncate text-xs font-normal">
-            {technicians.length} technician{technicians.length === 1 ? "" : "s"} · {shiftEntryCount} appointment
-            {shiftEntryCount === 1 ? "" : "s"}
-          </span>
-        </button>
+        <Hint label={collapsed ? `Show the ${title}` : `Hide the ${title}`}>
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            aria-expanded={!collapsed}
+            className="hover:text-primary -ml-1 flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 text-left"
+          >
+            <ChevronDown className={cn("size-4 shrink-0 transition-transform", collapsed && "-rotate-90")} />
+            <span className="text-sm font-semibold">{title}</span>
+            <span className="text-muted-foreground truncate text-xs font-normal">
+              {technicians.length} technician{technicians.length === 1 ? "" : "s"} · {shiftEntryCount} appointment
+              {shiftEntryCount === 1 ? "" : "s"}
+            </span>
+          </button>
+        </Hint>
         <div className="flex min-w-0 items-center gap-3">
           {!collapsed && selectedCount > 0 && (
             <span className="bg-primary/10 text-primary flex shrink-0 items-center gap-2 rounded px-2 py-0.5 text-[11px] font-medium">
@@ -2882,21 +2908,21 @@ function ShiftSection({
             </div>
             <div className="relative min-w-0 flex-1">
               {hourCells.map((cell) => (
-                <div
-                  key={cell.start}
-                  // inset-y-0 + items-center so the hour sits on the same
-                  // baseline as the "Technician" label in the frozen column;
-                  // pinned to top-0 it rode ~9px high above it.
-                  className={cn(
-                    "text-muted-foreground absolute inset-y-0 flex items-center border-l px-1.5 text-[11px] tabular-nums",
-                    // An hour outside the shift's usual window, shown for today's jobs.
-                    cell.extended && "bg-muted/70 italic",
-                  )}
-                  style={{ left: `${cell.leftPct}%`, width: `${cell.widthPct}%` }}
-                  title={cell.extended ? `Outside the usual ${title.toLowerCase()} hours` : undefined}
-                >
-                  {formatHourLabel(cell.start)}
-                </div>
+                <Hint key={cell.start} label={cell.extended ? `Outside the usual ${title.toLowerCase()} hours` : undefined}>
+                  <div
+                    // inset-y-0 + items-center so the hour sits on the same
+                    // baseline as the "Technician" label in the frozen column;
+                    // pinned to top-0 it rode ~9px high above it.
+                    className={cn(
+                      "text-muted-foreground absolute inset-y-0 flex items-center border-l px-1.5 text-[11px] tabular-nums",
+                      // An hour outside the shift's usual window, shown for today's jobs.
+                      cell.extended && "bg-muted/70 italic",
+                    )}
+                    style={{ left: `${cell.leftPct}%`, width: `${cell.widthPct}%` }}
+                  >
+                    {formatHourLabel(cell.start)}
+                  </div>
+                </Hint>
               ))}
               {/* While a bar is dragged, the hour row marks the time it would take. */}
               {dragBand && (
@@ -3236,53 +3262,57 @@ const TechnicianRow = memo(function TechnicianRow({
         {/* Team row order: a full-height handle down the left of the name cell,
             big enough to grab comfortably with a mouse. */}
         {canReorder && (
-          <button
-            type="button"
-            data-grip={id}
-            onPointerDown={(e) => onBeginRowPress(e, id)}
-            onKeyDown={(e) => onRowKey(e, id)}
-            // A long press on touch would otherwise open the context menu.
-            onContextMenu={(e) => e.preventDefault()}
-            className="group/grip text-muted-foreground hover:bg-muted hover:text-foreground focus:bg-primary/10 focus:text-primary data-[pressing=true]:bg-primary/15 data-[pressing=true]:text-primary absolute inset-y-0 left-0 flex w-7 cursor-grab touch-none items-center justify-center opacity-0 transition-[opacity,background-color,color] duration-150 group-hover/row:opacity-100 focus:opacity-100 focus:outline-none active:cursor-grabbing data-[pressing=true]:opacity-100"
-            title="Drag to reorder, or click and use ↑ ↓"
-            aria-label={`Reorder ${technician.display_name}: drag the handle, or use the arrow keys`}
-          >
-            <GripVertical className="size-4 transition-transform duration-200 group-data-[pressing=true]/grip:scale-125" />
-          </button>
+          <Hint label="Drag to reorder, or click and use ↑ ↓">
+            <button
+              type="button"
+              data-grip={id}
+              onPointerDown={(e) => onBeginRowPress(e, id)}
+              onKeyDown={(e) => onRowKey(e, id)}
+              // A long press on touch would otherwise open the context menu.
+              onContextMenu={(e) => e.preventDefault()}
+              className="group/grip text-muted-foreground hover:bg-muted hover:text-foreground focus:bg-primary/10 focus:text-primary data-[pressing=true]:bg-primary/15 data-[pressing=true]:text-primary absolute inset-y-0 left-0 flex w-7 cursor-grab touch-none items-center justify-center opacity-0 transition-[opacity,background-color,color] duration-150 group-hover/row:opacity-100 focus:opacity-100 focus:outline-none active:cursor-grabbing data-[pressing=true]:opacity-100"
+              aria-label={`Reorder ${technician.display_name}: drag the handle, or use the arrow keys`}
+            >
+              <GripVertical className="size-4 transition-transform duration-200 group-data-[pressing=true]/grip:scale-125" />
+            </button>
+          </Hint>
         )}
         <div className="group flex min-w-0 items-start gap-1">
           {canReorder && (
-            <input
-              type="checkbox"
-              checked={selected}
-              onChange={() => undefined}
-              onClick={(e) => onSelectRow(e, id)}
-              className={cn(
-                "accent-primary mt-0.5 size-3.5 shrink-0 cursor-pointer transition-opacity",
-                selected ? "opacity-100" : "opacity-0 group-hover/row:opacity-100 focus:opacity-100",
-              )}
-              title="Tick to move this row with others (Shift-click for a range)"
-              aria-label={`Select ${technician.display_name} to move with other rows`}
-            />
+            <Hint label="Tick to move this row with others (Shift-click for a range)">
+              <input
+                type="checkbox"
+                checked={selected}
+                onChange={() => undefined}
+                onClick={(e) => onSelectRow(e, id)}
+                className={cn(
+                  "accent-primary mt-0.5 size-3.5 shrink-0 cursor-pointer transition-opacity",
+                  selected ? "opacity-100" : "opacity-0 group-hover/row:opacity-100 focus:opacity-100",
+                )}
+                aria-label={`Select ${technician.display_name} to move with other rows`}
+              />
+            </Hint>
           )}
-          <span
-            className="line-clamp-2 min-w-0 flex-1 text-sm leading-tight font-medium break-words"
-            style={{ color: roleColor ?? undefined }}
-            title={technician.display_name}
-          >
-            {technician.display_name}
-          </span>
+          <Hint label={technician.display_name}>
+            <span
+              className="line-clamp-2 min-w-0 flex-1 text-sm leading-tight font-medium break-words"
+              style={{ color: roleColor ?? undefined }}
+            >
+              {technician.display_name}
+            </span>
+          </Hint>
           {/* FR-1: edit this technician's role without leaving the board. */}
           {canEditRoles && !isEditingRole && (
-            <button
-              type="button"
-              onClick={() => onSetEditingRole(id)}
-              className="text-muted-foreground hover:text-foreground shrink-0 rounded p-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100"
-              title={`Edit role for ${technician.display_name}`}
-              aria-label={`Edit role for ${technician.display_name}`}
-            >
-              <Pencil className="size-3" />
-            </button>
+            <Hint label={`Edit role for ${technician.display_name}`}>
+              <button
+                type="button"
+                onClick={() => onSetEditingRole(id)}
+                className="text-muted-foreground hover:text-foreground shrink-0 rounded p-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100"
+                aria-label={`Edit role for ${technician.display_name}`}
+              >
+                <Pencil className="size-3" />
+              </button>
+            </Hint>
           )}
         </div>
         {canEditRoles && isEditingRole && (
@@ -3354,30 +3384,33 @@ const TechnicianRow = memo(function TechnicianRow({
         {/* One clickable cell per hour: clicking 5–6 AM opens the add dialog
             with 5:00 AM–6:00 AM already selected. */}
         {hourCells.map((cell) => (
-          <button
+          <Hint
             key={cell.start}
-            type="button"
-            disabled={!isEditable || !!leave}
-            onClick={() =>
-              onAddEntry(id, {
-                startTime: minutesToHhmm(cell.start),
-                endTime: minutesToHhmm(cell.end),
-              })
-            }
-            className={cn(
-              "border-border/40 absolute top-0 bottom-0 border-l",
-              isEditable && !leave ? "hover:bg-primary/5 cursor-pointer" : "cursor-default",
-              cell.extended && "bg-muted/40",
-            )}
-            style={{ left: `${cell.leftPct}%`, width: `${cell.widthPct}%` }}
-            title={
+            label={
               leave
                 ? "On leave — unavailable"
                 : isEditable
                   ? `Add ${formatRange(cell.start, cell.end)} for ${technician.display_name}`
                   : undefined
             }
-          />
+          >
+            <button
+              type="button"
+              disabled={!isEditable || !!leave}
+              onClick={() =>
+                onAddEntry(id, {
+                  startTime: minutesToHhmm(cell.start),
+                  endTime: minutesToHhmm(cell.end),
+                })
+              }
+              className={cn(
+                "border-border/40 absolute top-0 bottom-0 border-l",
+                isEditable && !leave ? "hover:bg-primary/5 cursor-pointer" : "cursor-default",
+                cell.extended && "bg-muted/40",
+              )}
+              style={{ left: `${cell.leftPct}%`, width: `${cell.widthPct}%` }}
+            />
+          </Hint>
         ))}
 
         {leave && (
@@ -3475,78 +3508,79 @@ const TechnicianRow = memo(function TechnicianRow({
           const { primaryText, secondaryText } = entryText(entry, fieldVis, allDay);
 
           return (
-            <button
-              key={entry.id}
-              type="button"
-              onPointerDown={(e) => onBeginEntryDrag(e, entry, placed, id, "move")}
-              // Pointer clicks are handled on pointer-up (so a drag isn't also
-              // a click); this only catches keyboard activation.
-              onClick={(e) => {
-                if (e.detail === 0) onEntryClick(entry);
-              }}
-              className={cn(
-                "group/bar absolute flex flex-col justify-center gap-0.5 overflow-hidden rounded border-r border-black/15 px-2 text-left shadow-sm transition-[box-shadow,filter,opacity] select-none",
-                boxColour,
-                movingAway
-                  ? "z-10 opacity-35 shadow-none outline-2 -outline-offset-2 outline-white/80 outline-dashed"
-                  : resizing
-                    ? "ring-primary z-20 shadow-md ring-2 ring-offset-1"
-                    : cn("z-10", ring),
-                draggable ? "cursor-grab hover:shadow-md hover:brightness-110 active:cursor-grabbing" : "cursor-pointer",
-                // A square, open edge where the job runs on beyond this grid.
-                clippedStart && "rounded-l-none border-l-2 border-dashed border-l-white/80",
-                clippedEnd && "rounded-r-none border-r-2 border-dashed border-r-white/80 pr-5",
-              )}
-              style={{
-                left: `${leftPct}%`,
-                width: `${widthPct}%`,
-                top: laneTop,
-                height: laneBoxHeight,
-                touchAction: "none",
-                transition: resizing ? "width 90ms ease-out" : undefined,
-                backgroundImage: syncFailed ? SYNC_FAILED_STRIPES : undefined,
-              }}
-              title={beingDragged ? undefined : tooltip}
-            >
-              <span className="flex items-center gap-1 truncate text-[11px] leading-tight font-medium">
-                {clippedStart && (
-                  <ChevronsLeft
-                    className="-ml-1 size-3.5 shrink-0"
-                    aria-label={`Started earlier, at ${clockLabel(startMin)}`}
-                  />
+            <Hint key={entry.id} label={beingDragged ? undefined : tooltip}>
+              <button
+                type="button"
+                onPointerDown={(e) => onBeginEntryDrag(e, entry, placed, id, "move")}
+                // Pointer clicks are handled on pointer-up (so a drag isn't also
+                // a click); this only catches keyboard activation.
+                onClick={(e) => {
+                  if (e.detail === 0) onEntryClick(entry);
+                }}
+                className={cn(
+                  "group/bar absolute flex flex-col justify-center gap-0.5 overflow-hidden rounded border-r border-black/15 px-2 text-left shadow-sm transition-[box-shadow,filter,opacity] select-none",
+                  boxColour,
+                  movingAway
+                    ? "z-10 opacity-35 shadow-none outline-2 -outline-offset-2 outline-white/80 outline-dashed"
+                    : resizing
+                      ? "ring-primary z-20 shadow-md ring-2 ring-offset-1"
+                      : cn("z-10", ring),
+                  draggable ? "cursor-grab hover:shadow-md hover:brightness-110 active:cursor-grabbing" : "cursor-pointer",
+                  // A square, open edge where the job runs on beyond this grid.
+                  clippedStart && "rounded-l-none border-l-2 border-dashed border-l-white/80",
+                  clippedEnd && "rounded-r-none border-r-2 border-dashed border-r-white/80 pr-5",
                 )}
-                {syncFailed && <AlertTriangle className="size-3.5 shrink-0" />}
-                {synced && <CircleCheck className="size-3.5 shrink-0" aria-label="Synced to FSM" />}
-                {pendingCreate && <Clock className="size-3.5 shrink-0" aria-label="Pending creation in FSM" />}
-                {overlaps && <Layers className="size-3.5 shrink-0" aria-label="Overlaps another appointment" />}
-                <span className="truncate">{primaryText}</span>
-              </span>
-              {secondaryText && (
-                <span className="truncate text-[10px] leading-tight opacity-85">{secondaryText}</span>
-              )}
-              {clippedEnd && (
-                <span
-                  className="absolute inset-y-0 right-0 flex w-5 items-center justify-center"
-                  aria-label={`Runs on until ${clockLabel(endMin)}`}
-                >
-                  <ChevronsRight className="size-3.5" />
-                </span>
-              )}
-              {/* Right edge: drag to change how long the appointment runs. */}
-              {resizable && !movingAway && (
-                <span
-                  onPointerDown={(e) => onBeginEntryDrag(e, entry, placed, id, "resize")}
-                  className={cn(
-                    "absolute inset-y-0 right-0 flex w-2.5 cursor-ew-resize items-center justify-center transition-opacity hover:bg-white/25",
-                    resizing ? "bg-white/25 opacity-100" : "opacity-0 group-hover/bar:opacity-100",
+                style={{
+                  left: `${leftPct}%`,
+                  width: `${widthPct}%`,
+                  top: laneTop,
+                  height: laneBoxHeight,
+                  touchAction: "none",
+                  transition: resizing ? "width 90ms ease-out" : undefined,
+                  backgroundImage: syncFailed ? SYNC_FAILED_STRIPES : undefined,
+                }}
+              >
+                <span className="flex items-center gap-1 truncate text-[11px] leading-tight font-medium">
+                  {clippedStart && (
+                    <ChevronsLeft
+                      className="-ml-1 size-3.5 shrink-0"
+                      aria-label={`Started earlier, at ${clockLabel(startMin)}`}
+                    />
                   )}
-                  title="Drag to change the end time"
-                  aria-hidden
-                >
-                  <span className="h-4 w-[3px] rounded-full border-x border-white/90" />
+                  {syncFailed && <AlertTriangle className="size-3.5 shrink-0" />}
+                  {synced && <CircleCheck className="size-3.5 shrink-0" aria-label="Synced to FSM" />}
+                  {pendingCreate && <Clock className="size-3.5 shrink-0" aria-label="Pending creation in FSM" />}
+                  {overlaps && <Layers className="size-3.5 shrink-0" aria-label="Overlaps another appointment" />}
+                  <span className="truncate">{primaryText}</span>
                 </span>
-              )}
-            </button>
+                {secondaryText && (
+                  <span className="truncate text-[10px] leading-tight opacity-85">{secondaryText}</span>
+                )}
+                {clippedEnd && (
+                  <span
+                    className="absolute inset-y-0 right-0 flex w-5 items-center justify-center"
+                    aria-label={`Runs on until ${clockLabel(endMin)}`}
+                  >
+                    <ChevronsRight className="size-3.5" />
+                  </span>
+                )}
+                {/* Right edge: drag to change how long the appointment runs. */}
+                {resizable && !movingAway && (
+                  <Hint label="Drag to change the end time" side="right">
+                    <span
+                      onPointerDown={(e) => onBeginEntryDrag(e, entry, placed, id, "resize")}
+                      className={cn(
+                        "absolute inset-y-0 right-0 flex w-2.5 cursor-ew-resize items-center justify-center transition-opacity hover:bg-white/25",
+                        resizing ? "bg-white/25 opacity-100" : "opacity-0 group-hover/bar:opacity-100",
+                      )}
+                      aria-hidden
+                    >
+                      <span className="h-4 w-[3px] rounded-full border-x border-white/90" />
+                    </span>
+                  </Hint>
+                )}
+              </button>
+            </Hint>
           );
         })}
 

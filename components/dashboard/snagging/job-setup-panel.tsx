@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Save,
   ShieldCheck,
+  StickyNote,
   Ticket,
   Upload,
   UserCog,
@@ -34,6 +35,8 @@ import {
 } from "@/components/ui/dialog";
 import { PhoneInput } from "@/components/ui/phone-input";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { CLIENT_PHONE_REQUIRED, isUsablePhone } from "@/lib/snagging/client-phone";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { compressImage } from "@/lib/media/compress-image";
@@ -155,7 +158,16 @@ export function JobSetupPanel({
     return onJob.length > 0 ? [...staff, ...onJob] : staff;
   }, [staff, task.assignees, task.approval_manager_id, task.manager, task.reviewer_id, task.reviewer]);
   const [saving, setSaving] = useState<
-    null | "appt" | "contacts" | "assign" | "noc" | "gatepass" | "location" | "property" | "client"
+    | null
+    | "appt"
+    | "contacts"
+    | "notes"
+    | "assign"
+    | "noc"
+    | "gatepass"
+    | "location"
+    | "property"
+    | "client"
   >(null);
 
   /*
@@ -200,6 +212,8 @@ export function JobSetupPanel({
   const [devPhone, setDevPhone] = useState(task.developer_contact_phone ?? "");
   const [cliName, setCliName] = useState(task.client_contact_name ?? "");
   const [cliPhone, setCliPhone] = useState(task.client_contact_phone ?? "");
+  // Office notes (SNG-022): typed on the quotation, read by the inspector.
+  const [officeNotes, setOfficeNotes] = useState(task.notes ?? "");
 
   /*
     Every inspector on the job, not one of them (point 6).
@@ -306,6 +320,19 @@ export function JobSetupPanel({
       toast.error(
         e instanceof Error ? e.message : "Could not save the contacts",
       );
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  async function saveNotes() {
+    setSaving("notes");
+    try {
+      await snaggingService.updateTask(task.id, { notes: officeNotes.trim() || null });
+      toast.success("Office notes saved");
+      await onChanged();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not save the notes");
     } finally {
       setSaving(null);
     }
@@ -613,6 +640,10 @@ export function JobSetupPanel({
       toast.error("The client needs a name.");
       return;
     }
+    if (!isUsablePhone(clientDraft.phone)) {
+      toast.error(CLIENT_PHONE_REQUIRED);
+      return;
+    }
 
     setSaving("client");
     try {
@@ -781,6 +812,24 @@ export function JobSetupPanel({
                     value: property?.plot_area_sqft
                       ? `${property.plot_area_sqft.toLocaleString()} sq ft`
                       : null,
+                  },
+                  {
+                    label: "Floors",
+                    value: property?.floors ? String(property.floors) : null,
+                  },
+                  // As the client declared it on the quotation (SNG-100).
+                  {
+                    label: "Furnishing",
+                    value:
+                      task.furnished == null
+                        ? null
+                        : task.furnished
+                          ? "Furnished"
+                          : "Unfurnished",
+                  },
+                  {
+                    label: "Booked out of hours",
+                    value: task.out_of_hours ? "Yes" : null,
                   },
                   { label: "Developer", value: property?.developer_name },
                   {
@@ -1108,7 +1157,9 @@ export function JobSetupPanel({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="client-phone">Phone</Label>
+              <Label htmlFor="client-phone">
+                Phone <span className="text-brand">*</span>
+              </Label>
               <Input
                 id="client-phone"
                 value={clientDraft.phone}
@@ -1586,6 +1637,47 @@ export function JobSetupPanel({
             </Field>
           </div>
         </div>
+      </SetupSection>
+
+      {/*
+        Office notes (SNG-022). Carried over from the quotation the job was
+        raised from, and shown to the inspector in the app.
+      */}
+      <SetupSection
+        icon={StickyNote}
+        title="Office notes"
+        description="Anything the inspector should know on site. Shown on the job in the inspector app."
+        footer={
+          canEdit ? (
+            <SubmitButton
+              variant="outline"
+              onClick={() => void saveNotes()}
+              disabled={saving !== null || officeNotes.trim() === (task.notes ?? "").trim()}
+              pending={saving === "notes"}
+              pendingLabel="Saving…"
+              icon={<Save className="size-4" />}
+            >
+              Save notes
+            </SubmitButton>
+          ) : null
+        }
+      >
+        {canEdit ? (
+          <Textarea
+            rows={3}
+            value={officeNotes}
+            maxLength={4000}
+            onChange={(e) => setOfficeNotes(e.target.value)}
+            placeholder="Access, handover date, anything the inspector should know on site"
+            aria-label="Office notes"
+          />
+        ) : (
+          <p className="text-sm whitespace-pre-wrap">
+            {task.notes?.trim() || (
+              <span className="text-muted-foreground">No office notes.</span>
+            )}
+          </p>
+        )}
       </SetupSection>
 
       {/* NOC (FR-3.04) — the property's copy (FR-1.09), attachable here */}

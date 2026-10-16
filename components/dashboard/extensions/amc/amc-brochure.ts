@@ -1,4 +1,5 @@
 import { getAmcBrochureDefaults, type AmcBrochureKey } from "./amc-brochure-copy";
+import { buildPriceListRows } from "./amc-contract-content";
 import { formatPaymentLabel } from "./amc-pricing";
 import { formatPhoneForDocument } from "./amc-phone";
 import {
@@ -77,6 +78,12 @@ export type AmcBrochure = {
   */
   contacts: { name: string; phone: string }[];
   accountManagers: { name: string; phone: string }[];
+  /*
+    The supply and installation price list, when the proposal has it on
+    (UAT AMC-057). It printed in the contract and nowhere on the proposal,
+    so the client agreed to rates they had not been shown. Empty when off.
+  */
+  priceList: { no: string; category: string; description: string; brand: string; price: string }[];
   propertyLabel: string;
   propertyType: string;
   /* Which photos the first page shows (residential or commercial). */
@@ -195,6 +202,9 @@ export function buildAmcBrochure(data: AmcComputedData): AmcBrochure {
         phone: formatPhoneForDocument(manager.phone ?? ""),
       }))
       .filter((manager) => manager.name || manager.phone),
+    priceList: formData.optionalSections?.supplyInstallPriceList
+      ? buildPriceListRows(formData.priceListRows ?? [])
+      : [],
     propertyLabel: getProposalPropertyLabel(formData),
     propertyType: data.propertyTypeLabel,
     propertyCategory: formData.propertyCategory === "commercial" ? "commercial" : "residential",

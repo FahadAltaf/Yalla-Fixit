@@ -2,6 +2,10 @@
 # Throwaway local Postgres 15: rebuild the AMC tables as production has
 # them (the seven v2 migrations), apply every migration from 20261005 on
 # TWICE (idempotency), then run the behavioural and schema checks 90-97.
+# Three snagging migrations from main are skipped (here, compat.sh and
+# scale.sh): they alter snagging_quotations, snagging_jobs and the FSM
+# sync log, which the shim does not model. The two that add columns to
+# snagging_clients and snagging_properties, which AMC uses, are applied.
 # Never touches production. See README.md.
 set -euo pipefail
 PGBIN="${PGBIN:-/c/Program Files/PostgreSQL/15/bin}"
@@ -31,7 +35,7 @@ done
 
 for pass in 1 2; do
   echo "== hardening migrations, pass $pass"
-  for f in $(ls "$WT" | grep -E '^20261(00[5-9]|0[1-3][0-9]|1[0-2][0-9])[0-9]{6}_.*\.sql$' | sort); do
+  for f in $(ls "$WT" | grep -E '^20261(00[5-9]|0[1-3][0-9]|1[0-2][0-9])[0-9]{6}_.*\.sql$' | grep -v -E '_(snagging_quotation_office_notes|snagging_fsm_quotation_sync|snagging_fsm_jobs)\.sql$' | sort); do
     echo "   $f"; "${PSQL[@]}" -f "$WT/$f" >/dev/null
   done
 done

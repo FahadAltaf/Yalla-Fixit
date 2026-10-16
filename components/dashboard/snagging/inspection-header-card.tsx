@@ -29,6 +29,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { snaggingService } from "@/modules/snagging";
+import { publishReportPdf } from "./report-publish";
 import { ActionType, ResourceType, type SnaggingTask } from "@/types/types";
 
 import { AdditionalVisitDialog } from "./additional-visit-dialog";
@@ -58,8 +59,21 @@ export function InspectionHeaderCard({
   onChanged,
   onVisitsChanged,
   pending = {},
+  part = "all",
+  notice,
+  actions,
 }: {
   task: SnaggingTask;
+  /**
+   * Which half to draw. The job page puts the header (title, status, actions)
+   * above its tabs, as the AMC proposal page does, and the four figures in
+   * the Snags tab; elsewhere it is drawn whole.
+   */
+  part?: "all" | "header" | "stats";
+  /** A band along the bottom of the header card: the job's visit alerts. */
+  notice?: React.ReactNode;
+  /** More buttons at the front of the action row (the job page's Refresh). */
+  actions?: React.ReactNode;
   /*
     Re-reads the job. Awaited: an action keeps its button busy until the
     page shows the result, so the old buttons never flash back first.
@@ -207,13 +221,11 @@ export function InspectionHeaderCard({
   const accessIssues = areas.filter(
     (area) => area.access_state && area.access_state !== "accessible",
   );
-  const photoTotal = snags.reduce(
-    (sum, snag) => sum + (snag.photos?.length ?? 0),
-    0,
-  );
-  const snagsWithPhoto = snags.filter(
-    (snag) => (snag.photos?.length ?? 0) > 0,
-  ).length;
+  // The page holds the light summary, which counts photos without them.
+  const photosOf = (snag: (typeof snags)[number]) =>
+    snag.photo_count ?? snag.photos?.length ?? 0;
+  const photoTotal = snags.reduce((sum, snag) => sum + photosOf(snag), 0);
+  const snagsWithPhoto = snags.filter((snag) => photosOf(snag) > 0).length;
 
   const awaitingDecision =
     task.status === "submitted" || task.status === "in_review";
@@ -356,9 +368,34 @@ export function InspectionHeaderCard({
     });
     if (!ok) return;
 
-    toast.success(
-      "Inspection approved. Open the report to send it to the client.",
-    );
+    // A de-snag round issues no report of its own; nothing to make.
+    if (task.visit_type === "desnag") {
+      toast.success("Inspection approved. Open the report to send it to the client.");
+      return;
+    }
+
+    /*
+      The report's PDF, made here in the report page's design and saved as
+      the version's file, which also puts it on the Zoho FSM work order.
+      The server no longer renders its own copy, so this is the step that
+      gives the approved job its document.
+    */
+    const keepOpen = "Keep this page open while the report is saved and sent to Zoho FSM.";
+    const progress = toast.loading("Inspection approved. Preparing the report…", { description: keepOpen });
+    try {
+      await publishReportPdf(task.id, {
+        onStage: (stage) => toast.loading(`${stage}…`, { id: progress, description: keepOpen }),
+      });
+      toast.success("Inspection approved and the report saved", {
+        id: progress,
+        description: "It is attached to the Zoho FSM work order. Open the report to send it to the client.",
+      });
+    } catch (error) {
+      toast.error("Inspection approved, but the report was not saved", {
+        id: progress,
+        description: `${error instanceof Error ? error.message : "Something went wrong"}. Opening the report saves it.`,
+      });
+    }
   }
 
   /*
@@ -420,9 +457,13 @@ export function InspectionHeaderCard({
     }
   }
 
+  const showHeader = part !== "stats";
+  const showStats = part !== "header";
+
   return (
     <>
-      <Card className="gap-0 p-0">
+      {showHeader ? (
+      <Card className="gap-0 overflow-hidden p-0">
         <div className="flex flex-wrap items-center justify-between gap-4 p-5">
           <div className="space-y-1">
             <div className="flex items-center gap-2">
@@ -482,6 +523,7 @@ export function InspectionHeaderCard({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {actions}
             {["submitted", "in_review", "approved", "delivered"].includes(
               task.status,
             ) ? (
@@ -548,34 +590,6 @@ export function InspectionHeaderCard({
                   Approve inspection
                 </SubmitButton>
               </>
-            ) : awaitingDecision ? (
-              /*
-                Waiting on somebody else. Naming them turns a missing set of
-                buttons into an answer — otherwise a coordinator is left
-                wondering whether the page is broken or they simply are not
-                the person it is waiting on.
-              */
-              /*
-                Waiting on somebody, named. Each line says which of the
-                two steps the job is at and who holds it, because with
-                the buttons gone that is the whole answer to "why can I
-                not do anything here". Where no reviewer is named the
-                approval manager is reviewing it, so they are the one
-                named — "the reviewer" would point at an empty seat.
-              */
-              <span className="text-muted-foreground text-sm">
-                {task.status === "submitted"
-                  ? (reviewerName ?? managerName)
-                    ? `Waiting for ${reviewerName ?? managerName} to review it`
-                    : "Nobody is named to review this. Assign a reviewer or an approval manager on Setup."
-                  : !reviewComplete
-                    ? (reviewerName ?? managerName)
-                      ? `${reviewerName ?? managerName} is reviewing it`
-                      : "Under review"
-                    : managerName
-                      ? `Reviewed. Waiting for ${managerName} to approve it`
-                      : "Reviewed. No approval manager is named, so assign one on Setup."}
-              </span>
             ) : null}
             {(task.status === "approved" || task.status === "delivered") &&
             canCreate &&
@@ -661,34 +675,54 @@ export function InspectionHeaderCard({
               <RemediationDue due={task.remediation_due_at} />
             ) : null}
           </div>
-        ) : awaitingDecision && !pending.snags ? (
+        ) : awaitingDecision ? (
+          /*
+            Who the job is waiting on, as the AMC proposal's band says it:
+            your step when it is yours, otherwise the person named, so a
+            missing set of buttons reads as "not your step" and never as a
+            broken page. Where no reviewer is named the approval manager is
+            reviewing it, so they are the one named.
+          */
           <div className="border-warning/30 bg-warning/5 border-t px-5 py-3">
-            <p className="text-sm">
-              {snagsWithPhoto === snags.length
-                ? "Every snag has at least one photo."
-                : `${snags.length - snagsWithPhoto} snag(s) have no photo yet.`}{" "}
-              {/*
-                Said to whoever is reading it. This line is on the card
-                for everybody, and "approving accepts the records" is not
-                what a reviewer is about to do — nor what a coordinator
-                watching the job can do at all.
-              */}
+            <p className="text-sm font-medium">
               {!reviewComplete && canReview
-                ? "Completing your review accepts the snag records; media keeps arriving after."
-                : canDecide
-                  ? "Approving accepts the snag records; media keeps arriving after."
-                  : "Whoever accepts it takes the snag records as they stand; media keeps arriving after."}
+                ? "Waiting for your review"
+                : reviewComplete && canDecide
+                  ? "Waiting for your decision"
+                  : task.status === "submitted"
+                    ? (reviewerName ?? managerName)
+                      ? `Waiting for ${reviewerName ?? managerName} to review it`
+                      : "Nobody is named to review this"
+                    : !reviewComplete
+                      ? (reviewerName ?? managerName)
+                        ? `${reviewerName ?? managerName} is reviewing it`
+                        : "Under review"
+                      : managerName
+                        ? `Reviewed. Waiting for ${managerName} to approve it`
+                        : "Reviewed. No approval manager is named"}
+            </p>
+            <p className="text-muted-foreground mt-1 text-sm">
+              {!reviewComplete && canReview
+                ? `Read the snags through, then complete your review to hand it to ${managerName ?? "the approval manager"} for approval.`
+                : reviewComplete && canDecide
+                  ? "Read the report through, then approve it or send it back with a note."
+                  : (task.status === "submitted" && !(reviewerName ?? managerName)) ||
+                      (reviewComplete && !managerName)
+                    ? "Assign a reviewer or an approval manager on Setup."
+                    : "It is locked while it waits. Nothing goes to the client until it is approved."}
             </p>
           </div>
         ) : null}
+        {notice}
       </Card>
+      ) : null}
 
       {/*
         The four numbers a manager decides on, in the same stat card
         every other page uses rather than a divided strip that only
         existed here.
       */}
-      {pending.snags ? (
+      {!showStats ? null : pending.snags ? (
         <StatCardGrid columns={4}>
           {Array.from({ length: 4 }).map((_, index) => (
             <Skeleton key={index} className="h-[132px] rounded-xl" />
@@ -782,6 +816,8 @@ export function InspectionHeaderCard({
       </StatCardGrid>
       )}
 
+      {showHeader ? (
+      <>
       <RejectInspectionDialog
         open={rejectOpen}
         onOpenChange={setRejectOpen}
@@ -825,6 +861,8 @@ export function InspectionHeaderCard({
       />
 
       {dialog}
+      </>
+      ) : null}
     </>
   );
 }

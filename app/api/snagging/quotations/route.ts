@@ -4,6 +4,8 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
+import { hasQuotationNotes } from "@/lib/server/snagging/columns";
+import { syncQuotationNow } from "@/lib/server/snagging/fsm-quotation-sync";
 import { resolveClient } from "@/lib/server/snagging/client";
 import { PROPERTY_COLUMNS, resolveProperty } from "@/lib/server/snagging/property";
 import {
@@ -15,6 +17,7 @@ import {
 } from "@/lib/server/snagging/quotation-build";
 import { desnagBand } from "@/lib/server/snagging/pricing";
 import { LIST_COLUMNS, listQuotations, toWire } from "@/lib/server/snagging/quotation-list";
+import { firstRequiredPropertyError } from "@/lib/snagging/quotation-required";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
@@ -236,6 +239,10 @@ export async function POST(req: NextRequest) {
             ? new Date().toISOString()
             : null,
         rate_override_reason: priced.rate_outside_band ? overrideReason : null,
+        // The office note typed on the form (SNG-022), once the column exists.
+        ...((await hasQuotationNotes(admin))
+          ? { notes: emptyToNull(body?.notes) }
+          : {}),
         created_by: profile.id,
         updated_at: new Date().toISOString(),
       })
@@ -264,6 +271,13 @@ export async function POST(req: NextRequest) {
         rate_outside_band: priced.rate_outside_band,
       },
     });
+
+    /*
+      Into Zoho FSM now, before answering: the quotation takes FSM's
+      estimate number as its own, so it opens showing that number.
+    */
+    const fsmNumber = await syncQuotationNow(admin, row.id, profile.id);
+    if (fsmNumber) row.quote_number = fsmNumber;
 
     /* With the address it was raised for, so the form can attach the
        documents picked on it (there is no job yet to hang them on). */
@@ -445,6 +459,9 @@ async function desnagQuotation(
       source_job: job.code,
     },
   });
+  // Into Zoho FSM now, so it comes back with FSM's number.
+  const fsmNumber = await syncQuotationNow(admin, row.id, userId);
+  if (fsmNumber) row.quote_number = fsmNumber;
 
   return NextResponse.json({ data: toWire(row) }, { status: 201 });
 }
@@ -468,13 +485,15 @@ function validate(
   if (!body.client_id && phone.length < 5) {
     return "The client needs a phone number the team can reach them on.";
   }
-  if (String(p.unit_label ?? "").trim().length === 0) {
-    return "The unit reference is required — it is what names the property on the quotation.";
-  }
-  if (!(Number(p.built_up_area_sqft) > 0)) {
-    return "Built-up area is required: the quotation is priced from it.";
-  }
-  return null;
+  // Unit, project, type, bedrooms and built-up area (SNG-017), by the
+  // same rule the form shows under each field.
+  return firstRequiredPropertyError({
+    unit_label: p.unit_label,
+    building_name: p.building_name,
+    property_type: p.property_type,
+    bedrooms: p.bedrooms,
+    built_up_area: p.built_up_area_sqft,
+  });
 }
 
 function emptyToNull(value: unknown): string | null {

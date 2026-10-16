@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { LucideIcon } from "lucide-react";
@@ -9,6 +9,7 @@ import {
   ArrowLeft,
   Building2,
   CalendarIcon,
+  CheckCircle2,
   ChevronDown,
   Crosshair,
   Eraser,
@@ -35,6 +36,11 @@ import { toast } from "sonner";
 import { useDebounce } from "@/hooks/use-debounce";
 
 import { compressImage, readImageSize } from "@/lib/media/compress-image";
+import { toPinnablePlan } from "@/lib/snagging/pinnable-plan";
+import {
+  requiredPropertyErrors,
+  type RequiredPropertyKey,
+} from "@/lib/snagging/quotation-required";
 import {
   zoneLabelPoint,
   type ZonePoint,
@@ -58,6 +64,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import TimeSelect, { formatTimeAmPm } from "@/components/ui/time-select";
 import { PhoneInput } from "@/components/ui/phone-input";
 import { Label } from "@/components/ui/label";
@@ -70,6 +77,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Hint } from "@/components/ui/hint";
 import { cn } from "@/lib/utils";
 import { pickRateForSize } from "@/lib/server/snagging/pricing";
 import {
@@ -85,6 +93,7 @@ import { templateFor } from "@/lib/snagging/area-templates";
 import type { SnaggingProperty, SnaggingPropertyType } from "@/types/types";
 
 import {
+  ActionDialogContent,
   ErrorState,
   PROPERTY_TYPE_LABELS,
   PageHeading,
@@ -131,8 +140,10 @@ type Draft = {
   building_name: string;
   community: string;
   developer_name: string;
-  property_type: SnaggingPropertyType;
-  bedrooms: number; // 0 = studio; ignored for commercial
+  /* Empty until chosen, so a quotation cannot go out on a default the
+     coordinator never looked at (SNG-017). */
+  property_type: SnaggingPropertyType | "";
+  bedrooms: number | null; // 0 = studio; ignored for commercial
   built_up_area: string; // sqft
   plot_area: string; // villa / townhouse
   external_areas_in_scope: boolean;
@@ -167,6 +178,18 @@ type Draft = {
   approval_manager_id: string;
   reviewer_id: string;
 };
+
+/** The signed links a quotation read carries for its address's documents, by stored path. */
+function linksOf(prop: Record<string, unknown>): Record<string, string> {
+  const links: Record<string, string> = {};
+  for (const [path, url] of [
+    [prop.title_deed_path, prop.title_deed_url],
+    [prop.noc_path, prop.noc_url],
+  ]) {
+    if (typeof path === "string" && path && typeof url === "string" && url) links[path] = url;
+  }
+  return links;
+}
 
 /** The draft with a saved property's fields laid over it; null returns to "new". */
 function withProperty(current: Draft, prop: SnaggingProperty | null, areasTouched: boolean): Draft {
@@ -245,7 +268,7 @@ const ALL_STEPS = [
   { key: "assign", label: "Assign", icon: Users },
 ] as const;
 
-type PropertyErrorKey = "client" | "unit_label" | "built_up_area";
+type PropertyErrorKey = "client" | RequiredPropertyKey;
 
 /**
  * The property-step rules, expressed as the sentence the coordinator
@@ -266,17 +289,18 @@ function propertyErrors(draft: Draft): Partial<Record<PropertyErrorKey, string>>
       "This client has no usable phone number. Change the client, or add one with the + button.";
   }
 
-  if (draft.unit_label.trim().length === 0) {
-    errors.unit_label = "The inspector finds the property by this reference, so it is required.";
-  }
-
-  if (!(Number(draft.built_up_area) > 0)) {
-    errors.built_up_area = draft.built_up_area.trim()
-      ? "Enter the area as a number greater than 0."
-      : "The quotation is priced from this, so it is required.";
-  }
-
-  return errors;
+  // Unit, project, type, bedrooms and built-up area (SNG-017): the same
+  // rule the API refuses with.
+  return {
+    ...errors,
+    ...requiredPropertyErrors({
+      unit_label: draft.unit_label,
+      building_name: draft.building_name,
+      property_type: draft.property_type,
+      bedrooms: draft.bedrooms,
+      built_up_area: draft.built_up_area,
+    }),
+  };
 }
 
 const AREAS_ERROR =
@@ -342,6 +366,9 @@ export default function NewJobWizard({
   );
   const [quotationError, setQuotationError] = useState<string | null>(null);
   const [quotationLabel, setQuotationLabel] = useState<string | null>(null);
+  // The status of the quotation being edited: a sent or rejected one goes
+  // back to Draft when it is saved, and the form says so.
+  const [editingStatus, setEditingStatus] = useState<string | null>(null);
   /*
     Whether an inspector may be picked while the job is being created:
     always, once the form has settled. A job raised from an approved
@@ -352,12 +379,27 @@ export default function NewJobWizard({
   const canAssignInspector = !quotationLoading;
   const [step, setStep] = useState(0);
   const [submitting, setSubmitting] = useState(false);
+  /*
+    Create asks first, then shows its progress in the same popup: each step
+    of the save as it runs (the record, the plans, the documents), ticked
+    off as it finishes, rather than one toast in the corner.
+  */
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [saveSteps, setSaveSteps] = useState<Array<{ label: string; detail?: string; done: boolean }> | null>(
+    null,
+  );
   const [users, setUsers] = useState<AssignableUser[]>([]);
   const [usersLoading, setUsersLoading] = useState(true);
   const [usersError, setUsersError] = useState<string | null>(null);
   const [plans, setPlans] = useState<PendingPlan[]>([]);
   const [titleDeedFile, setTitleDeedFile] = useState<File | null>(null);
   const [nocFile, setNocFile] = useState<File | null>(null);
+  /*
+    Links to the title deed and NOC already on the address, by their stored
+    path, from the quotation read (it signs them). Keyed by path so a link
+    is only offered while the form still points at that same file.
+  */
+  const [docLinks, setDocLinks] = useState<Record<string, string>>({});
   const [gatepassFile, setGatepassFile] = useState<File | null>(null);
 
   const [draft, setDraft] = useState<Draft>({
@@ -370,8 +412,8 @@ export default function NewJobWizard({
     building_name: "",
     community: "",
     developer_name: "",
-    property_type: "apartment",
-    bedrooms: 2,
+    property_type: "",
+    bedrooms: null,
     built_up_area: "",
     plot_area: "",
     external_areas_in_scope: false,
@@ -492,6 +534,9 @@ export default function NewJobWizard({
           title_deed_path: text(prop.title_deed_path),
           noc_required: Boolean(prop.noc_required),
           noc_path: text(prop.noc_path),
+          // The office note typed on the quotation (SNG-022), so it reaches
+          // the job's Setup tab and the inspector's phone.
+          notes: current.notes || text(quote.notes),
           areas: areasTouched.current ? current.areas : [],
         }));
         setQuotationLabel(quote.quote_number);
@@ -534,14 +579,13 @@ export default function NewJobWizard({
         const quote = await snaggingService.getQuotationById(editQuotationId);
         if (cancelled) return;
 
-        if (quote.status !== "draft") {
+        if (quote.status === "approved") {
           setQuotationError(
-            quote.status === "sent"
-              ? "That quotation has already been sent to the client, so it can no longer be edited."
-              : "That quotation has been decided, so it can no longer be edited.",
+            "That quotation has been approved, so it can no longer be edited.",
           );
           return;
         }
+        setEditingStatus(quote.status);
 
         const prop = (quote.property ?? {}) as Record<string, unknown>;
         const snap = (quote.property_snapshot ?? {}) as Record<string, unknown>;
@@ -580,16 +624,22 @@ export default function NewJobWizard({
           floors: text(prop.floors),
           location_lat: text(prop.location_lat),
           location_lng: text(prop.location_lng),
+          // The files already on the address, so the form shows them and
+          // saving without touching them keeps them.
+          title_deed_path: text(prop.title_deed_path),
           noc_required: Boolean(prop.noc_required),
+          noc_path: text(prop.noc_path),
           furnished: Boolean(quote.furnished ?? snap.furnished),
           out_of_hours: quote.out_of_hours === true,
           // The rate this document was priced at, so leaving the field
           // alone saves the same figure rather than resuggesting one.
           rate_per_sqft: text(quote.rate_per_sqft),
           external_rate_per_sqft: text(quote.external_rate_per_sqft),
+          notes: text(quote.notes),
           areas: areasTouched.current ? current.areas : [],
         }));
         setQuotationLabel(quote.quote_number);
+        setDocLinks(linksOf(prop));
       } catch (error) {
         if (!cancelled) {
           setQuotationError(
@@ -778,16 +828,18 @@ export default function NewJobWizard({
       for all of it, with no sign of how far along it was. The same toast
       becomes the success or the error at the end.
     */
-    const progress = toast.loading(
-      quoteOnly
-        ? editQuotationId
-          ? "Saving the quotation…"
-          : "Creating the quotation…"
-        : "Creating the job…",
-      { description: "This can take a few seconds." },
-    );
+    setSaveSteps([
+      {
+        label: quoteOnly ? (editQuotationId ? "Saving the quotation" : "Creating the quotation") : "Creating the job",
+        done: false,
+      },
+    ]);
+    // Ticks off what was running and starts the next step.
     const stage = (message: string, description?: string) =>
-      toast.loading(message, { id: progress, description });
+      setSaveSteps((prev) => [
+        ...(prev ?? []).map((step) => ({ ...step, done: true })),
+        { label: message.replace(/…$/, ""), detail: description, done: false },
+      ]);
     try {
       /*
         Quote-only: write the quotation and stop (BA v2, changes 1-2).
@@ -809,9 +861,11 @@ export default function NewJobWizard({
             client_email: draft.client_email,
             client_phone: draft.client_phone,
             developer_name: draft.developer_name,
-            property_type: draft.property_type,
+            property_type: draft.property_type || undefined,
             bedrooms:
-              draft.property_type === "commercial" ? undefined : draft.bedrooms,
+              draft.property_type === "commercial"
+                ? undefined
+                : (draft.bedrooms ?? undefined),
             built_up_area_sqft: num0(draft.built_up_area),
             plot_area_sqft: num0(draft.plot_area),
             external_areas_in_scope: draft.external_areas_in_scope,
@@ -837,6 +891,8 @@ export default function NewJobWizard({
           out_of_hours: draft.out_of_hours,
           rate_per_sqft: num0(draft.rate_per_sqft),
           external_rate_per_sqft: num0(draft.external_rate_per_sqft),
+          // Office notes (SNG-022): kept on the quotation, copied to its job.
+          notes: draft.notes,
         };
 
         /*
@@ -875,20 +931,16 @@ export default function NewJobWizard({
         if (editQuotationId) {
           const saved = await snaggingService.updateQuotation(editQuotationId, payload);
           await attachDocuments(saved.property_id ?? draft.property_id);
-          toast.success(`Quotation ${quotationLabel ?? ""} saved`.replace("  ", " "), {
-            id: progress,
-            description: undefined,
-          });
+          stage("Opening the quotation…");
+          toast.success(`Quotation ${quotationLabel ?? ""} saved`.replace("  ", " "));
           router.push(`/snagging/quotations/${editQuotationId}`);
           return;
         }
 
         const quote = await snaggingService.createQuotation(payload);
         await attachDocuments(quote.property_id ?? draft.property_id);
-        toast.success(`Quotation ${quote.quote_number} created`, {
-          id: progress,
-          description: "Opening it now.",
-        });
+        stage("Opening the quotation…");
+        toast.success(`Quotation ${quote.quote_number} created`);
         router.push(`/snagging/quotations/${quote.id}`);
         return;
       }
@@ -911,9 +963,10 @@ export default function NewJobWizard({
           client_email: draft.client_email,
           client_phone: draft.client_phone,
           developer_name: draft.developer_name,
-          property_type: draft.property_type,
+          property_type: draft.property_type || "apartment",
           city: "Dubai",
-          bedrooms: draft.property_type === "commercial" ? undefined : draft.bedrooms,
+          bedrooms:
+            draft.property_type === "commercial" ? undefined : (draft.bedrooms ?? undefined),
           built_up_area_sqft: num(draft.built_up_area),
           plot_area_sqft: num(draft.plot_area),
           external_areas_in_scope: draft.external_areas_in_scope,
@@ -1072,7 +1125,8 @@ export default function NewJobWizard({
         }
       }
 
-      toast.success("Job created", { id: progress, description: "Opening the job now." });
+      stage("Opening the job…");
+      toast.success("Job created");
       router.push(`/snagging/${created.id}`);
     } catch (error) {
       toast.error(
@@ -1082,15 +1136,84 @@ export default function NewJobWizard({
             : "Could not create the quotation"
           : "Could not create the job",
         {
-          id: progress,
           description: error instanceof Error ? error.message : "Please try again.",
         },
       );
+      setSaveSteps(null);
       setSubmitting(false);
     }
   }
 
   const isLast = step === STEPS.length - 1;
+
+  const saveVerb = isEdit ? "Save changes" : quoteOnly ? "Create quotation" : "Create job";
+  const saveDialog = (
+    <Dialog
+      open={confirmOpen || saveSteps !== null}
+      onOpenChange={(open) => {
+        // Nothing closes it while the save runs; it goes when the page opens.
+        if (!open && !submitting) setConfirmOpen(false);
+      }}
+    >
+      <ActionDialogContent busy={submitting} className="sm:max-w-md">
+        {saveSteps === null ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>
+                {isEdit ? "Save these changes?" : quoteOnly ? "Create this quotation?" : "Create this job?"}
+              </DialogTitle>
+              <DialogDescription>
+                {isEdit
+                  ? "The quotation is updated with what is on the form, and the client and address records with it."
+                  : quoteOnly
+                    ? `A quotation for ${draft.client_name || "the client"}${
+                        draft.unit_label ? ` at ${draft.unit_label}${draft.building_name ? `, ${draft.building_name}` : ""}` : ""
+                      } is numbered and saved as a draft. Nothing reaches the client until you share it.`
+                    : "The job is created with its areas, floor plans and documents."}
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setConfirmOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => {
+                  setConfirmOpen(false);
+                  void submit();
+                }}
+              >
+                {saveVerb}
+              </Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <>
+            <DialogHeader>
+              <DialogTitle>
+                {isEdit ? "Saving the quotation" : quoteOnly ? "Creating the quotation" : "Creating the job"}
+              </DialogTitle>
+              <DialogDescription>Keep this page open. It takes a few seconds.</DialogDescription>
+            </DialogHeader>
+            <ol className="space-y-3 py-1">
+              {saveSteps.map((entry, index) => (
+                <li key={`${entry.label}-${index}`} className="flex items-start gap-3 text-sm">
+                  {entry.done ? (
+                    <CheckCircle2 className="text-success mt-0.5 size-4 shrink-0" aria-label="Done" />
+                  ) : (
+                    <Loader2 className="text-muted-foreground mt-0.5 size-4 shrink-0 animate-spin" aria-label="In progress" />
+                  )}
+                  <span className="min-w-0">
+                    <span className={cn(entry.done ? "text-muted-foreground" : "font-medium")}>{entry.label}</span>
+                    {entry.detail ? <span className="text-muted-foreground block text-xs">{entry.detail}</span> : null}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </>
+        )}
+      </ActionDialogContent>
+    </Dialog>
+  );
 
   return (
     <div className="flex flex-col gap-6">
@@ -1114,7 +1237,7 @@ export default function NewJobWizard({
         }
         description={
           isEdit
-            ? "Correct the details while it is still a draft. Saving reprices the document and updates the client and property records."
+            ? "Change what the quotation is priced from until the client approves it. Saving reprices the document and updates the client and property records."
             : quoteOnly
               ? "Price a client's property. The job is raised once they approve it."
               : quotationLabel
@@ -1158,6 +1281,20 @@ export default function NewJobWizard({
             Loading the quotation…
           </p>
         </Card>
+      ) : isEdit && (editingStatus === "sent" || editingStatus === "rejected") ? (
+        <Alert>
+          <AlertTriangle />
+          <AlertTitle>
+            {editingStatus === "sent"
+              ? "This quotation is with the client"
+              : "The client rejected this quotation"}
+          </AlertTitle>
+          <AlertDescription>
+            Saving your changes moves it back to Draft and reprices it. The
+            link the client was sent stops working, so send the revised
+            quotation again from its page.
+          </AlertDescription>
+        </Alert>
       ) : quotationError ? (
         <Alert variant="destructive">
           <AlertTriangle />
@@ -1192,12 +1329,13 @@ export default function NewJobWizard({
                 setTitleDeedFile={setTitleDeedFile}
                 nocFile={nocFile}
                 setNocFile={setNocFile}
+                docLinks={docLinks}
                 errors={fieldErrors}
               />
             ) : STEPS[step].key === "plan_areas" ? (
               <PlanAreasStep
-                propertyType={draft.property_type}
-                bedrooms={draft.bedrooms}
+                propertyType={draft.property_type || "apartment"}
+                bedrooms={draft.bedrooms ?? 0}
                 areas={draft.areas}
                 setAreas={setAreas}
                 plans={plans}
@@ -1254,15 +1392,11 @@ export default function NewJobWizard({
               </Button>
               {isLast ? (
                 <SubmitButton
-                  onClick={() => attempt(() => void submit())}
+                  onClick={() => attempt(() => setConfirmOpen(true))}
                   pending={submitting}
                   pendingLabel={isEdit ? "Saving…" : "Creating…"}
                 >
-                  {isEdit
-                    ? "Save changes"
-                    : quoteOnly
-                      ? "Create quotation"
-                      : "Create job"}
+                  {saveVerb}
                 </SubmitButton>
               ) : (
                 <Button onClick={() => attempt(() => setStep(step + 1))}>
@@ -1273,6 +1407,7 @@ export default function NewJobWizard({
           </div>
         </Card>
       )}
+      {saveDialog}
     </div>
   );
 }
@@ -1324,6 +1459,9 @@ function Field({
  * Clients come from the distinct client rows on existing properties, so
  * there is no second table to keep in step.
  */
+/** Clients loaded per page in the picker; scrolling to the end loads the next page. */
+const CLIENT_PAGE_SIZE = 10;
+
 function ClientPicker({
   draft,
   set,
@@ -1337,29 +1475,90 @@ function ClientPicker({
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
-  const [clients, setClients] = useState<SnaggingClientOption[]>([]);
-  // The search the list on screen answers; loading until it is the current one.
-  const [fetchedFor, setFetchedFor] = useState<string | null>(null);
-  const boxRef = useRef<HTMLDivElement>(null);
   /*
-    The server searches every client and sends the best few. The picker
-    used to load the first 400 and filter those here, so anyone after
-    them could not be found.
+    The list on screen: the pages loaded so far for one search. Clients are
+    kept in Zoho FSM (Sami, 14 Oct 2026) and searched there, newest first,
+    ten at a time; scrolling to the end of the list asks for the next ten.
+    FSM gives no total, so the list goes on while FSM says there are more.
   */
+  const [list, setList] = useState<{
+    search: string | null;
+    rows: SnaggingClientOption[];
+    more: boolean;
+    pages: number;
+    source: "fsm" | "portal";
+  }>({ search: null, rows: [], more: false, pages: 0, source: "fsm" });
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
+  // The FSM contact being linked to the portal after it was picked.
+  const [linking, setLinking] = useState<string | null>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
   const debouncedSearch = useDebounce(search.trim(), 250);
-  const loading = fetchedFor !== debouncedSearch;
+  // Loading until the list answers the search in the box.
+  const loading = list.search !== debouncedSearch;
+  const hasMore = !loading && list.more;
+  const fromFsm = list.source === "fsm";
+  // Only the latest request may fill the list: a slow reply for an older search is dropped.
+  const ticket = useRef(0);
 
   useEffect(() => {
-    let active = true;
+    const mine = ++ticket.current;
     snaggingService
-      .searchClients(debouncedSearch || undefined, { limit: 8 })
-      .then((rows) => active && setClients(rows))
-      .catch(() => undefined)
-      .finally(() => active && setFetchedFor(debouncedSearch));
-    return () => {
-      active = false;
-    };
+      .listFsmClients({ search: debouncedSearch || undefined, page: 0, pageSize: CLIENT_PAGE_SIZE })
+      .then((result) => {
+        if (mine !== ticket.current) return;
+        setList({
+          search: debouncedSearch,
+          rows: result.data,
+          more: result.hasMore,
+          pages: 1,
+          source: result.source,
+        });
+        setListError(null);
+      })
+      .catch((err) => {
+        if (mine !== ticket.current) return;
+        setList((current) => ({ ...current, search: debouncedSearch, rows: [], more: false, pages: 0 }));
+        setListError(err instanceof Error ? err.message : "Could not load clients");
+      });
   }, [debouncedSearch]);
+
+  async function loadMore() {
+    if (!hasMore || loadingMore) return;
+    const mine = ticket.current;
+    setLoadingMore(true);
+    try {
+      const result = await snaggingService.listFsmClients({
+        search: list.search || undefined,
+        page: list.pages,
+        pageSize: CLIENT_PAGE_SIZE,
+      });
+      if (mine !== ticket.current) return;
+      setList((current) => {
+        // A client added since the first page can shift the pages by one: never list anyone twice.
+        const key = (row: SnaggingClientOption) => row.fsm_contact_id ?? row.id;
+        const seen = new Set(current.rows.map(key));
+        return {
+          ...current,
+          rows: [...current.rows, ...result.data.filter((row) => !seen.has(key(row)))],
+          more: result.hasMore,
+          pages: current.pages + 1,
+        };
+      });
+    } catch (err) {
+      if (mine === ticket.current) {
+        setListError(err instanceof Error ? err.message : "Could not load more clients");
+      }
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+
+  // Near the end of the list, the next page.
+  function onListScroll(event: UIEvent<HTMLDivElement>) {
+    const el = event.currentTarget;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 48) void loadMore();
+  }
 
   useEffect(() => {
     function onClick(event: MouseEvent) {
@@ -1369,9 +1568,26 @@ function ClientPicker({
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
 
-  const matches = clients;
+  const matches = list.rows;
 
-  function choose(client: SnaggingClientOption) {
+  /*
+    A client from FSM that the portal has not used yet gets its portal row
+    now (linked to the FSM contact), so the quotation has a client to point
+    at. One already used, or a portal client, is taken as it is.
+  */
+  async function choose(picked: SnaggingClientOption) {
+    let client = picked;
+    if (!client.id && client.fsm_contact_id) {
+      setLinking(client.fsm_contact_id);
+      try {
+        client = await snaggingService.linkFsmClient(client.fsm_contact_id);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Could not use this client");
+        return;
+      } finally {
+        setLinking(null);
+      }
+    }
     releaseProperty();
     set("client_id", client.id ?? "");
     set("property_id", "");
@@ -1421,7 +1637,7 @@ function ClientPicker({
             Change
           </Button>
         </div>
-        <AddClientDialog open={addOpen} onOpenChange={setAddOpen} onSave={saveNew} />
+        <AddClientDialog open={addOpen} onOpenChange={setAddOpen} onSave={saveNew} requireEmail={fromFsm} />
       </>
     );
   }
@@ -1438,40 +1654,53 @@ function ClientPicker({
               setOpen(true);
             }}
             onFocus={() => setOpen(true)}
-            placeholder="Search clients on file"
+            placeholder={fromFsm ? "Search clients in Zoho FSM" : "Search clients on file"}
             className="pr-9 pl-9"
           />
           <ChevronDown className="text-muted-foreground pointer-events-none absolute top-1/2 right-3 size-4 -translate-y-1/2" />
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          onClick={() => setAddOpen(true)}
-          aria-label="Add a new client"
-          title="Add a new client"
-        >
-          <Plus className="size-4" />
-        </Button>
+        <Hint label="Add a new client">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            onClick={() => setAddOpen(true)}
+            aria-label="Add a new client"
+          >
+            <Plus className="size-4" />
+          </Button>
+        </Hint>
       </div>
 
       {open ? (
         <div className="relative">
           <div className="bg-popover absolute z-50 mt-1 w-full overflow-hidden rounded-[12px] border shadow-md">
-            <div className="max-h-64 overflow-y-auto py-1">
+            <div className="max-h-64 overflow-y-auto py-1" onScroll={onListScroll}>
               {loading ? (
-                <p className="text-muted-foreground px-3 py-2 text-sm">Loading clients…</p>
+                <div className="space-y-1 px-3 py-2" aria-label="Loading clients">
+                  {Array.from({ length: 4 }, (_, i) => (
+                    <div key={i} className="space-y-1.5 py-1.5">
+                      <Skeleton className="h-3.5 w-1/3" />
+                      <Skeleton className="h-3 w-1/2" />
+                    </div>
+                  ))}
+                </div>
+              ) : listError && matches.length === 0 ? (
+                <p className="text-destructive px-3 py-2 text-sm">{listError}</p>
               ) : matches.length === 0 ? (
                 <p className="text-muted-foreground px-3 py-2 text-sm">
-                  No client on file matches. Use the + button to add a new one.
+                  {fromFsm
+                    ? "No client in Zoho FSM matches. FSM searches the last name, email and phone. Use + to add a new one."
+                    : "No client on file matches. Use the + button to add a new one."}
                 </p>
               ) : (
                 matches.map((client) => (
                   <button
-                    key={`${client.client_name}-${client.client_email ?? ""}`}
+                    key={client.fsm_contact_id ?? client.id ?? `${client.client_name}-${client.client_email ?? ""}`}
                     type="button"
-                    onClick={() => choose(client)}
-                    className="hover:bg-mist-soft flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm"
+                    disabled={linking !== null}
+                    onClick={() => void choose(client)}
+                    className="hover:bg-mist-soft flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm disabled:opacity-60"
                   >
                     <span className="min-w-0">
                       <span className="block truncate font-medium">{client.client_name}</span>
@@ -1481,14 +1710,37 @@ function ClientPicker({
                         </span>
                       ) : null}
                     </span>
-                    {client.property_count ? (
-                      <span className="text-muted-foreground shrink-0 text-xs">
-                        {client.property_count} job{client.property_count === 1 ? "" : "s"}
-                      </span>
+                    {linking !== null && linking === client.fsm_contact_id ? (
+                      <Loader2 className="text-muted-foreground size-4 shrink-0 animate-spin" />
+                    ) : client.client_phone ? (
+                      <span className="text-muted-foreground shrink-0 text-xs">{client.client_phone}</span>
                     ) : null}
                   </button>
                 ))
               )}
+              {!loading && matches.length > 0 ? (
+                <div className="text-muted-foreground px-3 py-2 text-xs">
+                  {loadingMore ? (
+                    <span className="inline-flex items-center gap-2">
+                      <Loader2 className="size-3.5 animate-spin" />
+                      Loading more clients…
+                    </span>
+                  ) : hasMore ? (
+                    <button
+                      type="button"
+                      onClick={() => void loadMore()}
+                      className="hover:text-foreground underline-offset-2 hover:underline"
+                    >
+                      Showing {matches.length}. Scroll for more
+                    </button>
+                  ) : (
+                    <span>
+                      {matches.length === 1 ? "1 client" : `All ${matches.length} clients`}
+                      {list.search ? " matching your search" : ""}
+                    </span>
+                  )}
+                </div>
+              ) : null}
             </div>
             <button
               type="button"
@@ -1510,22 +1762,26 @@ function ClientPicker({
         onOpenChange={setAddOpen}
         initialName={search.trim()}
         onSave={saveNew}
+        requireEmail={fromFsm}
       />
     </div>
   );
 }
 
-/** Collects a brand-new client: name (required), email, phone. */
+/** Collects a brand-new client: name and phone (required), email. */
 function AddClientDialog({
   open,
   onOpenChange,
   initialName = "",
   onSave,
+  requireEmail = false,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initialName?: string;
   onSave: (client: SnaggingClientOption) => void;
+  /** Zoho FSM keeps every client with an email, so a new one needs one. */
+  requireEmail?: boolean;
 }) {
   // The dialog content unmounts when closed, so these initialisers run
   // fresh on each open — seeding the name from whatever was typed in the
@@ -1534,14 +1790,18 @@ function AddClientDialog({
   const [name, setName] = useState(initialName);
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
+  const [company, setCompany] = useState("");
+  // Zoho FSM requires a Maher ID on every client (Sami, Oct 2026: its own field).
+  const [maherId, setMaherId] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // D1/D2: name and phone are required (phone in any international format);
-  // email is optional and must never block the record.
+  // D1/D2: name and phone are required (phone in any international format).
+  // The email too once clients are kept in Zoho FSM, which requires one.
+  const emailOk = /.+@.+\..+/.test(email.trim());
   const valid =
     name.trim().length >= 2 &&
     /[0-9]{6,}/.test(phone.replace(/[^0-9]/g, "")) &&
-    (email === "" || /.+@.+\..+/.test(email));
+    (requireEmail ? emailOk && maherId.trim().length > 0 : email === "" || emailOk);
 
   // Persist the client now, so it is genuinely on file (and reusable) the
   // moment it is added, rather than only when the job is finally created.
@@ -1553,6 +1813,8 @@ function AddClientDialog({
         client_name: name.trim(),
         client_email: email.trim() || undefined,
         client_phone: phone.trim() || undefined,
+        company: company.trim() || undefined,
+        maher_id: maherId.trim() || undefined,
       });
       onSave(created);
       toast.success(`${created.client_name} added`);
@@ -1569,7 +1831,9 @@ function AddClientDialog({
         <DialogHeader>
           <DialogTitle>Add a client</DialogTitle>
           <DialogDescription>
-            The client receives the report. Only the name is required.
+            {requireEmail
+              ? "The client receives the report. They are added in Zoho FSM too, which needs their email and Maher ID."
+              : "The client receives the report. Only the name is required."}
           </DialogDescription>
         </DialogHeader>
 
@@ -1585,12 +1849,28 @@ function AddClientDialog({
           <Field label="Phone" required hint="Any country code works.">
             <PhoneInput value={phone} onChange={setPhone} />
           </Field>
-          <Field label="Email" hint="Optional.">
+          <Field label="Email" required={requireEmail} hint={requireEmail ? "Zoho FSM requires it." : "Optional."}>
             <Input
               type="email"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               placeholder="name@example.com"
+            />
+          </Field>
+          {requireEmail ? (
+            <Field label="Maher ID" required hint="Zoho FSM requires it.">
+              <Input
+                value={maherId}
+                onChange={(event) => setMaherId(event.target.value)}
+                placeholder="e.g. C0354059"
+              />
+            </Field>
+          ) : null}
+          <Field label="Company" hint="Optional. The agency or business, if any; linked in Zoho FSM.">
+            <Input
+              value={company}
+              onChange={(event) => setCompany(event.target.value)}
+              placeholder="e.g. Driven Properties"
             />
           </Field>
         </div>
@@ -1627,11 +1907,14 @@ function DocumentField({
   hint,
   file,
   onPick,
+  onFile = null,
 }: {
   label: string;
   hint?: string;
   file: File | null;
   onPick: (file: File | null) => void;
+  /** A file already on the address: shown with View and Replace until one is picked. */
+  onFile?: { url: string | null } | null;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
@@ -1692,6 +1975,31 @@ function DocumentField({
             aria-label={`Remove ${file.name}`}
           >
             <X className="size-4" />
+          </Button>
+        </div>
+      ) : onFile ? (
+        <div className="border-border bg-muted/30 flex items-center gap-3 rounded-lg border px-3 py-3">
+          <span className="bg-background text-muted-foreground flex size-10 shrink-0 items-center justify-center rounded-md border">
+            <FileText className="size-5" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium">{label}</p>
+            <p className="text-muted-foreground text-xs">Uploaded to this address</p>
+          </div>
+          {onFile.url ? (
+            <Button asChild type="button" variant="ghost" size="sm">
+              <a href={onFile.url} target="_blank" rel="noopener noreferrer">
+                View
+              </a>
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => inputRef.current?.click()}
+          >
+            Replace
           </Button>
         </div>
       ) : (
@@ -1819,6 +2127,7 @@ function PropertyStep({
   setTitleDeedFile,
   nocFile,
   setNocFile,
+  docLinks,
   errors,
 }: {
   draft: Draft;
@@ -1836,6 +2145,8 @@ function PropertyStep({
   setTitleDeedFile: (file: File | null) => void;
   nocFile: File | null;
   setNocFile: (file: File | null) => void;
+  /** Links to the files already on the address, by stored path. */
+  docLinks: Record<string, string>;
   /** Shown under their fields once someone has tried to continue. */
   errors: Partial<Record<PropertyErrorKey, string>>;
 }) {
@@ -1862,7 +2173,11 @@ function PropertyStep({
     clientId: string | null;
     state: "loading" | "ready" | "error";
     rows: SnaggingProperty[];
+    /** Zoho FSM could not be read: the list holds the portal's addresses only. */
+    fsmError?: string | null;
   }>({ clientId: null, state: "loading", rows: [] });
+  // The FSM address being saved to the portal after it was picked.
+  const [linkingAddress, setLinkingAddress] = useState(false);
 
   const fresh = Boolean(draft.client_id) && lookup.clientId === draft.client_id;
   const propertiesState: "idle" | "loading" | "ready" | "error" = !draft.client_id
@@ -1872,15 +2187,48 @@ function PropertyStep({
       : "loading";
   const clientProperties = fresh ? lookup.rows : [];
 
+  /*
+    An address only in Zoho FSM (source "fsm") has no portal row yet: picking
+    it makes one, linked to the FSM address, so the quotation can point at it.
+  */
+  const linkAddress = useCallback(
+    async (clientId: string, row: SnaggingProperty): Promise<SnaggingProperty | null> => {
+      if (row.source !== "fsm") return row;
+      setLinkingAddress(true);
+      try {
+        const linked = await snaggingService.linkFsmAddress(
+          clientId,
+          row.fsm_address_id ?? row.id.replace(/^fsm:/, ""),
+        );
+        setLookup((current) =>
+          current.clientId === clientId
+            ? { ...current, rows: current.rows.map((r) => (r.id === row.id ? { ...linked, source: "portal" } : r)) }
+            : current,
+        );
+        return linked;
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Could not use that address");
+        return null;
+      } finally {
+        setLinkingAddress(false);
+      }
+    },
+    [],
+  );
+
   const loadClientProperties = useCallback((clientId: string) => {
     let active = true;
     snaggingService
-      .listProperties(clientId)
-      .then((rows) => {
+      .listClientAddresses(clientId)
+      .then(async ({ data: rows, fsmError }) => {
         if (!active) return;
-        setLookup({ clientId, state: "ready", rows });
-        // Newest first, so the first is the address they were last quoted for.
-        autofillProperty(clientId, rows[0]);
+        setLookup({ clientId, state: "ready", rows, fsmError });
+        // Newest first (the portal's own, then FSM's), so the first is the
+        // address they were last quoted for.
+        const first = rows[0];
+        if (!first) return;
+        const usable = first.source === "fsm" ? await linkAddress(clientId, first) : first;
+        if (active && usable) autofillProperty(clientId, usable);
       })
       .catch(() => {
         // Not the same as "this client has none": an empty list here would
@@ -1890,7 +2238,7 @@ function PropertyStep({
     return () => {
       active = false;
     };
-  }, [autofillProperty]);
+  }, [autofillProperty, linkAddress]);
 
   useEffect(() => {
     if (!draft.client_id) return;
@@ -1985,6 +2333,12 @@ function PropertyStep({
           </Field>
         ) : null}
 
+        {draft.client_id && propertiesState === "ready" && lookup.fsmError ? (
+          <p className="text-warning text-xs">
+            Zoho FSM could not be read, so this client&apos;s addresses there are not listed.
+          </p>
+        ) : null}
+
         {draft.client_id && propertiesState === "ready" && clientProperties.length === 0 ? (
           <p className="text-muted-foreground text-xs">
             No address on file for this client yet. The details below will be
@@ -2003,10 +2357,21 @@ function PropertyStep({
           >
             <Select
               value={draft.property_id || "new"}
+              disabled={linkingAddress}
               onValueChange={(value) => {
                 // "New property" starts from an empty address, not a copy of the saved one.
-                if (value === "new") releaseProperty();
-                else applyProperty(clientProperties.find((p) => p.id === value) ?? null);
+                if (value === "new") {
+                  releaseProperty();
+                  return;
+                }
+                const row = clientProperties.find((p) => p.id === value) ?? null;
+                if (!row || row.source !== "fsm") {
+                  applyProperty(row);
+                  return;
+                }
+                void linkAddress(draft.client_id, row).then((linked) => {
+                  if (linked) applyProperty(linked);
+                });
               }}
             >
               <SelectTrigger className="w-full">
@@ -2016,8 +2381,10 @@ function PropertyStep({
                 <SelectItem value="new">New property</SelectItem>
                 {clientProperties.map((p) => (
                   <SelectItem key={p.id} value={p.id}>
-                    {[p.unit_label, p.building_name, p.community].filter(Boolean).join(", ") ||
-                      p.unit_label}
+                    {p.source === "fsm"
+                      ? `${p.fsm_address_label ?? p.unit_label} · Zoho FSM`
+                      : [p.unit_label, p.building_name, p.community].filter(Boolean).join(", ") ||
+                        p.unit_label}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -2045,7 +2412,7 @@ function PropertyStep({
               placeholder="e.g. Unit 1904"
             />
           </Field>
-          <Field label="Project / tower" required>
+          <Field label="Project / tower" required error={errors.building_name}>
             <Input
               value={draft.building_name}
               onChange={(event) => set("building_name", event.target.value)}
@@ -2066,13 +2433,13 @@ function PropertyStep({
               placeholder="e.g. Emaar"
             />
           </Field>
-          <Field label="Property type" required>
+          <Field label="Property type" required error={errors.property_type}>
             <Select
               value={draft.property_type}
               onValueChange={(value) => setPropertyType(value as SnaggingPropertyType)}
             >
-              <SelectTrigger className="w-full">
-                <SelectValue />
+              <SelectTrigger className="w-full" aria-invalid={Boolean(errors.property_type)}>
+                <SelectValue placeholder="Choose the type" />
               </SelectTrigger>
               <SelectContent>
                 {Object.entries(PROPERTY_TYPE_LABELS).map(([value, label]) => (
@@ -2085,10 +2452,13 @@ function PropertyStep({
           </Field>
 
           {!isCommercial ? (
-            <Field label="Bedrooms" required>
-              <Select value={String(draft.bedrooms)} onValueChange={(v) => setBedrooms(Number(v))}>
-                <SelectTrigger className="w-full">
-                  <SelectValue />
+            <Field label="Bedrooms" required error={errors.bedrooms}>
+              <Select
+                value={draft.bedrooms == null ? "" : String(draft.bedrooms)}
+                onValueChange={(v) => setBedrooms(Number(v))}
+              >
+                <SelectTrigger className="w-full" aria-invalid={Boolean(errors.bedrooms)}>
+                  <SelectValue placeholder="Choose bedrooms" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="0">Studio</SelectItem>
@@ -2227,23 +2597,25 @@ function PropertyStep({
           <DocumentField
             label="Title deed"
             hint={
-              draft.title_deed_path
-                ? "One is on file for this address. Choose a file to replace it."
+              draft.title_deed_path && !titleDeedFile
+                ? "On file for this address. Replace it to upload a new one."
                 : "Optional. Confirms the unit and its area."
             }
             file={titleDeedFile}
             onPick={setTitleDeedFile}
+            onFile={draft.title_deed_path ? { url: docLinks[draft.title_deed_path] ?? null } : null}
           />
           {draft.noc_required ? (
             <DocumentField
               label="NOC / authorization letter"
               hint={
-                draft.noc_path
-                  ? "One is on file for this address. Choose a file to replace it."
+                draft.noc_path && !nocFile
+                  ? "On file for this address. Replace it to upload a new one."
                   : "Optional. Never blocks the job."
               }
               file={nocFile}
               onPick={setNocFile}
+              onFile={draft.noc_path ? { url: docLinks[draft.noc_path] ?? null } : null}
             />
           ) : null}
         </div>
@@ -2307,8 +2679,8 @@ function PlanAreasStep({
 
   const activePlan =
     plans.find((plan) => plan.id === activePlanId) ?? plans[0] ?? null;
-  // Only an image can be clicked for a coordinate. A PDF plan still
-  // uploads and still reaches the inspector; it just cannot be pinned here.
+  // Only an image can be clicked for a coordinate. A PDF is converted to
+  // one when it is picked, so this only fails for a file that never loaded.
   const canPin = Boolean(activePlan?.file.type.startsWith("image/"));
 
   /*
@@ -2366,9 +2738,27 @@ function PlanAreasStep({
         The preview, the dimensions stored against the plan, and the bytes
         that eventually upload then all describe one image. Doing it at
         submit instead would mean the pin coordinates were measured against
-        a picture the job never receives.
+        a picture the job never receives. A PDF is rendered to an image
+        here too, so every plan can be pinned and drawn on (SNG-055).
       */
-      const { file: prepared, width, height } = await compressImage(file);
+      const isPdf = file.type === "application/pdf";
+      const toastId = isPdf ? toast.loading(`Converting ${file.name}…`) : undefined;
+      let pinnable: Awaited<ReturnType<typeof toPinnablePlan>>;
+      try {
+        pinnable = await toPinnablePlan(file);
+        if (isPdf) toast.success("PDF converted to an image", { id: toastId });
+      } catch (error) {
+        toast.error(
+          isPdf
+            ? "Could not read that PDF. Upload the plan as an image (PNG or JPG)."
+            : error instanceof Error
+              ? error.message
+              : "Could not add that plan",
+          { id: toastId },
+        );
+        continue;
+      }
+      const { file: prepared, width, height } = pinnable;
       const url = URL.createObjectURL(prepared);
       const dims =
         width && height
@@ -2385,7 +2775,8 @@ function PlanAreasStep({
     }
 
     setPlans((current) => [...current, ...next]);
-    if (next.length > 0 && !activePlanId) setActivePlanId(next[0].id);
+    // The plan just added opens, ready to place rooms on.
+    if (next.length > 0) setActivePlanId(next[0].id);
   }
 
   function rename(id: string, label: string) {
@@ -2545,7 +2936,7 @@ function PlanAreasStep({
               <Upload className="text-muted-foreground size-6" />
               <span className="font-medium">Add plan images</span>
               <span className="text-muted-foreground text-sm">
-                PNG, JPG, WEBP or PDF, up to 15MB, one per floor
+                PNG, JPG, WEBP or PDF, up to 15MB, one per floor. A PDF uses its first page.
               </span>
             </button>
           ) : (
@@ -2577,24 +2968,26 @@ function PlanAreasStep({
                       >
                         {name}
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => setRenaming({ id: plan.id, label: plan.label })}
-                        aria-label={`Rename ${name}`}
-                        title="Rename"
-                        className="rounded-full p-1 opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100"
-                      >
-                        <Pencil className="size-3" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => remove(plan.id)}
-                        aria-label={`Remove ${name}`}
-                        title="Remove"
-                        className="hover:text-destructive mr-1 rounded-full p-1 opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100"
-                      >
-                        <X className="size-3" />
-                      </button>
+                      <Hint label="Rename">
+                        <button
+                          type="button"
+                          onClick={() => setRenaming({ id: plan.id, label: plan.label })}
+                          aria-label={`Rename ${name}`}
+                          className="rounded-full p-1 opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100"
+                        >
+                          <Pencil className="size-3" />
+                        </button>
+                      </Hint>
+                      <Hint label="Remove">
+                        <button
+                          type="button"
+                          onClick={() => remove(plan.id)}
+                          aria-label={`Remove ${name}`}
+                          className="hover:text-destructive mr-1 rounded-full p-1 opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100"
+                        >
+                          <X className="size-3" />
+                        </button>
+                      </Hint>
                     </div>
                   );
                 })}
@@ -2612,9 +3005,8 @@ function PlanAreasStep({
               {activePlan ? (
                 <>
                   {/*
-                    Pin or outline (BA change 6). Only offered on an image —
-                    a PDF plan still uploads and still reaches the inspector,
-                    it just cannot be drawn on here.
+                    Pin or outline (BA change 6). Every plan is an image by
+                    now: a PDF is converted when it is picked (SNG-055).
                   */}
                   {canPin ? (
                     <div className="bg-muted/40 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-2 py-1.5">
@@ -2705,9 +3097,8 @@ function PlanAreasStep({
                     <div className="border-border bg-mist-soft text-muted-foreground flex flex-col items-center justify-center gap-2 rounded-lg border px-6 py-16 text-center">
                       <ImageIcon className="size-6" />
                       <p className="max-w-sm text-sm">
-                        A PDF plan still uploads with the job, but it cannot be
-                        drawn on here. Add the floor as an image to place rooms
-                        on it.
+                        This plan could not be shown. Remove it and add the
+                        floor as an image (PNG or JPG) to place rooms on it.
                       </p>
                     </div>
                   )}
@@ -2744,17 +3135,18 @@ function PlanAreasStep({
                   <ListChecks className="text-brand size-4" />
                   Areas to inspect
                 </h3>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  className="size-7 shrink-0"
-                  onClick={() => setAddOpen(true)}
-                  aria-label="Add an area"
-                  title="Add an area"
-                >
-                  <Plus className="size-4" />
-                </Button>
+                <Hint label="Add an area">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="size-7 shrink-0"
+                    onClick={() => setAddOpen(true)}
+                    aria-label="Add an area"
+                  >
+                    <Plus className="size-4" />
+                  </Button>
+                </Hint>
               </div>
 
               <div className="flex items-center justify-between gap-2">
@@ -2863,32 +3255,32 @@ function PlanAreasStep({
                       the list, so the placed rooms can be counted in one
                       pass, and the names start at the same x.
                     */}
-                    <span
-                      className={cn(
-                        "flex size-7 shrink-0 items-center justify-center rounded-md border [&_svg]:size-3.5",
-                        placed
-                          ? "border-brand/30 bg-brand-50 text-brand"
-                          : "text-muted-foreground bg-muted/50",
-                      )}
-                      title={
-                        drawn ? "Drawn as a room" : placed ? "Pinned" : "Not on the plan"
-                      }
-                    >
-                      {drawn ? <Shapes /> : placed ? <MapPin /> : <Crosshair />}
-                    </span>
+                    <Hint label={drawn ? "Drawn as a room" : placed ? "Pinned" : "Not on the plan"}>
+                      <span
+                        className={cn(
+                          "flex size-7 shrink-0 items-center justify-center rounded-md border [&_svg]:size-3.5",
+                          placed
+                            ? "border-brand/30 bg-brand-50 text-brand"
+                            : "text-muted-foreground bg-muted/50",
+                        )}
+                      >
+                        {drawn ? <Shapes /> : placed ? <MapPin /> : <Crosshair />}
+                      </span>
+                    </Hint>
 
                     {chosen && canPin && placed ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="text-muted-foreground hover:text-destructive size-7 shrink-0"
-                        onClick={() => clearPlacement(option.name)}
-                        aria-label={`Take ${option.name} off the plan`}
-                        title="Take off the plan"
-                      >
-                        <Eraser className="size-3.5" />
-                      </Button>
+                      <Hint label="Take off the plan">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="text-muted-foreground hover:text-destructive size-7 shrink-0"
+                          onClick={() => clearPlacement(option.name)}
+                          aria-label={`Take ${option.name} off the plan`}
+                        >
+                          <Eraser className="size-3.5" />
+                        </Button>
+                      </Hint>
                     ) : null}
                   </div>
                 );
@@ -3045,7 +3437,9 @@ function QuotePricingBlock({
   pricing: SnaggingPricingConfig | null;
 }) {
   const isCommercial = draft.property_type === "commercial";
-  const row = pricing?.rate_card?.types?.[draft.property_type] ?? null;
+  const row = draft.property_type
+    ? (pricing?.rate_card?.types?.[draft.property_type] ?? null)
+    : null;
   const area = Number(draft.built_up_area) || 0;
 
   /*

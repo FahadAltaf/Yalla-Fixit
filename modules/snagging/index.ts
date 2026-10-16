@@ -10,6 +10,10 @@ export type {
   SnaggingQuotationSummary,
   SnaggingQuoteLine,
   SnaggingVisitDetail,
+  SnagPageQuery,
+  SnagPageResult,
+  SnaggingQuotationFsm,
+  SnaggingJobFsm,
 } from "./services/snagging-service";
 
 export * from "./schemas";

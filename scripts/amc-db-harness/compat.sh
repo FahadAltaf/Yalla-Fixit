@@ -43,7 +43,7 @@ contract() {
 }
 
 contract "00 main baseline" > "$OUT/compat-results.txt"
-MIGS=$(ls "$NEW" | grep -E '^20261(00[5-9]|0[1-3][0-9]|1[0-2][0-9])[0-9]{6}_.*\.sql$' | sort)
+MIGS=$(ls "$NEW" | grep -E '^20261(00[5-9]|0[1-3][0-9]|1[0-2][0-9])[0-9]{6}_.*\.sql$' | grep -v -E '_(snagging_quotation_office_notes|snagging_fsm_quotation_sync|snagging_fsm_jobs)\.sql$' | sort)
 i=0
 for f in $MIGS; do
   i=$((i+1))

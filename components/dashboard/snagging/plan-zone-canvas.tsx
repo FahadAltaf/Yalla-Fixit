@@ -13,6 +13,7 @@ import {
   zoneLabelPoint,
   type ZonePoint,
 } from "@/lib/snagging/zone-geometry";
+import { Hint } from "@/components/ui/hint";
 
 /** One room as the canvas needs to see it, whatever the caller stores. */
 export type PlacedArea = {
@@ -292,21 +293,41 @@ export function PlanZoneCanvas({
         );
       })}
 
-      {pinned.map((area) => (
-        <span
-          key={area.key}
-          style={{
-            left: `${(area.pinX ?? 0) * 100}%`,
-            top: `${(area.pinY ?? 0) * 100}%`,
-          }}
-          className="pointer-events-none absolute flex -translate-x-1/2 -translate-y-full flex-col items-center"
-        >
-          <span className="bg-brand text-primary-foreground rounded-full px-1.5 py-0.5 text-[0.625rem] font-medium whitespace-nowrap shadow-sm">
-            {area.name}
+      {/*
+        Room pins. The tip of a filled map pin sits exactly on the spot,
+        and the name sits above it -- or below it, and pulled in from the
+        side, when the spot is near an edge. Centred above every time, a
+        room pinned near the top or a side of the plan had its marker cut
+        off by the plan's frame.
+      */}
+      {pinned.map((area) => {
+        const x = area.pinX ?? 0;
+        const y = area.pinY ?? 0;
+        const nearTop = y < 0.14;
+        const align = x < 0.15 ? "left" : x > 0.85 ? "right" : "center";
+        return (
+          <span
+            key={area.key}
+            style={{ left: `${x * 100}%`, top: `${y * 100}%` }}
+            className="pointer-events-none absolute size-0"
+          >
+            <MapPin
+              aria-hidden
+              className="fill-brand absolute bottom-0 left-0 size-6 -translate-x-1/2 stroke-white drop-shadow-md"
+              strokeWidth={1.75}
+            />
+            <span
+              className={cn(
+                "bg-brand text-primary-foreground absolute rounded-full px-1.5 py-0.5 text-[0.625rem] font-medium whitespace-nowrap shadow-sm",
+                nearTop ? "top-1.5" : "bottom-6",
+                align === "left" ? "left-0 -translate-x-1" : align === "right" ? "right-0 translate-x-1" : "left-0 -translate-x-1/2",
+              )}
+            >
+              {area.name}
+            </span>
           </span>
-          <MapPin className="text-brand size-4 drop-shadow-sm" />
-        </span>
-      ))}
+        );
+      })}
 
       {/*
         Snag pins, over the rooms. Each says what it is on hover, and
@@ -323,28 +344,31 @@ export function PlanZoneCanvas({
           top: `${marker.y * 100}%`,
         } as const;
         const className = cn(
-          "absolute flex size-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-white text-[0.625rem] font-semibold shadow-md",
+          // A pill as wide as the snag's code ("S004"), not a fixed circle it overflows.
+          "absolute flex h-5 min-w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-white px-1 text-[0.625rem] leading-none font-semibold whitespace-nowrap tabular-nums shadow-md",
           marker.tone,
         );
         return marker.onSelect ? (
-          <button
-            key={marker.key}
-            type="button"
-            title={marker.title}
-            aria-label={marker.title}
-            style={style}
-            className={cn(className, "cursor-pointer hover:brightness-110")}
-            onClick={(event) => {
-              event.stopPropagation();
-              marker.onSelect?.();
-            }}
-          >
-            {marker.label}
-          </button>
+          <Hint key={marker.key} label={marker.title}>
+            <button
+              type="button"
+              aria-label={marker.title}
+              style={style}
+              className={cn(className, "cursor-pointer hover:brightness-110")}
+              onClick={(event) => {
+                event.stopPropagation();
+                marker.onSelect?.();
+              }}
+            >
+              {marker.label}
+            </button>
+          </Hint>
         ) : (
-          <span key={marker.key} title={marker.title} style={style} className={className}>
-            {marker.label}
-          </span>
+          <Hint key={marker.key} label={marker.title}>
+            <span style={style} className={className}>
+              {marker.label}
+            </span>
+          </Hint>
         );
       })}
 

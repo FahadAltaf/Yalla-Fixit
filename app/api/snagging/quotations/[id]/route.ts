@@ -6,6 +6,14 @@ import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { clientEmailHtml, escapeEmailHtml } from "@/lib/email-brand";
 import { sendEmail } from "@/lib/server/send-email";
 import { recordAudit } from "@/lib/server/snagging/audit";
+import {
+  actorNames,
+  quotationAuthorship,
+} from "@/lib/server/snagging/change-history";
+import { hasColumn, hasQuotationNotes } from "@/lib/server/snagging/columns";
+import { signMediaPaths } from "@/lib/server/snagging/media";
+import { fsmClientsReady, updateClientWithFsm } from "@/lib/server/snagging/fsm-clients";
+import { queueFsmSync, syncQuotationNow } from "@/lib/server/snagging/fsm-quotation-sync";
 import { resolveClient } from "@/lib/server/snagging/client";
 import {
   PROPERTY_COLUMNS,
@@ -25,6 +33,7 @@ import {
   type QuoteRef,
 } from "@/lib/server/snagging/quotation";
 import { mintReportToken } from "@/lib/server/snagging/report-token";
+import { firstRequiredPropertyError } from "@/lib/snagging/quotation-required";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
@@ -103,10 +112,10 @@ export async function GET(
     const { data: row, error: loadError } = await admin
       .from("snagging_quotations")
       .select<string, Record<string, unknown>>(
-        `${LOAD_COLUMNS},
+        `${await loadColumns(admin)},
          job_ref:job_id(approval_manager_id),
          property_rec:property_id(${PROPERTY_COLUMNS}),
-         client_rec:client_id(id, name, email, phone)`,
+         client_rec:client_id(${await detailClientColumns(admin)})`,
       )
       .eq("id", id)
       .maybeSingle();
@@ -130,11 +139,30 @@ export async function GET(
     const sent = { ...quote };
     delete sent.rate_chosen_by;
     delete sent.rate_chosen_at;
+    /*
+      Who raised it, who last changed it, and who picked the rate
+      (SNG-037). The rate chooser's id stays off the wire; their name is
+      what the page shows.
+    */
+    const [authorship, chooser, property] = await Promise.all([
+      quotationAuthorship(admin, {
+        id: String(quote.id),
+        created_by: (quote.created_by as string | null) ?? null,
+      }),
+      actorNames(admin, quote.rate_chosen_by ? [String(quote.rate_chosen_by)] : []),
+      withDocumentLinks(admin, one(property_rec)),
+    ]);
+    delete sent.created_by;
     return NextResponse.json({
       data: {
         ...sent,
         can_approve_rate:
           isAdminUser(accessUser) || (Boolean(quote.job_id) && managerId === profile.id),
+        ...authorship,
+        rate_chosen_by_name: quote.rate_chosen_by
+          ? (chooser.get(String(quote.rate_chosen_by)) ?? null)
+          : null,
+        rate_chosen_at: quote.rate_chosen_at ?? null,
         /*
           The LIVE client and property, beside the snapshot the document
           was built from.
@@ -145,7 +173,7 @@ export async function GET(
           reports the unit as it was rather than as it is. An edit form
           filled from it would quietly revert whatever it could not see.
         */
-        property: one(property_rec),
+        property,
         client: one(client_rec),
       },
     });
@@ -267,11 +295,16 @@ export async function POST(
     }
 
     try {
-      if (action === "send") return await send(admin, quote, profile.id, body);
+      // Zoho FSM follows each of these once it has answered (sent, or repriced).
+      const thenSync = (res: NextResponse) => {
+        if (res.ok) queueFsmSync(admin, id, profile.id);
+        return res;
+      };
+      if (action === "send") return thenSync(await send(admin, quote, profile.id, body));
       if (action === "share_link")
-        return await shareLink(admin, quote, profile.id);
+        return thenSync(await shareLink(admin, quote, profile.id));
       if (action === "regenerate")
-        return await regenerate(admin, quote, profile.id);
+        return thenSync(await regenerate(admin, quote, profile.id));
       if (action === "approve") {
         const data = await approveQuotation(admin, ref, {
           name: body.approved_by_name ?? null,
@@ -346,17 +379,28 @@ export async function PATCH(
         { status: 404 },
       );
 
-    if (quote.status !== "draft") {
+    /*
+      Editable until the client approves it (Sami, Oct 2026): what it is
+      priced from -- the property, furnished, out of hours, the rates --
+      can be corrected on a sent or rejected quotation too, and the
+      document is rebuilt from them. Never a free edit of the text.
+
+      Saving a sent or rejected one puts it back to Draft (UNDECIDED below
+      clears the decision and the approval link), so the client's old link
+      stops working and the revised quotation has to be sent again.
+      An approved quotation is the agreement a job is raised from, and
+      stays as it is.
+    */
+    if (quote.status === "approved") {
       return NextResponse.json(
         {
           error:
-            quote.status === "sent"
-              ? "This quotation has already been sent to the client, so it can no longer be edited. Raise a new one instead."
-              : "This quotation has been decided, so it can no longer be edited.",
+            "This quotation has been approved, so it can no longer be edited. Raise a new one instead.",
         },
         { status: 409 },
       );
     }
+    const reopenedFrom = quote.status === "draft" ? null : String(quote.status);
 
     /*
       A de-snag is priced from its original job, not from a property form
@@ -416,16 +460,51 @@ export async function PATCH(
       clientId = picked;
     } else if (previous) {
       clientId = previous;
-      const { error: clientError } = await admin
-        .from("snagging_clients")
-        .update({
-          name: String(p.client_name ?? "").trim() || null,
-          email: text(p.client_email),
-          phone: text(p.client_phone),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", previous);
-      if (clientError) throw new Error(clientError.message);
+      const next = {
+        name: String(p.client_name ?? "").trim() || null,
+        email: text(p.client_email),
+        phone: text(p.client_phone),
+      };
+      /*
+        A client linked to Zoho FSM is corrected there as well, the way the
+        Clients page corrects one: FSM first, then the portal's copy. Only
+        when something actually changed, so an edit that leaves the client
+        alone costs no FSM call. If FSM refuses, the portal copy is still
+        saved below -- a Zoho problem never blocks editing a quotation.
+      */
+      let savedThroughFsm = false;
+      if (await fsmClientsReady(admin)) {
+        const { data: current } = await admin
+          .from("snagging_clients")
+          .select("name, email, phone, fsm_contact_id")
+          .eq("id", previous)
+          .maybeSingle();
+        const changed =
+          current &&
+          ((current.name ?? null) !== next.name ||
+            (current.email ?? null) !== next.email ||
+            (current.phone ?? null) !== next.phone);
+        if (current?.fsm_contact_id && changed) {
+          try {
+            await updateClientWithFsm(
+              admin,
+              { id: previous },
+              { name: next.name ?? undefined, email: next.email, phone: next.phone },
+              profile.id,
+            );
+            savedThroughFsm = true;
+          } catch (fsmError) {
+            console.error("The client could not be updated in Zoho FSM:", fsmError);
+          }
+        }
+      }
+      if (!savedThroughFsm) {
+        const { error: clientError } = await admin
+          .from("snagging_clients")
+          .update({ ...next, updated_at: new Date().toISOString() })
+          .eq("id", previous);
+        if (clientError) throw new Error(clientError.message);
+      }
     } else {
       clientId = await resolveClient(admin, {
         clientId: null,
@@ -534,6 +613,10 @@ export async function PATCH(
         ...(rateMoved || !priced.rate_outside_band
           ? { rate_approved_by: null, rate_approved_at: null }
           : {}),
+        // The office note (SNG-022). Absent from an older caller: kept.
+        ...(body?.notes !== undefined && (await hasQuotationNotes(admin))
+          ? { notes: text(body.notes) }
+          : {}),
         updated_at: new Date().toISOString(),
       })
       .eq("id", id)
@@ -553,8 +636,20 @@ export async function PATCH(
         rate_before: quote.rate_per_sqft,
         rate_after: priced.rate_per_sqft,
         client_changed: clientId !== previous,
+        // Edited after it went to the client: back to draft, link withdrawn.
+        ...(reopenedFrom ? { reopened_from: reopenedFrom } : {}),
+        ...(body?.notes !== undefined &&
+        (text(body.notes) ?? null) !== ((quote.notes as string | null | undefined) ?? null)
+          ? { notes_changed: true }
+          : {}),
       },
     });
+    /*
+      The FSM estimate follows now, before answering: updated while it is
+      unsent there, revised after (and the revision's number taken).
+    */
+    const fsmNumber = await syncQuotationNow(admin, id, profile.id);
+    if (fsmNumber) data.quote_number = fsmNumber;
 
     return NextResponse.json({
       data: {
@@ -582,6 +677,7 @@ async function records(admin: Admin, quote: Record<string, unknown>) {
   const propertyId = quote.property_id as string | null;
   const clientId = quote.client_id as string | null;
 
+  const clientColumns = await detailClientColumns(admin);
   const [property, client] = await Promise.all([
     propertyId
       ? admin
@@ -594,14 +690,42 @@ async function records(admin: Admin, quote: Record<string, unknown>) {
     clientId
       ? admin
           .from("snagging_clients")
-          .select("id, name, email, phone")
+          .select(clientColumns)
           .eq("id", clientId)
           .maybeSingle()
           .then((r) => r.data)
       : Promise.resolve(null),
   ]);
 
-  return { property, client };
+  return { property: await withDocumentLinks(admin, property), client };
+}
+
+/** The client as the Details tab shows it: with the company, and the Maher ID once its column is in. */
+async function detailClientColumns(admin: Admin): Promise<string> {
+  return (await hasColumn(admin, "snagging_clients", "maher_id"))
+    ? "id, name, email, phone, company, maher_id"
+    : "id, name, email, phone, company";
+}
+
+/**
+ * The property with its title deed and NOC as links the Details tab and the
+ * edit form can open. Both sit in the private bucket, so a stored path is no
+ * use to a browser; they are signed here in one call, as the job page signs
+ * them. A signing failure costs the links, not the read.
+ */
+async function withDocumentLinks(admin: Admin, property: unknown): Promise<Record<string, unknown> | null> {
+  if (!property) return null;
+  const record = property as Record<string, unknown>;
+  const docs = [
+    { id: "title_deed", storage_path: (record.title_deed_path as string | null) ?? null },
+    { id: "noc", storage_path: (record.noc_path as string | null) ?? null },
+  ].filter((doc) => doc.storage_path);
+  const signed = (await signMediaPaths(admin, docs).catch(() => [])) as Array<{
+    id: string;
+    signed_url?: string | null;
+  }>;
+  const urlOf = (id: string) => signed.find((doc) => doc.id === id)?.signed_url ?? null;
+  return { ...record, title_deed_url: urlOf("title_deed"), noc_url: urlOf("noc") };
 }
 
 /**
@@ -623,13 +747,15 @@ function validateQuoted(
   if (!body.client_id && phone.length < 5) {
     return "The client needs a phone number the team can reach them on.";
   }
-  if (String(p.unit_label ?? "").trim().length === 0) {
-    return "The unit reference is required — it is what names the property on the quotation.";
-  }
-  if (!(Number(p.built_up_area_sqft) > 0)) {
-    return "Built-up area is required: the quotation is priced from it.";
-  }
-  return null;
+  // Unit, project, type, bedrooms and built-up area (SNG-017), by the
+  // same rule the form shows under each field.
+  return firstRequiredPropertyError({
+    unit_label: p.unit_label,
+    building_name: p.building_name,
+    property_type: p.property_type,
+    bedrooms: p.bedrooms,
+    built_up_area: p.built_up_area_sqft,
+  });
 }
 
 /** A rate the caller may have left out. `false` means "sent, but wrong". */
@@ -646,12 +772,17 @@ function text(value: unknown): string | null {
 
 /* The page's columns, plus who chose the rate: the edit keeps that when
    the rate is unchanged, and GET leaves it out. */
-const LOAD_COLUMNS = `${QUOTATION_COLUMNS}, rate_chosen_by, rate_chosen_at`;
+const LOAD_COLUMNS = `${QUOTATION_COLUMNS}, rate_chosen_by, rate_chosen_at, created_by`;
+
+/* The same, plus the office note once its column exists (SNG-022). */
+async function loadColumns(admin: Admin): Promise<string> {
+  return (await hasQuotationNotes(admin)) ? `${LOAD_COLUMNS}, notes` : LOAD_COLUMNS;
+}
 
 async function load(admin: Admin, id: string) {
   const { data, error } = await admin
     .from("snagging_quotations")
-    .select<string, Record<string, unknown>>(LOAD_COLUMNS)
+    .select<string, Record<string, unknown>>(await loadColumns(admin))
     .eq("id", id)
     .maybeSingle();
   if (error) throw new Error(error.message);

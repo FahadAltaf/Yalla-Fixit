@@ -4,6 +4,7 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { recordAudit } from "@/lib/server/snagging/audit";
+import { syncQuotationNow } from "@/lib/server/snagging/fsm-quotation-sync";
 import { loadJobFamily } from "@/lib/server/snagging/job-family";
 import { PROPERTY_COLUMNS } from "@/lib/server/snagging/property";
 import {
@@ -201,6 +202,9 @@ export async function POST(
         visit_number: visit.visit_number,
       },
     });
+    // The visit's quotation goes to Zoho FSM too, now, so it has FSM's number.
+    const fsmNumber = await syncQuotationNow(admin, quote.id as string, profile.id);
+    if (fsmNumber) quote.quote_number = fsmNumber;
 
     return NextResponse.json({ data: quote }, { status: 201 });
   } catch (error) {

@@ -40,14 +40,15 @@ export function ClientDocumentShell({
   return (
     <div className="min-h-screen bg-slate-100">
       <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/80">
-        <div className="mx-auto flex max-w-[858px] flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        {/* Logo left, actions right; actions that do not fit beside it take their own row. */}
+        <div className="mx-auto flex max-w-[858px] flex-wrap items-center justify-between gap-3 px-4 py-3">
           {/* eslint-disable-next-line @next/next/no-img-element -- static brand asset */}
           <img
             src={AMC_BRAND_IMAGES.logoTrimmed}
             alt="Yalla Fix It Facility Management"
-            className="h-12 w-auto shrink-0 self-start object-contain sm:h-14 sm:self-auto"
+            className="h-12 w-auto shrink-0 object-contain sm:h-14"
           />
-          <div className="flex gap-2">{actions}</div>
+          <div className="flex flex-wrap justify-end gap-2">{actions}</div>
         </div>
       </header>
 
@@ -97,9 +98,17 @@ export function FitToWidth({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <div ref={frameRef} className="flex w-full justify-center">
-      <div className="overflow-hidden rounded-xl bg-white shadow-sm ring-1 ring-slate-200" style={{ zoom }}>
-        {children}
+    <div className="flex w-full flex-col gap-2">
+      {/* On a phone the A4 page is shown whole and small: say how to read it. */}
+      {zoom < 0.65 ? (
+        <p className="text-center text-xs text-slate-500">
+          Pinch to zoom in, or use Download to open it as a PDF or Word file.
+        </p>
+      ) : null}
+      <div ref={frameRef} className="flex w-full justify-center">
+        <div className="overflow-hidden rounded-xl bg-white shadow-sm ring-1 ring-slate-200" style={{ zoom }}>
+          {children}
+        </div>
       </div>
     </div>
   );
@@ -122,9 +131,12 @@ export type ClientFileFormat = "pdf" | "docx";
 export function ClientDownloadMenu({
   onDownload,
   disabled,
+  showLabel = false,
 }: {
   onDownload: (format: ClientFileFormat) => Promise<void>;
   disabled?: boolean;
+  /** Say "Download" at every width, for a page where it is the only action. */
+  showLabel?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const run = async (format: ClientFileFormat) => {
@@ -143,8 +155,8 @@ export function ClientDownloadMenu({
       <DropdownMenuTrigger asChild>
         <Button variant="outline" disabled={busy || disabled} aria-label="Download">
           {busy ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
-          <span className="hidden lg:inline">{busy ? "Preparing…" : "Download"}</span>
-          <ChevronDown className="hidden size-3.5 opacity-60 lg:inline" />
+          <span className={showLabel ? undefined : "hidden lg:inline"}>{busy ? "Preparing…" : "Download"}</span>
+          <ChevronDown className={showLabel ? "size-3.5 opacity-60" : "hidden size-3.5 opacity-60 lg:inline"} />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">

@@ -58,7 +58,7 @@ import {
   type AmcSubmissionStatus,
 } from "./amc-types";
 
-type Scope = "all" | "mine";
+type Scope = "all" | "mine" | "others";
 
 function getErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error && error.message) {
@@ -83,7 +83,6 @@ export function SubmissionsList() {
   /* The current page's rows only; the server does the paging. */
   const [submissions, setSubmissions] = useState<AmcSubmission[]>([]);
   const [total, setTotal] = useState(0);
-  const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
   const [isLoading, setIsLoading] = useState(true);
   /* Why the last load failed; shown above the table, not inside it. */
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -100,7 +99,7 @@ export function SubmissionsList() {
     : "all";
   const scopeParam = searchParams.get("scope");
   /* Approvers see everyone's submitted proposals as well as their own. */
-  const scope: Scope = scopeParam === "mine" ? "mine" : "all";
+  const scope: Scope = scopeParam === "mine" || scopeParam === "others" ? scopeParam : "all";
 
   /* A filter is a change of address, so Back and a reload keep it. */
   const setFilter = useCallback(
@@ -143,7 +142,6 @@ export function SubmissionsList() {
       if (mine !== ticket.current) return;
       setSubmissions(response.submissions);
       setTotal(response.totalCount ?? 0);
-      setStatusCounts(response.counts ?? {});
       /* FR3.2 — the server decides this from role_access; the list just
          reflects it, so approval rights are never inferred client-side. */
       setCanApprove(Boolean(response.canApprove));
@@ -455,13 +453,10 @@ export function SubmissionsList() {
     },
   ];
 
+  // The statuses alone, without a count beside each.
   const statusOptions = [
-    { value: "all", label: "All statuses", count: statusCounts.all ?? 0 },
-    ...AMC_STATUSES.map((value) => ({
-      value,
-      label: AMC_STATUS_LABELS[value],
-      count: statusCounts[value] ?? 0,
-    })),
+    { value: "all", label: "All statuses" },
+    ...AMC_STATUSES.map((value) => ({ value, label: AMC_STATUS_LABELS[value] })),
   ];
 
   return (

@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Hint } from "@/components/ui/hint";
 import { ActionDialogContent } from "@/components/dashboard/shared/kaizen-states";
 
 /*
@@ -42,15 +43,16 @@ export function NoteEditButton({
     It was a 14px glyph nudged down by a margin, which did both.
   */
   return hasNote ? (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={`Edit ${noun}`}
-      title={`Edit ${noun}`}
-      className="text-muted-foreground hover:text-foreground hover:bg-muted focus-visible:ring-ring inline-flex size-4 shrink-0 items-center justify-center rounded-sm transition-colors focus-visible:ring-2 focus-visible:outline-none"
-    >
-      <Pencil className="size-3" strokeWidth={1.75} />
-    </button>
+    <Hint label={`Edit ${noun}`}>
+      <button
+        type="button"
+        onClick={onClick}
+        aria-label={`Edit ${noun}`}
+        className="text-muted-foreground hover:text-foreground hover:bg-muted focus-visible:ring-ring inline-flex size-4 shrink-0 items-center justify-center rounded-sm transition-colors focus-visible:ring-2 focus-visible:outline-none"
+      >
+        <Pencil className="size-3" strokeWidth={1.75} />
+      </button>
+    </Hint>
   ) : (
     <button
       type="button"

@@ -292,6 +292,7 @@ export function getDefaultFormValues(): AmcFormData {
       additionalFixedPriceServices: false,
     },
     priceListRows: [emptyPriceListRow(), emptyPriceListRow(), emptyPriceListRow()],
+    fixedPriceRates: [],
     accountManagers: [
       { name: "", phone: "" },
       { name: "", phone: "" },
@@ -300,10 +301,8 @@ export function getDefaultFormValues(): AmcFormData {
     customerId: "",
     customerPhone: "",
     customerEmail: "",
-    coordinationContacts: [
-      { name: "", phone: "", designation: "owner" },
-      { name: "", phone: "", designation: "owner" },
-    ],
+    // One to start with; the form adds more (AMC-099).
+    coordinationContacts: [{ name: "", phone: "", designation: "owner" }],
     startDate,
     endDate: getDefaultEndDate(startDate),
     paymentTerms: "annual",

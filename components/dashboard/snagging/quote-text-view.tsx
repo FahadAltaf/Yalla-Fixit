@@ -4,6 +4,7 @@ import type { RefObject } from "react";
 import { Bold, Heading1, Heading2, List, ListOrdered } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Hint } from "@/components/ui/hint";
 import { inlineParts, parseScope, parseTerms } from "@/lib/snagging/quote-text";
 import { cn } from "@/lib/utils";
 
@@ -143,18 +144,18 @@ export function FormatToolbar({
       {kinds.map((kind) => {
         const b = buttons[kind];
         return (
-          <Button
-            key={kind}
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-7 gap-1 px-2 text-xs"
-            onClick={b.run}
-            title={b.label}
-          >
-            <b.icon className="size-3.5" aria-hidden />
-            {b.label}
-          </Button>
+          <Hint key={kind} label={b.label}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1 px-2 text-xs"
+              onClick={b.run}
+            >
+              <b.icon className="size-3.5" aria-hidden />
+              {b.label}
+            </Button>
+          </Hint>
         );
       })}
     </div>

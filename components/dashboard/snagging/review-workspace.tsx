@@ -112,7 +112,14 @@ export default function ReviewWorkspace() {
     setLoadingTask(true);
     setTaskError(null);
     try {
-      const next = await snaggingService.getTask(id);
+      // The snags light: the list pages through the server on its own.
+      const next = await snaggingService.getTask(id, {}, [
+        "checklist",
+        "snag_summary",
+        "floor_plans",
+        "visit_status",
+        "desnag_quotation",
+      ]);
       if (ticket === taskTicket.current) setTask(next);
     } catch (error) {
       if (ticket !== taskTicket.current) return;

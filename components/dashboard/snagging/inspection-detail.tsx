@@ -17,7 +17,7 @@ import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { ActionType, ResourceType } from "@/types/types";
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
-import { TabCount } from "@/components/dashboard/shared/kaizen";
+import { PillTabs, TabCount } from "@/components/dashboard/shared/kaizen";
 
 import { ErrorState } from "./shared";
 import { SignoffsCard } from "./signoffs-card";
@@ -27,7 +27,11 @@ import { InspectionHeaderCard } from "./inspection-header-card";
 import { JobDetailProvider, useJobDetail, type JobDetailInitial } from "./job-detail-context";
 import { SnagWalkList } from "./snag-walk-list";
 import { VisitActivityAlerts } from "./visit-activity-alerts";
-import { JobTabsSkeleton } from "@/components/dashboard/snagging/route-skeletons";
+import {
+  JobTabsSkeleton,
+  PropertyClientCardSkeleton,
+  SectionLoadingSkeleton,
+} from "@/components/dashboard/snagging/route-skeletons";
 
 /*
   The tabs the page does not open on are split into their own chunks and
@@ -45,7 +49,7 @@ const ChecklistPanel = dynamic(
 );
 const JobSetupPanel = dynamic(
   () => import("./job-setup-panel").then((m) => m.JobSetupPanel),
-  { loading: PanelLoading },
+  { loading: PropertyClientCardSkeleton },
 );
 const QuotationPanel = dynamic(
   () => import("./quotation-panel").then((m) => m.QuotationPanel),
@@ -57,7 +61,11 @@ const AdditionalVisitsPanel = dynamic(
 );
 const AuditTimeline = dynamic(
   () => import("./audit-timeline").then((m) => m.AuditTimeline),
-  { loading: PanelLoading },
+  { loading: SectionLoadingSkeleton },
+);
+const FsmJobCard = dynamic(
+  () => import("./fsm-job-card").then((m) => m.FsmJobCard),
+  { loading: SectionLoadingSkeleton },
 );
 
 /**
@@ -174,7 +182,9 @@ function InspectionDetailView() {
     setOpened((prev) => (prev.has(next) ? prev : new Set(prev).add(next)));
     const query = new URLSearchParams(window.location.search);
     query.set("tab", next);
-    window.history.replaceState(null, "", `?${query.toString()}`);
+    // The router's own state, so Next leaves the entry alone: a new ?tab=
+    // through Next re-keys the page and remounts it, refetching everything.
+    window.history.replaceState(window.history.state, "", `?${query.toString()}`);
   }, []);
   /*
     The tab asked for, if this job actually has it.
@@ -228,39 +238,28 @@ function InspectionDetailView() {
   }
 
   /*
-    The header row renders straight away, before any data: the way back,
-    and the Refresh control. It never waits on the job.
+    Refresh, in the header card's button row beside Report and the decision
+    buttons (the page has no separate top row: the breadcrumb is the way
+    back). When the job was last read is on hover.
   */
-  const toolbar = (
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <BackToJobs />
-      <div className="flex items-center gap-3">
-        {job.lastFetchedAt ? (
-          <span className="text-muted-foreground hidden text-xs sm:inline">
-            Updated {formatClock(job.lastFetchedAt)}
-          </span>
-        ) : null}
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => void refreshEverything()}
-          disabled={job.loading || refreshing}
-          aria-label="Refresh this job"
-        >
-          <RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />
-          <span className="hidden sm:inline">Refresh</span>
-        </Button>
-      </div>
-    </div>
+  const refreshButton = (
+    <Button
+      variant="outline"
+      onClick={() => void refreshEverything()}
+      disabled={job.loading || refreshing}
+      aria-label="Refresh this job"
+      title={job.lastFetchedAt ? `Updated ${formatClock(job.lastFetchedAt)}` : undefined}
+    >
+      <RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />
+      Refresh
+    </Button>
   );
 
   // The job has not arrived yet: the shape of the page, not a spinner.
   if (!task && job.loading) {
     return (
       <div className="flex flex-col gap-4">
-        {toolbar}
-        {visitList.length > 0 ? <VisitActivityAlerts taskId={taskId} visits={visitList} /> : null}
-        <JobTabsSkeleton />
+        <JobTabsSkeleton tab={tab} />
       </div>
     );
   }
@@ -268,7 +267,6 @@ function InspectionDetailView() {
   if (!task && job.error) {
     return (
       <div className="flex flex-col gap-4">
-        {toolbar}
         <ErrorState
           title="Could not load this inspection"
           message={job.error}
@@ -317,14 +315,22 @@ function InspectionDetailView() {
 
   return (
     <div className="flex flex-col gap-4">
-      {toolbar}
-
       {/*
-        Above the tabs, so it is read whichever tab the job opens on: a
-        visit waiting for review is the most urgent thing on the page.
-        Drawn from the visits alone, so it appears as soon as they do.
+        The job at a glance and what can be done with it, above the tabs as
+        on the AMC proposal page, so the title, status and decision buttons
+        stay put whichever tab is open. Any live additional visit says where
+        it stands in a band along the card's bottom edge -- the most urgent
+        thing on the page, read before any tab.
       */}
-      <VisitActivityAlerts taskId={task.id} visits={visitList} />
+      <InspectionHeaderCard
+        task={task}
+        part="header"
+        onChanged={jobChanged}
+        onVisitsChanged={visitsChanged}
+        pending={{ snags: snags.data === null, desnag: desnag.lastFetchedAt === null }}
+        notice={<VisitActivityAlerts taskId={task.id} visits={visitList} variant="band" />}
+        actions={refreshButton}
+      />
 
       <Tabs value={activeTab} onValueChange={setTab}>
         {/* Wraps onto a second line on a narrow screen rather than
@@ -371,8 +377,9 @@ function InspectionDetailView() {
               <TabBusy on={visits.refreshing} />
             </TabsTrigger>
           ) : null}
+          {/* Sign-offs, then Zoho FSM and the change history: everything that happened to the job. */}
           <TabsTrigger value="history">
-            History
+            Activity
             <TabBusy on={auditRefreshing} />
           </TabsTrigger>
         </TabsList>
@@ -399,10 +406,10 @@ function InspectionDetailView() {
                 }, 120);
               }}
             />
-            {/* The counts and the Approve / Send back decision sit with
-                the snags they are about. */}
+            {/* The four figures sit with the snags they count. */}
             <InspectionHeaderCard
               task={task}
+              part="stats"
               onChanged={jobChanged}
               onVisitsChanged={visitsChanged}
               pending={{ snags: snags.data === null, desnag: desnag.lastFetchedAt === null }}
@@ -489,7 +496,8 @@ function InspectionDetailView() {
           <>
             {/* Every inspector's signature, kept internally. */}
             <SignoffsCard signoffs={task.signoffs} clientSigner={task.submissions?.[0]?.signer_name} />
-            <AuditTimeline />
+            {/* Zoho FSM and the change history, each its own tab, each fetched when opened. */}
+            <JobActivityTabs taskId={task.id} canEdit={canEditSnags} jobStatus={task.status} />
           </>,
         )}
       </Tabs>
@@ -546,6 +554,52 @@ function formatClock(at: number): string {
  * app — and changes with it.
  */
 /** A small spinner on a tab whose data is being re-read; the data stays. */
+/**
+ * The Activity tab's own two tabs: this job in Zoho FSM (its quotation,
+ * work order and report, with every call a page at a time from the server)
+ * and the job's change history. Each mounts the first time it is opened and
+ * stays mounted after, so neither is fetched until it is looked at and
+ * going back to one asks for nothing.
+ */
+function JobActivityTabs({
+  taskId,
+  canEdit,
+  jobStatus,
+}: {
+  taskId: string;
+  canEdit: boolean;
+  jobStatus?: string | null;
+}) {
+  const [sub, setSubState] = useState<"fsm" | "history">("fsm");
+  const [opened, setOpened] = useState<Set<string>>(() => new Set(["fsm"]));
+  const setSub = useCallback((next: "fsm" | "history") => {
+    setSubState(next);
+    setOpened((prev) => (prev.has(next) ? prev : new Set(prev).add(next)));
+  }, []);
+  return (
+    <div className="flex flex-col gap-4">
+      <PillTabs<"fsm" | "history">
+        value={sub}
+        onChange={setSub}
+        tabs={[
+          { value: "fsm", label: "Zoho FSM" },
+          { value: "history", label: "Change history" },
+        ]}
+      />
+      {opened.has("fsm") ? (
+        <div hidden={sub !== "fsm"}>
+          <FsmJobCard taskId={taskId} canEdit={canEdit} jobStatus={jobStatus} />
+        </div>
+      ) : null}
+      {opened.has("history") ? (
+        <div hidden={sub !== "history"}>
+          <AuditTimeline />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function TabBusy({ on }: { on: boolean }) {
   if (!on) return null;
   return <Loader2 className="text-muted-foreground ml-1 size-3 animate-spin" aria-label="Refreshing" />;

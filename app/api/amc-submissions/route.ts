@@ -41,7 +41,8 @@ const DOCUMENT_TYPES = ["proposal", "contract"] as const;
 const coordinationContactSchema = z.object({
   name: z.string(),
   phone: z.string(),
-  designation: z.enum(["owner", "tenant", "representative"]),
+  // One of the presets, or the client's own title for them (AMC-099).
+  designation: z.string().trim().max(60),
 });
 
 const priceListRowSchema = z.object({
@@ -70,7 +71,7 @@ const submissionPayloadSchema = z.object({
     customerId: z.string().optional(),
     customerPhone: z.string(),
     customerEmail: z.string(),
-    coordinationContacts: z.tuple([coordinationContactSchema, coordinationContactSchema]),
+    coordinationContacts: z.array(coordinationContactSchema).min(1).max(10),
     startDate: z.string(),
     endDate: z.string(),
     paymentTerms: z.enum(["monthly", "quarterly", "annual"]),
@@ -85,6 +86,8 @@ const submissionPayloadSchema = z.object({
         additionalFixedPriceServices: z.boolean(),
       }),
       priceListRows: z.array(priceListRowSchema),
+      // Clause 6.3's rates for this proposal (AMC-057).
+      fixedPriceRates: z.array(z.string().max(300)).max(20).optional(),
       accountManagers: z.tuple([accountManagerSchema, accountManagerSchema]),
     })
     .optional(),
@@ -420,6 +423,8 @@ export async function GET(req: NextRequest) {
     ? (statusParam as AmcSubmissionStatus)
     : null;
   const mineOnly = params.get("scope") === "mine";
+  // An approver's "Submitted by others": the proposals they decide on.
+  const othersOnly = params.get("scope") === "others";
   const term = likeTerm(params.get("search"));
 
   /* FR5.3: the approvers chosen in AMC Settings, or the role permission
@@ -439,8 +444,21 @@ export async function GET(req: NextRequest) {
   */
   /* DEV-368 (BRD 5.4): approvers and AMC Operations (View) see the team's proposals; others their own. */
   const seesTeam = canApprove || hasResourceAction(gate.accessUser, ResourceType.AMC_OPERATIONS, ActionType.VIEW);
+  // An approver's "Submitted by others": the proposals they decide on.
+  const reviewing = canApprove && othersOnly;
   const visibilityClauses =
-    seesTeam && !mineOnly ? [`owner_id.eq.${profile.id}`, "status.neq.draft"] : null;
+    seesTeam && !mineOnly && !reviewing ? [`owner_id.eq.${profile.id}`, "status.neq.draft"] : null;
+  /*
+    Which rows, before the search: anyone's past draft plus mine (the or
+    above), only mine, or -- for an approver's "Submitted by others" --
+    everyone else's that has left draft.
+  */
+  const scoped = <Q extends { eq: (c: string, v: string) => Q; neq: (c: string, v: string) => Q }>(query: Q): Q =>
+    reviewing
+      ? query.neq("owner_id", profile.id).neq("status", "draft")
+      : visibilityClauses
+        ? query
+        : query.eq("owner_id", profile.id);
 
   /*
     The search box: the customer, the proposal number, the address -- and,
@@ -501,7 +519,7 @@ export async function GET(req: NextRequest) {
       .order("created_at", { ascending: false })
       .order("id")
       .range(from, to);
-    if (!visibilityClauses) query = query.eq("owner_id", profile.id);
+    query = scoped(query);
     if (orFilter) query = query.or(orFilter);
     if (status) query = query.eq("status", status);
     return query;
@@ -510,38 +528,7 @@ export async function GET(req: NextRequest) {
     result.error && missingColumn(result.error) ? pageQueryWith(LIST_COLUMNS) : result,
   );
 
-  /*
-    How many proposals sit in each status, for the status filter's counts.
-    They follow the scope and the search but not the status picked, so the
-    other options still say how many they would show.
-  */
-  const countFor = async (value: AmcSubmissionStatus | null) => {
-    let counter = admin
-      .from("amc_submissions")
-      .select("id", { count: "exact", head: true });
-    if (!visibilityClauses) counter = counter.eq("owner_id", profile.id);
-    if (orFilter) counter = counter.or(orFilter);
-    if (value) counter = counter.eq("status", value);
-    const { count, error: countError } = await counter;
-    if (countError) throw new Error(countError.message);
-    return count ?? 0;
-  };
-
-  let results;
-  try {
-    results = await Promise.all([
-      pageQuery,
-      countFor(null),
-      ...AMC_STATUSES.map((value) => countFor(value)),
-    ]);
-  } catch (countError) {
-    return NextResponse.json(
-      { error: countError instanceof Error ? countError.message : "Could not count proposals" },
-      { status: 500 },
-    );
-  }
-
-  const [{ data, error, count }, all, ...byStatus] = results;
+  const { data, error, count } = await pageQuery;
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
@@ -571,10 +558,6 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     submissions,
     totalCount: count ?? 0,
-    counts: {
-      all,
-      ...Object.fromEntries(AMC_STATUSES.map((value, i) => [value, byStatus[i]])),
-    } as Record<string, number>,
     canApprove,
   });
 }

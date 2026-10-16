@@ -15,7 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-export type ProposalScope = "all" | "mine";
+export type ProposalScope = "all" | "mine" | "others";
 
 /**
  * Toolbar for the proposals table, the same shape as the snagging jobs
@@ -90,6 +90,8 @@ export function ProposalsToolbar({
               <SelectContent>
                 <SelectItem value="all">All proposals</SelectItem>
                 <SelectItem value="mine">Mine only</SelectItem>
+                {/* Raised by other people, for this approver to decide. */}
+                <SelectItem value="others">Submitted by others</SelectItem>
               </SelectContent>
             </Select>
           ) : null}

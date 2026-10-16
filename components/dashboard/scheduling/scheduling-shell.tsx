@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card } from "@/components/ui/card";
+import { Hint } from "@/components/ui/hint";
 import { cn } from "@/lib/actions/utils";
 import { SCHEDULING_NAV_COOKIE } from "@/lib/scheduling/nav-preference";
 
@@ -90,20 +91,21 @@ export default function SchedulingShell({
                 )}
               >
                 {navOpen && <span className="tracking-wide uppercase">Scheduling</span>}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={toggleNav}
-                  aria-expanded={navOpen}
-                  aria-label={navOpen ? "Collapse section menu" : "Expand section menu"}
-                  title={navOpen ? "Collapse section menu" : "Expand section menu"}
-                  className={cn(
-                    "text-muted-foreground hover:text-foreground size-9 shrink-0 p-0",
-                    navOpen && "-mr-1",
-                  )}
-                >
-                  {navOpen ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />}
-                </Button>
+                <Hint label={navOpen ? "Collapse section menu" : "Expand section menu"}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={toggleNav}
+                    aria-expanded={navOpen}
+                    aria-label={navOpen ? "Collapse section menu" : "Expand section menu"}
+                    className={cn(
+                      "text-muted-foreground hover:text-foreground size-9 shrink-0 p-0",
+                      navOpen && "-mr-1",
+                    )}
+                  >
+                    {navOpen ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />}
+                  </Button>
+                </Hint>
               </SidebarGroupLabel>
 
             <SidebarGroupContent>

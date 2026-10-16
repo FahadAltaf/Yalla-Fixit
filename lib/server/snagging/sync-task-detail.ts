@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { hasGatepass, hasJobInspectors } from "@/lib/server/snagging/columns";
 import { readAllRows } from "@/lib/server/snagging/read-all";
+import { furnishedByJob } from "@/lib/server/snagging/furnished";
 import { loadSigners } from "@/lib/server/snagging/signoffs";
 
 /**
@@ -112,7 +113,13 @@ export async function loadTaskDetail(admin: SupabaseClient, jobId: string) {
     job (or the live visit's crew), with when they signed. The phone holds
     Submit until everyone has.
   */
-  const signoffs = await loadSigners(admin, jobId, (live?.id as string | undefined) ?? null);
+  const [signoffs, furnished] = await Promise.all([
+    loadSigners(admin, jobId, (live?.id as string | undefined) ?? null),
+    // Furnished or not, as the client declared it on the quotation (SNG-100).
+    furnishedByJob(admin, [
+      { id: jobId, parent_job_id: (data.parent_job_id as string | null) ?? null },
+    ]),
+  ]);
 
   const job = data;
   // BR-1: the property record is canonical, the job's own copy the fallback.
@@ -159,6 +166,8 @@ export async function loadTaskDetail(admin: SupabaseClient, jobId: string) {
       plot_area_sqft: pick("plot_area_sqft"),
       floors: pick("floors"),
       external_areas_in_scope: pick("external_areas_in_scope"),
+      // Quoted furnished or unfurnished; null when no quotation says (SNG-100).
+      furnished: furnished.get(jobId) ?? null,
       developer_contact_name: job.developer_contact_name ?? null,
       developer_contact_phone: job.developer_contact_phone ?? null,
       client_contact_name: job.client_contact_name ?? null,

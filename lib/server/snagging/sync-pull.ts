@@ -4,6 +4,7 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import { hasAreaInspector, hasGatepass, hasJobInspectors } from "@/lib/server/snagging/columns";
+import { furnishedByJob } from "@/lib/server/snagging/furnished";
 import { loadSyncChildren } from "@/lib/server/snagging/sync-children";
 import { chunkIds, readAllByIds, readAllRows } from "@/lib/server/snagging/read-all";
 import { syncPullSchema } from "@/modules/snagging/schemas";
@@ -721,6 +722,17 @@ export async function handleSyncPull(
           )
         : null);
 
+    // Furnished or not, from each job's quotation (SNG-100). Full pull only:
+    // a card does not show it.
+    const furnished = listView
+      ? new Map<string, boolean | null>()
+      : await furnishedByJob(
+          admin,
+          (jobs ?? []).map((job) => ({
+            id: (job as { id: string }).id,
+            parent_job_id: (job as { parent_job_id?: string | null }).parent_job_id ?? null,
+          })),
+        );
     const fullTask = (job: unknown) => {
       const j = job as JobRow;
       const client = firstOf(j.client);
@@ -842,6 +854,7 @@ export async function handleSyncPull(
           plot_area_sqft: pick("plot_area_sqft"),
           floors: pick("floors"),
           external_areas_in_scope: pick("external_areas_in_scope"),
+          furnished: furnished.get(j.id as string) ?? null,
           // FR-3.03 — the two people an inspector actually calls: the
           // developer's rep who opens the unit and the client who owns it.
           developer_contact_name: j.developer_contact_name,

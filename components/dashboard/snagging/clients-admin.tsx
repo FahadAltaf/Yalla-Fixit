@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 import {
   Briefcase,
+  Loader2,
   Mail,
   MapPin,
   Pencil,
@@ -32,8 +33,10 @@ import { PhoneInput } from "@/components/ui/phone-input";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Hint } from "@/components/ui/hint";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
+import { CLIENT_PHONE_REQUIRED, isUsablePhone } from "@/lib/snagging/client-phone";
 import {
   snaggingService,
   type SnaggingClientOption,
@@ -72,7 +75,7 @@ export default function ClientsAdmin({
     app/(dashboard)/snagging/clients/page.tsx). The table shows it at once;
     every later page, sort and search is asked for as before.
   */
-  initial?: { data: SnaggingClientOption[]; totalCount: number } | null;
+  initial?: { data: SnaggingClientOption[]; hasMore: boolean; source: "fsm" | "portal" } | null;
 } = {}) {
   const { userProfile } = useAuth();
   const canEdit = hasResourceAction(
@@ -92,8 +95,15 @@ export default function ClientsAdmin({
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
-  const [total, setTotal] = useState(initial?.totalCount ?? 0);
-  const [sort, setSort] = useState<{ sortBy?: string; sortOrder?: "asc" | "desc" }>({});
+  /*
+    Clients are kept in Zoho FSM (Sami, 14 Oct 2026) and listed from it,
+    newest first. FSM gives no total, so the table pages on "is there
+    another page" rather than "page 3 of 529".
+  */
+  const [hasMore, setHasMore] = useState(initial?.hasMore ?? false);
+  const [source, setSource] = useState<"fsm" | "portal">(initial?.source ?? "fsm");
+  // The FSM contact being linked to the portal before its addresses open.
+  const [opening, setOpening] = useState<string | null>(null);
   // The client whose jobs are open in a popup.
   const [jobsFor, setJobsFor] = useState<SnaggingClientOption | null>(null);
   // The client whose addresses are open in a popup.
@@ -112,23 +122,47 @@ export default function ClientsAdmin({
     setLoading(true);
     setError(null);
     try {
-      const result = await snaggingService.listClientsPage({
+      const result = await snaggingService.listFsmClients({
         search: debouncedSearch || undefined,
         page,
         pageSize,
-        sortBy: sort.sortBy,
-        sortDirection: sort.sortOrder,
       });
       if (mine !== ticket.current) return;
       setClients(result.data);
-      setTotal(result.totalCount);
+      setHasMore(result.hasMore);
+      setSource(result.source);
     } catch (err) {
       if (mine !== ticket.current) return;
       setError(err instanceof Error ? err.message : "Could not load clients");
     } finally {
       if (mine === ticket.current) setLoading(false);
     }
-  }, [debouncedSearch, page, pageSize, sort]);
+  }, [debouncedSearch, page, pageSize]);
+
+  /*
+    A client listed from FSM has no portal row until it is used. Its
+    addresses (and their documents) live on that row, so it is made here,
+    the first time they are opened.
+  */
+  const openAddresses = useCallback(async (client: SnaggingClientOption) => {
+    if (client.id) {
+      setAddressesFor(client);
+      return;
+    }
+    if (!client.fsm_contact_id) return;
+    setOpening(client.fsm_contact_id);
+    try {
+      const linked = await snaggingService.linkFsmClient(client.fsm_contact_id);
+      setClients((rows) =>
+        rows.map((row) => (row.fsm_contact_id === client.fsm_contact_id ? { ...row, ...linked } : row)),
+      );
+      setAddressesFor(linked);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not open this client");
+    } finally {
+      setOpening(null);
+    }
+  }, []);
 
   // The first request is skipped when the server already sent the first page.
   const skipFirstLoad = useRef(Boolean(initial));
@@ -152,6 +186,8 @@ export default function ClientsAdmin({
         id: "client_name",
         header: "Client",
         accessorKey: "client_name",
+        // Newest first, as FSM lists them: FSM cannot sort by these columns.
+        enableSorting: false,
         cell: ({ row }) => (
           /*
             The shared identity cell, not a hand-rolled avatar. It hashes
@@ -161,8 +197,12 @@ export default function ClientsAdmin({
           */
           <IdentityCell
             title={row.original.client_name}
-            subtitle={row.original.company || "No company recorded"}
-            seed={row.original.id ?? row.original.client_name}
+            subtitle={
+              [row.original.company || "No company recorded", row.original.maher_id ? `Maher ID ${row.original.maher_id}` : null]
+                .filter(Boolean)
+                .join(" · ")
+            }
+            seed={row.original.fsm_contact_id ?? row.original.id ?? row.original.client_name}
           />
         ),
       },
@@ -170,6 +210,7 @@ export default function ClientsAdmin({
         id: "client_phone",
         header: "Phone",
         accessorKey: "client_phone",
+        enableSorting: false,
         cell: ({ row }) => (
           <Contact icon={Phone} value={row.original.client_phone} />
         ),
@@ -178,6 +219,7 @@ export default function ClientsAdmin({
         id: "client_email",
         header: "Email",
         accessorKey: "client_email",
+        enableSorting: false,
         cell: ({ row }) => (
           <Contact icon={Mail} value={row.original.client_email} />
         ),
@@ -194,26 +236,34 @@ export default function ClientsAdmin({
           so a returning client's was typed in again each time.
         */
         cell: ({ row }) => {
+          /*
+            The count is the portal's own rows. A client from FSM can have
+            addresses there the portal has not used yet, so an FSM client
+            shows "Addresses" and the popup lists both.
+          */
+          const fromFsm = Boolean(row.original.fsm_contact_id);
           const count = row.original.property_count ?? 0;
-          if (count === 0 && !canCreate) {
+          if (!fromFsm && count === 0 && !canCreate) {
             return <span className="text-muted-foreground text-sm">None yet</span>;
           }
+          const busy = opening !== null && opening === row.original.fsm_contact_id;
           return (
             <Button
               variant="outline"
               size="sm"
+              disabled={busy}
               onClick={(event) => {
                 event.stopPropagation();
-                setAddressesFor(row.original);
+                void openAddresses(row.original);
               }}
-              aria-label={
-                count === 0
-                  ? `Add an address for ${row.original.client_name}`
-                  : `View ${count} addresses for ${row.original.client_name}`
-              }
+              aria-label={`Addresses for ${row.original.client_name}`}
             >
-              <MapPin className="size-3.5" aria-hidden />
-              {count === 0 ? "Add address" : `Addresses (${count})`}
+              {busy ? (
+                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+              ) : (
+                <MapPin className="size-3.5" aria-hidden />
+              )}
+              {fromFsm ? "Addresses" : count === 0 ? "Add address" : `Addresses (${count})`}
             </Button>
           );
         },
@@ -255,24 +305,25 @@ export default function ClientsAdmin({
         // One action, so one icon rather than a menu holding it.
         cell: ({ row }) =>
           canEdit ? (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-8"
-              onClick={(event) => {
-                event.stopPropagation();
-                setCreating(false);
-                setEditing(row.original);
-              }}
-              aria-label={`Edit ${row.original.client_name}`}
-              title="Edit details"
-            >
-              <Pencil className="size-4" />
-            </Button>
+            <Hint label="Edit details">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setCreating(false);
+                  setEditing(row.original);
+                }}
+                aria-label={`Edit ${row.original.client_name}`}
+              >
+                <Pencil className="size-4" />
+              </Button>
+            </Hint>
           ) : null,
       },
     ],
-    [canEdit, canCreate],
+    [canEdit, canCreate, opening, openAddresses],
   );
 
   if (error) {
@@ -298,7 +349,11 @@ export default function ClientsAdmin({
         <PageHeading
           eyebrow="Master data"
           title="Clients"
-          description="Who jobs and quotations are raised for. Edits here reach every future document."
+          description={
+            source === "fsm"
+              ? "Clients and their addresses are kept in Zoho FSM. New clients and edits made here are saved there too."
+              : "Who jobs and quotations are raised for. Edits here reach every future document."
+          }
           actions={
             canCreate ? (
               <Button
@@ -320,17 +375,14 @@ export default function ClientsAdmin({
           columns={columns}
           data={clients}
           loading={loading}
-          rowCount={total}
+          rowCount={0}
+          hasMore={hasMore}
           pageSize={pageSize}
           currentPage={page}
           isPagination
           onPageChange={setPage}
           onPageSizeChange={(size) => {
             setPageSize(size);
-            setPage(0);
-          }}
-          onSortingChange={(sortBy, sortOrder) => {
-            setSort({ sortBy, sortOrder });
             setPage(0);
           }}
           onGlobalFilterChange={(value) => {
@@ -372,7 +424,9 @@ export default function ClientsAdmin({
               }
               description={
                 search.trim()
-                  ? "Try a partial phone number, or part of the company name."
+                  ? source === "fsm"
+                    ? "Zoho FSM searches the last name, the email and the phone number. Try one of those."
+                    : "Try a partial phone number, or part of the company name."
                   : "Clients are created with their first job, and appear here once they are."
               }
             />
@@ -383,6 +437,7 @@ export default function ClientsAdmin({
       <ClientDialog
         client={editing}
         creating={creating}
+        requireEmail={source === "fsm"}
         onClose={() => setEditing(null)}
         onSaved={(created) => {
           setEditing(null);
@@ -440,11 +495,14 @@ function Contact({
 function ClientDialog({
   client,
   creating,
+  requireEmail,
   onClose,
   onSaved,
 }: {
   client: SnaggingClientOption | null;
   creating: boolean;
+  /** Zoho FSM keeps every client with an email, so a new one needs one. */
+  requireEmail: boolean;
   onClose: () => void;
   /** Passed the new client when one was added, nothing on an edit. */
   onSaved: (created?: SnaggingClientOption) => void;
@@ -453,6 +511,7 @@ function ClientDialog({
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [company, setCompany] = useState("");
+  const [maherId, setMaherId] = useState("");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -461,33 +520,50 @@ function ClientDialog({
     setEmail(client?.client_email ?? "");
     setPhone(client?.client_phone ?? "");
     setCompany(client?.company ?? "");
+    setMaherId(client?.maher_id ?? "");
     setNotes(client?.notes ?? "");
   }, [client]);
 
   const nameError = name.trim().length > 0 && name.trim().length < 2;
-  const canSave = name.trim().length >= 2 && !saving;
+  // Required here as on the quotation form (SNG-008). Said once something
+  // has been typed, so an empty new dialog does not open on an error.
+  const phoneError = phone.trim().length > 0 && !isUsablePhone(phone);
+  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  // Said once something has been typed, like the phone above.
+  const emailError =
+    email.trim().length > 0 && !emailValid ? "Enter a full email address." : undefined;
+  const canSave =
+    name.trim().length >= 2 &&
+    isUsablePhone(phone) &&
+    (!requireEmail || emailValid) &&
+    // Zoho FSM requires it, so it can be neither left out nor cleared.
+    (!requireEmail || maherId.trim().length > 0) &&
+    (!email.trim() || emailValid) &&
+    !saving;
 
   async function save() {
     if (!client || !canSave) return;
     setSaving(true);
     try {
-      if (creating || !client.id) {
+      if (creating) {
         const created = await snaggingService.createClient({
           client_name: name.trim(),
           client_email: email.trim() || undefined,
           client_phone: phone.trim() || undefined,
           company: company.trim() || undefined,
+          maher_id: maherId.trim() || undefined,
         });
         // The page announces it, with the offer to add an address.
         onSaved(created);
         return;
       } else {
         await snaggingService.updateClient({
-          id: client.id,
+          ...(client.id ? { id: client.id } : { fsm_contact_id: client.fsm_contact_id ?? null }),
           client_name: name.trim(),
           client_email: email.trim() || null,
           client_phone: phone.trim() || null,
           company: company.trim() || null,
+          ...(maherId.trim() ? { maher_id: maherId.trim() } : {}),
           notes: notes.trim() || null,
         });
         toast.success("Client updated");
@@ -509,13 +585,17 @@ function ClientDialog({
           </DialogTitle>
           <DialogDescription>
             {creating
-              ? "Only the name is required. The rest can be filled in later."
-              : "Quotations already issued keep the details they were raised with — this changes what future documents carry."}
+              ? requireEmail
+                ? "The name, phone, email and Maher ID are required. The client is created in Zoho FSM as well."
+                : "The name and phone are required. The rest can be filled in later."
+              : requireEmail
+                ? "Saved in Zoho FSM and here. Quotations already issued keep the details they were raised with."
+                : "Quotations already issued keep the details they were raised with — this changes what future documents carry."}
           </DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-4">
-          <Field label="Name" htmlFor="client-name" error={nameError ? "A name needs at least two characters." : undefined}>
+          <Field label="Name" htmlFor="client-name" required error={nameError ? "A name needs at least two characters." : undefined}>
             <Input
               id="client-name"
               value={name}
@@ -526,10 +606,21 @@ function ClientDialog({
           </Field>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Phone" htmlFor="client-phone">
+            <Field
+              label="Phone"
+              htmlFor="client-phone"
+              required
+              error={
+                phoneError
+                  ? "Enter the full number, with at least six digits."
+                  : !creating && !phone.trim()
+                    ? CLIENT_PHONE_REQUIRED
+                    : undefined
+              }
+            >
               <PhoneInput id="client-phone" value={phone} onChange={setPhone} />
             </Field>
-            <Field label="Email" htmlFor="client-email">
+            <Field label="Email" htmlFor="client-email" required={requireEmail} error={emailError}>
               <Input
                 id="client-email"
                 type="email"
@@ -539,6 +630,22 @@ function ClientDialog({
               />
             </Field>
           </div>
+
+          {requireEmail ? (
+            <Field
+              label="Maher ID"
+              htmlFor="client-maher-id"
+              required
+              error={!creating && !maherId.trim() ? "Zoho FSM requires a Maher ID." : undefined}
+            >
+              <Input
+                id="client-maher-id"
+                value={maherId}
+                onChange={(event) => setMaherId(event.target.value)}
+                placeholder="e.g. C0354059"
+              />
+            </Field>
+          ) : null}
 
           <Field label="Company" htmlFor="client-company">
             <Input
@@ -584,17 +691,20 @@ function Field({
   label,
   htmlFor,
   error,
+  required,
   children,
 }: {
   label: string;
   htmlFor: string;
   error?: string;
+  required?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <div className="space-y-1.5">
       <Label htmlFor={htmlFor} className="text-muted-foreground text-xs font-medium">
         {label}
+        {required ? <span className="text-brand"> *</span> : null}
       </Label>
       {children}
       {error ? <p className="text-destructive text-xs">{error}</p> : null}

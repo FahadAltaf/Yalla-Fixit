@@ -82,6 +82,39 @@ export async function POST(req: NextRequest) {
 
     const admin = await createAdminServerClient();
 
+    /*
+      0. A job is only ever raised from an approved quotation (SNG-052).
+
+      Checked before anything is written, so a job can no longer be created
+      from scratch or onto a quotation that is still with the client or
+      already has its job. The bind in step 5 keeps its own guard for the
+      race where two coordinators press Create job at once.
+    */
+    if (!input.quotation_id) {
+      return NextResponse.json(
+        { error: "A job can only be created from an approved quotation." },
+        { status: 400 },
+      );
+    }
+    const { data: source, error: sourceError } = await admin
+      .from("snagging_quotations")
+      .select("id, status, job_id")
+      .eq("id", input.quotation_id)
+      .maybeSingle();
+    if (sourceError) throw new Error(sourceError.message);
+    if (!source || source.status !== "approved" || source.job_id) {
+      return NextResponse.json(
+        {
+          error: !source
+            ? "That quotation was not found."
+            : source.job_id
+              ? "That quotation already has a job."
+              : "The quotation must be approved before a job is created.",
+        },
+        { status: 409 },
+      );
+    }
+
     // 1. Resolve the client. A client the picker already persisted arrives
     // by id; otherwise find-or-create one from the typed details.
     const clientId = await resolveClient(admin, {

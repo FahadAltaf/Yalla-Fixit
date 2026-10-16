@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Hint } from "@/components/ui/hint";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertTriangle, Loader2, Search } from "lucide-react";
 import TimeSelect from "@/components/ui/time-select";
@@ -532,15 +533,14 @@ export default function AddEntryDialog({
                                 </span>
                                 <span className="flex flex-wrap items-center gap-1.5">
                                   {info && (
-                                    <span
-                                      className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium"
-                                      title={info.status ?? undefined}
-                                    >
-                                      <span className={`size-1.5 rounded-full ${APPOINTMENT_STATE_STYLES[info.state].dot}`} />
-                                      <span className={APPOINTMENT_STATE_STYLES[info.state].text}>
-                                        {APPOINTMENT_STATE_LABELS[info.state]}
+                                    <Hint label={info.status ?? undefined}>
+                                      <span className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium">
+                                        <span className={`size-1.5 rounded-full ${APPOINTMENT_STATE_STYLES[info.state].dot}`} />
+                                        <span className={APPOINTMENT_STATE_STYLES[info.state].text}>
+                                          {APPOINTMENT_STATE_LABELS[info.state]}
+                                        </span>
                                       </span>
-                                    </span>
+                                    </Hint>
                                   )}
                                   {lines.length > 0 && (
                                     <span className="text-muted-foreground text-[11px]">
@@ -745,25 +745,25 @@ export default function AddEntryDialog({
               {filteredTechnicians.map((t) => {
                 const leave = onLeaveByTechnician.get(t.fsm_resource_id);
                 return (
-                  <label
-                    key={t.fsm_resource_id}
-                    className={`flex items-center gap-2 rounded px-1 py-1 text-sm ${
-                      leave ? "cursor-not-allowed opacity-55" : "hover:bg-muted/50 cursor-pointer"
-                    }`}
-                    title={leave ? `On leave: ${leave.leave_type}` : undefined}
-                  >
-                    <Checkbox
-                      checked={selectedTechnicianIds.includes(t.fsm_resource_id)}
-                      disabled={!!leave}
-                      onCheckedChange={() => toggleTechnician(t.fsm_resource_id)}
-                    />
-                    <span className="flex-1">{t.display_name}</span>
-                    {leave && (
-                      <span className="rounded bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium text-warning">
-                        On leave: {leave.leave_type}
-                      </span>
-                    )}
-                  </label>
+                  <Hint key={t.fsm_resource_id} label={leave ? `On leave: ${leave.leave_type}` : undefined}>
+                    <label
+                      className={`flex items-center gap-2 rounded px-1 py-1 text-sm ${
+                        leave ? "cursor-not-allowed opacity-55" : "hover:bg-muted/50 cursor-pointer"
+                      }`}
+                    >
+                      <Checkbox
+                        checked={selectedTechnicianIds.includes(t.fsm_resource_id)}
+                        disabled={!!leave}
+                        onCheckedChange={() => toggleTechnician(t.fsm_resource_id)}
+                      />
+                      <span className="flex-1">{t.display_name}</span>
+                      {leave && (
+                        <span className="rounded bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium text-warning">
+                          On leave: {leave.leave_type}
+                        </span>
+                      )}
+                    </label>
+                  </Hint>
                 );
               })}
               {filteredTechnicians.length === 0 && (
