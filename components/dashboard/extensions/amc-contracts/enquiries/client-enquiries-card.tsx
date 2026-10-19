@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { Inbox } from "lucide-react";
+import { Inbox, Plus } from "lucide-react";
 
 import { DataRow, SectionCard } from "@/components/dashboard/shared/kaizen";
+import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { enquiriesService } from "@/modules/amc-contracts/enquiries-service";
 
@@ -29,6 +30,16 @@ export function ClientEnquiriesCard({ customerId }: { customerId: string }) {
       title="Enquiries"
       description={list.total > list.enquiries.length ? `The latest ${list.enquiries.length} of ${list.total}, newest first.` : "Every enquiry from this client, newest first."}
       icon={<Inbox />}
+      action={
+        meta.canCreate ? (
+          <Button variant="outline" size="sm" asChild>
+            <Link href={`/extensions/amc-contracts/enquiries/new?client=${customerId}`}>
+              <Plus className="size-3.5" />
+              New enquiry
+            </Link>
+          </Button>
+        ) : undefined
+      }
       bodyClassName={list.enquiries.length === 0 ? "border-t" : "px-5 pb-5"}
     >
       {list.enquiries.length === 0 ? (

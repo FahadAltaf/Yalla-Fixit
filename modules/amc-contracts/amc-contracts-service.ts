@@ -35,6 +35,7 @@ import type {
   QuoteRecord,
 } from "@/lib/server/amc/business";
 import type { AdditionalServiceEligibility, DiscountConfig } from "@/lib/amc/business";
+import type { ClientListPage, ClientListRow } from "@/lib/server/amc/client-list";
 import type {
   ContractsDashboard,
   ReminderPlan,
@@ -50,6 +51,7 @@ import type {
 
 export type { ContractsDashboard, ReminderPlan, RenewalOverview, UsageEntry };
 export type { AmcNotificationSettings, AssessmentPhoto, InAppNotification, SignedArchiveRecord, SweepResult };
+export type { ClientListPage, ClientListRow };
 export type ActivationPreview = Awaited<ReturnType<typeof activationPreview>>;
 export type { ContractFsmActivity, FsmWorkOrderForAmc, SyncOutcome };
 export type {
@@ -102,6 +104,18 @@ export type PropertyInput = {
   occupancy?: "owner" | "tenant" | "vacant" | null;
   accessConstraints?: string | null;
   parentPropertyId?: string | null;
+};
+/** One of a client's addresses in a picker: a portal property, or one only in Zoho FSM (id "fsm:…"). */
+export type ClientAddress = {
+  id: string;
+  source: "portal" | "fsm";
+  label: string;
+  unitType: string | null;
+  propertyCategory: string | null;
+  community: string | null;
+  fsmAddressId?: string;
+  /** Required address fields this one lacks (unit, project, type, bedrooms, built-up area); an FSM address is checked once it is used. */
+  missing?: string[];
 };
 export type UnitSummary = { id: string; label: string; unitType: string | null; customerId: string | null };
 export type AdditionalServiceRequest = {
@@ -420,6 +434,16 @@ export const amcContractsService = {
     if (limit) params.set("limit", String(limit));
     return request<{ customers: CustomerRecord[] }>(`/api/amc-contracts/customers?${params}`);
   },
+  /** One page of clients as Snagging lists them: from Zoho FSM, newest first (the portal with a status filter or without FSM). */
+  clientsPage(query: { q?: string; page: number; pageSize: number; lifecycle?: "prospect" | "client" | "former" | null }) {
+    const params = new URLSearchParams({ q: query.q ?? "", page: String(query.page), pageSize: String(query.pageSize) });
+    if (query.lifecycle) params.set("lifecycle", query.lifecycle);
+    return request<ClientListPage>(`/api/amc-contracts/customers?${params}`);
+  },
+  /** The portal client for an FSM contact, made the first time it is used (FSM is only read). */
+  openFsmClient(fsmContactId: string) {
+    return request<{ customer: CustomerRecord }>("/api/amc-contracts/customers/link", { method: "POST", body: JSON.stringify({ fsmContactId }) });
+  },
   createCustomer(input: CustomerInput) {
     return request<{ customer: CustomerRecord }>("/api/amc-contracts/customers", { method: "POST", body: JSON.stringify(input) });
   },
@@ -428,6 +452,17 @@ export const amcContractsService = {
   },
   customer(id: string) {
     return request<{ overview: CustomerOverview; canEdit?: boolean }>(`/api/amc-contracts/customers/${id}`);
+  },
+  /** A client's addresses as Snagging's new quotation lists them: the portal's, then FSM's not yet used. */
+  clientAddresses(customerId: string) {
+    return request<{ addresses: ClientAddress[]; fsmError: string | null }>(`/api/amc-contracts/customers/${customerId}/addresses`);
+  },
+  /** The portal property for one of the client's FSM addresses, made when it is picked (FSM is only read). */
+  openFsmAddress(customerId: string, fsmAddressId: string) {
+    return request<{ property: PropertyRecord; missing?: string[] }>(`/api/amc-contracts/customers/${customerId}/addresses`, {
+      method: "POST",
+      body: JSON.stringify({ fsmAddressId }),
+    });
   },
   customerProperties(id: string) {
     return request<{ properties: PropertyRecord[] }>(`/api/amc-contracts/customers/${id}/properties`);
@@ -438,11 +473,34 @@ export const amcContractsService = {
       body: JSON.stringify(input),
     });
   },
+  /** AMC's own fields about an address entered on Snagging's address form; only what is sent is written. */
+  updatePropertyDetails(
+    id: string,
+    input: {
+      unitType?: string | null;
+      propertyCategory?: "residential" | "commercial" | null;
+      occupancy?: "owner" | "tenant" | "vacant" | null;
+      floor?: string | null;
+      street?: string | null;
+      city?: string | null;
+      zones?: string[];
+      accessConstraints?: string | null;
+    },
+  ) {
+    return request<{ property: PropertyRecord }>(`/api/amc-contracts/properties/${id}/details`, { method: "PUT", body: JSON.stringify(input) });
+  },
   updateProperty(id: string, input: PropertyInput) {
     return request<{ property: PropertyRecord }>(`/api/amc-contracts/properties/${id}`, { method: "PATCH", body: JSON.stringify(input) });
   },
   property(id: string) {
-    return request<{ overview: PropertyOverview; units?: { parent: UnitSummary | null; children: UnitSummary[] }; canEdit?: boolean }>(`/api/amc-contracts/properties/${id}`);
+    return request<{
+      overview: PropertyOverview;
+      units?: { parent: UnitSummary | null; children: UnitSummary[] };
+      canEdit?: boolean;
+      /** The pin on the map, when the address has one. */
+      location?: { lat: number; lng: number } | null;
+      developer?: string | null;
+    }>(`/api/amc-contracts/properties/${id}`);
   },
   links(contractId: string) {
     return request<{ links: LiveLinks }>(`/api/amc-contracts/${contractId}/links`);

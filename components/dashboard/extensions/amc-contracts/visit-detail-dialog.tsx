@@ -15,6 +15,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import DateSelect from "@/components/ui/date-select";
+import TimeSelect from "@/components/ui/time-select";
 import { ACCESS_TYPE_LABELS, TRADE_LABELS, WEEKDAY_SHORT } from "@/lib/amc/client-profile";
 import { PLANNABLE_STATUSES, VISIT_STATUS_LABELS } from "@/lib/amc/ppm";
 import {
@@ -267,7 +269,7 @@ function Panel({ title, description, children }: { title: string; description?: 
 
 function Field({ id, label, hint, children }: { id: string; label: string; hint?: ReactNode; children: ReactNode }) {
   return (
-    <div className="grid gap-2">
+    <div className="grid min-w-0 content-start gap-2">
       <Label htmlFor={id}>{label}</Label>
       {children}
       {hint ? <div className="text-muted-foreground text-xs">{hint}</div> : null}
@@ -650,7 +652,7 @@ function AccessSection({ visit: v, canEdit, working, setWorking, changed }: Body
               label="Valid until"
               hint={shortPass ? <span className="text-warning">Runs out before the visit ({formatContractDate(v.targetDate)}).</span> : "Only for an approved pass."}
             >
-              <Input id={ids.until} type="date" value={validUntil} disabled={status !== "approved"} onChange={(e) => setValidUntil(e.target.value)} />
+              <DateSelect id={ids.until} value={validUntil} disabled={status !== "approved"} onChange={setValidUntil} />
             </Field>
           </div>
           <Field id={ids.note} label="Note (optional)">
@@ -829,10 +831,10 @@ function AssignmentSection({ visit: v, canEdit, working, setWorking, changed }: 
         >
           <div className="grid gap-4 sm:grid-cols-3">
             <Field id={ids.date} label="Date">
-              <Input id={ids.date} type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+              <DateSelect id={ids.date} value={date} onChange={setDate} />
             </Field>
             <Field id={ids.time} label="Start time">
-              <Input id={ids.time} type="time" step={900} value={time} onChange={(e) => setTime(e.target.value)} />
+              <TimeSelect id={ids.time} step={900} value={time} onChange={setTime} />
             </Field>
             <Field id={ids.duration} label="Duration (minutes)">
               <Input id={ids.duration} type="number" min={15} max={1440} step={15} value={duration} onChange={(e) => setDuration(e.target.value)} />

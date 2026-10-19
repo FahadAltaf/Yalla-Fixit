@@ -15,6 +15,7 @@ import MultipleSelector from "@/components/ui/multiselect";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import DateSelect from "@/components/ui/date-select";
 import { AMC_CONFIG_SECTION_LEVEL, validateAmcConfigSection, type AmcConfig } from "@/lib/amc/config";
 import type { AmcConfigUser } from "@/modules/amc-platform/amc-platform-service";
 
@@ -269,7 +270,7 @@ function HolidaysInput({
       {sorted.length === 0 ? <p className="text-muted-foreground text-sm">No holidays listed.</p> : null}
       {sorted.map((h, i) => (
         <div key={`${h.date}-${i}`} className="flex flex-wrap items-center gap-2">
-          <Input type="date" className="w-44" value={h.date} disabled={disabled} onChange={(e) => update(i, { date: e.target.value })} />
+          <DateSelect className="w-44" value={h.date} disabled={disabled} onChange={(value) => update(i, { date: value })} />
           <Input className="min-w-48 flex-1" value={h.name} disabled={disabled} onChange={(e) => update(i, { name: e.target.value })} />
           {!disabled ? (
             <Button type="button" variant="ghost" size="icon" aria-label={`Remove ${h.name}`} onClick={() => onChange(sorted.filter((_, j) => j !== i))}>

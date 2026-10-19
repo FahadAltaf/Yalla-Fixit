@@ -196,7 +196,7 @@ export function Panel({ title, description, action, children }: { title: string;
 
 export function Field({ id, label, hint, children }: { id: string; label: string; hint?: ReactNode; children: ReactNode }) {
   return (
-    <div className="grid gap-2">
+    <div className="grid min-w-0 content-start gap-2">
       <Label htmlFor={id}>{label}</Label>
       {children}
       {hint ? <div className="text-muted-foreground text-xs">{hint}</div> : null}
@@ -649,7 +649,7 @@ export function useUrlDialog(param = "open") {
       if (query.has(param)) {
         query.delete(param);
         const qs = query.toString();
-        window.history.replaceState(null, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
+        window.history.replaceState(window.history.state, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
       }
     },
     [param],

@@ -86,7 +86,7 @@ function useReportTab() {
     setPicked(next);
     const query = new URLSearchParams(window.location.search);
     query.set("tab", next);
-    window.history.replaceState(null, "", `?${query.toString()}`);
+    window.history.replaceState(window.history.state, "", `?${query.toString()}`);
   }, []);
   return [tab, setTab] as const;
 }

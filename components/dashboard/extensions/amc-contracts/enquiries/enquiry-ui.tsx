@@ -3,6 +3,7 @@
 import { AlarmClock, CalendarClock, Flag } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ENQUIRY_STAGE, isAtOrAfter } from "@/lib/amc/enquiries";
 import { cn } from "@/lib/utils";
@@ -26,8 +27,9 @@ export function stageTone(stage: string, stages: readonly string[]): string {
 
 export function StageBadge({ stage, stages, className }: { stage: string; stages: readonly string[]; className?: string }) {
   return (
-    <Badge variant="secondary" className={cn("border-0 font-medium", stageTone(stage, stages), className)}>
-      {stage}
+    <Badge variant="secondary" title={stage} className={cn("max-w-full border-0 font-medium", stageTone(stage, stages), className)}>
+      {/* A long stage name ends in an ellipsis inside its column rather than running into the next one. */}
+      <span className="truncate">{stage}</span>
     </Badge>
   );
 }
@@ -149,8 +151,66 @@ export function PersonSelect({
         {allowNone ? <SelectItem value="none">Nobody</SelectItem> : null}
         {people.map((p) => (
           <SelectItem key={p.id} value={p.id}>
-            {p.name}
-            {p.email && p.email !== p.name ? <span className="text-muted-foreground"> · {p.email}</span> : null}
+            {/* One truncating line, so a long email never pushes the field wider. */}
+            <span className="truncate">
+              {p.name}
+              {p.email && p.email !== p.name ? <span className="text-muted-foreground"> · {p.email}</span> : null}
+            </span>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+/** A labelled field for the enquiry forms, with an optional hint under it. */
+export function Field({
+  label,
+  htmlFor,
+  hint,
+  children,
+  className,
+}: {
+  label: string;
+  htmlFor?: string;
+  hint?: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={cn("grid min-w-0 content-start gap-2", className)}>
+      <Label htmlFor={htmlFor}>{label}</Label>
+      {children}
+      {hint ? <p className="text-muted-foreground text-xs">{hint}</p> : null}
+    </div>
+  );
+}
+
+export function SimpleSelect({
+  label,
+  value,
+  options,
+  onChange,
+  placeholder = "Choose",
+  allowNone = false,
+}: {
+  label: string;
+  value: string | null | undefined;
+  options: Array<[string, string]>;
+  onChange: (v: string | null) => void;
+  placeholder?: string;
+  allowNone?: boolean;
+}) {
+  return (
+    <Select value={value ?? (allowNone ? "none" : "")} onValueChange={(v) => onChange(v === "none" ? null : v)}>
+      <SelectTrigger className="w-full" aria-label={label}>
+        <SelectValue placeholder={placeholder} />
+      </SelectTrigger>
+      <SelectContent>
+        {allowNone ? <SelectItem value="none">Not set</SelectItem> : null}
+        {options.map(([k, l]) => (
+          <SelectItem key={k} value={k}>
+            {l}
           </SelectItem>
         ))}
       </SelectContent>

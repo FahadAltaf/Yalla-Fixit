@@ -1,10 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
 import { CalendarClock, Clock, EllipsisVerticalIcon, FileSignature, Inbox, Megaphone, Plus, UserRound } from "lucide-react";
-import { toast } from "sonner";
 
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
 import { PageHeading, SectionCard, StatCard, StatCardGrid, timeAgo } from "@/components/dashboard/shared/kaizen";
@@ -23,9 +23,8 @@ import { AmcNotificationsBell } from "../amc-notifications-bell";
 import { formatContractDate, formatDateTime } from "../contract-status";
 import { ExportMenu } from "../export-menu";
 import { useAmcData } from "../use-amc-data";
-import { EnquiryFormDialog } from "./enquiry-dialogs";
 import { EnquiryFlags, StageBadge } from "./enquiry-ui";
-import { ListToolbar, ToolbarSelect } from "./list-toolbar";
+import { FilterPopover, ListToolbar } from "./list-toolbar";
 
 type View = "open" | "mine" | "follow_ups" | "idle" | "all";
 
@@ -65,7 +64,6 @@ export function EnquiriesPage() {
   const term = useDebounce(q.trim(), 250);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(25);
-  const [adding, setAdding] = useState(false);
   /* Set by Refresh and cleared when the answer lands; the rows stay on screen meanwhile. */
   const [refreshing, setRefreshing] = useState(false);
 
@@ -170,7 +168,7 @@ export function EnquiriesPage() {
         header: "Stage",
         enableSorting: false,
         cell: ({ row }) => (
-          <div className="grid gap-1">
+          <div className="grid min-w-0 gap-1">
             <StageBadge stage={row.original.stage} stages={stages ?? []} className="w-fit" />
             <EnquiryFlags enquiry={row.original} compact />
           </div>
@@ -213,9 +211,11 @@ export function EnquiriesPage() {
           <>
             <AmcNotificationsBell />
             {m?.canCreate ? (
-              <Button onClick={() => setAdding(true)}>
-                <Plus className="size-4" />
-                New enquiry
+              <Button asChild>
+                <Link href="/extensions/amc-contracts/enquiries/new">
+                  <Plus className="size-4" />
+                  New enquiry
+                </Link>
               </Button>
             ) : null}
           </>
@@ -267,24 +267,29 @@ export function EnquiriesPage() {
                   pageSize={pageSize}
                   onPageSizeChange={resetPage(setPageSize)}
                   onRefresh={refresh}
+                  /* Five filters behind one button, so the toolbar stays a search box. */
                   filters={
-                    <>
-                      <ToolbarSelect label="View" value={view} onChange={(v) => resetPage(setView)(v as View)} options={VIEWS} />
-                      <ToolbarSelect label="Stage" value={stage} onChange={resetPage(setStage)} anyLabel="All stages" options={(m?.stages ?? []).map((s) => ({ value: s, label: s }))} />
-                      <ToolbarSelect label="Source" value={source} onChange={resetPage(setSource)} anyLabel="All sources" options={(m?.sources ?? []).map((s) => ({ value: s, label: s }))} />
-                      <ToolbarSelect label="Owner" value={owner} onChange={resetPage(setOwner)} anyLabel="All owners" options={(m?.people ?? []).map((p) => ({ value: p.id, label: p.name }))} />
-                      <ToolbarSelect
-                        label="Follow-up"
-                        value={followUp}
-                        onChange={resetPage(setFollowUp)}
-                        anyLabel="Any follow-up"
-                        options={[
-                          { value: "overdue", label: "Overdue" },
-                          { value: "today", label: "Today" },
-                          { value: "week", label: "Within 7 days" },
-                        ]}
-                      />
-                    </>
+                    <FilterPopover
+                      fields={[
+                        { key: "view", label: "View", value: view, defaultValue: "open", onChange: (v) => resetPage(setView)(v as View), options: VIEWS },
+                        { key: "stage", label: "Stage", value: stage, defaultValue: "any", onChange: resetPage(setStage), anyLabel: "All stages", options: (m?.stages ?? []).map((s) => ({ value: s, label: s })) },
+                        { key: "source", label: "Source", value: source, defaultValue: "any", onChange: resetPage(setSource), anyLabel: "All sources", options: (m?.sources ?? []).map((s) => ({ value: s, label: s })) },
+                        { key: "owner", label: "Owner", value: owner, defaultValue: "any", onChange: resetPage(setOwner), anyLabel: "All owners", options: (m?.people ?? []).map((p) => ({ value: p.id, label: p.name })) },
+                        {
+                          key: "followUp",
+                          label: "Follow-up",
+                          value: followUp,
+                          defaultValue: "any",
+                          onChange: resetPage(setFollowUp),
+                          anyLabel: "Any follow-up",
+                          options: [
+                            { value: "overdue", label: "Overdue" },
+                            { value: "today", label: "Today" },
+                            { value: "week", label: "Within 7 days" },
+                          ],
+                        },
+                      ]}
+                    />
                   }
                   extra={
                     m?.canExport ? (
@@ -336,7 +341,7 @@ export function EnquiriesPage() {
                     icon={<Inbox className="size-5" />}
                     title="No enquiries yet"
                     description="Log the first one when a client gets in touch."
-                    action={m?.canCreate ? { label: "New enquiry", onClick: () => setAdding(true) } : undefined}
+                    action={m?.canCreate ? { label: "New enquiry", onClick: () => router.push("/extensions/amc-contracts/enquiries/new") } : undefined}
                   />
                 )
               }
@@ -345,18 +350,6 @@ export function EnquiriesPage() {
         </>
       )}
 
-      {m ? (
-        <EnquiryFormDialog
-          open={adding}
-          onOpenChange={setAdding}
-          meta={m}
-          enquiry={null}
-          onSaved={(saved) => {
-            toast.success(`Enquiry ${saved.enquiryNumber} logged`);
-            router.push(enquiryHref(saved.id));
-          }}
-        />
-      ) : null}
     </div>
   );
 }

@@ -37,7 +37,31 @@ export class FsmConfigError extends Error {
 
 // The single shared OAuth access token (refreshed elsewhere by the existing
 // zoho-token-refresh job) that every FSM call authenticates with.
+/**
+ * The master switch, for Snagging and AMC alike, without touching any of
+ * their own settings:
+ *   ZOHO_FSM=off   no call to Zoho FSM at all (the portal on its own);
+ *   ZOHO_FSM=read  FSM is read (clients, addresses, records) but nothing
+ *                  is created, changed or deleted there;
+ *   unset (or anything else), FSM is fully on.
+ */
+export function zohoFsmMode(): "on" | "read" | "off" {
+  const value = (process.env.ZOHO_FSM ?? "").trim().toLowerCase();
+  return value === "off" ? "off" : value === "read" ? "read" : "on";
+}
+
+export function zohoFsmSwitchedOff(): boolean {
+  return zohoFsmMode() === "off";
+}
+
+/** True when nothing may be written to FSM (ZOHO_FSM=off or read). */
+export function zohoFsmWritesOff(): boolean {
+  return zohoFsmMode() !== "on";
+}
+
 export async function getFsmAccessToken(admin: Admin): Promise<string> {
+  // Every FSM call starts here, so the master switch stops them all.
+  if (zohoFsmSwitchedOff()) throw new FsmConfigError("Zoho FSM is switched off (ZOHO_FSM=off).");
   const { data, error } = await admin
     .from("settings")
     .select("oauth_access_token")
@@ -110,6 +134,16 @@ export async function fsmFetch(
 ): Promise<{ ok: boolean; status: number; json: any }> {
   let lastError: unknown = null;
   const once = options.retry === false;
+
+  // ZOHO_FSM=read: only reads go out; a write is refused here, whoever asks.
+  const method = (init?.method ?? "GET").toUpperCase();
+  if (method !== "GET" && zohoFsmWritesOff()) {
+    return {
+      ok: false,
+      status: 403,
+      json: { error: `Zoho FSM is read-only for now (ZOHO_FSM=${zohoFsmMode()}): ${method} ${path} was not sent.` },
+    };
+  }
 
   for (let attempt = 1; attempt <= FSM_MAX_ATTEMPTS; attempt += 1) {
     let res: Response;

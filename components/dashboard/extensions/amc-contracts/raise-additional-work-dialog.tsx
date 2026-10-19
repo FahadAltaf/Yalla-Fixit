@@ -80,7 +80,7 @@ export function PartiesEditor({ value, onChange, disabled }: { value: PartyDraft
         return (
           <fieldset key={p} className="grid gap-2 rounded-lg border px-3 py-3">
             <legend className="px-1 text-sm font-medium">{WORK_PARTY_LABELS[p]}</legend>
-            <div className="grid gap-2 sm:grid-cols-[1fr_10rem]">
+            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_10rem]">
               <Input
                 id={`${id}-name`}
                 aria-label={`${WORK_PARTY_LABELS[p]} name`}
@@ -280,8 +280,8 @@ export function RaiseAdditionalWorkDialog({
           </Collapsible>
         </div>
 
-        <DialogFooter className="items-center">
-          {problem ? <p className="text-muted-foreground mr-auto text-xs">{problem}</p> : null}
+        <DialogFooter className="sm:items-center">
+          {problem ? <p className="text-muted-foreground order-last text-xs sm:order-first sm:mr-auto">{problem}</p> : null}
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>

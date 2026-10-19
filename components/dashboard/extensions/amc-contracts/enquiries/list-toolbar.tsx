@@ -1,11 +1,13 @@
 "use client";
 
 import { useId } from "react";
-import { LoaderCircleIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
+import { LoaderCircleIcon, RefreshCwIcon, SearchIcon, SlidersHorizontalIcon } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 /**
@@ -88,6 +90,81 @@ export function ListToolbar({
         </div>
       </div>
     </div>
+  );
+}
+
+/** One filter in the Filters panel. `defaultValue` is what Clear all returns it to. */
+export type FilterField = {
+  key: string;
+  label: string;
+  value: string;
+  defaultValue: string;
+  onChange: (value: string) => void;
+  options: ReadonlyArray<{ value: string; label: string }>;
+  /** The "no filter" choice (value "any"), when the filter has one. */
+  anyLabel?: string;
+};
+
+/**
+ * Every filter behind one button, so the toolbar stays a search box and a
+ * button however many filters a list has. The button counts the filters
+ * that are set; the panel holds one labelled dropdown each and a Clear all.
+ * A change applies at once, as the dropdowns in the toolbar did.
+ */
+export function FilterPopover({ fields }: { fields: ReadonlyArray<FilterField> }) {
+  const active = fields.filter((field) => field.value !== field.defaultValue).length;
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="outline" aria-label={active ? `Filters, ${active} set` : "Filters"}>
+          <SlidersHorizontalIcon className="size-4" />
+          Filters
+          {active ? (
+            <Badge variant="secondary" className="ml-0.5 h-5 min-w-5 rounded-full px-1.5 tabular-nums">
+              {active}
+            </Badge>
+          ) : null}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-[min(22rem,calc(100vw-2rem))] p-0">
+        <div className="flex items-center justify-between border-b px-4 py-3">
+          <p className="text-sm font-semibold">Filters</p>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2"
+            disabled={!active}
+            onClick={() =>
+              fields.forEach((field) => {
+                if (field.value !== field.defaultValue) field.onChange(field.defaultValue);
+              })
+            }
+          >
+            Clear all
+          </Button>
+        </div>
+        <div className="grid gap-3 p-4">
+          {fields.map((field) => (
+            <div key={field.key} className="grid gap-1.5">
+              <Label className="text-muted-foreground text-xs font-medium">{field.label}</Label>
+              <Select value={field.value} onValueChange={field.onChange}>
+                <SelectTrigger className="w-full" aria-label={field.label}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {field.anyLabel ? <SelectItem value="any">{field.anyLabel}</SelectItem> : null}
+                  {field.options.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 

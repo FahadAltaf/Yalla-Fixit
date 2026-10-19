@@ -22,7 +22,8 @@ export function useUrlTab<T extends string>(tabs: readonly T[], fallback: T) {
     setOpened((prev) => (prev.has(value) ? prev : new Set(prev).add(value)));
     const query = new URLSearchParams(window.location.search);
     query.set("tab", value);
-    window.history.replaceState(null, "", `?${query.toString()}`);
+    // The router's own state, so Next leaves the entry alone: replacing it with null re-keys the page and remounts it.
+    window.history.replaceState(window.history.state, "", `?${query.toString()}`);
   }, []);
 
   return { tab, setTab, isOpened: (value: T) => opened.has(value) };

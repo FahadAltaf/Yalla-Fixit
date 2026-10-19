@@ -662,7 +662,15 @@ export function SubmissionDetails({
             <MoreActions
               downloading={downloading}
               onDownload={onDownload ? (type, format) => onDownload(submission, type, format) : undefined}
-              revise={revisable ? { label: `Revise (V${(submission.current_version ?? 1) + 1})`, onSelect: () => setReviseOpen(true) } : null}
+              revise={
+                revisable
+                  ? {
+                      /* Approved and not sent: it reopens as a draft of the same version. */
+                      label: submission.status === "approved" ? "Revise before sending" : `Revise (V${(submission.current_version ?? 1) + 1})`,
+                      onSelect: () => setReviseOpen(true),
+                    }
+                  : null
+              }
               recordAnswer={answerable ? () => setAnswerOpen(true) : null}
               reject={canDecideNow && onReject ? () => onReject(submission) : null}
               rejectDisabled={deciding}

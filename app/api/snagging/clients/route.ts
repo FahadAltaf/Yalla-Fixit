@@ -7,7 +7,7 @@ import { listClients, toOption } from "@/lib/server/snagging/client-list";
 import { hasColumn } from "@/lib/server/snagging/columns";
 import {
   createClientWithFsm,
-  fsmClientsReady,
+  fsmClientWritesReady,
   fsmErrorMessage,
   updateClientWithFsm,
 } from "@/lib/server/snagging/fsm-clients";
@@ -95,7 +95,7 @@ export async function POST(req: NextRequest) {
       is created there and in the portal. FSM requires an email on a
       contact, and one it already has is linked rather than duplicated.
     */
-    if (await fsmClientsReady(admin)) {
+    if (await fsmClientWritesReady(admin)) {
       if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
         return NextResponse.json(
           { error: "An email is required: Zoho FSM keeps every client with one." },
@@ -221,7 +221,7 @@ export async function PATCH(req: NextRequest) {
     const admin = await createAdminServerClient();
 
     // The FSM contact is the record: corrected there first, then the portal's copy.
-    if (await fsmClientsReady(admin)) {
+    if (await fsmClientWritesReady(admin)) {
       try {
         const data = await updateClientWithFsm(
           admin,

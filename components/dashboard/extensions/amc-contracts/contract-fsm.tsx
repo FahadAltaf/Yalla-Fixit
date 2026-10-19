@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import DateTimeSelect from "@/components/ui/date-time-select";
 import { SectionCard } from "@/components/dashboard/shared/kaizen";
 import { ActionDialogContent, ErrorState, ListSkeleton, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
 import { formatQuantity } from "@/lib/amc/contracts";
@@ -719,7 +720,7 @@ function LinkWorkDialog({
                 <div className="grid gap-2">
                   <Label htmlFor="amc-fsm-link-appt">Appointment</Label>
                   <Select value={appointmentId} onValueChange={setAppointmentId}>
-                    <SelectTrigger id="amc-fsm-link-appt">
+                    <SelectTrigger className="w-full" id="amc-fsm-link-appt">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -735,7 +736,7 @@ function LinkWorkDialog({
                 <div className="grid gap-2">
                   <Label htmlFor="amc-fsm-link-line">Service line (optional)</Label>
                   <Select value={lineId} onValueChange={chooseLine}>
-                    <SelectTrigger id="amc-fsm-link-line">
+                    <SelectTrigger className="w-full" id="amc-fsm-link-line">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -752,7 +753,7 @@ function LinkWorkDialog({
                 <div className="grid gap-2">
                   <Label htmlFor="amc-fsm-link-ent">AMC service</Label>
                   <Select value={entitlementId} onValueChange={setEntitlementId}>
-                    <SelectTrigger id="amc-fsm-link-ent">
+                    <SelectTrigger className="w-full" id="amc-fsm-link-ent">
                       <SelectValue placeholder="Choose the contract service" />
                     </SelectTrigger>
                     <SelectContent>
@@ -766,11 +767,10 @@ function LinkWorkDialog({
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="amc-fsm-link-req">Client request time (optional)</Label>
-                  <Input
+                  <DateTimeSelect
                     id="amc-fsm-link-req"
-                    type="datetime-local"
                     value={requestedAt}
-                    onChange={(event) => setRequestedAt(event.target.value)}
+                    onChange={setRequestedAt}
                   />
                   <p className="text-muted-foreground text-xs">
                     Dubai time. FSM does not record when the client asked; response targets are measured from this.

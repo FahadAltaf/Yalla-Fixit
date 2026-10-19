@@ -102,6 +102,24 @@ export const createEnquirySchema = z
         name: z.string().trim().min(1, "Name the client").max(200),
         customerType: z.enum(["individual", "company"]).nullable().optional(),
         company: optionalText(200),
+        /* As Snagging adds a client: the client is also the enquiry's contact. */
+        phone: optionalText(40),
+        email: optionalEmail,
+        /* Maher_Id__C, which Zoho FSM requires on a contact. */
+        maherId: optionalText(60),
+      })
+      .strict()
+      .nullable()
+      .optional(),
+    /*
+      A property not on file yet, saved as the client's property with the
+      enquiry (with its type, category and area), so it is there to pick
+      when the site visit is booked.
+    */
+    newProperty: z
+      .object({
+        label: z.string().trim().min(1, "Name the property (e.g. Villa 32)").max(200),
+        building: optionalText(200),
       })
       .strict()
       .nullable()

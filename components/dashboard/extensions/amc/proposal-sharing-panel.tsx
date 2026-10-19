@@ -292,7 +292,7 @@ export function RecordClientAnswerDialog({
           <div className="grid gap-1.5">
             <Label htmlFor="answer-choice">Answer</Label>
             <Select value={answer} onValueChange={(v) => setAnswer(v as ClientAnswer)}>
-              <SelectTrigger id="answer-choice" aria-label="Answer">
+              <SelectTrigger className="w-full" id="answer-choice" aria-label="Answer">
                 <SelectValue placeholder="Choose" />
               </SelectTrigger>
               <SelectContent>

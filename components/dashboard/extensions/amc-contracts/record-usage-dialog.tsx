@@ -121,7 +121,7 @@ export function RecordUsageDialog({
           <div className="grid gap-2">
             <Label htmlFor="amc-usage-service">Service</Label>
             <Select value={entitlementId} onValueChange={setEntitlementId}>
-              <SelectTrigger id="amc-usage-service">
+              <SelectTrigger className="w-full" id="amc-usage-service">
                 <SelectValue placeholder="Choose a service" />
               </SelectTrigger>
               <SelectContent>
@@ -157,11 +157,11 @@ export function RecordUsageDialog({
             </div>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-[180px_1fr]">
+          <div className="grid gap-4 sm:grid-cols-[180px_minmax(0,1fr)]">
             <div className="grid gap-2">
               <Label htmlFor="amc-usage-ref-type">FSM reference</Label>
               <Select value={refType} onValueChange={(v) => setRefType(v as typeof refType)}>
-                <SelectTrigger id="amc-usage-ref-type">
+                <SelectTrigger className="w-full" id="amc-usage-ref-type">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

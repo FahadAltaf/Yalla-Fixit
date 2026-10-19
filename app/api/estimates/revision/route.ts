@@ -3,7 +3,7 @@ import { zohoEdgeHeaders } from "@/lib/server/zoho/edge-auth";
 import { z } from "zod";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { requireResourceAccess } from "@/lib/server/require-access";
-import { getFsmAccessToken } from "@/lib/server/zoho/fsm-client";
+import { getFsmAccessToken, zohoFsmWritesOff } from "@/lib/server/zoho/fsm-client";
 import { ActionType, ResourceType } from "@/types/types";
 
 const GET_ESTIMATE_EDGE_URL = `${process.env.SUPABASE_URL}/functions/v1/get-estimate`;
@@ -52,6 +52,8 @@ function relationId(value: unknown): string | undefined {
 /* Server-only: the token never leaves the server, and is read with the
    service role (browsers can no longer read it, 20261005160000). */
 async function getAccessToken(): Promise<string> {
+  // A revision creates an estimate in FSM: not while FSM is off or read-only.
+  if (zohoFsmWritesOff()) throw new Error("Zoho FSM is read-only for now, so a revision cannot be created.");
   try {
     return await getFsmAccessToken(await createAdminServerClient());
   } catch {

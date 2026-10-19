@@ -32,8 +32,19 @@ export const VERSION_REASON_LABELS: Record<VersionReason, string> = {
  */
 export const REVISABLE_STATUSES = ["proposal_sent", "proposal_rejected"] as const;
 
+/**
+ * Approved but not yet sent: the client has not seen it, so revising it
+ * reopens it as a draft of the same version (nothing to lock) that goes
+ * for approval again.
+ */
+export const REOPENABLE_STATUSES = ["approved"] as const;
+
+export function reopensInPlace(status: string): boolean {
+  return (REOPENABLE_STATUSES as readonly string[]).includes(status);
+}
+
 export function canRevise(status: string, isOwner: boolean): boolean {
-  return isOwner && (REVISABLE_STATUSES as readonly string[]).includes(status);
+  return isOwner && ((REVISABLE_STATUSES as readonly string[]).includes(status) || reopensInPlace(status));
 }
 
 export const reviseSchema = z

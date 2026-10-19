@@ -2,23 +2,32 @@
 
 import { useEffect, useState } from "react";
 import { Check, SearchIcon } from "lucide-react";
+import { toast } from "sonner";
 
 import { SubmitButton } from "@/components/dashboard/shared/kaizen-states";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { useDebounce } from "@/hooks/use-debounce";
+import DateSelect from "@/components/ui/date-select";
 import { CHANNEL_LABELS, LIFECYCLE_LABELS, PREFERRED_CHANNELS, UNIT_TYPES, UNIT_TYPE_CATEGORY, UNIT_TYPE_LABELS as UNIT_LABELS } from "@/lib/amc/client-profile";
 import {
   amcContractsService,
+  type ClientListRow,
   type CustomerInput,
   type CustomerRecord,
   type PropertyInput,
   type PropertyRecord,
 } from "@/modules/amc-contracts/amc-contracts-service";
 
-/** Search the shared clients by name, Customer ID, phone or email and pick one. */
+import { ClientRowLabel, customerForRow, useClientList } from "./client-picker";
+
+/**
+ * Search the clients and pick one: Zoho FSM's clients, as on Snagging,
+ * with AMC's portal-only prospects on top. An FSM client the portal has not
+ * used yet gets its portal row when it is picked.
+ */
 export function CustomerSearch({
   onPick,
   selectedId,
@@ -27,57 +36,72 @@ export function CustomerSearch({
   selectedId?: string | null;
 }) {
   const [q, setQ] = useState("");
-  const [results, setResults] = useState<CustomerRecord[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const term = useDebounce(q.trim(), 250);
+  const [picking, setPicking] = useState<string | null>(null);
+  const list = useClientList(q);
 
-  useEffect(() => {
-    let stale = false;
-    amcContractsService.customers(term).then(
-      ({ customers }) => {
-        if (stale) return;
-        setResults(customers);
-        setError(null);
-      },
-      (e) => !stale && setError(e instanceof Error ? e.message : "Could not search clients."),
-    );
-    return () => {
-      stale = true;
-    };
-  }, [term]);
+  const pick = async (row: ClientListRow) => {
+    const key = row.fsmContactId ?? row.id ?? row.name;
+    setPicking(key);
+    try {
+      onPick(await customerForRow(row));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not use this client.");
+    } finally {
+      setPicking(null);
+    }
+  };
 
   return (
     <div className="grid gap-2">
       <div className="relative">
-        <Input type="search" placeholder="Search name, Customer ID, phone or email…" className="ps-9" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search clients" />
+        <Input
+          type="search"
+          placeholder={list.source === "fsm" ? "Search clients in Zoho FSM" : "Search name, Customer ID, phone or email…"}
+          className="ps-9"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          aria-label="Search clients"
+        />
         <SearchIcon aria-hidden className="text-muted-foreground/80 pointer-events-none absolute start-3 top-1/2 size-4 -translate-y-1/2" />
       </div>
-      {error ? <p className="text-danger text-xs">{error}</p> : null}
-      <ul className="max-h-56 divide-y overflow-y-auto rounded-lg border text-sm">
-        {results.length === 0 ? (
-          <li className="text-muted-foreground px-3 py-2">{term ? "No clients match." : "No clients yet."}</li>
+      {list.error ? <p className="text-danger text-xs">{list.error}</p> : null}
+      <ul
+        className="max-h-56 divide-y overflow-y-auto rounded-lg border text-sm"
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          if (el.scrollTop + el.clientHeight >= el.scrollHeight - 48) void list.loadMore();
+        }}
+      >
+        {list.loading ? (
+          Array.from({ length: 3 }, (_, i) => (
+            <li key={i} className="space-y-1.5 px-3 py-2.5">
+              <Skeleton className="h-3.5 w-1/3" />
+              <Skeleton className="h-3 w-1/2" />
+            </li>
+          ))
+        ) : list.rows.length === 0 ? (
+          <li className="text-muted-foreground px-3 py-2">{q.trim() ? "No clients match." : "No clients yet."}</li>
         ) : (
-          results.map((c) => {
-            const picked = selectedId === c.id;
+          list.rows.map((row) => {
+            const key = row.fsmContactId ?? row.id ?? row.name;
+            const picked = Boolean(selectedId) && selectedId === row.id;
             return (
-              <li key={c.id}>
+              <li key={key}>
                 <button
                   type="button"
-                  onClick={() => onPick(c)}
+                  disabled={picking !== null}
+                  onClick={() => void pick(row)}
                   aria-pressed={picked}
-                  className={`flex w-full items-center gap-3 px-3 py-2 text-left ${picked ? "bg-brand-50" : "hover:bg-muted/50"}`}
+                  className={`flex w-full items-center gap-3 px-3 py-2 text-left disabled:opacity-60 ${picked ? "bg-brand-50" : "hover:bg-muted/50"}`}
                 >
-                  <span className="min-w-0 flex-1">
-                    <span className={`font-medium ${picked ? "text-brand" : ""}`}>{c.name}</span>
-                    {c.customerRef ? <span className="text-muted-foreground"> · {c.customerRef}</span> : null}
-                    <span className="text-muted-foreground block truncate text-xs">{[c.phone, c.email].filter(Boolean).join(" · ") || "No contact details"}</span>
-                  </span>
+                  <ClientRowLabel row={row} busy={picking === key} />
                   {picked ? <Check className="text-brand size-4 shrink-0" aria-hidden /> : null}
                 </button>
               </li>
             );
           })
         )}
+        {list.loadingMore ? <li className="text-muted-foreground px-3 py-2 text-xs">Loading more clients…</li> : null}
       </ul>
     </div>
   );
@@ -110,14 +134,16 @@ export function PropertySelect({
   const list = customerId ? properties : [];
   return (
     <Select value={value ?? ""} onValueChange={(id) => onChange(list.find((p) => p.id === id) ?? null)} disabled={!customerId || list.length === 0}>
-      <SelectTrigger aria-label="Property">
+      <SelectTrigger className="w-full" aria-label="Property">
         <SelectValue placeholder={!customerId ? "Choose the client first" : list.length ? "Choose a property" : "No properties yet"} />
       </SelectTrigger>
       <SelectContent>
         {list.map((p) => (
           <SelectItem key={p.id} value={p.id}>
-            {p.label}
-            {p.unitType ? ` · ${UNIT_LABELS[p.unitType as keyof typeof UNIT_LABELS] ?? p.unitType}` : ""}
+            <span className="truncate">
+              {p.label}
+              {p.unitType ? ` · ${UNIT_LABELS[p.unitType as keyof typeof UNIT_LABELS] ?? p.unitType}` : ""}
+            </span>
           </SelectItem>
         ))}
       </SelectContent>
@@ -152,7 +178,7 @@ export function CustomerFields({ value, onChange }: { value: CustomerInput; onCh
       <div className="grid gap-1.5">
         <Label>Type</Label>
         <Select value={value.customerType ?? ""} onValueChange={(v) => onChange({ ...value, customerType: v as CustomerInput["customerType"] })}>
-          <SelectTrigger aria-label="Type">
+          <SelectTrigger className="w-full" aria-label="Type">
             <SelectValue placeholder="Choose" />
           </SelectTrigger>
           <SelectContent>
@@ -164,7 +190,7 @@ export function CustomerFields({ value, onChange }: { value: CustomerInput; onCh
       <div className="grid gap-1.5">
         <Label>Status</Label>
         <Select value={value.lifecycle ?? "client"} onValueChange={(v) => onChange({ ...value, lifecycle: v as CustomerInput["lifecycle"] })}>
-          <SelectTrigger aria-label="Status">
+          <SelectTrigger className="w-full" aria-label="Status">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -184,7 +210,7 @@ export function CustomerFields({ value, onChange }: { value: CustomerInput; onCh
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="cust-licence-expiry">Licence expiry</Label>
-            <Input id="cust-licence-expiry" type="date" value={value.tradeLicenseExpiry ?? ""} onChange={set("tradeLicenseExpiry")} />
+            <DateSelect id="cust-licence-expiry" value={value.tradeLicenseExpiry ?? ""} onChange={(day) => onChange({ ...value, tradeLicenseExpiry: day })} />
           </div>
           <div className="grid gap-1.5 sm:col-span-2">
             <Label htmlFor="cust-trn">TRN (15 digits)</Label>
@@ -195,7 +221,7 @@ export function CustomerFields({ value, onChange }: { value: CustomerInput; onCh
       <div className="grid gap-1.5">
         <Label>Preferred channel</Label>
         <Select value={value.preferredChannel ?? ""} onValueChange={(v) => onChange({ ...value, preferredChannel: v as CustomerInput["preferredChannel"] })}>
-          <SelectTrigger aria-label="Preferred channel">
+          <SelectTrigger className="w-full" aria-label="Preferred channel">
             <SelectValue placeholder="Choose" />
           </SelectTrigger>
           <SelectContent>
@@ -256,7 +282,7 @@ export function PropertyFields({
             onChange({ ...value, unitType, propertyCategory: value.propertyCategory ?? UNIT_TYPE_CATEGORY[unitType] ?? null });
           }}
         >
-          <SelectTrigger aria-label="Unit type">
+          <SelectTrigger className="w-full" aria-label="Unit type">
             <SelectValue placeholder="Choose" />
           </SelectTrigger>
           <SelectContent>
@@ -271,7 +297,7 @@ export function PropertyFields({
       <div className="grid gap-1.5">
         <Label>Category</Label>
         <Select value={value.propertyCategory ?? ""} onValueChange={(v) => onChange({ ...value, propertyCategory: v as PropertyInput["propertyCategory"] })}>
-          <SelectTrigger aria-label="Category">
+          <SelectTrigger className="w-full" aria-label="Category">
             <SelectValue placeholder="Choose" />
           </SelectTrigger>
           <SelectContent>
@@ -338,7 +364,7 @@ export function PropertyFields({
         <div className="grid gap-1.5">
           <Label>Occupied by</Label>
           <Select value={value.occupancy ?? ""} onValueChange={(v) => onChange({ ...value, occupancy: v as PropertyInput["occupancy"] })}>
-            <SelectTrigger aria-label="Occupied by">
+            <SelectTrigger className="w-full" aria-label="Occupied by">
               <SelectValue placeholder="Choose" />
             </SelectTrigger>
             <SelectContent>
@@ -363,7 +389,7 @@ export function PropertyFields({
         <div className="grid gap-1.5 sm:col-span-2">
           <Label>Part of (combined units)</Label>
           <Select value={value.parentPropertyId ?? "none"} onValueChange={(v) => onChange({ ...value, parentPropertyId: v === "none" ? null : v })}>
-            <SelectTrigger aria-label="Part of">
+            <SelectTrigger className="w-full" aria-label="Part of">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

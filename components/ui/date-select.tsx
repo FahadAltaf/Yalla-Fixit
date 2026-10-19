@@ -36,6 +36,9 @@ export default function DateSelect({
   "aria-label": ariaLabel,
   /** Days that cannot be chosen, e.g. `{ before: new Date() }`. */
   disabledDates,
+  /** Earliest / latest day that can be chosen, YYYY-MM-DD (as the native input's min and max). */
+  min,
+  max,
 }: {
   id?: string;
   value: string;
@@ -45,9 +48,16 @@ export default function DateSelect({
   placeholder?: string;
   "aria-label"?: string;
   disabledDates?: React.ComponentProps<typeof Calendar>["disabled"];
+  min?: string;
+  max?: string;
 }) {
   const [open, setOpen] = useState(false);
   const selected = value ? parseISO(value) : undefined;
+  const bounds = [
+    ...(min ? [{ before: parseISO(min) }] : []),
+    ...(max ? [{ after: parseISO(max) }] : []),
+  ];
+  const disabledDays = disabledDates ?? (bounds.length ? bounds : undefined);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -65,14 +75,15 @@ export default function DateSelect({
           )}
         >
           <CalendarIcon className="text-muted-foreground mr-2 size-4" />
-          {selected ? format(selected, "dd MMM yyyy") : placeholder}
+          <span className="truncate">{selected ? format(selected, "dd MMM yyyy") : placeholder}</span>
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-auto p-0" align="start">
         <Calendar
           mode="single"
           selected={selected}
-          disabled={disabledDates}
+          disabled={disabledDays}
+          defaultMonth={selected}
           onSelect={(date) => {
             onChange(date ? format(date, "yyyy-MM-dd") : "");
             setOpen(false);

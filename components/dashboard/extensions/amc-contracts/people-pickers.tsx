@@ -91,8 +91,10 @@ function PersonSelect({
         {missing ? <SelectItem value={missing}>{state.loading ? "Loading…" : `${missing} (not listed)`}</SelectItem> : null}
         {state.list.map((p) => (
           <SelectItem key={p.id} value={p.id}>
-            {p.name}
-            {p.detail ? <span className="text-muted-foreground ml-1 text-xs">{p.detail}</span> : null}
+            <span className="truncate">
+              {p.name}
+              {p.detail ? <span className="text-muted-foreground ml-1 text-xs">{p.detail}</span> : null}
+            </span>
           </SelectItem>
         ))}
       </SelectContent>

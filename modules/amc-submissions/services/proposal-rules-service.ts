@@ -24,6 +24,8 @@ export interface ProposalRules {
     "level1Name" | "level2Name" | "level3Name" | "discountLevel1AbovePercent" | "discountLevel2AbovePercent" | "discountLevel3AbovePercent"
   >;
   validityDays: number;
+  /** The shortest contract AMC configuration allows, in months (BRD 5.7). */
+  minimumTermMonths?: number;
 }
 
 export interface RateCardResponse {
@@ -49,7 +51,8 @@ export const proposalRulesService = {
     return request<{ versions: ProposalVersion[]; migrated: boolean }>(`/api/amc-submissions/versions?id=${encodeURIComponent(submissionId)}`);
   },
   revise(input: { id: string; reason: VersionReason; summary: string }) {
-    return request<{ versionNo: number; lockedVersionNo: number }>("/api/amc-submissions/versions", { method: "POST", body: JSON.stringify(input) });
+    /* reopened: an approved proposal not yet sent, back to a draft of the same version. */
+    return request<{ versionNo: number; lockedVersionNo: number; reopened?: boolean }>("/api/amc-submissions/versions", { method: "POST", body: JSON.stringify(input) });
   },
   versionUrl(submissionId: string, versionNo: number) {
     return request<{ url: string }>(`/api/amc-submissions/versions/file?id=${encodeURIComponent(submissionId)}&version=${versionNo}`);

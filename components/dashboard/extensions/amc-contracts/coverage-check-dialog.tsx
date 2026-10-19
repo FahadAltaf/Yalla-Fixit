@@ -213,7 +213,7 @@ export function CoverageCheckDialog({
             <div className="grid gap-2">
               <Label htmlFor="amc-cov-type">Request</Label>
               <Select value={requestType} onValueChange={(value) => setRequestType(value as RequestType)}>
-                <SelectTrigger id="amc-cov-type">
+                <SelectTrigger className="w-full" id="amc-cov-type">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -233,7 +233,7 @@ export function CoverageCheckDialog({
             <div className="grid gap-2">
               <Label htmlFor="amc-cov-service">Service</Label>
               <Select value={serviceId} onValueChange={setServiceId}>
-                <SelectTrigger id="amc-cov-service">
+                <SelectTrigger className="w-full" id="amc-cov-service">
                   <SelectValue placeholder="Choose a service" />
                 </SelectTrigger>
                 <SelectContent>

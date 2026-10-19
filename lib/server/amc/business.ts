@@ -31,7 +31,17 @@ import { UNIT_TYPES } from "@/lib/amc/client-profile";
 import { defaultPaymentPlan, legacyTermsForPlan, rateModelFor } from "@/lib/amc/proposal-rules";
 import { readAmcConfig } from "@/lib/server/amc/config";
 import { rateCardInForce } from "@/lib/server/amc/rate-card";
+import { snapToCardFrequencies } from "@/lib/amc/rate-card";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
+import { hasColumn } from "@/lib/server/snagging/columns";
+import {
+  createClientWithFsm,
+  fsmClientWritesReady,
+  fsmErrorMessage,
+  queuePropertyEditToFsm,
+  queuePropertyToFsm,
+} from "@/lib/server/snagging/fsm-clients";
+import { FsmApiError } from "@/lib/server/zoho/fsm-contacts";
 import { ContractError, isMissingTable, loadContract, toRulesContract } from "@/lib/server/amc/contracts";
 import { fetchAllRowsById } from "@/lib/server/amc/paging";
 import { removeDraftPhotoFiles } from "@/lib/server/amc/assessment-photos";
@@ -127,16 +137,23 @@ export interface PropertyRecord {
   directory views, which put both side by side under the names this module
   has always used, so CustomerRecord and PropertyRecord did not change.
 */
-const CLIENT_DIRECTORY = "amc_client_directory";
+export const CLIENT_DIRECTORY = "amc_client_directory";
 const PROPERTY_DIRECTORY = "amc_property_directory";
-const CUSTOMER_COLUMNS =
+export const CUSTOMER_COLUMNS =
   "id, name, customer_ref, company, email, phone, fsm_contact_id, notes, created_at, customer_type, lifecycle, became_client_at, trade_license_no, trade_license_expiry, trn, preferred_channel, preferred_language, marketing_consent, marketing_consent_at, marketing_consent_source";
 const PROPERTY_COLUMNS =
   "id, customer_id, label, address, community, property_category, unit_type, bedrooms, size_sqft, notes, created_at, building, unit_no, floor, street, city, floors_count, zones, occupancy, access_constraints, parent_property_id";
 
-/** A client or address embedded in another AMC row (one FK, so no hint needed). */
+/** A client embedded in another AMC row (one FK, so no hint needed). */
 export const CLIENT_EMBED = "id, name, profile:amc_client_profiles(customer_ref, lifecycle)";
-export const PROPERTY_EMBED = "id, unit_label, property_type, profile:amc_property_profiles(property_category, unit_type)";
+/*
+  An address embedded in another AMC row. Its profile needs the FK named:
+  amc_property_profiles points at snagging_properties twice (property_id,
+  and parent_property_id for a unit's building), and PostgREST refuses an
+  embed it cannot tell apart ("more than one relationship was found").
+*/
+export const PROPERTY_EMBED =
+  "id, unit_label, property_type, profile:amc_property_profiles!amc_property_profiles_property_id_fkey(property_category, unit_type)";
 
 /* PostgREST returns a one-to-one embed as an object; be ready for an array too. */
 const one = (v: unknown): Row | null => (Array.isArray(v) ? ((v[0] as Row | undefined) ?? null) : ((v as Row | null) ?? null));
@@ -182,7 +199,7 @@ async function withColumns<T>(
   return first;
 }
 
-function mapCustomer(r: Row): CustomerRecord {
+export function mapCustomer(r: Row): CustomerRecord {
   return {
     id: String(r.id),
     name: String(r.name),
@@ -236,7 +253,7 @@ function mapProperty(r: Row): PropertyRecord {
 }
 
 /** Characters that would break a PostgREST or() filter. */
-function safeTerm(q: string): string {
+export function safeTerm(q: string): string {
   return q.replace(/[,()"'%_*:\\]/g, " ").trim().replace(/\s+/g, " ").slice(0, 100);
 }
 
@@ -279,6 +296,8 @@ export interface CustomerInput {
   preferredLanguage?: string | null;
   /* BRD 5.9: the FSM customer (Contact id) behind the profile. */
   fsmContactId?: string | null;
+  /* Maher_Id__C on the shared Snagging client, which Zoho FSM requires (new clients only). */
+  maherId?: string | null;
 }
 
 const blankToNull = (v: string | null | undefined) => (v && v.trim() ? v.trim() : null);
@@ -369,10 +388,33 @@ export async function createCustomer(admin: Admin, input: CustomerInput, actor: 
   let id: string;
   if (match) {
     id = String(match.id);
+  } else if (row.email && (await fsmClientWritesReady(admin))) {
+    /*
+      Zoho FSM keeps the clients (Sami, 14 Oct 2026): a new one is made there
+      too, as Snagging makes one, and one FSM already has with that email is
+      linked rather than created twice. Off while FSM writes are off
+      (ZOHO_FSM=read or off); FSM also needs the email, so a client without
+      one stays in the portal.
+    */
+    try {
+      const { client } = await createClientWithFsm(
+        admin,
+        { name: row.name, email: row.email, phone: row.phone, company: row.company, maherId: blankToNull(input.maherId) },
+        actor.id,
+      );
+      if (!client.id) throw new ContractError("Zoho FSM did not return the client.", 502);
+      id = client.id;
+    } catch (error) {
+      if (error instanceof FsmApiError || error instanceof FsmConfigError) throw new ContractError(fsmErrorMessage(error), 502);
+      throw error;
+    }
   } else {
+    /* The Maher ID lives on the Snagging client once its column is in (20261015120000). */
+    const maherId = blankToNull(input.maherId);
+    const withMaher = maherId && (await hasColumn(admin, "snagging_clients", "maher_id")) ? { maher_id: maherId } : {};
     const { data, error } = await admin
       .from("snagging_clients")
-      .insert({ ...row, created_by: actor.id })
+      .insert({ ...row, ...withMaher, created_by: actor.id })
       .select("id")
       .single<Row>();
     if (error) throw fail(error);
@@ -547,6 +589,8 @@ export async function createProperty(admin: Admin, input: PropertyInput, actor: 
       .single<Row>();
     if (error) throw fail(error);
     id = String(data.id);
+    // To Zoho FSM once the caller has its answer (only while FSM writes are on).
+    queuePropertyToFsm(admin, id, actor.id);
   }
   await writePropertyProfile(admin, id, propertyProfileRow(input), actor);
   await recordAmcAudit(admin, {
@@ -560,6 +604,37 @@ export async function createProperty(admin: Admin, input: PropertyInput, actor: 
   return getProperty(admin, id);
 }
 
+export interface PropertyDetailsInput {
+  unitType?: string | null;
+  propertyCategory?: string | null;
+  occupancy?: string | null;
+  floor?: string | null;
+  street?: string | null;
+  city?: string | null;
+  zones?: string[];
+  accessConstraints?: string | null;
+}
+
+/**
+ * What only AMC keeps about an address (finer unit type, category,
+ * occupancy, street, city, zones, access), leaving the address itself, which
+ * Snagging's form saved, as it is. Only the fields sent are written.
+ */
+export async function updatePropertyDetails(admin: Admin, id: string, input: PropertyDetailsInput, actor: Actor): Promise<PropertyRecord> {
+  await getProperty(admin, id);
+  const fields: Record<string, unknown> = {};
+  if (input.unitType !== undefined) fields.unit_type = input.unitType || null;
+  if (input.propertyCategory !== undefined) fields.property_category = input.propertyCategory || null;
+  if (input.occupancy !== undefined) fields.occupancy = input.occupancy || null;
+  if (input.floor !== undefined) fields.floor = blankToNull(input.floor);
+  if (input.street !== undefined) fields.street = blankToNull(input.street);
+  if (input.city !== undefined) fields.city = blankToNull(input.city);
+  if (input.zones !== undefined) fields.zones = input.zones.map((z) => z.trim()).filter(Boolean);
+  if (input.accessConstraints !== undefined) fields.access_constraints = blankToNull(input.accessConstraints);
+  if (Object.keys(fields).length > 0) await writePropertyProfile(admin, id, fields, actor);
+  return getProperty(admin, id);
+}
+
 export async function updateProperty(admin: Admin, id: string, input: PropertyInput, actor: Actor): Promise<PropertyRecord> {
   const { data, error } = await admin
     .from("snagging_properties")
@@ -569,6 +644,7 @@ export async function updateProperty(admin: Admin, id: string, input: PropertyIn
     .maybeSingle<Row>();
   if (error) throw fail(error);
   if (!data) throw new ContractError("Property not found.", 404);
+  queuePropertyEditToFsm(admin, id, actor.id);
   await writePropertyProfile(admin, id, propertyProfileRow(input), actor);
   await recordAmcAudit(admin, {
     entityType: "customer",
@@ -1323,7 +1399,8 @@ export async function createProposalFromAssessment(admin: Admin, id: string, act
   );
   if (!prefill.ok) throw new ContractError(prefill.error, prefill.status);
   const priced = priceSubmission({
-    services: prefill.services,
+    /* Each line at a frequency the card allows (the service default may say 1). */
+    services: card ? snapToCardFrequencies(prefill.services, card.card, prefill.property.unitType) : prefill.services,
     discountPercent: 0,
     unitType: prefill.property.unitType,
     settings,

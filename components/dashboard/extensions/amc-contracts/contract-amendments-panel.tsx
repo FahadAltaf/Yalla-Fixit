@@ -20,6 +20,7 @@ import { Money } from "@/components/ui/money";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import DateSelect from "@/components/ui/date-select";
 import {
   AMENDMENT_HINTS,
   AMENDMENT_KINDS,
@@ -628,7 +629,7 @@ function RequestAmendmentDialog({
 
   const dateField = (key: "effectiveOn" | "until" | "noticeOn" | "terminationOn", label: string, hint?: ReactNode) => (
     <Field id={`${base}-${key}`} label={label} hint={hint}>
-      <Input id={`${base}-${key}`} type="date" value={form[key]} onChange={(e) => set(key, e.target.value)} />
+      <DateSelect id={`${base}-${key}`} value={form[key]} onChange={(value) => set(key, value)} />
     </Field>
   );
 
@@ -855,7 +856,7 @@ function TransferFields({
         </Field>
         <Field id={`${base}-party-role`} label="Takes it over as">
           <Select value={form.partyRole} onValueChange={(v) => set("partyRole", v as RequestForm["partyRole"])}>
-            <SelectTrigger id={`${base}-party-role`}>
+            <SelectTrigger className="w-full" id={`${base}-party-role`}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

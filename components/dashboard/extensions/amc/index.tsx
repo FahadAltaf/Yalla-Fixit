@@ -43,6 +43,7 @@ import {
 import { getAmcSettingsDefaults, type AmcSettings } from "./amc-settings";
 import { amcSettingsService, proposalRulesService, type ProposalRules } from "@/modules/amc-submissions";
 import { applyRateCard } from "@/lib/amc/rate-card";
+import { proposalTermMonths } from "@/lib/amc/contracts";
 import { planFromLegacyTerms } from "@/lib/amc/proposal-rules";
 import { PropertyCustomerStep } from "./steps/property-customer-step";
 import { ServicesPricingStep } from "./steps/services-pricing-step";
@@ -450,6 +451,15 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
       if (requireValidation) {
         const fields = STEP_FIELDS[currentStep] ?? [];
         const isValid = fields.length === 0 ? true : await form.trigger(fields);
+        /* BRD 5.7: a term under the configured minimum is stopped on the dates step, not at submit. */
+        if (isValid && currentStep === 1 && rules?.minimumTermMonths) {
+          const { startDate, endDate } = form.getValues();
+          const term = startDate && endDate ? proposalTermMonths(startDate, endDate) : null;
+          if (term !== null && term < rules.minimumTermMonths) {
+            toast.error(`The term is at least ${rules.minimumTermMonths} months (AMC configuration). These dates run ${term} month${term === 1 ? "" : "s"}.`);
+            return;
+          }
+        }
 
         if (!isValid) {
           toast.error(
@@ -469,7 +479,7 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
         persistDraft();
       }
     },
-    [currentStep, form, persistDraft],
+    [currentStep, form, persistDraft, rules],
   );
 
   const handleNext = () => {
@@ -637,7 +647,7 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
   const renderStep = () => {
     switch (currentStep) {
       case 1:
-        return <PropertyCustomerStep form={form} />;
+        return <PropertyCustomerStep form={form} minimumTermMonths={rules?.minimumTermMonths} />;
       case 2:
         return (
           <ServicesPricingStep

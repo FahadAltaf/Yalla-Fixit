@@ -172,6 +172,23 @@ export function addMonths(isoDate: string, months: number): string | null {
   return formatIsoDate(target);
 }
 
+/**
+ * A proposal's term in months, the one way the fee and the minimum-term
+ * check both count it: days between the dates over an average month,
+ * rounded, at least 1. Rounding, because "1 Jan to 1 Jan" and "1 Jan to
+ * 31 Dec" are both a year; counting calendar months called the second
+ * eleven months, and the minimum-term check refused it. Null without two
+ * valid dates in order.
+ */
+export function proposalTermMonths(startDate: string, endDate: string): number | null {
+  const start = parseDate(startDate);
+  const end = parseDate(endDate);
+  if (!start || !end) return null;
+  const days = Math.round((end.getTime() - start.getTime()) / 86_400_000);
+  if (days <= 0) return null;
+  return Math.max(1, Math.round(days / (365.25 / 12)));
+}
+
 export function defaultEndDate(startDate: string, termMonths = DEFAULT_TERM_MONTHS): string | null {
   return addMonths(startDate, termMonths);
 }

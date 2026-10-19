@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import DateTimeSelect from "@/components/ui/date-time-select";
 import { CHANNEL_LABELS, COMMUNICATION_CHANNELS } from "@/lib/amc/client-profile";
 import { clientProfileService, type CommunicationInput } from "@/modules/amc-contracts/client-profile-service";
 
@@ -132,7 +133,7 @@ function LogDialog({ open, onOpenChange, onSave }: { open: boolean; onOpenChange
           <div className="grid gap-1.5">
             <Label>Channel</Label>
             <Select value={value.channel} onValueChange={(channel) => setValue((v) => ({ ...v, channel }))}>
-              <SelectTrigger aria-label="Channel">
+              <SelectTrigger className="w-full" aria-label="Channel">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -147,7 +148,7 @@ function LogDialog({ open, onOpenChange, onSave }: { open: boolean; onOpenChange
           <div className="grid gap-1.5">
             <Label>Direction</Label>
             <Select value={value.direction} onValueChange={(direction) => setValue((v) => ({ ...v, direction: direction as CommunicationInput["direction"] }))}>
-              <SelectTrigger aria-label="Direction">
+              <SelectTrigger className="w-full" aria-label="Direction">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -161,7 +162,7 @@ function LogDialog({ open, onOpenChange, onSave }: { open: boolean; onOpenChange
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="log-when">When</Label>
-            <Input id="log-when" type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
+            <DateTimeSelect id="log-when" value={when} onChange={setWhen} />
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="log-subject">Subject (optional)</Label>

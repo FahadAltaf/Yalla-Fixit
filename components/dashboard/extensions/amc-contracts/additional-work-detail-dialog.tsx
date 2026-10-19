@@ -647,7 +647,7 @@ function QuoteEditor({ drafts, setDrafts, disabled }: { drafts: LineDraft[]; set
       {drafts.map((d, i) => {
         const amount = Number(d.quantity) * Number(d.unitPrice);
         return (
-          <div key={d.key} className="grid gap-2 rounded-lg border px-3 py-2 sm:grid-cols-[1fr_8rem_5rem_7rem_6.5rem_auto] sm:items-center sm:border-0 sm:px-0 sm:py-0">
+          <div key={d.key} className="grid gap-2 rounded-lg border px-3 py-2 md:grid-cols-[minmax(0,1fr)_8rem_5rem_7rem_6.5rem_auto] md:items-center md:border-0 md:px-0 md:py-0">
             <Input
               id={`${base}-${d.key}-desc`}
               aria-label={`Line ${i + 1} description`}

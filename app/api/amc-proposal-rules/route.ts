@@ -38,6 +38,7 @@ export async function GET() {
           discountLevel3AbovePercent: config.approvals.discountLevel3AbovePercent,
         },
         validityDays: config.proposals.validityDays,
+        minimumTermMonths: config.contracts.minimumTermMonths,
       },
       { headers: { "Cache-Control": "no-store" } },
     );

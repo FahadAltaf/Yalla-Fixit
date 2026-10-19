@@ -35,6 +35,7 @@ import { Label } from "@/components/ui/label";
 import { Money } from "@/components/ui/money";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import DateSelect from "@/components/ui/date-select";
 import { DOCUMENT_CATEGORIES } from "@/lib/amc/client-profile";
 import { todayInDubai } from "@/lib/amc/contracts";
 import { PAYMENT_MODE_LABELS } from "@/lib/amc/payments";
@@ -407,7 +408,7 @@ function Shell({
 
 function Field({ id, label, hint, children }: { id: string; label: string; hint?: ReactNode; children: ReactNode }) {
   return (
-    <div className="grid gap-2">
+    <div className="grid min-w-0 content-start gap-2">
       <Label htmlFor={id}>{label}</Label>
       {children}
       {hint ? <p className="text-muted-foreground text-xs">{hint}</p> : null}
@@ -537,10 +538,10 @@ function RecordPaymentDialog({
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
         <Field id="pay-received" label="Received on">
-          <Input id="pay-received" type="date" max={todayInDubai()} value={receivedOn} onChange={(e) => setReceivedOn(e.target.value)} />
+          <DateSelect id="pay-received" max={todayInDubai()} value={receivedOn} onChange={setReceivedOn} />
         </Field>
         <Field id="pay-value-date" label="Value date (optional)">
-          <Input id="pay-value-date" type="date" value={valueDate} onChange={(e) => setValueDate(e.target.value)} />
+          <DateSelect id="pay-value-date" value={valueDate} onChange={setValueDate} />
         </Field>
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
@@ -633,7 +634,7 @@ function ChequeDialog({
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
         <Field id="chq-date" label="Cheque date">
-          <Input id="chq-date" type="date" value={chequeDate} onChange={(e) => setChequeDate(e.target.value)} />
+          <DateSelect id="chq-date" value={chequeDate} onChange={setChequeDate} />
         </Field>
         <Field id="chq-amount" label="Amount (AED)">
           <Input id="chq-amount" type="number" inputMode="decimal" min={0} step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} />
@@ -687,7 +688,7 @@ function ChequeDateDialog({ open, onOpenChange, clearing, cheque, submit }: Base
         </p>
       ) : null}
       <Field id="chq-when" label={clearing ? "Cleared on" : "Deposited on"}>
-        <Input id="chq-when" type="date" max={todayInDubai()} value={date} onChange={(e) => setDate(e.target.value)} />
+        <DateSelect id="chq-when" max={todayInDubai()} value={date} onChange={setDate} />
       </Field>
     </Shell>
   );
@@ -742,7 +743,7 @@ function BounceDialog({ open, onOpenChange, cheque, submit }: BaseProps & { cheq
     >
       <div className="grid gap-4 sm:grid-cols-2">
         <Field id="bnc-date" label="Bounced on">
-          <Input id="bnc-date" type="date" max={todayInDubai()} value={date} onChange={(e) => setDate(e.target.value)} />
+          <DateSelect id="bnc-date" max={todayInDubai()} value={date} onChange={setDate} />
         </Field>
         <Field id="bnc-charges" label="Bank charges (optional)">
           <Input id="bnc-charges" type="number" inputMode="decimal" min={0} step="0.01" value={charges} onChange={(e) => setCharges(e.target.value)} />

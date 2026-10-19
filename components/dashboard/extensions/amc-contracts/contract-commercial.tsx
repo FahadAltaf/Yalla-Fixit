@@ -320,7 +320,7 @@ function AdditionalServiceDialog({
                 setResult(null);
               }}
             >
-              <SelectTrigger id="aq-service">
+              <SelectTrigger className="w-full" id="aq-service">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

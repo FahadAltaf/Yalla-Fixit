@@ -1,7 +1,7 @@
 import { after } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { FsmConfigError, getFsmAccessToken } from "@/lib/server/zoho/fsm-client";
+import { FsmConfigError, getFsmAccessToken, zohoFsmSwitchedOff, zohoFsmWritesOff } from "@/lib/server/zoho/fsm-client";
 import {
   FsmApiError,
   addContactAddress,
@@ -41,12 +41,21 @@ type Admin = SupabaseClient;
 type Row = Record<string, any>;
 
 export async function fsmClientsReady(admin: Admin): Promise<boolean> {
+  if (zohoFsmSwitchedOff()) return false;
   if ((process.env.SNAGGING_FSM_CLIENTS ?? "").trim().toLowerCase() === "off") return false;
   const [client, property] = await Promise.all([
     hasColumn(admin, "snagging_clients", "fsm_contact_id"),
     hasColumn(admin, "snagging_properties", "fsm_address_id"),
   ]);
   return client && property;
+}
+
+/**
+ * Whether a new or changed client or address also goes to FSM. Not with
+ * ZOHO_FSM=read: FSM is still read, and the change is kept in the portal.
+ */
+export async function fsmClientWritesReady(admin: Admin): Promise<boolean> {
+  return !zohoFsmWritesOff() && (await fsmClientsReady(admin));
 }
 
 /** A client as the pickers and the Clients page show it. */
@@ -538,7 +547,7 @@ export async function ensurePropertyInFsm(
   let claimed: string | null = null;
   let clientId: string | null = null;
   try {
-    if (!(await fsmClientsReady(admin))) return null;
+    if (!(await fsmClientWritesReady(admin))) return null;
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const { data: property } = await admin
         .from("snagging_properties")
@@ -628,7 +637,7 @@ export async function syncPropertyEditToFsm(
   let clientId: string | null = null;
   let addressId: string | null = null;
   try {
-    if (!(await fsmClientsReady(admin))) return;
+    if (!(await fsmClientWritesReady(admin))) return;
     const { data: property } = await admin
       .from("snagging_properties")
       .select("id, client_id, unit_label, building_name, community, location_lat, location_lng, fsm_address_id")

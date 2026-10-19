@@ -5,7 +5,7 @@ import { computeAmcData } from "@/components/dashboard/extensions/amc/amc-pricin
 import { getAmcSettingsDefaults, resolveAmcSettings } from "@/components/dashboard/extensions/amc/amc-settings";
 import { submissionToFormData } from "@/components/dashboard/extensions/amc/amc-submission-mapper";
 import type { AmcSubmission } from "@/components/dashboard/extensions/amc/amc-types";
-import { REVISABLE_STATUSES, VERSION_REASON_LABELS, planFromLegacyTerms, type VersionReason } from "@/lib/amc/proposal-rules";
+import { REVISABLE_STATUSES, VERSION_REASON_LABELS, planFromLegacyTerms, reopensInPlace, type VersionReason } from "@/lib/amc/proposal-rules";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { ContractError, isMissingFunction, isMissingTable } from "@/lib/server/amc/contracts";
 import { readAmcSettings } from "@/lib/server/amc/settings";
@@ -156,10 +156,11 @@ export async function reviseProposal(
   input: { id: string; reason: VersionReason; summary: string },
   actor: Actor,
   opts: { renderPdf?: (html: string) => Promise<Uint8Array | null> } = {},
-): Promise<{ versionNo: number; lockedVersionNo: number }> {
+): Promise<{ versionNo: number; lockedVersionNo: number; reopened?: boolean }> {
   const { data, error } = await admin.from("amc_submissions").select("*").eq("id", input.id).maybeSingle<SubmissionRow>();
   if (error) throw new ContractError(error.message, 500);
   if (!data) throw new ContractError("Not found", 404);
+  if (reopensInPlace(data.status)) return reopenApproved(admin, data, input, actor);
   if (!(REVISABLE_STATUSES as readonly string[]).includes(data.status)) {
     throw new ContractError(`A proposal that is ${data.status.replace(/_/g, " ")} has not been shared, so it is edited in place.`, 409);
   }
@@ -229,6 +230,50 @@ export async function reviseProposal(
     details: { lockedVersion: lockedVersionNo, newVersion: versionNo },
   });
   return { versionNo, lockedVersionNo };
+}
+
+/**
+ * Revise an approved proposal before it is sent: the client has not seen
+ * it, so there is no version to lock. It goes back to a draft of the same
+ * version, its approval cleared, and is submitted again after the changes,
+ * when the approval triggers are checked afresh (a new approval round).
+ */
+async function reopenApproved(
+  admin: Admin,
+  data: SubmissionRow,
+  input: { reason: VersionReason; summary: string },
+  actor: Actor,
+): Promise<{ versionNo: number; lockedVersionNo: number; reopened: true }> {
+  const versionNo = Number(data.current_version ?? 1);
+  const nowIso = new Date().toISOString();
+  const { data: moved, error } = await admin
+    .from("amc_submissions")
+    .update({ status: "draft", decided_at: null, decided_by: null, sent_back_reason: null, updated_at: nowIso })
+    .eq("id", data.id)
+    .eq("status", "approved")
+    .select("id");
+  if (error) throw new ContractError(error.message, 500);
+  if (!moved?.length) throw new ContractError("Someone else updated this proposal a moment ago. Reload it.", 409);
+  const reason = `${VERSION_REASON_LABELS[input.reason]} · ${input.summary.trim()}`;
+  await recordAmcAudit(admin, {
+    entityType: "submission",
+    entityId: data.id,
+    eventType: "proposal_reopened",
+    actorId: actor.id,
+    actorLabel: actor.label,
+    justification: input.summary.trim(),
+    payload: { from: "approved", to: "draft", version: versionNo, reason: input.reason, finalPrice: Number(data.final_price ?? 0) },
+  });
+  await recordStatusChange(admin, {
+    entityType: "submission",
+    entityId: data.id,
+    from: "approved",
+    to: "draft",
+    reason: `Reopened before sending: ${reason}`,
+    actor,
+    details: { version: versionNo },
+  });
+  return { versionNo, lockedVersionNo: versionNo, reopened: true };
 }
 
 /** A short-lived link to a locked version's document. */

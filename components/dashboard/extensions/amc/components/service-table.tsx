@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +13,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import {
   Table,
@@ -21,6 +23,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { nearestAllowedFrequency } from "@/lib/amc/rate-card";
 import { formatCurrencyAED } from "@/utils/format-currency";
 
 import { isFrequencyEditable } from "../amc-constants";
@@ -46,9 +49,14 @@ interface ServiceTableProps {
   rateCard?: boolean;
   /** Shown under the discount: the approval its size needs. */
   discountNote?: React.ReactNode;
+  /**
+   * The visits a year the rate card allows for a service (BRD 5.3); empty
+   * when it does not limit them. The frequency is then picked from these.
+   */
+  allowedFrequencies?: (serviceId: string) => readonly number[];
 }
 
-export function ServiceTable({ form, catalogue, rateCard = false, discountNote }: ServiceTableProps) {
+export function ServiceTable({ form, catalogue, rateCard = false, discountNote, allowedFrequencies }: ServiceTableProps) {
   const unitType = form.watch("unitType");
   const serviceRows = form.watch("serviceRows");
   const discountPercent = form.watch("discountPercent") ?? 0;
@@ -64,6 +72,25 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote }
     })
     .map((service) => service.label);
   const flagUnpriced = form.formState.errors.serviceRows?.message === BASE_PRICE_MESSAGE;
+
+  /*
+    A ticked line at a frequency the card does not allow is moved to the
+    nearest one it does, rather than being refused only on submit (a draft
+    started from an enquiry or a site visit may carry the default of 1).
+  */
+  useEffect(() => {
+    if (!allowedFrequencies) return;
+    let changed = false;
+    const next = serviceRows.map((row) => {
+      const service = catalogue.find((s) => s.id === row.serviceId);
+      if (!row.included || !service || !isFrequencyEditable(service.frequencyType)) return row;
+      const frequency = nearestAllowedFrequency(allowedFrequencies(row.serviceId), row.frequency);
+      if (frequency === row.frequency) return row;
+      changed = true;
+      return { ...row, frequency };
+    });
+    if (changed) form.setValue("serviceRows", next, { shouldValidate: true, shouldDirty: true });
+  }, [serviceRows, allowedFrequencies, catalogue, form]);
 
   const updateRow = (
     serviceId: string,
@@ -153,7 +180,25 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote }
                             somebody forgot to switch on. The word that
                             will print on the contract is shown instead.
                           */}
-                          {frequencyEditable ? (
+                          {frequencyEditable && (allowedFrequencies?.(service.id).length ?? 0) > 0 ? (
+                            /* The card limits it: only its frequencies are offered. */
+                            <Select
+                              value={String(row.frequency)}
+                              disabled={!row.included}
+                              onValueChange={(value) => updateRow(service.id, { frequency: Number(value) })}
+                            >
+                              <SelectTrigger className="h-8 w-full text-xs" aria-label={`Frequency for ${service.label}`}>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {allowedFrequencies!(service.id).map((n) => (
+                                  <SelectItem key={n} value={String(n)}>
+                                    {n} a year
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          ) : frequencyEditable ? (
                             <Input
                               type="number"
                               min={1}

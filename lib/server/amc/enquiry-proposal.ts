@@ -13,6 +13,7 @@ import { ContractError } from "@/lib/server/amc/contracts";
 import { getEnquiry, linkEnquiryProposal } from "@/lib/server/amc/enquiries";
 import { priceSubmission } from "@/lib/server/amc/pricing";
 import { rateCardInForce } from "@/lib/server/amc/rate-card";
+import { snapToCardFrequencies } from "@/lib/amc/rate-card";
 import { readAmcSettings } from "@/lib/server/amc/settings";
 
 /**
@@ -126,7 +127,8 @@ export async function createProposalFromEnquiry(admin: Admin, enquiryId: string,
     };
   });
   const priced = priceSubmission({
-    services: rows,
+    /* Each line at a frequency the card allows (the scope or the default may say 1). */
+    services: card ? snapToCardFrequencies(rows, card.card, model) : rows,
     discountPercent: 0,
     unitType: model,
     settings,

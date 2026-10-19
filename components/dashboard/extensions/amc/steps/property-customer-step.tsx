@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/select";
 
 import { getDefaultEndDate } from "../amc-constants";
+import { defaultEndDate, proposalTermMonths } from "@/lib/amc/contracts";
 import { UNIT_TYPES, UNIT_TYPE_CATEGORY, UNIT_TYPE_LABELS } from "@/lib/amc/client-profile";
 import { rateModelFor } from "@/lib/amc/proposal-rules";
 import { MODEL_LABELS } from "@/lib/amc/rate-card";
@@ -61,8 +62,20 @@ interface StepProps {
   form: UseFormReturn<AmcFormData>;
 }
 
-export function PropertyCustomerStep({ form }: StepProps) {
+/**
+ * The end date a start date gets: a year on (the usual AMC), or the
+ * configured minimum term when that is longer.
+ */
+function endDateFor(startDate: string, minimumTermMonths: number): string {
+  return minimumTermMonths > 12 ? (defaultEndDate(startDate, minimumTermMonths) ?? getDefaultEndDate(startDate)) : getDefaultEndDate(startDate);
+}
+
+export function PropertyCustomerStep({ form, minimumTermMonths = 12 }: StepProps & { minimumTermMonths?: number }) {
   const startDate = form.watch("startDate");
+  const endDate = form.watch("endDate");
+  /* BRD 5.7: the term against the configured minimum, said here rather than only on submit. */
+  const termMonths = startDate && endDate ? proposalTermMonths(startDate, endDate) : null;
+  const termShort = termMonths !== null && termMonths < minimumTermMonths;
   /*
     Which property types this category has (Behrouz, Oct 2026; the full
     BRD 5.2 list since Phase 4): the pair prints as the document's banner,
@@ -330,18 +343,24 @@ export function PropertyCustomerStep({ form }: StepProps) {
                         field.onChange(nextStartDate);
 
                         const currentEndDate = form.getValues("endDate");
+                        /*
+                          The end date follows the start: set when there is
+                          none, or when it is before the start or would make
+                          the term shorter than the minimum.
+                        */
+                        const currentTerm =
+                          nextStartDate && currentEndDate ? proposalTermMonths(nextStartDate, currentEndDate) : null;
                         if (
                           nextStartDate &&
-                          currentEndDate &&
-                          isEndDateBeforeStartDate(
-                            nextStartDate,
-                            currentEndDate,
-                          )
+                          (!currentEndDate ||
+                            isEndDateBeforeStartDate(nextStartDate, currentEndDate) ||
+                            currentTerm === null ||
+                            currentTerm < minimumTermMonths)
                         ) {
                           form.setValue(
                             "endDate",
-                            getDefaultEndDate(nextStartDate),
-                            { shouldValidate: true },
+                            endDateFor(nextStartDate, minimumTermMonths),
+                            { shouldValidate: true, shouldDirty: true },
                           );
                         } else {
                           void form.trigger("endDate");
@@ -377,6 +396,16 @@ export function PropertyCustomerStep({ form }: StepProps) {
                     />
                   </FormControl>
                   <FormMessage />
+                  {termShort ? (
+                    <p className="text-destructive text-xs">
+                      The term is at least {minimumTermMonths} months (AMC configuration). These dates run{" "}
+                      {termMonths} month{termMonths === 1 ? "" : "s"}.
+                    </p>
+                  ) : termMonths !== null ? (
+                    <p className="text-muted-foreground text-xs">
+                      {termMonths} month{termMonths === 1 ? "" : "s"}, as the fee is priced.
+                    </p>
+                  ) : null}
                 </FormItem>
               )}
             />

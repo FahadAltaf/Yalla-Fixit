@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import DateSelect from "@/components/ui/date-select";
 import { AMC_DOCUMENT_MAX_BYTES, DOCUMENT_CATEGORIES, documentExpiryState, type DocumentLevel } from "@/lib/amc/client-profile";
 import { todayInDubai } from "@/lib/amc/contracts";
 import { clientProfileService, type DocumentRecord } from "@/modules/amc-contracts/client-profile-service";
@@ -255,7 +256,7 @@ function UploadDialog({
             </div>
             <div className="grid gap-1.5">
               <Label htmlFor="doc-expiry">Expires on (optional)</Label>
-              <Input id="doc-expiry" type="date" value={expiresOn} onChange={(e) => setExpiresOn(e.target.value)} />
+              <DateSelect id="doc-expiry" value={expiresOn} onChange={setExpiresOn} />
             </div>
           </div>
           <div className="grid gap-1.5">

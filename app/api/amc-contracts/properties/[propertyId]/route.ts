@@ -20,11 +20,25 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ propertyId
   try {
     const overview = await propertyOverview(gate.admin, { userId: gate.userId, canApprove: gate.seesAll }, propertyId);
     /* Combined units (BRD 5.2): the parent and the units linked under this one. */
-    const [units, owner] = await Promise.all([
+    const [units, owner, pin] = await Promise.all([
       propertyUnits(gate.admin, propertyId, overview.property.parentPropertyId),
       gate.admin.from("amc_property_directory").select("created_by").eq("id", propertyId).maybeSingle<{ created_by: string | null }>(),
+      /* The pin on the map, from the Snagging address (the directory does not carry it). */
+      gate.admin
+        .from("snagging_properties")
+        .select("location_lat, location_lng, developer_name")
+        .eq("id", propertyId)
+        .maybeSingle<{ location_lat: number | null; location_lng: number | null; developer_name: string | null }>(),
     ]);
-    return NextResponse.json({ overview, units, canEdit: canEditCustomer(gate.actor, owner.data?.created_by ?? null) });
+    const lat = pin.data?.location_lat;
+    const lng = pin.data?.location_lng;
+    return NextResponse.json({
+      overview,
+      units,
+      canEdit: canEditCustomer(gate.actor, owner.data?.created_by ?? null),
+      location: typeof lat === "number" && typeof lng === "number" ? { lat, lng } : null,
+      developer: pin.data?.developer_name ?? null,
+    });
   } catch (error) {
     return contractErrorResponse(error, "Could not load the property");
   }

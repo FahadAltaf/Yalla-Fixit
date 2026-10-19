@@ -185,6 +185,8 @@ test("discount authority, validity, property types, revising", () => {
   assert.equal(canRevise("proposal_sent", false), false, "the owner revises");
   assert.equal(canRevise("draft", true), false, "a draft is edited in place");
   assert.equal(canRevise("contract_sent", true), false);
+  assert.equal(canRevise("approved", true), true, "approved and not yet sent: reopened as a draft of the same version");
+  assert.equal(canRevise("approved", false), false, "only the owner reopens it");
   assert.equal(isAmcSubmissionEditable("proposal_rejected"), false, "a rejected proposal is revised, not edited");
   assert.equal(reviseSchema.safeParse({ id: "7b1f3c2a-4d5e-4f60-8a71-92b3c4d5e6f7", reason: "discount", summary: "ok" }).success, false, "say what changes");
 });

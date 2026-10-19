@@ -22,6 +22,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import DateSelect from "@/components/ui/date-select";
 import { TRADE_LABELS, TRADES } from "@/lib/amc/client-profile";
 import { todayInDubai } from "@/lib/amc/contracts";
 import { SKILL_LEVEL_LABELS, SKILL_LEVELS, type SkillLevel, type Trade } from "@/lib/amc/visits";
@@ -471,13 +472,12 @@ function EditTechnicianDialog({
                       disabled={!row.on}
                       onChange={(e) => setSkill(trade, { certificate: e.target.value })}
                     />
-                    <Input
-                      type="date"
+                    <DateSelect
                       aria-label={`${TRADE_LABELS[trade]} certificate expiry`}
                       value={row.expires}
                       disabled={!row.on}
                       className={expired ? "border-danger text-danger" : undefined}
-                      onChange={(e) => setSkill(trade, { expires: e.target.value })}
+                      onChange={(value) => setSkill(trade, { expires: value })}
                     />
                   </div>
                 );
@@ -569,7 +569,7 @@ function ChipsField({
   return (
     <div className="grid gap-2">
       <Label htmlFor={id}>{label}</Label>
-      <div className="focus-within:ring-ring/50 flex min-h-9 flex-wrap items-center gap-1.5 rounded-md border px-2 py-1.5 focus-within:ring-[3px]">
+      <div className="focus-within:ring-ring/50 border-input dark:bg-input/30 flex min-h-8 flex-wrap items-center gap-1.5 rounded-[12px] border px-2 py-1 focus-within:ring-[3px]">
         {values.map((v) => (
           <Badge key={v} variant="secondary" className="gap-1 pr-1 font-normal">
             {v}

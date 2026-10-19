@@ -15,6 +15,9 @@ import { Money } from "@/components/ui/money";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import DateSelect from "@/components/ui/date-select";
+import TimeSelect from "@/components/ui/time-select";
+import DateTimeSelect from "@/components/ui/date-time-select";
 import { CALL_OUT_CHANNEL_LABELS, canMoveCallOut, slaDueAt, type CallOutChannel, type CallOutStatus } from "@/lib/amc/call-outs";
 import { TRADE_LABELS } from "@/lib/amc/client-profile";
 import { todayInDubai } from "@/lib/amc/contracts";
@@ -576,10 +579,10 @@ function ScheduleSection({ callOut: c, canEdit, working, setWorking, changed }: 
       ) : null}
       <div className="grid gap-4 sm:grid-cols-3">
         <Field id={ids.date} label="Date">
-          <Input id={ids.date} type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          <DateSelect id={ids.date} value={date} onChange={setDate} />
         </Field>
         <Field id={ids.time} label="Start time">
-          <Input id={ids.time} type="time" step={900} value={time} onChange={(e) => setTime(e.target.value)} />
+          <TimeSelect id={ids.time} step={900} value={time} onChange={setTime} />
         </Field>
         <Field id={ids.duration} label="Duration (minutes)">
           <Input id={ids.duration} type="number" min={15} max={720} step={15} value={duration} onChange={(e) => setDuration(e.target.value)} />
@@ -737,7 +740,7 @@ function AttendSection({ callOut: c, canEdit, working, setWorking, changed }: Se
       <div className="flex flex-wrap items-end gap-3">
         <div className="grid gap-2">
           <Field id={id} label="Arrived at" hint={beforeCall ? <span className="text-danger">Attendance cannot be before the call.</span> : undefined}>
-            <Input id={id} type="datetime-local" className="w-56" value={attendedAt} onChange={(e) => setAttendedAt(e.target.value)} />
+            <DateTimeSelect id={id} className="max-w-sm" value={attendedAt} onChange={setAttendedAt} />
           </Field>
         </div>
         <SubmitButton
@@ -846,7 +849,7 @@ function RecordSection({ callOut: c, canEdit, working, setWorking, changed, onSu
       <Field id={ids.resolution} label="Resolution">
         <Textarea id={ids.resolution} rows={3} maxLength={4000} value={resolution} onChange={(e) => setResolution(e.target.value)} />
       </Field>
-      <div className="grid gap-4 sm:grid-cols-[1fr_10rem]">
+      <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_10rem]">
         <Field id={ids.parts} label="Parts needed">
           <Input id={ids.parts} maxLength={1000} placeholder="Leave empty if none" value={partsNeeded} onChange={(e) => setPartsNeeded(e.target.value)} />
         </Field>
@@ -858,7 +861,7 @@ function RecordSection({ callOut: c, canEdit, working, setWorking, changed, onSu
       <div className="grid gap-2">
         <p className="text-sm font-medium">Pending works</p>
         {rows.map((r, i) => (
-          <div key={r.key} className="grid gap-2 sm:grid-cols-[1fr_14rem_auto] sm:items-center">
+          <div key={r.key} className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_14rem_auto] sm:items-center">
             <Input
               id={`${base}-${r.key}-desc`}
               aria-label={`Pending work ${i + 1}`}

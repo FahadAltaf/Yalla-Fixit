@@ -3,10 +3,11 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Building2, ChevronRight, ClipboardCheck, Home, Layers, Pencil, Plus, Receipt, RefreshCw, ScrollText, UserRound, UserX } from "lucide-react";
+import { ArrowLeft, Building2, ChevronRight, ClipboardCheck, Layers, Pencil, Plus, Receipt, RefreshCw, ScrollText, TriangleAlert, UserRound, UserX } from "lucide-react";
 import { toast } from "sonner";
 
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -16,7 +17,9 @@ import { Money } from "@/components/ui/money";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { DataRow, SectionCard, StatCard, StatCardGrid, TabCount } from "@/components/dashboard/shared/kaizen";
+import { DataRow, PillTabs, SectionCard, StatCard, StatCardGrid, SubHeading, TabCount } from "@/components/dashboard/shared/kaizen";
+import { GoogleLocationMap, hasGoogleMapsKey } from "@/components/dashboard/snagging/google-location-map";
+import { LocationMap } from "@/components/dashboard/snagging/location-map";
 import { ActionDialogContent, ErrorState, SectionSkeleton, StatGridSkeleton, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
 import { canViewAmcPayments } from "@/components/dashboard/extensions/amc/amc-constants";
 import { useAuth } from "@/context/AuthContext";
@@ -263,7 +266,7 @@ function QuotesList({ quotes }: { quotes: QuoteItem[] }) {
   );
 }
 
-function StartAssessmentButton({ customerId, propertyId }: { customerId: string | null; propertyId: string | null }) {
+function StartAssessmentButton({ customerId, propertyId, size }: { customerId: string | null; propertyId: string | null; size?: "sm" }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const start = async () => {
@@ -277,7 +280,7 @@ function StartAssessmentButton({ customerId, propertyId }: { customerId: string 
     }
   };
   return (
-    <SubmitButton onClick={() => void start()} pending={busy} pendingLabel="Starting…" icon={<ClipboardCheck className="size-4" />}>
+    <SubmitButton size={size} onClick={() => void start()} pending={busy} pendingLabel="Starting…" icon={<ClipboardCheck className="size-4" />}>
       New site visit
     </SubmitButton>
   );
@@ -548,238 +551,403 @@ function customerInput(c: CustomerOverview["customer"]): CustomerInput {
 
 /* ------------------------------------------------------------------ */
 
-const PROPERTY_TABS = ["overview", "contracts", "visits", "assets", "access", "scope", "documents"] as const;
+/* Four tabs, as a quotation has its three: what it is, its contracts, what is maintained there, and what happened to it. */
+const PROPERTY_TABS = ["details", "contracts", "assets", "activity"] as const;
+type MaintainedView = "assets" | "scope" | "access";
+type PropertyActivityView = "visits" | "documents";
+
+/** A sub-tab asked for in the link (?view=), so "Assets and scope" lands on Scope. */
+function initialView<T extends string>(allowed: readonly T[], fallback: T): T {
+  if (typeof window === "undefined") return fallback;
+  const asked = new URLSearchParams(window.location.search).get("view") as T | null;
+  return asked && allowed.includes(asked) ? asked : fallback;
+}
 
 /**
- * A property (BRD 5.2, 5.9): details and combined units, its AMC, the asset
- * register, access rules, scope and documents. Laid out as the client page.
+ * One property, laid out like a quotation's page: the way back and what the
+ * property can do in one toolbar, access constraints as an alert, then
+ * Details (the figures, the property and its client with the map, combined
+ * units), Contracts, Assets and scope, and Activity (site visits, documents).
  */
 export function PropertyDetail({ id }: { id: string }) {
   const router = useRouter();
-  const { data, error, loading, reload, fetchedAt, refreshing, refresh } = useRecord(() => amcContractsService.property(id), id);
+  const { data, error, loading, reload, refreshing, refresh } = useRecord(() => amcContractsService.property(id), id);
   useBreadcrumbLabel("properties", "Properties");
   useBreadcrumbLabel(id, data?.overview.property.label ?? "Property");
   const editing = useDialog();
-  const { tab, setTab, isOpened } = useUrlTab(PROPERTY_TABS, "overview");
+  const { tab, setTab, isOpened } = useUrlTab(PROPERTY_TABS, "details");
+  const [maintained, setMaintainedState] = useState<MaintainedView>(() => initialView<MaintainedView>(["assets", "scope", "access"], "assets"));
+  const [maintainedOpened, setMaintainedOpened] = useState<Set<MaintainedView>>(() => new Set([maintained]));
+  const setMaintained = (next: MaintainedView) => {
+    setMaintainedState(next);
+    setMaintainedOpened((prev) => (prev.has(next) ? prev : new Set(prev).add(next)));
+  };
+  const [activity, setActivityState] = useState<PropertyActivityView>(() => initialView<PropertyActivityView>(["visits", "documents"], "visits"));
+  const [activityOpened, setActivityOpened] = useState<Set<PropertyActivityView>>(() => new Set([activity]));
+  const setActivity = (next: PropertyActivityView) => {
+    setActivityState(next);
+    setActivityOpened((prev) => (prev.has(next) ? prev : new Set(prev).add(next)));
+  };
 
   const owner = data?.overview.customer ?? null;
-  const toolbar = (
-    <DetailToolbar
-      backHref={owner ? `${CLIENTS_HREF}/${owner.id}?tab=properties` : CLIENTS_HREF}
-      backLabel={owner ? owner.name : "Clients"}
-      fetchedAt={fetchedAt}
-      refreshing={refreshing}
-      onRefresh={data ? refresh : undefined}
-    />
-  );
+  const backHref = owner ? `${CLIENTS_HREF}/${owner.id}?tab=properties` : CLIENTS_HREF;
 
-  if (loading)
-    return (
-      <div className="flex w-full flex-1 flex-col gap-6">
-        {toolbar}
-        <DetailSkeleton />
-      </div>
-    );
   if (error && /not found/i.test(error))
     return (
       <div className="flex w-full flex-1 flex-col gap-6">
-        {toolbar}
+        <BackLink href={CLIENTS_HREF} label="Back to clients" />
         <Card className="p-0">
-          <EmptyState icon={<Building2 className="size-5" />} title="Property not found" description="It may have been removed. Open the client to see their properties." action={{ label: "Back to clients", onClick: () => router.push(CLIENTS_HREF) }} />
+          <EmptyState
+            icon={<Building2 className="size-5" />}
+            title="Property not found"
+            description="It may have been removed. Open the client to see their properties."
+            action={{ label: "Back to clients", onClick: () => router.push(CLIENTS_HREF) }}
+          />
         </Card>
       </div>
     );
-  if (error || !data)
-    return (
-      <div className="flex w-full flex-1 flex-col gap-6">
-        {toolbar}
-        <ErrorState title="Could not load this property" message={error} onRetry={reload} />
-      </div>
-    );
 
-  const { property, customer, current, previous, assessments, quotes }: PropertyOverview = data.overview;
-  const units = data.units ?? { parent: null, children: [] };
-  const canEdit = data.canEdit !== false;
+  const overview: PropertyOverview | null = data?.overview ?? null;
+  const property = overview?.property ?? null;
+  const customer = overview?.customer ?? null;
+  const current = overview?.current ?? null;
+  const previous = overview?.previous ?? [];
+  const assessments = overview?.assessments ?? [];
+  const quotes = overview?.quotes ?? [];
+  const units = data?.units ?? { parent: null, children: [] };
+  const canEdit = data?.canEdit !== false;
+  const location = data?.location ?? null;
   const panel = (value: (typeof PROPERTY_TABS)[number], children: React.ReactNode) =>
     isOpened(value) ? (
-      <TabsContent value={value} forceMount className="mt-4 flex flex-col gap-6 data-[state=inactive]:hidden">
+      <TabsContent value={value} forceMount className="mt-4 flex flex-col gap-4 data-[state=inactive]:hidden">
         {children}
       </TabsContent>
     ) : null;
 
-  const left = [
-    { label: "Category", value: property.propertyCategory ? <span className="capitalize">{property.propertyCategory}</span> : null },
-    { label: "Type", value: unitTypeLabel(property.unitType) },
-    { label: "Building", value: property.building },
-    { label: "Unit / floor", value: [property.unitNo, property.floor ? `floor ${property.floor}` : null].filter(Boolean).join(", ") },
-    { label: "Street / city", value: [property.street, property.city].filter(Boolean).join(", ") },
-  ];
-  const right = [
-    { label: "Community", value: property.community },
-    { label: "Size", value: [property.sizeSqft ? `${property.sizeSqft} sq ft` : null, property.bedrooms !== null ? `${property.bedrooms} bed` : null].filter(Boolean).join(" · ") },
-    { label: "Floors", value: property.floorsCount },
-    { label: "Occupied by", value: property.occupancy ? <span className="capitalize">{property.occupancy}</span> : null },
-    { label: "Zones", value: property.zones.length ? property.zones.join(", ") : null },
-  ];
-
   return (
     <div className="flex w-full flex-1 flex-col gap-6">
-      {toolbar}
-
-      <Card className="gap-0 p-0">
-        <div className="flex flex-wrap items-center justify-between gap-4 p-5">
-          <div className="min-w-0 space-y-1">
-            <div className="flex flex-wrap items-center gap-2">
-              {unitTypeLabel(property.unitType) ? <Badge variant="outline">{unitTypeLabel(property.unitType)}</Badge> : null}
-              {property.propertyCategory ? (
-                <Badge variant="outline" className="capitalize">
-                  {property.propertyCategory}
-                </Badge>
+      {/* Back to the client on the left, everything the property can do on the right: the toolbar a quotation carries. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <BackLink href={backHref} label={owner ? `Back to ${owner.name}` : "Back to clients"} />
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={refresh} disabled={loading || refreshing} aria-label="Refresh this property">
+            <RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />
+            <span className="hidden sm:inline">Refresh</span>
+          </Button>
+          {property ? (
+            <>
+              {customer ? (
+                <Button asChild variant="outline" size="sm">
+                  <Link href={`${CLIENTS_HREF}/${customer.id}`}>
+                    <UserRound className="size-4" />
+                    Open the client
+                  </Link>
+                </Button>
               ) : null}
-              {units.parent ? <Badge variant="outline">Part of {units.parent.label}</Badge> : null}
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-2xl">{property.label}</h2>
               {current ? (
-                <Badge variant="secondary" className={`border-0 font-medium ${contractStatusTone(current.displayStatus)}`}>
-                  {CONTRACT_STATUS_LABELS[current.displayStatus]}
-                </Badge>
-              ) : (
-                <Badge variant="secondary" className="bg-mist text-ink-soft border-0 font-medium">
-                  No contract in force
-                </Badge>
-              )}
-            </div>
-            <p className="text-muted-foreground text-sm">
-              {[customer?.name, property.address, property.community].filter(Boolean).join(" · ") || "No address recorded"}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {customer ? (
-              <Button asChild variant="outline">
-                <Link href={`${CLIENTS_HREF}/${customer.id}`}>
-                  <UserRound className="size-4" />
-                  Client
-                </Link>
-              </Button>
-            ) : null}
-            {canEdit ? (
-              <Button variant="outline" onClick={() => editing.show(true)}>
-                <Pencil className="size-4" />
-                Edit
-              </Button>
-            ) : null}
-            <StartAssessmentButton customerId={customer?.id ?? null} propertyId={property.id} />
-          </div>
+                <Button asChild variant="outline" size="sm">
+                  <Link href={`/extensions/amc-contracts/${current.id}`}>
+                    <ScrollText className="size-4" />
+                    {current.proposalNumber}
+                  </Link>
+                </Button>
+              ) : null}
+              {canEdit ? (
+                <Button variant="outline" size="sm" onClick={() => editing.show(true)}>
+                  <Pencil className="size-4" />
+                  Edit
+                </Button>
+              ) : null}
+              <StartAssessmentButton customerId={customer?.id ?? null} propertyId={property.id} size="sm" />
+            </>
+          ) : null}
         </div>
-        {property.accessConstraints ? (
-          <div className="border-warning/30 bg-warning/5 border-t px-5 py-3">
-            <p className="text-sm">
-              <span className="text-warning font-medium">Access constraints</span>
-              <span className="text-muted-foreground"> · {property.accessConstraints}</span>
-            </p>
-          </div>
-        ) : null}
-      </Card>
+      </div>
 
-      <StatCardGrid columns={4}>
-        <StatCard
-          label="Current AMC"
-          value={current ? current.proposalNumber : "None"}
-          headline={current ? CONTRACT_STATUS_LABELS[current.displayStatus] : "No contract in force"}
-          caption={current ? `${formatContractDate(current.startDate)} to ${formatContractDate(current.endDate)}` : "Start one from a proposal"}
-        />
-        <StatCard label="Previous contracts" value={previous.length} headline="Kept as they were" caption="Renewals never overwrite them" />
-        <StatCard label="Site visits" value={assessments.length} headline={`${assessments.filter((a) => a.status === "completed").length} completed`} caption="Surveys of this property" />
-        <StatCard label="Additional-service quotes" value={quotes.length} headline={`${quotes.filter((q) => q.status === "draft").length} draft`} caption="Work outside the contract" />
-      </StatCardGrid>
+      {error ? (
+        <ErrorState title="Could not load this property" message={error} onRetry={reload} />
+      ) : loading || !property || !overview ? (
+        <PropertyBodySkeleton tab={tab} />
+      ) : (
+        <div className="flex flex-col gap-4">
+          {/* What anyone going there must know first, as a quotation shows what is holding it up. */}
+          {property.accessConstraints ? (
+            <Alert>
+              <TriangleAlert />
+              <AlertTitle>Access constraints</AlertTitle>
+              <AlertDescription>{property.accessConstraints}</AlertDescription>
+            </Alert>
+          ) : null}
 
-      <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className={TABS_LIST}>
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="contracts">
-            Contracts
-            <TabCount value={previous.length + (current ? 1 : 0)} />
-          </TabsTrigger>
-          <TabsTrigger value="visits">
-            Site visits
-            <TabCount value={assessments.length} />
-          </TabsTrigger>
-          <TabsTrigger value="assets">Assets</TabsTrigger>
-          <TabsTrigger value="access">Access rules</TabsTrigger>
-          <TabsTrigger value="scope">Scope</TabsTrigger>
-          <TabsTrigger value="documents">Documents</TabsTrigger>
-        </TabsList>
+          <Tabs value={tab} onValueChange={setTab}>
+            <TabsList className={TABS_LIST}>
+              <TabsTrigger value="details">Details</TabsTrigger>
+              <TabsTrigger value="contracts">Contracts</TabsTrigger>
+              <TabsTrigger value="assets">Assets and scope</TabsTrigger>
+              <TabsTrigger value="activity">Activity</TabsTrigger>
+            </TabsList>
 
-        {panel(
-          "overview",
-          <>
-            <div className="grid gap-6 lg:grid-cols-3">
-              <SectionCard title="Details" icon={<Home />} bodyClassName="px-5 pb-4" className="lg:col-span-2">
-                <div className="grid gap-x-8 sm:grid-cols-2">
-                  <DetailList rows={left} />
-                  <DetailList rows={right} />
-                </div>
-              </SectionCard>
-              <SectionCard title="Combined units" icon={<Layers />} description="Linked, not merged: each keeps its owner, billing and history." bodyClassName="border-t">
-                {units.parent ? (
-                  <DataRow
-                    onClick={() => router.push(`/extensions/amc-contracts/properties/${units.parent!.id}`)}
-                    icon={<Building2 />}
-                    title={units.parent.label}
-                    subtitle="This unit is part of it"
-                    trailing={<ChevronRight className="text-muted-foreground size-4" aria-hidden />}
+            {panel(
+              "details",
+              <>
+                {/* The four answers somebody opens a property for. */}
+                <StatCardGrid columns={4}>
+                  <StatCard
+                    label="Current AMC"
+                    value={current ? CONTRACT_STATUS_LABELS[current.displayStatus] : "None"}
+                    headline={current ? `Contract ${current.proposalNumber}` : "No contract in force"}
+                    caption={current ? `${formatContractDate(current.startDate)} to ${formatContractDate(current.endDate)}` : "Start one from a proposal"}
+                    tone={current ? "good" : "neutral"}
+                    onSelect={() => setTab("contracts")}
+                    selectLabel="Open the contracts"
                   />
+                  <StatCard
+                    label="Previous contracts"
+                    value={previous.length}
+                    headline="Kept as they were"
+                    caption="Renewals never overwrite them"
+                    onSelect={() => setTab("contracts")}
+                    selectLabel="Open the contracts"
+                  />
+                  <StatCard
+                    label="Site visits"
+                    value={assessments.length}
+                    headline={`${assessments.filter((a) => a.status === "completed").length} completed`}
+                    caption="Surveys of this property"
+                    onSelect={() => {
+                      setActivity("visits");
+                      setTab("activity");
+                    }}
+                    selectLabel="Open the site visits"
+                  />
+                  <StatCard
+                    label="Additional-service quotes"
+                    value={quotes.length}
+                    headline={`${quotes.filter((q) => q.status === "draft").length} draft`}
+                    caption="Work outside the contract"
+                    onSelect={() => setTab("contracts")}
+                    selectLabel="Open the quotes"
+                  />
+                </StatCardGrid>
+
+                <SectionCard title="Property & client" icon={<Building2 />} description="The address, what it is, who it belongs to, and where it is." bodyClassName="px-5 pb-5">
+                  <div className="grid items-stretch gap-6 lg:grid-cols-2">
+                    <div className="min-w-0 space-y-6">
+                      <div className="space-y-3">
+                        <SubHeading>Property</SubHeading>
+                        <DetailList
+                          rows={[
+                            { label: "Unit", value: property.label },
+                            { label: "Unit no. / floor", value: [property.unitNo, property.floor ? `floor ${property.floor}` : null].filter(Boolean).join(", ") || null },
+                            { label: "Building", value: property.building },
+                            { label: "Community", value: property.community },
+                            { label: "Street / city", value: [property.street, property.city].filter(Boolean).join(", ") || null },
+                            { label: "Developer", value: data?.developer ?? null },
+                            { label: "Type", value: unitTypeLabel(property.unitType) },
+                            { label: "Category", value: property.propertyCategory ? <span className="capitalize">{property.propertyCategory}</span> : null },
+                            {
+                              label: "Size",
+                              value:
+                                [property.sizeSqft ? `${property.sizeSqft.toLocaleString("en-US")} sq ft` : null, property.bedrooms !== null ? `${property.bedrooms} bed` : null]
+                                  .filter(Boolean)
+                                  .join(" · ") || null,
+                            },
+                            { label: "Floors", value: property.floorsCount },
+                            { label: "Zones", value: property.zones.length ? property.zones.join(", ") : null },
+                            { label: "Occupied by", value: property.occupancy ? <span className="capitalize">{property.occupancy}</span> : null },
+                          ]}
+                        />
+                      </div>
+                      <div className="space-y-3">
+                        <SubHeading>Client</SubHeading>
+                        <DetailList
+                          rows={[
+                            {
+                              label: "Name",
+                              value: customer ? (
+                                <Link href={`${CLIENTS_HREF}/${customer.id}`} className="hover:text-brand underline underline-offset-2">
+                                  {customer.name}
+                                </Link>
+                              ) : null,
+                            },
+                            { label: "Customer ID", value: customer?.customerRef ?? null },
+                            {
+                              label: "Status",
+                              value: customer ? (
+                                <Badge variant="secondary" className={`border-0 font-medium ${LIFECYCLE_TONE[customer.lifecycle] ?? ""}`}>
+                                  {LIFECYCLE_LABELS[customer.lifecycle] ?? customer.lifecycle}
+                                </Badge>
+                              ) : null,
+                            },
+                          ]}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex min-w-0 flex-col space-y-3">
+                      <SubHeading>Location</SubHeading>
+                      {location ? (
+                        hasGoogleMapsKey() ? (
+                          <GoogleLocationMap className="flex-1" lat={location.lat} lng={location.lng} label={property.label} />
+                        ) : (
+                          <LocationMap className="flex-1" lat={location.lat} lng={location.lng} label={property.label} />
+                        )
+                      ) : (
+                        <div className="text-muted-foreground flex min-h-48 flex-1 flex-col items-center justify-center rounded-lg border border-dashed p-6 text-center text-sm">
+                          No location pinned on the property record.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </SectionCard>
+
+                <SectionCard title="Combined units" icon={<Layers />} description="Linked, not merged: each keeps its owner, billing and history." bodyClassName="border-t">
+                  {units.parent ? (
+                    <DataRow
+                      onClick={() => router.push(`/extensions/amc-contracts/properties/${units.parent!.id}`)}
+                      icon={<Building2 />}
+                      title={units.parent.label}
+                      subtitle="This unit is part of it"
+                      trailing={<ChevronRight className="text-muted-foreground size-4" aria-hidden />}
+                    />
+                  ) : null}
+                  {units.children.map((u) => (
+                    <DataRow
+                      key={u.id}
+                      onClick={() => router.push(`/extensions/amc-contracts/properties/${u.id}`)}
+                      icon={<Layers />}
+                      title={u.label}
+                      subtitle={[unitTypeLabel(u.unitType), u.customerId && u.customerId !== customer?.id ? "different owner" : null].filter(Boolean).join(" · ") || "Unit within"}
+                      trailing={<ChevronRight className="text-muted-foreground size-4" aria-hidden />}
+                    />
+                  ))}
+                  {!units.parent && units.children.length === 0 ? (
+                    <p className="text-muted-foreground px-5 py-4 text-sm">Not linked to other units. Link one from its Edit form.</p>
+                  ) : null}
+                </SectionCard>
+              </>,
+            )}
+
+            {panel(
+              "contracts",
+              <>
+                <CurrentAmcCard current={current} />
+                <SectionCard title="Previous contracts" description="Kept as they were; renewals never overwrite them." icon={<ScrollText />} bodyClassName="border-t">
+                  <ContractsTable contracts={previous} showProperty={false} />
+                </SectionCard>
+                <SectionCard title="Additional-service quotes" icon={<Receipt />} bodyClassName="border-t">
+                  <QuotesList quotes={quotes} />
+                </SectionCard>
+              </>,
+            )}
+
+            {panel(
+              "assets",
+              /* What is maintained there: the asset register, the scope and the access rules, each fetched when opened. */
+              <>
+                <PillTabs<MaintainedView>
+                  value={maintained}
+                  onChange={setMaintained}
+                  tabs={[
+                    { value: "assets", label: "Assets" },
+                    { value: "scope", label: "Scope" },
+                    { value: "access", label: "Access rules" },
+                  ]}
+                />
+                {maintainedOpened.has("assets") ? (
+                  <div hidden={maintained !== "assets"}>
+                    <AssetsPanel propertyId={property.id} canEdit={canEdit} />
+                  </div>
                 ) : null}
-                {units.children.map((u) => (
-                  <DataRow
-                    key={u.id}
-                    onClick={() => router.push(`/extensions/amc-contracts/properties/${u.id}`)}
-                    icon={<Layers />}
-                    title={u.label}
-                    subtitle={[unitTypeLabel(u.unitType), u.customerId && u.customerId !== customer?.id ? "different owner" : null].filter(Boolean).join(" · ") || "Unit within"}
-                    trailing={<ChevronRight className="text-muted-foreground size-4" aria-hidden />}
-                  />
-                ))}
-                {!units.parent && units.children.length === 0 ? <p className="text-muted-foreground px-5 py-4 text-sm">Not linked to other units. Link one from its Edit form.</p> : null}
-              </SectionCard>
-            </div>
+                {maintainedOpened.has("scope") ? (
+                  <div hidden={maintained !== "scope"}>
+                    <ScopePanel propertyId={property.id} canEdit={canEdit} />
+                  </div>
+                ) : null}
+                {maintainedOpened.has("access") ? (
+                  <div hidden={maintained !== "access"}>
+                    <AccessRulesPanel propertyId={property.id} canEdit={canEdit} />
+                  </div>
+                ) : null}
+              </>,
+            )}
 
-            <CurrentAmcCard current={current} />
-          </>,
-        )}
-        {panel(
-          "contracts",
-          <>
-            <SectionCard title="Previous contracts" description="Kept as they were; renewals never overwrite them." icon={<ScrollText />} bodyClassName="border-t">
-              <ContractsTable contracts={previous} showProperty={false} />
-            </SectionCard>
-            <SectionCard title="Additional-service quotes" icon={<Receipt />} bodyClassName="border-t">
-              <QuotesList quotes={quotes} />
-            </SectionCard>
-          </>,
-        )}
-        {panel(
-          "visits",
-          <SectionCard title="Site visits" description="Surveys of this property, and the proposals raised from them." icon={<ClipboardCheck />} bodyClassName="border-t">
-            <AssessmentsList assessments={assessments} />
-          </SectionCard>,
-        )}
-        {panel("assets", <AssetsPanel propertyId={property.id} canEdit={canEdit} />)}
-        {panel("access", <AccessRulesPanel propertyId={property.id} canEdit={canEdit} />)}
-        {panel("scope", <ScopePanel propertyId={property.id} canEdit={canEdit} />)}
-        {panel("documents", <DocumentsPanel target={{ level: "property", entityId: property.id }} canUpload={canEdit} />)}
-      </Tabs>
+            {panel(
+              "activity",
+              <>
+                <PillTabs<PropertyActivityView>
+                  value={activity}
+                  onChange={setActivity}
+                  tabs={[
+                    { value: "visits", label: "Site visits", count: assessments.length },
+                    { value: "documents", label: "Documents" },
+                  ]}
+                />
+                {activityOpened.has("visits") ? (
+                  <div hidden={activity !== "visits"}>
+                    <SectionCard title="Site visits" description="Surveys of this property, and the proposals raised from them." icon={<ClipboardCheck />} bodyClassName="border-t">
+                      <AssessmentsList assessments={assessments} />
+                    </SectionCard>
+                  </div>
+                ) : null}
+                {activityOpened.has("documents") ? (
+                  <div hidden={activity !== "documents"}>
+                    <DocumentsPanel target={{ level: "property", entityId: property.id }} canUpload={canEdit} />
+                  </div>
+                ) : null}
+              </>,
+            )}
+          </Tabs>
+        </div>
+      )}
 
-      <EditPropertyDialog
-        key={editing.key}
-        open={editing.open}
-        onOpenChange={editing.onOpenChange}
-        property={property}
-        customerId={customer?.id ?? null}
-        childIds={units.children.map((u) => u.id)}
-        onSaved={reload}
-      />
+      {property ? (
+        <EditPropertyDialog
+          key={editing.key}
+          open={editing.open}
+          onOpenChange={editing.onOpenChange}
+          property={property}
+          customerId={customer?.id ?? null}
+          childIds={units.children.map((u) => u.id)}
+          onSaved={reload}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function BackLink({ href, label }: { href: string; label: string }) {
+  return (
+    <Button asChild variant="ghost" size="sm" className="-ml-2 max-w-full self-start">
+      <Link href={href}>
+        <ArrowLeft className="size-4" />
+        <span className="truncate">{label}</span>
+      </Link>
+    </Button>
+  );
+}
+
+/** The loading shape of the tab being opened, so the page does not jump when it lands. */
+function PropertyBodySkeleton({ tab }: { tab: (typeof PROPERTY_TABS)[number] }) {
+  return (
+    <div className="flex flex-col gap-4" aria-label="Loading the property">
+      <Skeleton className="h-9 w-full rounded-lg" />
+      {tab === "details" ? (
+        <>
+          <StatGridSkeleton count={4} />
+          <SectionSkeleton />
+        </>
+      ) : tab === "assets" || tab === "activity" ? (
+        <>
+          <div className="flex gap-1.5">
+            <Skeleton className="h-8 w-24 rounded-full" />
+            <Skeleton className="h-8 w-24 rounded-full" />
+          </div>
+          <SectionSkeleton />
+        </>
+      ) : (
+        <SectionSkeleton />
+      )}
     </div>
   );
 }

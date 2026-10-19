@@ -21,7 +21,7 @@ import { readAmcConfig } from "@/lib/server/amc/config";
 import { ContractError } from "@/lib/server/amc/contracts";
 import { siteVisitProblem } from "@/lib/server/amc/enquiry-proposal";
 import { checkTerm } from "@/lib/amc/contract-lifecycle";
-import { termMonthsBetween } from "@/lib/amc/contracts";
+import { proposalTermMonths } from "@/lib/amc/contracts";
 
 /**
  * The internal half of the approval flow (FR5.1–FR5.3, FR5.9).
@@ -138,7 +138,7 @@ export async function POST(req: NextRequest) {
     const submitConfig = await readAmcConfig(admin);
     /* BRD 5.7: the contract term, against the configured minimum, before it goes for approval. */
     const { data: dates } = await admin.from("amc_submissions").select("customer").eq("id", existing.id).maybeSingle<{ customer: { startDate?: string; endDate?: string } | null }>();
-    const term = dates?.customer?.startDate && dates.customer.endDate ? termMonthsBetween(dates.customer.startDate, dates.customer.endDate) : null;
+    const term = dates?.customer?.startDate && dates.customer.endDate ? proposalTermMonths(dates.customer.startDate, dates.customer.endDate) : null;
     const termProblem = term !== null ? checkTerm(term, submitConfig.contracts) : null;
     if (termProblem) return NextResponse.json({ error: `${termProblem} This proposal runs ${term} months.` }, { status: 400 });
     /* BRD 5.2: the site visit a commercial proposal needs (flag or block, from configuration). */

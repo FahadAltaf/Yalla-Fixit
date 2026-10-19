@@ -151,6 +151,35 @@ export function rateItemFor(card: RateCard, serviceId: string, model: string): R
   return live.find((i) => i.model === model) ?? live.find((i) => i.model === "any") ?? null;
 }
 
+/**
+ * The frequency the card allows nearest to the one wanted (a tie goes to
+ * the higher, more visits being the safer reading). Unchanged when the card
+ * does not limit it.
+ */
+export function nearestAllowedFrequency(allowed: readonly number[], wanted: number): number {
+  if (allowed.length === 0 || allowed.includes(Math.trunc(wanted))) return wanted;
+  return [...allowed].sort((a, b) => Math.abs(a - wanted) - Math.abs(b - wanted) || b - a)[0];
+}
+
+/**
+ * Ticked lines moved onto a frequency the card allows, so a proposal
+ * started from an enquiry or a site visit (whose frequency is the scope's,
+ * or the service's default of 1) is not refused on submit for it.
+ */
+export function snapToCardFrequencies<R extends { serviceId: string; frequency: number; included?: boolean }>(
+  rows: readonly R[],
+  card: RateCard | null,
+  model: string,
+): R[] {
+  if (!card) return [...rows];
+  return rows.map((row) => {
+    if (!row.included) return row;
+    const allowed = rateItemFor(card, row.serviceId, model)?.allowedFrequencies ?? [];
+    const frequency = nearestAllowedFrequency(allowed, row.frequency);
+    return frequency === row.frequency ? row : { ...row, frequency };
+  });
+}
+
 const appliesTo = (list: readonly string[], value: string) => list.length === 0 || list.includes(value);
 
 /** The best promotion in date for a service on a model, or null. */

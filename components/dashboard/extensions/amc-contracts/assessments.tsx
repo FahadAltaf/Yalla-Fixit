@@ -6,18 +6,19 @@ import { useRouter } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
 import {
   ArrowLeft,
+  Building2,
   CalendarClock,
   CheckCircle2,
   ClipboardCheck,
   EllipsisVerticalIcon,
   FileSignature,
   Inbox,
-  MoreHorizontal,
   Plus,
   RefreshCw,
   Save,
   SearchX,
   Trash2,
+  TriangleAlert,
   UserRound,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -26,6 +27,7 @@ import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-lab
 import { DataTable } from "@/components/data-table";
 import { IconText } from "@/components/data-table/columns/icon-text";
 import { StatusSelect } from "@/components/data-table/toolbars/status-select";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -40,21 +42,24 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { PageHeading, SectionCard, StatCard, StatCardGrid, TabCount } from "@/components/dashboard/shared/kaizen";
+import DateTimeSelect from "@/components/ui/date-time-select";
+import { PageHeading, SectionCard, StatCard, StatCardGrid, SubHeading } from "@/components/dashboard/shared/kaizen";
 import { ActionDialogContent, ErrorState, ListSkeleton, SectionSkeleton, StatGridSkeleton, SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { DatePickerField } from "@/components/dashboard/extensions/amc/components/date-picker-field";
 import { assessmentSummary, checkAssessmentCompletion, type AssessmentResult } from "@/lib/amc/business";
-import { ATTENDANCE_LABELS, SITE_VISIT_ATTENDANCE, type SiteVisitAttendance } from "@/lib/amc/enquiries";
+import { ATTENDANCE_LABELS, SITE_VISIT_ATTENDANCE } from "@/lib/amc/enquiries";
 import { cn } from "@/lib/utils";
 import { useDebounce } from "@/hooks/use-debounce";
 import { amcContractsService, type AssessmentRecord, type CustomerRecord } from "@/modules/amc-contracts/amc-contracts-service";
 
 import { AmcNotificationsBell } from "./amc-notifications-bell";
 import { AssessmentPhotos } from "./assessment-photos";
-import { CustomerSearch, PropertySelect, UNIT_TYPE_LABELS } from "./customer-pickers";
+import { CustomerSearch, UNIT_TYPE_LABELS } from "./customer-pickers";
 import { PropertyDialog } from "./customer-property-views";
 import { formatContractDate, formatDateTime } from "./contract-status";
-import { SiteVisitStatusBadge, formatClock, fromLocalInput, toLocalInput } from "./enquiries/enquiry-ui";
+import { AddressDialog, useAddressFormAccess } from "./address-dialog";
+import { EnquiryPropertySelect } from "./enquiries/enquiry-property-select";
+import { DetailList, SiteVisitStatusBadge, fromLocalInput, toLocalInput } from "./enquiries/enquiry-ui";
 import { ListToolbar } from "./enquiries/list-toolbar";
 import { useUrlTab } from "./profile/use-url-tab";
 import { useAmcData } from "./use-amc-data";
@@ -331,6 +336,8 @@ function NewSiteVisitForm({ working, setWorking, onOpenChange }: { working: bool
   const [propertyId, setPropertyId] = useState<string | null>(null);
   const [addingProperty, setAddingProperty] = useState(false);
   const [propertyVersion, setPropertyVersion] = useState(0);
+  /* A new address on the Clients page's form (with the map) when Snagging addresses can be added; the AMC form otherwise. */
+  const addressForm = useAddressFormAccess();
 
   const start = async () => {
     setWorking(true);
@@ -365,12 +372,19 @@ function NewSiteVisitForm({ working, setWorking, onOpenChange }: { working: bool
         </div>
         <div className="grid gap-2">
           <Label>Property</Label>
-          <PropertySelect customerId={customer?.id ?? null} value={propertyId} onChange={(p) => setPropertyId(p?.id ?? null)} refreshKey={propertyVersion} />
           {customer ? (
-            <Button variant="link" className="h-auto justify-start p-0" onClick={() => setAddingProperty(true)}>
-              Add a property for {customer.name}
-            </Button>
-          ) : null}
+            <EnquiryPropertySelect
+              customerId={customer.id}
+              clientName={customer.name}
+              requireComplete
+              value={propertyId}
+              onChange={setPropertyId}
+              onAddNew={() => setAddingProperty(true)}
+              refreshKey={propertyVersion}
+            />
+          ) : (
+            <p className="text-muted-foreground text-sm">Choose the client first.</p>
+          )}
         </div>
       </div>
       <DialogFooter>
@@ -381,7 +395,19 @@ function NewSiteVisitForm({ working, setWorking, onOpenChange }: { working: bool
           Start site visit
         </SubmitButton>
       </DialogFooter>
-      {addingProperty && customer ? (
+      {customer && addressForm ? (
+        <AddressDialog
+          open={addingProperty}
+          onOpenChange={setAddingProperty}
+          clientId={customer.id}
+          clientName={customer.name}
+          onSaved={(id) => {
+            setPropertyId(id);
+            setPropertyVersion((v) => v + 1);
+            setAddingProperty(false);
+          }}
+        />
+      ) : addingProperty && customer ? (
         <PropertyDialog
           title={`Add property for ${customer.name}`}
           initial={{ label: "" }}
@@ -414,19 +440,14 @@ export function AssessmentDetail({ id }: { id: string }) {
   const router = useRouter();
   /* Set by Refresh and cleared when the answer lands; the page stays on screen meanwhile. */
   const [refreshing, setRefreshing] = useState(false);
-  const { data, error, loading, reload } = useAmcData(
-    () =>
-      amcContractsService
-        .assessment(id)
-        .then((r) => ({ ...r, fetchedAt: Date.now() }))
-        .finally(() => setRefreshing(false)),
-    id,
-  );
+  const { data, error, loading, reload } = useAmcData(() => amcContractsService.assessment(id).finally(() => setRefreshing(false)), id);
   const catalogue = useAmcData(() => amcContractsService.coverageCatalogue(), "catalogue");
   useBreadcrumbLabel("assessments", "Site visits");
   useBreadcrumbLabel(id, data?.assessment.assessmentNumber ?? "Site visit");
   const { confirm, dialog } = useConfirm();
   const { tab, setTab, isOpened } = useUrlTab(TABS, "details");
+  const addressForm = useAddressFormAccess();
+  const [addingAddress, setAddingAddress] = useState(false);
 
   const [draft, setDraft] = useState<Draft | null>(null);
   const [pending, setPending] = useState<"save" | "proposal" | null>(null);
@@ -434,7 +455,7 @@ export function AssessmentDetail({ id }: { id: string }) {
 
   /* Take the loaded record as the editable draft (again after each save). */
   const loadedKey = data
-    ? `${data.assessment.id}|${data.assessment.status}|${data.assessment.createdAt}|${JSON.stringify(data.assessment.items.map((i) => i.result))}|${data.assessment.attendance}|${data.assessment.scheduledAt}|${JSON.stringify(data.assessment.assetCounts)}`
+    ? `${data.assessment.id}|${data.assessment.status}|${data.assessment.createdAt}|${data.assessment.property?.id ?? ""}|${JSON.stringify(data.assessment.items.map((i) => i.result))}|${data.assessment.attendance}|${data.assessment.scheduledAt}|${JSON.stringify(data.assessment.assetCounts)}`
     : null;
   if (data && loadedKey !== baseVersion) {
     setBaseVersion(loadedKey);
@@ -448,23 +469,9 @@ export function AssessmentDetail({ id }: { id: string }) {
     reload();
   };
 
-  /* Renders straight away, before any data: the way back and Refresh. */
-  const toolbar = (
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <BackToSiteVisits />
-      <div className="flex items-center gap-3">
-        {data ? <span className="text-muted-foreground hidden text-xs sm:inline">Updated {formatClock(data.fetchedAt)}</span> : null}
-        <Button variant="outline" size="sm" onClick={refresh} disabled={loading || refreshing} aria-label="Refresh this site visit">
-          <RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />
-          <span className="hidden sm:inline">Refresh</span>
-        </Button>
-      </div>
-    </div>
-  );
-
   if (error && /not found/i.test(error)) {
     return (
-      <div className="flex w-full flex-1 flex-col gap-4">
+      <div className="flex w-full flex-1 flex-col gap-6">
         <BackToSiteVisits />
         <Card className="p-0">
           <EmptyState
@@ -477,38 +484,20 @@ export function AssessmentDetail({ id }: { id: string }) {
       </div>
     );
   }
-  if (error) {
-    return (
-      <div className="flex w-full flex-1 flex-col gap-4">
-        {toolbar}
-        <ErrorState title="Could not load this site visit" message={error} onRetry={refresh} retrying={refreshing} />
-      </div>
-    );
-  }
-  if (loading || !data || !draft || !summary) {
-    return (
-      <div className="flex w-full flex-1 flex-col gap-4">
-        {toolbar}
-        <Skeleton className="h-32 w-full rounded-xl" />
-        <StatGridSkeleton count={4} />
-        <SectionSkeleton />
-      </div>
-    );
-  }
-  const a = data.assessment;
-  const editable = data.canEdit;
+
+  const a = data?.assessment ?? null;
+  const ready = Boolean(a && draft && summary) && !error;
+  const editable = Boolean(data?.canEdit);
   const busy = pending !== null;
-  const completion = checkAssessmentCompletion({
-    status: a.status,
-    assessedOn: draft.assessedOn,
-    propertyId: draft.propertyId,
-    items: draft.items,
-    attendance: draft.attendance,
-  });
+  const completion =
+    a && draft
+      ? checkAssessmentCompletion({ status: a.status, assessedOn: draft.assessedOn, propertyId: draft.propertyId, items: draft.items, attendance: draft.attendance })
+      : { ok: false, errors: [] as string[] };
 
   /* The draft as the server takes it; throws on failure. */
-  const persist = () =>
-    amcContractsService.updateAssessment(id, {
+  const persist = () => {
+    if (!draft) return Promise.resolve();
+    return amcContractsService.updateAssessment(id, {
       assessedOn: draft.assessedOn,
       assessorName: draft.assessorName,
       propertyCategory: draft.propertyCategory,
@@ -527,6 +516,7 @@ export function AssessmentDetail({ id }: { id: string }) {
       exclusions: draft.exclusions,
       items: draft.items.map((i) => ({ itemKey: i.itemKey, result: i.result, notes: i.notes })),
     });
+  };
   const save = async () => {
     setPending("save");
     try {
@@ -576,399 +566,478 @@ export function AssessmentDetail({ id }: { id: string }) {
         router.push("/extensions/amc-contracts/assessments");
       },
     });
+  /* The property picked (or just added): saved on the visit straight away, as it is not part of the draft's form. */
+  const linkProperty = async (propertyId: string | null) => {
+    if (!draft || !propertyId) return;
+    setDraft({ ...draft, propertyId });
+    try {
+      await amcContractsService.updateAssessment(id, { propertyId });
+      toast.success("Property linked to the site visit");
+      reload();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not link the property.");
+    }
+  };
 
   const setItem = (itemKey: string, patch: Partial<Draft["items"][number]>) =>
-    setDraft({ ...draft, items: draft.items.map((i) => (i.itemKey === itemKey ? { ...i, ...patch } : i)) });
-  const categories = [...new Map(draft.items.map((i) => [i.categoryKey, i.categoryLabel])).entries()];
+    draft && setDraft({ ...draft, items: draft.items.map((i) => (i.itemKey === itemKey ? { ...i, ...patch } : i)) });
+  const categories = draft ? [...new Map(draft.items.map((i) => [i.categoryKey, i.categoryLabel])).entries()] : [];
   const services = catalogue.data?.catalogue ?? [];
-  const answered = summary.total - summary.unanswered;
+  const answered = summary ? summary.total - summary.unanswered : 0;
   const panel = (value: (typeof TABS)[number], children: React.ReactNode) =>
     isOpened(value) ? (
-      <TabsContent value={value} forceMount className="mt-4 flex flex-col gap-6 data-[state=inactive]:hidden">
+      <TabsContent value={value} forceMount className="mt-4 flex flex-col gap-4 data-[state=inactive]:hidden">
         {children}
       </TabsContent>
     ) : null;
+  const unitLabel = (v: string | null | undefined) => (v ? (UNIT_TYPE_LABELS[v as keyof typeof UNIT_TYPE_LABELS] ?? v) : null);
 
   return (
-    <div className="flex w-full flex-1 flex-col gap-4">
+    <div className="flex w-full flex-1 flex-col gap-6">
       {dialog}
-      {toolbar}
-
-      <Card className="gap-0 p-0">
-        <div className="flex flex-wrap items-center justify-between gap-4 p-5">
-          <div className="space-y-1">
-            {a.enquiryId || draft.unitType ? (
-              <div className="flex flex-wrap items-center gap-2">
-                {a.enquiryId ? <Badge variant="outline">From an enquiry</Badge> : null}
-                {draft.unitType ? <Badge variant="outline">{UNIT_TYPE_LABELS[draft.unitType as keyof typeof UNIT_TYPE_LABELS] ?? draft.unitType}</Badge> : null}
-              </div>
-            ) : null}
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-2xl">{a.assessmentNumber}</h2>
-              <SiteVisitStatusBadge status={a.status} />
-            </div>
-            <p className="text-muted-foreground text-sm">
-              {[
-                a.customer?.name ?? "No client",
-                a.property?.label,
-                a.assessorName ? `by ${a.assessorName}` : null,
-                a.assessedOn ? formatContractDate(a.assessedOn) : a.scheduledAt ? formatDateTime(a.scheduledAt) : null,
-              ]
-                .filter(Boolean)
-                .join(" · ")}
-            </p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            {a.proposal ? (
-              <Button asChild variant="outline">
-                <Link href={`/extensions/amc/${a.proposal.id}`}>
-                  <FileSignature className="size-4" />
-                  Proposal {a.proposal.proposalNumber}
-                </Link>
-              </Button>
-            ) : null}
-            {editable ? (
-              <>
-                <SubmitButton variant="outline" onClick={() => void save()} pending={pending === "save"} pendingLabel="Saving…" disabled={busy} icon={<Save className="size-4" />}>
-                  Save
-                </SubmitButton>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="icon" aria-label="More actions" disabled={busy}>
-                      <MoreHorizontal className="size-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-max">
-                    {a.enquiryId ? (
-                      <>
-                        <DropdownMenuItem onClick={() => router.push(`/extensions/amc-contracts/enquiries/${a.enquiryId}`)}>
-                          <Inbox className="mr-2 size-4" />
-                          Open the enquiry
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                      </>
-                    ) : null}
-                    <DropdownMenuItem onClick={remove} className="text-destructive focus:text-destructive">
-                      <Trash2 className="mr-2 size-4" />
-                      Delete draft
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-                <Button onClick={complete} disabled={busy || !completion.ok}>
-                  <CheckCircle2 className="size-4" />
-                  Complete
-                </Button>
-              </>
-            ) : null}
-            {a.status === "completed" && !a.proposal ? (
-              <SubmitButton onClick={() => void createProposal()} pending={pending === "proposal"} pendingLabel="Creating…" icon={<FileSignature className="size-4" />}>
-                Create AMC proposal
-              </SubmitButton>
-            ) : null}
-          </div>
-        </div>
-
-        {editable && !completion.ok ? (
-          <div className="border-warning/30 bg-warning/5 border-t px-5 py-3">
-            <p className="text-sm">To complete: {completion.errors.join(" ")}</p>
-          </div>
-        ) : null}
-      </Card>
-
-      <StatCardGrid columns={4}>
-        <StatCard
-          label="Checklist"
-          value={`${answered}/${summary.total}`}
-          tone={summary.total > 0 && summary.unanswered === 0 ? "good" : "neutral"}
-          headline={summary.unanswered ? `${summary.unanswered} unanswered` : "Every item answered"}
-          caption={`${summary.ok} OK · ${summary.notApplicable} not applicable`}
-          onSelect={() => setTab("checklist")}
-        />
-        <StatCard
-          label="Needs attention"
-          value={summary.attention}
-          tone={summary.attention ? "progress" : "neutral"}
-          headline={summary.attention ? "Items to put right" : "Nothing flagged"}
-          caption="From the checklist"
-          onSelect={() => setTab("findings")}
-        />
-        <StatCard
-          label="Recommended services"
-          value={draft.recommendedServiceIds.length}
-          headline="Ticked on the proposal it starts"
-          caption="Prices are entered in the proposal"
-          onSelect={() => setTab("findings")}
-        />
-        <StatCard
-          label="Visit"
-          value={draft.attendance ? (ATTENDANCE_LABELS[draft.attendance as SiteVisitAttendance] ?? draft.attendance) : "Not recorded"}
-          headline={draft.scheduledAt ? formatDateTime(draft.scheduledAt) : "Not booked for a time"}
-          caption="Attendance"
-          onSelect={() => setTab("details")}
-        />
-      </StatCardGrid>
-
-      <Tabs value={tab} onValueChange={setTab}>
-        {/* Wraps onto a second line on a narrow screen rather than scrolling sideways. */}
-        <TabsList className="h-auto w-full flex-wrap justify-start gap-1 group-data-horizontal/tabs:h-auto">
-          <TabsTrigger value="details">Details</TabsTrigger>
-          <TabsTrigger value="checklist">
-            Checklist
-            <TabCount value={summary.total} />
-          </TabsTrigger>
-          <TabsTrigger value="findings">
-            Findings and services
-            <TabCount value={summary.attention} />
-          </TabsTrigger>
-          <TabsTrigger value="photos">Photos</TabsTrigger>
-        </TabsList>
-
-        {panel(
-          "details",
-          <div className="grid gap-6 lg:grid-cols-2">
-            <SectionCard
-              title="Visit"
-              description={
-                a.enquiryId
-                  ? "Booked from an enquiry. Record whether it took place, how to get in, and what is left out."
-                  : "When the visit is, whether it took place, how to get in, and what is left out."
-              }
-              icon={<CalendarClock />}
-              bodyClassName="px-5 pb-5 grid gap-4 sm:grid-cols-2"
-              action={
-                a.enquiryId ? (
-                  <Button asChild size="sm" variant="outline">
-                    <Link href={`/extensions/amc-contracts/enquiries/${a.enquiryId}`}>Open the enquiry</Link>
-                  </Button>
-                ) : null
-              }
-            >
-              <div className="grid gap-2">
-                <Label htmlFor="as-visit-at">Visit date and time</Label>
-                {editable ? (
-                  <Input id="as-visit-at" type="datetime-local" value={toLocalInput(draft.scheduledAt)} onChange={(e) => setDraft({ ...draft, scheduledAt: fromLocalInput(e.target.value) })} />
-                ) : (
-                  <ReadValue>{a.scheduledAt ? formatDateTime(a.scheduledAt) : null}</ReadValue>
-                )}
-              </div>
-              <SelectField
-                label="Attendance"
-                editable={editable}
-                value={draft.attendance}
-                options={SITE_VISIT_ATTENDANCE.map((v) => [v, ATTENDANCE_LABELS[v]])}
-                onChange={(v) => setDraft({ ...draft, attendance: v })}
-              />
-              <Area label="Access notes" editable={editable} value={draft.accessNotes ?? ""} onChange={(v) => setDraft({ ...draft, accessNotes: v })} rows={2} className="sm:col-span-2" />
-              <Area label="Exclusions" editable={editable} value={draft.exclusions ?? ""} onChange={(v) => setDraft({ ...draft, exclusions: v })} rows={2} className="sm:col-span-2" />
-            </SectionCard>
-
-            <SectionCard title="Property" description="The client, the property and what was found there." icon={<ClipboardCheck />} bodyClassName="px-5 pb-5 grid gap-4">
-              <div className="text-sm">
-                {a.customer ? (
-                  <Link href={`/extensions/amc-contracts/customers/${a.customer.id}`} className="font-medium hover:underline">
-                    {a.customer.name}
+      {/* Back to the list on the left, everything this visit can do on the right: the toolbar a quotation carries. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <BackToSiteVisits />
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={refresh} disabled={loading || refreshing} aria-label="Refresh this site visit">
+            <RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />
+            <span className="hidden sm:inline">Refresh</span>
+          </Button>
+          {ready && a ? (
+            <>
+              {a.enquiryId ? (
+                <Button asChild variant="outline" size="sm">
+                  <Link href={`/extensions/amc-contracts/enquiries/${a.enquiryId}`}>
+                    <Inbox className="size-4" />
+                    Open the enquiry
                   </Link>
-                ) : (
-                  "No client"
-                )}
-                {a.property ? (
-                  <>
-                    {" · "}
-                    <Link href={`/extensions/amc-contracts/properties/${a.property.id}`} className="hover:underline">
-                      {a.property.label}
-                    </Link>
-                  </>
-                ) : null}
-              </div>
-              {!a.property && editable && a.customer ? (
-                <div className="grid gap-2">
-                  <Label>Property</Label>
-                  <PropertySelect
-                    customerId={a.customer.id}
-                    value={draft.propertyId}
-                    onChange={(p) => {
-                      setDraft({ ...draft, propertyId: p?.id ?? null });
-                      if (p) void amcContractsService.updateAssessment(id, { propertyId: p.id }).then(reload);
-                    }}
+                </Button>
+              ) : null}
+              {a.proposal ? (
+                <Button asChild variant="outline" size="sm">
+                  <Link href={`/extensions/amc/${a.proposal.id}`}>
+                    <FileSignature className="size-4" />
+                    Proposal {a.proposal.proposalNumber}
+                  </Link>
+                </Button>
+              ) : null}
+              {editable ? (
+                <>
+                  <Button variant="outline" size="sm" onClick={remove} disabled={busy} className="text-destructive hover:text-destructive">
+                    <Trash2 className="size-4" />
+                    Delete draft
+                  </Button>
+                  <SubmitButton variant="outline" size="sm" onClick={() => void save()} pending={pending === "save"} pendingLabel="Saving…" disabled={busy} icon={<Save className="size-4" />}>
+                    Save
+                  </SubmitButton>
+                  <Button size="sm" onClick={complete} disabled={busy || !completion.ok}>
+                    <CheckCircle2 className="size-4" />
+                    Complete
+                  </Button>
+                </>
+              ) : null}
+              {a.status === "completed" && !a.proposal ? (
+                <SubmitButton size="sm" onClick={() => void createProposal()} pending={pending === "proposal"} pendingLabel="Creating…" icon={<FileSignature className="size-4" />}>
+                  Create AMC proposal
+                </SubmitButton>
+              ) : null}
+            </>
+          ) : null}
+        </div>
+      </div>
+
+      {error ? (
+        <ErrorState title="Could not load this site visit" message={error} onRetry={refresh} retrying={refreshing} />
+      ) : !ready || !a || !draft || !summary ? (
+        <SiteVisitBodySkeleton tab={tab} />
+      ) : (
+        <div className="flex flex-col gap-4">
+          {/* What is still needed, as a quotation shows what is holding it up. */}
+          {editable && !completion.ok ? (
+            <Alert>
+              <TriangleAlert />
+              <AlertTitle>To complete this site visit</AlertTitle>
+              <AlertDescription>{completion.errors.join(" ")}</AlertDescription>
+            </Alert>
+          ) : null}
+          {a.status === "completed" && !a.proposal ? (
+            <Alert>
+              <CheckCircle2 />
+              <AlertTitle>The site visit is complete</AlertTitle>
+              <AlertDescription className="flex flex-wrap items-center gap-3">
+                <span>Start the proposal from it: the recommended services are ticked, with the units counted on site.</span>
+                <SubmitButton size="sm" onClick={() => void createProposal()} pending={pending === "proposal"} pendingLabel="Creating…" icon={<FileSignature className="size-4" />}>
+                  Create AMC proposal
+                </SubmitButton>
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
+          <Tabs value={tab} onValueChange={setTab}>
+            <TabsList className="h-auto w-full flex-wrap justify-start gap-1 group-data-horizontal/tabs:h-auto">
+              <TabsTrigger value="details">Details</TabsTrigger>
+              <TabsTrigger value="checklist">Checklist</TabsTrigger>
+              <TabsTrigger value="findings">Findings and services</TabsTrigger>
+              <TabsTrigger value="photos">Photos</TabsTrigger>
+            </TabsList>
+
+            {panel(
+              "details",
+              <>
+                {/* The four answers somebody opens a site visit for. */}
+                <StatCardGrid columns={4}>
+                  <StatCard
+                    label="Status"
+                    value={a.status === "completed" ? "Completed" : "Draft"}
+                    headline={`Site visit ${a.assessmentNumber}${a.enquiryId ? " · from an enquiry" : ""}`}
+                    caption={draft.scheduledAt ? `Booked for ${formatDateTime(draft.scheduledAt)}` : "Not booked for a time"}
+                    tone={a.status === "completed" ? "good" : "progress"}
                   />
-                </div>
-              ) : null}
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="grid gap-2">
-                  <Label htmlFor="as-date">Visited on</Label>
-                  {editable ? (
-                    <DatePickerField id="as-date" value={draft.assessedOn ?? ""} onChange={(v) => setDraft({ ...draft, assessedOn: v || null })} />
-                  ) : (
-                    <ReadValue>{a.assessedOn ? formatContractDate(a.assessedOn) : null}</ReadValue>
-                  )}
-                </div>
-                <Field label="Assessor" editable={editable} value={draft.assessorName ?? ""} onChange={(v) => setDraft({ ...draft, assessorName: v })} />
-                <SelectField label="Unit type" editable={editable} value={draft.unitType} options={Object.entries(UNIT_TYPE_LABELS)} onChange={(v) => setDraft({ ...draft, unitType: v })} />
-                <SelectField
-                  label="Occupancy"
-                  editable={editable}
-                  value={draft.occupancy}
-                  options={[
-                    ["occupied", "Occupied"],
-                    ["vacant", "Vacant"],
-                    ["unknown", "Unknown"],
-                  ]}
-                  onChange={(v) => setDraft({ ...draft, occupancy: v })}
-                />
-                <Field label="Bedrooms" type="number" editable={editable} value={draft.bedrooms?.toString() ?? ""} onChange={(v) => setDraft({ ...draft, bedrooms: v === "" ? null : Number(v) })} />
-                <Field label="Size (sq ft)" type="number" editable={editable} value={draft.sizeSqft?.toString() ?? ""} onChange={(v) => setDraft({ ...draft, sizeSqft: v === "" ? null : Number(v) })} />
-              </div>
-            </SectionCard>
-          </div>,
-        )}
+                  <StatCard
+                    label="Checklist"
+                    value={`${answered}/${summary.total}`}
+                    tone={summary.total > 0 && summary.unanswered === 0 ? "good" : "neutral"}
+                    headline={summary.unanswered ? `${summary.unanswered} unanswered` : "Every item answered"}
+                    caption={`${summary.ok} OK · ${summary.notApplicable} not applicable`}
+                    onSelect={() => setTab("checklist")}
+                    selectLabel="Open the checklist"
+                  />
+                  <StatCard
+                    label="Needs attention"
+                    value={summary.attention}
+                    tone={summary.attention ? "progress" : "neutral"}
+                    headline={summary.attention ? "Items to put right" : "Nothing flagged"}
+                    caption="From the checklist"
+                    onSelect={() => setTab("findings")}
+                    selectLabel="Open the findings"
+                  />
+                  <StatCard
+                    label="Recommended services"
+                    value={draft.recommendedServiceIds.length}
+                    headline="Ticked on the proposal it starts"
+                    caption="Prices are entered in the proposal"
+                    onSelect={() => setTab("findings")}
+                    selectLabel="Open the recommended services"
+                  />
+                </StatCardGrid>
 
-        {panel(
-          "checklist",
-          <SectionCard
-            title="Checklist"
-            description={`${summary.ok} OK · ${summary.attention} attention · ${summary.notApplicable} n/a · ${summary.unanswered} unanswered`}
-            icon={<CheckCircle2 />}
-            bodyClassName={draft.items.length === 0 ? "border-t" : "px-5 pb-5 space-y-5"}
-          >
-            {draft.items.length === 0 ? (
-              <EmptyState icon={<CheckCircle2 className="size-5" />} title="The checklist is empty" description="An approver can add items in Settings." />
-            ) : null}
-            {categories.map(([key, label]) => (
-              <div key={key} className="space-y-2">
-                <h3 className="text-sm font-medium">{label}</h3>
-                <ul className="divide-y rounded-lg border">
-                  {draft.items
-                    .filter((i) => i.categoryKey === key)
-                    .map((i) => (
-                      <li key={i.itemKey} className="grid gap-2 p-3 sm:grid-cols-[1fr_auto]">
-                        <div className="text-sm">{i.label}</div>
-                        {editable ? (
-                          <div className="flex flex-wrap gap-1">
-                            {(Object.keys(RESULT_LABELS) as AssessmentResult[]).map((r) => (
-                              <Button
-                                key={r}
-                                size="sm"
-                                variant={i.result === r ? "default" : "outline"}
-                                className="h-7 px-2 text-xs"
-                                aria-pressed={i.result === r}
-                                onClick={() => setItem(i.itemKey, { result: i.result === r ? null : r })}
-                              >
-                                {RESULT_LABELS[r]}
-                              </Button>
-                            ))}
-                          </div>
-                        ) : (
-                          <Badge variant="secondary" className={cn("h-fit border-0 font-medium", i.result ? RESULT_TONES[i.result] : "bg-mist text-ink-soft")}>
-                            {i.result ? RESULT_LABELS[i.result] : "Not answered"}
-                          </Badge>
-                        )}
-                        {editable ? (
-                          <Input
-                            className="h-8 sm:col-span-2"
-                            placeholder="Notes"
-                            value={i.notes ?? ""}
-                            maxLength={1000}
-                            onChange={(e) => setItem(i.itemKey, { notes: e.target.value })}
-                            aria-label={`Notes for ${i.label}`}
-                          />
-                        ) : i.notes ? (
-                          <p className="text-muted-foreground text-xs sm:col-span-2">{i.notes}</p>
+                <SectionCard title="Client & property" icon={<Building2 />} description="Who the visit is for and the property being assessed." bodyClassName="px-5 pb-5">
+                  <div className="grid gap-6 lg:grid-cols-2">
+                    <div className="min-w-0 space-y-3">
+                      <SubHeading>Client</SubHeading>
+                      <DetailList
+                        rows={[
+                          {
+                            label: "Name",
+                            value: a.customer ? (
+                              <Link href={`/extensions/amc-contracts/customers/${a.customer.id}`} className="hover:text-brand underline underline-offset-2">
+                                {a.customer.name}
+                              </Link>
+                            ) : null,
+                          },
+                          {
+                            label: "Enquiry",
+                            value: a.enquiryId ? (
+                              <Link href={`/extensions/amc-contracts/enquiries/${a.enquiryId}`} className="hover:text-brand underline underline-offset-2">
+                                Open the enquiry
+                              </Link>
+                            ) : null,
+                          },
+                          {
+                            label: "Proposal",
+                            value: a.proposal ? (
+                              <Link href={`/extensions/amc/${a.proposal.id}`} className="hover:text-brand underline underline-offset-2">
+                                {a.proposal.proposalNumber}
+                              </Link>
+                            ) : null,
+                          },
+                        ]}
+                      />
+                    </div>
+                    <div className="min-w-0 space-y-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <SubHeading>Property</SubHeading>
+                        {a.property ? (
+                          <Button asChild size="sm" variant="ghost" className="-my-1 h-7">
+                            <Link href={`/extensions/amc-contracts/properties/${a.property.id}?tab=assets&view=scope`}>Assets and scope</Link>
+                          </Button>
                         ) : null}
-                      </li>
-                    ))}
-                </ul>
-              </div>
-            ))}
-          </SectionCard>,
-        )}
-
-        {panel(
-          "findings",
-          <div className="grid gap-6 lg:grid-cols-2">
-            <SectionCard
-              title="Recommended services"
-              description="Ticked here, they are ticked on the proposal it starts, with the units counted on site. Prices are entered in the proposal."
-              icon={<FileSignature />}
-              bodyClassName="px-5 pb-5"
-            >
-              {services.length === 0 ? (
-                <ListSkeleton rows={3} />
-              ) : (
-                <ul className="grid gap-2 sm:grid-cols-2">
-                  {services.map((s) => (
-                    <li key={s.id} className="flex items-center justify-between gap-2">
-                      <label className="flex items-center gap-2 text-sm">
-                        <Checkbox
-                          checked={draft.recommendedServiceIds.includes(s.id)}
-                          disabled={!editable}
-                          onCheckedChange={(v) =>
-                            setDraft({
-                              ...draft,
-                              recommendedServiceIds: v === true ? [...draft.recommendedServiceIds, s.id] : draft.recommendedServiceIds.filter((x) => x !== s.id),
-                            })
-                          }
-                          aria-label={s.label}
+                      </div>
+                      {a.property ? (
+                        <DetailList
+                          rows={[
+                            {
+                              label: "Address",
+                              value: (
+                                <Link href={`/extensions/amc-contracts/properties/${a.property.id}`} className="hover:text-brand underline underline-offset-2">
+                                  {a.property.label}
+                                </Link>
+                              ),
+                            },
+                            { label: "Type", value: unitLabel(draft.unitType) },
+                            { label: "Category", value: draft.propertyCategory ? capitalise(draft.propertyCategory) : null },
+                          ]}
                         />
-                        {s.label}
-                      </label>
-                      {draft.recommendedServiceIds.includes(s.id) ? (
-                        editable ? (
-                          <Input
-                            type="number"
-                            min={1}
-                            max={10000}
-                            className="h-7 w-20"
-                            placeholder="Units"
-                            value={draft.assetCounts[s.id] ?? ""}
-                            onChange={(e) => {
-                              const next = { ...draft.assetCounts };
-                              const n = Math.trunc(Number(e.target.value));
-                              if (e.target.value === "" || !Number.isFinite(n) || n < 1) delete next[s.id];
-                              else next[s.id] = Math.min(n, 10000);
-                              setDraft({ ...draft, assetCounts: next });
-                            }}
-                            aria-label={`Units counted for ${s.label}`}
+                      ) : editable && a.customer ? (
+                        <div className="grid gap-2">
+                          <EnquiryPropertySelect
+                            customerId={a.customer.id}
+                            clientName={a.customer.name}
+                            requireComplete
+                            value={draft.propertyId}
+                            onChange={(pid) => void linkProperty(pid)}
+                            onAddNew={addressForm ? () => setAddingAddress(true) : undefined}
                           />
-                        ) : (
-                          <span className="text-muted-foreground text-xs tabular-nums">{draft.assetCounts[s.id] ?? 1} unit(s)</span>
-                        )
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </SectionCard>
-            <SectionCard title="Summary and findings" icon={<ClipboardCheck />} bodyClassName="px-5 pb-5 grid gap-4">
-              <Area label="Summary" editable={editable} value={draft.summary ?? ""} onChange={(v) => setDraft({ ...draft, summary: v })} rows={2} />
-              <Area label="Findings" editable={editable} value={draft.findings ?? ""} onChange={(v) => setDraft({ ...draft, findings: v })} rows={4} />
-              <Area label="Notes" editable={editable} value={draft.notes ?? ""} onChange={(v) => setDraft({ ...draft, notes: v })} rows={2} />
-              {summary.attentionItems.length ? (
-                <div className="border-warning/30 bg-warning/5 rounded-md border px-3 py-2 text-sm">
-                  <div className="font-medium">Needs attention</div>
-                  <ul className="text-muted-foreground list-disc pl-5">
-                    {summary.attentionItems.map((x) => (
-                      <li key={x}>{x}</li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-            </SectionCard>
-          </div>,
-        )}
+                          <p className="text-muted-foreground text-xs">The property is needed to complete the visit. Pick one of the client&apos;s addresses, or add a new one.</p>
+                        </div>
+                      ) : (
+                        <p className="text-muted-foreground text-sm">No property linked.</p>
+                      )}
+                    </div>
+                  </div>
+                </SectionCard>
 
-        {panel("photos", <AssessmentPhotos assessmentId={a.id} editable={editable} completed={a.status === "completed"} />)}
-      </Tabs>
+                <SectionCard
+                  title="Visit"
+                  icon={<CalendarClock />}
+                  description={
+                    a.enquiryId
+                      ? "Booked from an enquiry. Record whether it took place, what was found, how to get in and what is left out."
+                      : "When the visit is, whether it took place, what was found, how to get in and what is left out."
+                  }
+                  bodyClassName="px-5 pb-5 grid gap-4"
+                >
+                  <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                    <div className="grid min-w-0 content-start gap-2">
+                      <Label htmlFor="as-visit-at">Visit date and time</Label>
+                      {editable ? (
+                        <DateTimeSelect id="as-visit-at" value={toLocalInput(draft.scheduledAt)} onChange={(value) => setDraft({ ...draft, scheduledAt: fromLocalInput(value) })} />
+                      ) : (
+                        <ReadValue>{a.scheduledAt ? formatDateTime(a.scheduledAt) : null}</ReadValue>
+                      )}
+                    </div>
+                    <SelectField
+                      label="Attendance"
+                      editable={editable}
+                      value={draft.attendance}
+                      options={SITE_VISIT_ATTENDANCE.map((v) => [v, ATTENDANCE_LABELS[v]])}
+                      onChange={(v) => setDraft({ ...draft, attendance: v })}
+                    />
+                    <div className="grid min-w-0 content-start gap-2">
+                      <Label htmlFor="as-date">Visited on</Label>
+                      {editable ? (
+                        <DatePickerField id="as-date" value={draft.assessedOn ?? ""} onChange={(v) => setDraft({ ...draft, assessedOn: v || null })} />
+                      ) : (
+                        <ReadValue>{a.assessedOn ? formatContractDate(a.assessedOn) : null}</ReadValue>
+                      )}
+                    </div>
+                    <Field label="Assessor" editable={editable} value={draft.assessorName ?? ""} onChange={(v) => setDraft({ ...draft, assessorName: v })} />
+                    <SelectField label="Unit type" editable={editable} value={draft.unitType} options={Object.entries(UNIT_TYPE_LABELS)} onChange={(v) => setDraft({ ...draft, unitType: v })} />
+                    <SelectField
+                      label="Occupancy"
+                      editable={editable}
+                      value={draft.occupancy}
+                      options={[
+                        ["occupied", "Occupied"],
+                        ["vacant", "Vacant"],
+                        ["unknown", "Unknown"],
+                      ]}
+                      onChange={(v) => setDraft({ ...draft, occupancy: v })}
+                    />
+                    <Field label="Bedrooms" type="number" editable={editable} value={draft.bedrooms?.toString() ?? ""} onChange={(v) => setDraft({ ...draft, bedrooms: v === "" ? null : Number(v) })} />
+                    <Field label="Size (sq ft)" type="number" editable={editable} value={draft.sizeSqft?.toString() ?? ""} onChange={(v) => setDraft({ ...draft, sizeSqft: v === "" ? null : Number(v) })} />
+                  </div>
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <Area label="Access notes" editable={editable} value={draft.accessNotes ?? ""} onChange={(v) => setDraft({ ...draft, accessNotes: v })} rows={2} />
+                    <Area label="Exclusions" editable={editable} value={draft.exclusions ?? ""} onChange={(v) => setDraft({ ...draft, exclusions: v })} rows={2} />
+                  </div>
+                </SectionCard>
+              </>,
+            )}
+
+            {panel(
+              "checklist",
+              <SectionCard
+                title="Checklist"
+                description={`${summary.ok} OK · ${summary.attention} attention · ${summary.notApplicable} n/a · ${summary.unanswered} unanswered`}
+                icon={<CheckCircle2 />}
+                bodyClassName={draft.items.length === 0 ? "border-t" : "px-5 pb-5 space-y-5"}
+              >
+                {draft.items.length === 0 ? (
+                  <EmptyState icon={<CheckCircle2 className="size-5" />} title="The checklist is empty" description="An approver can add items in Settings." />
+                ) : null}
+                {categories.map(([key, label]) => (
+                  <div key={key} className="space-y-2">
+                    <h3 className="text-sm font-medium">{label}</h3>
+                    <ul className="divide-y rounded-lg border">
+                      {draft.items
+                        .filter((i) => i.categoryKey === key)
+                        .map((i) => (
+                          <li key={i.itemKey} className="grid gap-2 p-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+                            <div className="text-sm">{i.label}</div>
+                            {editable ? (
+                              <div className="flex flex-wrap gap-1">
+                                {(Object.keys(RESULT_LABELS) as AssessmentResult[]).map((r) => (
+                                  <Button
+                                    key={r}
+                                    size="sm"
+                                    variant={i.result === r ? "default" : "outline"}
+                                    className="h-7 px-2 text-xs"
+                                    aria-pressed={i.result === r}
+                                    onClick={() => setItem(i.itemKey, { result: i.result === r ? null : r })}
+                                  >
+                                    {RESULT_LABELS[r]}
+                                  </Button>
+                                ))}
+                              </div>
+                            ) : (
+                              <Badge variant="secondary" className={cn("h-fit border-0 font-medium", i.result ? RESULT_TONES[i.result] : "bg-mist text-ink-soft")}>
+                                {i.result ? RESULT_LABELS[i.result] : "Not answered"}
+                              </Badge>
+                            )}
+                            {editable ? (
+                              <Input
+                                className="h-8 sm:col-span-2"
+                                placeholder="Notes"
+                                value={i.notes ?? ""}
+                                maxLength={1000}
+                                onChange={(e) => setItem(i.itemKey, { notes: e.target.value })}
+                                aria-label={`Notes for ${i.label}`}
+                              />
+                            ) : i.notes ? (
+                              <p className="text-muted-foreground text-xs sm:col-span-2">{i.notes}</p>
+                            ) : null}
+                          </li>
+                        ))}
+                    </ul>
+                  </div>
+                ))}
+              </SectionCard>,
+            )}
+
+            {panel(
+              "findings",
+              <div className="grid gap-4 lg:grid-cols-2">
+                <SectionCard
+                  title="Recommended services"
+                  description="Ticked here, they are ticked on the proposal it starts, with the units counted on site. Prices are entered in the proposal."
+                  icon={<FileSignature />}
+                  bodyClassName="px-5 pb-5"
+                >
+                  {services.length === 0 ? (
+                    <ListSkeleton rows={3} />
+                  ) : (
+                    <ul className="grid gap-2 sm:grid-cols-2">
+                      {services.map((s) => (
+                        <li key={s.id} className="flex items-center justify-between gap-2">
+                          <label className="flex items-center gap-2 text-sm">
+                            <Checkbox
+                              checked={draft.recommendedServiceIds.includes(s.id)}
+                              disabled={!editable}
+                              onCheckedChange={(v) =>
+                                setDraft({
+                                  ...draft,
+                                  recommendedServiceIds: v === true ? [...draft.recommendedServiceIds, s.id] : draft.recommendedServiceIds.filter((x) => x !== s.id),
+                                })
+                              }
+                              aria-label={s.label}
+                            />
+                            {s.label}
+                          </label>
+                          {draft.recommendedServiceIds.includes(s.id) ? (
+                            editable ? (
+                              <Input
+                                type="number"
+                                min={1}
+                                max={10000}
+                                className="h-7 w-20"
+                                placeholder="Units"
+                                value={draft.assetCounts[s.id] ?? ""}
+                                onChange={(e) => {
+                                  const next = { ...draft.assetCounts };
+                                  const n = Math.trunc(Number(e.target.value));
+                                  if (e.target.value === "" || !Number.isFinite(n) || n < 1) delete next[s.id];
+                                  else next[s.id] = Math.min(n, 10000);
+                                  setDraft({ ...draft, assetCounts: next });
+                                }}
+                                aria-label={`Units counted for ${s.label}`}
+                              />
+                            ) : (
+                              <span className="text-muted-foreground text-xs tabular-nums">{draft.assetCounts[s.id] ?? 1} unit(s)</span>
+                            )
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </SectionCard>
+                <SectionCard title="Summary and findings" icon={<ClipboardCheck />} bodyClassName="px-5 pb-5 grid gap-4">
+                  <Area label="Summary" editable={editable} value={draft.summary ?? ""} onChange={(v) => setDraft({ ...draft, summary: v })} rows={2} />
+                  <Area label="Findings" editable={editable} value={draft.findings ?? ""} onChange={(v) => setDraft({ ...draft, findings: v })} rows={4} />
+                  <Area label="Notes" editable={editable} value={draft.notes ?? ""} onChange={(v) => setDraft({ ...draft, notes: v })} rows={2} />
+                  {summary.attentionItems.length ? (
+                    <div className="border-warning/30 bg-warning/5 rounded-md border px-3 py-2 text-sm">
+                      <div className="font-medium">Needs attention</div>
+                      <ul className="text-muted-foreground list-disc pl-5">
+                        {summary.attentionItems.map((x) => (
+                          <li key={x}>{x}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </SectionCard>
+              </div>,
+            )}
+
+            {panel("photos", <AssessmentPhotos assessmentId={a.id} editable={editable} completed={a.status === "completed"} />)}
+          </Tabs>
+        </div>
+      )}
+
+      {/* A new address on the Clients page's form, with its pin on the map; linked to the visit once saved. */}
+      {a?.customer && addressForm ? (
+        <AddressDialog
+          open={addingAddress}
+          onOpenChange={setAddingAddress}
+          clientId={a.customer.id}
+          clientName={a.customer.name}
+          defaults={{ unitType: draft?.unitType, propertyCategory: draft?.propertyCategory }}
+          onSaved={(propertyId) => {
+            setAddingAddress(false);
+            void linkProperty(propertyId);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
+
+/** The loading shape of the tab being opened, so the page does not jump when it lands. */
+function SiteVisitBodySkeleton({ tab }: { tab: (typeof TABS)[number] }) {
+  return (
+    <div className="flex flex-col gap-4" aria-label="Loading the site visit">
+      <Skeleton className="h-9 w-full rounded-lg" />
+      {tab === "details" ? (
+        <>
+          <StatGridSkeleton count={4} />
+          <SectionSkeleton />
+          <SectionSkeleton />
+        </>
+      ) : (
+        <SectionSkeleton />
+      )}
+    </div>
+  );
+}
+
+const capitalise = (v: string) => (v ? v.charAt(0).toUpperCase() + v.slice(1) : v);
 
 function BackToSiteVisits() {
   return (
     <Button asChild variant="ghost" size="sm" className="-ml-2 self-start">
       <Link href="/extensions/amc-contracts/assessments">
         <ArrowLeft className="size-4" />
-        Site visits
+        Back to site visits
       </Link>
     </Button>
   );
@@ -985,7 +1054,7 @@ function ReadValue({ children, multiline = false }: { children: React.ReactNode;
 
 function Field({ label, value, onChange, editable, type = "text" }: { label: string; value: string; onChange: (v: string) => void; editable: boolean; type?: string }) {
   return (
-    <div className="grid gap-2">
+    <div className="grid min-w-0 content-start gap-2">
       <Label>{label}</Label>
       {editable ? <Input type={type} value={value} onChange={(e) => onChange(e.target.value)} aria-label={label} /> : <ReadValue>{value}</ReadValue>}
     </div>

@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import DateTimeSelect from "@/components/ui/date-time-select";
 import { useDebounce } from "@/hooks/use-debounce";
 import { CALL_OUT_CHANNEL_LABELS, CALL_OUT_CHANNELS, CALL_OUT_PRIORITIES, CALL_OUT_PRIORITY_LABELS, type CallOutChannel, type CallOutPriority } from "@/lib/amc/call-outs";
 import { TRADE_LABELS, TRADES } from "@/lib/amc/client-profile";
@@ -270,7 +271,7 @@ export function LogCallOutDialog({
                 </Select>
               </Field>
               <Field id={ids.reported} label="Client called at">
-                <Input id={ids.reported} type="datetime-local" value={reportedAt} onChange={(e) => setReportedAt(e.target.value)} />
+                <DateTimeSelect id={ids.reported} value={reportedAt} onChange={setReportedAt} />
               </Field>
             </div>
 
@@ -351,7 +352,7 @@ export function LogCallOutDialog({
           </div>
         )}
 
-        <DialogFooter className="items-center">
+        <DialogFooter className="sm:items-center">
           {done ? (
             <>
               {onOpenCallOut ? (
@@ -366,7 +367,7 @@ export function LogCallOutDialog({
             </>
           ) : (
             <>
-              {problems.length ? <p className="text-muted-foreground mr-auto text-xs">{problems[0]}</p> : null}
+              {problems.length ? <p className="text-muted-foreground order-last text-xs sm:order-first sm:mr-auto">{problems[0]}</p> : null}
               <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
                 Cancel
               </Button>

@@ -14,6 +14,8 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import DateSelect from "@/components/ui/date-select";
+import TimeSelect from "@/components/ui/time-select";
 import { TRADE_LABELS } from "@/lib/amc/client-profile";
 import { cn } from "@/lib/utils";
 import { visitsService, type BoardActionInput, type BoardVisit, type VisitSuggestion } from "@/modules/amc-contracts/visits-service";
@@ -78,7 +80,7 @@ function Shell({
 
 function Field({ id, label, hint, children }: { id: string; label: string; hint?: ReactNode; children: ReactNode }) {
   return (
-    <div className="grid gap-2">
+    <div className="grid min-w-0 content-start gap-2">
       <Label htmlFor={id}>{label}</Label>
       {children}
       {hint ? <div className="text-muted-foreground text-xs">{hint}</div> : null}
@@ -258,10 +260,10 @@ export function PlaceDialog({ open, onOpenChange, onDone, reload, request, techn
     >
       <div className="grid gap-4 sm:grid-cols-3">
         <Field id="place-date" label="Date">
-          <Input id="place-date" type="date" value={day} onChange={(e) => setDay(e.target.value)} />
+          <DateSelect id="place-date" value={day} onChange={setDay} />
         </Field>
         <Field id="place-time" label="Start time">
-          <Input id="place-time" type="time" step={900} value={time} onChange={(e) => setTime(e.target.value)} />
+          <TimeSelect id="place-time" step={900} value={time} onChange={setTime} />
         </Field>
         <Field id="place-duration" label="Duration (minutes)">
           <Input
@@ -454,10 +456,10 @@ export function MoveDialog({ open, onOpenChange, onDone, reload, visits, date }:
     >
       <div className="grid gap-4 sm:grid-cols-2">
         <Field id="move-date" label="Date">
-          <Input id="move-date" type="date" value={day} onChange={(e) => setDay(e.target.value)} />
+          <DateSelect id="move-date" value={day} onChange={setDay} />
         </Field>
         <Field id="move-time" label="Start time (optional)" hint="Empty keeps each visit's time.">
-          <Input id="move-time" type="time" step={900} value={time} onChange={(e) => setTime(e.target.value)} />
+          <TimeSelect id="move-time" step={900} value={time} onChange={setTime} />
         </Field>
       </div>
       {outside.length ? (

@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import DateTimeSelect from "@/components/ui/date-time-select";
 import { TRADE_LABELS, TRADES } from "@/lib/amc/client-profile";
 import {
   LINE_OUTCOME_LABELS,
@@ -426,10 +427,10 @@ function SheetBody({
             {editable ? (
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field id={ids.arrived} label="Arrived">
-                  <Input id={ids.arrived} type="datetime-local" value={form.arrivedAt} onChange={(e) => set("arrivedAt", e.target.value)} />
+                  <DateTimeSelect id={ids.arrived} value={form.arrivedAt} onChange={(value) => set("arrivedAt", value)} />
                 </Field>
                 <Field id={ids.completed} label="Completed">
-                  <Input id={ids.completed} type="datetime-local" value={form.completedAt} onChange={(e) => set("completedAt", e.target.value)} />
+                  <DateTimeSelect id={ids.completed} value={form.completedAt} onChange={(value) => set("completedAt", value)} />
                 </Field>
               </div>
             ) : (
@@ -924,7 +925,7 @@ function ChecklistSection({
       {rows.map((r, i) => {
         const id = `${base}-${r.key}`;
         return (
-          <div key={r.key} className="grid gap-2 rounded-lg border px-3 py-3 sm:grid-cols-[1fr_1fr_10rem_auto] sm:items-end">
+          <div key={r.key} className="grid gap-2 rounded-lg border px-3 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_10rem_auto] sm:items-end">
             <Field id={`${id}-label`} label="Item">
               <Input id={`${id}-label`} maxLength={300} value={r.label} onChange={(e) => update(r.key, { label: e.target.value })} />
             </Field>
@@ -1162,7 +1163,7 @@ function ConsumablesSection({
       ) : (
         <>
           {rows.map((r, i) => (
-            <div key={r.key} className="grid gap-2 sm:grid-cols-[1fr_7rem_7rem_auto] sm:items-end">
+            <div key={r.key} className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_7rem_7rem_auto] sm:items-end">
               <Field id={`${base}-${r.key}-item`} label="Item">
                 <Input id={`${base}-${r.key}-item`} maxLength={200} value={r.item} onChange={(e) => update(r.key, { item: e.target.value })} />
               </Field>
@@ -1228,7 +1229,7 @@ function AdditionalWorkSection({
       ) : (
         <>
           {rows.map((r, i) => (
-            <div key={r.key} className="grid gap-2 sm:grid-cols-[1fr_10rem_auto] sm:items-end">
+            <div key={r.key} className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_10rem_auto] sm:items-end">
               <Field id={`${base}-${r.key}-desc`} label="Description">
                 <Input id={`${base}-${r.key}-desc`} maxLength={1000} value={r.description} onChange={(e) => update(r.key, { description: e.target.value })} />
               </Field>
@@ -1278,7 +1279,7 @@ function PendingWorksSection({
       ) : (
         <>
           {rows.map((r, i) => (
-            <div key={r.key} className="grid gap-2 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+            <div key={r.key} className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
               <Field id={`${base}-${r.key}-desc`} label="Description">
                 <Input id={`${base}-${r.key}-desc`} maxLength={1000} value={r.description} onChange={(e) => update(r.key, { description: e.target.value })} />
               </Field>
@@ -1426,7 +1427,7 @@ function Panel({ title, description, children }: { title: string; description?: 
 
 function Field({ id, label, hint, children }: { id: string; label: string; hint?: ReactNode; children: ReactNode }) {
   return (
-    <div className="grid gap-2">
+    <div className="grid min-w-0 content-start gap-2">
       <Label htmlFor={id}>{label}</Label>
       {children}
       {hint ? <div className="text-muted-foreground text-xs">{hint}</div> : null}

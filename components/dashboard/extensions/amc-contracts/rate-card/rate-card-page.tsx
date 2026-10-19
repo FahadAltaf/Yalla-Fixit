@@ -36,6 +36,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import DateSelect from "@/components/ui/date-select";
 import {
   MODEL_LABELS,
   PROPERTY_MODELS,
@@ -719,7 +720,7 @@ function PackageDialog({
             {value.lines.map((line, index) => (
               <div key={index} className="flex items-center gap-2">
                 <Select value={line.serviceId} onValueChange={(serviceId) => setLine(index, { serviceId })}>
-                  <SelectTrigger className="flex-1" aria-label={`Service ${index + 1}`}>
+                  <SelectTrigger className="min-w-0 flex-1" aria-label={`Service ${index + 1}`}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -956,11 +957,11 @@ function PromotionDialog({
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="grid gap-1.5">
               <Label htmlFor="promo-start">Starts</Label>
-              <Input id="promo-start" type="date" value={value.startDate} onChange={(e) => setValue((v) => ({ ...v, startDate: e.target.value }))} />
+              <DateSelect id="promo-start" value={value.startDate} onChange={(day) => setValue((v) => ({ ...v, startDate: day }))} />
             </div>
             <div className="grid gap-1.5">
               <Label htmlFor="promo-end">Ends</Label>
-              <Input id="promo-end" type="date" value={value.endDate} onChange={(e) => setValue((v) => ({ ...v, endDate: e.target.value }))} />
+              <DateSelect id="promo-end" value={value.endDate} onChange={(day) => setValue((v) => ({ ...v, endDate: day }))} />
             </div>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
@@ -1131,7 +1132,7 @@ function PublishDialog({
         <div className="grid gap-4 py-2">
           <div className="grid gap-1.5">
             <Label htmlFor="publish-from">Effective from</Label>
-            <Input id="publish-from" type="date" min={today} value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} />
+            <DateSelect id="publish-from" min={today} value={effectiveFrom} onChange={setEffectiveFrom} />
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="publish-reason">Why</Label>

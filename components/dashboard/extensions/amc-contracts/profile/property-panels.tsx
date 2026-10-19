@@ -17,6 +17,8 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import DateSelect from "@/components/ui/date-select";
+import TimeSelect from "@/components/ui/time-select";
 import {
   ACCESS_TYPES,
   ACCESS_TYPE_LABELS,
@@ -339,7 +341,7 @@ function AssetDialog({
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="asset-installed">Installed on (optional)</Label>
-            <Input id="asset-installed" type="date" value={v.installedOn ?? ""} onChange={text("installedOn")} />
+            <DateSelect id="asset-installed" value={v.installedOn ?? ""} onChange={(picked) => setV((x) => ({ ...x, installedOn: picked }))} />
           </div>
           <div className="grid gap-1.5">
             <Label>Condition</Label>
@@ -627,11 +629,11 @@ function AccessRuleDialog({
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="rule-from">From (optional)</Label>
-            <Input id="rule-from" type="time" value={v.permittedFrom ?? ""} onChange={text("permittedFrom")} />
+            <TimeSelect id="rule-from" value={v.permittedFrom ?? ""} onChange={(picked) => setV((x) => ({ ...x, permittedFrom: picked }))} />
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="rule-to">To (optional)</Label>
-            <Input id="rule-to" type="time" value={v.permittedTo ?? ""} onChange={text("permittedTo")} />
+            <TimeSelect id="rule-to" value={v.permittedTo ?? ""} onChange={(picked) => setV((x) => ({ ...x, permittedTo: picked }))} />
           </div>
           <div className="grid gap-1.5 sm:col-span-2">
             <Label htmlFor="rule-parking">Parking (optional)</Label>

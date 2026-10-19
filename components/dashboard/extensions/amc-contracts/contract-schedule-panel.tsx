@@ -41,6 +41,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import DateSelect from "@/components/ui/date-select";
 import { todayInDubai } from "@/lib/amc/contracts";
 import { PLANNABLE_STATUSES, VISIT_CHANGE_LABELS, VISIT_STATUS_LABELS, classifyMove, clubbingGroups, windowsOverlap } from "@/lib/amc/ppm";
 import { ACCESS_STATUS_LABELS } from "@/lib/amc/visits";
@@ -202,7 +203,7 @@ export function ContractSchedulePanel({ contractId, schedule }: { contractId: st
     const query = new URLSearchParams(window.location.search);
     if (query.has("visit")) {
       query.delete("visit");
-      window.history.replaceState(null, "", `?${query.toString()}`);
+      window.history.replaceState(window.history.state, "", `?${query.toString()}`);
     }
   };
   /* The dialog keeps its own pending state and shows a failure as a toast; this posts, reloads and closes. */
@@ -754,7 +755,7 @@ function Shell({
 
 function Field({ id, label, hint, children }: { id: string; label: string; hint?: ReactNode; children: ReactNode }) {
   return (
-    <div className="grid gap-2">
+    <div className="grid min-w-0 content-start gap-2">
       <Label htmlFor={id}>{label}</Label>
       {children}
       {hint ? <div className="text-muted-foreground text-xs">{hint}</div> : null}
@@ -809,7 +810,7 @@ function MoveDialog({ open, onOpenChange, visit, confirmed, submit }: BaseProps 
       }
     >
       <Field id="ppm-move-date" label="New date" hint={hint}>
-        <Input id="ppm-move-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+        <DateSelect id="ppm-move-date" value={date} onChange={setDate} />
       </Field>
       <Field id="ppm-move-reason" label={move?.needsReason ? "Reason" : "Reason (optional)"}>
         <Textarea id="ppm-move-reason" rows={3} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} />
@@ -836,6 +837,7 @@ function AddVisitDialog({ open, onOpenChange, lines, windowDays, submit }: BaseP
       onOpenChange={onOpenChange}
       busy={busy}
       title="Add visit"
+      wide
       description="An extra visit for one service, on top of the plan."
       footer={
         <SubmitButton
@@ -864,7 +866,7 @@ function AddVisitDialog({ open, onOpenChange, lines, windowDays, submit }: BaseP
         </Select>
       </Field>
       <Field id="ppm-add-date" label="Date" hint={`The visit gets a ${plural(windowDays, "day")} window from this date.`}>
-        <Input id="ppm-add-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+        <DateSelect id="ppm-add-date" value={date} onChange={setDate} />
       </Field>
       <Field id="ppm-add-reason" label="Reason">
         <Textarea id="ppm-add-reason" rows={3} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} />

@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import DateSelect from "@/components/ui/date-select";
 import { CONTRACT_STATUS_NAMES, MATERIAL_LABELS, expiryFromCommencement, type ContractStatus, type LifecycleAction } from "@/lib/amc/contract-lifecycle";
 import { todayInDubai } from "@/lib/amc/contracts";
 import type { ContractDetail } from "@/modules/amc-contracts/amc-contracts-service";
@@ -306,7 +307,7 @@ function ScanDialog({ open, onOpenChange, data, onDone }: DialogProps & { data: 
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="grid gap-2">
           <Label htmlFor="scan-date">Signed on</Label>
-          <Input id="scan-date" type="date" max={todayInDubai()} value={date} onChange={(e) => setDate(e.target.value)} />
+          <DateSelect id="scan-date" max={todayInDubai()} value={date} onChange={setDate} />
         </div>
         <div className="grid gap-2">
           <Label htmlFor="scan-name">Signed for the client by</Label>
@@ -376,7 +377,7 @@ function ActivateDialog({ open, onOpenChange, data, onDone }: DialogProps & { da
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="grid gap-2">
           <Label htmlFor="act-start">Commencement date</Label>
-          <Input id="act-start" type="date" value={start} onChange={(e) => setStart(e.target.value)} />
+          <DateSelect id="act-start" value={start} onChange={setStart} />
         </div>
         <div className="grid gap-2">
           <Label htmlFor="act-term">Term (months)</Label>
@@ -646,7 +647,7 @@ function TermsDialog({ open, onOpenChange, contractId, entitlement, onDone }: Di
         <div className="grid gap-2">
           <Label htmlFor="terms-material">Materials</Label>
           <Select value={material} onValueChange={(v) => setMaterial(v as keyof typeof MATERIAL_LABELS)}>
-            <SelectTrigger id="terms-material">
+            <SelectTrigger className="w-full" id="terms-material">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

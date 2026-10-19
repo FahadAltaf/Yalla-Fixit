@@ -26,6 +26,7 @@ import {
   PROPERTY_EMBED,
   createAssessment,
   createCustomer,
+  createProperty,
   embeddedClient,
   embeddedProperty,
   getCustomer,
@@ -400,8 +401,9 @@ export async function createEnquiry(admin: Admin, input: CreateEnquiryInput, act
         name: input.newCustomer!.name,
         company: input.newCustomer?.company ?? null,
         customerType: input.newCustomer?.customerType ?? null,
-        phone: blank(input.contactPhone),
-        email: blank(input.contactEmail),
+        phone: blank(input.newCustomer?.phone) ?? blank(input.contactPhone),
+        email: blank(input.newCustomer?.email) ?? blank(input.contactEmail),
+        maherId: blank(input.newCustomer?.maherId),
         lifecycle: "prospect",
         preferredChannel: input.preferredChannel ?? null,
         preferredLanguage: blank(input.preferredLanguage),
@@ -412,12 +414,30 @@ export async function createEnquiry(admin: Admin, input: CreateEnquiryInput, act
     createdCustomer = true;
   }
   if (input.propertyId) await propertyOfCustomer(admin, input.propertyId, customer.id);
+  /* A new property becomes the client's property now, so the site visit can be booked for it. */
+  let propertyId = input.propertyId ?? null;
+  if (!propertyId && input.newProperty) {
+    const property = await createProperty(
+      admin,
+      {
+        customerId: customer.id,
+        label: input.newProperty.label,
+        building: blank(input.newProperty.building),
+        community: blank(input.area),
+        unitType: input.unitType ?? null,
+        propertyCategory: input.propertyCategory ?? null,
+      },
+      actor,
+    );
+    propertyId = property.id;
+  }
 
   const stage = config.enquiries.stages[0] ?? ENQUIRY_STAGE.new;
   const { data, error } = await admin
     .from("amc_enquiries")
     .insert({
       ...enquiryRow(input),
+      property_id: propertyId,
       enquired_at: input.enquiredAt ?? new Date().toISOString(),
       customer_id: customer.id,
       owner_id: ownerId,

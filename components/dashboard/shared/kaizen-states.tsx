@@ -508,6 +508,7 @@ export function useConfirm() {
 export function ActionDialogContent({
   busy = false,
   children,
+  className,
   ...props
 }: React.ComponentProps<typeof DialogContent> & { busy?: boolean }) {
   const block = (event: { preventDefault: () => void }) => {
@@ -520,6 +521,8 @@ export function ActionDialogContent({
       onPointerDownOutside={block}
       onInteractOutside={block}
       {...props}
+      // A long form scrolls inside the screen (a phone included), never sideways.
+      className={cn("max-h-[calc(100dvh-2rem)] overflow-x-hidden overflow-y-auto", className)}
     >
       {children}
     </DialogContent>

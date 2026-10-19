@@ -1,7 +1,7 @@
 import { after } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { FsmConfigError, fsmFetch, fsmGetRecord, getFsmAccessToken } from "@/lib/server/zoho/fsm-client";
+import { FsmConfigError, fsmFetch, fsmGetRecord, getFsmAccessToken, zohoFsmWritesOff } from "@/lib/server/zoho/fsm-client";
 import { fsmMessage } from "@/lib/server/zoho/fsm-contacts";
 import { hasColumn, hasTable } from "@/lib/server/snagging/columns";
 import { ensurePropertyInFsm, isRealAddressId } from "@/lib/server/snagging/fsm-clients";
@@ -56,7 +56,7 @@ export function lineKind(description: string): FsmLineKind {
 }
 
 export function fsmSyncEnabled(): boolean {
-  return (process.env.SNAGGING_FSM_SYNC ?? "").trim().toLowerCase() === "on";
+  return !zohoFsmWritesOff() && (process.env.SNAGGING_FSM_SYNC ?? "").trim().toLowerCase() === "on";
 }
 
 /** Whether the migration that adds the sync's columns has been applied. */

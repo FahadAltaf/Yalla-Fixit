@@ -261,14 +261,21 @@ export function ReviseProposalDialog({
   const [reason, setReason] = useState<VersionReason | "">("");
   const [summary, setSummary] = useState("");
   const [busy, setBusy] = useState(false);
-  const next = (submission.current_version ?? 1) + 1;
+  const current = submission.current_version ?? 1;
+  const next = current + 1;
+  /* Approved, not yet sent: the client has not seen it, so it reopens as a draft of the same version. */
+  const reopen = submission.status === "approved";
 
   const revise = async () => {
     if (!reason) return;
     setBusy(true);
     try {
       const result = await proposalRulesService.revise({ id: submission.id, reason, summary: summary.trim() });
-      toast.success(`V${result.lockedVersionNo} is locked with its document. V${result.versionNo} is open as a draft.`);
+      toast.success(
+        result.reopened
+          ? `Reopened as a draft of V${result.versionNo}. Make the changes and submit it again.`
+          : `V${result.lockedVersionNo} is locked with its document. V${result.versionNo} is open as a draft.`,
+      );
       router.push(`/extensions/amc/${submission.id}/edit?step=2`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not revise the proposal.");
@@ -280,17 +287,26 @@ export function ReviseProposalDialog({
     <Dialog open={open} onOpenChange={(value) => !busy && onOpenChange(value)}>
       <ActionDialogContent busy={busy} className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Revise this proposal</DialogTitle>
+          <DialogTitle>{reopen ? "Revise before sending" : "Revise this proposal"}</DialogTitle>
           <DialogDescription>
-            V{next - 1} is locked with the document the client was sent, and V{next} opens as a draft that goes through approval again; the
-            client&apos;s current link stops working.
+            {reopen ? (
+              <>
+                It has not been sent to the client, so it reopens as a draft of V{current}; no new version is made. After your changes, submit it
+                again: its approval is checked afresh.
+              </>
+            ) : (
+              <>
+                V{next - 1} is locked with the document the client was sent, and V{next} opens as a draft that goes through approval again; the
+                client&apos;s current link stops working.
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-2">
           <div className="grid gap-1.5">
             <Label htmlFor="revise-reason">Why</Label>
             <Select value={reason} onValueChange={(value) => setReason(value as VersionReason)}>
-              <SelectTrigger id="revise-reason" aria-label="Reason for the new version">
+              <SelectTrigger className="w-full" id="revise-reason" aria-label="Reason for the new version">
                 <SelectValue placeholder="Choose a reason" />
               </SelectTrigger>
               <SelectContent>
@@ -315,10 +331,10 @@ export function ReviseProposalDialog({
             onClick={() => void revise()}
             disabled={!reason || summary.trim().length < 5}
             pending={busy}
-            pendingLabel={`Locking V${next - 1}…`}
+            pendingLabel={reopen ? "Reopening…" : `Locking V${next - 1}…`}
             icon={<GitBranch className="size-4" />}
           >
-            Open V{next}
+            {reopen ? "Reopen as draft" : `Open V${next}`}
           </SubmitButton>
         </DialogFooter>
       </ActionDialogContent>

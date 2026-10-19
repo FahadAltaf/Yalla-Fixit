@@ -8,9 +8,8 @@ import { ActionDialogContent, SubmitButton } from "@/components/dashboard/shared
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import DateTimeSelect from "@/components/ui/date-time-select";
 import { CHANNEL_LABELS, PREFERRED_CHANNELS, UNIT_TYPES, UNIT_TYPE_CATEGORY, UNIT_TYPE_LABELS } from "@/lib/amc/client-profile";
 import {
   CLOSED_STAGES,
@@ -21,12 +20,13 @@ import {
   type FollowUpChannel,
 } from "@/lib/amc/enquiries";
 import { cn } from "@/lib/utils";
-import { amcContractsService, type CustomerRecord, type PropertyInput } from "@/modules/amc-contracts/amc-contracts-service";
-import { enquiriesService, type CreateEnquiryInput, type EnquiryMeta, type EnquiryRecord, type UpdateEnquiryInput } from "@/modules/amc-contracts/enquiries-service";
+import { amcContractsService, type PropertyInput } from "@/modules/amc-contracts/amc-contracts-service";
+import { enquiriesService, type EnquiryMeta, type EnquiryRecord, type UpdateEnquiryInput } from "@/modules/amc-contracts/enquiries-service";
 
-import { CustomerSearch, PropertySelect } from "../customer-pickers";
 import { PropertyDialog } from "../customer-property-views";
-import { PersonSelect, fromLocalInput, localInputIn, toLocalInput } from "./enquiry-ui";
+import { AddressDialog, useAddressFormAccess } from "../address-dialog";
+import { EnquiryPropertySelect } from "./enquiry-property-select";
+import { Field, PersonSelect, SimpleSelect, fromLocalInput, localInputIn, toLocalInput } from "./enquiry-ui";
 
 /* ------------------------------------------------------------------ */
 /* Shared bits                                                         */
@@ -72,63 +72,13 @@ function WorkDialog({
   );
 }
 
-function Field({ label, htmlFor, children, className }: { label: string; htmlFor?: string; children: React.ReactNode; className?: string }) {
-  return (
-    <div className={cn("grid gap-2", className)}>
-      <Label htmlFor={htmlFor}>{label}</Label>
-      {children}
-    </div>
-  );
-}
-
-function SimpleSelect({
-  label,
-  value,
-  options,
-  onChange,
-  placeholder = "Choose",
-  allowNone = false,
-}: {
-  label: string;
-  value: string | null | undefined;
-  options: Array<[string, string]>;
-  onChange: (v: string | null) => void;
-  placeholder?: string;
-  allowNone?: boolean;
-}) {
-  return (
-    <Select value={value ?? (allowNone ? "none" : "")} onValueChange={(v) => onChange(v === "none" ? null : v)}>
-      <SelectTrigger className="w-full" aria-label={label}>
-        <SelectValue placeholder={placeholder} />
-      </SelectTrigger>
-      <SelectContent>
-        {allowNone ? <SelectItem value="none">Not set</SelectItem> : null}
-        {options.map(([k, l]) => (
-          <SelectItem key={k} value={k}>
-            {l}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
 /* ------------------------------------------------------------------ */
 /* Log or edit an enquiry (DEV-358)                                    */
 /* ------------------------------------------------------------------ */
 
 type EnquiryDraft = UpdateEnquiryInput & { source: string; contactName: string; need: string };
 
-function draftFrom(e: EnquiryRecord | null, meta: EnquiryMeta): EnquiryDraft {
-  if (!e) {
-    return {
-      source: meta.sources[0] ?? "",
-      contactName: "",
-      need: "",
-      ownerId: meta.me,
-      nextFollowUpAt: fromLocalInput(localInputIn(1, 10)),
-    };
-  }
+function draftFrom(e: EnquiryRecord): EnquiryDraft {
   return {
     source: e.source,
     referrer: e.referrer,
@@ -166,12 +116,12 @@ function cleanDraft(d: EnquiryDraft): EnquiryDraft {
 
 type EnquiryFormProps = {
   meta: EnquiryMeta;
-  /** null = log a new enquiry. */
-  enquiry: EnquiryRecord | null;
-  /** Told about the saved enquiry before the dialog closes (toast, reload or open it). */
+  enquiry: EnquiryRecord;
+  /** Told about the saved enquiry before the dialog closes (toast, reload). */
   onSaved: (saved: EnquiryRecord) => void | Promise<void>;
 };
 
+/** Edit an enquiry. A new one is logged on its own page (New enquiry), as a quotation is. */
 export function EnquiryFormDialog({ open, onOpenChange, ...props }: EnquiryFormProps & { open: boolean; onOpenChange: (open: boolean) => void }) {
   return (
     <WorkDialog open={open} onOpenChange={onOpenChange} className="max-h-[88vh] overflow-y-auto sm:max-w-2xl">
@@ -181,110 +131,27 @@ export function EnquiryFormDialog({ open, onOpenChange, ...props }: EnquiryFormP
 }
 
 function EnquiryForm({ meta, enquiry, onSaved, work, onCancel }: EnquiryFormProps & { work: Work; onCancel: () => void }) {
-  const creating = enquiry === null;
-  const [draft, setDraft] = useState<EnquiryDraft>(() => draftFrom(enquiry, meta));
-  const [clientMode, setClientMode] = useState<"new" | "existing">("new");
-  const [existing, setExisting] = useState<CustomerRecord | null>(null);
-  const [newClient, setNewClient] = useState<{ name: string; customerType: "individual" | "company" | null; company: string }>({
-    name: "",
-    customerType: "individual",
-    company: "",
-  });
+  const [draft, setDraft] = useState<EnquiryDraft>(() => draftFrom(enquiry));
   const set = (patch: Partial<EnquiryDraft>) => setDraft((d) => ({ ...d, ...patch }));
   const referral = /referr/i.test(draft.source);
 
   const save = () =>
     work.run(async () => {
-      const clean = cleanDraft(draft);
-      if (creating) {
-        const input: CreateEnquiryInput = {
-          ...clean,
-          customerId: clientMode === "existing" ? (existing?.id ?? null) : null,
-          newCustomer:
-            clientMode === "new"
-              ? { name: newClient.name.trim(), customerType: newClient.customerType, company: newClient.company.trim() || null }
-              : null,
-        };
-        const { enquiry: saved } = await enquiriesService.create(input);
-        await onSaved(saved);
-      } else {
-        const { enquiry: saved } = await enquiriesService.update(enquiry.id, clean);
-        await onSaved(saved);
-      }
+      const { enquiry: saved } = await enquiriesService.update(enquiry.id, cleanDraft(draft));
+      await onSaved(saved);
     }, "Could not save the enquiry.");
 
-  const clientReady = !creating || (clientMode === "existing" ? !!existing : !!newClient.name.trim());
-  const ready = clientReady && !!draft.contactName.trim() && draft.need.trim().length >= 3 && !!draft.source;
+  const reachable = !!(draft.contactPhone?.trim() || draft.contactEmail?.trim() || draft.contactWhatsapp?.trim());
+  const ready = !!draft.contactName.trim() && reachable && draft.need.trim().length >= 3 && !!draft.source && (!referral || !!draft.referrer?.trim());
 
   return (
     <>
       <DialogHeader>
-        <DialogTitle>{creating ? "New enquiry" : `Edit ${enquiry.enquiryNumber}`}</DialogTitle>
-        <DialogDescription>
-          {creating ? "Logs the enquiry; a new client becomes a prospect record now, so nothing is typed twice later." : "Saves the changes to this enquiry. The stage is changed separately."}
-        </DialogDescription>
+        <DialogTitle>Edit {enquiry.enquiryNumber}</DialogTitle>
+        <DialogDescription>Saves the changes to this enquiry. The stage is changed separately.</DialogDescription>
       </DialogHeader>
 
       <div className="grid gap-6 py-2">
-        {creating ? (
-          <section className="grid gap-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 className="text-sm font-medium">Client</h3>
-              <div className="bg-muted inline-flex w-fit rounded-md p-0.5" role="group" aria-label="Client">
-                {(["new", "existing"] as const).map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    aria-pressed={clientMode === m}
-                    onClick={() => setClientMode(m)}
-                    className={
-                      clientMode === m
-                        ? "bg-background text-foreground rounded px-3 py-1 text-xs font-medium shadow-sm"
-                        : "text-muted-foreground hover:text-foreground rounded px-3 py-1 text-xs font-medium"
-                    }
-                  >
-                    {m === "new" ? "New prospect" : "Existing client"}
-                  </button>
-                ))}
-              </div>
-            </div>
-            {clientMode === "existing" ? (
-              <div className="grid gap-2">
-                <CustomerSearch
-                  selectedId={existing?.id}
-                  onPick={(c) => {
-                    setExisting(c);
-                    set({ contactName: draft.contactName || c.name, contactPhone: draft.contactPhone || c.phone, contactEmail: draft.contactEmail || c.email });
-                  }}
-                />
-                {existing ? <p className="text-muted-foreground text-xs">Linked to {existing.name}.</p> : null}
-              </div>
-            ) : (
-              <div className="grid gap-4 sm:grid-cols-3">
-                <Field label="Client name" htmlFor="enq-client" className="sm:col-span-2">
-                  <Input id="enq-client" value={newClient.name} onChange={(e) => setNewClient((c) => ({ ...c, name: e.target.value }))} maxLength={200} />
-                </Field>
-                <Field label="Type">
-                  <SimpleSelect
-                    label="Client type"
-                    value={newClient.customerType}
-                    options={[
-                      ["individual", "Individual"],
-                      ["company", "Company"],
-                    ]}
-                    onChange={(v) => setNewClient((c) => ({ ...c, customerType: v as "individual" | "company" | null }))}
-                  />
-                </Field>
-                {newClient.customerType === "company" ? (
-                  <Field label="Company" htmlFor="enq-company" className="sm:col-span-3">
-                    <Input id="enq-company" value={newClient.company} onChange={(e) => setNewClient((c) => ({ ...c, company: e.target.value }))} maxLength={200} />
-                  </Field>
-                ) : null}
-              </div>
-            )}
-          </section>
-        ) : null}
-
         <section className="grid gap-4">
           <h3 className="text-sm font-medium">Contact</h3>
           <div className="grid gap-4 sm:grid-cols-2">
@@ -294,11 +161,11 @@ function EnquiryForm({ meta, enquiry, onSaved, work, onCancel }: EnquiryFormProp
             <Field label="Phone" htmlFor="enq-phone">
               <Input id="enq-phone" inputMode="tel" value={draft.contactPhone ?? ""} onChange={(e) => set({ contactPhone: e.target.value })} maxLength={40} />
             </Field>
-            <Field label="WhatsApp" htmlFor="enq-wa">
-              <Input id="enq-wa" inputMode="tel" value={draft.contactWhatsapp ?? ""} onChange={(e) => set({ contactWhatsapp: e.target.value })} maxLength={40} />
-            </Field>
             <Field label="Email" htmlFor="enq-email">
               <Input id="enq-email" type="email" value={draft.contactEmail ?? ""} onChange={(e) => set({ contactEmail: e.target.value })} maxLength={200} />
+            </Field>
+            <Field label="WhatsApp" htmlFor="enq-wa">
+              <Input id="enq-wa" inputMode="tel" value={draft.contactWhatsapp ?? ""} onChange={(e) => set({ contactWhatsapp: e.target.value })} maxLength={40} />
             </Field>
             <Field label="Preferred channel">
               <SimpleSelect
@@ -313,7 +180,7 @@ function EnquiryForm({ meta, enquiry, onSaved, work, onCancel }: EnquiryFormProp
               <Input id="enq-lang" placeholder="English, Arabic…" value={draft.preferredLanguage ?? ""} onChange={(e) => set({ preferredLanguage: e.target.value })} maxLength={40} />
             </Field>
           </div>
-          <p className="text-muted-foreground text-xs">A phone, WhatsApp or email is needed.</p>
+          <p className={cn("text-xs", reachable ? "text-muted-foreground" : "text-warning")}>A phone, WhatsApp or email is needed.</p>
         </section>
 
         <section className="grid gap-4">
@@ -326,16 +193,10 @@ function EnquiryForm({ meta, enquiry, onSaved, work, onCancel }: EnquiryFormProp
               <Field label="Referred by" htmlFor="enq-ref">
                 <Input id="enq-ref" value={draft.referrer ?? ""} onChange={(e) => set({ referrer: e.target.value })} maxLength={200} />
               </Field>
-            ) : (
-              <Field label="Area" htmlFor="enq-area">
-                <Input id="enq-area" placeholder="Community or district" value={draft.area ?? ""} onChange={(e) => set({ area: e.target.value })} maxLength={120} />
-              </Field>
-            )}
-            {referral ? (
-              <Field label="Area" htmlFor="enq-area2">
-                <Input id="enq-area2" placeholder="Community or district" value={draft.area ?? ""} onChange={(e) => set({ area: e.target.value })} maxLength={120} />
-              </Field>
             ) : null}
+            <Field label="Area" htmlFor="enq-area">
+              <Input id="enq-area" placeholder="Community or district" value={draft.area ?? ""} onChange={(e) => set({ area: e.target.value })} maxLength={120} />
+            </Field>
             <Field label="Property type">
               <SimpleSelect
                 label="Property type"
@@ -362,11 +223,9 @@ function EnquiryForm({ meta, enquiry, onSaved, work, onCancel }: EnquiryFormProp
                 onChange={(v) => set({ propertyCategory: v as EnquiryDraft["propertyCategory"] })}
               />
             </Field>
-            {!creating ? (
-              <Field label="Property" className="sm:col-span-2">
-                <PropertySelect customerId={enquiry.customer.id} value={draft.propertyId ?? null} onChange={(p) => set({ propertyId: p?.id ?? null })} />
-              </Field>
-            ) : null}
+            <Field label="Property" className="sm:col-span-2">
+              <EnquiryPropertySelect customerId={enquiry.customer.id} value={draft.propertyId ?? null} onChange={(id) => set({ propertyId: id })} />
+            </Field>
             <Field label="What the client needs" htmlFor="enq-need" className="sm:col-span-2">
               <Textarea id="enq-need" rows={3} value={draft.need} onChange={(e) => set({ need: e.target.value })} maxLength={2000} placeholder="In short: services, units, timing, anything agreed" />
             </Field>
@@ -374,7 +233,7 @@ function EnquiryForm({ meta, enquiry, onSaved, work, onCancel }: EnquiryFormProp
               <PersonSelect label="Owner" people={meta.people} value={draft.ownerId ?? null} onChange={(id) => set({ ownerId: id })} allowNone />
             </Field>
             <Field label="Next follow-up" htmlFor="enq-next">
-              <Input id="enq-next" type="datetime-local" value={toLocalInput(draft.nextFollowUpAt)} onChange={(e) => set({ nextFollowUpAt: fromLocalInput(e.target.value) })} />
+              <DateTimeSelect id="enq-next" value={toLocalInput(draft.nextFollowUpAt)} onChange={(value) => set({ nextFollowUpAt: fromLocalInput(value) })} />
             </Field>
           </div>
         </section>
@@ -385,7 +244,7 @@ function EnquiryForm({ meta, enquiry, onSaved, work, onCancel }: EnquiryFormProp
           Cancel
         </Button>
         <SubmitButton onClick={() => void save()} disabled={!ready} pending={work.working} pendingLabel="Saving…" icon={<Save className="size-4" />}>
-          {creating ? "Log enquiry" : "Save"}
+          Save
         </SubmitButton>
       </DialogFooter>
     </>
@@ -531,7 +390,7 @@ function FollowUpForm({ meta, enquiry, onSave, work, onCancel }: FollowUpProps &
       <div className="grid gap-4 py-2">
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="When" htmlFor="fu-when">
-            <Input id="fu-when" type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
+            <DateTimeSelect id="fu-when" value={when} onChange={setWhen} />
           </Field>
           <Field label="Channel">
             <SimpleSelect label="Channel" value={channel} options={FOLLOW_UP_CHANNELS.map((c) => [c, FOLLOW_UP_CHANNEL_LABELS[c]])} onChange={(v) => setChannel((v as FollowUpChannel) ?? "call")} />
@@ -545,7 +404,7 @@ function FollowUpForm({ meta, enquiry, onSave, work, onCancel }: FollowUpProps &
         </Field>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Next follow-up" htmlFor="fu-next">
-            <Input id="fu-next" type="datetime-local" value={next} onChange={(e) => setNext(e.target.value)} />
+            <DateTimeSelect id="fu-next" value={next} onChange={setNext} />
           </Field>
           <Field label="Move to stage (optional)">
             <SimpleSelect
@@ -603,7 +462,7 @@ type SiteVisitProps = {
 
 export function SiteVisitDialog({ open, onOpenChange, ...props }: SiteVisitProps & { open: boolean; onOpenChange: (open: boolean) => void }) {
   return (
-    <WorkDialog open={open} onOpenChange={onOpenChange} className="max-h-[88vh] overflow-y-auto sm:max-w-md">
+    <WorkDialog open={open} onOpenChange={onOpenChange} className="sm:max-w-lg">
       {(work) => <SiteVisitForm {...props} work={work} onCancel={() => onOpenChange(false)} />}
     </WorkDialog>
   );
@@ -611,10 +470,14 @@ export function SiteVisitDialog({ open, onOpenChange, ...props }: SiteVisitProps
 
 function SiteVisitForm({ meta, enquiry, onSave, work, onCancel }: SiteVisitProps & { work: Work; onCancel: () => void }) {
   const [propertyId, setPropertyId] = useState<string | null>(enquiry.property?.id ?? null);
+  /* A visit needs a complete address (unit, project, type, bedrooms, built-up area). */
+  const [propertyComplete, setPropertyComplete] = useState(false);
   const [when, setWhen] = useState(() => localInputIn(2, 10));
   const [assessorId, setAssessorId] = useState<string | null>(enquiry.owner?.id ?? meta.me);
   const [addingProperty, setAddingProperty] = useState(false);
   const [propertyVersion, setPropertyVersion] = useState(0);
+  /* A new address on the Clients page's form (with the map) when Snagging addresses can be added; the AMC form otherwise. */
+  const addressForm = useAddressFormAccess();
   const scheduledAt = fromLocalInput(when);
 
   return (
@@ -626,27 +489,32 @@ function SiteVisitForm({ meta, enquiry, onSave, work, onCancel }: SiteVisitProps
         </DialogDescription>
       </DialogHeader>
       <div className="grid gap-4 py-2">
-        <Field label="Property">
-          <PropertySelect customerId={enquiry.customer.id} value={propertyId} onChange={(p) => setPropertyId(p?.id ?? null)} refreshKey={propertyVersion} />
-          <Button variant="link" className="h-auto justify-start p-0" onClick={() => setAddingProperty(true)}>
-            Add a property for {enquiry.customer.name}
-          </Button>
+        {/* The client's saved and Zoho FSM addresses, or a new one added here. */}
+        <Field label="Property" hint={`Pick one of ${enquiry.customer.name}'s properties, or add a new one.`}>
+          <EnquiryPropertySelect
+            customerId={enquiry.customer.id}
+            clientName={enquiry.customer.name}
+            requireComplete
+            onCompleteChange={setPropertyComplete}
+            value={propertyId}
+            onChange={setPropertyId}
+            onAddNew={() => setAddingProperty(true)}
+            refreshKey={propertyVersion}
+          />
         </Field>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Date and time" htmlFor="sv-when">
-            <Input id="sv-when" type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
-          </Field>
-          <Field label="Assessor">
-            <PersonSelect label="Assessor" people={meta.people} value={assessorId} onChange={setAssessorId} />
-          </Field>
-        </div>
+        <Field label="Date and time" htmlFor="sv-when">
+          <DateTimeSelect id="sv-when" value={when} onChange={setWhen} />
+        </Field>
+        <Field label="Assessor">
+          <PersonSelect label="Assessor" people={meta.people} value={assessorId} onChange={setAssessorId} />
+        </Field>
       </div>
       <DialogFooter>
         <Button variant="outline" onClick={onCancel} disabled={work.working}>
           Cancel
         </Button>
         <SubmitButton
-          disabled={!propertyId || !scheduledAt || !assessorId}
+          disabled={!propertyId || !propertyComplete || !scheduledAt || !assessorId}
           pending={work.working}
           pendingLabel="Booking…"
           icon={<CalendarPlus className="size-4" />}
@@ -655,7 +523,20 @@ function SiteVisitForm({ meta, enquiry, onSave, work, onCancel }: SiteVisitProps
           Book site visit
         </SubmitButton>
       </DialogFooter>
-      {addingProperty ? (
+      {addressForm ? (
+        <AddressDialog
+          open={addingProperty}
+          onOpenChange={(open) => !open && setAddingProperty(false)}
+          clientId={enquiry.customer.id}
+          clientName={enquiry.customer.name}
+          defaults={{ unitType: enquiry.unitType, propertyCategory: enquiry.propertyCategory, community: enquiry.area }}
+          onSaved={(id) => {
+            setPropertyId(id);
+            setPropertyVersion((v) => v + 1);
+            setAddingProperty(false);
+          }}
+        />
+      ) : addingProperty ? (
         <PropertyDialog
           title={`Add property for ${enquiry.customer.name}`}
           initial={{

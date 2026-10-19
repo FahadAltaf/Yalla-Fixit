@@ -40,7 +40,7 @@ import {
 import type { AmcFormData, AmcPriceListRow } from "../amc-types";
 import { servicesForProperty, type AmcServiceDefinition } from "../amc-settings";
 import { calculateAmcTotals } from "../amc-pricing";
-import { applyPackage, packagesFor } from "@/lib/amc/rate-card";
+import { applyPackage, packagesFor, rateItemFor } from "@/lib/amc/rate-card";
 import {
   PAYMENT_PLAN_LABELS,
   allowedPaymentPlans,
@@ -112,7 +112,10 @@ function standardFixedPriceRates(settings: AmcSettings | null | undefined): stri
 
 export function ServicesPricingStep({ form, catalogue, settings, rules }: StepProps) {
   const card = rules?.rateCard ?? null;
-  const packages = card ? packagesFor(card.card, form.watch("unitType")) : [];
+  const model = form.watch("unitType");
+  const packages = card ? packagesFor(card.card, model) : [];
+  /* The visits a year the card allows per service on this model (BRD 5.3). */
+  const allowedFrequencies = (serviceId: string) => (card ? (rateItemFor(card.card, serviceId, model)?.allowedFrequencies ?? []) : []);
   const discount = form.watch("discountPercent") ?? 0;
   const level = rules ? discountApprovalLevel(rules.approvals, discount) : 0;
   const belowFloor = (form.watch("serviceRows") ?? []).some((row) => row.included && row.belowFloor);
@@ -218,6 +221,7 @@ export function ServicesPricingStep({ form, catalogue, settings, rules }: StepPr
             form={form}
             catalogue={catalogue}
             rateCard={!!card}
+            allowedFrequencies={card ? allowedFrequencies : undefined}
             discountNote={
               rules ? (
                 <p className={`flex items-center gap-1.5 text-xs ${level ? "text-warning" : "text-muted-foreground"}`}>

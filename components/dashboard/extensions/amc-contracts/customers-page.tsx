@@ -1,14 +1,15 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Building2, EllipsisVerticalIcon, FileText, Layers, MapPin, Plus, UserRound, Users } from "lucide-react";
+import { Building2, EllipsisVerticalIcon, FileText, Layers, Loader2, Mail, MapPin, Phone, Plus, UserRound, Users } from "lucide-react";
 import { toast } from "sonner";
 
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
 import { DataTable } from "@/components/data-table";
+import { ClientAddressesDialog } from "@/components/dashboard/snagging/client-addresses-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -18,11 +19,16 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { IdentityCell } from "@/components/ui/entity-avatar";
 import { DataRow, PageHeading } from "@/components/dashboard/shared/kaizen";
 import { ActionDialogContent, ErrorState, ListSkeleton, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
+import { useAuth } from "@/context/AuthContext";
 import { LIFECYCLE_LABELS } from "@/lib/amc/client-profile";
+import { hasResourceAction } from "@/lib/role-permissions";
 import { useDebounce } from "@/hooks/use-debounce";
-import { amcContractsService, type CustomerInput, type CustomerRecord } from "@/modules/amc-contracts/amc-contracts-service";
+import { amcContractsService, type ClientListRow, type CustomerInput, type CustomerRecord } from "@/modules/amc-contracts/amc-contracts-service";
+import type { SnaggingClientOption } from "@/modules/snagging/services/snagging-service";
+import { ActionType, ResourceType } from "@/types/types";
 
 import { AmcNotificationsBell } from "./amc-notifications-bell";
+import { customerForRow } from "./client-picker";
 import { ClientsToolbar } from "./clients-toolbar";
 import { CustomerFields, UNIT_TYPE_LABELS, cleanCustomer } from "./customer-pickers";
 import { useAmcData } from "./use-amc-data";
@@ -40,32 +46,103 @@ const LIFECYCLE_OPTIONS: ReadonlyArray<{ value: LifecycleFilter; label: string }
 
 const clientHref = (id: string, tab?: string) => `/extensions/amc-contracts/customers/${id}${tab ? `?tab=${tab}` : ""}`;
 
+/** A row as Snagging's addresses popup takes it. */
+const asSnaggingClient = (c: CustomerRecord): SnaggingClientOption => ({
+  id: c.id,
+  fsm_contact_id: c.fsmContactId,
+  client_name: c.name,
+  client_email: c.email,
+  client_phone: c.phone,
+  company: c.company,
+});
+
+/** A contact line, or an honest blank where there is nothing to call (as on Snagging). */
+function Contact({ icon: Icon, value }: { icon: typeof Phone; value: string | null }) {
+  if (!value) return <span className="text-muted-foreground text-sm">—</span>;
+  return (
+    <span className="flex min-w-0 items-center gap-2 text-sm">
+      <Icon className="text-muted-foreground size-3.5 shrink-0" aria-hidden />
+      <span className="truncate">{value}</span>
+    </span>
+  );
+}
+
 /**
- * The AMC clients: the same people as Snagging's Clients page, with what
- * AMC keeps about them (Customer ID, status). Searched on the server; the
- * answer is paged here, since the list call has no paging of its own.
+ * The AMC clients: the same table as Snagging's Clients page and the same
+ * records (snagging_clients and snagging_properties), read from Zoho FSM
+ * newest first, ten or more at a time, with what AMC keeps about each one
+ * (Customer ID, status) beside it. AMC's own prospects that FSM does not
+ * have yet are listed on the first page. A status filter is AMC's own
+ * field, so it lists the portal's clients.
  */
 export function CustomersPage() {
   useBreadcrumbLabel("customers", "Clients");
   const router = useRouter();
+  const { userProfile } = useAuth();
+  // The addresses popup is Snagging's own (the same records, edited in one place).
+  const snaggingAddresses = hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.VIEW);
+  const canEditAddresses =
+    hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.CREATE) || hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.EDIT);
+
   const [q, setQ] = useState("");
-  const term = useDebounce(q.trim(), 250);
+  const term = useDebounce(q.trim(), 300);
   const [lifecycle, setLifecycle] = useState<LifecycleFilter>("all");
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
-  const { data, error, loading, reload } = useAmcData(
-    () => amcContractsService.customers(term, lifecycle === "all" ? null : lifecycle, 200),
-    `customers|${term}|${lifecycle}`,
-  );
+  const [rows, setRows] = useState<ClientListRow[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [source, setSource] = useState<"fsm" | "portal">("fsm");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  // The row being linked to the portal before it opens.
+  const [opening, setOpening] = useState<string | null>(null);
   const adding = useDialog();
   const addresses = useDialog<CustomerRecord>();
   const { show: showAddresses } = addresses;
 
-  const all = data?.customers ?? [];
-  const rows = all.slice(page * pageSize, (page + 1) * pageSize);
+  /* Only the latest request may fill the table. */
+  const ticket = useRef(0);
+  const load = useCallback(async () => {
+    const mine = ++ticket.current;
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await amcContractsService.clientsPage({ q: term, page, pageSize, lifecycle: lifecycle === "all" ? null : lifecycle });
+      if (mine !== ticket.current) return;
+      setRows(result.clients);
+      setHasMore(result.hasMore);
+      setSource(result.source);
+    } catch (e) {
+      if (mine === ticket.current) setError(e instanceof Error ? e.message : "Could not load clients.");
+    } finally {
+      if (mine === ticket.current) setLoading(false);
+    }
+  }, [term, page, pageSize, lifecycle]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const rowKey = (row: ClientListRow) => row.fsmContactId ?? row.id ?? row.name;
+
+  /* A client listed from FSM has no portal row until it is used: it is made here (FSM is only read). */
+  const withCustomer = useCallback(async (row: ClientListRow, then: (customer: CustomerRecord) => void) => {
+    const key = row.fsmContactId ?? row.id ?? row.name;
+    setOpening(key);
+    try {
+      const customer = await customerForRow(row);
+      setRows((list) => list.map((r) => ((r.fsmContactId ?? r.id ?? r.name) === key ? { ...r, id: customer.id, customer, customerRef: customer.customerRef, lifecycle: customer.lifecycle } : r)));
+      then(customer);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not open this client.");
+    } finally {
+      setOpening(null);
+    }
+  }, []);
+
   const filtered = Boolean(term) || lifecycle !== "all";
 
-  const columns = useMemo<ColumnDef<CustomerRecord>[]>(
+  const columns = useMemo<ColumnDef<ClientListRow>[]>(
     () => [
       {
         id: "name",
@@ -74,52 +151,66 @@ export function CustomersPage() {
         cell: ({ row }) => (
           <IdentityCell
             title={row.original.name}
-            subtitle={[row.original.email, row.original.phone].filter(Boolean).join(" · ") || "No contact details"}
+            subtitle={[row.original.company || "No company recorded", row.original.customerRef ? `Customer ID ${row.original.customerRef}` : null].filter(Boolean).join(" · ")}
+            seed={row.original.fsmContactId ?? row.original.id ?? row.original.name}
           />
         ),
       },
       {
-        id: "company",
-        header: "Company",
+        id: "phone",
+        header: "Phone",
         enableSorting: false,
-        cell: ({ row }) => (row.original.company ? <span className="text-sm">{row.original.company}</span> : <span className="text-muted-foreground text-sm">—</span>),
+        cell: ({ row }) => <Contact icon={Phone} value={row.original.phone} />,
       },
       {
-        id: "customerRef",
-        header: "Customer ID",
+        id: "email",
+        header: "Email",
         enableSorting: false,
-        cell: ({ row }) =>
-          row.original.customerRef ? <span className="text-sm tabular-nums">{row.original.customerRef}</span> : <span className="text-muted-foreground text-sm">—</span>,
+        cell: ({ row }) => <Contact icon={Mail} value={row.original.email} />,
       },
       {
         id: "lifecycle",
         header: "Status",
         enableSorting: false,
         cell: ({ row }) => (
-          <Badge variant="secondary" className={`border-0 font-medium ${LIFECYCLE_TONE[row.original.lifecycle]}`}>
-            {LIFECYCLE_LABELS[row.original.lifecycle]}
-          </Badge>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {row.original.lifecycle ? (
+              <Badge variant="secondary" className={`border-0 font-medium ${LIFECYCLE_TONE[row.original.lifecycle]}`}>
+                {LIFECYCLE_LABELS[row.original.lifecycle]}
+              </Badge>
+            ) : (
+              <span className="text-muted-foreground text-sm">Not in AMC yet</span>
+            )}
+            {row.original.portalOnly ? (
+              <Badge variant="outline" className="font-medium">
+                Not in FSM yet
+              </Badge>
+            ) : null}
+          </div>
         ),
       },
       {
         id: "addresses",
-        header: "Properties",
+        header: "Addresses",
         enableSorting: false,
-        // Like Snagging's Clients page: the client's addresses open in place.
-        cell: ({ row }) => (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={(event) => {
-              event.stopPropagation();
-              showAddresses(row.original);
-            }}
-            aria-label={`View the properties of ${row.original.name}`}
-          >
-            <MapPin className="size-3.5" aria-hidden />
-            Properties
-          </Button>
-        ),
+        cell: ({ row }) => {
+          const busy = opening !== null && opening === rowKey(row.original);
+          return (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={(event) => {
+                event.stopPropagation();
+                void withCustomer(row.original, showAddresses);
+              }}
+              aria-label={`Addresses for ${row.original.name}`}
+            >
+              {busy ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : <MapPin className="size-3.5" aria-hidden />}
+              Addresses
+            </Button>
+          );
+        },
       },
       {
         id: "actions",
@@ -136,19 +227,19 @@ export function CustomersPage() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => router.push(clientHref(row.original.id))}>
+                <DropdownMenuItem onClick={() => void withCustomer(row.original, (c) => router.push(clientHref(c.id)))}>
                   <UserRound className="size-4" />
                   Open client
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => showAddresses(row.original)}>
+                <DropdownMenuItem onClick={() => void withCustomer(row.original, showAddresses)}>
                   <Building2 className="size-4" />
-                  Properties
+                  Addresses
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => router.push(clientHref(row.original.id, "contacts"))}>
+                <DropdownMenuItem onClick={() => void withCustomer(row.original, (c) => router.push(clientHref(c.id, "contacts")))}>
                   <Users className="size-4" />
                   Contacts
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => router.push(clientHref(row.original.id, "documents"))}>
+                <DropdownMenuItem onClick={() => void withCustomer(row.original, (c) => router.push(clientHref(c.id, "documents")))}>
                   <FileText className="size-4" />
                   Documents
                 </DropdownMenuItem>
@@ -158,15 +249,24 @@ export function CustomersPage() {
         ),
       },
     ],
-    [router, showAddresses],
+    [router, showAddresses, opening, withCustomer],
   );
+
+  const resetPage = <T,>(apply: (value: T) => void) => (value: T) => {
+    apply(value);
+    setPage(0);
+  };
 
   return (
     <div className="flex w-full flex-1 flex-col gap-6">
       <PageHeading
         eyebrow="Master data"
         title="Clients"
-        description="The same clients and addresses as Snagging. Contracts keep what was signed; these records say who the client is today."
+        description={
+          source === "fsm"
+            ? "The same clients and addresses as Snagging, read from Zoho FSM. Contracts keep what was signed; these records say who the client is today."
+            : "The same clients and addresses as Snagging. Contracts keep what was signed; these records say who the client is today."
+        }
         actions={
           <>
             <AmcNotificationsBell className="size-9" />
@@ -178,47 +278,33 @@ export function CustomersPage() {
         }
       />
 
-      {error ? <ErrorState title="Could not load clients" message={error} onRetry={reload} /> : null}
+      {error ? <ErrorState title="Could not load clients" message={error} onRetry={() => void load()} /> : null}
 
       <Card className="py-0">
         <DataTable
           columns={columns}
           data={rows}
           loading={loading}
-          rowCount={all.length}
+          rowCount={0}
+          hasMore={hasMore}
           pageSize={pageSize}
           currentPage={page}
           isPagination
           onPageChange={setPage}
-          onPageSizeChange={(size) => {
-            setPageSize(size);
-            setPage(0);
-          }}
-          onGlobalFilterChange={(value) => {
-            setQ(value);
-            setPage(0);
-          }}
-          handleRowClick={(c) => router.push(clientHref(c.id))}
+          onPageSizeChange={resetPage(setPageSize)}
+          onGlobalFilterChange={resetPage(setQ)}
+          handleRowClick={(row) => void withCustomer(row, (c) => router.push(clientHref(c.id)))}
           toolbar={
             <ClientsToolbar
               search={q}
-              onSearchChange={(value) => {
-                setQ(value);
-                setPage(0);
-              }}
+              onSearchChange={resetPage(setQ)}
               loading={loading || q.trim() !== term}
               statusOptions={LIFECYCLE_OPTIONS}
               status={lifecycle}
-              onStatusChange={(value) => {
-                setLifecycle(value as LifecycleFilter);
-                setPage(0);
-              }}
+              onStatusChange={(value) => resetPage(setLifecycle)(value as LifecycleFilter)}
               pageSize={pageSize}
-              onPageSizeChange={(size) => {
-                setPageSize(size);
-                setPage(0);
-              }}
-              onRefresh={reload}
+              onPageSizeChange={resetPage(setPageSize)}
+              onRefresh={() => void load()}
             />
           }
           emptyState={
@@ -228,7 +314,11 @@ export function CustomersPage() {
               <EmptyState
                 icon={<Users className="size-5" />}
                 title="No client matches that"
-                description="Try part of the name, phone or Customer ID, or another status."
+                description={
+                  source === "fsm" && lifecycle === "all"
+                    ? "Zoho FSM searches the last name, the email and the phone number. Try one of those."
+                    : "Try part of the name, phone or Customer ID, or another status."
+                }
                 action={{
                   label: "Clear filters",
                   variant: "outline",
@@ -243,7 +333,7 @@ export function CustomersPage() {
               <EmptyState
                 icon={<Users className="size-5" />}
                 title="No clients yet"
-                description="Clients come from Snagging and from AMC enquiries. Add one here, or link one from a contract."
+                description="Clients come from Zoho FSM and from AMC enquiries. Add one here, or link one from a contract."
                 action={{ label: "New client", onClick: () => adding.show(true) }}
               />
             )
@@ -256,7 +346,7 @@ export function CustomersPage() {
         open={adding.open}
         onOpenChange={adding.onOpenChange}
         title="New client"
-        description="Only the name is required. Signed contracts keep their own copy of these details."
+        description="Only the name is required. Saved in the portal for now; Zoho FSM is only read."
         submitLabel="Add client"
         initial={{ name: "", lifecycle: "client" }}
         onSave={async (input) => {
@@ -266,7 +356,16 @@ export function CustomersPage() {
         }}
       />
 
-      <ClientPropertiesDialog customer={addresses.target} open={addresses.open} onOpenChange={addresses.onOpenChange} />
+      {snaggingAddresses ? (
+        <ClientAddressesDialog
+          client={addresses.open && addresses.target ? asSnaggingClient(addresses.target) : null}
+          canEdit={canEditAddresses}
+          onClose={() => addresses.onOpenChange(false)}
+          onChanged={() => undefined}
+        />
+      ) : (
+        <ClientPropertiesDialog customer={addresses.target} open={addresses.open} onOpenChange={addresses.onOpenChange} />
+      )}
     </div>
   );
 }

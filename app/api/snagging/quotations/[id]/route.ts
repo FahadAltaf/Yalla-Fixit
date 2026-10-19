@@ -12,7 +12,7 @@ import {
 } from "@/lib/server/snagging/change-history";
 import { hasColumn, hasQuotationNotes } from "@/lib/server/snagging/columns";
 import { signMediaPaths } from "@/lib/server/snagging/media";
-import { fsmClientsReady, updateClientWithFsm } from "@/lib/server/snagging/fsm-clients";
+import { fsmClientWritesReady, updateClientWithFsm } from "@/lib/server/snagging/fsm-clients";
 import { queueFsmSync, syncQuotationNow } from "@/lib/server/snagging/fsm-quotation-sync";
 import { resolveClient } from "@/lib/server/snagging/client";
 import {
@@ -473,7 +473,7 @@ export async function PATCH(
         saved below -- a Zoho problem never blocks editing a quotation.
       */
       let savedThroughFsm = false;
-      if (await fsmClientsReady(admin)) {
+      if (await fsmClientWritesReady(admin)) {
         const { data: current } = await admin
           .from("snagging_clients")
           .select("name, email, phone, fsm_contact_id")
