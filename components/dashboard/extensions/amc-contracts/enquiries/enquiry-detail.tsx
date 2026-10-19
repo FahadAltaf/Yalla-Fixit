@@ -973,7 +973,7 @@ export function EnquiryDetail({ id }: { id: string }) {
             enquiry={e}
             onSave={async (input) =>
               after(
-                "Follow-up logged",
+                input.moveToStage ? `Follow-up logged. Moved to ${input.moveToStage}.` : "Follow-up logged",
                 await enquiriesService.addFollowUp(e.id, input),
               )
             }

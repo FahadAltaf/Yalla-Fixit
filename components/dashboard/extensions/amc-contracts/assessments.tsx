@@ -55,6 +55,7 @@ import { amcContractsService, type AssessmentRecord, type CustomerRecord } from 
 import { AmcNotificationsBell } from "./amc-notifications-bell";
 import { AssessmentPhotos } from "./assessment-photos";
 import { CustomerSearch, UNIT_TYPE_LABELS } from "./customer-pickers";
+import { UNIT_TYPE_CATEGORY } from "@/lib/amc/client-profile";
 import { PropertyDialog } from "./customer-property-views";
 import { formatContractDate, formatDateTime } from "./contract-status";
 import { AddressDialog, useAddressFormAccess } from "./address-dialog";
@@ -579,8 +580,9 @@ export function AssessmentDetail({ id }: { id: string }) {
     }
   };
 
+  /* From the latest draft, so quick taps on several items do not overwrite one another. */
   const setItem = (itemKey: string, patch: Partial<Draft["items"][number]>) =>
-    draft && setDraft({ ...draft, items: draft.items.map((i) => (i.itemKey === itemKey ? { ...i, ...patch } : i)) });
+    setDraft((d) => (d ? { ...d, items: d.items.map((i) => (i.itemKey === itemKey ? { ...i, ...patch } : i)) } : d));
   const categories = draft ? [...new Map(draft.items.map((i) => [i.categoryKey, i.categoryLabel])).entries()] : [];
   const services = catalogue.data?.catalogue ?? [];
   const answered = summary ? summary.total - summary.unanswered : 0;
@@ -844,7 +846,10 @@ export function AssessmentDetail({ id }: { id: string }) {
                       ]}
                       onChange={(v) => setDraft({ ...draft, occupancy: v })}
                     />
-                    <Field label="Bedrooms" type="number" editable={editable} value={draft.bedrooms?.toString() ?? ""} onChange={(v) => setDraft({ ...draft, bedrooms: v === "" ? null : Number(v) })} />
+                    {/* Bedrooms describe a home; a shop or office is sized by its area. */}
+                    {(UNIT_TYPE_CATEGORY[draft.unitType as keyof typeof UNIT_TYPE_CATEGORY] ?? draft.propertyCategory) !== "commercial" ? (
+                      <Field label="Bedrooms" type="number" editable={editable} value={draft.bedrooms?.toString() ?? ""} onChange={(v) => setDraft({ ...draft, bedrooms: v === "" ? null : Number(v) })} />
+                    ) : null}
                     <Field label="Size (sq ft)" type="number" editable={editable} value={draft.sizeSqft?.toString() ?? ""} onChange={(v) => setDraft({ ...draft, sizeSqft: v === "" ? null : Number(v) })} />
                   </div>
                   <div className="grid gap-4 lg:grid-cols-2">

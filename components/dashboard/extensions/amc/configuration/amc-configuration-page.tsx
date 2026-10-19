@@ -186,7 +186,7 @@ function show(value: unknown): string {
 
 function ConfigHistory({ data }: { data: AmcConfigResponse }) {
   return (
-    <SectionCard icon={<History />} title="Change history" description="Who changed what, when, with the old and new values (BRD 5.3, 6.9)." bodyClassName="border-t">
+    <SectionCard icon={<History />} title="Change history" description="Who changed what, when, with the old and new values." bodyClassName="border-t">
       {data.history.length === 0 ? (
         <EmptyState icon={<History />} title="No changes yet" description="Every section shows its default until someone saves it." />
       ) : (

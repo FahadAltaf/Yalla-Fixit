@@ -662,13 +662,21 @@ export async function scheduleSiteVisit(
 ): Promise<{ assessmentId: string; enquiry: EnquiryRecord }> {
   const current = await getEnquiry(admin, id, config);
   if (CLOSED_STAGES.includes(current.stage)) throw new ContractError(`The enquiry is ${current.stage}. Reopen it first.`, 409);
-  await propertyOfCustomer(admin, input.propertyId, current.customer.id);
+  const property = await propertyOfCustomer(admin, input.propertyId, current.customer.id);
   const assessorName = await personName(admin, input.assessorId);
 
   const assessment = await createAssessment(admin, { customerId: current.customer.id, propertyId: input.propertyId, assessorName }, actor);
   const { error } = await admin
     .from("amc_assessments")
-    .update({ enquiry_id: id, scheduled_at: input.scheduledAt, assessor_id: input.assessorId, assessor_name: assessorName, updated_at: new Date().toISOString() })
+    .update({
+      enquiry_id: id,
+      scheduled_at: input.scheduledAt,
+      assessor_id: input.assessorId,
+      assessor_name: assessorName,
+      /* The assessor sees the property's access rules (gate pass, lift, hours) without opening it. */
+      access_notes: property.accessConstraints ?? null,
+      updated_at: new Date().toISOString(),
+    })
     .eq("id", assessment.id);
   if (error) throw fail(error);
 

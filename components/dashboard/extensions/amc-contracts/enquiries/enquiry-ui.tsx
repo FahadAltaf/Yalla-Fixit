@@ -193,6 +193,7 @@ export function SimpleSelect({
   onChange,
   placeholder = "Choose",
   allowNone = false,
+  noneLabel = "Not set",
 }: {
   label: string;
   value: string | null | undefined;
@@ -200,6 +201,8 @@ export function SimpleSelect({
   onChange: (v: string | null) => void;
   placeholder?: string;
   allowNone?: boolean;
+  /** What the empty choice is called ("Stay where it is" for a stage move). */
+  noneLabel?: string;
 }) {
   return (
     <Select value={value ?? (allowNone ? "none" : "")} onValueChange={(v) => onChange(v === "none" ? null : v)}>
@@ -207,7 +210,7 @@ export function SimpleSelect({
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent>
-        {allowNone ? <SelectItem value="none">Not set</SelectItem> : null}
+        {allowNone ? <SelectItem value="none">{noneLabel}</SelectItem> : null}
         {options.map(([k, l]) => (
           <SelectItem key={k} value={k}>
             {l}

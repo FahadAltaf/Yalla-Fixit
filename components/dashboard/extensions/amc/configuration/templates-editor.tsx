@@ -69,14 +69,14 @@ export function TemplatesEditor({
     {
       kind: "email",
       title: "Emails",
-      description: "BRD 6.1. Sent from the portal. Email 4 is a draft until the companion workbook text arrives.",
+      description: "Sent from the portal. Email 4 is a draft until the companion workbook text arrives.",
       icon: <Mail />,
     },
     {
       kind: "message",
       title: "WhatsApp and SMS messages",
       description:
-        "BRD 6.3. The portal prepares the text and the coordinator sends it from WhatsApp (SMS as the fallback). Drafts until the companion workbook text arrives.",
+        "The portal prepares the text and the coordinator sends it from WhatsApp (SMS as the fallback). Drafts until the companion workbook text arrives.",
       icon: <MessageCircle />,
     },
   ];

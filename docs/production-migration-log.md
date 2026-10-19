@@ -37,5 +37,6 @@ Rules: one file at a time; pre-check first; never `supabase db push` on producti
 | 27 | 20261012130000 | amc_client_report.sql (Phase 12) | | | | Post-check §19, open AMC Proposals | Apply after row 26 |
 | 28 | 20261012140000 | amc_renewal_outcomes_and_amendments.sql (Phase 13; inserts into role_access) | | | | Post-check §20, open Permissions and AMC Proposals | |
 | 29 | 20261013100000 | amc_status_history_triggers.sql (Phase 14) | | | | Post-check §21, open AMC Proposals | Apply after rows 21, 22 and 25 |
+| 30 | 20261019100000 | amc_version_lock_approved.sql (revise an approved proposal before sending into V2) | | | | Post-check in the file header; revise an approved proposal, Versions shows V1 locked and V2 | Live-safe: replaces one AMC-only function |
 
 **Held until release (Group B, do not apply):** 20261005160000, 20261005170000, 20261005180000, 20261006160000.

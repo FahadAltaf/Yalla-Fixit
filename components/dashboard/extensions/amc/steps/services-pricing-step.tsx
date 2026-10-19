@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { AlertTriangle, BadgePercent, ListChecks, Plus, SlidersHorizontal, Trash2, UserRound, Wallet } from "lucide-react";
 import type { UseFormReturn } from "react-hook-form";
 
@@ -40,7 +41,8 @@ import {
 import type { AmcFormData, AmcPriceListRow } from "../amc-types";
 import { servicesForProperty, type AmcServiceDefinition } from "../amc-settings";
 import { calculateAmcTotals } from "../amc-pricing";
-import { applyPackage, packagesFor, rateItemFor } from "@/lib/amc/rate-card";
+import { applyPackage, nearestAllowedFrequency, packagesFor, rateItemFor, type RatePackage } from "@/lib/amc/rate-card";
+import { Label } from "@/components/ui/label";
 import {
   PAYMENT_PLAN_LABELS,
   allowedPaymentPlans,
@@ -110,6 +112,109 @@ function standardFixedPriceRates(settings: AmcSettings | null | undefined): stri
   return rates.length > 0 ? rates : CLAUSE_6_3_HANDYMAN.rates.map((rate) => rate.text);
 }
 
+type CardInForce = NonNullable<NonNullable<ProposalRules["rateCard"]>>["card"];
+
+/**
+ * A brochure package (BRD 5.3: Essential, Advantage, Premium, Complete, or
+ * build your own): picking one ticks its services with their units and
+ * visits a year. It shows the package the lines match, what it holds, and
+ * any of its lines the card cannot price on this property, so a package is
+ * never chosen blind.
+ */
+function PackageField({
+  form,
+  packages,
+  catalogue,
+  card,
+  model,
+}: {
+  form: UseFormReturn<AmcFormData>;
+  packages: RatePackage[];
+  catalogue: ReadonlyArray<AmcServiceDefinition>;
+  card: CardInForce;
+  model: string;
+}) {
+  const rows = form.watch("serviceRows") ?? [];
+  /* "Build your own" chosen on purpose, rather than read from the lines. */
+  const [ownChosen, setOwnChosen] = useState(false);
+  const label = (id: string) => catalogue.find((c) => c.id === id)?.label ?? id;
+  const isFree = (id: string) => catalogue.find((c) => c.id === id)?.includedFree === true;
+  const allowedFor = (id: string) => rateItemFor(card, id, model)?.allowedFrequencies ?? [];
+
+  /* The package the ticked lines are (frequencies as the card allows them). */
+  const matching =
+    packages.find((p) => {
+      const lines = new Map(p.lines.map((l) => [l.serviceId, l]));
+      const ticked = rows.filter((r) => r.included && !r.free);
+      return (
+        p.lines.every((l) => {
+          const row = rows.find((r) => r.serviceId === l.serviceId);
+          return Boolean(row?.included) && (isFree(l.serviceId) || (row!.units === l.units && row!.frequency === nearestAllowedFrequency(allowedFor(l.serviceId), l.frequency)));
+        }) && ticked.every((r) => lines.has(r.serviceId))
+      );
+    }) ?? null;
+  const value = ownChosen || !matching ? "own" : matching.id;
+  const shown = value === "own" ? null : matching;
+  /* Lines the card cannot price here: the proposal would not submit with them. */
+  const unpriced = shown ? shown.lines.filter((l) => !isFree(l.serviceId) && !rateItemFor(card, l.serviceId, model)).map((l) => label(l.serviceId)) : [];
+
+  return (
+    <div className="grid gap-2 sm:max-w-xl">
+      <Label htmlFor="amc-package">Package</Label>
+      <Select
+        value={value}
+        onValueChange={(id) => {
+          if (id === "own") {
+            setOwnChosen(true);
+            return;
+          }
+          const pkg = packages.find((p) => p.id === id);
+          if (!pkg) return;
+          setOwnChosen(false);
+          form.setValue("serviceRows", applyPackage(form.getValues("serviceRows"), pkg), { shouldValidate: true, shouldDirty: true });
+        }}
+      >
+        <SelectTrigger id="amc-package" className="w-full">
+          <SelectValue placeholder="Build your own" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="own">Build your own</SelectItem>
+          {packages.map((p) => (
+            <SelectItem key={p.id} value={p.id}>
+              {p.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {shown ? (
+        <div className="grid gap-1.5 rounded-md border px-3 py-2 text-xs">
+          {shown.description ? <p className="text-muted-foreground">{shown.description}</p> : null}
+          <ul className="grid gap-1">
+            {shown.lines.map((l) => (
+              <li key={l.serviceId} className="flex flex-wrap items-baseline justify-between gap-2">
+                <span className="font-medium">{label(l.serviceId)}</span>
+                <span className="text-muted-foreground tabular-nums">
+                  {isFree(l.serviceId)
+                    ? "Included"
+                    : `${l.units} unit${l.units === 1 ? "" : "s"} · ${nearestAllowedFrequency(allowedFor(l.serviceId), l.frequency)} a year`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <p className="text-muted-foreground text-xs">Tick the services yourself, or pick a package to fill them in.</p>
+      )}
+      {unpriced.length ? (
+        <p className="text-destructive text-xs">
+          {unpriced.join(", ")} {unpriced.length === 1 ? "has" : "have"} no rate on the card for this property, so the proposal cannot be submitted
+          with {unpriced.length === 1 ? "it" : "them"}. Untick {unpriced.length === 1 ? "it" : "them"}, or ask for the rate card to be updated.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 export function ServicesPricingStep({ form, catalogue, settings, rules }: StepProps) {
   const card = rules?.rateCard ?? null;
   const model = form.watch("unitType");
@@ -175,31 +280,14 @@ export function ServicesPricingStep({ form, catalogue, settings, rules }: StepPr
           </p>
         </div>
         {card ? (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/30 px-3 py-2 text-xs">
+          <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs">
             <span className="text-muted-foreground">
               Rate card V{card.versionNo}, in force since {card.effectiveFrom.split("-").reverse().join("/")}. Promotions in date are applied.
             </span>
-            {packages.length ? (
-              <Select
-                value=""
-                onValueChange={(id) => {
-                  const pkg = packages.find((p) => p.id === id);
-                  if (pkg) form.setValue("serviceRows", applyPackage(form.getValues("serviceRows"), pkg), { shouldValidate: true });
-                }}
-              >
-                <SelectTrigger size="sm" className="w-[200px]" aria-label="Apply a package">
-                  <SelectValue placeholder="Apply a package" />
-                </SelectTrigger>
-                <SelectContent>
-                  {packages.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>
-                      {p.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            ) : null}
           </div>
+        ) : null}
+        {card && packages.length ? (
+          <PackageField form={form} packages={packages} catalogue={catalogue} card={card.card} model={model} />
         ) : null}
         <div className="space-y-4">
           {/* FR1.4 — villa-only services stay hidden for apartments and

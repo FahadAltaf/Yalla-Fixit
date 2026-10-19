@@ -134,7 +134,7 @@ export function ApprovalsAndSendsPanel({ submission }: { submission: AmcSubmissi
       <SectionCard
         icon={<ShieldCheck />}
         title="Approval ladder"
-        description="On sharing, the discount, the value, the payment plan and floor rates are checked; each crossed rule names the level that must approve, in sequence."
+        description="On submitting, the discount, the value, the payment plan and floor rates are checked; each crossed rule names the level that must approve, in sequence."
         bodyClassName="border-t"
       >
         {rounds.length === 0 ? (
@@ -190,7 +190,7 @@ export function ApprovalsAndSendsPanel({ submission }: { submission: AmcSubmissi
         )}
       </SectionCard>
 
-      <SectionCard icon={<Send />} title="Sends" description="Every share: channel, recipients, version, who and when (BRD 5.6)." bodyClassName="border-t">
+      <SectionCard icon={<Send />} title="Sends" description="Every share: channel, recipients, version, who and when." bodyClassName="border-t">
         {sendLog.length === 0 ? (
           <p className="text-muted-foreground px-5 py-4 text-sm">Not shared yet.</p>
         ) : (
@@ -254,6 +254,14 @@ export function RecordClientAnswerDialog({
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
 
+  /* What still stops Record, said under the form rather than left to a greyed-out button. */
+  const missing = [
+    !answer && "the answer",
+    clientName.trim().length < 2 && "who answered",
+    answer && answer !== "approved" && !note.trim() && (answer === "revision_requested" ? "what they want changed" : "why they declined"),
+    !file && "the evidence",
+  ].filter(Boolean) as string[];
+
   const record = async () => {
     if (!answer || !file) return;
     setBusy(true);
@@ -290,7 +298,9 @@ export function RecordClientAnswerDialog({
         </DialogHeader>
         <div className="grid gap-4 py-2">
           <div className="grid gap-1.5">
-            <Label htmlFor="answer-choice">Answer</Label>
+            <Label htmlFor="answer-choice">
+              Answer <span className="text-destructive">*</span>
+            </Label>
             <Select value={answer} onValueChange={(v) => setAnswer(v as ClientAnswer)}>
               <SelectTrigger className="w-full" id="answer-choice" aria-label="Answer">
                 <SelectValue placeholder="Choose" />
@@ -305,19 +315,32 @@ export function RecordClientAnswerDialog({
             </Select>
           </div>
           <div className="grid gap-1.5">
-            <Label htmlFor="answer-name">Who answered</Label>
+            <Label htmlFor="answer-name">
+              Who answered <span className="text-destructive">*</span>
+            </Label>
             <Input id="answer-name" value={clientName} onChange={(e) => setClientName(e.target.value)} maxLength={200} />
           </div>
           {answer && answer !== "approved" ? (
             <div className="grid gap-1.5">
-              <Label htmlFor="answer-note">{answer === "revision_requested" ? "What they want changed" : "Why they declined"}</Label>
+              <Label htmlFor="answer-note">
+                {answer === "revision_requested" ? "What they want changed" : "Why they declined"} <span className="text-destructive">*</span>
+              </Label>
               <Textarea id="answer-note" rows={3} value={note} onChange={(e) => setNote(e.target.value)} maxLength={1000} />
             </div>
           ) : null}
           <div className="grid gap-1.5">
-            <Label htmlFor="answer-file">Evidence (PDF, image, Word)</Label>
+            <Label htmlFor="answer-file">
+              Evidence (PDF, image, Word) <span className="text-destructive">*</span>
+            </Label>
             <Input id="answer-file" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.docx" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+            <p className="text-muted-foreground text-xs">The email, a screenshot of the WhatsApp chat, or a signed page.</p>
           </div>
+          {answer === "approved" ? (
+            <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
+              This is final: the proposal is locked as approved, the client&apos;s link closes and the contract is created from it.
+            </p>
+          ) : null}
+          {missing.length ? <p className="text-muted-foreground text-xs">To record it, add {missing.join(", ")}.</p> : null}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
@@ -330,7 +353,7 @@ export function RecordClientAnswerDialog({
             pendingLabel="Recording…"
             icon={<FileUp className="size-4" />}
           >
-            Record
+            {answer === "approved" ? "Record approval" : "Record"}
           </SubmitButton>
         </DialogFooter>
       </ActionDialogContent>

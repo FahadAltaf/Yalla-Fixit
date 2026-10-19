@@ -410,9 +410,11 @@ function FollowUpForm({ meta, enquiry, onSave, work, onCancel }: FollowUpProps &
             <SimpleSelect
               label="Move to stage"
               allowNone
+              noneLabel="Stay where it is"
               placeholder="Stay where it is"
               value={moveTo}
-              options={meta.stages.filter((s) => s !== enquiry.stage && s !== ENQUIRY_STAGE.lost).map((s) => [s, s])}
+              /* Lost needs its reason and Won comes from the client accepting: both go through Change stage. */
+              options={meta.stages.filter((s) => s !== enquiry.stage && s !== ENQUIRY_STAGE.lost && s !== ENQUIRY_STAGE.won).map((s) => [s, s])}
               onChange={setMoveTo}
             />
           </Field>

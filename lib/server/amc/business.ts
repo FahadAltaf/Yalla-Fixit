@@ -49,6 +49,7 @@ import { priceSubmission } from "@/lib/server/amc/pricing";
 import { readAmcSettings } from "@/lib/server/amc/settings";
 import { fsmFetch, getFsmAccessToken, FsmConfigError } from "@/lib/server/zoho/fsm-client";
 import { servicesForProperty } from "@/components/dashboard/extensions/amc/amc-settings";
+import { listScope } from "@/lib/server/amc/client-profile";
 
 /**
  * AMC business operations on the server: shared customers and properties
@@ -250,6 +251,20 @@ function mapProperty(r: Row): PropertyRecord {
     accessConstraints: str(r.access_constraints),
     parentPropertyId: str(r.parent_property_id),
   };
+}
+
+/**
+ * The address a proposal prints: the street address, then the building,
+ * community and city when it does not already say them, so a unit saved
+ * as just "Villa 12" still reads as a place.
+ */
+export function proposalAddress(p: Pick<PropertyRecord, "label" | "address" | "building" | "community" | "city">): string {
+  const parts: string[] = [];
+  for (const part of [p.address ?? p.label, p.building, p.community, p.city]) {
+    const value = part?.trim();
+    if (value && !parts.some((x) => x.toLowerCase().includes(value.toLowerCase()))) parts.push(value);
+  }
+  return parts.join(", ");
 }
 
 /** Characters that would break a PostgREST or() filter. */
@@ -1370,13 +1385,21 @@ export async function deleteDraftAssessment(admin: Admin, who: Visibility, id: s
  */
 export async function createProposalFromAssessment(admin: Admin, id: string, actor: Actor) {
   const a = await getAssessment(admin, id);
-  const [customer, property, settings, card, config] = await Promise.all([
+  const [customer, property, settings, card, config, scope, enquiry] = await Promise.all([
     a.customer ? getCustomer(admin, a.customer.id) : Promise.resolve(null),
     a.property ? getProperty(admin, a.property.id) : Promise.resolve(null),
     readAmcSettings(admin),
     rateCardInForce(admin),
     readAmcConfig(admin),
+    /* The visits a year agreed in the property's scope, for the lines the visit recommends. */
+    a.property ? listScope(admin, a.property.id).catch(() => ({ items: [] })) : Promise.resolve({ items: [] }),
+    /* The person the client named on the enquiry, as the coordination contact. */
+    a.enquiryId
+      ? admin.from("amc_enquiries").select("contact_name, contact_phone, contact_whatsapp").eq("id", a.enquiryId).maybeSingle<Row>().then((r) => r.data ?? null)
+      : Promise.resolve(null),
   ]);
+  const scopeFrequency = new Map<string, number>();
+  for (const item of scope.items) if (item.active && item.frequencyPerYear) scopeFrequency.set(item.serviceId, item.frequencyPerYear);
   /* Phase 4: the full property type, priced on its rate model (a clinic as an office). */
   const propertyType = property?.unitType ?? a.unitType ?? null;
   const category = property?.propertyCategory ?? a.propertyCategory;
@@ -1398,9 +1421,10 @@ export async function createProposalFromAssessment(admin: Admin, id: string, act
     offered.map((s) => ({ id: s.id, frequencyPerYear: s.frequencyPerYear ?? null })),
   );
   if (!prefill.ok) throw new ContractError(prefill.error, prefill.status);
+  const lines = prefill.services.map((s) => (s.included && scopeFrequency.has(s.serviceId) ? { ...s, frequency: Math.trunc(scopeFrequency.get(s.serviceId)!) } : s));
   const priced = priceSubmission({
-    /* Each line at a frequency the card allows (the service default may say 1). */
-    services: card ? snapToCardFrequencies(prefill.services, card.card, prefill.property.unitType) : prefill.services,
+    /* Each line at a frequency the card allows (the scope or the service default may say 1). */
+    services: card ? snapToCardFrequencies(lines, card.card, prefill.property.unitType) : lines,
     discountPercent: 0,
     unitType: prefill.property.unitType,
     settings,
@@ -1425,8 +1449,23 @@ export async function createProposalFromAssessment(admin: Admin, id: string, act
       ...extra,
       owner_id: actor.id,
       status: "draft",
-      property: propertyType ? { ...prefill.property, propertyType } : prefill.property,
-      customer: { ...prefill.customer, paymentTerms: legacyTermsForPlan(plan) },
+      property: {
+        ...prefill.property,
+        ...(property ? { propertyAddress: proposalAddress(property) } : {}),
+        ...(propertyType ? { propertyType } : {}),
+      },
+      customer: {
+        ...prefill.customer,
+        paymentTerms: legacyTermsForPlan(plan),
+        coordinationContacts: [
+          {
+            name: str(enquiry?.contact_name) ?? customer?.name ?? "",
+            phone: str(enquiry?.contact_phone) ?? str(enquiry?.contact_whatsapp) ?? customer?.phone ?? "",
+            designation: property?.occupancy === "tenant" ? "tenant" : "owner",
+          },
+          { name: "", phone: "", designation: "owner" },
+        ],
+      },
       document_options: {
         optionalSections: { supplyInstallPriceList: false, additionalFixedPriceServices: false },
         priceListRows: [],

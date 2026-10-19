@@ -71,7 +71,7 @@ function RoleTemplatesCard({ isAdmin }: { isAdmin: boolean }) {
     <SectionCard
       icon={<ShieldCheck />}
       title="AMC roles"
-      description="BRD 4 and 6.7: the AMC team's roles as permission sets. Technicians work in the FSM app and need no AMC role; admins already have everything. Every role stays editable in Roles and Permissions."
+      description="The AMC team's roles as permission sets. Technicians work in the FSM app and need no AMC role; admins already have everything. Every role stays editable in Roles and Permissions."
       bodyClassName="border-t"
       action={
         isAdmin && toDo.length > 0 ? (

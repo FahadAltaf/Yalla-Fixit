@@ -1035,7 +1035,7 @@ function HistoryTab({ versions, label }: { versions: RateCardVersion[]; label: (
   /* Newest first; each compared with the one published before it. */
   const entries = versions.map((v, index) => ({ v, changes: diffRateCards(versions[index + 1]?.card ?? emptyRateCard(), v.card, label) }));
   return (
-    <SectionCard title="History" icon={<History />} description="Every published version: who, when, from which date, why, and each old and new value (BRD 5.3)." bodyClassName="border-t">
+    <SectionCard title="History" icon={<History />} description="Every published version: who, when, from which date, why, and each old and new value." bodyClassName="border-t">
       {entries.length === 0 ? (
         <EmptyState icon={<History />} title="Nothing published yet" description="Each version appears here once it is published, with every value it changed." />
       ) : (

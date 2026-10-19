@@ -118,7 +118,7 @@ export function ProposalVersionsPanel({ submission }: { submission: AmcSubmissio
       <SectionCard
         icon={<History />}
         title="Versions"
-        description="A change after the client has seen the proposal makes a new version. Earlier versions are locked with the document the client was sent."
+        description="Revising a proposal once it is approved or sent makes a new version. Earlier versions are locked with their document: what was approved, or what the client was sent."
         bodyClassName="border-t"
       >
         <ul className="divide-y">
@@ -263,8 +263,8 @@ export function ReviseProposalDialog({
   const [busy, setBusy] = useState(false);
   const current = submission.current_version ?? 1;
   const next = current + 1;
-  /* Approved, not yet sent: the client has not seen it, so it reopens as a draft of the same version. */
-  const reopen = submission.status === "approved";
+  /* Approved, not yet sent: V1 is kept as approved (it was never sent) and V2 opens. */
+  const approvedUnsent = submission.status === "approved";
 
   const revise = async () => {
     if (!reason) return;
@@ -287,12 +287,12 @@ export function ReviseProposalDialog({
     <Dialog open={open} onOpenChange={(value) => !busy && onOpenChange(value)}>
       <ActionDialogContent busy={busy} className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{reopen ? "Revise before sending" : "Revise this proposal"}</DialogTitle>
+          <DialogTitle>{approvedUnsent ? "Revise before sending" : "Revise this proposal"}</DialogTitle>
           <DialogDescription>
-            {reopen ? (
+            {approvedUnsent ? (
               <>
-                It has not been sent to the client, so it reopens as a draft of V{current}; no new version is made. After your changes, submit it
-                again: its approval is checked afresh.
+                V{current} is locked as it was approved (it was never sent), and V{next} opens as a draft. After your changes, submit V{next}: its
+                approval is checked afresh.
               </>
             ) : (
               <>
@@ -331,10 +331,10 @@ export function ReviseProposalDialog({
             onClick={() => void revise()}
             disabled={!reason || summary.trim().length < 5}
             pending={busy}
-            pendingLabel={reopen ? "Reopening…" : `Locking V${next - 1}…`}
+            pendingLabel={`Locking V${next - 1}…`}
             icon={<GitBranch className="size-4" />}
           >
-            {reopen ? "Reopen as draft" : `Open V${next}`}
+            Open V{next}
           </SubmitButton>
         </DialogFooter>
       </ActionDialogContent>

@@ -160,8 +160,9 @@ export async function reviseProposal(
   const { data, error } = await admin.from("amc_submissions").select("*").eq("id", input.id).maybeSingle<SubmissionRow>();
   if (error) throw new ContractError(error.message, 500);
   if (!data) throw new ContractError("Not found", 404);
-  if (reopensInPlace(data.status)) return reopenApproved(admin, data, input, actor);
-  if (!(REVISABLE_STATUSES as readonly string[]).includes(data.status)) {
+  /* Approved and not yet sent: versioned like a shared one (20261019100000), V1 kept as approved. */
+  const approvedUnsent = reopensInPlace(data.status);
+  if (!approvedUnsent && !(REVISABLE_STATUSES as readonly string[]).includes(data.status)) {
     throw new ContractError(`A proposal that is ${data.status.replace(/_/g, " ")} has not been shared, so it is edited in place.`, 409);
   }
   const lockedVersionNo = Number(data.current_version ?? 1);
@@ -178,7 +179,7 @@ export async function reviseProposal(
     model,
     `<p class="archive">Version V${lockedVersionNo} of proposal ${esc(number)}, locked on ${esc(lockedOn)} when V${lockedVersionNo + 1} was opened (${esc(
       VERSION_REASON_LABELS[input.reason],
-    )}). Content SHA-256: ${esc(contentSha)}</p>`,
+    )}).${approvedUnsent ? " It was approved internally and never sent to the client." : ""} Content SHA-256: ${esc(contentSha)}</p>`,
   );
   const pdf = await (opts.renderPdf ?? renderPdf)(html);
   const file = pdf ?? new TextEncoder().encode(html);
@@ -203,6 +204,8 @@ export async function reviseProposal(
   });
   if (lockError) {
     await admin.storage.from(AMC_DOCUMENTS_BUCKET).remove([path]);
+    /* Before 20261019100000 the lock refuses an approved proposal: it is reopened in place instead. */
+    if (approvedUnsent && lockError.code === "23514") return reopenApproved(admin, data, input, actor);
     if (isMissingFunction(lockError) || isMissingTable(lockError)) throw new ContractError(VERSIONS_NOT_MIGRATED, 503);
     if (lockError.code === "40001") throw new ContractError("Someone else revised this proposal a moment ago. Reload it.", 409);
     if (lockError.code === "23514") throw new ContractError(lockError.message.replace(/^amc_version:\s*/, ""), 409);
@@ -233,10 +236,10 @@ export async function reviseProposal(
 }
 
 /**
- * Revise an approved proposal before it is sent: the client has not seen
- * it, so there is no version to lock. It goes back to a draft of the same
- * version, its approval cleared, and is submitted again after the changes,
- * when the approval triggers are checked afresh (a new approval round).
+ * Revise an approved proposal before it is sent, while the version lock
+ * still refuses an approved one (before 20261019100000): it goes back to a
+ * draft of the same version, its approval cleared, and is submitted again
+ * after the changes, when the approval triggers are checked afresh.
  */
 async function reopenApproved(
   admin: Admin,

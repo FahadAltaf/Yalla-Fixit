@@ -752,7 +752,7 @@ function OperationsBody({ r }: { r: OperationalReport }) {
       <div className="grid gap-6 xl:grid-cols-2">
         <ReportTable
           title="Visits by month"
-          description="Visits planned in the period by status, with the confirmation attempts made (BRD 6.9)."
+          description="Visits planned in the period by status, with the confirmation attempts made."
           icon={<CalendarCheck />}
           name="visits-by-month"
           columns={VISIT_MONTH_COLUMNS}

@@ -7,7 +7,7 @@ import { todayInDubai } from "@/lib/amc/contracts";
 import { CLOSED_STAGES, siteVisitRequired } from "@/lib/amc/enquiries";
 import { defaultPaymentPlan, legacyTermsForPlan, rateModelFor } from "@/lib/amc/proposal-rules";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
-import { getCustomer, getProperty } from "@/lib/server/amc/business";
+import { getCustomer, getProperty, proposalAddress } from "@/lib/server/amc/business";
 import { listScope } from "@/lib/server/amc/client-profile";
 import { ContractError } from "@/lib/server/amc/contracts";
 import { getEnquiry, linkEnquiryProposal } from "@/lib/server/amc/enquiries";
@@ -99,13 +99,17 @@ export async function createProposalFromEnquiry(admin: Admin, enquiryId: string,
   /* The lines: the visit's recommendations and counts, else the property's scope. */
   let source: ProposalFromEnquiry["source"] = "none";
   const wanted = new Map<string, { units: number; frequency: number | null }>();
+  const { items } = await listScope(admin, property.id);
+  const active = items.filter((i) => i.active);
   if (visit) {
     source = "site_visit";
     const counts = (visit.asset_counts ?? {}) as Record<string, number>;
-    for (const id of (visit.recommended_service_ids as string[] | null) ?? []) wanted.set(id, { units: Math.max(1, Math.trunc(Number(counts[id] ?? 1))), frequency: null });
+    /* Units as counted on site; visits a year as agreed in the scope, when it has them. */
+    const scopeFrequency = new Map(active.filter((i) => i.frequencyPerYear).map((i) => [i.serviceId, i.frequencyPerYear as number]));
+    for (const id of (visit.recommended_service_ids as string[] | null) ?? []) {
+      wanted.set(id, { units: Math.max(1, Math.trunc(Number(counts[id] ?? 1))), frequency: scopeFrequency.get(id) ?? null });
+    }
   } else {
-    const { items } = await listScope(admin, property.id);
-    const active = items.filter((i) => i.active);
     if (active.length) source = "scope";
     for (const item of active) {
       const prev = wanted.get(item.serviceId);
@@ -146,7 +150,7 @@ export async function createProposalFromEnquiry(admin: Admin, enquiryId: string,
     property: {
       propertyCategory: category ?? (model === "office" ? "commercial" : "residential"),
       unitType: model,
-      propertyAddress: property.address ?? property.label,
+      propertyAddress: proposalAddress(property),
       propertyDetail: property.label,
       ...(propertyType ? { propertyType } : {}),
     },

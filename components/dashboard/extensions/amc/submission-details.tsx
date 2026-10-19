@@ -140,6 +140,8 @@ function buildTimelineFromEvents(
     const payload = event.payload ?? {};
     const resend = payload.resend === true;
     const viaLink = payload.deliver === "link";
+    /* Prepared for WhatsApp: the link is live and the owner sends it from WhatsApp; no email is involved. */
+    const viaWhatsapp = payload.deliver === "whatsapp";
     const to = typeof payload.to === "string" ? payload.to : null;
 
     switch (event.type) {
@@ -176,12 +178,15 @@ function buildTimelineFromEvents(
         /* Marked sent with a working link, but the email did not go. */
         const notEmailed =
           !viaLink &&
+          !viaWhatsapp &&
           (payload.outcome === "no_recipient" ||
             payload.outcome === "email_failed" ||
             payload.emailed === false);
         steps.push({
           label: viaLink
             ? `${doc} link ${resend ? "created again" : "created"}${by(event)}`
+            : viaWhatsapp
+              ? `${doc} shared on WhatsApp${resend ? " again" : ""}${by(event)}`
             : notEmailed
               ? `${doc} marked as sent, but the email was not delivered${by(event)}`
               : `${doc} ${resend ? "emailed again" : "emailed to the client"}${by(event)}`,
@@ -190,7 +195,7 @@ function buildTimelineFromEvents(
             ? payload.outcome === "no_recipient"
               ? "No client email on the proposal; the link can be copied instead"
               : `${to ? `To ${to}. ` : ""}${typeof payload.error === "string" ? payload.error : "Delivery failed"}`
-            : !viaLink && to
+            : !viaLink && !viaWhatsapp && to
               ? `To ${to}`
               : null,
           tone: notEmailed ? "bad" : undefined,
@@ -215,7 +220,7 @@ function buildTimelineFromEvents(
         break;
       case "proposal_rejected_by_client":
         steps.push({
-          label: `${event.actor || "The client"} asked for changes`,
+          label: `${event.actor || "The client"} declined the proposal`,
           at: event.at,
           note: event.note,
           tone: "bad",
@@ -394,6 +399,12 @@ const STAGE: Record<
   signed: { next: "Signed by the client", tone: "good" },
 };
 
+/* A rejected proposal is either declined or sent back for changes; the reason says which (link and manual answers both prefix it). */
+const REVISION_PREFIX = "Revision requested: ";
+function clientAskedForChanges(reason: string | null | undefined): boolean {
+  return Boolean(reason?.startsWith(REVISION_PREFIX));
+}
+
 /* The contract's length in months, counting the last day as a whole day. */
 function termMonths(start?: string, end?: string): number | null {
   if (!start || !end) return null;
@@ -518,7 +529,9 @@ export function SubmissionDetails({
       ? { ...baseStage, next: `Approved. ${sender} sends it to the client` }
       : sender && submission.status === "proposal_approved"
         ? { ...baseStage, next: `Client accepted. ${sender} sends the contract` }
-        : baseStage;
+        : submission.status === "proposal_rejected" && !clientAskedForChanges(submission.client_rejected_reason)
+          ? { ...baseStage, next: "The client declined it. Revise it to send again" }
+          : baseStage;
   const months = termMonths(form.startDate, form.endDate);
   /* Oldest first is how a trail is read; newest first is how it is
      checked. The job page offers both, so this does too. */
@@ -593,8 +606,10 @@ export function SubmissionDetails({
       : submission.status === "proposal_rejected" && submission.client_rejected_reason
         ? {
           tone: "bad" as const,
-          title: `The client asked for changes${submission.client_decided_by_name ? ` (${submission.client_decided_by_name})` : ""}`,
-          body: submission.client_rejected_reason,
+          title: `${clientAskedForChanges(submission.client_rejected_reason) ? "The client asked for changes" : "The client declined the proposal"}${submission.client_decided_by_name ? ` (${submission.client_decided_by_name})` : ""}`,
+          body: clientAskedForChanges(submission.client_rejected_reason)
+            ? submission.client_rejected_reason.slice(REVISION_PREFIX.length)
+            : submission.client_rejected_reason,
         }
         : submission.below_floor && (submission.status === "draft" || submission.status === "sent_back" || awaiting)
           ? {
@@ -666,7 +681,7 @@ export function SubmissionDetails({
                 revisable
                   ? {
                       /* Approved and not sent: it reopens as a draft of the same version. */
-                      label: submission.status === "approved" ? "Revise before sending" : `Revise (V${(submission.current_version ?? 1) + 1})`,
+                      label: `${submission.status === "approved" ? "Revise before sending" : "Revise"} (V${(submission.current_version ?? 1) + 1})`,
                       onSelect: () => setReviseOpen(true),
                     }
                   : null

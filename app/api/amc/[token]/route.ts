@@ -368,8 +368,13 @@ export async function POST(
       });
     });
 
+    /* The row was read before client_answer was written: say the answer just given, or a change request reads as declined. */
+    const answered = toPublicStatus(data as unknown as Row, kind);
+    if (body.action !== "sign") {
+      answered.answer = body.action === "approve" ? "approved" : body.action === "reject" ? "rejected" : "revision_requested";
+    }
     return NextResponse.json(
-      { data: toPublicStatus(data as unknown as Row, kind) },
+      { data: answered },
       { headers: { "Cache-Control": "no-store", "X-Robots-Tag": "noindex" } },
     );
   } catch (error) {

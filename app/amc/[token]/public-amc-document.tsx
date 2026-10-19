@@ -7,6 +7,7 @@ import {
   FileSignature,
   Loader2,
   MessageSquareWarning,
+  PencilLine,
 } from "lucide-react";
 import { saveAs } from "file-saver";
 
@@ -268,7 +269,7 @@ export function PublicAmcDocument({ token }: { token: string }) {
             disabled={busy}
             onClick={() => start("revision")}
           >
-            <MessageSquareWarning className="size-4" /> Request a change
+            <PencilLine className="size-4" /> Request a change
           </Button>
           <Button className="flex-1 sm:flex-none" disabled={busy} onClick={() => start("approve")}>
             <CheckCircle2 className="size-4" /> Approve proposal
@@ -294,8 +295,11 @@ export function PublicAmcDocument({ token }: { token: string }) {
           label: termFeeLabel(termMonths),
           value: formatCurrencyAED(doc.finalPrice),
           hint: [
+            /* The server sends the plan's label ("Single payment"); only an older proposal sends monthly/quarterly/annual. */
             doc.paymentTerms &&
-              `Paid ${formatPaymentTermsLabel(doc.paymentTerms as "monthly" | "quarterly" | "annual", termMonths).toLowerCase()}`,
+              (doc.paymentTerms === "monthly" || doc.paymentTerms === "quarterly" || doc.paymentTerms === "annual"
+                ? `Paid ${formatPaymentTermsLabel(doc.paymentTerms, termMonths).toLowerCase()}`
+                : doc.paymentTerms),
             "excl. 5% VAT",
           ]
             .filter(Boolean)
@@ -320,7 +324,9 @@ export function PublicAmcDocument({ token }: { token: string }) {
                     ? `Sign ${numbered}?`
                     : action === "approve"
                       ? `Approve ${numbered}?`
-                      : `Reject ${numbered}?`}
+                      : action === "revision"
+                        ? `Request a change to ${numbered}?`
+                        : `Reject ${numbered}?`}
               </DialogTitle>
               <DialogDescription>
                 {step === "name"

@@ -102,7 +102,7 @@ export function AssetsPanel({ propertyId, canEdit }: { propertyId: string; canEd
     <SectionCard
       icon={<Wrench />}
       title="Asset register"
-      description={`Type, location, make, model, serial number and condition (BRD 5.2). ${activeUnits ? `${activeUnits} active unit(s).` : ""}`}
+      description={`Type, location, make, model, serial number and condition. ${activeUnits ? `${activeUnits} active ${activeUnits === 1 ? "unit" : "units"}.` : ""}`}
       bodyClassName="border-t"
       action={
         <div className="flex items-center gap-2">
@@ -351,8 +351,9 @@ function AssetDialog({
               </SelectTrigger>
               <SelectContent>
                 {ASSET_CONDITIONS.map((c) => (
-                  <SelectItem key={c} value={c} className="capitalize">
-                    {c}
+                  /* Capitalised in the text itself: the trigger shows the item text, not its class. */
+                  <SelectItem key={c} value={c}>
+                    {c.charAt(0).toUpperCase() + c.slice(1)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -448,7 +449,7 @@ export function AccessRulesPanel({ propertyId, canEdit }: { propertyId: string; 
     <SectionCard
       icon={<KeyRound />}
       title="Access rules"
-      description="What a visit needs before it can happen: gate pass, permits, security clearance, lift booking, keys (BRD 5.9). Visits show each rule and its status."
+      description="What a visit needs before it can happen: gate pass, permits, security clearance, lift booking, keys. Visits show each rule and its status."
       bodyClassName="border-t"
       action={
         canAdd ? (
@@ -723,7 +724,7 @@ export function ScopePanel({ propertyId, canEdit }: { propertyId: string; canEdi
     <SectionCard
       icon={<ClipboardList />}
       title="Scope"
-      description="The services this property needs, by trade, with frequency, duration, preferred months or days and exclusions (BRD 5.2). Captured once; the proposal and the PPM schedule reuse it."
+      description="The services this property needs, by trade, with frequency, duration, preferred months or days and exclusions. Captured once; the proposal and the PPM schedule reuse it."
       bodyClassName="border-t"
       action={
         canAdd ? (
@@ -752,13 +753,14 @@ export function ScopePanel({ propertyId, canEdit }: { propertyId: string; canEdi
         />
       ) : (
         <div className="overflow-x-auto">
-          <Table className="min-w-[760px]">
+          <Table className="min-w-[840px]">
             <TableHeader className="[&_th]:text-muted-foreground">
               <TableRow className="hover:bg-transparent">
                 <TableHead className="pl-5">Service</TableHead>
                 <TableHead>Trade</TableHead>
                 <TableHead className="text-right">Qty</TableHead>
                 <TableHead className="text-right">Visits / year</TableHead>
+                <TableHead className="text-right">Per visit</TableHead>
                 <TableHead>Preferred</TableHead>
                 <TableHead>Exclusions</TableHead>
                 <TableHead className="w-12 pr-5" />
@@ -776,6 +778,13 @@ export function ScopePanel({ propertyId, canEdit }: { propertyId: string; canEdi
                     <TableCell>{TRADE_LABELS[i.trade as keyof typeof TRADE_LABELS] ?? i.trade}</TableCell>
                     <TableCell className="text-right tabular-nums">{i.quantity}</TableCell>
                     <TableCell className="text-right tabular-nums">{i.frequencyPerYear ?? "—"}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {i.durationMinutes
+                        ? i.durationMinutes >= 60
+                          ? `${Math.floor(i.durationMinutes / 60)} h${i.durationMinutes % 60 ? ` ${i.durationMinutes % 60} min` : ""}`
+                          : `${i.durationMinutes} min`
+                        : "—"}
+                    </TableCell>
                     <TableCell className="text-sm">
                       {[i.preferredMonths.length ? i.preferredMonths.map((m) => MONTHS[m - 1]).join(", ") : null, i.preferredDays.length ? i.preferredDays.map((d) => WEEKDAY_SHORT[d]).join(", ") : null]
                         .filter(Boolean)
