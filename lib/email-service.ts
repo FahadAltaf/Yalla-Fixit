@@ -1,5 +1,35 @@
 import { TODO_STATUS_LABELS, Todo } from "@/types/types";
 import { clientEmailHtml, escapeEmailHtml } from "@/lib/email-brand";
+import { mentionsToPlainText } from "@/lib/todos/mentions";
+
+/**
+ * FR-17: the email a user gets when a comment @-mentions them. A pure
+ * builder, so server routes can send it in process (lib/server/send-email.ts)
+ * and `emailService.sendTodoMentionEmail` can send it over HTTP.
+ */
+export function buildTodoMentionEmail(
+  todo: Pick<Todo, "todo_key" | "title">,
+  authorName: string,
+  commentBody: string,
+): { subject: string; html: string } {
+  const subject = `${authorName} mentioned you — ${todo.todo_key}`;
+  const todoUrl = `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3032"}/todos?todo=${encodeURIComponent(todo.todo_key)}`;
+  const excerpt = mentionsToPlainText(commentBody);
+  const html = clientEmailHtml({
+    eyebrow: "Todos",
+    // The builder escapes the heading itself; paragraphs are trusted HTML.
+    heading: `${authorName} mentioned you in a comment`,
+    paragraphs: [
+      escapeEmailHtml(excerpt.length > 1200 ? `${excerpt.slice(0, 1200)}…` : excerpt).replace(/\n/g, "<br>"),
+    ],
+    details: [
+      { label: "ID", value: todo.todo_key },
+      { label: "Title", value: todo.title },
+    ],
+    cta: { label: "Open the todo", url: todoUrl },
+  });
+  return { subject, html };
+}
 
 interface EmailOptions {
   to?: string | string[];
@@ -24,6 +54,10 @@ export const emailService = {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({ to, subject, html, cc, attachment }),
+          // FR-18: a mail endpoint that hangs must not hold a todo save open
+          // until the platform times it out; a timeout here becomes a
+          // rejected promise, which callers turn into a warning.
+          signal: AbortSignal.timeout(15_000),
         }
       );
       const data = await response.json();
@@ -279,6 +313,15 @@ export const emailService = {
     });
 
     return emailService.sendEmail({ to: email, subject, html });
+  },
+
+  sendTodoMentionEmail: async (
+    email: string,
+    todo: Pick<Todo, "todo_key" | "title">,
+    authorName: string,
+    commentBody: string,
+  ) => {
+    return emailService.sendEmail({ to: email, ...buildTodoMentionEmail(todo, authorName, commentBody) });
   },
 
   sendTodoReminderEmail: async (emails: string[], todo: Todo) => {

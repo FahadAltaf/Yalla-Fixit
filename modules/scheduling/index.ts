@@ -3,8 +3,10 @@ export type { TechnicianReference, TechnicianAttributeUpdate } from "./services/
 export { rolesService, serviceTypesService } from "./services/attributes-service";
 export { tagsService } from "./services/tags-service";
 export { leaveService } from "./services/leave-service";
+export { leaveTypesService } from "./services/leave-types-service";
 export type {
   LeaveCreateInput,
+  LeaveCreateResult,
   LeaveUpdateInput,
   LeaveFilters,
   AssignmentConflict,

@@ -33,10 +33,10 @@ export async function POST(req: NextRequest) {
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
-      return NextResponse.json(
-        { error: error.message || "GraphQL query failed" },
-        { status: response.status },
-      );
+      const message = error.message || error.error || "GraphQL query failed";
+      // Logged here because the browser only ever sees the status code.
+      console.error(`GraphQL upstream ${response.status}:`, message, "query:", String(query).trim().slice(0, 80));
+      return NextResponse.json({ error: message }, { status: response.status });
     }
 
     const result = await response.json();

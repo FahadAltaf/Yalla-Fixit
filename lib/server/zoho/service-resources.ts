@@ -76,6 +76,47 @@ function buildDisplayNamer(resources: Resource[]) {
   };
 }
 
+/*
+  FR-23: technician_reference.deactivated_at records the first sync that
+  found a technician inactive, and is cleared if FSM reactivates them. Two
+  cheap set-based updates after the roster is written; they never touch
+  is_active, which stays the source of truth. The column arrives with
+  migration 20261020130000; until it is applied the update answers 42703
+  (undefined column) and the stamp is simply skipped.
+*/
+const MISSING_COLUMN_CODES = new Set(["42703", "PGRST204"]);
+
+async function stampDeactivatedAt(
+  admin: Awaited<ReturnType<typeof createAdminServerClient>>,
+  now: string,
+  newlyInactiveIds: string[],
+) {
+  // Only a transition seen in THIS run is stamped. Technicians who were
+  // already inactive when the column arrived keep NULL: a stamp of today
+  // would read as a resignation date that is months wrong.
+  if (newlyInactiveIds.length > 0) {
+    const { error: setError } = await admin
+      .from("technician_reference")
+      .update({ deactivated_at: now })
+      .in("fsm_resource_id", newlyInactiveIds)
+      .is("deactivated_at", null);
+    if (setError) {
+      if (!MISSING_COLUMN_CODES.has(setError.code)) {
+        console.error("[zoho:syncFsmTechnicians] deactivated_at set error:", setError);
+      }
+      return;
+    }
+  }
+  const { error: clearError } = await admin
+    .from("technician_reference")
+    .update({ deactivated_at: null })
+    .eq("is_active", true)
+    .not("deactivated_at", "is", null);
+  if (clearError && !MISSING_COLUMN_CODES.has(clearError.code)) {
+    console.error("[zoho:syncFsmTechnicians] deactivated_at clear error:", clearError);
+  }
+}
+
 // Pulls the technician roster from FSM and upserts public.technician_reference.
 export async function syncFsmTechnicians(): Promise<FsmResult> {
   try {
@@ -117,6 +158,13 @@ export async function syncFsmTechnicians(): Promise<FsmResult> {
     if (resources.length > 0) {
       const now = new Date().toISOString();
       const displayNameFor = buildDisplayNamer(resources);
+
+      // FR-23: who was active before this run, so a true-to-false change
+      // can be stamped below.
+      const { data: priorRows } = await admin.from("technician_reference").select("fsm_resource_id, is_active");
+      const wasActive = new Set(
+        (priorRows ?? []).filter((r: { is_active: boolean }) => r.is_active).map((r: { fsm_resource_id: string }) => r.fsm_resource_id),
+      );
 
       const { error: upsertError } = await admin.from("technician_reference").upsert(
         resources.map((r) => ({
@@ -167,6 +215,12 @@ export async function syncFsmTechnicians(): Promise<FsmResult> {
           }
         }
       }
+
+      const newlyInactive = [
+        ...resources.filter((r) => !r.isActive).map((r) => r.fsmResourceId),
+        ...removed.referenced,
+      ].filter((id) => wasActive.has(id));
+      await stampDeactivatedAt(admin, now, newlyInactive);
     }
 
     return fsmOk({ resources, removed });

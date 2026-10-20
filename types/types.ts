@@ -15,6 +15,9 @@ export interface User {
   status?: string;
   // When TRUE, this user receives the "schedule needs approval" email.
   receives_schedule_approval_email?: boolean;
+  // FR-20: when TRUE, a task this user owns and is the only assignee of is
+  // private to them (hidden from everyone else, admins included).
+  is_task_manager?: boolean;
 
   settings?: {
     edges: {
@@ -165,6 +168,8 @@ export interface TodoComment {
   created_at: string;
   updated_at?: string;
   author?: User;
+  // FR-17: ids of the users this comment @-mentions (stored as data).
+  mentions?: string[];
 }
 
 export interface TodoUpdateLog {
@@ -207,6 +212,35 @@ export interface Todo {
   assignees?: User[];
   comments?: TodoComment[];
   updates?: TodoUpdateLog[];
+  // FR-17: everyone @-mentioned in this todo's comments. A mention grants
+  // read and comment access while the comment exists.
+  mentioned_user_ids?: string[];
+  // FR-17 point 7: those mentioned by the owner; only they can open a private todo.
+  owner_mentioned_user_ids?: string[];
+  // FR-16: how many files are attached (the list itself loads with the dialog).
+  attachment_count?: number;
+}
+
+// FR-16: one file attached to a todo. `signed_url` is minted per read and
+// lives for an hour; it is never stored.
+export interface TodoAttachment {
+  id: string;
+  todo_id: string;
+  // Set when the file was posted with a comment; null for a file on the task.
+  comment_id?: string | null;
+  uploaded_by: string | null;
+  file_name: string;
+  content_type: string;
+  size_bytes: number;
+  created_at: string;
+  uploader?: {
+    id: string;
+    email?: string | null;
+    first_name?: string | null;
+    last_name?: string | null;
+    full_name?: string | null;
+  } | null;
+  signed_url: string | null;
 }
 
 export const TODO_STATUS_LABELS: Record<TodoStatus, string> = {
@@ -269,6 +303,20 @@ export interface TechnicianReference {
   // Team-arranged row order on the schedule board ("Custom" sort). Null =
   // not arranged yet.
   board_position?: number | null;
+  // FR-23: first FSM sync that found the technician inactive. Null while active.
+  deactivated_at?: string | null;
+}
+
+// FR-21: one option of the managed leave-type list (lookup_options,
+// list_key 'leave_type'). leave_records.leave_type holds the NAME as text,
+// so deleting an option retires it: past records keep their text, the
+// dropdown stops offering it.
+export interface LeaveType {
+  id: string;
+  name: string;
+  sort_order: number;
+  // Leave records (any status) that carry this name, case-insensitive.
+  record_count?: number;
 }
 
 export interface TechnicianTag {
