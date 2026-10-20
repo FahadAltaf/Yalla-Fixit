@@ -1,20 +1,4 @@
-import {
-  GET_ALL_ROLES,
-  GET_ROLE_BY_ID,
-  GET_ROLES_WITH_ACCESS,
-  GET_ROLES_PAGINATED,
-  SEARCH_ROLES,
-  GET_ROLE_BY_NAME,
-  CREATE_ROLE,
-  UPDATE_ROLE,
-  DELETE_ROLE,
-  GET_ROLE_ACCESS,
-  CREATE_ROLE_ACCESS,
-  DELETE_ROLE_ACCESS,
-  DELETE_ROLE_ACCESS_BY_ROLE,
-} from "./roles-graphql";
-import { executeGraphQLBackend } from "@/lib/graphql-server";
-import { v4 as uuidv4 } from "uuid";
+import { executeRESTBackend } from "@/lib/rest-server";
 import { Role, RoleAccess } from "@/types/types";
 
 // Type for role with access permissions
@@ -26,39 +10,20 @@ interface RoleWithAccess extends Role {
   }>;
 }
 
+/*
+  Every call goes to /api/roles or /api/role-access, which check the
+  signed-in user (Roles / Permissions rights; admins always pass) and write
+  with the service role. These used to be pg_graphql requests with the
+  public anon key: anyone could create a role, rename one, or grant a role
+  any permission.
+*/
 export const rolesService = {
   /**
    * Get all roles
    */
-  getAllRoles: async () => {
+  getAllRoles: async (): Promise<Role[]> => {
     try {
-      /*
-        Walked, not fetched once. pg_graphql caps a collection at its
-        default page size unless `first` is given, and this returned only
-        that first page -- silently, so a role added past the cap simply
-        did not exist for the pickers.
-
-        The ceiling is a guard against an unbounded loop, not a real limit;
-        a deployment with more roles than this has other problems.
-      */
-      const PAGE = 100;
-      const MAX_PAGES = 50;
-      const roles: Role[] = [];
-      let after: string | null = null;
-
-      for (let page = 0; page < MAX_PAGES; page += 1) {
-        const data = await executeGraphQLBackend(GET_ALL_ROLES, {
-          first: PAGE,
-          after,
-        });
-        const collection = data?.rolesCollection;
-        roles.push(
-          ...(collection?.edges ?? []).map((edge: { node: Role }) => edge.node),
-        );
-        if (!collection?.pageInfo?.hasNextPage) break;
-        after = collection.pageInfo.endCursor;
-      }
-
+      const { roles } = await executeRESTBackend<{ roles: Role[] }>("/api/roles");
       return roles;
     } catch (error) {
       console.error("Error fetching roles:", error);
@@ -70,42 +35,16 @@ export const rolesService = {
    * Get a role by ID
    */
   getRoleById: async (id: string): Promise<Role | null> => {
-    try {
-      const data = await executeGraphQLBackend<{ roles_by_pk: Role }>(GET_ROLE_BY_ID, {
-        id,
-      });
-      return data.roles_by_pk;
-    } catch (error) {
-      console.error(`Error fetching role with ID ${id}:`, error);
-      return null;
-    }
+    const roles = await rolesService.getAllRoles();
+    return roles.find((r) => r.id === id) ?? null;
   },
 
   /**
-   * Get roles with their access permissions
+   * Get roles with their access permissions (Permissions: View)
    */
   getRolesWithAccess: async (): Promise<RoleWithAccess[]> => {
     try {
-      const data = await executeGraphQLBackend(GET_ROLES_WITH_ACCESS);
-
-      // Transform the data to match the expected format
-      const roles = data.rolesCollection.edges.map(
-        (edge: {
-          node: {
-            role_accessCollection: { edges: Array<{ node: RoleAccess }> };
-          };
-        }) => {
-          const node = edge.node;
-          return {
-            ...node,
-            role_access:
-              node?.role_accessCollection?.edges.map(
-                (accessEdge: { node: RoleAccess }) => accessEdge.node
-              ) || [],
-          };
-        }
-      );
-
+      const { roles } = await executeRESTBackend<{ roles: RoleWithAccess[] }>("/api/roles", { params: { op: "withAccess" } });
       return roles;
     } catch (error) {
       console.error("Error fetching roles with access:", error);
@@ -116,90 +55,30 @@ export const rolesService = {
   /**
    * Get paginated roles with search
    */
-  getPaginatedRoles: async (
-    search = "",
-    page = 0,
-    pageSize = 10
-  ): Promise<{ roles: Role[]; total: number }> => {
-    try {
-      const offset = page * pageSize;
-      const searchPattern = `%${search}%`;
-
-      const data = await executeGraphQLBackend(GET_ROLES_PAGINATED, {
-        limit: pageSize,
-        offset: offset,
-      });
-
-      return {
-        roles: data.rolesCollection.edges.map(
-          (edge: { node: Role }) => edge.node
-        ),
-        total: data.rolesCollection.edges.length,
-      };
-    } catch (error) {
-      console.error("Error fetching paginated roles:", error);
-      return { roles: [], total: 0 };
-    }
+  getPaginatedRoles: async (search = "", page = 0, pageSize = 10): Promise<{ roles: Role[]; total: number }> => {
+    const all = await rolesService.searchRoles(search);
+    return { roles: all.slice(page * pageSize, page * pageSize + pageSize), total: all.length };
   },
 
   /**
    * Search roles by name
    */
   searchRoles: async (searchTerm: string): Promise<Role[]> => {
-    try {
-      // Add wildcard for partial matches
-      const formattedSearchTerm = `%${searchTerm}%`;
-
-      const data = await executeGraphQLBackend(SEARCH_ROLES, {
-        searchTerm: formattedSearchTerm,
-      });
-
-      return data.rolesCollection || [];
-    } catch (error) {
-      console.error(`Error searching roles with term "${searchTerm}":`, error);
-      return [];
-    }
-  },
-
-  getRoleByName: async (roleName: string = "user"): Promise<string> => {
-    try {
-      const roleData = await executeGraphQLBackend(GET_ROLE_BY_NAME, {
-        name: roleName,
-      });
-
-      const role = roleData?.rolesCollection.edges[0].node;
-      if (!role.id) {
-        console.error("Error fetching user role: Role not found");
-      }
-
-      return role?.id || "e1b0d2c1-79b0-48b4-94fd-60a7bbf2b7c4"; // Fallback to hardcoded user role ID
-    } catch (error) {
-      console.error(`Error searching roles with term:`, error);
-      return "";
-    }
+    const term = searchTerm.replace(/%/g, "").trim().toLowerCase();
+    const roles = await rolesService.getAllRoles();
+    return term ? roles.filter((r) => r.name?.toLowerCase().includes(term)) : roles;
   },
 
   /**
-   * Create a new role
+   * Create a new role (Roles: Create)
    */
-  createRole: async (
-    name: string,
-    description?: string
-  ): Promise<Role | null> => {
+  createRole: async (name: string, description?: string): Promise<Role | null> => {
     try {
-      const data = await executeGraphQLBackend(CREATE_ROLE, {
-        objects: [
-          {
-            name,
-            description: description || null,
-          },
-        ],
+      const { role } = await executeRESTBackend<{ role: Role }>("/api/roles", {
+        method: "POST",
+        body: { name, description: description || null },
       });
-      if (data.insertIntorolesCollection.errors) {
-        throw new Error(data.insertIntorolesCollection.errors[0].message);
-      }
-
-      return data.insertIntorolesCollection.records[0];
+      return role;
     } catch (error) {
       console.error("Error creating role:", error);
       return null;
@@ -207,21 +86,16 @@ export const rolesService = {
   },
 
   /**
-   * Update an existing role
+   * Update an existing role (Roles: Edit)
    */
-  updateRole: async (
-    id: string,
-    name: string,
-    description?: string
-  ): Promise<Role | null> => {
+  updateRole: async (id: string, name: string, description?: string): Promise<Role | null> => {
     try {
-      const data = await executeGraphQLBackend(UPDATE_ROLE, {
-        id,
-        name,
-        description,
+      const { role } = await executeRESTBackend<{ role: Role }>("/api/roles", {
+        method: "PATCH",
+        params: { id },
+        body: { name, description: description ?? null },
       });
-
-      return data.updaterolesCollection.records[0];
+      return role;
     } catch (error) {
       console.error(`Error updating role with ID ${id}:`, error);
       return null;
@@ -229,12 +103,13 @@ export const rolesService = {
   },
 
   /**
-   * Delete a role
+   * Delete a role (Roles: Delete). The admin role, or a role still held by
+   * users, is refused.
    */
   deleteRole: async (id: string): Promise<boolean> => {
     try {
-      const result = await executeGraphQLBackend(DELETE_ROLE, { id });
-      return result.deleteFromrolesCollection.affectedCount > 0;
+      await executeRESTBackend("/api/roles", { method: "DELETE", params: { id } });
+      return true;
     } catch (error) {
       console.error(`Error deleting role with ID ${id}:`, error);
       return false;
@@ -242,16 +117,14 @@ export const rolesService = {
   },
 
   /**
-   * Get role access permissions for a role
+   * Get role access permissions for a role (Permissions: View)
    */
   getRoleAccess: async (roleId: string): Promise<RoleAccess[]> => {
     try {
-      const data = await executeGraphQLBackend(GET_ROLE_ACCESS, {
-        filter: { ...(roleId ? { role_id: { eq: roleId } } : {}) },
+      const { data } = await executeRESTBackend<{ data: RoleAccess[] }>("/api/role-access", {
+        params: { operation: "getByRole", roleId },
       });
-      return data.role_accessCollection.edges.map(
-        (edge: { node: RoleAccess }) => edge.node
-      );
+      return data;
     } catch (error) {
       console.error(`Error fetching role access for role ID ${roleId}:`, error);
       return [];
@@ -259,44 +132,23 @@ export const rolesService = {
   },
 
   /**
-   * Create a new role access permission
+   * Create a new role access permission (Permissions: Create)
    */
-  createRoleAccess: async (
-    roleId: string,
-    resource: string,
-    action: string
-  ): Promise<RoleAccess | null> => {
-    try {
-      const data = await executeGraphQLBackend(CREATE_ROLE_ACCESS, {
-        objects: [
-          {
-            role_id: roleId,
-            resource,
-            action,
-          },
-        ],
-      });
-      if (data.insertIntorole_accessCollection.errors) {
-        throw new Error(data.insertIntorole_accessCollection.errors[0].message);
-      }
-      return data.insertIntorole_accessCollection.records[0];
-    } catch (error: unknown) {
-      if (error instanceof Error) {
-        console.error("Error creating role access:", error.message);
-      } else {
-        console.error("Error creating role access:", error);
-      }
-      throw error;
-    }
+  createRoleAccess: async (roleId: string, resource: string, action: string): Promise<RoleAccess | null> => {
+    const { data } = await executeRESTBackend<{ data: RoleAccess }>("/api/role-access", {
+      method: "POST",
+      body: { operation: "create", data: { role_id: roleId, resource, action, enabled: true } },
+    });
+    return data;
   },
 
   /**
-   * Delete a role access permission
+   * Delete a role access permission (Permissions: Edit + Delete)
    */
   deleteRoleAccess: async (id: string): Promise<boolean> => {
     try {
-      const result = await executeGraphQLBackend(DELETE_ROLE_ACCESS, { id });
-      return result.deleteFromrole_accessCollection.affectedCount > 0;
+      await executeRESTBackend("/api/role-access", { method: "DELETE", params: { id } });
+      return true;
     } catch (error) {
       console.error(`Error deleting role access with ID ${id}:`, error);
       return false;
@@ -304,14 +156,12 @@ export const rolesService = {
   },
 
   /**
-   * Delete all role access permissions for a role
+   * Delete all role access permissions for a role (Permissions: Edit + Delete)
    */
   deleteRoleAccessByRole: async (roleId: string): Promise<boolean> => {
     try {
-      const result = await executeGraphQLBackend(DELETE_ROLE_ACCESS_BY_ROLE, {
-        roleId,
-      });
-      return result.deleteFromrole_accessCollection.affectedCount > 0;
+      await executeRESTBackend("/api/role-access", { method: "DELETE", params: { roleId } });
+      return true;
     } catch (error) {
       console.error(`Error deleting role access for role ID ${roleId}:`, error);
       return false;

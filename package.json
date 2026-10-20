@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "node --import ./tests/setup/register.mjs --test \"tests/**/*.test.ts\"",
     "supabase:start": "npx --yes supabase start",
     "supabase:stop": "npx --yes supabase stop",
     "supabase:status": "npx --yes supabase status",

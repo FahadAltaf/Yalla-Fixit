@@ -1,0 +1,130 @@
+-- =====================================================================
+-- schedule_audit_events: service role only (close the open audit log)
+--
+-- NOT APPLIED. Requires approval.
+-- Created on branch amc-hardening (5 Oct 2026). Apply only after review,
+-- together with the other hardening migrations, and only after the
+-- pre-apply checks in docs/security-followup-shared-rls.md pass.
+--
+-- Scope
+-- -----
+-- Only public.schedule_audit_events. The two estimate tables
+-- (estimate_revisions, estimate_service_items) have the same open policy
+-- but are deliberately NOT touched here: the portal reaches them with the
+-- cookie-session client (authenticated, or anon when no session) from
+-- unauthenticated API routes, and the get-estimate edge function (source
+-- not in this repo) may read them as anon. See the doc for the plan.
+--
+-- Why
+-- ---
+-- 20260721090000_add_scheduling_settings_and_approver.sql:67-73 created
+--   CREATE POLICY "Allow All on schedule_audit_events"
+--     ON public.schedule_audit_events FOR ALL TO public
+--     USING (true) WITH CHECK (true);
+-- and the table carries Supabase's default grants (live, 5 Oct 2026:
+-- SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER to both
+-- anon and authenticated). The anon key is public -- it ships in the
+-- inspector app bundle (EXPO_PUBLIC_SUPABASE_ANON_KEY) -- so anyone on
+-- the internet can today read the whole scheduling audit trail (actor
+-- ids, technician/appointment payloads in before_value/after_value) and
+-- insert forged events, rewrite or delete real ones through
+-- /rest/v1/schedule_audit_events or pg_graphql. An audit log that anyone
+-- can edit is not evidence of anything.
+--
+-- Evidence that no legitimate caller needs anon/authenticated
+-- -----------------------------------------------------------
+-- Every reader and writer in the repo uses the service-role client
+-- (createAdminServerClient, lib/supabase/supabase-helpers.ts:53), which
+-- bypasses RLS and is not affected by these REVOKEs:
+--   readers : app/api/scheduling/audit/route.ts:32
+--             lib/server/zoho/import-appointments.ts:232
+--   writers : 31 .insert() calls under app/api/scheduling/** and
+--             lib/server/{publish-schedule,schedule-sync}.ts and
+--             lib/server/zoho/{import-appointments,reconcile}.ts
+--             (full list with line numbers in the doc).
+-- No code updates or deletes audit rows. No GraphQL query references
+-- schedule_audit_eventsCollection (the /api/graphql proxy, which runs as
+-- anon, is not used for this table). No view, function, trigger or
+-- realtime publication in supabase/migrations references the table.
+--
+-- Why there are NO append-only rules here (unlike amc_audit_events)
+-- -----------------------------------------------------------------
+-- All three foreign keys on this table are ON DELETE SET NULL
+-- (actor_id -> user_profile, schedule_version_id -> schedule_versions,
+-- schedule_entry_id -> schedule_entries). Postgres implements SET NULL as
+-- an UPDATE on this table, and rules are applied to those referential
+-- UPDATEs too. The portal deletes schedule_entries
+-- (app/api/scheduling/schedule/entries/route.ts:474 and
+-- app/api/scheduling/schedule/clear/route.ts:59-62), so a
+-- "DO INSTEAD NOTHING" update rule would silently leave dangling
+-- schedule_entry_id values behind. That would change behaviour, so it is
+-- left out. Revoking the privileges already stops browser roles from
+-- updating/deleting rows; the RI actions run as the table owner and are
+-- unaffected.
+--
+-- What this does
+-- --------------
+--   * Drops the "Allow All on schedule_audit_events" policy. RLS stays
+--     enabled with no policy, so anon/authenticated see and change
+--     nothing even if a grant is ever re-added by mistake.
+--   * REVOKE ALL on the table from anon and authenticated (same model as
+--     amc_audit_events in 20260915130000_amc_settings_and_audit.sql:140).
+--   * service_role and postgres keep their privileges; the id column is a
+--     UUID default, so there is no sequence to revoke.
+--
+-- What it does not change
+-- -----------------------
+-- The scheduling board, audit history panel, FSM import/reconcile and
+-- sync all keep working: they already use the service role.
+--
+-- Rollback (restores the live state of 5 Oct 2026 exactly)
+-- --------------------------------------------------------
+--   GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
+--     ON public.schedule_audit_events TO anon, authenticated;
+--   CREATE POLICY "Allow All on schedule_audit_events"
+--     ON public.schedule_audit_events
+--     FOR ALL TO public
+--     USING (true) WITH CHECK (true);
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- 1. The open policy goes. RLS stays on, with no policy for browser roles.
+-- ---------------------------------------------------------------------
+DROP POLICY IF EXISTS "Allow All on schedule_audit_events"
+  ON public.schedule_audit_events;
+
+ALTER TABLE public.schedule_audit_events ENABLE ROW LEVEL SECURITY;
+
+-- ---------------------------------------------------------------------
+-- 2. Privileges: browser roles get nothing. Service role untouched.
+--    REVOKE is idempotent; re-running this file is safe.
+-- ---------------------------------------------------------------------
+REVOKE ALL ON public.schedule_audit_events FROM anon, authenticated;
+
+-- ---------------------------------------------------------------------
+-- Verification (read-only; run by hand after applying)
+-- ---------------------------------------------------------------------
+-- SELECT policyname, cmd, roles FROM pg_policies
+--  WHERE schemaname = 'public' AND tablename = 'schedule_audit_events';
+--   -- expect: no rows
+--
+-- SELECT relrowsecurity FROM pg_class
+--  WHERE oid = 'public.schedule_audit_events'::regclass;
+--   -- expect: true
+--
+-- SELECT grantee, string_agg(privilege_type, ',' ORDER BY privilege_type)
+--   FROM information_schema.role_table_grants
+--  WHERE table_schema = 'public' AND table_name = 'schedule_audit_events'
+--  GROUP BY grantee ORDER BY grantee;
+--   -- expect: no anon / authenticated rows; postgres and service_role
+--   -- still listed
+--
+-- SELECT count(*) FROM public.schedule_audit_events;
+--   -- as postgres/service role: unchanged (455 on 5 Oct 2026, plus any
+--   -- events written since)
+--
+-- From outside (anon key, no session), both should now fail or be empty:
+--   GET  /rest/v1/schedule_audit_events?select=id&limit=1
+--     -- expect 401/42501 permission denied
+--   POST /rest/v1/schedule_audit_events {"event_type":"probe"}
+--     -- expect 401/42501 permission denied

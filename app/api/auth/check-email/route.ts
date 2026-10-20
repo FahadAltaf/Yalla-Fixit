@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
+import { clientAddress, rateLimited } from "@/lib/server/request-origin";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 
 const bodySchema = z.object({
@@ -20,6 +21,10 @@ const bodySchema = z.object({
  * ever returned.
  */
 export async function POST(req: NextRequest) {
+  // Answers before sign-in, so it is an account-enumeration surface: throttle it.
+  if (rateLimited(`check-email:${clientAddress(req.headers)}`, 30, 10 * 60_000)) {
+    return NextResponse.json({ error: "Too many attempts. Please wait a few minutes." }, { status: 429 });
+  }
   const parsed = bodySchema.safeParse(await req.json().catch(() => ({})));
   if (!parsed.success) {
     return NextResponse.json({ error: "Please enter a valid email address" }, { status: 400 });

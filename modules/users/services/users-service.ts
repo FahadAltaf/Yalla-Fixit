@@ -1,14 +1,3 @@
-import {
-  DELETE_USER,
-  GET_USERS,
-  GET_USERS_BY_EMAIL,
-  GET_USERS_BY_ID,
-  GET_USERS_COUNT,
-  GET_USERS_PAGINATION,
-  INSERT_USER,
-  UPDATE_USER,
-} from "./users-graphql";
-import { executeGraphQLBackend } from "@/lib/graphql-server";
 import { executeRESTBackend } from "@/lib/rest-server";
 import { User } from "@/types/types";
 
@@ -30,35 +19,30 @@ const STAFF_TTL_MS = 60_000;
 let staffCache: { at: number; users: AssignableUser[] } | null = null;
 let staffInFlight: Promise<AssignableUser[]> | null = null;
 
+/*
+  Every call goes to /api/users, which checks the signed-in user and
+  writes with the service role. These used to be pg_graphql requests with
+  the public anon key, so any visitor could read or rewrite any profile,
+  their own role included.
+*/
 export const usersService = {
   /**
-   * Insert a user
+   * Insert a user profile (Users: Create).
    */
   insertUser: async (data: User) => {
-    const response = await executeGraphQLBackend(INSERT_USER, {
-      objects: [
-        {
-          id: data.id,
-          email: data.email,
-          role_id: data.role_id,
-          first_name: data.first_name || null,
-          last_name: data.last_name || null,
-          is_active: true,
-          profile_image: data.profile_image || null,
-          full_name: data.full_name || null,
-        },
-      ],
+    const { user } = await executeRESTBackend<{ user: User }>("/api/users", {
+      method: "POST",
+      body: {
+        id: data.id,
+        email: data.email,
+        role_id: data.role_id,
+        first_name: data.first_name || null,
+        last_name: data.last_name || null,
+        profile_image: data.profile_image || null,
+        full_name: data.full_name || null,
+      },
     });
-    if (response.errors) {
-      return response.errors[0].message;
-    }
-    return response.insertIntouser_profileCollection.records[0];
-  },
-  getUserByEmail: async (filter: { email: { ilike: string } }) => {
-    const response = await executeGraphQLBackend(GET_USERS_BY_EMAIL, {
-      filter,
-    });
-    return response.user_profileCollection.edges[0]?.node as User | null;
+    return user;
   },
   /**
    * Create a user - wrapper for insertUser
@@ -67,20 +51,11 @@ export const usersService = {
     return await usersService.insertUser(data);
   },
   /**
-   * Get all users, following the cursor page by page so nobody past the
-   * GraphQL page size is left out (staff pickers read this).
+   * Every colleague, for pickers. Directory fields only, unless the caller
+   * manages users.
    */
   getUsers: async () => {
-    const users: User[] = [];
-    let after: string | null = null;
-    // A hard stop, so a server that never reports the last page cannot loop.
-    for (let page = 0; page < 200; page += 1) {
-      const response = await executeGraphQLBackend(GET_USERS, { first: 100, after });
-      const collection = response.user_profileCollection;
-      users.push(...collection.edges.map((edge: { node: User }) => edge.node));
-      if (!collection.pageInfo?.hasNextPage || !collection.pageInfo.endCursor) break;
-      after = collection.pageInfo.endCursor;
-    }
+    const { users } = await executeRESTBackend<{ users: User[] }>("/api/users", { params: { op: "all" } });
     return users;
   },
   getUsersPagination: async (
@@ -92,45 +67,25 @@ export const usersService = {
       sortOrder?: "asc" | "desc";
     }
   ) => {
-    // Create a filter object based on role
-    const filter: {
-      or: Array<
-        { email: { ilike: string } } | { full_name: { ilike: string } }
-      >;
-    } = {
-      or: [{ email: { ilike: search } }, { full_name: { ilike: search } }],
-    };
-
-    const response = await executeGraphQLBackend(GET_USERS_PAGINATION, {
-      filter,
-      limit,
-      offset: offset * limit,
-      sorting:
-        Object.keys(sorting || {}).length > 0
-          ? {
-              [sorting?.sortBy || "created_at"]:
-                sorting?.sortOrder === "asc" ? "AscNullsLast" : "DescNullsLast",
-            }
-          : { created_at: "DescNullsLast" },
+    return executeRESTBackend<{ users: User[]; totalCount: number }>("/api/users", {
+      params: {
+        op: "page",
+        /* The screen sends an ilike pattern ("%term%"); the server wants the term. */
+        search: search.replace(/%/g, ""),
+        limit,
+        page: offset,
+        sortBy: sorting?.sortBy ?? "created_at",
+        sortOrder: sorting?.sortOrder ?? "desc",
+      },
     });
-
-    const countResponse = await executeGraphQLBackend(GET_USERS_COUNT, {
-      filter,
-    });
-
-    return {
-      users: response.user_profileCollection.edges.map(
-        (edge: { node: User }) => edge.node
-      ),
-      totalCount: countResponse.user_profileCollection.edges.length,
-    };
   },
   /**
-   * Update a user
+   * Update a user. Your own name and photo; anything else needs Users: Edit.
    */
   updateUser: async (data: User): Promise<void> => {
-    try {
-      const response = await executeGraphQLBackend(UPDATE_USER, {
+    await executeRESTBackend("/api/users", {
+      method: "PATCH",
+      body: {
         id: data.id,
         first_name: data.first_name,
         last_name: data.last_name,
@@ -139,32 +94,15 @@ export const usersService = {
         profile_image: data.profile_image,
         is_active: data.is_active,
         receives_schedule_approval_email: data.receives_schedule_approval_email ?? false,
-      });
-
-      if (response.errors) {
-        throw new Error(response.errors[0].message);
-      }
-    } catch (error) {
-      throw new Error(
-        error instanceof Error ? error.message : "Failed to update user"
-      );
-    }
+      },
+    });
   },
   /**
-   * Delete a user from both GraphQL database and Supabase Auth
+   * Delete a user profile (Users: Delete). A user who owns records that
+   * must be kept is refused: deactivate them instead.
    */
   deleteUser: async (id: string): Promise<void> => {
-    try {
-      // Delete user from GraphQL database
-     const result = await executeGraphQLBackend(DELETE_USER, { id });
-     if (result.errors) {
-      throw new Error(result.errors[0].message);
-     }
-   
-    } catch (error) {
-      console.error("Error deleting user:", error);
-      throw error;
-    }
+    await executeRESTBackend("/api/users", { method: "DELETE", params: { id } });
   },
   /**
    * Everyone who can be assigned to a job, a round or a visit: id, name
@@ -202,15 +140,10 @@ export const usersService = {
     }
   },
   /**
-   * Get a user by id
+   * Get a user by id (yourself, or Users: View).
    */
   getUserById: async (id: string) => {
-    try {
-      const response = await executeGraphQLBackend(GET_USERS_BY_ID, { id });
-      return response.user_profileCollection.edges[0].node;
-    } catch (error) {
-      console.error("Error getting user by id:", error);
-      throw error;
-    }
+    const { user } = await executeRESTBackend<{ user: User }>("/api/users", { params: { op: "byId", id } });
+    return user;
   },
 };

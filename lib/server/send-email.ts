@@ -39,7 +39,10 @@ export async function sendEmail({
   cc,
   attachment,
 }: SendEmailInput): Promise<{ data: { id?: string } | null }> {
-  const apiKey = process.env.NEXT_PUBLIC_RESEND_API_KEY;
+  /* RESEND_API_KEY (server-only). The NEXT_PUBLIC_ name is still read so a
+     deployment that has not renamed it keeps working; a NEXT_PUBLIC_
+     variable is inlined into any browser bundle that references it. */
+  const apiKey = process.env.RESEND_API_KEY || process.env.NEXT_PUBLIC_RESEND_API_KEY;
   const from = process.env.NEXT_PUBLIC_EMAIL_FROM;
   if (!apiKey || !from) throw new Error("Email service is not configured");
 
