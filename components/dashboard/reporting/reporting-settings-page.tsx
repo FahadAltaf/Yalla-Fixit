@@ -371,6 +371,8 @@ function SettingField({
 }) {
   const id = `reporting-${field.path.replace(/\./g, "-")}`;
   const changed = !same(value, defaultValue);
+  /* Recipients and the threshold have no BRD value; they start empty. */
+  const hasSuggestion = !(defaultValue === null || (Array.isArray(defaultValue) && defaultValue.length === 0));
 
   const userOptions: Option[] = useMemo(() => users.map((u) => ({ value: u.id, label: u.name })), [users]);
 
@@ -441,10 +443,12 @@ function SettingField({
 
       {problem ? <p className="text-destructive text-xs">{problem}</p> : null}
       {field.hint ? <p className="text-muted-foreground text-xs">{field.hint}</p> : null}
-      <p className="text-muted-foreground text-xs">
+      <p className="text-muted-foreground text-xs empty:hidden">
         {changed
-          ? `Changed. Suggested: ${display(defaultValue, field, users)}.`
-          : "Suggested value (BRD §6.6), to be confirmed."}
+          ? `Changed. ${hasSuggestion ? "Suggested" : "Default"}: ${display(defaultValue, field, users)}.`
+          : hasSuggestion
+            ? "Suggested value (BRD §6.6), to be confirmed."
+            : null}
       </p>
     </div>
   );
