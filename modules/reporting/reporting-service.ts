@@ -2,6 +2,7 @@ import { executeRESTBackend } from "@/lib/rest-server";
 import type { ReportingSettings, ReportingSettingsOverrides } from "@/lib/reporting/settings";
 import type { InAppNotification } from "@/lib/server/notifications/inbox";
 import type { ReportingSettingsHistoryEntry } from "@/lib/server/reporting/audit";
+import type { FsmResourceStatus } from "@/lib/server/finance/fsm-sync/status";
 import type { PickableUser } from "@/lib/server/people/pickable-users";
 
 export type ReportingSettingsResponse = {
@@ -23,6 +24,9 @@ export const reportingService = {
       changedKeys: string[];
       history: ReportingSettingsHistoryEntry[];
     }>("/api/reporting-settings", { method: "PUT", body: overrides as Record<string, unknown> }),
+
+  fsmStatus: () =>
+    executeRESTBackend<{ resources: FsmResourceStatus[] }>("/api/finance/fsm-sync/status"),
 };
 
 export const notificationsService = {

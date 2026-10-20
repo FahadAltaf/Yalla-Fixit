@@ -8,12 +8,12 @@ Part of the [Finance & Reports plan](README.md).
  Zoho FSM (production, read only)
         │  GET only, via lib/server/finance/fsm-read.ts (FINANCE_FSM_READ, budget)
         ▼
- Sync runs (CRON_SECRET POST routes)  ──►  fsm_sync_state / fsm_sync_runs  (freshness, errors)
+ Sync runs (CRON_SECRET POST routes)  ──►  fsm.sync_state / fsm.sync_runs  (freshness, errors)
         │  incremental by Modified_Time, idempotent upserts
         ▼
  FSM read model (Supabase)
-   fsm_estimates (+ status events) · fsm_work_orders · fsm_line_items
-   fsm_appointments (+ resources) · [fsm_trips · fsm_checkin_events — B-01]
+   fsm.estimates (+ status events) · fsm.work_orders · fsm.line_items
+   fsm.appointments (+ resources) · [fsm_trips · fsm_checkin_events — B-01]
         │
         ├──► Finance trigger ──► fin_queue_items + fin_queue_item_lines (UNIQUE fsm_line_id)
         │         │                   │

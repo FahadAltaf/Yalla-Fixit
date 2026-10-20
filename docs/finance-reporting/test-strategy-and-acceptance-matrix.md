@@ -28,7 +28,8 @@ baseline before database tests touch `snagging_*` tables; finance and reports ta
 | `tests/notifications/notifier.test.ts` | P1 | 9 | pass | Sending without a successful claim → 4 fail |
 | `tests/people/people.test.ts` | P1 | 10 | pass | — |
 | `tests/permissions/finance-reports-access.test.ts` | P1 | 11 | pass | Admin exclusions removed → 1 fails |
-| `scripts/db-harness/checks/*.sql` | P1 | 47 | pass | `REVOKE` removed → grant check fails |
+| `tests/finance/fsm-sync.test.ts` | P2 | 18 | pass | Reconcile allowed to set the watermark → 1 fails |
+| `scripts/db-harness/checks/*.sql` | P1, P2 | 87 | pass | `REVOKE` removed → grant check fails |
 
 ## BRD acceptance (TC01–TC15)
 
@@ -68,7 +69,7 @@ baseline before database tests touch `snagging_*` tables; finance and reports ta
 - Older page after a newer one → the stored row is not overwritten.
 - Status change → one status event; no change → none.
 - Budget reached mid-run → clean stop, watermark unchanged, the next run resumes.
-- FSM 429 / 5xx / timeout → retried per `fsmFetch`; persistent failure recorded in `fsm_sync_state`.
+- FSM 429 / 5xx / timeout → retried per `fsmFetch`; persistent failure recorded in `fsm.sync_state`.
 - FSM unreachable → reports show the last good data with a freshness warning; nothing is blanked.
 
 ### Calculations (unit layer)

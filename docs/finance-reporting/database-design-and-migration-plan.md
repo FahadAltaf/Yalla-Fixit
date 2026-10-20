@@ -39,18 +39,22 @@ Development runs against the **production database** (decision of 20 Oct), so:
 
 ## New tables
 
-### FSM read model (P2)
+### FSM read model (P2) — schema `fsm`
+
+Kept in its own schema (decided 20 Oct), apart from the portal's tables in `public`. Only `service_role` is
+granted anything in it; the schema must be listed in Supabase's Exposed schemas for the server to reach it.
+Writes go through the `fsm.*` functions, which refuse to let an older FSM record overwrite a newer one.
 
 | Table | Key columns | Constraints and indexes |
 |---|---|---|
-| `fsm_sync_state` | `resource text pk`, `watermark timestamptz`, `last_run_at`, `last_success_at`, `last_error text`, `consecutive_failures int` | — |
-| `fsm_sync_runs` | `id uuid pk`, `resource`, `started_at`, `finished_at`, `pages int`, `records int`, `calls int`, `status`, `error` | idx `(resource, started_at desc)` |
-| `fsm_estimates` | `fsm_estimate_id text pk`, `number`, `status`, `post_to_maher text`, `maher_invoice_number text`, `grand_total`, `sub_total`, `tax_amount numeric(14,2)`, `owner_name`, `owner_email`, `fsm_contact_id`, `fsm_company_id`, `expiry_date date`, `created_in_fsm_at`, `approved_at`, `rejected_at`, `expired_at`, `status_changed_at`, `quotation_type`, `root_number`, `fsm_work_order_id`, `modified_time`, `synced_at` | idx `(status, status_changed_at)`, `(post_to_maher)` where not null, `(modified_time)` |
-| `fsm_estimate_status_events` | `id bigserial pk`, `fsm_estimate_id`, `from_status`, `to_status`, `observed_at` | unique `(fsm_estimate_id, to_status, observed_at)`; idx `(fsm_estimate_id, observed_at)` |
-| `fsm_work_orders` | `fsm_work_order_id text pk`, `number`, `status`, `type`, `work_type`, `completed_at`, `fsm_estimate_id`, `grand_total`, `sub_total`, `tax_amount`, `billing_status`, `amc_contract_ref`, `parent_fsm_work_order_id`, `modified_time`, `synced_at` | idx `(fsm_estimate_id)`, `(status, completed_at)`, `(modified_time)` |
-| `fsm_line_items` | `fsm_line_id text pk`, `fsm_work_order_id`, `fsm_estimate_id`, `kind` (service/part), `name`, `description`, `quantity numeric(12,3)`, `unit_price numeric(14,2)`, `amount numeric(14,2)`, `tax_percent`, `status`, `sequence int`, `synced_at` | idx `(fsm_work_order_id)`, `(fsm_estimate_id)` |
-| `fsm_appointments` | `fsm_appointment_id text pk`, `fsm_work_order_id`, `status`, `type`, `scheduled_start`, `scheduled_end`, `actual_start`, `actual_end`, `actual_duration_minutes`, `cancelled_at`, `cancellation_reason`, `modified_time`, `synced_at` | idx `(scheduled_start)`, `(fsm_work_order_id)`, `(status, actual_start)` |
-| `fsm_appointment_resources` | `fsm_appointment_id`, `technician_fsm_id` | pk `(fsm_appointment_id, technician_fsm_id)`; idx `(technician_fsm_id)` |
+| `fsm.sync_state` | `resource text pk`, `watermark timestamptz`, `last_run_at`, `last_success_at`, `last_error text`, `consecutive_failures int` | — |
+| `fsm.sync_runs` | `id uuid pk`, `resource`, `started_at`, `finished_at`, `pages int`, `records int`, `calls int`, `status`, `error` | idx `(resource, started_at desc)` |
+| `fsm.estimates` | `fsm_estimate_id text pk`, `number`, `status`, `post_to_maher text`, `maher_invoice_number text`, `grand_total`, `sub_total`, `tax_amount numeric(14,2)`, `owner_name`, `owner_email`, `fsm_contact_id`, `fsm_company_id`, `expiry_date date`, `created_in_fsm_at`, `approved_at`, `rejected_at`, `expired_at`, `status_changed_at`, `quotation_type`, `root_number`, `fsm_work_order_id`, `modified_time`, `synced_at` | idx `(status, status_changed_at)`, `(post_to_maher)` where not null, `(modified_time)` |
+| `fsm.estimate_status_events` | `id bigserial pk`, `fsm_estimate_id`, `from_status`, `to_status`, `observed_at` | unique `(fsm_estimate_id, to_status, observed_at)`; idx `(fsm_estimate_id, observed_at)` |
+| `fsm.work_orders` | `fsm_work_order_id text pk`, `number`, `status`, `type`, `work_type`, `completed_at`, `fsm_estimate_id`, `grand_total`, `sub_total`, `tax_amount`, `billing_status`, `amc_contract_ref`, `parent_fsm_work_order_id`, `modified_time`, `synced_at` | idx `(fsm_estimate_id)`, `(status, completed_at)`, `(modified_time)` |
+| `fsm.line_items` | `fsm_line_id text pk`, `fsm_work_order_id`, `fsm_estimate_id`, `kind` (service/part), `name`, `description`, `quantity numeric(12,3)`, `unit_price numeric(14,2)`, `amount numeric(14,2)`, `tax_percent`, `status`, `sequence int`, `synced_at` | idx `(fsm_work_order_id)`, `(fsm_estimate_id)` |
+| `fsm.appointments` | `fsm_appointment_id text pk`, `fsm_work_order_id`, `status`, `type`, `scheduled_start`, `scheduled_end`, `actual_start`, `actual_end`, `actual_duration_minutes`, `cancelled_at`, `cancellation_reason`, `modified_time`, `synced_at` | idx `(scheduled_start)`, `(fsm_work_order_id)`, `(status, actual_start)` |
+| `fsm.appointment_resources` | `fsm_appointment_id`, `technician_fsm_id` | pk `(fsm_appointment_id, technician_fsm_id)`; idx `(technician_fsm_id)` |
 | `fsm_trips` *provisional (B-01)* | trip id, technician, start, end, distance | — |
 | `fsm_checkin_events` *provisional (B-01, D-15)* | event id, technician, kind (shift_in/out, appt_in/out), at, appointment id | unique on FSM event id |
 

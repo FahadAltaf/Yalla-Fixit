@@ -125,7 +125,7 @@ recalculated.
 ## Quotation pipeline (DEV-442)
 
 Per status: count, Σ total, average age. **Days in status** = today − the time the estimate entered its
-current status (from `fsm_estimate_status_events`; for records imported before the sync existed, the
+current status (from `fsm.estimate_status_events`; for records imported before the sync existed, the
 matching FSM lifecycle timestamp, otherwise creation). **Ageing breach** when days in status > that
 status's limit (defaults Not Sent 7, Sent 10, Approved 5). **Expiry warning** when `expiry_date` − today ≤
 warning days (default 5). Status mapping pending **D-13**.

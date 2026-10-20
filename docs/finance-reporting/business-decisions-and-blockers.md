@@ -33,6 +33,22 @@ assumption, not a policy.
 | **D-21** | Correcting a wrongly recorded invoice | Records are immutable by design | BRD silent | Finance | DEV-440 | Corrections recorded as new, linked entries; nothing edited |
 | **D-22** | Is a working day 8 h or 9 h? | Every available-hours figure | The BRD example uses 8 h a day; the portal's day shift is 08:00–17:00 = **9 h**. Either an unpaid hour is deducted or the example is wrong ([calculation spec](reporting-calculation-specification.md)) | Sharon, HR | DEV-443, 444, TC08 | Unpaid break is a setting, 0 until answered |
 
+## Evidence from the live sync (P2, 20 Oct)
+
+Read-only, from the portal's copy of FSM; counts only.
+
+- **D-01**: on the 38 recently changed work orders read in full, **33 of 41 lines are Completed while their
+  work orders are In Progress**. Completion happens at line level in practice.
+- **D-02 / D-03**: only **394 of 3,400** work orders link to a quotation, and 5 of 41 recent lines carry one.
+  How a queue item finds its quotation (and so its completion %) needs the business's answer.
+- **D-05**: FSM's two line amounts (`Line_Item_Amount`, `Amount`) differ on **10 of 41** lines, most likely
+  discounts. Which one invoicing uses must be decided.
+- **D-13**: across all 1,054 quotations, statuses seen are New, Converted to Work Order, Approved and
+  **Expired** (Expired was not in the recent sample).
+- **Utilization (D-08, D-17)**: FSM lists crews of up to **24 technicians** on one appointment. Whether each
+  of them is credited the full appointment time is a business rule.
+- **B-04**: FSM holds **1,054 quotations** and more than 3,400 work orders (count still running).
+
 ## Blockers
 
 | ID | Blocker | Impact | Who can clear it |

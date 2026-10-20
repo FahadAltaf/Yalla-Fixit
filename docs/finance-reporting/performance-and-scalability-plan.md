@@ -25,7 +25,7 @@ Counted on production, 20 Oct 2026: 118 technicians (115 active), 17 portal user
 | Compliance month | Calculated daily into `hr_missed_checkins`; finalised months read from `hr_compliance_statements` | Finalised figures must never change, and re-reading them is cheaper anyway |
 | Report export | Server-side generation with an EXPORT check; asynchronous only if a measured export exceeds the request budget | Snagging exports run in the browser; that bypasses the server check and loads everything into memory |
 | Dashboard loading | One query per card (the snagging `useSection` pattern), lazy below the fold | Avoid one slow card blocking the page |
-| Write-heavy tables | Minimal indexes on `fin_queue_events`, `fsm_sync_runs`, `report_access_log` | Append-heavy; read by item or by time only |
+| Write-heavy tables | Minimal indexes on `fin_queue_events`, `fsm.sync_runs`, `report_access_log` | Append-heavy; read by item or by time only |
 | Audit growth | Append-only tables are never pruned automatically; archiving is a later decision | Pruning conflicts with the append-only rules |
 
 ## Not adding now, and what would change that

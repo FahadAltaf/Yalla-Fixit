@@ -51,3 +51,25 @@ select
      where table_schema = 'public' and table_name = 'org_public_holidays'
        and grantee in ('anon', 'authenticated'))                                    as holiday_api_grants
 ) post;
+
+-- 20261020130000: expect 9, 3, 7, 0, 0, f, t
+SELECT harness.expect(row(fsm_tables, sync_resources, fsm_functions, api_table_grants, api_executable,
+                          api_schema_usage, server_schema_usage)
+                      = row(9::bigint, 3::bigint, 7::bigint, 0::bigint, 0::bigint, false, true),
+                      '20261020130000 post-check returns 9, 3, 7, 0, 0, f, t')
+FROM (
+select
+  (select count(*) from pg_class
+     where relnamespace = 'fsm'::regnamespace and relkind = 'r')                       as fsm_tables,
+  (select count(*) from fsm.sync_state)                                             as sync_resources,
+  (select count(*) from pg_proc where pronamespace = 'fsm'::regnamespace)           as fsm_functions,
+  (select count(*) from information_schema.role_table_grants
+     where table_schema = 'fsm' and grantee in ('anon', 'authenticated'))           as api_table_grants,
+  (select count(*) from pg_proc p
+     where p.pronamespace = 'fsm'::regnamespace
+       and (has_function_privilege('anon', p.oid, 'EXECUTE')
+            or has_function_privilege('authenticated', p.oid, 'EXECUTE')))          as api_executable,
+  has_schema_privilege('anon', 'fsm', 'USAGE')
+    or has_schema_privilege('authenticated', 'fsm', 'USAGE')                        as api_schema_usage,
+  has_schema_privilege('service_role', 'fsm', 'USAGE')                              as server_schema_usage
+) post;

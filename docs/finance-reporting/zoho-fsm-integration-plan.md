@@ -84,7 +84,7 @@ values (D-13).
 | Resource | Source | Fields (confirmed unless marked) | Paging | Freshness | Status |
 |---|---|---|---|---|---|
 | Quotations | `GET /Estimates` | `id, Name, Status, Grand_Total, Sub_Total, Tax_Amount, Owner, Contact, Company, Expiry_Date, Creation_Date__C, Approved_Time, Rejected_Time, Expired_Time, Cancelled_Time, Closed_Time, Post_To_Maher__C, Invoice_Number_from_Maher__C, Quotation_Type__C, Root_Quotation_Number__C, Work_Order, Modified_Time` | `per_page=200`, `info.more_records` | 15 min incremental | **Readable** |
-| Quotation status history | Derived | Each sync compares status with the stored row and appends `fsm_estimate_status_events` | — | as sync | **Build** (no history API used) |
+| Quotation status history | Derived | Each sync compares status with the stored row and appends `fsm.estimate_status_events` | — | as sync | **Build** (no history API used) |
 | Work orders | `GET /Work_Orders` | `id, Name, Status, Type, Work_Type__C, Completed_Time, Estimate, Service_Line_Items, Service_Appointments, Grand_Total, Sub_Total, Tax_Amount, Billing_Status, AMC_Contract_Ref__C, Parent_Work_Order, Modified_Time` | same | 15 min | **Readable** |
 | Line items | Embedded in work order (`Service_Line_Items[]`) | From code (`work-order-copy.ts`): `id, Name, Service, Quantity, List_Price, Amount, Line_Item_Amount, Discount, Tax, Status`. **Keep the line `id`** — today's code drops it | with WO | with WO | **Readable** (row shape to confirm on a WO that has lines) |
 | Appointments | `GET /Service_Appointments` | `id, Name, Status, Type, Scheduled_Start/End_Date_Time, Actual_Start/End_Date_Time, Actual_Duration, Scheduled_Duration, Work_Order, Service_Resources, Overlapping_Appointments, Cancellation_Reason, Modified_Time` | same | 15 min; 5 min for today's window (alerts) | **Readable** |
@@ -104,11 +104,16 @@ values (D-13).
   idempotent upserts make re-reading harmless.
 - **Idempotent upserts** keyed on the FSM id (`ON CONFLICT (fsm_id) DO UPDATE … WHERE excluded.modified_time
   >= current.modified_time`), so a late or repeated page never overwrites newer data.
-- **Run log** `fsm_sync_runs` (started, finished, pages, records, calls, error) and per-resource
-  `fsm_sync_state` (watermark, last success, last error, consecutive failures) — surfaced as a freshness
+- **Run log** `fsm.sync_runs` (started, finished, pages, records, calls, error) and per-resource
+  `fsm.sync_state` (watermark, last success, last error, consecutive failures) — surfaced as a freshness
   indicator on every report.
-- **Concurrency**: a run claims its resource with an advisory lock (`pg_try_advisory_lock`), so two
-  triggers never sync the same resource at once.
+- **Concurrency**: a run claims its resource with a lease row (`fsm.sync_claim`, expiring after 15 minutes so
+  a crashed run cannot block the next), so two triggers never sync the same resource at once. Not an
+  advisory lock: those belong to a database session, and the API's pooled connections are shared.
+- **Detail calls** (found in P2 discovery): line items and an appointment's crew (`$Service_Resources`) come
+  only on a record's detail call, and a line can complete without its work order's `Modified_Time` moving
+  (seen: 336 s later). So a changed work order is re-read in full, and so is the work order of every changed
+  appointment. Each costs one call; the budget per run caps them.
 - **Budget**: each run has a ceiling (`createFsmReader` budget) well under the org's daily allowance, which
   is shared with scheduling and snagging. The rate-limit headers could not be read (the probe got a 401
   without them); the allowance must be confirmed from the Zoho console (B-03).

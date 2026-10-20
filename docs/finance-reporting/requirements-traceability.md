@@ -76,6 +76,7 @@ screens have been checked in a browser.
 | DEV-462 | P0, P1 | Security port (P0). Built: 13 Finance/Reports resources in the Permissions screen; four named-person acts not inherited by admin; technician ↔ account link by email for "own data" scoping | Role rows wait on D-18; `20261006160000` still held until deploy (B-02) |
 | DEV-463 | P0, P1 | 65 unit tests and 47 database checks running | Grows each phase |
 | (platform) | P1 | `portal_notifications`, the notifier (claim-first dedupe, delivery policy), inbox page, home panel | Used from P4 on |
+| (platform) | P2 | FSM read model in schema `fsm`, read-only sync (incremental, reconcile, backfill), freshness panel. Enables DEV-433, 434, 442, 444, 452, 453, 454 | Work-order and appointment backfills to finish; schedule at go-live; sync frequency to agree with Danish (DEV-433) |
 
 ## Coverage
 

@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { FsmFreshness } from "@/components/dashboard/reporting/fsm-freshness";
 import { PageHeading, PillTabs, SectionCard } from "@/components/dashboard/shared/kaizen";
 import { DataTable } from "@/components/data-table";
 import { IconText } from "@/components/data-table/columns/icon-text";
@@ -49,7 +50,8 @@ import { reportingService } from "@/modules/reporting/reporting-service";
  * from the defaults (lib/reporting/settings.ts explains why).
  */
 
-type View = "finance" | "quotations" | "attendance" | "compliance" | "planning" | "history";
+type View = "finance" | "quotations" | "attendance" | "compliance" | "planning" | "history" | "fsm";
+type SectionKey = Exclude<View, "history" | "fsm">;
 
 type NumberField = {
   kind: "number";
@@ -65,7 +67,7 @@ type TimeField = { kind: "time"; path: string; label: string; hint?: string };
 type PeopleField = { kind: "people"; path: string; label: string; hint?: string };
 type Field = NumberField | TimeField | PeopleField;
 
-const SECTIONS: Record<Exclude<View, "history">, { title: string; description: string; icon: React.ReactNode; fields: Field[] }> = {
+const SECTIONS: Record<SectionKey, { title: string; description: string; icon: React.ReactNode; fields: Field[] }> = {
   finance: {
     title: "Invoicing queue and digest",
     description: "When Finance hears about new items, and when a waiting item counts as aged (E1, N1, N2).",
@@ -216,7 +218,7 @@ export function ReportingSettingsPage() {
     setProblems(found);
     if (Object.keys(found).length > 0) {
       const first = Object.keys(found)[0];
-      const tab = (Object.keys(SECTIONS) as Exclude<View, "history">[]).find((key) =>
+      const tab = (Object.keys(SECTIONS) as SectionKey[]).find((key) =>
         SECTIONS[key].fields.some((field) => field.path === first),
       );
       if (tab) setView(tab);
@@ -299,7 +301,7 @@ export function ReportingSettingsPage() {
     );
   }
 
-  const changedIn = (section: Exclude<View, "history">) =>
+  const changedIn = (section: SectionKey) =>
     SECTIONS[section].fields.filter((field) => !same(getPath(draft, field.path), getPath(defaults, field.path))).length;
 
   return (
@@ -320,10 +322,13 @@ export function ReportingSettingsPage() {
           { value: "compliance", label: "Compliance", count: changedIn("compliance") || undefined },
           { value: "planning", label: "Capacity and exceptions", count: changedIn("planning") || undefined },
           { value: "history", label: "Change history", count: history.length },
+          { value: "fsm", label: "FSM data" },
         ]}
       />
 
-      {view === "history" ? (
+      {view === "fsm" ? (
+        <FsmFreshness />
+      ) : view === "history" ? (
         <SettingsHistory history={history} />
       ) : (
         <SectionCard

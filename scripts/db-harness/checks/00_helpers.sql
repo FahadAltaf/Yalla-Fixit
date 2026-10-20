@@ -30,5 +30,5 @@ BEGIN
   RAISE NOTICE 'ok   %', label;
 END $$;
 
-GRANT USAGE ON SCHEMA harness TO anon, authenticated;
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA harness TO anon, authenticated;
+GRANT USAGE ON SCHEMA harness TO anon, authenticated, service_role;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA harness TO anon, authenticated, service_role;

@@ -73,11 +73,25 @@ next phase).
 - **Risks**: shared-file conflicts with `amc-hardening` (permissions constants, menu, notifications, users).
   Keep hunks small and additive.
 
-## P2 — FSM read model and sync · L
+## P2 — FSM read model and sync · L · **built; live backfill in progress (20 Oct)**
+
+- **Delivered**: schema `fsm` (migration `20261020130000`, applied by the user, schema exposed) with nine
+  tables and seven guarded writer functions; the sync engine (`lib/server/finance/fsm-sync/`: incremental,
+  reconcile, resumable backfill, lease, call budget, run log); `CRON_SECRET` run route and a status route;
+  the freshness panel (Settings → Reporting → FSM data); 18 engine tests, 30 database checks for the read
+  model; two more read-only discovery passes (13 calls).
+- **Live so far**: quotations fully loaded (1,054, 6 calls) and on incremental sync (1 call when nothing
+  changed); work orders 3,400 headers and lines for 38 recent ones; appointments 128 from the last week with
+  6 crews. Every run GET-only and capped.
+- **Changed from the plan**: own schema (user's decision); a lease row instead of an advisory lock; line
+  changes are caught through appointment changes as well, because a line can complete without its work
+  order's `Modified_Time` moving.
+- **Still to do**: finish the work-order and appointment backfills (call spend to agree, B-03); nightly
+  reconcile and the 15-minute schedule are wired at go-live only.
 
 - **Enables**: DEV-433, 442, 444, 446, 453, 454. **Depends on**: P0.
-- **Migrations**: `fsm_sync_state`, `fsm_sync_runs`, `fsm_estimates`, `fsm_estimate_status_events`,
-  `fsm_work_orders`, `fsm_line_items`, `fsm_appointments`, `fsm_appointment_resources`.
+- **Migrations**: `fsm.sync_state`, `fsm.sync_runs`, `fsm.estimates`, `fsm.estimate_status_events`,
+  `fsm.work_orders`, `fsm.line_items`, `fsm.appointments`, `fsm.appointment_resources`.
 - **Backend**: `lib/server/finance/fsm-sync/*` per resource; watermark with a 10-minute overlap; idempotent
   upserts guarded on `modified_time`; advisory-lock claim per resource; run log; status-event derivation;
   nightly 7-day reconciliation; resumable backfill; run routes behind `CRON_SECRET`.
