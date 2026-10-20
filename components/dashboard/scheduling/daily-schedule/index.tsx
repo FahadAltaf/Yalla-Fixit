@@ -33,6 +33,7 @@ import {
 } from "@/modules/scheduling";
 import type { LeaveRecord, TechnicianTag, TechnicianRole, TechnicianServiceType } from "@/types/types";
 import { orderTechnicians, type SortMode } from "./technician-order";
+import { isListedTechnician } from "@/lib/people/pickable";
 import { exportSchedulePdf, type PdfBar, type PdfRow, type PdfSection } from "@/lib/scheduling/export-pdf";
 import {
   DAY_MINUTES,
@@ -609,7 +610,7 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
   const anyCategoryFilter = tagFilters.length > 0 || roleFilters.length > 0 || serviceFilters.length > 0;
 
   const visibleTechnicians = useMemo(() => {
-    let list = technicians.filter((t) => t.is_active);
+    let list = technicians.filter(isListedTechnician);
 
     if (search.trim()) {
       const q = search.trim().toLowerCase();
@@ -681,7 +682,7 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
   const sectionTechnicians = useMemo(() => {
     const belongs = (t: TechnicianReference, key: ShiftKey) =>
       t.shift === (key === "night" ? "night" : "morning");
-    const active = technicians.filter((t) => t.is_active);
+    const active = technicians.filter(isListedTechnician);
     return {
       night: visibleTechnicians.filter((t) => belongs(t, "night")),
       day: visibleTechnicians.filter((t) => belongs(t, "day")),
@@ -1676,7 +1677,7 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
           defaultStartTime={addEntryFor.startTime}
           defaultEndTime={addEntryFor.endTime}
           defaultTechnicianFsmId={addEntryFor.technicianFsmId}
-          technicians={technicians.filter((t) => t.is_active)}
+          technicians={technicians.filter(isListedTechnician)}
           tags={tags}
           assignmentsByTechnician={assignments}
           leaveRecords={leaveRecords}

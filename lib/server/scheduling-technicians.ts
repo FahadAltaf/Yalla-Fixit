@@ -25,6 +25,8 @@ export async function listTechniciansForViewer(): Promise<TechnicianReference[]>
   // relationships to the same table on its own.
   const baseColumns =
     "fsm_resource_id, display_name, is_active, last_synced_at, role_id, service_type_id, shift, team_leader_fsm_id, " +
+    // Finance & Reports (migration 20261020110000, applied before this code runs).
+    "email, user_profile_id, employment_status, leaving_date, hidden_from_lists, rest_weekdays, " +
     "role:lookup_options!technician_reference_role_id_fkey(name), " +
     "service_type:lookup_options!technician_reference_service_type_id_fkey(name)";
   const load = (columns: string) =>
@@ -59,6 +61,12 @@ export async function listTechniciansForViewer(): Promise<TechnicianReference[]>
       team_leader_fsm_id: (r.team_leader_fsm_id as string) ?? null,
       team_leader_name: r.team_leader_fsm_id ? (nameByFsmId.get(r.team_leader_fsm_id as string) ?? null) : null,
       board_position: typeof r.board_position === "number" ? r.board_position : null,
+      email: (r.email as string | null) ?? null,
+      user_profile_id: (r.user_profile_id as string | null) ?? null,
+      employment_status: r.employment_status === "resigned" ? "resigned" : "active",
+      leaving_date: (r.leaving_date as string | null) ?? null,
+      hidden_from_lists: r.hidden_from_lists === true,
+      rest_weekdays: Array.isArray(r.rest_weekdays) ? (r.rest_weekdays as number[]) : null,
     };
   });
 }

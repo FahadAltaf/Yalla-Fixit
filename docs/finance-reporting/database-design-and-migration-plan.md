@@ -20,6 +20,12 @@ Development runs against the **production database** (decision of 20 Oct), so:
    (`fsm_*_id`).
 6. **Rollback** is a reviewed `drop … if exists` script per migration, kept beside it and never run
    automatically. New tables hold no live-relied-upon data until go-live, so dropping them is safe up to then.
+7. **Append-only tables use a trigger that raises, never `DO INSTEAD NOTHING` rules.** A rule on a table with
+   a foreign key to `user_profile` (`ON DELETE SET NULL`) makes **every** user deletion fail with an internal
+   referential-integrity error, even when the table is empty (reproduced on Postgres 15 in P1). Actors in
+   audit tables are therefore plain `uuid` columns with an `actor_label`, not foreign keys.
+8. **Rows addressed to a user go with the user** (`ON DELETE CASCADE`) when a check requires a recipient;
+   `SET NULL` there would violate the check and block the deletion just the same.
 
 ## Existing tables used or extended
 

@@ -75,6 +75,7 @@ import {
   isAdminUser,
 } from "@/lib/role-permissions";
 import { usersService } from "@/modules/users/services/users-service";
+import { pickableOptions } from "@/lib/people/pickable";
 import {
   TodoCreateInput,
   TodoUpdateInput,
@@ -471,9 +472,12 @@ export default function TodosPage() {
   const canEditTodo = (todo: Todo) => canEditTodoRecord(userProfile, todo, userId);
   const canDeleteTodo = (todo: Todo) => canDeleteTodoRecord(userProfile, todo, userId);
 
+  /* Hidden accounts are not offered (DEV-458); an assignee already on the
+     to-do stays, so saving it does not drop them. */
   const userOptions: Option[] = useMemo(
-    () => users.map((user) => ({ value: user.id, label: userLabel(user) })),
-    [users]
+    () =>
+      pickableOptions(users, form.assigneeIds).map((user) => ({ value: user.id, label: userLabel(user) })),
+    [users, form.assigneeIds]
   );
   const selectedAssignees = userOptions.filter((option) => form.assigneeIds.includes(option.value));
 
@@ -991,7 +995,7 @@ export default function TodosPage() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All assignees</SelectItem>
-              {users.map((user) => (
+              {pickableOptions(users, filters.assigneeId ? [filters.assigneeId] : []).map((user) => (
                 <SelectItem key={user.id} value={user.id}>
                   {userLabel(user)}
                 </SelectItem>
@@ -1011,7 +1015,7 @@ export default function TodosPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All owners</SelectItem>
-                {users.map((user) => (
+                {pickableOptions(users, filters.ownerId ? [filters.ownerId] : []).map((user) => (
                   <SelectItem key={user.id} value={user.id}>
                     {userLabel(user)}
                   </SelectItem>

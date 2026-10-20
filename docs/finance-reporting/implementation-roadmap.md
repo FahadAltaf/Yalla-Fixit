@@ -43,8 +43,17 @@ next phase).
   (D-19); 5 leave records in total (D-16).
 - **Jira**: DEV-462 (security precondition), DEV-463 (matrix started).
 
-## P1 — Platform prerequisites · L
+## P1 — Platform prerequisites · L · **built on the branch, 20 Oct; migrations not yet applied**
 
+- **Delivered**: migrations `20261020100000_reporting_platform` and `20261020110000_people_reporting_fields`
+  (files, checks and rollbacks in [migrations/](migrations/)); the throwaway-Postgres harness
+  (`scripts/db-harness/`, 47 checks, migrations applied twice, rollback round trip); 13 resources and four
+  admin exclusions; Reporting Settings (API, page, History); notifier, inbox API, inbox page, home panel;
+  technician ↔ account link in the FSM sync, and leavers kept rather than deleted; hide-from-lists in every
+  people picker; leave categories; employment status, leaving date and rest days on the technician dialog.
+- **Changed from the plan**: no role rows (D-18); the audit table uses an append-only trigger, not rules
+  (rules plus a user foreign key block every user deletion, found by the harness); the compliance threshold
+  has no default (D-09).
 - **Jira**: DEV-462, 461, 456, 457, 458. **BRD**: 5.3, 6.6, 6.7.
 - **Depends on**: P0. D-18 for role names (roles can be created and renamed later).
 - **Migrations**: roles and resources seed; `reporting_settings`; `portal_notifications`;
@@ -157,8 +166,8 @@ next phase).
 
 | State | Issues |
 |---|---|
-| Done on branch | — (P0 delivered the precondition for DEV-462 and started DEV-463) |
-| Next (P1) | DEV-456, 457, 458, 461, 462 |
+| Built on branch (P1), awaiting migrations and browser check | DEV-456, 457 (process doc open), 458, 461, 462 (roles wait on D-18) |
+| Next (P2) | FSM read model and sync |
 | Buildable after P2 | DEV-434, 435, 436*, 437, 438*, 439, 440, 441, 442*, 443, 452, 453*, 455 |
 | Waiting on a decision | DEV-433 (D-01–03), 434 (D-03–05), 438 (D-06), 442 (D-13), 446 (D-15), 447 (D-09, D-11), 449 (D-10, D-19), 453 (D-01, D-02), 454 (D-14, D-17) |
 | Externally blocked (B-01) | DEV-436 (report link), 444 (travel), 445, 447, 448†, 450†, 451, 454 (ratings) |

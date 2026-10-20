@@ -7,6 +7,7 @@ import {
   UserRoles,
 } from "@/types/types";
 import {
+  Bell,
   CalendarClock,
   ClipboardCheck,
   LayoutDashboard,
@@ -99,6 +100,13 @@ export const baseSectionsItems: MenuItem[] = [
     icon: <LayoutDashboard className="size-4 text-primary" />,
     isActive: false,
     resource: ResourceType.DASHBOARD,
+  },
+  /* Everyone's own inbox (BRD §6.2); no resource, so always shown. */
+  {
+    title: "Notifications",
+    url: "/notifications",
+    icon: <Bell className="size-4 text-primary" />,
+    isActive: false,
   },
   {
     title: "Todos",
@@ -281,6 +289,13 @@ export const getNavData = (user: User) => {
           title: "Snagging",
           url: "/settings/snagging",
           resource: ResourceType.SNAGGING_CATALOGUE,
+        },
+        /* Thresholds, recipients and penalties for invoicing and reports
+           (BRD §6.6). */
+        {
+          title: "Reporting",
+          url: "/settings/reporting",
+          resource: ResourceType.REPORTING_SETTINGS,
         },
       ],
     });

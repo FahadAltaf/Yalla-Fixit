@@ -16,6 +16,13 @@ const schema = z.object({
     serviceTypeId: z.string().uuid().nullable().optional(),
     shift: z.enum(["morning", "night"]).nullable().optional(),
     teamLeaderFsmId: z.string().trim().min(1).nullable().optional(),
+    // DEV-457: a leaver. The database refuses 'resigned' without a date.
+    employmentStatus: z.enum(["active", "resigned"]).optional(),
+    leavingDate: z.iso.date().nullable().optional(),
+    // DEV-458: keep a test or dev account off the board and the pickers.
+    hiddenFromLists: z.boolean().optional(),
+    // ISO weekdays off, 1 = Monday .. 7 = Sunday.
+    restWeekdays: z.array(z.number().int().min(1).max(7)).max(7).nullable().optional(),
   }),
 });
 
@@ -40,6 +47,14 @@ export async function PUT(req: NextRequest) {
     if ("serviceTypeId" in attributes) patch.service_type_id = attributes.serviceTypeId ?? null;
     if ("shift" in attributes) patch.shift = attributes.shift ?? null;
     if ("teamLeaderFsmId" in attributes) patch.team_leader_fsm_id = attributes.teamLeaderFsmId ?? null;
+    if (attributes.employmentStatus !== undefined) patch.employment_status = attributes.employmentStatus;
+    if ("leavingDate" in attributes) patch.leaving_date = attributes.leavingDate ?? null;
+    if (attributes.hiddenFromLists !== undefined) patch.hidden_from_lists = attributes.hiddenFromLists;
+    if ("restWeekdays" in attributes) {
+      patch.rest_weekdays = attributes.restWeekdays
+        ? [...new Set(attributes.restWeekdays)].sort((a, b) => a - b)
+        : null;
+    }
 
     if (Object.keys(patch).length === 0) {
       return NextResponse.json({ error: "No attributes to update" }, { status: 400 });
@@ -59,6 +74,13 @@ export async function PUT(req: NextRequest) {
       .update(patch)
       .in("fsm_resource_id", fsmResourceIds)
       .select("fsm_resource_id");
+    // 23514: technician_reference_resigned_has_leaving_date.
+    if (error?.code === "23514") {
+      return NextResponse.json(
+        { error: "A resigned technician needs a leaving date" },
+        { status: 400 },
+      );
+    }
     if (error) throw new Error(error.message);
 
     await admin.from("schedule_audit_events").insert({

@@ -1,9 +1,12 @@
 import { executeRESTBackend } from "@/lib/rest-server";
+import type { LeaveCategory } from "@/lib/scheduling/leave-categories";
 import { LeaveRecord, LeaveStatus } from "@/types/types";
 
 export interface LeaveCreateInput {
   technicianFsmId: string;
-  leaveType: string;
+  /** DEV-456. Its label is stored as leaveType when leaveType is left out. */
+  leaveCategory?: LeaveCategory;
+  leaveType?: string;
   startAt: string;
   endAt: string;
   notes?: string | null;
@@ -11,6 +14,7 @@ export interface LeaveCreateInput {
 
 export interface LeaveUpdateInput {
   id: string;
+  leaveCategory?: LeaveCategory | null;
   leaveType?: string;
   startAt?: string;
   endAt?: string;

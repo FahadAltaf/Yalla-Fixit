@@ -6,13 +6,15 @@ type Admin = Awaited<ReturnType<typeof createAdminServerClient>>;
 // Who receives the "a day needs approval" email — NOT everyone who can
 // approve, but the active users explicitly flagged with
 // receives_schedule_approval_email. Turn the flag on for the account(s) that
-// should be notified.
+// should be notified. An account hidden from lists (DEV-458) is left out:
+// it is not someone the business means to reach.
 export async function getApproverRecipients(admin: Admin): Promise<Array<{ email: string; name: string }>> {
   const { data: users } = await admin
     .from("user_profile")
     .select("email, full_name")
     .eq("receives_schedule_approval_email", true)
-    .eq("is_active", true);
+    .eq("is_active", true)
+    .eq("hidden_from_lists", false);
 
   return (users ?? [])
     .filter((u: { email: string | null }) => Boolean(u.email))

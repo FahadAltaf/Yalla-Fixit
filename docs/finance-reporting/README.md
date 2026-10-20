@@ -9,7 +9,8 @@ Branch `feature/yfi-finance-reporting`, from `origin/main` `f341a26`, in its own
 
 ## Status — 20 Oct 2026
 
-**P0 (foundation and discovery) done on the branch.** Next: P1, after review.
+**P0 done; P1 (platform prerequisites) built on the branch.** P1's two migrations are waiting to be applied
+([migration log](migration-log.md)); its screens have not yet been checked in a browser. Next: P2.
 
 | | |
 |---|---|
@@ -17,7 +18,7 @@ Branch `feature/yfi-finance-reporting`, from `origin/main` `f341a26`, in its own
 | On `main` today | 0 implemented · 3 partial (DEV-443, 456, 459) · 28 not implemented |
 | Externally blocked | 8 issues in whole or part, all by **B-01** (Zoho OAuth scope) |
 | Waiting on a business decision | 9 before their build can finish (D-01 … D-22) |
-| Tests | 21 passing (`npm test`), both safety rails mutation-tested |
+| Tests | 65 unit tests (`npm test`) and 47 database checks (`scripts/db-harness/run.sh`), all passing; safety rails, admin exclusions and notification dedupe mutation-tested |
 
 ## The four things to know first
 

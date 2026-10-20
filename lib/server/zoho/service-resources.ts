@@ -11,6 +11,7 @@
 // action, and refreshTechniciansIfStale() lazily tops it up when the
 // scheduling screen is opened and the cache has aged out.
 
+import { keepWhenGoneFromFsm, linkTechniciansToUsers } from "@/lib/server/people/technician-links";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import {
   fsmFail,
@@ -124,10 +125,19 @@ export async function syncFsmTechnicians(): Promise<FsmResult> {
           display_name: displayNameFor(r),
           is_active: r.isActive,
           last_synced_at: now,
+          // How the technician is matched to a portal account (DEV-462).
+          email: r.email,
         })),
         { onConflict: "fsm_resource_id" },
       );
       if (upsertError) console.error("[zoho:syncFsmTechnicians] upsert error:", upsertError);
+
+      try {
+        await linkTechniciansToUsers(admin);
+      } catch (linkError) {
+        // The roster is what this sync is for; a failed link waits for the next run.
+        console.error("[zoho:syncFsmTechnicians] link error:", linkError);
+      }
 
       // Anyone who no longer qualifies -- wrong profile, deleted in FSM, or
       // gone from the listing entirely -- is REMOVED, not just deactivated.
@@ -140,14 +150,26 @@ export async function syncFsmTechnicians(): Promise<FsmResult> {
       const seenIds = new Set(resources.map((r) => r.fsmResourceId));
       const { data: allRows, error: listError } = await admin
         .from("technician_reference")
-        .select("fsm_resource_id");
+        .select("fsm_resource_id, employment_status, leaving_date");
 
       if (listError) {
         console.error("[zoho:syncFsmTechnicians] list error:", listError);
       } else {
-        const disqualified = (allRows ?? [])
-          .map((r: { fsm_resource_id: string }) => r.fsm_resource_id)
-          .filter((id: string) => !seenIds.has(id));
+        type Row = { fsm_resource_id: string; employment_status?: string | null; leaving_date?: string | null };
+        const gone = ((allRows ?? []) as Row[]).filter((r) => !seenIds.has(r.fsm_resource_id));
+
+        // A leaver's leaving date is what the reports stop counting them
+        // from, so a leaver is deactivated and kept, never deleted.
+        for (const row of gone.filter(keepWhenGoneFromFsm)) {
+          removed.referenced.push(row.fsm_resource_id);
+          await admin
+            .from("technician_reference")
+            .update({ is_active: false, last_synced_at: now })
+            .eq("fsm_resource_id", row.fsm_resource_id);
+        }
+        const disqualified = gone
+          .filter((r) => !keepWhenGoneFromFsm(r))
+          .map((r) => r.fsm_resource_id);
 
         for (const id of disqualified) {
           const { error: deleteError } = await admin

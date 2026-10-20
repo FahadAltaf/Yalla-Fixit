@@ -3,12 +3,15 @@ import { z } from "zod";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
+import { LEAVE_CATEGORY_VALUES, leaveCategoryLabel } from "@/lib/scheduling/leave-categories";
 import { ActionType, ResourceType } from "@/types/types";
 
 const createLeaveSchema = z
   .object({
     technicianFsmId: z.string().trim().min(1),
-    leaveType: z.string().trim().min(1),
+    // DEV-456. The category's label becomes leave_type when none is sent.
+    leaveCategory: z.enum(LEAVE_CATEGORY_VALUES).optional(),
+    leaveType: z.string().trim().min(1).optional(),
     startAt: z.string().datetime({ offset: true }),
     endAt: z.string().datetime({ offset: true }),
     notes: z.string().trim().optional().nullable(),
@@ -17,11 +20,16 @@ const createLeaveSchema = z
     // LEAVE-006: leave end must not be earlier than leave start.
     message: "Leave end must not be earlier than leave start",
     path: ["endAt"],
+  })
+  .refine((data) => Boolean(data.leaveCategory || data.leaveType), {
+    message: "Choose a leave type",
+    path: ["leaveCategory"],
   });
 
 const updateLeaveSchema = z
   .object({
     id: z.string().uuid(),
+    leaveCategory: z.enum(LEAVE_CATEGORY_VALUES).nullable().optional(),
     leaveType: z.string().trim().min(1).optional(),
     startAt: z.string().datetime({ offset: true }).optional(),
     endAt: z.string().datetime({ offset: true }).optional(),
@@ -121,7 +129,8 @@ export async function POST(req: NextRequest) {
       .from("leave_records")
       .insert({
         technician_fsm_id: payload.technicianFsmId,
-        leave_type: payload.leaveType,
+        leave_type: payload.leaveType ?? leaveCategoryLabel(payload.leaveCategory),
+        leave_category: payload.leaveCategory ?? null,
         start_at: payload.startAt,
         end_at: payload.endAt,
         notes: payload.notes || null,
@@ -187,6 +196,13 @@ export async function PUT(req: NextRequest) {
       updated_at: new Date().toISOString(),
     };
     if (payload.leaveType !== undefined) updateData.leave_type = payload.leaveType;
+    if (payload.leaveCategory !== undefined) {
+      updateData.leave_category = payload.leaveCategory;
+      // Keep the text main shows in step, unless the caller sent its own.
+      if (payload.leaveCategory && payload.leaveType === undefined) {
+        updateData.leave_type = leaveCategoryLabel(payload.leaveCategory);
+      }
+    }
     if (payload.startAt !== undefined) updateData.start_at = payload.startAt;
     if (payload.endAt !== undefined) updateData.end_at = payload.endAt;
     if (payload.notes !== undefined) updateData.notes = payload.notes || null;

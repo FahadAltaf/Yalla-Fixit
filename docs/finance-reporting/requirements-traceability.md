@@ -61,6 +61,22 @@ names. Decisions (D-) and blockers (B-) are in
 | DEV-462 | 6.7 | Roles and permissions | Permission model exists; **escalation hole on `main`** | Security port (P0, on the feature branch); new resources and roles; record scoping | D-18 | P0 (port) + P1 | ⬜ (no finance/HR access on `main`; port done on the branch) |
 | DEV-463 | 6.11 | Full test case sheet | 15 starter cases in BRD | Expanded matrix ([test strategy](test-strategy-and-acceptance-matrix.md)) | Sheet link (DEV-463 text) | P0 → P9 | ⬜ (matrix started on the branch) |
 
+## Progress on the feature branch
+
+The tables above describe `main`. This is what the branch adds, phase by phase. **Built** means written,
+type-checked, unit- and database-tested and building; it is not ✅ until the migrations are applied and the
+screens have been checked in a browser.
+
+| Jira | Phase | On the branch | Still open |
+|---|---|---|---|
+| DEV-456 | P1 | Built: `leave_category` (annual, sick, public holiday, offset); leave API accepts it and keeps `leave_type` in step; dropdown replaces free text in the technician dialog | Migration `20261020110000` to apply; browser check |
+| DEV-457 | P1 | Built: `employment_status`, `leaving_date` (resigned needs a date, enforced in the database), rest days; set in the technician dialog; a leaver is deactivated, not deleted, when they leave FSM | The process (deactivate in FSM, reassign appointments, stop the "Resigned" tag) is Sharon's to document with Ali and Behrouz; migration; browser check |
+| DEV-458 | P1 | Built: `hidden_from_lists` on users and technicians; honoured by the to-dos pickers, snagging staff, schedule approval emails, AMC approvers, the schedule board and its pickers; still listed in Users and on the Technicians page; a hidden person already chosen is kept | Migration; browser check |
+| DEV-461 | P1 | Built: `reporting_settings` with every BRD §6.6 setting, suggested defaults labelled as such, compliance threshold deliberately unset (D-09); key-path audit and History tab; page under Settings → Reporting | Migration `20261020100000`; browser check |
+| DEV-462 | P0, P1 | Security port (P0). Built: 13 Finance/Reports resources in the Permissions screen; four named-person acts not inherited by admin; technician ↔ account link by email for "own data" scoping | Role rows wait on D-18; `20261006160000` still held until deploy (B-02) |
+| DEV-463 | P0, P1 | 65 unit tests and 47 database checks running | Grows each phase |
+| (platform) | P1 | `portal_notifications`, the notifier (claim-first dedupe, delivery policy), inbox page, home panel | Used from P4 on |
+
 ## Coverage
 
 **31 / 31 mapped to a phase.** On `main`: ✅ 0 · 🟡 3 (DEV-443, 456, 459) · ⬜ 28.

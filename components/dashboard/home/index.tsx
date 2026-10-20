@@ -1,5 +1,6 @@
 "use client";
 
+import { HomeNotificationsPanel } from "@/components/dashboard/notifications/home-notifications-panel";
 import { PageHeading } from "@/components/dashboard/shared/kaizen";
 import { useAuth } from "@/context/AuthContext";
 
@@ -16,6 +17,10 @@ import { useAuth } from "@/context/AuthContext";
  * Each module's own landing page is where its figures belong: Snagging
  * Overview for throughput and the attention list, AMC proposals for the
  * approval queue, Todos for the list.
+ *
+ * The one exception is unread notifications, which BRD §6.2 puts here
+ * until they are opened. The panel is absent when there are none, so the
+ * page stays a greeting the rest of the time.
  */
 export default function HomeDashboard() {
   const { userProfile } = useAuth();
@@ -29,6 +34,7 @@ export default function HomeDashboard() {
         title={name ? `Welcome back, ${name}` : "Welcome back"}
         description="Pick a module from the sidebar to get started."
       />
+      <HomeNotificationsPanel />
     </div>
   );
 }

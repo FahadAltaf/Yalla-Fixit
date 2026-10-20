@@ -56,13 +56,17 @@ async function requireAmcReader() {
   The people an admin can choose as approvers: admins, and everyone whose
   role has the AMC Proposals permission (view or approve). Someone without
   AMC access could not open the approval queue, so they are not offered.
+  Nor is an account hidden from lists (DEV-458), unless it is already one
+  of the approvers in `keepEmails`, so saving the page does not drop it.
 */
 async function listAmcUsers(
   admin: Awaited<ReturnType<typeof createAdminServerClient>>,
+  keepEmails: string[] = [],
 ): Promise<{ email: string; name: string; isAdmin: boolean }[]> {
+  const keep = new Set(keepEmails.map((email) => email.trim().toLowerCase()));
   const { data, error } = await admin
     .from("user_profile")
-    .select("email, full_name, is_active, roles(name, role_access(resource, action, enabled))")
+    .select("email, full_name, is_active, hidden_from_lists, roles(name, role_access(resource, action, enabled))")
     .not("email", "is", null)
     .order("full_name", { ascending: true })
     .limit(2000);
@@ -72,6 +76,9 @@ async function listAmcUsers(
   }
   return (data ?? [])
     .filter((row) => row.is_active !== false)
+    .filter(
+      (row) => row.hidden_from_lists !== true || keep.has(String(row.email).trim().toLowerCase()),
+    )
     .map((row) => {
       const email = String(row.email).trim().toLowerCase();
       type RoleRow = {
@@ -110,14 +117,16 @@ export async function GET() {
       actually been edited, which is how the page marks a field as
       customised versus still on the shipped default.
     */
-    const [settings, overrides, history, amcUsers] = await Promise.all([
+    const [settings, overrides, history] = await Promise.all([
       readAmcSettings(admin),
       readAmcSettingsOverrides(admin),
       /* FR6.5 — who changed what, and when. Admins only, like the page. */
       gate.isAdmin ? listAmcSettingsHistory(admin) : Promise.resolve([]),
-      /* FR5.3 — the people an admin can choose as approvers. */
-      gate.isAdmin ? listAmcUsers(admin) : Promise.resolve([]),
     ]);
+    /* FR5.3 — the people an admin can choose as approvers. */
+    const amcUsers = gate.isAdmin
+      ? await listAmcUsers(admin, settings.approval?.approvers ?? [])
+      : [];
     /* The override document is an admin's working view -- which fields
        have been customised. The team only needs the resolved text. */
     return NextResponse.json(

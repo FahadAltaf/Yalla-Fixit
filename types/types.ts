@@ -15,6 +15,8 @@ export interface User {
   status?: string;
   // When TRUE, this user receives the "schedule needs approval" email.
   receives_schedule_approval_email?: boolean;
+  // Kept out of people pickers (DEV-458); still listed in Users.
+  hidden_from_lists?: boolean;
 
   settings?: {
     edges: {
@@ -145,6 +147,30 @@ export enum ResourceType {
     They are different jobs, so they are different permissions.
   */
   MOBILE_APP = "mobile_app",
+  // Finance (BRD §5.1, DEV-462). The group, then its pages.
+  FINANCE = "finance",
+  /* View the Ready-to-Invoice queue; Edit works an item (pick up, hold,
+     query); Approve records the MAHER invoice; Export. */
+  FINANCE_QUEUE = "finance_queue",
+  /* Create asks for an item to be excluded as not invoiceable; Approve
+     verifies that request (Behrouz, BRD §5.1 Step 6). */
+  FINANCE_EXCLUSIONS = "finance_exclusions",
+  // Reports (BRD §5.2). The group, then each report: View and Export.
+  REPORTS = "reports",
+  REPORTS_QUOTATIONS = "reports_quotations",
+  REPORTS_UTILIZATION = "reports_utilization",
+  REPORTS_CAPACITY = "reports_capacity",
+  REPORTS_ATTENDANCE = "reports_attendance",
+  REPORTS_REVENUE = "reports_revenue",
+  REPORTS_EXCEPTIONS = "reports_exceptions",
+  /* Everyone's check-in compliance. Edit waives a miss; Approve decides a
+     dispute; Export. */
+  COMPLIANCE = "compliance",
+  /* A technician's own compliance and statement, resolved from the
+     session, never from the request. */
+  COMPLIANCE_SELF = "compliance_self",
+  /* Thresholds, digest time, ageing limits (BRD §6.6). */
+  REPORTING_SETTINGS = "reporting_settings",
 }
 
 export type TodoStatus =
@@ -269,7 +295,18 @@ export interface TechnicianReference {
   // Team-arranged row order on the schedule board ("Custom" sort). Null =
   // not arranged yet.
   board_position?: number | null;
+  // Finance & Reports (DEV-457, 458). See migration 20261020110000.
+  email?: string | null;
+  user_profile_id?: string | null;
+  employment_status?: TechnicianEmploymentStatus;
+  /** First day no longer working (YYYY-MM-DD). */
+  leaving_date?: string | null;
+  hidden_from_lists?: boolean;
+  /** ISO weekdays off, 1 = Monday .. 7 = Sunday. Null = not recorded. */
+  rest_weekdays?: number[] | null;
 }
+
+export type TechnicianEmploymentStatus = "active" | "resigned";
 
 export interface TechnicianTag {
   id: string;
@@ -288,6 +325,8 @@ export interface LeaveRecord {
   technician_fsm_id: string;
   technician?: TechnicianReference;
   leave_type: string;
+  /** DEV-456. Null on records made before categories, or by live main. */
+  leave_category?: "annual" | "sick" | "public_holiday" | "offset" | null;
   start_at: string;
   end_at: string;
   status: LeaveStatus;

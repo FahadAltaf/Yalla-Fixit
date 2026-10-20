@@ -15,6 +15,14 @@ export interface TechnicianAttributeUpdate {
   serviceTypeId?: string | null;
   shift?: TechnicianShift | null;
   teamLeaderFsmId?: string | null;
+  /** DEV-457. 'resigned' needs a leaving date (the database refuses it without). */
+  employmentStatus?: "active" | "resigned";
+  /** YYYY-MM-DD, the first day no longer working. */
+  leavingDate?: string | null;
+  /** DEV-458. */
+  hiddenFromLists?: boolean;
+  /** ISO weekdays off, 1 = Monday .. 7 = Sunday. */
+  restWeekdays?: number[] | null;
 }
 
 // Client-side: set attributes on one or many technicians at once (#15 bulk edit).

@@ -94,6 +94,8 @@ export const usersService = {
         profile_image: data.profile_image,
         is_active: data.is_active,
         receives_schedule_approval_email: data.receives_schedule_approval_email ?? false,
+        // Left out (undefined) by forms that do not show it, so they never change it.
+        hidden_from_lists: data.hidden_from_lists,
       },
     });
   },

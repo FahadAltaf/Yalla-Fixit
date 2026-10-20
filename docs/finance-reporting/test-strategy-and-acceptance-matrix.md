@@ -8,7 +8,7 @@ point; every one becomes an executable test. **No test is reported as passing un
 | Layer | Tool | What it proves | Data |
 |---|---|---|---|
 | Unit | `node:test` (`npm test`, zero dependencies, `tests/setup/ts-loader.mjs`) | Pure calculators, policies, guards | In-memory fixtures |
-| Database | Throwaway Postgres 15 harness, **to be ported from `amc-hardening` in P1** (only the `node:test` runner was ported in P0), migrations applied twice | Constraints, functions, concurrency, idempotency | Synthetic, generated at test volumes |
+| Database | Throwaway Postgres 15 harness (`scripts/db-harness/run.sh`, ported in P1), migrations applied twice, shipped post-checks and rollbacks exercised | Constraints, functions, concurrency, idempotency | Synthetic, generated at test volumes |
 | Integration | `node:test` against route handlers with a fake FSM fetcher | Sync, triggers, permission denials | Recorded FSM-shaped payloads (no values from production) |
 | Browser UAT | Built-in browser, dev server on the feature worktree | Screens, flows, role views | Test accounts, delivery policy in redirect mode |
 
@@ -18,12 +18,17 @@ email or notifications (the delivery policy has no live mode without `FINANCE_NO
 **Known harness gap (B-07)**: today's schema cannot be rebuilt from the repo. The harness needs a schema
 baseline before database tests touch `snagging_*` tables; finance and reports tables do not depend on them.
 
-## Already running (P0)
+## Already running
 
-| Suite | Tests | Result | Mutation check |
-|---|---|---|---|
-| `tests/finance/fsm-read.test.ts` | 11 | pass | Guard disabled → 6 fail; the cast test still passes by design (two layers) |
-| `tests/finance/delivery-policy.test.ts` | 10 | pass | "Blocked" falling through to "live" → 4 fail |
+| Suite | Phase | Tests | Result | Mutation check |
+|---|---|---|---|---|
+| `tests/finance/fsm-read.test.ts` | P0 | 11 | pass | Guard disabled → 6 fail; the cast test still passes by design (two layers) |
+| `tests/finance/delivery-policy.test.ts` | P0 | 10 | pass | "Blocked" falling through to "live" → 4 fail |
+| `tests/reporting/settings.test.ts` | P1 | 14 | pass | — |
+| `tests/notifications/notifier.test.ts` | P1 | 9 | pass | Sending without a successful claim → 4 fail |
+| `tests/people/people.test.ts` | P1 | 10 | pass | — |
+| `tests/permissions/finance-reports-access.test.ts` | P1 | 11 | pass | Admin exclusions removed → 1 fails |
+| `scripts/db-harness/checks/*.sql` | P1 | 47 | pass | `REVOKE` removed → grant check fails |
 
 ## BRD acceptance (TC01–TC15)
 

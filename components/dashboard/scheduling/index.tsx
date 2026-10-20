@@ -42,6 +42,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/actions/utils";
+import { LEAVE_CATEGORIES, type LeaveCategory } from "@/lib/scheduling/leave-categories";
 import {
   formatZonedDate,
   zonedTimeToUtc,
@@ -103,6 +104,36 @@ const SHIFT_OPTIONS = [
   { value: "morning", label: "Morning" },
   { value: "night", label: "Night" },
 ];
+
+const EMPLOYMENT_OPTIONS = [
+  { value: "active", label: "Active" },
+  { value: "resigned", label: "Resigned" },
+];
+
+// DEV-456: every category is excluded from available hours and compliance.
+const LEAVE_TYPE_OPTIONS = [
+  { value: "", label: "— Leave type —" },
+  ...LEAVE_CATEGORIES.map((c) => ({ value: c.value, label: c.label })),
+];
+
+const WEEKDAYS = [
+  { value: 1, label: "Mon" },
+  { value: 2, label: "Tue" },
+  { value: 3, label: "Wed" },
+  { value: 4, label: "Thu" },
+  { value: 5, label: "Fri" },
+  { value: 6, label: "Sat" },
+  { value: 7, label: "Sun" },
+];
+
+// The FSM id, and what is unusual about this technician, under their name.
+function technicianSubtitle(t: TechnicianReference): string {
+  const notes = [t.fsm_resource_id];
+  if (t.employment_status === "resigned") notes.push(t.leaving_date ? `Resigned, leaving ${t.leaving_date}` : "Resigned");
+  else if (t.leaving_date) notes.push(`Leaving ${t.leaving_date}`);
+  if (t.hidden_from_lists) notes.push("Hidden from lists");
+  return notes.join(" · ");
+}
 
 function nearestActiveLeave(records: LeaveRecord[]): { record: LeaveRecord; current: boolean } | null {
   const now = Date.now();
@@ -369,6 +400,10 @@ export default function SchedulingDashboard({ technicians }: Props) {
           next.team_leader_fsm_id = attrs.teamLeaderFsmId ?? null;
           next.team_leader_name = techs.find((x) => x.fsm_resource_id === attrs.teamLeaderFsmId)?.display_name ?? null;
         }
+        if (attrs.employmentStatus !== undefined) next.employment_status = attrs.employmentStatus;
+        if ("leavingDate" in attrs) next.leaving_date = attrs.leavingDate ?? null;
+        if (attrs.hiddenFromLists !== undefined) next.hidden_from_lists = attrs.hiddenFromLists;
+        if ("restWeekdays" in attrs) next.rest_weekdays = attrs.restWeekdays ?? null;
         return next;
       }),
     );
@@ -617,7 +652,7 @@ export default function SchedulingDashboard({ technicians }: Props) {
                       <TableCell>
                         <TechnicianIdentity
                           name={technician.display_name}
-                          subtitle={id}
+                          subtitle={technicianSubtitle(technician)}
                           seed={id}
                           inactive={!technician.is_active}
                         />
@@ -1221,7 +1256,7 @@ function ManageTechnicianDialog({
   const [assignedIds, setAssignedIds] = useState<Set<string>>(new Set(assignedTags.map((t) => t.id)));
   const [busyTagId, setBusyTagId] = useState<string | null>(null);
 
-  const [leaveType, setLeaveType] = useState("");
+  const [leaveCategory, setLeaveCategory] = useState<LeaveCategory | "">("");
   const [startDate, setStartDate] = useState("");
   const [startTime, setStartTime] = useState("00:00");
   const [endDate, setEndDate] = useState("");
@@ -1229,6 +1264,30 @@ function ManageTechnicianDialog({
   const [notes, setNotes] = useState("");
   const [savingLeave, setSavingLeave] = useState(false);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
+
+  // DEV-457: status and leaving date are saved together, because the
+  // database refuses "resigned" without a date.
+  const [employmentStatus, setEmploymentStatus] = useState<"active" | "resigned">(
+    technician.employment_status ?? "active",
+  );
+  const [leavingDate, setLeavingDate] = useState(technician.leaving_date ?? "");
+  const employmentChanged =
+    employmentStatus !== (technician.employment_status ?? "active") ||
+    leavingDate !== (technician.leaving_date ?? "");
+  const saveEmployment = () => {
+    if (employmentStatus === "resigned" && !leavingDate) {
+      toast.error("A resigned technician needs a leaving date");
+      return;
+    }
+    onApplyAttributes({ employmentStatus, leavingDate: leavingDate || null });
+  };
+  const restDays = new Set(technician.rest_weekdays ?? []);
+  const toggleRestDay = (day: number) => {
+    const next = new Set(restDays);
+    if (next.has(day)) next.delete(day);
+    else next.add(day);
+    onApplyAttributes({ restWeekdays: next.size > 0 ? [...next].sort((a, b) => a - b) : null });
+  };
 
   const toggleTag = async (tagId: string) => {
     if (busyTagId) return;
@@ -1258,7 +1317,7 @@ function ManageTechnicianDialog({
   };
 
   const handleAddLeave = async () => {
-    if (!leaveType.trim() || !startDate || !endDate) {
+    if (!leaveCategory || !startDate || !endDate) {
       toast.error("Leave type, start date, and end date are required");
       return;
     }
@@ -1266,7 +1325,7 @@ function ManageTechnicianDialog({
     try {
       const { conflicts } = await leaveService.createLeave({
         technicianFsmId: technician.fsm_resource_id,
-        leaveType: leaveType.trim(),
+        leaveCategory,
         startAt: zonedTimeToUtc(startDate, startTime).toISOString(),
         endAt: zonedTimeToUtc(endDate, endTime).toISOString(),
         notes: notes.trim() || null,
@@ -1276,7 +1335,7 @@ function ManageTechnicianDialog({
           ? `Leave saved — ${conflicts.length} existing assignment(s) now conflict on the schedule`
           : "Leave saved",
       );
-      setLeaveType("");
+      setLeaveCategory("");
       setStartDate("");
       setEndDate("");
       setNotes("");
@@ -1332,6 +1391,69 @@ function ManageTechnicianDialog({
         </div>
 
         <div>
+          <p className="mb-2 text-sm font-medium">Employment</p>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="flex flex-col gap-1 text-xs font-medium">
+              Status
+              <Select
+                value={employmentStatus}
+                options={EMPLOYMENT_OPTIONS}
+                onChange={(v) => setEmploymentStatus(v === "resigned" ? "resigned" : "active")}
+                className="h-9"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-xs font-medium">
+              Leaving date
+              <Input type="date" value={leavingDate} onChange={(e) => setLeavingDate(e.target.value)} className="h-9" />
+            </label>
+          </div>
+          <p className="text-muted-foreground mt-1.5 text-xs">
+            The first day they no longer work. From that day on they are left out of available hours, alerts and
+            compliance. Deactivate them in Zoho FSM as well.
+          </p>
+          {employmentChanged ? (
+            <Button size="sm" variant="outline" className="mt-2" onClick={saveEmployment}>
+              Save employment
+            </Button>
+          ) : null}
+        </div>
+
+        <div>
+          <p className="mb-2 text-sm font-medium">Weekly rest days</p>
+          <div className="flex flex-wrap gap-1.5">
+            {WEEKDAYS.map((day) => (
+              <button
+                key={day.value}
+                type="button"
+                aria-pressed={restDays.has(day.value)}
+                onClick={() => toggleRestDay(day.value)}
+                className={cn(
+                  "rounded-md border px-2.5 py-1 text-sm transition-colors",
+                  restDays.has(day.value) ? "border-primary bg-primary/10" : "hover:bg-muted/50",
+                )}
+              >
+                {day.label}
+              </button>
+            ))}
+          </div>
+          <p className="text-muted-foreground mt-1.5 text-xs">Not counted as available hours. Leave none ticked if not recorded.</p>
+        </div>
+
+        <label className="flex items-start gap-2.5 text-sm">
+          <Checkbox
+            checked={technician.hidden_from_lists === true}
+            onCheckedChange={(checked) => onApplyAttributes({ hiddenFromLists: checked === true })}
+            className="mt-0.5"
+          />
+          <span>
+            <span className="font-medium">Hide from lists</span>
+            <span className="text-muted-foreground block text-xs">
+              For test and dev accounts: kept off the schedule board and its pickers. Still listed here.
+            </span>
+          </span>
+        </label>
+
+        <div>
           <p className="mb-2 text-sm font-medium">Tags</p>
           <div className="flex max-h-40 flex-col gap-1 overflow-y-auto">
             {tags.length === 0 && <p className="text-muted-foreground text-sm">No tags created yet.</p>}
@@ -1385,7 +1507,13 @@ function ManageTechnicianDialog({
           </div>
 
           <div className="flex flex-col gap-2">
-            <Input placeholder="Leave type (e.g. Annual Leave)" value={leaveType} onChange={(e) => setLeaveType(e.target.value)} />
+            <Select
+              ariaLabel="Leave type"
+              value={leaveCategory}
+              options={LEAVE_TYPE_OPTIONS}
+              onChange={(v) => setLeaveCategory(v as LeaveCategory | "")}
+              className="h-9"
+            />
             <div className="grid grid-cols-2 gap-2">
               <label className="flex flex-col gap-1 text-xs font-medium">
                 Start date
