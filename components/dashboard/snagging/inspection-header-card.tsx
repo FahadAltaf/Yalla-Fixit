@@ -29,7 +29,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { snaggingService } from "@/modules/snagging";
-import { publishReportPdf } from "./report-publish";
+import { useReportProgress } from "./report-progress-dialog";
 import { ActionType, ResourceType, type SnaggingTask } from "@/types/types";
 
 import { AdditionalVisitDialog } from "./additional-visit-dialog";
@@ -91,6 +91,24 @@ export function InspectionHeaderCard({
 }) {
   const { userProfile } = useAuth();
   const { confirm, dialog } = useConfirm();
+  /* The report being made after approval, in a popup that ticks off each step. */
+  const reportProgress = useReportProgress();
+  /* SNG-100: the quotation is void (property not as quoted) until a revised one is approved. */
+  const quotationVoid = task.quotation_void ?? null;
+  const [revising, setRevising] = useState(false);
+  async function raiseRevisedQuotation() {
+    setRevising(true);
+    try {
+      const revised = await snaggingService.quotationAction(task.id, "revise");
+      toast.success(`Revised quotation ${revised.quote_number} raised`, {
+        description: "Check it, then send it to the client. The inspection can be approved once they approve it.",
+      });
+      router.push(`/snagging/quotations/${revised.id}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not raise the revised quotation");
+      setRevising(false);
+    }
+  }
   const [working, setWorking] = useState(false);
   const [roundOpen, setRoundOpen] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
@@ -170,7 +188,8 @@ export function InspectionHeaderCard({
     window.dispatchEvent(new Event(SNAGGING_APPROVALS_CHANGED));
   };
 
-  const snags = useMemo(() => task.snags ?? [], [task]);
+  /* Withdrawn (deleted in the app) snags are out of every count, as on the jobs table. */
+  const snags = useMemo(() => (task.snags ?? []).filter((s) => s.status !== "withdrawn"), [task]);
   const areas = task.areas ?? [];
 
   const highCount = snags.filter((snag) => snag.severity === "high").length;
@@ -380,22 +399,14 @@ export function InspectionHeaderCard({
       The server no longer renders its own copy, so this is the step that
       gives the approved job its document.
     */
-    const keepOpen = "Keep this page open while the report is saved and sent to Zoho FSM.";
-    const progress = toast.loading("Inspection approved. Preparing the report…", { description: keepOpen });
-    try {
-      await publishReportPdf(task.id, {
-        onStage: (stage) => toast.loading(`${stage}…`, { id: progress, description: keepOpen }),
-      });
-      toast.success("Inspection approved and the report saved", {
-        id: progress,
-        description: "It is attached to the Zoho FSM work order. Open the report to send it to the client.",
-      });
-    } catch (error) {
-      toast.error("Inspection approved, but the report was not saved", {
-        id: progress,
-        description: `${error instanceof Error ? error.message : "Something went wrong"}. Opening the report saves it.`,
-      });
-    }
+    await reportProgress.run(task.id, {
+      title: "Saving the report",
+      done: "Inspection approved",
+      successMessage: "Report version {version} is saved and goes to the Zoho FSM work order. Open the report to send it to the client.",
+      failureMessage: "The inspection is approved, but its report was not saved. Opening the report saves it.",
+      reportHref: `/snagging/${task.id}/report`,
+      watchFsm: true,
+    });
   }
 
   /*
@@ -583,8 +594,8 @@ export function InspectionHeaderCard({
                   pending={working}
                   pendingLabel="Approving…"
                   // The approval checks the snags' photos first; it cannot
-                  // until they have loaded.
-                  disabled={pending.snags}
+                  // until they have loaded. A void quotation holds it (SNG-100).
+                  disabled={pending.snags || Boolean(quotationVoid?.blocking)}
                   icon={<CheckCircle2 className="size-4" />}
                 >
                   Approve inspection
@@ -635,6 +646,48 @@ export function InspectionHeaderCard({
             ) : null}
           </div>
         </div>
+
+        {/*
+          SNG-100: the inspector found the property not as quoted. Shown
+          until the revised quotation is approved, with the one step that
+          moves it on: raise the revision, or open the one raised.
+        */}
+        {quotationVoid?.blocking ? (
+          <div className="border-danger/30 bg-danger/5 flex flex-wrap items-start justify-between gap-3 border-t px-5 py-4">
+            <div className="min-w-0 flex-1">
+              <p className="text-danger flex items-center gap-1.5 text-sm font-medium">
+                <AlertTriangle className="size-4 shrink-0" aria-hidden />
+                Property not as quoted · quotation {quotationVoid.quotation.quote_number} is void
+              </p>
+              {quotationVoid.quotation.void_reason ? (
+                <p className="text-muted-foreground mt-1 text-sm">{quotationVoid.quotation.void_reason}</p>
+              ) : null}
+              <p className="text-muted-foreground mt-1 text-sm">
+                {quotationVoid.revised
+                  ? `Revised quotation ${quotationVoid.revised.quote_number} is ${quotationVoid.revised.status}. This inspection can be approved once the client approves it.`
+                  : "Raise a revised quotation, priced as found, and send it to the client. This inspection can be approved once they approve it."}
+              </p>
+            </div>
+            {quotationVoid.revised ? (
+              <Button variant="outline" size="sm" asChild>
+                <Link href={`/snagging/quotations/${quotationVoid.revised.id}`}>
+                  <FileText className="size-4" />
+                  Open revised quotation
+                </Link>
+              </Button>
+            ) : canCreate ? (
+              <SubmitButton
+                size="sm"
+                onClick={() => void raiseRevisedQuotation()}
+                pending={revising}
+                pendingLabel="Raising…"
+                icon={<FileText className="size-4" />}
+              >
+                Raise revised quotation
+              </SubmitButton>
+            ) : null}
+          </div>
+        ) : null}
 
         {/*
           While the send-back is still being answered, not only while the
@@ -861,6 +914,7 @@ export function InspectionHeaderCard({
       />
 
       {dialog}
+      {reportProgress.dialog}
       </>
       ) : null}
     </>

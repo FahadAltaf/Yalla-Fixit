@@ -3,6 +3,7 @@ import {
   BorderStyle,
   Document,
   Footer,
+  Header,
   ImageRun,
   Packer,
   PageNumber,
@@ -45,6 +46,10 @@ const PAGE_W = 11906;
 const MARGIN_X = 720;
 const MARGIN_Y = 720;
 const CONTENT_W = PAGE_W - MARGIN_X * 2;
+/* The PDF's running header colour (rgb 131, 32, 30). */
+const HEADER_RED = "83201E";
+/* Worst first, as the PDF orders the closing list. */
+const OUTLINE_RANK = ["high", "medium", "low"];
 
 /* The report's palette (see inspection-report.tsx). */
 const C = {
@@ -493,6 +498,10 @@ export async function generateInspectionReportDocx(
       if (photo.signed_url && isPhoto(photo)) urls.add(photo.signed_url);
     }
   }
+  /* The running header's ISO marks, as the PDF sets them beside the title. */
+  const headerBadges = (
+    await Promise.all(AMC_BRAND_IMAGES.iso.map((badge) => loadPhoto(badge.src)))
+  ).filter((badge): badge is Photo => Boolean(badge));
   const [logo, signature, ...loaded] = await Promise.all([
     loadPhoto(AMC_BRAND_IMAGES.logoTrimmed),
     /*
@@ -521,8 +530,22 @@ export async function generateInspectionReportDocx(
     }),
   );
 
-  /* The plans, each painted with the pins that sit on it. */
-  const plans = (task.floor_plans ?? []).filter((plan) => plan.signed_url);
+  /*
+    The plans, each painted with the pins that sit on it. Only a plan with
+    a defect on it, as the PDF prints them: the Word carried every plan, so
+    a two-storey unit with defects on one floor had a page more (SNG-140).
+  */
+  const plans = (task.floor_plans ?? []).filter(
+    (plan) =>
+      plan.signed_url &&
+      snags.some(
+        (snag) =>
+          snag.floor_plan_id === plan.id &&
+          snag.pin_x != null &&
+          snag.pin_y != null &&
+          defectNumber.has(snag.id),
+      ),
+  );
   const plannedImages = new Map(
     await Promise.all(
       plans.map(async (plan) => {
@@ -1331,9 +1354,27 @@ export async function generateInspectionReportDocx(
     para(
       snags.length === 0
         ? "The property was found in acceptable condition, with no defects recorded at this inspection."
-        : `The property was found in acceptable condition with comments, with ${snags.length} finishing and workmanship comment${snags.length === 1 ? "" : "s"}, listed above.`,
+        : `The property was found in ${count("high") > 0 ? "acceptable condition with comments" : "acceptable condition"}, with ${snags.length} finishing and workmanship comment${snags.length === 1 ? "" : "s"}, highlighted below.`,
     ),
   );
+  /* The defects themselves, worst first, as the PDF lists them under the summary (SNG-140). */
+  for (const snag of [...snags].sort(
+    (a, b) => OUTLINE_RANK.indexOf(a.severity) - OUTLINE_RANK.indexOf(b.severity),
+  )) {
+    const label = [snag.area?.name ?? snag.area_label, snag.element_label, snag.defect_label]
+      .filter(Boolean)
+      .join(" · ");
+    body.push(
+      new Paragraph({
+        children: text([
+          { text: `-  ${label}` },
+          ...(snag.note ? [{ text: ` — ${snag.note}`, color: C.sub }] : []),
+        ]),
+        indent: { left: 400 },
+        spacing: { after: 80, line: 260 },
+      }),
+    );
+  }
   if (inspector?.full_name || submission?.signed_at) {
     body.push(
       para([
@@ -1369,7 +1410,65 @@ export async function generateInspectionReportDocx(
     ]),
   );
 
-  /* The footer on every page; no running header. */
+  /*
+    The running header, as the PDF draws it on every page after the cover:
+    the logo and the report's title on the left in the brand's dark red,
+    the ISO marks on the right, a rule under both (SNG-140).
+  */
+  const header = new Header({
+    children: [
+      new Table({
+        width: { size: CONTENT_W, type: WidthType.DXA },
+        columnWidths: [Math.round(CONTENT_W * 0.7), CONTENT_W - Math.round(CONTENT_W * 0.7)],
+        borders: {
+          ...BARE,
+          bottom: { style: BorderStyle.SINGLE, size: 6, color: HEADER_RED },
+        },
+        rows: [
+          new TableRow({
+            children: [
+              new TableCell({
+                width: { size: Math.round(CONTENT_W * 0.7), type: WidthType.DXA },
+                borders: NO_CELL_BORDERS(),
+                verticalAlign: VerticalAlign.CENTER,
+                children: [
+                  new Paragraph({
+                    children: [
+                      ...(logo ? [imageRun(logo, 120, 34), new TextRun({ text: "   " })] : []),
+                      new TextRun({
+                        text: `Property handover snagging report${place ? ` · ${place}` : ""}`,
+                        size: half(7.5),
+                        color: HEADER_RED,
+                      }),
+                    ],
+                    spacing: { after: 60 },
+                  }),
+                ],
+              }),
+              new TableCell({
+                width: { size: CONTENT_W - Math.round(CONTENT_W * 0.7), type: WidthType.DXA },
+                borders: NO_CELL_BORDERS(),
+                verticalAlign: VerticalAlign.CENTER,
+                children: [
+                  new Paragraph({
+                    alignment: AlignmentType.RIGHT,
+                    children: headerBadges.flatMap((badge, index) => [
+                      ...(index > 0 ? [new TextRun({ text: " " })] : []),
+                      imageRun(badge, 60, 30),
+                    ]),
+                    spacing: { after: 60 },
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      }),
+      new Paragraph({ children: [], spacing: { after: 120 } }),
+    ],
+  });
+
+  /* The footer on every page. */
   const footer = new Footer({
     children: [
       new Paragraph({
@@ -1410,6 +1509,7 @@ export async function generateInspectionReportDocx(
     sections: [
       {
         properties: {
+          titlePage: true,
           page: {
             size: { width: PAGE_W, height: 16838 },
             margin: {
@@ -1420,6 +1520,8 @@ export async function generateInspectionReportDocx(
             },
           },
         },
+        /* The cover goes without the running header, as on the PDF. */
+        headers: { default: header, first: new Header({ children: [new Paragraph({ children: [] })] }) },
         footers: { default: footer, first: footer },
         children: body,
       },

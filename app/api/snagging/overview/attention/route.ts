@@ -10,6 +10,7 @@ import {
   myQuotations,
 } from "@/lib/server/snagging/overview-queries";
 import { APPROVAL_SLA_HOURS } from "@/lib/server/snagging/workflow";
+import { voidColumnsReady } from "@/lib/server/snagging/quotation-void";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
@@ -182,6 +183,45 @@ export async function GET(req: NextRequest) {
       if (result.error) throw new Error(result.error.message);
     }
 
+    /*
+      SNG-100: quotations made void because the inspector found the property
+      not as quoted, until the revised one is approved. Rare and blocking,
+      so they lead the list. For the quotation's coordinator and the job's
+      approval manager, the two people the email went to.
+    */
+    type VoidRow = {
+      id: string;
+      quote_number: string;
+      job_id: string | null;
+      voided_at: string;
+      void_reason: string | null;
+      replaced_by_quotation_id: string | null;
+      created_by: string | null;
+      property_snapshot: Record<string, unknown> | null;
+      job: { approval_manager_id: string | null } | { approval_manager_id: string | null }[] | null;
+    };
+    let voids: VoidRow[] = [];
+    if (await voidColumnsReady(admin)) {
+      const { data: voidRows, error: voidError } = await admin
+        .from("snagging_quotations")
+        .select("id, quote_number, job_id, voided_at, void_reason, replaced_by_quotation_id, created_by, property_snapshot, job:job_id(approval_manager_id)")
+        .not("voided_at", "is", null)
+        .order("voided_at", { ascending: true })
+        .limit(200);
+      if (voidError) throw new Error(voidError.message);
+      const mine = ((voidRows ?? []) as VoidRow[]).filter((row) => {
+        const job = Array.isArray(row.job) ? row.job[0] : row.job;
+        return row.created_by === me || job?.approval_manager_id === me;
+      });
+      // Still open: no revision yet, or one the client has not approved.
+      const revisionIds = mine.map((row) => row.replaced_by_quotation_id).filter(Boolean) as string[];
+      const { data: revisions } = revisionIds.length
+        ? await admin.from("snagging_quotations").select("id, status").in("id", revisionIds)
+        : { data: [] as { id: string; status: string }[] };
+      const approved = new Set(((revisions ?? []) as { id: string; status: string }[]).filter((r) => r.status === "approved").map((r) => r.id));
+      voids = mine.filter((row) => !row.replaced_by_quotation_id || !approved.has(row.replaced_by_quotation_id));
+    }
+
     type Row = {
       id: string;
       code: string;
@@ -230,6 +270,24 @@ export async function GET(req: NextRequest) {
         : null;
 
     const items = [
+      // A void quotation leads (SNG-100): the inspection cannot be approved until it is revised.
+      ...voids.map((row) => {
+        const snap = row.property_snapshot ?? {};
+        return {
+          id: row.id,
+          category: "quote_void" as const,
+          severity: "urgent" as const,
+          title:
+            [snap.unit_label, snap.building_name].filter(Boolean).join(", ") ||
+            (snap.client_name as string | undefined) ||
+            `Quotation ${row.quote_number}`,
+          subtitle: row.replaced_by_quotation_id
+            ? `Property not as quoted: revised quotation waiting on the client (${row.quote_number} is void)`
+            : `Property not as quoted: quotation ${row.quote_number} is void. Raise a revised one`,
+          at: row.voided_at,
+          href: row.job_id ? `/snagging/${row.job_id}` : `/snagging/quotations/${row.id}`,
+        };
+      }),
       // A visit that never happened leads: it blocks everything downstream,
       // and unlike the review items nobody is waiting on a decision -- they
       // are waiting on somebody to turn up.
@@ -321,6 +379,9 @@ export async function GET(req: NextRequest) {
       chips with one item each would be noise.
     */
     const categories = [
+      ...(voids.length
+        ? [{ key: "quote_void", label: "Not as quoted", count: voids.length, severity: "urgent" as const }]
+        : []),
       {
         key: "overdue_on_site",
         label: "Overdue on site",
@@ -357,6 +418,7 @@ export async function GET(req: NextRequest) {
       {
         data: {
           total:
+            voids.length +
             onSiteCount +
             rejectedCount +
             waitingCount +

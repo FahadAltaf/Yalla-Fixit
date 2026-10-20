@@ -87,6 +87,49 @@ export const emailService = {
   },
 
   /**
+   * SNG-100 — the inspector found the property not as quoted, so the
+   * quotation is void until a revised one is approved. Goes to the
+   * quotation's coordinator and the job's approval manager.
+   */
+  sendSnaggingQuotationVoidEmail: async ({
+    to,
+    code,
+    unit,
+    quotationNumber,
+    reason,
+    inspector,
+    jobUrl,
+  }: {
+    to: string[];
+    code: string;
+    unit: string;
+    quotationNumber: string;
+    reason: string;
+    inspector: string | null;
+    jobUrl: string;
+  }) => {
+    const subject = `Property not as quoted — quotation ${quotationNumber} is void (${code})`;
+    const html = clientEmailHtml({
+      eyebrow: "Snagging",
+      heading: "Property not as quoted",
+      paragraphs: [
+        `The inspector found the unit is not as the quotation describes, so quotation ${quotationNumber} is void.`,
+        "Raise a revised quotation from the job and send it to the client. The inspection cannot be approved until the client approves the revised one.",
+      ],
+      details: [
+        { label: "Inspection", value: code },
+        { label: "Unit", value: unit },
+        { label: "Quotation", value: quotationNumber },
+        { label: "Found", value: reason },
+        ...(inspector ? [{ label: "Flagged by", value: inspector }] : []),
+      ],
+      cta: { label: "Open the inspection", url: jobUrl },
+      footnote: "You are receiving this because you raised the quotation or are the approval manager on this job.",
+    });
+    return emailService.sendEmail({ to, subject, html });
+  },
+
+  /**
    * FR-6.02 / FR-6.03 — work sent back to the inspector.
    *
    * Carries the category, the written reason and the remediation deadline,

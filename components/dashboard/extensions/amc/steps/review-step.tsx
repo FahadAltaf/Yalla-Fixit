@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/table";
 
 import type { AmcComputedData, AmcFormData } from "../amc-types";
+import { contractClauseReferences } from "../amc-document-model";
 import { termFeeLabel } from "../amc-date-utils";
 import { formatDisplayDate } from "../amc-pricing";
 
@@ -322,8 +323,14 @@ export function ReviewStep({ form, computed }: StepProps) {
         title="Services and cost"
         description="As it appears in the documents, with the total before and after 5% VAT."
       >
-        <ServicesAndCost rows={computed.frequencyRows} totals={totals} />
+        <ServicesAndCost rows={withContractReferences(computed)} totals={totals} />
       </ReviewSection>
     </div>
   );
+}
+
+/* Each row's clause as the contract numbers it, not the fixed reference in AMC Settings (AMC-057). */
+function withContractReferences(computed: AmcComputedData): AmcComputedData["frequencyRows"] {
+  const references = contractClauseReferences(computed);
+  return computed.frequencyRows.map((row) => ({ ...row, reference: references.get(row.serviceId) ?? row.reference }));
 }

@@ -248,7 +248,22 @@ export async function createClientWithFsm(
   const token = await getFsmAccessToken(admin);
   const existing = await findContactByEmail(token, input.email);
   if (existing) {
-    return { client: await linkFsmContact(admin, existing.id, actorId), existed: true };
+    /*
+      FSM keeps one contact per email, so a second is never made. Logged, so
+      the activity says why no new client appeared (SNG-191), and the caller
+      tells the user which client was opened instead.
+    */
+    const client = await linkFsmContact(admin, existing.id, actorId);
+    await log(admin, {
+      quotationId: null,
+      clientId: client.id ?? null,
+      action: "contact_exists",
+      status: "skipped",
+      recordId: existing.id,
+      message: `${input.name} <${input.email}> was not created: FSM already has this email as ${existing.name}, which was opened instead`,
+      actorId,
+    });
+    return { client, existed: true };
   }
 
   let contactId: string;

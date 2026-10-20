@@ -342,6 +342,18 @@ export interface SnaggingQuotation {
    */
   can_approve_rate?: boolean;
 
+  /**
+   * SNG-100: void because the inspector found the property not as quoted,
+   * and the revision either way (the one raised for it, or the void one
+   * this revises). Null when neither applies.
+   */
+  void_info?: {
+    voided_at: string | null;
+    void_reason: string | null;
+    replaced_by: { id: string; quote_number: string; status: string } | null;
+    revises: { id: string; quote_number: string } | null;
+  } | null;
+
   /** Office notes typed on the form; copied to the job (SNG-022). */
   notes?: string | null;
 
@@ -378,6 +390,8 @@ export interface SnaggingQuotation {
 export interface SnaggingClientOption {
   /** Present for persisted clients (from snagging_clients). */
   id?: string;
+  /** Set by Add client when Zoho FSM already had the email: that client was opened instead. */
+  existed?: boolean;
   /** The Zoho FSM contact. A client listed from FSM and not used yet has only this. */
   fsm_contact_id?: string | null;
   /** Maher ID, which Zoho FSM requires on a client (Maher_Id__C). */
@@ -854,7 +868,7 @@ export const snaggingService = {
 
   quotationAction: async (
     taskId: string,
-    action: "generate" | "send" | "share_link" | "approve" | "reject",
+    action: "generate" | "send" | "share_link" | "approve" | "reject" | "revise",
     extra?: Record<string, unknown>,
   ): Promise<SnaggingQuotation> =>
     executeRESTBackend<SnaggingQuotation>(

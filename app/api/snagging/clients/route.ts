@@ -114,7 +114,8 @@ export async function POST(req: NextRequest) {
           { name, email, phone, company, maherId },
           profile.id,
         );
-        return NextResponse.json({ data: client, existed }, { status: existed ? 200 : 201 });
+        /* existed: FSM already had the email, so that client was opened instead (said to the user). */
+        return NextResponse.json({ data: { ...client, existed }, existed }, { status: existed ? 200 : 201 });
       } catch (err) {
         return NextResponse.json({ error: fsmErrorMessage(err) }, { status: 502 });
       }

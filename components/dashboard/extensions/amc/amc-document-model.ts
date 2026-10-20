@@ -186,7 +186,13 @@ function opening(data: AmcComputedData): Block[] {
 // Contract
 // ---------------------------------------------------------------------------
 
-function contractBlocks(data: AmcComputedData): Block[] {
+function contractBlocks(
+  data: AmcComputedData,
+  /* Filled with the clause each service's row points at, as the contract prints it. */
+  references?: Map<string, string>,
+  /* Filled with each clause's number, by role, as the contract prints it. */
+  clauseNumbers?: Map<string, string>,
+): Block[] {
   const { formData, totals, frequencyRows, settings } = data;
   const fill = (value: string) => fillBlocks(value, data);
   /*
@@ -419,6 +425,7 @@ function contractBlocks(data: AmcComputedData): Block[] {
     numberOf.set(clause.id, number);
     if (clause.role) numberOf.set(clause.role, number);
   }
+  for (const [key, value] of numberOf) clauseNumbers?.set(key, value);
 
   /* A reference to a clause that has been removed says so, rather than
      printing a number that is now somebody else's. */
@@ -623,13 +630,16 @@ function contractBlocks(data: AmcComputedData): Block[] {
               headerCell("REFERENCE", "center"),
             ],
             rows: zebra(
-              frequencyRows.map((row) => [
+              frequencyRows.map((row) => {
+                references?.set(row.serviceId, referenceFor(row));
+                return [
                 cell(row.scope),
                 // Blank, not "1": see FrequencyRow.hasUnits.
                 cell(row.hasUnits ? String(row.units) : "", { align: "center" }),
                 cell(row.frequency, { align: "center" }),
                 cell([[t(referenceFor(row), { tone: "muted" })]], { align: "center" }),
-              ]),
+              ];
+              }),
             ),
           },
         ];
@@ -821,6 +831,25 @@ function contractBlocks(data: AmcComputedData): Block[] {
     contactTable,
     ...body,
   ];
+}
+
+/**
+ * The clause each service points at in the contract ("Clause 2.2"), by
+ * service. The scopes are numbered by which services are on the contract,
+ * so a fixed reference from AMC Settings is wrong as soon as one before it
+ * is left out (AMC-057: Plumbing showed 2.3 where the contract printed 2.2).
+ */
+export function contractClauseReferences(data: AmcComputedData): Map<string, string> {
+  const references = new Map<string, string>();
+  contractBlocks({ ...data, documentType: "contract" }, references);
+  return references;
+}
+
+/** The number a clause prints with on this contract ("5.3"), or null when it is not on it. */
+export function contractClauseNumber(data: AmcComputedData, role: string): string | null {
+  const numbers = new Map<string, string>();
+  contractBlocks({ ...data, documentType: "contract" }, undefined, numbers);
+  return numbers.get(role) ?? null;
 }
 
 export function buildAmcDocumentModel(data: AmcComputedData): AmcDocumentModel {

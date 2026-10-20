@@ -776,6 +776,15 @@ export interface SnaggingTask {
    * holds assignment back.
    */
   quotation_status?: string | null;
+  /**
+   * SNG-100: the job's quotation is void because the inspector found the
+   * property not as quoted. `blocking` until the revised one is approved.
+   */
+  quotation_void?: {
+    quotation: { id: string; quote_number: string; voided_at: string; void_reason: string | null };
+    revised: { id: string; quote_number: string; status: string } | null;
+    blocking: boolean;
+  } | null;
   /** As quoted (SNG-100): furnished or not. Null when no quotation says. */
   furnished?: boolean | null;
   /** Booked outside working hours, as quoted. Null when no quotation says. */

@@ -66,7 +66,7 @@ import {
   formatLocalDateTime,
   useConfirm,
 } from "./shared";
-import { publishReportPdf } from "./report-publish";
+import { useReportProgress } from "./report-progress-dialog";
 import { SnagWalkList } from "./snag-walk-list";
 import { VisitEditDialog } from "./visit-edit-dialog";
 import { VisitBodySkeleton } from "@/components/dashboard/snagging/route-skeletons";
@@ -147,6 +147,8 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
   const [bookMode, setBookMode] = useState(false);
   const [sendBackOpen, setSendBackOpen] = useState(false);
   const { confirm, dialog: confirmDialog } = useConfirm();
+  /* The new report version being made after approval, in a popup that ticks off each step. */
+  const reportProgress = useReportProgress();
   const [reason, setReason] = useState("");
   // The tab is linkable (?tab=quotation), so "Send quotation" anywhere in
   // the app lands on this visit's quotation rather than a separate page.
@@ -269,24 +271,14 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
       report with this visit merged in) and saved as its file, which also puts
       it on the Zoho FSM work order.
     */
-    const keepOpen = "Keep this page open while the report is saved and sent to Zoho FSM.";
-    const progress = toast.loading(`Visit ${visit.visit_number} approved. Preparing report version ${outcome.generated.version}…`, {
-      description: keepOpen,
+    await reportProgress.run(taskId, {
+      title: `Saving report version ${outcome.generated.version}`,
+      done: `Visit ${visit.visit_number} approved`,
+      successMessage: `Report version {version}, with visit ${visit.visit_number} in it, is saved and goes to the Zoho FSM work order.`,
+      failureMessage: `Visit ${visit.visit_number} is approved, but the report was not saved. Opening the job's report saves it.`,
+      reportHref: `/snagging/${taskId}/report`,
+      watchFsm: true,
     });
-    try {
-      await publishReportPdf(taskId, {
-        onStage: (stage) => toast.loading(`${stage}…`, { id: progress, description: keepOpen }),
-      });
-      toast.success(`Visit ${visit.visit_number} approved and report version ${outcome.generated.version} saved`, {
-        id: progress,
-        description: "It is attached to the Zoho FSM work order.",
-      });
-    } catch (error) {
-      toast.error(`Visit ${visit.visit_number} approved, but the report was not saved`, {
-        id: progress,
-        description: `${error instanceof Error ? error.message : "Something went wrong"}. Opening the job's report saves it.`,
-      });
-    }
   }
 
   async function sendBack() {
@@ -787,6 +779,7 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
       />
 
       {confirmDialog}
+      {reportProgress.dialog}
       <Dialog open={sendBackOpen} onOpenChange={setSendBackOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>

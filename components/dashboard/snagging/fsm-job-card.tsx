@@ -19,7 +19,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { snaggingService, type SnaggingJobFsm } from "@/modules/snagging";
 
 import { FsmEventList } from "./fsm-activity";
-import { publishReportPdf } from "./report-publish";
+import { useReportProgress } from "./report-progress-dialog";
 import { SubmitButton, formatLocalDateTime } from "./shared";
 
 /**
@@ -46,6 +46,8 @@ export function FsmJobCard({
   const [state, setState] = useState<SnaggingJobFsm | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<null | "sync" | "attach">(null);
+  /* Attaching the report, in a popup that ticks off each step. */
+  const reportProgress = useReportProgress();
   // The activity is paged on the server, like the History card.
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
@@ -85,19 +87,20 @@ export function FsmJobCard({
 
   async function attachReport() {
     setBusy("attach");
-    const id = toast.loading("Preparing the report for FSM…");
     try {
       /*
         The report page's PDF, saved as the report version's file -- the one
         the client gets -- and sent to the work order from there, so FSM and
         the client always hold the same document.
       */
-      const saved = await publishReportPdf(taskId, {
-        onStage: (stage) => toast.loading(`${stage}…`, { id }),
+      const saved = await reportProgress.run(taskId, {
+        title: "Attaching the report",
+        successMessage:
+          "Report version {version} is saved. It is being attached to the work order now; this card shows it in a few seconds.",
+        failureMessage: "The report was not attached.",
       });
-      toast.success(`Report version ${saved.version} saved and sent to the work order`, { id });
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not attach the report", { id });
+      /* The attach runs on the server after the save answers: read again once it has had time to land. */
+      if (saved) setTimeout(() => void load(), 8000);
     } finally {
       setBusy(null);
       void load();
@@ -114,6 +117,8 @@ export function FsmJobCard({
   */
   const approved = jobStatus === "approved" || jobStatus === "delivered";
   const workOrder = Boolean(job?.fsm_work_order_id);
+  /* A work order still open in FSM is not ready to invoice; completing it is a step that can be retried (SNG-189, 191). */
+  const incomplete = workOrder && !/completed|closed/i.test(job?.fsm_status ?? "");
   const badge = !state
     ? null
     : !state.enabled
@@ -122,6 +127,8 @@ export function FsmJobCard({
         ? { label: "Not set up", tone: "bg-muted text-muted-foreground" }
         : problem
           ? { label: "Needs attention", tone: "bg-destructive/10 text-destructive" }
+          : incomplete
+            ? { label: "Not completed in FSM", tone: "bg-warning/10 text-warning" }
           : workOrder && job?.fsm_report_version
             ? { label: "Ready to invoice", tone: "bg-success/10 text-success" }
             : workOrder
@@ -132,7 +139,7 @@ export function FsmJobCard({
                   ? { label: "Inspection not approved yet", tone: "bg-muted text-muted-foreground" }
                   : { label: "Not in FSM yet", tone: "bg-muted text-muted-foreground" };
   // Send only once there is something it would create: an approved job with no work order.
-  const canSend = canEdit && (Boolean(problem) || (approved && !workOrder));
+  const canSend = canEdit && (Boolean(problem) || (approved && !workOrder) || (approved && incomplete));
   const canAttach = canEdit && workOrder;
 
   const log = state?.log ?? [];
@@ -141,6 +148,7 @@ export function FsmJobCard({
 
   return (
     <div className="flex flex-col gap-4">
+      {reportProgress.dialog}
       {/* Where each record stands in FSM. */}
       <SectionCard
         title="Zoho FSM"
@@ -237,7 +245,7 @@ export function FsmJobCard({
                     pendingLabel="Syncing…"
                     icon={<RefreshCw className="size-4" />}
                   >
-                    {problem ? "Retry" : "Create the work order"}
+                    {problem ? "Retry" : incomplete ? "Complete the work order in FSM" : "Create the work order"}
                   </SubmitButton>
                 ) : null}
                 {canAttach ? (

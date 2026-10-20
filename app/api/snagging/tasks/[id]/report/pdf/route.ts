@@ -82,7 +82,20 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       design, or "Attach the report again"), so FSM always ends up with the
       document the client gets.
     */
-    if (fsmSyncEnabled()) queueJobFsmSync(admin, rootId, profile.id, { bytes, version: stored.version });
+    /*
+      A de-snag round is billed on its own quotation, so it has a work order
+      of its own and its report goes there; it went to the root inspection's
+      work order, and the round's stayed without one (UAT retest, 20 Oct
+      2026). An additional visit has no work order of its own and adds to
+      the root's.
+    */
+    let target = rootId;
+    if (id !== rootId) {
+      const { data: own } = await admin.from("snagging_jobs").select("visit_type, fsm_work_order_id").eq("id", id).maybeSingle();
+      const row = own as { visit_type?: string | null; fsm_work_order_id?: string | null } | null;
+      if (row?.visit_type === "desnag" || row?.fsm_work_order_id) target = id;
+    }
+    if (fsmSyncEnabled()) queueJobFsmSync(admin, target, profile.id, { bytes, version: stored.version });
 
     return NextResponse.json({ data: { versionId: stored.versionId, version: stored.version } });
   } catch (error) {

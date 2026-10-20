@@ -132,11 +132,14 @@ export function ClientDownloadMenu({
   onDownload,
   disabled,
   showLabel = false,
+  pdfOnly = false,
 }: {
   onDownload: (format: ClientFileFormat) => Promise<void>;
   disabled?: boolean;
   /** Say "Download" at every width, for a page where it is the only action. */
   showLabel?: boolean;
+  /** The PDF alone, as one button: the Word file is for the office to edit, not for the client. */
+  pdfOnly?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const run = async (format: ClientFileFormat) => {
@@ -150,6 +153,14 @@ export function ClientDownloadMenu({
       setBusy(false);
     }
   };
+  if (pdfOnly) {
+    return (
+      <Button variant="outline" disabled={busy || disabled} aria-label="Download PDF" onClick={() => void run("pdf")}>
+        {busy ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+        <span className={showLabel ? undefined : "hidden lg:inline"}>{busy ? "Preparing…" : "Download PDF"}</span>
+      </Button>
+    );
+  }
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>

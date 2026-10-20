@@ -45,6 +45,7 @@ import { ActionType, ResourceType } from "@/types/types";
 
 import { ClientAddressesDialog } from "./client-addresses-dialog";
 import { ClientJobsDialog } from "./client-jobs-dialog";
+import { ExistingClientDialog } from "./existing-client-dialog";
 import {
   ActionDialogContent,
   ErrorState,
@@ -108,6 +109,8 @@ export default function ClientsAdmin({
   const [jobsFor, setJobsFor] = useState<SnaggingClientOption | null>(null);
   // The client whose addresses are open in a popup.
   const [addressesFor, setAddressesFor] = useState<SnaggingClientOption | null>(null);
+  /* Add client found the email already in FSM: said in a popup, with that client. */
+  const [existingClient, setExistingClient] = useState<SnaggingClientOption | null>(null);
   const [editing, setEditing] = useState<SnaggingClientOption | null>(null);
   /** Distinguishes "add a client" from "edit this one" in the same dialog. */
   const [creating, setCreating] = useState(false);
@@ -442,6 +445,15 @@ export default function ClientsAdmin({
         onSaved={(created) => {
           setEditing(null);
           void load();
+          /*
+            FSM already had the email: nothing new was made, and the dialog
+            used to close without a word (UAT retest, point 1). Say which
+            client it is, and open their addresses.
+          */
+          if (created?.existed) {
+            setExistingClient(created);
+            return;
+          }
           // A new client has no address yet; offer it while they are in mind.
           if (created?.id) {
             toast.success("Client added", {
@@ -450,6 +462,12 @@ export default function ClientsAdmin({
             });
           }
         }}
+      />
+
+      <ExistingClientDialog
+        client={existingClient}
+        onClose={() => setExistingClient(null)}
+        action={{ label: "Open addresses", onClick: (client) => setAddressesFor(client) }}
       />
 
       <ClientJobsDialog client={jobsFor} onClose={() => setJobsFor(null)} />

@@ -97,7 +97,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const { id } = await ctx.params;
     const admin = await createAdminServerClient();
     const result = await syncJobToFsm(admin, id, { actorId: profile.id });
-    return NextResponse.json({ data: result }, { status: result.ok ? 200 : 502 });
+    /*
+      A sync that ran and found a problem is an answer, not a failed request:
+      a 502 here made the card say only "Request failed (HTTP 502)" instead
+      of FSM's reason (result.ok tells the card which it is).
+    */
+    return NextResponse.json({ data: result });
   } catch (error) {
     console.error("Snagging job FSM POST error:", error);
     return NextResponse.json({ error: "Failed to sync with Zoho FSM" }, { status: 500 });

@@ -222,7 +222,8 @@ export function SnagWalkList({
     running them together would have the visit appear to have captured
     defects it never touched.
   */
-  const snags = useMemo(() => all.filter((s) => !s.from_earlier_visit), [all]);
+  /* A snag the inspector deleted stays on record as withdrawn; it is not one captured on the walk, and the list leaves it out too (UAT-TH-7). */
+  const snags = useMemo(() => all.filter((s) => !s.from_earlier_visit && s.status !== "withdrawn"), [all]);
   const earlier = useMemo(() => all.filter((s) => s.from_earlier_visit), [all]);
   const plans = useMemo(() => task.floor_plans ?? [], [task]);
   const areas = useMemo(

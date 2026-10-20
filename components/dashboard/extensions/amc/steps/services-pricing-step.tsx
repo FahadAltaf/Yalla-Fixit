@@ -38,6 +38,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { AmcFormData, AmcPriceListRow } from "../amc-types";
+import { contractClauseNumber } from "../amc-document-model";
+import { computeAmcData } from "../amc-pricing";
 
 interface StepProps {
   form: UseFormReturn<AmcFormData>;
@@ -101,6 +103,10 @@ export function ServicesPricingStep({ form, settings }: StepProps) {
   const priceListRows = form.watch("priceListRows") ?? [];
   const showFixedRates = form.watch("optionalSections.additionalFixedPriceServices");
   const fixedPriceRates = form.watch("fixedPriceRates") ?? [];
+  /* The services decide which clauses print, and so the rates clause's number. */
+  form.watch("serviceRows");
+  const handymanClause =
+    showFixedRates && settings ? contractClauseNumber(computeAmcData(form.getValues(), "contract", settings), "handymanRates") : null;
 
   const setFixedRates = (next: string[]) =>
     form.setValue("fixedPriceRates", next, { shouldValidate: true });
@@ -364,9 +370,10 @@ export function ServicesPricingStep({ form, settings }: StepProps) {
                 <FormItem>
                   <div className="space-y-2 rounded-md border p-3">
                     <p className="text-muted-foreground text-xs">
-                      One rate per line, as it prints in clause 6.3 of the
-                      contract. These start from the standard rates in AMC
-                      Settings and apply to this proposal only.
+                      {/* The clause's number moves with what else is on the contract (AMC-057: it said 6.3, the contract printed 5.3). */}
+                      One rate per line, as it prints in{" "}
+                      {handymanClause ? `clause ${handymanClause}` : "its own clause"}{" "}
+                      of the contract. These start from the standard rates in AMC Settings and apply to this proposal only.
                     </p>
                     {fixedPriceRates.map((rate, index) => (
                       <div key={index} className="flex items-center gap-2">

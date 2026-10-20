@@ -104,6 +104,6 @@ export async function buildInspectionReportDocx(
   const blob = await generateInspectionReportDocx(task, quotation);
   return {
     blob,
-    filename: `${(task.property?.unit_label ?? "inspection").replace(/s+/g, "-")}-snagging-report.docx`,
+    filename: `${(task.property?.unit_label ?? "inspection").replace(/\s+/g, "-")}-snagging-report.docx`,
   };
 }

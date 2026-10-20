@@ -35,6 +35,7 @@ import {
 import { mintReportToken } from "@/lib/server/snagging/report-token";
 import { firstRequiredPropertyError } from "@/lib/snagging/quotation-required";
 import { ActionType, ResourceType } from "@/types/types";
+import { quotationVoidInfo } from "@/lib/server/snagging/quotation-void";
 
 /**
  * One quotation raised from the Quotations section (BA v2, changes 1-3).
@@ -144,13 +145,15 @@ export async function GET(
       (SNG-037). The rate chooser's id stays off the wire; their name is
       what the page shows.
     */
-    const [authorship, chooser, property] = await Promise.all([
+    const [authorship, chooser, property, voidInfo] = await Promise.all([
       quotationAuthorship(admin, {
         id: String(quote.id),
         created_by: (quote.created_by as string | null) ?? null,
       }),
       actorNames(admin, quote.rate_chosen_by ? [String(quote.rate_chosen_by)] : []),
       withDocumentLinks(admin, one(property_rec)),
+      // SNG-100: void (property not as quoted), and the revision either way.
+      quotationVoidInfo(admin, String(quote.id)),
     ]);
     delete sent.created_by;
     return NextResponse.json({
@@ -175,6 +178,7 @@ export async function GET(
         */
         property,
         client: one(client_rec),
+        void_info: voidInfo,
       },
     });
   } catch (error) {
