@@ -20,7 +20,6 @@ import {
   CircleAlert,
   CirclePause,
   Clock,
-  Copy,
   LayoutGrid,
   List,
   ListTodo,
@@ -40,13 +39,11 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import MultipleSelector, { Option } from "@/components/ui/multiselect";
 import {
   Select,
   SelectContent,
@@ -54,7 +51,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import {
   TableBody,
   TableCell,
@@ -62,7 +58,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dialog";
 import StatusBadge from "@/components/ui/status-badge";
 import DateFilter from "./date-filter";
@@ -75,12 +70,9 @@ import {
   isAdminUser,
 } from "@/lib/role-permissions";
 import { usersService } from "@/modules/users/services/users-service";
-import {
-  TodoCreateInput,
-  TodoUpdateInput,
-  TodosFilters,
-  todosService,
-} from "@/modules/todos";
+import { MentionableUser, TodosFilters, todosService } from "@/modules/todos";
+import { TodoDialog } from "./todo-dialog";
+import { RELATED_TYPES, TODO_STATUSES, formatDateTime, tagBadgeStyle, userLabel } from "./todo-helpers";
 import {
   TODO_STATUS_LABELS,
   ActionType,
@@ -92,21 +84,7 @@ import {
   User,
 } from "@/types/types";
 
-const TODO_STATUSES: TodoStatus[] = ["todo", "in_progress", "done", "blocked", "canceled"];
-const RELATED_TYPES: TodoRelatedType[] = ["work_order", "quotation", "appointment"];
 type TodosViewMode = "kanban" | "list";
-
-const emptyForm = {
-  title: "",
-  description: "",
-  assigneeIds: [] as string[],
-  tags: [] as string[],
-  relatedType: "none" as TodoRelatedType | "none",
-  relatedId: "",
-  deadlineAt: "",
-  reminderAt: "",
-  status: "todo" as TodoStatus,
-};
 
 const emptyTagForm = {
   id: "",
@@ -135,86 +113,9 @@ const MATERIAL_TAG_COLORS = [
   "#607d8b",
 ];
 
-function toDatetimeLocal(value?: string | null) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const offset = date.getTimezoneOffset();
-  const local = new Date(date.getTime() - offset * 60_000);
-  return local.toISOString().slice(0, 16);
-}
-
-function fromDatetimeLocal(value: string) {
-  return value ? new Date(value).toISOString() : "";
-}
-
 function getTodoLink(todo: Todo) {
   if (typeof window === "undefined") return `/todos?todo=${encodeURIComponent(todo.todo_key)}`;
   return `${window.location.origin}/todos?todo=${encodeURIComponent(todo.todo_key)}`;
-}
-
-function formatDateTime(value?: string | null) {
-  return value ? new Date(value).toLocaleString() : "-";
-}
-
-function formatUpdateField(fieldName?: string | null) {
-  const labels: Record<string, string> = {
-    title: "Title",
-    description: "Description",
-    tags: "Tags",
-    related_type: "Related type",
-    related_id: "Related ID",
-    deadline: "Deadline",
-    reminder: "Reminder",
-    status: "Status",
-    assignees: "Assignees",
-  };
-  return fieldName ? labels[fieldName] || fieldName.replace("_", " ") : "Todo";
-}
-
-function formatUpdateValue(value: unknown, fieldName?: string | null) {
-  if (value === null || value === undefined || value === "") return "empty";
-  if (fieldName === "status" && typeof value === "string" && value in TODO_STATUS_LABELS) {
-    return TODO_STATUS_LABELS[value as TodoStatus];
-  }
-  if ((fieldName === "deadline" || fieldName === "reminder") && typeof value === "string") {
-    return formatDateTime(value);
-  }
-  if (fieldName === "related_type" && typeof value === "string") {
-    return value.replace("_", " ");
-  }
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => {
-        if (typeof item === "object" && item && "name" in item) {
-          return String((item as { name: unknown }).name);
-        }
-        return String(item);
-      })
-      .join(", ") || "empty";
-  }
-  if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
-}
-
-function formatUpdateSummary(update: NonNullable<Todo["updates"]>[number]) {
-  if (update.action === "created") return "created this todo";
-  const fieldName = formatUpdateField(update.field_name);
-  return `changed ${fieldName} from ${formatUpdateValue(update.old_value, update.field_name)} to ${formatUpdateValue(update.new_value, update.field_name)}`;
-}
-
-function tagBadgeStyle(color?: string) {
-  if (!color) return undefined;
-  return {
-    backgroundColor: `${color}1A`,
-    borderColor: `${color}66`,
-    color,
-  };
-}
-
-function userLabel(user?: User | null) {
-  if (!user) return "Unknown user";
-  return user.full_name || [user.first_name, user.last_name].filter(Boolean).join(" ") || user.email || "Unknown user";
 }
 
 function statusIcon(status: TodoStatus) {
@@ -447,13 +348,14 @@ export default function TodosPage() {
   const [tagsDialogOpen, setTagsDialogOpen] = useState(false);
   const [editingTodo, setEditingTodo] = useState<Todo | null>(null);
   const [deleteTodo, setDeleteTodo] = useState<Todo | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
   const [isSavingTag, setIsSavingTag] = useState(false);
-  const [commentBody, setCommentBody] = useState("");
+  // FR-17: who can be @-mentioned in a comment.
+  const [mentionableUsers, setMentionableUsers] = useState<MentionableUser[]>([]);
+  // The column a quick-add started from, so the new todo lands there.
+  const [createStatus, setCreateStatus] = useState<TodoStatus | undefined>(undefined);
   const [filters, setFilters] = useState<TodosFilters>({});
   const [filtersOpen, setFiltersOpen] = useState(true);
   const [viewMode, setViewMode] = useState<TodosViewMode>("kanban");
-  const [form, setForm] = useState(emptyForm);
   const [tagForm, setTagForm] = useState(emptyTagForm);
   const [pendingLinkedTodo, setPendingLinkedTodo] = useState<string | null>(() => {
     if (typeof window === "undefined") return null;
@@ -470,13 +372,6 @@ export default function TodosPage() {
 
   const canEditTodo = (todo: Todo) => canEditTodoRecord(userProfile, todo, userId);
   const canDeleteTodo = (todo: Todo) => canDeleteTodoRecord(userProfile, todo, userId);
-
-  const userOptions: Option[] = useMemo(
-    () => users.map((user) => ({ value: user.id, label: userLabel(user) })),
-    [users]
-  );
-  const selectedAssignees = userOptions.filter((option) => form.assigneeIds.includes(option.value));
-
   const uniqueTags = useMemo(
     () =>
       Array.from(new Set([...todos.flatMap((todo) => todo.tags), ...tagDefinitions.map((tag) => tag.name)]))
@@ -502,6 +397,11 @@ export default function TodosPage() {
   const loadUsers = async () => {
     const allUsers = await usersService.getUsers();
     setUsers(allUsers);
+    try {
+      setMentionableUsers(await todosService.listMentionableUsers());
+    } catch (error) {
+      console.error("Error loading mentionable users:", error);
+    }
   };
 
   const loadTags = async () => {
@@ -546,25 +446,12 @@ export default function TodosPage() {
       return;
     }
     setEditingTodo(null);
-    setForm(status ? { ...emptyForm, status } : emptyForm);
-    setCommentBody("");
+    setCreateStatus(status);
     setDialogOpen(true);
   };
 
   const openEditDialog = (todo: Todo) => {
     setEditingTodo(todo);
-    setForm({
-      title: todo.title,
-      description: todo.description,
-      assigneeIds: todo.assignees?.map((user) => user.id) ?? [],
-      tags: todo.tags,
-      relatedType: todo.related_type || "none",
-      relatedId: todo.related_id || "",
-      deadlineAt: toDatetimeLocal(todo.deadline_at),
-      reminderAt: toDatetimeLocal(todo.reminder_at),
-      status: todo.status,
-    });
-    setCommentBody("");
     setDialogOpen(true);
   };
 
@@ -678,65 +565,6 @@ export default function TodosPage() {
     }
   };
 
-  const saveTodo = async () => {
-    if (editingTodo) {
-      if (!canEditTodo(editingTodo)) {
-        toast.error("You do not have permission to edit this todo");
-        return;
-      }
-    } else if (!canCreate) {
-      toast.error("You do not have permission to create todos");
-      return;
-    }
-
-    if (!form.title.trim()) {
-      toast.error("Title is required");
-      return;
-    }
-    if (!form.description.trim()) {
-      toast.error("Description is required");
-      return;
-    }
-    if (form.assigneeIds.length === 0) {
-      toast.error("Select at least one assignee");
-      return;
-    }
-    if (!form.deadlineAt) {
-      toast.error("Deadline is required");
-      return;
-    }
-
-    const payload: TodoCreateInput = {
-      title: form.title.trim(),
-      description: form.description.trim(),
-      assigneeIds: form.assigneeIds,
-      tags: form.tags,
-      relatedType: form.relatedType === "none" ? null : form.relatedType,
-      relatedId: form.relatedId.trim() || null,
-      deadlineAt: fromDatetimeLocal(form.deadlineAt),
-      reminderAt: form.reminderAt ? fromDatetimeLocal(form.reminderAt) : null,
-      status: form.status,
-    };
-
-    setIsSaving(true);
-    try {
-      if (editingTodo) {
-        await todosService.updateTodo({ ...(payload as TodoUpdateInput), id: editingTodo.id });
-        toast.success("Todo updated");
-      } else {
-        await todosService.createTodo(payload);
-        toast.success("Todo created");
-      }
-      setDialogOpen(false);
-      await loadTodos();
-    } catch (error) {
-      console.error("Error saving todo:", error);
-      toast.error("Failed to save todo");
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
   const updateStatus = async (todo: Todo, status: TodoStatus) => {
     if (!canEditTodo(todo)) {
       toast.error("You do not have permission to update this todo");
@@ -775,6 +603,7 @@ export default function TodosPage() {
       await todosService.deleteTodo(deleteTodo.id);
       toast.success("Todo deleted");
       setDeleteTodo(null);
+      setDialogOpen(false);
       await loadTodos();
     } catch (error) {
       console.error("Error deleting todo:", error);
@@ -782,56 +611,27 @@ export default function TodosPage() {
     }
   };
 
-  const addComment = async () => {
-    if (!editingTodo || !commentBody.trim()) return;
-    if (!canEditTodo(editingTodo)) {
-      toast.error("You do not have permission to comment on this todo");
-      return;
-    }
-    try {
-      await todosService.addComment(editingTodo.id, commentBody.trim());
-      setCommentBody("");
-      toast.success("Comment added");
-      await loadTodos();
-      const refreshed = (await todosService.listTodos(filters, 0, 500)).todos.find(
-        (todo) => todo.id === editingTodo.id
-      );
+  // Reloads the list and the open dialog together, so tab counts and the
+  // Updates log follow an upload, a delete or a comment change.
+  const refreshEditingTodo = async () => {
+    if (editingTodo) {
+      // The open todo first, on its own, so the dialog updates at once; the
+      // board follows in the background.
+      const refreshed = await todosService.getTodo(editingTodo.id);
       if (refreshed) {
         setEditingTodo(refreshed);
+        setTodos((current) => current.map((todo) => (todo.id === refreshed.id ? refreshed : todo)));
       }
-    } catch (error) {
-      console.error("Error adding comment:", error);
-      toast.error("Failed to add comment");
-    }
-  };
-
-  const removeComment = async (commentId: string) => {
-    if (!editingTodo) return;
-    if (!canEditTodo(editingTodo)) {
-      toast.error("You do not have permission to delete comments on this todo");
+      void loadTodos();
       return;
     }
-    try {
-      await todosService.deleteComment(commentId, editingTodo.id);
-      toast.success("Comment deleted");
-      const response = await todosService.listTodos(filters, 0, 500);
-      setTodos(response.todos);
-      const refreshed = response.todos.find((todo) => todo.id === editingTodo.id);
-      if (refreshed) {
-        setEditingTodo(refreshed);
-      }
-    } catch (error) {
-      console.error("Error deleting comment:", error);
-      toast.error("Failed to delete comment");
-    }
+    await loadTodos();
   };
 
   const todosByStatus = TODO_STATUSES.reduce((acc, status) => {
     acc[status] = todos.filter((todo) => todo.status === status);
     return acc;
   }, {} as Record<TodoStatus, Todo[]>);
-
-  const isDialogReadOnly = Boolean(editingTodo && !canEditTodo(editingTodo));
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-4">
@@ -1300,263 +1100,24 @@ export default function TodosPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="grid max-h-[86vh] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-4xl">
-          <DialogHeader className="pr-10">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div className="space-y-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  {editingTodo && (
-                    <Badge variant="secondary" className="rounded-sm font-mono">
-                      {editingTodo.todo_key}
-                    </Badge>
-                  )}
-                  {editingTodo && <StatusBadge status={editingTodo.status} />}
-                </div>
-                <DialogTitle className="text-2xl">
-                  {editingTodo
-                    ? isDialogReadOnly
-                      ? "View Todo"
-                      : form.title || "Untitled todo"
-                    : "Create Todo"}
-                </DialogTitle>
-              </div>
-              <div className="flex shrink-0 gap-2 sm:pr-2">
-                {editingTodo && (
-                  <Button type="button" variant="outline" size="sm" onClick={() => copyTodoLink(editingTodo)}>
-                    <Copy className="size-4 sm:mr-2" />
-                    <span className="hidden sm:inline">Copy link</span>
-                  </Button>
-                )}
-              </div>
-            </div>
-          </DialogHeader>
-
-          <div className={`min-h-0 overflow-y-auto pr-2 ${dialogScrollClass}`}>
-            <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
-              <div className="space-y-4">
-                <div className="grid gap-3 rounded-md border p-4">
-                  <div className="grid gap-1.5">
-                    <Label>Title</Label>
-                    <Input
-                      value={form.title}
-                      disabled={isDialogReadOnly}
-                      onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))}
-                      placeholder="Short todo title"
-                    />
-                  </div>
-                  <div className="grid gap-1.5">
-                    <Label>Description</Label>
-                    <Textarea
-                      value={form.description}
-                      disabled={isDialogReadOnly}
-                      onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
-                      placeholder="What needs to be done?"
-                      className="min-h-32 resize-none"
-                    />
-                  </div>
-                </div>
-
-                {editingTodo && (
-                  <div className="grid gap-3 rounded-md border p-4">
-                    <Tabs defaultValue="comments" className="gap-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <Label>Activity</Label>
-                        <TabsList>
-                          <TabsTrigger value="comments">Comments ({editingTodo.comments?.length ?? 0})</TabsTrigger>
-                          <TabsTrigger value="updates">Updates ({editingTodo.updates?.length ?? 0})</TabsTrigger>
-                        </TabsList>
-                      </div>
-
-                      <TabsContent value="comments" className="mt-0 space-y-3">
-                        <div className="space-y-2">
-                          {editingTodo.comments?.length ? (
-                            editingTodo.comments.map((comment) => (
-                              <div key={comment.id} className="rounded-md bg-muted/50 p-3">
-                                <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                                  <span>
-                                    {userLabel(comment.author)} · {new Date(comment.created_at).toLocaleString()}
-                                  </span>
-                                  {!isDialogReadOnly && (
-                                    <Button
-                                      type="button"
-                                      size="icon-xs"
-                                      variant="ghost"
-                                      onClick={() => removeComment(comment.id)}
-                                    >
-                                      <Trash2 className="size-3.5" />
-                                      <span className="sr-only">Delete comment</span>
-                                    </Button>
-                                  )}
-                                </div>
-                                <p className="mt-2 text-sm whitespace-pre-wrap">{comment.body}</p>
-                              </div>
-                            ))
-                          ) : (
-                            <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">No comments yet.</p>
-                          )}
-                        </div>
-                        {!isDialogReadOnly && (
-                          <div className="flex gap-2">
-                            <Input
-                              value={commentBody}
-                              onChange={(event) => setCommentBody(event.target.value)}
-                              placeholder="Add a comment"
-                            />
-                            <Button type="button" variant="outline" onClick={addComment} disabled={!commentBody.trim()}>
-                              Add
-                            </Button>
-                          </div>
-                        )}
-                      </TabsContent>
-
-                      <TabsContent value="updates" className="mt-0 space-y-3">
-                        {editingTodo.updates?.length ? (
-                          editingTodo.updates.map((update) => (
-                            <div key={update.id} className="flex gap-3 rounded-md bg-muted/40 p-3">
-                              <div className="mt-1 size-2 shrink-0 rounded-full bg-primary" />
-                              <div className="min-w-0 flex-1">
-                                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-                                  <span className="font-medium">{userLabel(update.actor)}</span>
-                                  <span className="text-muted-foreground">{formatUpdateSummary(update)}</span>
-                                </div>
-                                <div className="mt-1 text-xs text-muted-foreground">
-                                  {new Date(update.created_at).toLocaleString()}
-                                </div>
-                              </div>
-                            </div>
-                          ))
-                        ) : (
-                          <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">No updates yet.</p>
-                        )}
-                      </TabsContent>
-                    </Tabs>
-                  </div>
-                )}
-              </div>
-
-              <div className="grid content-start gap-4">
-                <div className="grid gap-3 rounded-md border p-4">
-                  <div className="grid gap-1.5">
-                    <Label>Status</Label>
-                    <Select
-                      value={form.status}
-                      disabled={isDialogReadOnly}
-                      onValueChange={(value) => setForm((current) => ({ ...current, status: value as TodoStatus }))}
-                    >
-                      <SelectTrigger className="w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {TODO_STATUSES.map((status) => (
-                          <SelectItem key={status} value={status}>
-                            {TODO_STATUS_LABELS[status]}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="grid gap-1.5">
-                    <Label>Assignees</Label>
-                    <MultipleSelector
-                      value={selectedAssignees}
-                      options={userOptions}
-                      disabled={isDialogReadOnly}
-                      placeholder="Select assignees"
-                      onChange={(options) => setForm((current) => ({ ...current, assigneeIds: options.map((option) => option.value) }))}
-                      emptyIndicator={<span className="text-muted-foreground">No users found</span>}
-                    />
-                  </div>
-                  <div className="grid gap-1.5">
-                    <Label>Tags</Label>
-                    <MultipleSelector
-                      value={form.tags.map((tag) => ({
-                        value: tag,
-                        label: tag,
-                        color: tagColorMap.get(tag.toLowerCase()),
-                      }))}
-                      options={uniqueTags.map((tag) => ({
-                        value: tag,
-                        label: tag,
-                        color: tagColorMap.get(tag.toLowerCase()),
-                      }))}
-                      disabled={isDialogReadOnly}
-                      creatable={!isDialogReadOnly}
-                      placeholder="Add or select tags"
-                      onChange={(options) => setForm((current) => ({ ...current, tags: options.map((option) => option.value) }))}
-                      emptyIndicator={<span className="text-muted-foreground">Create a new tag</span>}
-                    />
-                  </div>
-                </div>
-
-                <div className="grid gap-3 rounded-md border p-4">
-                  <div className="grid gap-1.5">
-                    <Label>Deadline</Label>
-                    <Input
-                      type="datetime-local"
-                      value={form.deadlineAt}
-                      disabled={isDialogReadOnly}
-                      onChange={(event) => setForm((current) => ({ ...current, deadlineAt: event.target.value }))}
-                    />
-                  </div>
-                  <div className="grid gap-1.5">
-                    <Label>Reminder / Followup</Label>
-                    <Input
-                      type="datetime-local"
-                      value={form.reminderAt}
-                      disabled={isDialogReadOnly}
-                      onChange={(event) => setForm((current) => ({ ...current, reminderAt: event.target.value }))}
-                    />
-                  </div>
-                </div>
-
-                <div className="grid gap-3 rounded-md border p-4">
-                  <div className="grid gap-1.5">
-                    <Label>Related Type</Label>
-                    <Select
-                      value={form.relatedType}
-                      disabled={isDialogReadOnly}
-                      onValueChange={(value) => setForm((current) => ({ ...current, relatedType: value as TodoRelatedType | "none" }))}
-                    >
-                      <SelectTrigger className="w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">None</SelectItem>
-                        {RELATED_TYPES.map((type) => (
-                          <SelectItem key={type} value={type}>
-                            {type.replace("_", " ")}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="grid gap-1.5">
-                    <Label>Related ID</Label>
-                    <Input
-                      value={form.relatedId}
-                      disabled={isDialogReadOnly}
-                      onChange={(event) => setForm((current) => ({ ...current, relatedId: event.target.value }))}
-                      placeholder="AP-123 or WO-1234"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <DialogFooter className="border-t pt-4">
-            <Button type="button" variant="outline" onClick={() => setDialogOpen(false)} disabled={isSaving}>
-              {isDialogReadOnly ? "Close" : "Cancel"}
-            </Button>
-            {!isDialogReadOnly && (
-              <Button type="button" onClick={saveTodo} disabled={isSaving}>
-                {isSaving ? "Saving..." : editingTodo ? "Save Todo" : "Create Todo"}
-              </Button>
-            )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {dialogOpen && (
+        <TodoDialog
+          todo={editingTodo}
+          initialStatus={createStatus}
+          users={users}
+          mentionableUsers={mentionableUsers}
+          tagOptions={uniqueTags.map((tag) => ({ value: tag, label: tag, color: tagColorMap.get(tag.toLowerCase()) }))}
+          tagColorMap={tagColorMap}
+          userProfile={userProfile}
+          userId={userId}
+          isAdmin={isAdmin}
+          canViewAllRecords={canViewAllRecords}
+          onClose={() => setDialogOpen(false)}
+          onRefresh={refreshEditingTodo}
+          onDelete={(todo) => setDeleteTodo(todo)}
+          onCopyLink={copyTodoLink}
+        />
+      )}
 
       <ConfirmationAlertDialog
         isOpen={Boolean(deleteTodo)}

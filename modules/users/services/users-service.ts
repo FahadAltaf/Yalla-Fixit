@@ -139,6 +139,7 @@ export const usersService = {
         profile_image: data.profile_image,
         is_active: data.is_active,
         receives_schedule_approval_email: data.receives_schedule_approval_email ?? false,
+        is_task_manager: data.is_task_manager ?? false,
       });
 
       if (response.errors) {

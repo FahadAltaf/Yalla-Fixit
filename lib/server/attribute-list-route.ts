@@ -11,6 +11,10 @@ export const LOOKUP_KEYS = {
   technicianRole: "technician_role",
   technicianServiceType: "technician_service_type",
   technicianTag: "technician_tag",
+  // FR-21: the leave types offered in the Add Leave dropdown. leave_records
+  // stores the name as text, so this list has its own route
+  // (app/api/scheduling/leave-types) rather than makeAttributeListRoute.
+  leaveType: "leave_type",
 } as const;
 
 export type LookupKey = (typeof LOOKUP_KEYS)[keyof typeof LOOKUP_KEYS];

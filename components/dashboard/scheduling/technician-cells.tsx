@@ -5,6 +5,7 @@ import { IdentityCell } from "@/components/ui/entity-avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TableCell, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/actions/utils";
+import { formatZonedDate } from "@/lib/scheduling/org-time";
 import {
   CarFrontIcon,
   MoonIcon,
@@ -26,12 +27,17 @@ export function TechnicianIdentity({
   subtitle,
   seed,
   inactive,
+  inactiveSince,
 }: {
   name: string;
   subtitle: string;
   seed: string;
   inactive?: boolean;
+  // FR-23: when the FSM sync first saw the technician inactive (ISO date).
+  inactiveSince?: string | null;
 }) {
+  // Organisation time, like every other date on the scheduling screens.
+  const sinceLabel = inactiveSince ? ` since ${formatZonedDate(inactiveSince)}` : "";
   return (
     <IdentityCell
       title={name}
@@ -40,7 +46,7 @@ export function TechnicianIdentity({
       badge={
         inactive ? (
           <Badge variant="outline" className="text-muted-foreground px-1.5 py-0 text-[10px] font-normal">
-            Inactive
+            Inactive{sinceLabel}
           </Badge>
         ) : undefined
       }

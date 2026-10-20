@@ -97,6 +97,12 @@ export function UserRowActions({
         full_name: user.full_name,
         role_id: user.role_id,
         is_active: nextActive,
+        // updateUser writes every flag it is given (false when absent), so
+        // enabling or disabling a user must carry their flags along, or a
+        // manager's private tasks (FR-20) and approval emails would be
+        // switched off by a status toggle.
+        receives_schedule_approval_email: user.receives_schedule_approval_email ?? false,
+        is_task_manager: user.is_task_manager ?? false,
       };
 
       await usersService.updateUser(updatedUserData);

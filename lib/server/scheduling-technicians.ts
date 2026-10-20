@@ -30,9 +30,11 @@ export async function listTechniciansForViewer(): Promise<TechnicianReference[]>
   const load = (columns: string) =>
     admin.from("technician_reference").select(columns).order("display_name", { ascending: true });
 
-  let { data, error } = await load(`${baseColumns}, board_position`);
-  // board_position arrives with migration 20260917090000. Until it's applied,
-  // load without it so the board still opens (Custom order just stays empty).
+  let { data, error } = await load(`${baseColumns}, board_position, deactivated_at`);
+  // deactivated_at arrives with migration 20261020130000 and board_position
+  // with 20260917090000. Until each is applied, load without it so the board
+  // still opens (Custom order and "inactive since" just stay empty).
+  if (error?.code === "42703") ({ data, error } = await load(`${baseColumns}, board_position`));
   if (error?.code === "42703") ({ data, error } = await load(baseColumns));
 
   if (error) throw new Error(`Failed to load technicians: ${error.message}`);
@@ -59,6 +61,7 @@ export async function listTechniciansForViewer(): Promise<TechnicianReference[]>
       team_leader_fsm_id: (r.team_leader_fsm_id as string) ?? null,
       team_leader_name: r.team_leader_fsm_id ? (nameByFsmId.get(r.team_leader_fsm_id as string) ?? null) : null,
       board_position: typeof r.board_position === "number" ? r.board_position : null,
+      deactivated_at: typeof r.deactivated_at === "string" ? r.deactivated_at : null,
     };
   });
 }

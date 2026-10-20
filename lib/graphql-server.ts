@@ -30,7 +30,11 @@ export async function executeGraphQLBackend<T = any>(
     });
 
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      // Carry the upstream reason: a bare "status: 500" says nothing about
+      // whether Supabase timed out, refused the query or was unreachable.
+      const body = await response.json().catch(() => ({}));
+      const detail = typeof body?.error === "string" ? body.error : typeof body?.message === "string" ? body.message : "";
+      throw new Error(`HTTP error! status: ${response.status}${detail ? ` (${detail})` : ""}`);
     }
 
     const result = await response.json();

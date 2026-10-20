@@ -63,6 +63,9 @@ export default function EditUser({
   const [receivesApprovalEmail, setReceivesApprovalEmail] = useState(
     userData?.receives_schedule_approval_email ?? false,
   );
+  const [isTaskManager, setIsTaskManager] = useState(
+    userData?.is_task_manager ?? false,
+  );
   const [isLoading, setIsLoading] = useState(false);
   // Initialize form
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -88,6 +91,7 @@ export default function EditUser({
       });
       setProfile(userData.profile_image || "");
       setReceivesApprovalEmail(userData.receives_schedule_approval_email ?? false);
+      setIsTaskManager(userData.is_task_manager ?? false);
     }
   }, [userData, form]);
 
@@ -108,6 +112,7 @@ export default function EditUser({
         role_id: values.role,
         is_active: userData.is_active,
         receives_schedule_approval_email: receivesApprovalEmail,
+        is_task_manager: isTaskManager,
       };
 
       await usersService.updateUser(updatedUserData);
@@ -241,6 +246,20 @@ export default function EditUser({
                     checked={receivesApprovalEmail}
                     onCheckedChange={setReceivesApprovalEmail}
                     aria-label="Receive schedule approval emails"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-sm font-medium">Task manager</span>
+                    <span className="text-muted-foreground text-xs">
+                      A task this user creates and keeps for themselves alone is private to them, hidden from everyone else.
+                    </span>
+                  </div>
+                  <Switch
+                    checked={isTaskManager}
+                    onCheckedChange={setIsTaskManager}
+                    aria-label="Task manager"
                   />
                 </div>
 
