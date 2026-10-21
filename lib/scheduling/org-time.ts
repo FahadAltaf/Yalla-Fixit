@@ -42,11 +42,23 @@ function toDate(at: Instant) {
   return at instanceof Date ? at : new Date(at);
 }
 
+// One formatter per zone: building one costs about a millisecond, and a
+// report converts thousands of times (every technician, every day).
+const offsetFormatters = new Map<string, Intl.DateTimeFormat>();
+function offsetFormatter(timeZone: string) {
+  let formatter = offsetFormatters.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "longOffset" });
+    offsetFormatters.set(timeZone, formatter);
+  }
+  return formatter;
+}
+
 // The zone's UTC offset, in minutes, at a given instant (+240 for Dubai).
 export function zoneOffsetMinutes(at: Instant, timeZone: string = orgTimeZone): number {
   try {
     const name =
-      new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "longOffset" })
+      offsetFormatter(timeZone)
         .formatToParts(toDate(at))
         .find((part) => part.type === "timeZoneName")?.value ?? "GMT";
     const match = /GMT([+-])(\d{1,2})(?::(\d{2}))?/.exec(name);

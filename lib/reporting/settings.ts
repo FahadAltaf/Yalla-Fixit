@@ -70,6 +70,12 @@ export const reportingSettingsSchema = z.object({
   }),
   capacity: z.object({
     horizonDays: z.number().int().min(1).max(90),
+    /** A day is spare when booked hours are below this share of available
+        hours. The BRD names spare days without a figure: a suggestion. */
+    spareBelowPercent: z.number().int().min(0).max(100),
+    /** N14 (optional in the BRD): the coordinators told when a team's day
+        is over-booked. Empty = nobody until set. */
+    alertRecipientUserIds: userIds,
   }),
   exceptions: z.object({
     /** N13: a completed job still without the invoice flag after this many days. */
@@ -123,7 +129,7 @@ export function getReportingSettingsDefaults(): ReportingSettings {
       disputeCutoffDay: 25,
       hrRecipientUserIds: [],
     },
-    capacity: { horizonDays: 14 },
+    capacity: { horizonDays: 14, spareBelowPercent: 50, alertRecipientUserIds: [] },
     exceptions: { completedWithoutFlagAfterDays: 3 },
   };
 }

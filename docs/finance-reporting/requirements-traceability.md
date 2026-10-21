@@ -30,7 +30,7 @@ names. Decisions (D-) and blockers (B-) are in
 |---|---|---|---|---|---|---|---|---|---|
 | DEV-442 | 5.2 B1, N7 N8 | Quotation pipeline, ageing, expiry | Single-record estimate reads only | I estimates mirror + status history; B summary; F report; N7/N8 | `Estimates` ✓ | D-13 | TC07 | P5 | ✅ built and browser-tested (status mapping provisional, D-13) |
 | DEV-443 | 5.2 B2 | Available hours engine | Org shift times in `settings`; `technician_reference.shift`; `leave_records` | B pure calculator; D holidays, rest days, leaving date | — | D-16 | TC08, TC15; cross-midnight; part-day leave | P5 | ✅ engine, loader and public holidays built and tested; shown on screen in P6 (D-22 break, D-16 leave entry) |
-| DEV-444 | 5.2 B2, 6.4 | Time vs commercial utilization; travel; completeness | Nothing | B calculator; F report; I appointments + trips | Actuals ✓ (100 % on completed); trips ⛔ | D-08, D-14, D-16 | TC09; 78 % / 69 % example | P6 | ⬜ ⛔ (travel, B-01) |
+| DEV-444 | 5.2 B2, 6.4 | Time vs commercial utilization; travel; completeness | Nothing | B calculator; F report; I appointments + trips | Actuals ✓ (100 % on completed); trips ⛔ | D-08, D-14, D-16 | TC09; 78 % / 69 % example | P6 | 🟡 built and unit-tested (time, commercial, completeness, outside shift, variance, trend, drill-through); travel ⛔ B-01; chargeable rule ❓ D-08/D-14; rest days unset (D-16) |
 | DEV-445 | 5.2 B3, N5 | Shift check-in missed alert | Nothing | B 5-min sweep; dedupe; N5 | Shift check-in ⛔ | D-11 | TC10 | P7 | ⬜ ⛔ |
 | DEV-446 | 5.2 B3, N6 | Appointment check-in missed alert | Nothing | B sweep; N6 | Possibly actual start | D-15 | One alert; none for cancelled/reassigned | P7 | ⬜ ❓ |
 | DEV-447 | 5.2 B4 | Compliance % and penalty | Nothing | B calculator; D statements | Check-ins ⛔ | **D-09, D-11** | TC11, TC12 | P7 | ⬜ ⛔ ❓ |
@@ -38,7 +38,7 @@ names. Decisions (D-) and blockers (B-) are in
 | DEV-449 | 5.2 B4, N9–N12, 6.8 | Technician view and disputes | Nothing; no technician ↔ user link | D link + `hr_disputes`; F self-service | — | **D-10, D-19** | TC14 | P7 | ⬜ ❓ |
 | DEV-450 | 5.2 B4, E2 E3 | Monthly statement and HR report | Nothing | B month-end finalisation; E2/E3 | Check-ins ⛔ | D-11 | Figures frozen after the window | P7 | ⬜ ⛔ |
 | DEV-451 | 5.2 B5 | Daily attendance | Nothing | B report from shift + check-ins | Shift check-ins ⛔ | D-11 | Late / early / absent flags | P7 | ⬜ ⛔ |
-| DEV-452 | 5.2 B5, N14 | Booked vs available capacity | Board shows today only | B forward calculator; F report; optional N14 | Appointments ✓ | — | Over-booked days highlighted | P6 | ⬜ |
+| DEV-452 | 5.2 B5, N14 | Booked vs available capacity | Board shows today only | B forward calculator; F report; optional N14 | Appointments ✓ | — | Over-booked days highlighted | P6 | ✅ board by team and technician, spare and over-booked highlighted, unassigned apart; N14 built (off until recipients are set) |
 | DEV-453 | 5.2 B5, N13 | Exceptions: no invoice flag; no actual times | Nothing | B two reports; N13 | ✓ | D-01, D-02 | Completeness % per technician | P5 | ✅ built and browser-tested (rule provisional, D-01, D-02) |
 | DEV-454 | 5.2 B5 | Revenue, AMC mix, ratings, FSM links | Nothing | B revenue report; F links | Ratings ⛔ | D-14, D-17 | Ranked revenue; links open FSM | P8 | ⬜ ⛔ ❓ |
 | DEV-455 | 5.2 B5 | Shared filters, export, drill, access, saved filters | Analytics drill-through and xlsx export exist | F shared shell; D `reports.saved_filters`, `reports.access_log` | — | — | Same controls on every report | P5 | ✅ built; saved filters and the log work once `20261022100000` is applied |
@@ -78,7 +78,7 @@ screens have been checked in a browser.
 | (platform) | P1 | `portal_notifications`, the notifier (claim-first dedupe, delivery policy), inbox page, home panel | Used from P4 on |
 | DEV-434 | P3 | Built: line-level items, `UNIQUE(fsm_line_id)`, value and progress derived; Q-1042 reproduced on the harness | D-03, D-04, D-05 confirmations; migration `20261021100000` to apply |
 | DEV-437 | P3 | Built: six statuses, actions with expected-status check, reasons, N4 | Screens (P4) |
-| DEV-438 | P3 | Built: request with reason and evidence paths, verify/reject, N3 | D-06 (AMC hidden vs excluded); evidence upload (P4) |
+| DEV-438 | P3, P4 | Built: request with reason and evidence files (private bucket, one-time upload links, one-minute download links, only this item's files), verify/reject, N3 | D-06 (AMC hidden vs excluded); migration `20261022110000` to apply |
 | DEV-440 | P3 | Built: record invoice, mandatory variance reason, idempotent, append-only | D-21 (corrections); screens (P4) |
 | DEV-433 | P3 | **Not built**: waits on D-01, D-02, D-03. `create_queue_item` is ready for it | Decisions |
 | DEV-435 | P4 | Built and browser-tested: list, summary strip, filters, paging | Coordinator scoping (D-18) |

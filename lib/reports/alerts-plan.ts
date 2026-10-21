@@ -1,3 +1,4 @@
+import type { CapacityResult } from "./capacity";
 import type { UnflaggedRow } from "./exceptions";
 import type { QuotationRow } from "./quotations";
 
@@ -15,6 +16,10 @@ import type { QuotationRow } from "./quotations";
  *  N13 "{work order} for {client} completed {d} days ago, not marked Ready
  *      to be Invoiced." To the coordinator (the quotation's owner until
  *      D-18). Once per work order; stops when flagged or queued.
+ *  N14 "{date}: {team} has {b} h booked against {a} h available." To the
+ *      over-booking recipients (coordinators). Optional in the BRD. Once per
+ *      team and day when the day first becomes over-booked; stops when it
+ *      no longer is, or the day leaves the horizon.
  *
  * The dedupe key carries what makes an alert new, so a run every hour
  * sends nothing twice, and a key that no longer matches means the alert
@@ -34,20 +39,21 @@ export const ALERT_EVENTS = {
   quotationAged: "reports.quotation_aged",
   quotationExpiring: "reports.quotation_expiring",
   workOrderUnflagged: "reports.work_order_unflagged",
+  capacityOverbooked: "reports.capacity_overbooked",
 } as const;
 
 export type OpenAlert = { event: string; entityId: string; dedupeKey: string };
 
 export type PlannedAlert = {
   event: string;
-  entityType: "fsm_estimate" | "fsm_work_order";
+  entityType: "fsm_estimate" | "fsm_work_order" | "capacity_day";
   entityId: string;
   dedupeKey: string;
   title: string;
   body: string;
   link: string;
-  /** "recipients" = the N7 list; an email = the owner or coordinator. */
-  to: { kind: "recipients" } | { kind: "person"; email: string | null; name: string | null };
+  /** "recipients" = a list in Reporting Settings; an email = the owner or coordinator. */
+  to: { kind: "recipients"; list: "quotations" | "capacity" } | { kind: "person"; email: string | null; name: string | null };
 };
 
 const aed = (value: number) => `AED ${value.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
@@ -63,6 +69,11 @@ export function expiringKey(r: QuotationRow) {
 export function unflaggedKey(r: UnflaggedRow) {
   return `wo-unflagged:${r.workOrderId}`;
 }
+export function overbookedKey(r: { teamKey: string; date: string }) {
+  return `capacity-over:${r.teamKey}:${r.date}`;
+}
+
+const hoursText = (minutes: number) => `${Math.round((minutes / 60) * 10) / 10} h`;
 
 export function planReportAlerts(input: {
   quotations: QuotationRow[];
@@ -71,6 +82,8 @@ export function planReportAlerts(input: {
   crossingWindowDays?: number;
   /** For N13: the days after completion at which a work order is overdue. */
   unflaggedAfterDays?: number;
+  /** N14: team days over-booked in the horizon. Left out = N14 not run. */
+  overbooked?: CapacityResult["overbooked"];
 }): { send: PlannedAlert[]; resolve: OpenAlert[]; backlog: { quotationsAged: number; workOrdersUnflagged: number } } {
   const window = input.crossingWindowDays ?? CROSSING_WINDOW_DAYS;
   const send: PlannedAlert[] = [];
@@ -95,7 +108,7 @@ export function planReportAlerts(input: {
           "day",
         )}, over the ${r.ageingLimit}-day limit.`,
         link: `/reports/quotations?status=${encodeURIComponent(r.statusKey)}&q=${encodeURIComponent(r.number ?? "")}`,
-        to: { kind: "recipients" },
+        to: { kind: "recipients", list: "quotations" },
       });
     }
     if (r.expiring) {
@@ -137,6 +150,24 @@ export function planReportAlerts(input: {
     });
   }
 
-  const resolve = input.open.filter((o) => !current.has(o.dedupeKey));
+  for (const r of input.overbooked ?? []) {
+    const key = overbookedKey(r);
+    current.add(key);
+    send.push({
+      event: ALERT_EVENTS.capacityOverbooked,
+      entityType: "capacity_day",
+      entityId: `${r.teamKey}:${r.date}`,
+      dedupeKey: key,
+      title: `${r.teamName} over-booked on ${r.date}`,
+      body: `${r.date}: ${r.teamName} has ${hoursText(r.bookedMinutes)} booked against ${hoursText(r.availableMinutes)} available.`,
+      link: `/reports/capacity?team=${encodeURIComponent(r.teamKey)}&day=${r.date}`,
+      to: { kind: "recipients", list: "capacity" },
+    });
+  }
+
+  /* N14 alerts are only judged when capacity was worked out this run. */
+  const resolve = input.open.filter(
+    (o) => !current.has(o.dedupeKey) && (input.overbooked !== undefined || o.event !== ALERT_EVENTS.capacityOverbooked),
+  );
   return { send, resolve, backlog };
 }

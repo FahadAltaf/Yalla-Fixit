@@ -63,30 +63,47 @@ available hours by 16).
 
 - **Actual job hours** for `t`: the union of `[actual_start, actual_end)` of `t`'s appointments, so two
   overlapping appointments are not counted twice. Included statuses: Completed, and Cannot Complete when
-  both actuals are present. A job shared by two technicians counts in full for each, for time.
+  both actuals are present. A job shared by two technicians counts in full for each, for time. An
+  appointment belongs to the period by its actual start, or its scheduled start when it has none.
+  Built in P6: `lib/reports/utilization.ts`.
 - **Overtime (D-16)**: until decided, job time is clipped to the shift window for utilization, and job time
-  outside the window is reported beside it as "outside shift". That keeps utilization at or below 100 %
-  and hides nothing.
-- **Chargeable job hours**: job hours on appointments whose estimate total is greater than zero, or that
-  are identified AMC work (**D-08**, **D-14**). A zero-total estimate counts for time only (TC09).
+  outside the window is reported beside it as "outside shift". Job time on a day with nothing available
+  (holiday, rest day, full-day leave, after leaving) is outside shift too, so such a day adds nothing to
+  either side of the ratio. Utilization can pass 100 % only by the unpaid break, which is a length, not a
+  time of day.
+- **Chargeable job hours**: job hours on appointments whose work order's quotation totals more than zero
+  before VAT; with no quotation, whose work order itself has a value (**D-08**). A zero-total quotation
+  counts for time only (TC09). Work with no value anywhere is time only too, and reported apart as
+  "no value in FSM": that is where AMC and in-contract work sits until FSM says how to tell it (**D-14**).
+  On live data (Sept 2026) that bucket is 3,904 of 5,466 job hours, so commercial utilization reads low
+  until D-14 is answered.
 - **Time utilization** = actual ÷ available. **Commercial utilization** = chargeable ÷ available. Always
   shown together.
 - **Travel** (blocked, B-01): Σ trip durations, shown as hours and as a share of available hours. Never
   added to job hours.
 - **Scheduled vs actual variance** per appointment: actual duration − scheduled duration.
-- **Data completeness** = appointments with both actuals ÷ appointments expected to have them (Completed +
-  Cannot Complete). Measured on production, 20 Oct: Completed appointments carry both actuals on **402 of
-  402**.
+- **Data completeness** = Completed appointments with both actuals ÷ Completed appointments, the same
+  figure as the exception report (DEV-453), so the two screens agree. Cannot Complete is left out: 323 of
+  536 have no actual times, mostly because the work never started, which is not a data gap. Measured on
+  production, 21 Oct: **2,672 of 2,672**.
 
 **Example (BRD B2)**: 150 actual ÷ 192 available = 78.125 % → **78 %**; 132 chargeable ÷ 192 = 68.75 % →
 **69 %**; 28 travel hours = 14.6 % of available hours, shown separately.
 
 ## Capacity (DEV-452)
 
-For each day in the horizon (default 14 days): **booked** = union of scheduled intervals per technician,
-summed; **available** = the engine above; **over-booked** when booked > available; **spare** when booked <
-available × (1 − spare threshold). **Unassigned** = scheduled hours on appointments with no resource,
-shown separately. N14 fires once when a day first moves into over-booking.
+For each day in the horizon (default 14 days): **booked** = union of the scheduled intervals of a
+technician's appointments that are not cancelled, by calendar day, summed over technicians; **available**
+= the engine above; **over-booked** when booked > available (a booking on a rest day, holiday or leave is
+over-booking); **spare** when booked < available × spare share (`capacity.spareBelowPercent`, suggested
+50 %; the BRD gives no figure). **Unassigned** = scheduled hours on appointments with no technician, summed
+(separate jobs), shown apart and in no team. Team = team leader (D-20). N14 fires once per team and day when
+the day first becomes over-booked, to `capacity.alertRecipientUserIds`, and closes when it no longer is.
+Built in P6: `lib/reports/capacity.ts`.
+
+The portal's night shift (00:00–09:00) lies within one day; a shift crossing midnight would split its
+bookings across two dates. Bookings come from FSM appointments only: entries in the portal's own schedule
+that have not reached FSM are not counted.
 
 ## Attendance (DEV-451) — blocked, B-01
 

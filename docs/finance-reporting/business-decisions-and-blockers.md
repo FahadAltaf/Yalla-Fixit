@@ -56,8 +56,16 @@ Read-only, from the portal's copy of FSM; counts only.
 - **DEV-453 (P5)**: every completed appointment in FSM has both actual times (2,668 of 2,668), so "appointments
   without actual times" is empty today. 15 completed work orders on a valued quotation have no invoice flag
   (AED 24,875 before VAT), 13 of them past 3 days, which suggests the flag is not in use yet (D-02).
-- **Utilization (D-08, D-17)**: FSM lists crews of up to **24 technicians** on one appointment. Whether each
-  of them is credited the full appointment time is a business rule.
+- **Utilization (D-08, D-17)**: FSM lists crews of up to **35 technicians** on one appointment. Whether each
+  of them is credited the full appointment time is a business rule; P6 credits each in full for time.
+- **Utilization (P6, Sept 2026)**: of 2,672 completed appointments, 473 are on a quotation above zero, 499
+  have no quotation but a priced work order, 9 are on a zero quotation, and **1,691 have no value in FSM
+  at all**. Built rule (D-08): quotation total > 0, else work order value > 0. The no-value work is
+  probably AMC and in-contract work, which the BRD calls chargeable; it cannot be identified until D-14.
+- **Available hours (D-16)**: no technician has rest days set, so every day counts as a working day and
+  utilization reads low (17.9 % time for Sept). Rest days are on the technician dialog.
+- **Capacity**: FSM held 4 future appointments on 21 Oct and the portal's own schedule 7 (none yet in FSM),
+  so the board is mostly empty ahead. Whether forward bookings live in FSM is worth confirming.
 - **B-04**: FSM holds **1,054 quotations** and more than 3,400 work orders (count still running).
 
 ## Blockers

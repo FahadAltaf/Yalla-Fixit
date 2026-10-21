@@ -21,6 +21,16 @@ CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$
   SELECT nullif(current_setting('request.jwt.claim.sub', true), '')::uuid
 $$;
 
+-- Supabase Storage's bucket table, as far as the finance evidence bucket uses it.
+CREATE SCHEMA storage;
+CREATE TABLE storage.buckets (
+  id text PRIMARY KEY,
+  name text NOT NULL,
+  public boolean DEFAULT false,
+  file_size_limit bigint,
+  allowed_mime_types text[]
+);
+
 CREATE TABLE public.roles (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name text NOT NULL UNIQUE,

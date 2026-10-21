@@ -1,10 +1,11 @@
 /*
-  Run the daily report alerts (N7, N8, N13) once, by hand: the same
+  Run the daily report alerts (N7, N8, N13, N14) once, by hand: the same
   runReportAlerts the CRON_SECRET route calls. Delivery goes through the
   safety rail, so outside production in-app alerts reach only
   NOTIFY_INAPP_ALLOWLIST.
 
   Add --plan to only print what would be sent and closed, writing nothing.
+  The plan always works out N14, even with no recipients set.
 
   Run:
     node --env-file=.env --env-file=.env.local --import ./tests/setup/register.mjs \
@@ -16,6 +17,7 @@ import { buildQuotationRows } from "@/lib/reports/quotations";
 import { todayInZone } from "@/lib/scheduling/org-time";
 import { runReportAlerts } from "@/lib/server/reports/alerts";
 import { loadQuotationRecords, loadUnflaggedInputs } from "@/lib/server/reports/data";
+import { computeCapacityFor } from "@/lib/server/reports/planning";
 import { readReportingSettings } from "@/lib/server/reporting/settings";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 
@@ -34,7 +36,8 @@ async function main() {
   });
   const afterDays = settings.exceptions.completedWithoutFlagAfterDays;
   const unflagged = findUnflagged({ ...(await loadUnflaggedInputs(admin)), today, afterDays });
-  const plan = planReportAlerts({ quotations, unflagged, open: [], unflaggedAfterDays: afterDays });
+  const { result: capacity } = await computeCapacityFor(admin, settings, { from: today, days: settings.capacity.horizonDays });
+  const plan = planReportAlerts({ quotations, unflagged, open: [], unflaggedAfterDays: afterDays, overbooked: capacity.overbooked });
   console.log(
     JSON.stringify(
       {

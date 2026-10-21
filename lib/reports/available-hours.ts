@@ -160,6 +160,17 @@ export function computeAvailability(input: AvailabilityInput): TechnicianAvailab
   const dates = datesBetween(input.from, input.to);
   const holidays = new Set(input.holidays);
   const breakSetting = Math.max(0, input.unpaidBreakMinutes);
+  /* Every technician on a shift shares its window for a day: worked out once. */
+  const windows = new Map<string, { start: Date; end: Date }>();
+  const windowOf = (date: string, start: string, end: string) => {
+    const key = `${date}|${start}|${end}`;
+    let window = windows.get(key);
+    if (!window) {
+      window = shiftWindow(date, start, end, input.timeZone);
+      windows.set(key, window);
+    }
+    return window;
+  };
 
   const leaveByTech = new Map<string, Array<{ start: number; end: number }>>();
   for (const l of input.leave) {
@@ -204,7 +215,7 @@ export function computeAvailability(input: AvailabilityInput): TechnicianAvailab
         return off("rest_day");
       }
 
-      const window = shiftWindow(date, start, end, input.timeZone);
+      const window = windowOf(date, start, end);
       const windowMinutes = (window.end.getTime() - window.start.getTime()) / MINUTE;
       const breakMinutes = Math.min(breakSetting, windowMinutes);
       const working = windowMinutes - breakMinutes;

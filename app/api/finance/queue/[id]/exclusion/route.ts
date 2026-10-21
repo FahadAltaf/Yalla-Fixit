@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
+import { EVIDENCE_MAX_FILES, evidencePrefix } from "@/lib/finance/evidence";
 import { readQueueItemSummary, requestExclusion } from "@/lib/server/finance/queue";
 import { notifyExclusionRequested } from "@/lib/server/finance/queue-notifications";
 import { UUID_PATTERN, actorOf, queueErrorResponse } from "@/lib/server/finance/route-helpers";
@@ -13,14 +14,14 @@ import { ActionType, ResourceType } from "@/types/types";
  * TC05). It is not Excluded until verified; N3 goes to whoever may verify.
  *
  * Body: { reason, notes?, evidence? } where evidence is storage paths of
- * files already uploaded (the upload comes with the item screen, P4).
+ * files already uploaded through ./evidence; only this item's paths.
  */
 
 const bodySchema = z
   .object({
     reason: z.string().trim().min(1).max(200),
     notes: z.string().trim().max(2000).nullish(),
-    evidence: z.array(z.string().trim().min(1).max(500)).max(10).optional(),
+    evidence: z.array(z.string().trim().min(1).max(500)).max(EVIDENCE_MAX_FILES).optional(),
   })
   .strict();
 
@@ -33,6 +34,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   const parsed = bodySchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "A reason is required" }, { status: 400 });
+  if (parsed.data.evidence?.some((path) => !path.startsWith(evidencePrefix(id)) || path.includes(".."))) {
+    return NextResponse.json({ error: "Evidence must be uploaded to this item" }, { status: 400 });
+  }
 
   try {
     const admin = await createAdminServerClient();

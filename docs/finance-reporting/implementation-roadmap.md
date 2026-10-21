@@ -142,7 +142,8 @@ next phase).
   rail, second run deduplicated), N3/N4 delivered to the allowlisted user and closed when answered.
 - **Bugs found and fixed**: a query raised from On Hold lost the hold reason (migrations `20261021120000`,
   `20261021130000`); FSM `Line_Item_Amount` is VAT-inclusive (labels, D-05).
-- **Open**: evidence file upload for exclusions; coordinator scoping and N4 recipients wait on D-18.
+- **Open**: coordinator scoping and N4 recipients wait on D-18. Evidence upload for exclusions added after P6
+  (private bucket `finance-evidence`, migration `20261022110000`).
 
 - **Jira**: DEV-435, 436, 439, 441. **BRD**: 6.4, 6.1 E1, 6.2 N1 N2, 5.1 Step 8. **Depends on**: P3.
 - **Backend**: paginated, filtered queue API; detail API; digest run route (once a day, not sent when
@@ -183,7 +184,26 @@ next phase).
   day.
 - **Waiting**: D-13 status mapping, D-22 shift length.
 
-## P6 — Utilization and capacity · M
+## P6 — Utilization and capacity · M · **built on the branch (21 Oct); no migration**
+
+- **Delivered**: the utilization calculation (`lib/reports/utilization.ts`: job hours as an interval union
+  clipped to shift windows, outside-shift time beside it, chargeable from the quotation or work order,
+  completeness, scheduled-vs-actual variance, daily/weekly/monthly trend) and the capacity calculation
+  (`lib/reports/capacity.ts`: booked vs available by day, team and technician, over-booked and spare days,
+  unassigned hours); **Reports → Utilization** (by technician, by team, appointments underneath; time and
+  commercial side by side; travel column waiting on B-01; click a technician for their appointments, a team
+  for its technicians); **Reports → Capacity** (board of booked/available per team or technician per day,
+  a cell opens its bookings); export and access logging on both; N14 in the daily alerts (only worked out
+  when recipients are set); two Reporting Settings (spare-day share, N14 recipients); the shared time-zone
+  helper caches its formatter (reports went from 16 s to 3–5 s locally).
+- **Tested**: 19 new unit tests (the BRD's 192 h / 150 h / 132 h example → 78.1 % and 68.8 %, TC09,
+  overlapping appointments once, missing actuals excluded and counted in completeness, outside-shift time,
+  crews, variance, weekly trend sums, capacity statuses, rest-day booking, unassigned, N14 planning).
+- **Found on live data (Sept 2026)**: 115 technicians, 30,600 h available, 5,466 h job time → 17.9 % time,
+  5.1 % commercial. Three things pull that down and are on the page: no technician has rest days set, so
+  every day counts as a working day (D-16); 3,904 job hours are on work with no value in FSM (D-08, D-14);
+  264 appointments in the month have no crew read yet, so they count for the lead technician only. Forward
+  bookings are sparse in FSM (4 future appointments on 21 Oct).
 
 - **Jira**: DEV-444, 452. **BRD**: 5.2 B2, B5; N14. **Depends on**: P5.
 - **Backend**: utilization (interval union, outside-shift reporting, completeness); capacity horizon;

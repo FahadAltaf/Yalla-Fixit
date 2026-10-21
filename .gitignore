@@ -68,6 +68,8 @@ next-env.d.ts
 # Local debug output, never part of a commit.
 debug.log
 .next-check/
+# Any other NEXT_DIST_DIR build (a second dev server). Ignored so Tailwind never scans its cache.
+/.next-*/
 
 # The AMC database harness's working directory.
 #

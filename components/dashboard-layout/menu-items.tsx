@@ -35,6 +35,8 @@ const canUseFinanceQueue = (user: User) =>
 /* Reports (BRD 5.2 B): the group shows when any report it holds may be opened. */
 const canUseReports = (user: User) =>
   hasResourceAction(user, ResourceType.REPORTS_QUOTATIONS, ActionType.VIEW) ||
+  hasResourceAction(user, ResourceType.REPORTS_UTILIZATION, ActionType.VIEW) ||
+  hasResourceAction(user, ResourceType.REPORTS_CAPACITY, ActionType.VIEW) ||
   hasResourceAction(user, ResourceType.REPORTS_EXCEPTIONS, ActionType.VIEW);
 
 // hasViewPermission and filter functions unchanged
@@ -191,6 +193,16 @@ export const baseSectionsItems: MenuItem[] = [
         title: "Quotation summary",
         url: "/reports/quotations",
         resource: ResourceType.REPORTS_QUOTATIONS,
+      },
+      {
+        title: "Utilization",
+        url: "/reports/utilization",
+        resource: ResourceType.REPORTS_UTILIZATION,
+      },
+      {
+        title: "Capacity",
+        url: "/reports/capacity",
+        resource: ResourceType.REPORTS_CAPACITY,
       },
       {
         title: "Exception reports",

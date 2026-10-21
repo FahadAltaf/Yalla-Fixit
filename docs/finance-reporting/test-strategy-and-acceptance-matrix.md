@@ -44,7 +44,7 @@ baseline before database tests touch `snagging_*` tables; finance and reports ta
 | TC06 | Invoice lower than queue value | Reason mandatory; Invoiced; lines flagged | DB | P3 | — |
 | TC07 | Quotation in Sent 11 days, limit 10 | N7 to Behrouz; row highlighted | Unit ✓ (`tests/reports/quotations`, `alerts-plan`) | P5 | D-13 |
 | TC08 | 2 days annual leave | Available hours −16; no alerts; compliance unaffected | Unit ✓ (`tests/reports/available-hours`; alerts and compliance in P7) | P5 | D-22 (8 h day) |
-| TC09 | Quotation total 0, 2-hour job | Time utilization only | Unit | P6 | D-08 |
+| TC09 | Quotation total 0, 2-hour job | Time utilization only | Unit ✓ (`tests/reports/utilization`) | P6 | D-08 |
 | TC10 | Shift 08:00, no check-in by 08:15 | One N5 with the day's appointments | Integration | P7 | **B-01** |
 | TC11 | 200 required, 7 missed, threshold 97 % | 96.5 %; AED 350 | Unit | P7 | D-09 |
 | TC12 | 200 required, 14 missed | 700 capped to AED 500 | Unit | P7 | **D-09 — holds only at 97 %** |

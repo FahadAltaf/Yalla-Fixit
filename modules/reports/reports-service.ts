@@ -1,8 +1,9 @@
 import { executeRESTBackend } from "@/lib/rest-server";
 import type { SavedFilter } from "@/lib/server/reports/access";
+import type { CapacityReport, UtilizationReport } from "@/lib/server/reports/planning";
 import type { ActualTimesReport, QuotationReport, UnflaggedReport } from "@/lib/server/reports/reports";
 
-export type ReportKey = "quotations" | "exceptions";
+export type ReportKey = "quotations" | "exceptions" | "utilization" | "capacity";
 export type ReportFilters = Record<string, string>;
 export type ReportCan = { can: { view: boolean; export: boolean } };
 
@@ -37,6 +38,18 @@ export const reportsService = {
 
   exceptions: (filters: ReportFilters, options: ReportRequestOptions = {}) =>
     executeRESTBackend<(UnflaggedReport | ActualTimesReport) & ReportCan>("/api/reports/exceptions", {
+      params: paramsOf(filters, options),
+      signal: options.signal,
+    }),
+
+  utilization: (filters: ReportFilters, options: ReportRequestOptions = {}) =>
+    executeRESTBackend<UtilizationReport & ReportCan>("/api/reports/utilization", {
+      params: paramsOf(filters, options),
+      signal: options.signal,
+    }),
+
+  capacity: (filters: ReportFilters, options: ReportRequestOptions = {}) =>
+    executeRESTBackend<CapacityReport & ReportCan>("/api/reports/capacity", {
       params: paramsOf(filters, options),
       signal: options.signal,
     }),

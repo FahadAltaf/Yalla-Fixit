@@ -5,7 +5,7 @@ import { cronAuthorised } from "@/lib/server/reports/route-helpers";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 
 /**
- * The daily report alerts N7, N8, N13 (BRD 6.2; DEV-442, DEV-453), and
+ * The daily report alerts N7, N8, N13 and N14 (BRD 6.2; DEV-442, 452, 453), and
  * closing the ones that are over. Driven by an external scheduler with
  * CRON_SECRET, the house pattern; safe to call every hour (deduplicated).
  * Nothing schedules it until go-live.

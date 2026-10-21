@@ -133,10 +133,20 @@ const SECTIONS: Record<SectionKey, { title: string; description: string; icon: R
   },
   planning: {
     title: "Capacity and exceptions",
-    description: "How far ahead capacity looks, and when a completed job without the invoice flag is reported (N13).",
+    description: "How far ahead capacity looks, what counts as a spare day, who hears about over-booking (N14), and when a completed job without the invoice flag is reported (N13).",
     icon: <CalendarClock />,
     fields: [
       { kind: "number", path: "capacity.horizonDays", label: "Capacity horizon", unit: "days", min: 1, max: 90 },
+      {
+        kind: "number",
+        path: "capacity.spareBelowPercent",
+        label: "Spare day below",
+        unit: "% of available hours booked",
+        hint: "The BRD asks for spare days to be highlighted without giving a figure; 50 % is a suggestion.",
+        min: 0,
+        max: 100,
+      },
+      { kind: "people", path: "capacity.alertRecipientUserIds", label: "Over-booking alert recipients", hint: "The coordinators (N14, optional in the BRD). Nobody is told until this is set." },
       { kind: "number", path: "exceptions.completedWithoutFlagAfterDays", label: "Completed without invoice flag after", unit: "days", min: 0, max: 365 },
     ],
   },

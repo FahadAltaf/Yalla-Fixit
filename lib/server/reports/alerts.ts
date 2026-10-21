@@ -10,15 +10,19 @@ import { sendEmail } from "@/lib/server/send-email";
 import { readAllRows } from "@/lib/server/snagging/read-all";
 
 import { loadQuotationRecords, loadUnflaggedInputs } from "./data";
+import { computeCapacityFor } from "./planning";
 
 /**
- * Runs the daily report alerts N7, N8 and N13 (lib/reports/alerts-plan.ts
+ * Runs the daily report alerts N7, N8, N13 and N14 (lib/reports/alerts-plan.ts
  * says what and to whom), and closes the ones that are over. In-app only.
  * Delivery goes through the notifier and its safety rail, so outside
  * production only the development allowlist receives anything.
  *
  * Safe to run every hour: every alert has a dedupe key, so a second run
  * sends nothing new.
+ *
+ * N14 is optional in the BRD: capacity is worked out only when someone is
+ * set to receive it, so an unset list costs nothing and sends nothing.
  */
 
 const EVENTS = Object.values(ALERT_EVENTS);
@@ -82,7 +86,11 @@ export async function runReportAlerts(admin: SupabaseClient): Promise<ReportAler
   });
   const afterDays = settings.exceptions.completedWithoutFlagAfterDays;
   const unflagged = findUnflagged({ ...unflaggedInputs, today, afterDays });
-  const plan = planReportAlerts({ quotations, unflagged, open, unflaggedAfterDays: afterDays });
+  const n14Recipients = settings.capacity.alertRecipientUserIds;
+  const overbooked = n14Recipients.length
+    ? (await computeCapacityFor(admin, settings, { from: today, days: settings.capacity.horizonDays })).result.overbooked
+    : undefined;
+  const plan = planReportAlerts({ quotations, unflagged, open, unflaggedAfterDays: afterDays, overbooked });
 
   const n7Recipients = settings.quotations.alertRecipientUserIds;
   const notify = createNotifier({
@@ -102,7 +110,7 @@ export async function runReportAlerts(admin: SupabaseClient): Promise<ReportAler
   };
 
   const recipientsOf = (alert: PlannedAlert): string[] => {
-    if (alert.to.kind === "recipients") return n7Recipients;
+    if (alert.to.kind === "recipients") return alert.to.list === "capacity" ? n14Recipients : n7Recipients;
     const id = alert.to.email ? emails.get(alert.to.email.trim().toLowerCase()) : undefined;
     return id ? [id] : [];
   };

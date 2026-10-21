@@ -15,6 +15,8 @@ import { ActionType, ResourceType, type User } from "@/types/types";
 export const REPORTS = {
   quotations: { resource: ResourceType.REPORTS_QUOTATIONS, title: "Quotation summary" },
   exceptions: { resource: ResourceType.REPORTS_EXCEPTIONS, title: "Exception reports" },
+  utilization: { resource: ResourceType.REPORTS_UTILIZATION, title: "Utilization" },
+  capacity: { resource: ResourceType.REPORTS_CAPACITY, title: "Capacity" },
 } as const;
 
 export type ReportKey = keyof typeof REPORTS;

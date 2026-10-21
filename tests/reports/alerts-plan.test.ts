@@ -45,7 +45,7 @@ test("TC07: a quotation 11 days in Sent against 10 raises N7 to the recipients, 
   assert.equal(send.length, 1);
   assert.equal(send[0].event, ALERT_EVENTS.quotationAged);
   assert.equal(send[0].body, "Quotation 17001 (Client A, AED 12,500) in Sent for 11 days, over the 10-day limit.");
-  assert.deepEqual(send[0].to, { kind: "recipients" });
+  assert.deepEqual(send[0].to, { kind: "recipients", list: "quotations" });
   assert.match(send[0].link, /^\/reports\/quotations\?status=sent&q=17001$/);
 });
 
@@ -104,4 +104,19 @@ test("an open alert whose key no longer applies is resolved; a current one is ke
     resolve.map((r) => r.dedupeKey),
     ["quote-aged:E1:notSent:2026-09-01T04:00:00Z", "wo-unflagged:W7"],
   );
+});
+
+test("N14: once per team and day over-booked; closed when it no longer is", () => {
+  const over = [{ date: "2026-10-23", teamKey: "L1", teamName: "Ali's team", bookedMinutes: 1230, availableMinutes: 960 }];
+  const { send } = planReportAlerts({ quotations: [], unflagged: [], open: [], overbooked: over });
+  assert.equal(send.length, 1);
+  assert.equal(send[0].event, ALERT_EVENTS.capacityOverbooked);
+  assert.equal(send[0].dedupeKey, "capacity-over:L1:2026-10-23");
+  assert.equal(send[0].body, "2026-10-23: Ali's team has 20.5 h booked against 16 h available.");
+  assert.deepEqual(send[0].to, { kind: "recipients", list: "capacity" });
+
+  const open = [{ event: ALERT_EVENTS.capacityOverbooked, entityId: "L1:2026-10-23", dedupeKey: "capacity-over:L1:2026-10-23" }];
+  assert.equal(planReportAlerts({ quotations: [], unflagged: [], open, overbooked: over }).resolve.length, 0, "still over: stays open");
+  assert.equal(planReportAlerts({ quotations: [], unflagged: [], open, overbooked: [] }).resolve.length, 1, "no longer over: closed");
+  assert.equal(planReportAlerts({ quotations: [], unflagged: [], open }).resolve.length, 0, "capacity not worked out: left alone");
 });

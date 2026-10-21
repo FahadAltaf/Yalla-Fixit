@@ -87,6 +87,7 @@ export async function PUT(req: NextRequest) {
       ...next.finance.digestRecipientUserIds,
       ...next.compliance.hrRecipientUserIds,
       ...next.quotations.alertRecipientUserIds,
+      ...next.capacity.alertRecipientUserIds,
     ];
     if (recipientIds.length > 0) {
       const pickable = new Set((await listPickableUsers(admin)).map((user) => user.id));

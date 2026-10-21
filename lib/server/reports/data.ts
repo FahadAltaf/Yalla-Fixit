@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { AvailabilityInput, AvailabilityTechnician, LeaveInterval, ShiftTimes } from "@/lib/reports/available-hours";
+import type { CapacityAppointment } from "@/lib/reports/capacity";
 import type {
   ExceptionAppointment,
   ExceptionEstimate,
@@ -8,6 +9,7 @@ import type {
   ExceptionWorkOrder,
 } from "@/lib/reports/exceptions";
 import type { QuotationRecord } from "@/lib/reports/quotations";
+import { chargeabilityOf, type UtilizationAppointment } from "@/lib/reports/utilization";
 import { addDaysToDateString, zonedTimeToUtc } from "@/lib/scheduling/org-time";
 import { readAllByIds, readAllRows } from "@/lib/server/snagging/read-all";
 
@@ -191,9 +193,33 @@ export async function loadCompletedAppointments(
         .range(from, to),
     "completed appointments",
   );
-  const ids = rows.map((r) => String(r.fsm_appointment_id));
+  const [crews, wos] = await Promise.all([loadCrews(admin, rows), loadWorkOrdersOf(admin, rows)]);
+
+  return rows.map((r) => {
+    const id = String(r.fsm_appointment_id);
+    const wo = wos.get(String(r.fsm_work_order_id));
+    const crew = crewOf(r, crews);
+    return {
+      id,
+      number: str(r.number),
+      workOrderId: str(r.fsm_work_order_id),
+      workOrderNumber: wo ? str(wo.number) : null,
+      clientName: wo ? str(wo.company_name) : null,
+      scheduledStart: str(r.scheduled_start),
+      actualStart: str(r.actual_start),
+      actualEnd: str(r.actual_end),
+      technicianIds: crew,
+    };
+  });
+}
+
+// ---------------------------------------------------------------------
+// Crews and work orders of appointments (shared by the appointment reports)
+// ---------------------------------------------------------------------
+
+async function loadCrews(admin: SupabaseClient, appointments: Record<string, unknown>[]): Promise<Map<string, string[]>> {
   const crewRows = await readAllByIds<Record<string, unknown>>(
-    ids,
+    appointments.map((r) => String(r.fsm_appointment_id)),
     (chunk, from, to) =>
       admin
         .schema("fsm")
@@ -211,38 +237,148 @@ export async function loadCompletedAppointments(
     list.push(String(c.technician_fsm_id));
     crews.set(String(c.fsm_appointment_id), list);
   }
-  const woIds = [...new Set(rows.map((r) => str(r.fsm_work_order_id)).filter((id): id is string => Boolean(id)))];
-  const woRows = await readAllByIds<Record<string, unknown>>(
-    woIds,
+  return crews;
+}
+
+/** A crew not read yet falls back to the lead technician. */
+function crewOf(r: Record<string, unknown>, crews: Map<string, string[]>): string[] {
+  return crews.get(String(r.fsm_appointment_id)) ?? (r.lead_technician_fsm_id ? [String(r.lead_technician_fsm_id)] : []);
+}
+
+/* With the quotation and value, for whether the work is chargeable (D-08). */
+async function loadWorkOrdersOf(
+  admin: SupabaseClient,
+  appointments: Record<string, unknown>[],
+): Promise<Map<string, Record<string, unknown>>> {
+  const ids = [...new Set(appointments.map((r) => str(r.fsm_work_order_id)).filter((id): id is string => Boolean(id)))];
+  const rows = await readAllByIds<Record<string, unknown>>(
+    ids,
     (chunk, from, to) =>
       admin
         .schema("fsm")
         .from("work_orders")
-        .select("fsm_work_order_id, number, company_name")
+        .select("fsm_work_order_id, number, company_name, fsm_estimate_id, sub_total")
         .in("fsm_work_order_id", chunk)
         .order("fsm_work_order_id")
         .range(from, to),
     "their work orders",
   );
-  const wos = new Map(woRows.map((r) => [String(r.fsm_work_order_id), r]));
+  return new Map(rows.map((r) => [String(r.fsm_work_order_id), r]));
+}
 
-  return rows.map((r) => {
-    const id = String(r.fsm_appointment_id);
+const APPOINTMENT_COLUMNS =
+  "fsm_appointment_id, number, fsm_work_order_id, status, type, scheduled_start, scheduled_end, actual_start, actual_end, lead_technician_fsm_id";
+
+// ---------------------------------------------------------------------
+// Utilization (DEV-444)
+// ---------------------------------------------------------------------
+
+/**
+ * Completed and Cannot Complete appointments that started in the dates
+ * (actual start, or scheduled start when there is none), with crews and
+ * whether each is chargeable (D-08: the quotation's total, else the work
+ * order's). A day either side is read; the calculation keeps the period.
+ */
+export async function loadUtilizationAppointments(
+  admin: SupabaseClient,
+  range: { from: string; to: string },
+): Promise<{ appointments: UtilizationAppointment[]; crewsUnknown: number }> {
+  const startIso = zonedTimeToUtc(addDaysToDateString(range.from, -1)).toISOString();
+  const endIso = zonedTimeToUtc(addDaysToDateString(range.to, 2)).toISOString();
+  const rows = await readAllRows<Record<string, unknown>>(
+    (from, to) =>
+      admin
+        .schema("fsm")
+        .from("appointments")
+        .select(APPOINTMENT_COLUMNS)
+        .in("status", ["Completed", "Cannot Complete"])
+        .or(
+          `and(actual_start.gte.${startIso},actual_start.lt.${endIso}),and(actual_start.is.null,scheduled_start.gte.${startIso},scheduled_start.lt.${endIso})`,
+        )
+        .order("fsm_appointment_id")
+        .range(from, to),
+    "appointments for utilization",
+  );
+  const [crews, wos] = await Promise.all([
+    loadCrews(admin, rows),
+    loadWorkOrdersOf(admin, rows),
+  ]);
+  const estimateRows = await readAllByIds<Record<string, unknown>>(
+    [...new Set([...wos.values()].map((w) => str(w.fsm_estimate_id)).filter((id): id is string => Boolean(id)))],
+    (chunk, from, to) =>
+      admin.schema("fsm").from("estimates").select("fsm_estimate_id, sub_total").in("fsm_estimate_id", chunk).order("fsm_estimate_id").range(from, to),
+    "their quotations",
+  );
+  const estimateTotals = new Map(estimateRows.map((e) => [String(e.fsm_estimate_id), num(e.sub_total)]));
+
+  let crewsUnknown = 0;
+  const appointments = rows.map<UtilizationAppointment>((r) => {
     const wo = wos.get(String(r.fsm_work_order_id));
-    /* A crew not read yet falls back to the lead technician. */
-    const crew = crews.get(id) ?? (r.lead_technician_fsm_id ? [String(r.lead_technician_fsm_id)] : []);
+    const estimateId = wo ? str(wo.fsm_estimate_id) : null;
+    if (!crews.has(String(r.fsm_appointment_id))) crewsUnknown += 1;
     return {
-      id,
+      id: String(r.fsm_appointment_id),
       number: str(r.number),
       workOrderId: str(r.fsm_work_order_id),
       workOrderNumber: wo ? str(wo.number) : null,
       clientName: wo ? str(wo.company_name) : null,
+      status: str(r.status),
+      type: str(r.type),
       scheduledStart: str(r.scheduled_start),
+      scheduledEnd: str(r.scheduled_end),
       actualStart: str(r.actual_start),
       actualEnd: str(r.actual_end),
-      technicianIds: crew,
+      technicianIds: crewOf(r, crews),
+      chargeability: chargeabilityOf({
+        /* A quotation the copy does not hold yet is treated as no quotation. */
+        quotationTotal: estimateId && estimateTotals.has(estimateId) ? estimateTotals.get(estimateId)! : null,
+        workOrderTotal: wo && wo.sub_total !== null && wo.sub_total !== undefined ? num(wo.sub_total) : null,
+      }),
     };
   });
+  return { appointments, crewsUnknown };
+}
+
+// ---------------------------------------------------------------------
+// Capacity (DEV-452)
+// ---------------------------------------------------------------------
+
+/** Appointments scheduled to overlap the dates, cancelled ones included (the calculation drops them). */
+export async function loadCapacityAppointments(
+  admin: SupabaseClient,
+  range: { from: string; to: string },
+): Promise<{ appointments: CapacityAppointment[]; crewsUnknown: number }> {
+  const startIso = zonedTimeToUtc(range.from).toISOString();
+  const endIso = zonedTimeToUtc(addDaysToDateString(range.to, 1)).toISOString();
+  const rows = await readAllRows<Record<string, unknown>>(
+    (from, to) =>
+      admin
+        .schema("fsm")
+        .from("appointments")
+        .select(APPOINTMENT_COLUMNS)
+        .lt("scheduled_start", endIso)
+        .gt("scheduled_end", startIso)
+        .order("fsm_appointment_id")
+        .range(from, to),
+    "appointments for capacity",
+  );
+  const [crews, wos] = await Promise.all([loadCrews(admin, rows), loadWorkOrdersOf(admin, rows)]);
+  let crewsUnknown = 0;
+  const appointments = rows.map<CapacityAppointment>((r) => {
+    const wo = wos.get(String(r.fsm_work_order_id));
+    if (!crews.has(String(r.fsm_appointment_id))) crewsUnknown += 1;
+    return {
+      id: String(r.fsm_appointment_id),
+      number: str(r.number),
+      workOrderNumber: wo ? str(wo.number) : null,
+      clientName: wo ? str(wo.company_name) : null,
+      status: str(r.status),
+      scheduledStart: str(r.scheduled_start),
+      scheduledEnd: str(r.scheduled_end),
+      technicianIds: crewOf(r, crews),
+    };
+  });
+  return { appointments, crewsUnknown };
 }
 
 // ---------------------------------------------------------------------
@@ -253,12 +389,27 @@ export async function loadAvailabilityInput(
   admin: SupabaseClient,
   input: { from: string; to: string; technicians: AvailabilityTechnician[]; unpaidBreakMinutes: number },
 ): Promise<AvailabilityInput> {
-  const { data: config, error } = await admin
-    .from("settings")
-    .select("day_shift_start, day_shift_end, night_shift_start, night_shift_end")
-    .eq("id", 1)
-    .single();
+  /* Leave overlapping the range, with a day either side for night shifts. */
+  const startIso = zonedTimeToUtc(addDaysToDateString(input.from, -1)).toISOString();
+  const endIso = zonedTimeToUtc(addDaysToDateString(input.to, 2)).toISOString();
+  const [{ data: config, error }, { data: holidayRows, error: holidayError }, leaveRows] = await Promise.all([
+    admin.from("settings").select("day_shift_start, day_shift_end, night_shift_start, night_shift_end").eq("id", 1).single(),
+    admin.from("org_public_holidays").select("holiday_date").gte("holiday_date", input.from).lte("holiday_date", input.to),
+    readAllRows<Record<string, unknown>>(
+      (from, to) =>
+        admin
+          .from("leave_records")
+          .select("id, technician_fsm_id, start_at, end_at")
+          .eq("status", "active")
+          .lt("start_at", endIso)
+          .gt("end_at", startIso)
+          .order("id")
+          .range(from, to),
+      "leave",
+    ),
+  ]);
   if (error) throw new Error(`shift settings: ${error.message}`);
+  if (holidayError) throw new Error(`public holidays: ${holidayError.message}`);
   const shiftTimes: ShiftTimes = {
     dayStart: String(config.day_shift_start),
     dayEnd: String(config.day_shift_end),
@@ -266,28 +417,6 @@ export async function loadAvailabilityInput(
     nightEnd: String(config.night_shift_end),
   };
 
-  const { data: holidayRows, error: holidayError } = await admin
-    .from("org_public_holidays")
-    .select("holiday_date")
-    .gte("holiday_date", input.from)
-    .lte("holiday_date", input.to);
-  if (holidayError) throw new Error(`public holidays: ${holidayError.message}`);
-
-  /* Leave overlapping the range, with a day either side for night shifts. */
-  const startIso = zonedTimeToUtc(addDaysToDateString(input.from, -1)).toISOString();
-  const endIso = zonedTimeToUtc(addDaysToDateString(input.to, 2)).toISOString();
-  const leaveRows = await readAllRows<Record<string, unknown>>(
-    (from, to) =>
-      admin
-        .from("leave_records")
-        .select("id, technician_fsm_id, start_at, end_at")
-        .eq("status", "active")
-        .lt("start_at", endIso)
-        .gt("end_at", startIso)
-        .order("id")
-        .range(from, to),
-    "leave",
-  );
   const wanted = new Set(input.technicians.map((t) => t.fsmId));
   const leave: LeaveInterval[] = leaveRows
     .filter((r) => wanted.has(String(r.technician_fsm_id)))

@@ -147,9 +147,11 @@ Please start MAHER numbers with `TEST-` so they are easy to remove.
 
 | # | Do | Expect |
 |---|---|---|
-| 4.20 | **Mark not invoiceable**, reason and notes | "It cannot be invoiced until this is decided"; *Record invoice* disappears; a notification goes to the verifier |
+| 4.20 | **Mark not invoiceable**, reason and notes, and attach a PDF and a photo under *Evidence* (after migration `20261022110000`) | "It cannot be invoiced until this is decided"; *Record invoice* disappears; the two files show as chips under the request; a notification goes to the verifier |
+| 4.20a | Click a file chip | It opens in a new tab. Copy that tab's link, wait two minutes, reload it: refused (links last one minute) |
+| 4.20b | In the dialog, pick an `.exe` or a file over 10 MB | Refused with a message before anything is sent |
 | 4.21 | **Reject** with a note | The request closes; item back to *Pending*; notification closes |
-| 4.22 | **Mark not invoiceable** again, then **Verify exclusion** | Status *Excluded*; its value appears in *Excluded value* on the list |
+| 4.22 | **Mark not invoiceable** again, then **Verify exclusion** | Status *Excluded*; a *Not to be invoiced* box shows the reason, who requested and verified it, and the files; its value appears in *Excluded value* on the list |
 
 ### Metrics (DEV-441)
 
@@ -215,13 +217,45 @@ migration log). Without it the reports still work, but saved filters and the acc
 | 5.16 | **Settings → Reporting → Public holidays**: add a date and name | Listed; the change appears in Change history |
 | 5.17 | Remove it | Gone; the removal is in Change history too |
 
-Available hours themselves appear on the utilization and capacity screens (P6). To see the figures now:
+## 5b. Utilization and capacity (P6)
+
+No migration. Give your role *Utilization* and *Capacity* View (and Export) under Permissions → Reports.
+
+### Utilization (DEV-444)
+
+| # | Do | Expect |
+|---|---|---|
+| 5.18 | **Reports → Utilization**, set the period to 1–30 Sep | Cards: time %, commercial %, outside shift, data completeness, travel "—" (B-01). For Sept: 17.9 % and 5.1 %, 115 technicians. Notes under the cards say what the figures rest on (no break set, leave records found, technicians with no rest days, crews not read) |
+| 5.19 | The trend chart | Two lines per week; *Trend: monthly* in the filters switches to months |
+| 5.20 | **By technician**: lowest time % first; click a technician | Switches to *Appointments* for that technician: each with its actual times, hours, actual vs scheduled and chargeable or not |
+| 5.21 | **By team**, click a team | Back to *By technician*, filtered to that team |
+| 5.22 | Pick one technician in the filter | Cards, trend and list narrow to them. (Rest days would lower available hours, but don't save them on a real technician; the unit tests cover it) |
+| 5.23 | Settings → Reporting → *Unpaid break per shift* = 60, reload | Available hours fall to 8 h a working day. Put it back to 0 (D-22 is open) |
+| 5.24 | *Appointments*, switch on **Missing actual times only** | Empty today (every completed appointment has both times) |
+| 5.25 | **Export → Excel** on each tab | Technician rows with every figure, or the appointment rows |
+
+### Capacity (DEV-452)
+
+| # | Do | Expect |
+|---|---|---|
+| 5.26 | **Reports → Capacity** | Board from today for the horizon (14 days): each team's booked/available hours per day, *All teams* on top, *Unassigned* at the bottom; red = over-booked, amber = spare, green = in between |
+| 5.27 | Switch the board to **Technicians** | One row per technician; a booking on a rest day or holiday shows red |
+| 5.28 | Click a cell | The bookings below narrow to that team (or technician) and day; click it again to clear |
+| 5.29 | Change *From* to a past date (e.g. 1 Sep) and *Days* to 28 | The board shows that period's bookings against availability |
+| 5.30 | Settings → Reporting → *Spare day below* = 25 % | Fewer amber cells. Put it back |
+
+### Over-booking alert (N14, optional)
+
+Off until someone is set under Settings → Reporting → *Over-booking alert recipients*. To see what it
+would send without sending anything, run the plan command below: N14 lines appear under `wouldSend`.
+
+Available hours can also be checked from the command line:
 
 ```bash
 node --env-file=.env --env-file=.env.local --import ./tests/setup/register.mjs scripts/reports/run-alerts.ts --plan
 ```
 
-That prints the N7 / N8 / N13 alerts that *would* go out today, and the backlog held back, without writing
+That prints the N7 / N8 / N13 / N14 alerts that *would* go out today, and the backlog held back, without writing
 anything. Running it without `--plan` sends them (in-app only, through the safety rail); N7 needs recipients
 set under Settings → Reporting → Quotations.
 
@@ -233,20 +267,20 @@ Run from the branch folder:
 npm test
 ```
 
-Expect `# pass 127`, `# fail 0` (sync engine, queue rules, metrics, digest, safety rails, available hours,
-quotation ageing, exception rules, alert planning).
+Expect `# pass 148`, `# fail 0` (sync engine, queue rules, metrics, digest, safety rails, available hours,
+quotation ageing, exception rules, utilization, capacity, alert planning).
 
 ```bash
 bash scripts/db-harness/run.sh
 ```
 
 Needs the local PostgreSQL 15 the harness uses. It builds a throwaway database, applies every migration twice,
-runs 151 checks (including Q-1042 giving 41.7 / 75.0 / 100 %, double invoicing refused, append-only history)
+runs 153 checks (including Q-1042 giving 41.7 / 75.0 / 100 %, double invoicing refused, append-only history)
 and a rollback round trip. Expect `== all checks passed`.
 
 ## What is not built yet (don't look for it)
 
 - The automatic trigger that puts completed work into the queue (DEV-433): waits on decisions D-01..D-03.
   Until then the queue holds only the six test items.
-- Uploading evidence files for an exclusion; the completion report link (B-01).
-- Utilization, capacity, attendance, compliance and revenue reports: P6 onwards.
+- The completion report link on the item screen (B-01).
+- Travel time on utilization (B-01). Attendance, compliance and revenue reports: P7 onwards.

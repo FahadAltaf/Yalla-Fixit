@@ -50,8 +50,17 @@ export const financeService = {
     input: { idempotencyKey: string; number: string; date: string; amount: number; varianceReason?: string | null },
   ) => executeRESTBackend<{ invoiceId: string }>(`/api/finance/queue/${id}/invoice`, { method: "POST", body: input }),
 
-  requestExclusion: (id: string, input: { reason: string; notes?: string | null }) =>
+  requestExclusion: (id: string, input: { reason: string; notes?: string | null; evidence?: string[] }) =>
     executeRESTBackend<{ exclusionId: string }>(`/api/finance/queue/${id}/exclusion`, { method: "POST", body: input }),
+
+  signEvidenceUpload: (id: string, input: { fileName: string; contentType: string; size: number }) =>
+    executeRESTBackend<{ path: string; signedUrl: string; contentType: string }>(`/api/finance/queue/${id}/evidence`, {
+      method: "POST",
+      body: input,
+    }),
+
+  /** Opens through the API, which checks the file belongs to the item, then redirects to a one-minute link. */
+  evidenceUrl: (id: string, path: string) => `/api/finance/queue/${id}/evidence?path=${encodeURIComponent(path)}`,
 
   decideExclusion: (exclusionId: string, input: { decision: "verified" | "rejected"; note?: string | null }) =>
     executeRESTBackend<{ status: QueueStatus }>(`/api/finance/exclusions/${exclusionId}/decision`, {
