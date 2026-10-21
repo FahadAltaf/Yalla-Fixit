@@ -153,7 +153,25 @@ next phase).
   filters and paging; metric arithmetic.
 - **Partial**: the completion report link waits on B-01.
 
-## P5 — Reports foundation · M
+## P5 — Reports foundation · M · **built and browser-tested on live data (21 Oct); migration not yet applied**
+
+- **Delivered**: schema `reports` (migration `20261022100000`: saved filters, append-only access log);
+  the available-hours engine (`lib/reports/available-hours.ts`) and its loader; the quotation summary
+  (status cards that filter, ageing against each status's limit, expiry warning, filters by created date,
+  owner, client, value band, status and flag); the two exception reports (completed work orders without the
+  invoice flag; completed appointments without actual times, with data completeness per technician and
+  team); the shared report pieces (filters that persist per user, saved filters, export gated on Export and
+  logged, opening logged, "FSM data updated" line, drill-through to FSM when `NEXT_PUBLIC_FSM_APP_URL` is
+  set); the daily alerts N7, N8, N13 (`CRON_SECRET` route and a script with a dry-run mode); public holidays
+  in Reporting Settings, with changes in the history; the N7 recipients setting; a Reports menu group.
+- **Tested**: 21 new unit tests (TC07, TC08 with the BRD's 208 h → 192 h example, TC15, cross-midnight
+  shift, part-day leave, overlapping leave, holiday and rest day, status mapping, ageing, expiry, the
+  exception rules, alert planning); 14 database checks; browser on live data (1,054 quotations, 15
+  completed work orders without the flag, 2,668 completed appointments).
+- **Found on live data**: every completed appointment has both actual times (2,668 of 2,668), so the
+  second exception list is empty today; the backfill made 580 quotations look past their limit, so alerts
+  go out only for limits crossed in the last 7 days (the rest stay highlighted in the report).
+- **Not in P5**: the utilization and capacity screens that show available hours (P6).
 
 - **Jira**: DEV-455, 443, 442, 453. **BRD**: 5.2 B1, B2 (engine), B5; N7, N8, N13. **Depends on**: P1, P2.
 - **Migrations**: `report_saved_filters`, `report_access_log`.
@@ -198,6 +216,10 @@ next phase).
   ([FSM plan](zoho-fsm-integration-plan.md)); test-data inventory, dry run and reviewed cleanup script
   (never run without approval); truncate finance and HR transactional tables and re-run the backfill;
   hold-then-apply `20261006160000` with the deploy; full regression and browser UAT.
+- **Notification rows written during development** (`portal_notifications` with events `finance.*` and
+  `reports.*`, including the ones the safety rail marked suppressed) must be removed at go-live: their
+  dedupe keys would otherwise stop the real notification from being sent. The finance tables' append-only
+  triggers must be disabled for the test-data cleanup and re-enabled after.
 
 ## Progress (31 issues)
 

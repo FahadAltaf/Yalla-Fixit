@@ -47,7 +47,15 @@ Read-only, from the portal's copy of FSM; counts only.
   that invoices are reconciled on pre-tax values. (The P2 migration's comment calls `Line_Item_Amount`
   "quantity × list price"; that comment is wrong and the file is left as applied.)
 - **D-13**: across all 1,054 quotations, statuses seen are New, Converted to Work Order, Approved and
-  **Expired** (Expired was not in the recent sample).
+  **Expired** (Expired was not in the recent sample). The summary (P5) maps New → Not sent and the others by
+  name; any other value appears under its own name. "Revised" may be FSM's quotation **type** "Revision"
+  (106 quotations) rather than a status: to confirm.
+- **Ageing backlog (D-13, P5)**: on 21 Oct, 606 open quotations are past their status's limit, most of them for
+  months. Alerts (N7) go out only for a limit crossed in the last 7 days; the backlog stays highlighted in the
+  report. Whether old quotations should be closed in FSM, or the limits are right, is Behrouz's call.
+- **DEV-453 (P5)**: every completed appointment in FSM has both actual times (2,668 of 2,668), so "appointments
+  without actual times" is empty today. 15 completed work orders on a valued quotation have no invoice flag
+  (AED 24,875 before VAT), 13 of them past 3 days, which suggests the flag is not in use yet (D-02).
 - **Utilization (D-08, D-17)**: FSM lists crews of up to **24 technicians** on one appointment. Whether each
   of them is credited the full appointment time is a business rule.
 - **B-04**: FSM holds **1,054 quotations** and more than 3,400 work orders (count still running).

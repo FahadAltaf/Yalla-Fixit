@@ -18,6 +18,7 @@ import {
 import { toast } from "sonner";
 
 import { FsmFreshness } from "@/components/dashboard/reporting/fsm-freshness";
+import { PublicHolidays } from "@/components/dashboard/reporting/public-holidays";
 import { PageHeading, PillTabs, SectionCard } from "@/components/dashboard/shared/kaizen";
 import { DataTable } from "@/components/data-table";
 import { IconText } from "@/components/data-table/columns/icon-text";
@@ -50,8 +51,8 @@ import { reportingService } from "@/modules/reporting/reporting-service";
  * from the defaults (lib/reporting/settings.ts explains why).
  */
 
-type View = "finance" | "quotations" | "attendance" | "compliance" | "planning" | "history" | "fsm";
-type SectionKey = Exclude<View, "history" | "fsm">;
+type View = "finance" | "quotations" | "attendance" | "compliance" | "planning" | "holidays" | "history" | "fsm";
+type SectionKey = Exclude<View, "holidays" | "history" | "fsm">;
 
 type NumberField = {
   kind: "number";
@@ -87,6 +88,7 @@ const SECTIONS: Record<SectionKey, { title: string; description: string; icon: R
       { kind: "number", path: "quotations.ageingDaysByStatus.sent", label: "Sent, awaiting the client", unit: "days", min: 0, max: 365 },
       { kind: "number", path: "quotations.ageingDaysByStatus.approved", label: "Approved, not yet scheduled", unit: "days", min: 0, max: 365 },
       { kind: "number", path: "quotations.expiryWarningDays", label: "Expiry warning", unit: "days before validity ends", min: 0, max: 365 },
+      { kind: "people", path: "quotations.alertRecipientUserIds", label: "Ageing alert recipients", hint: "Behrouz and the managers (N7). The expiry warning (N8) goes to the quotation's owner. Nobody receives N7 until this is set." },
     ],
   },
   attendance: {
@@ -205,6 +207,15 @@ export function ReportingSettingsPage() {
     void load();
   }, [load]);
 
+  /* A holiday change shows in the history without reloading the draft. */
+  const refreshHistory = useCallback(async () => {
+    try {
+      setHistory((await reportingService.getSettings()).history);
+    } catch {
+      /* The history is supporting detail; the next load brings it. */
+    }
+  }, []);
+
   const dirty = Boolean(draft && saved && !same(draft, saved));
 
   const handleSave = async () => {
@@ -321,6 +332,7 @@ export function ReportingSettingsPage() {
           { value: "attendance", label: "Check-in alerts", count: changedIn("attendance") || undefined },
           { value: "compliance", label: "Compliance", count: changedIn("compliance") || undefined },
           { value: "planning", label: "Capacity and exceptions", count: changedIn("planning") || undefined },
+          { value: "holidays", label: "Public holidays" },
           { value: "history", label: "Change history", count: history.length },
           { value: "fsm", label: "FSM data" },
         ]}
@@ -328,6 +340,8 @@ export function ReportingSettingsPage() {
 
       {view === "fsm" ? (
         <FsmFreshness />
+      ) : view === "holidays" ? (
+        <PublicHolidays canEdit={canEdit} onChanged={() => void refreshHistory()} />
       ) : view === "history" ? (
         <SettingsHistory history={history} />
       ) : (

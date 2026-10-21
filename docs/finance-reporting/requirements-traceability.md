@@ -28,8 +28,8 @@ names. Decisions (D-) and blockers (B-) are in
 
 | Jira | BRD | Objective | Today | Work needed | FSM | Decision | Acceptance / tests | Phase | Status |
 |---|---|---|---|---|---|---|---|---|---|
-| DEV-442 | 5.2 B1, N7 N8 | Quotation pipeline, ageing, expiry | Single-record estimate reads only | I estimates mirror + status history; B summary; F report; N7/N8 | `Estimates` ✓ | D-13 | TC07 | P5 | ⬜ ❓ |
-| DEV-443 | 5.2 B2 | Available hours engine | Org shift times in `settings`; `technician_reference.shift`; `leave_records` | B pure calculator; D holidays, rest days, leaving date | — | D-16 | TC08, TC15; cross-midnight; part-day leave | P5 | 🟡 |
+| DEV-442 | 5.2 B1, N7 N8 | Quotation pipeline, ageing, expiry | Single-record estimate reads only | I estimates mirror + status history; B summary; F report; N7/N8 | `Estimates` ✓ | D-13 | TC07 | P5 | ✅ built and browser-tested (status mapping provisional, D-13) |
+| DEV-443 | 5.2 B2 | Available hours engine | Org shift times in `settings`; `technician_reference.shift`; `leave_records` | B pure calculator; D holidays, rest days, leaving date | — | D-16 | TC08, TC15; cross-midnight; part-day leave | P5 | ✅ engine, loader and public holidays built and tested; shown on screen in P6 (D-22 break, D-16 leave entry) |
 | DEV-444 | 5.2 B2, 6.4 | Time vs commercial utilization; travel; completeness | Nothing | B calculator; F report; I appointments + trips | Actuals ✓ (100 % on completed); trips ⛔ | D-08, D-14, D-16 | TC09; 78 % / 69 % example | P6 | ⬜ ⛔ (travel, B-01) |
 | DEV-445 | 5.2 B3, N5 | Shift check-in missed alert | Nothing | B 5-min sweep; dedupe; N5 | Shift check-in ⛔ | D-11 | TC10 | P7 | ⬜ ⛔ |
 | DEV-446 | 5.2 B3, N6 | Appointment check-in missed alert | Nothing | B sweep; N6 | Possibly actual start | D-15 | One alert; none for cancelled/reassigned | P7 | ⬜ ❓ |
@@ -39,9 +39,9 @@ names. Decisions (D-) and blockers (B-) are in
 | DEV-450 | 5.2 B4, E2 E3 | Monthly statement and HR report | Nothing | B month-end finalisation; E2/E3 | Check-ins ⛔ | D-11 | Figures frozen after the window | P7 | ⬜ ⛔ |
 | DEV-451 | 5.2 B5 | Daily attendance | Nothing | B report from shift + check-ins | Shift check-ins ⛔ | D-11 | Late / early / absent flags | P7 | ⬜ ⛔ |
 | DEV-452 | 5.2 B5, N14 | Booked vs available capacity | Board shows today only | B forward calculator; F report; optional N14 | Appointments ✓ | — | Over-booked days highlighted | P6 | ⬜ |
-| DEV-453 | 5.2 B5, N13 | Exceptions: no invoice flag; no actual times | Nothing | B two reports; N13 | ✓ | D-01, D-02 | Completeness % per technician | P5 | ⬜ ❓ |
+| DEV-453 | 5.2 B5, N13 | Exceptions: no invoice flag; no actual times | Nothing | B two reports; N13 | ✓ | D-01, D-02 | Completeness % per technician | P5 | ✅ built and browser-tested (rule provisional, D-01, D-02) |
 | DEV-454 | 5.2 B5 | Revenue, AMC mix, ratings, FSM links | Nothing | B revenue report; F links | Ratings ⛔ | D-14, D-17 | Ranked revenue; links open FSM | P8 | ⬜ ⛔ ❓ |
-| DEV-455 | 5.2 B5 | Shared filters, export, drill, access, saved filters | Analytics drill-through and xlsx export exist | F shared shell; D `report_saved_filters`, `report_access_log` | — | — | Same controls on every report | P5 | ⬜ (snagging export and drill-through are reusable, not this feature) |
+| DEV-455 | 5.2 B5 | Shared filters, export, drill, access, saved filters | Analytics drill-through and xlsx export exist | F shared shell; D `reports.saved_filters`, `reports.access_log` | — | — | Same controls on every report | P5 | ✅ built; saved filters and the log work once `20261022100000` is applied |
 
 ## Prerequisites (§5.3)
 

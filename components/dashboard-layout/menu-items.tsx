@@ -10,6 +10,7 @@ import {
   Bell,
   CalendarClock,
   ReceiptText,
+  ChartColumn,
   ClipboardCheck,
   LayoutDashboard,
   ListTodo,
@@ -30,6 +31,11 @@ const canUseFinanceQueue = (user: User) =>
   hasResourceAction(user, ResourceType.FINANCE_QUEUE, ActionType.VIEW) ||
   hasResourceAction(user, ResourceType.FINANCE_EXCLUSIONS, ActionType.CREATE) ||
   hasResourceAction(user, ResourceType.FINANCE_EXCLUSIONS, ActionType.APPROVE);
+
+/* Reports (BRD 5.2 B): the group shows when any report it holds may be opened. */
+const canUseReports = (user: User) =>
+  hasResourceAction(user, ResourceType.REPORTS_QUOTATIONS, ActionType.VIEW) ||
+  hasResourceAction(user, ResourceType.REPORTS_EXCEPTIONS, ActionType.VIEW);
 
 // hasViewPermission and filter functions unchanged
 const hasViewPermission = (
@@ -171,6 +177,25 @@ export const baseSectionsItems: MenuItem[] = [
         title: "Invoicing metrics",
         url: "/finance/metrics",
         resource: ResourceType.FINANCE_QUEUE,
+      },
+    ],
+  },
+  {
+    title: "Reports",
+    url: "/reports",
+    icon: <ChartColumn className="size-4 text-primary" />,
+    isActive: false,
+    canSee: canUseReports,
+    items: [
+      {
+        title: "Quotation summary",
+        url: "/reports/quotations",
+        resource: ResourceType.REPORTS_QUOTATIONS,
+      },
+      {
+        title: "Exception reports",
+        url: "/reports/exceptions",
+        resource: ResourceType.REPORTS_EXCEPTIONS,
       },
     ],
   },

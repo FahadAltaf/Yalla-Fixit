@@ -2,7 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 /**
  * Append-only audit trail for Finance & Reports (BRD §6.9): settings
- * changes now; waivers and dispute decisions in P7.
+ * and public-holiday changes now; waivers and dispute decisions in P7.
  *
  * The table refuses UPDATE, DELETE and TRUNCATE with an error (migration
  * 20261020100000). Like lib/server/amc/audit.ts, a failed insert is logged
@@ -11,7 +11,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  */
 
 export type ReportingAuditEntry = {
-  entityType: "settings";
+  entityType: "settings" | "holiday";
   entityId?: string | null;
   eventType: string;
   actorId?: string | null;
@@ -47,15 +47,15 @@ export type ReportingSettingsHistoryEntry = {
   createdAt: string;
 };
 
-/** The latest settings changes, newest first, for the History tab. */
+/** The latest settings and public-holiday changes, newest first, for the History tab. */
 export async function listReportingSettingsHistory(
   admin: SupabaseClient,
   limit = 25,
 ): Promise<ReportingSettingsHistoryEntry[]> {
   const { data, error } = await admin
     .from(AUDIT_TABLE)
-    .select("id, actor_label, payload, created_at")
-    .eq("entity_type", "settings")
+    .select("id, entity_type, event_type, actor_label, payload, created_at")
+    .in("entity_type", ["settings", "holiday"])
     .order("created_at", { ascending: false })
     .order("id", { ascending: false })
     .limit(limit);
@@ -67,7 +67,11 @@ export async function listReportingSettingsHistory(
   }
 
   return (data ?? []).map((row) => {
-    const keys = (row.payload as { changedKeys?: unknown } | null)?.changedKeys;
+    const payload = row.payload as { changedKeys?: unknown; date?: unknown; name?: unknown } | null;
+    const keys =
+      row.entity_type === "holiday"
+        ? [`Public holiday ${String(payload?.date ?? "")} ${row.event_type === "holiday_removed" ? "removed" : "saved"}: ${String(payload?.name ?? "")}`]
+        : payload?.changedKeys;
     return {
       id: Number(row.id),
       actorLabel: (row.actor_label as string | null) ?? null,

@@ -1,4 +1,4 @@
-# Manual test guide — Finance & Reports (P0–P4)
+# Manual test guide — Finance & Reports (P0–P5)
 
 How to check by hand what is built so far on `feature/yfi-finance-reporting`. Each step says what to do and
 what you should see. Automated tests are at the end.
@@ -32,8 +32,9 @@ The branch runs against the **production database**, so be careful what you save
    - *Ready-to-invoice queue*: View, Edit, **Approve** (Approve = record invoice)
    - *Not-invoiceable requests*: Create, **Approve** (Approve = verify)
    - *Reporting settings*: View, Edit
+   - *Quotation summary* and *Exception reports*: View, Export (administrators already have these)
 
-   Save, then reload the page. A **Finance** group appears in the menu.
+   Save, then reload the page. **Finance** and **Reports** groups appear in the menu.
 
 ## 1. Security (P0)
 
@@ -172,7 +173,59 @@ Please start MAHER numbers with `TEST-` so they are easy to remove.
 | 4.26 | On a sending day: an in-app *Ready to invoice* notification for the allowlisted user; the email is counted as *suppressed* (blocked by the rail) |
 | 4.27 | Remove yourself as a recipient afterwards |
 
-## 5. Automated tests
+## 5. Reports (P5)
+
+**Before**: apply `20261022100000_reports_foundation.sql` and add `reports` to Exposed schemas (row 8 of the
+migration log). Without it the reports still work, but saved filters and the access log do not.
+
+### Quotation summary (DEV-442)
+
+| # | Do | Expect |
+|---|---|---|
+| 5.1 | **Reports → Quotation summary** | "FSM quotations updated …" line; a card per status (Not sent, Sent, Approved, Converted to work order, Rejected, Revised, Expired) with count, value before VAT, average days and how many are over the limit; the list shows *Awaiting action* (Not sent, Sent, Approved), longest-waiting first |
+| 5.2 | Click the **Approved** card | The list shows only Approved; click it again to go back |
+| 5.3 | Click "… quotations expiring within 5 days" | *Any flag* becomes *Expiring soon*; each row's *Valid until* says "Expires in N days" |
+| 5.4 | Filter by owner, client, value band, created dates; search a number | The cards and the list narrow together |
+| 5.5 | A row past its limit | Days in red with "Over the N-day limit". A "≈" before the days means the start of the status was estimated |
+| 5.6 | Settings → Reporting → Quotations: change *Sent* limit, save, reload the report | Rows flagged against the new limit. Put it back |
+| 5.7 | **Export → Excel** | A file with the same rows as the filtered list |
+
+### Exception reports (DEV-453)
+
+| # | Do | Expect |
+|---|---|---|
+| 5.8 | **Reports → Exception reports**, tab *Completed, not flagged* | Work orders Completed or Closed in FSM, on a quotation with a value, not marked To Be Invoiced and not in the queue (15 on 21 Oct, 13 overdue); coordinator = the quotation's owner |
+| 5.9 | Switch on **Overdue only** | Only those completed more than 3 days ago (the setting under Capacity and exceptions) |
+| 5.10 | Tab *Missing actual times* | Data completeness overall, by team and by technician (last 30 days); the list of completed appointments missing a start or end. On 21 Oct every completed appointment has both, so the list is empty |
+| 5.11 | Pick a technician or team | Figures and list narrow to them |
+
+### Shared report controls (DEV-455), after the migration
+
+| # | Do | Expect |
+|---|---|---|
+| 5.12 | Set some filters, leave the page, come back | The same filters are back (remembered per person) |
+| 5.13 | **Saved filters → Save current filters…**, name it | It appears in the menu; choosing it later restores the filters; the bin icon deletes it |
+| 5.14 | Open a report and export it, then run in Supabase: `select report_key, action, user_label, row_count, format, created_at from reports.access_log order by id desc limit 5;` | One `view` row per visit and one `export` row with the row count and format |
+| 5.15 | A user without *Quotation summary* View | No Reports menu entry for it; the API answers 403 |
+
+### Public holidays (DEV-443)
+
+| # | Do | Expect |
+|---|---|---|
+| 5.16 | **Settings → Reporting → Public holidays**: add a date and name | Listed; the change appears in Change history |
+| 5.17 | Remove it | Gone; the removal is in Change history too |
+
+Available hours themselves appear on the utilization and capacity screens (P6). To see the figures now:
+
+```bash
+node --env-file=.env --env-file=.env.local --import ./tests/setup/register.mjs scripts/reports/run-alerts.ts --plan
+```
+
+That prints the N7 / N8 / N13 alerts that *would* go out today, and the backlog held back, without writing
+anything. Running it without `--plan` sends them (in-app only, through the safety rail); N7 needs recipients
+set under Settings → Reporting → Quotations.
+
+## 6. Automated tests
 
 Run from the branch folder:
 
@@ -180,14 +233,15 @@ Run from the branch folder:
 npm test
 ```
 
-Expect `# pass 106`, `# fail 0` (sync engine, queue rules, metrics, digest, safety rails).
+Expect `# pass 127`, `# fail 0` (sync engine, queue rules, metrics, digest, safety rails, available hours,
+quotation ageing, exception rules, alert planning).
 
 ```bash
 bash scripts/db-harness/run.sh
 ```
 
 Needs the local PostgreSQL 15 the harness uses. It builds a throwaway database, applies every migration twice,
-runs 137 checks (including Q-1042 giving 41.7 / 75.0 / 100 %, double invoicing refused, append-only history)
+runs 151 checks (including Q-1042 giving 41.7 / 75.0 / 100 %, double invoicing refused, append-only history)
 and a rollback round trip. Expect `== all checks passed`.
 
 ## What is not built yet (don't look for it)
@@ -195,4 +249,4 @@ and a rollback round trip. Expect `== all checks passed`.
 - The automatic trigger that puts completed work into the queue (DEV-433): waits on decisions D-01..D-03.
   Until then the queue holds only the six test items.
 - Uploading evidence files for an exclusion; the completion report link (B-01).
-- Any report page under **Reports**: that is P5 onwards.
+- Utilization, capacity, attendance, compliance and revenue reports: P6 onwards.

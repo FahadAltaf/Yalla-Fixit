@@ -14,6 +14,8 @@ export type ReportingSettingsResponse = {
   canEdit: boolean;
 };
 
+export type PublicHoliday = { id: string; date: string; name: string };
+
 export const reportingService = {
   getSettings: () => executeRESTBackend<ReportingSettingsResponse>("/api/reporting-settings"),
 
@@ -27,6 +29,17 @@ export const reportingService = {
 
   fsmStatus: () =>
     executeRESTBackend<{ resources: FsmResourceStatus[] }>("/api/finance/fsm-sync/status"),
+
+  listHolidays: () => executeRESTBackend<{ holidays: PublicHoliday[] }>("/api/reporting-settings/holidays"),
+
+  saveHoliday: (input: { date: string; name: string }) =>
+    executeRESTBackend<{ holidays: PublicHoliday[] }>("/api/reporting-settings/holidays", { method: "POST", body: input }),
+
+  removeHoliday: (id: string) =>
+    executeRESTBackend<{ holidays: PublicHoliday[] }>("/api/reporting-settings/holidays", {
+      method: "DELETE",
+      params: { id },
+    }),
 };
 
 export const notificationsService = {

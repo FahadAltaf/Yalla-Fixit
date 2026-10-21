@@ -45,6 +45,9 @@ export const reportingSettingsSchema = z.object({
     }),
     /** N8: warn this many days before a quotation's validity ends. */
     expiryWarningDays: wholeDays(365),
+    /** N7: who hears about a quotation past its limit (BRD: Behrouz and
+        the managers). Empty = nobody until set. */
+    alertRecipientUserIds: userIds,
   }),
   attendance: z.object({
     /** N5 and N6 are set independently (BRD §6.6). */
@@ -105,6 +108,7 @@ export function getReportingSettingsDefaults(): ReportingSettings {
     quotations: {
       ageingDaysByStatus: { notSent: 7, sent: 10, approved: 5 },
       expiryWarningDays: 5,
+      alertRecipientUserIds: [],
     },
     attendance: {
       shiftCheckInAlertDelayMinutes: 15,

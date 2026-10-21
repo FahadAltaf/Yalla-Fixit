@@ -42,15 +42,15 @@ baseline before database tests touch `snagging_*` tables; finance and reports ta
 | TC04 | Lines 1–5 invoiced; 6–9 done next month | New item shows only 6–9; cumulative includes month 1 | DB | P3 | D-03 |
 | TC05 | Marked not invoiceable | Behrouz notified; Excluded only after verification | Integration | P3 | D-06 |
 | TC06 | Invoice lower than queue value | Reason mandatory; Invoiced; lines flagged | DB | P3 | — |
-| TC07 | Quotation in Sent 11 days, limit 10 | N7 to Behrouz; row highlighted | Integration | P5 | D-13 |
-| TC08 | 2 days annual leave | Available hours −16; no alerts; compliance unaffected | Unit | P5 | D-22 (8 h day) |
+| TC07 | Quotation in Sent 11 days, limit 10 | N7 to Behrouz; row highlighted | Unit ✓ (`tests/reports/quotations`, `alerts-plan`) | P5 | D-13 |
+| TC08 | 2 days annual leave | Available hours −16; no alerts; compliance unaffected | Unit ✓ (`tests/reports/available-hours`; alerts and compliance in P7) | P5 | D-22 (8 h day) |
 | TC09 | Quotation total 0, 2-hour job | Time utilization only | Unit | P6 | D-08 |
 | TC10 | Shift 08:00, no check-in by 08:15 | One N5 with the day's appointments | Integration | P7 | **B-01** |
 | TC11 | 200 required, 7 missed, threshold 97 % | 96.5 %; AED 350 | Unit | P7 | D-09 |
 | TC12 | 200 required, 14 missed | 700 capped to AED 500 | Unit | P7 | **D-09 — holds only at 97 %** |
 | TC13 | Waive 1 of 7 | Required and performed −1; penalty recalculated (AED 300 at 96.98 %); reportable | Unit + DB | P7 | D-09 |
 | TC14 | Dispute raised on the 26th | Rejected; window closed | Integration | P7 | D-10 |
-| TC15 | Leaving date the 15th | 15th onward excluded everywhere; earlier days counted | Unit | P5 | — |
+| TC15 | Leaving date the 15th | 15th onward excluded everywhere; earlier days counted | Unit ✓ (`tests/reports/available-hours`) | P5 | — |
 
 ## Expanded matrix
 
