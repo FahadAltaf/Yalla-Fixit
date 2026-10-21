@@ -653,7 +653,7 @@ export function InspectionHeaderCard({
           moves it on: raise the revision, or open the one raised.
         */}
         {quotationVoid?.blocking ? (
-          <div className="border-danger/30 bg-danger/5 flex flex-wrap items-start justify-between gap-3 border-t px-5 py-4">
+          <div className="border-danger/30 bg-danger/5 flex flex-col gap-3 border-t px-5 py-4 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0 flex-1">
               <p className="text-danger flex items-center gap-1.5 text-sm font-medium">
                 <AlertTriangle className="size-4 shrink-0" aria-hidden />

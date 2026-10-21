@@ -71,6 +71,24 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
 
     /*
+      SNG-100: the inspector found the property not as quoted, so the
+      quotation is void. The inspection waits for the revised quotation:
+      approving it now would put a report, a work order and an invoice on a
+      price the client never agreed to.
+    */
+    const voidState = await jobVoidState(admin, job.id);
+    if (voidState?.blocking) {
+      return NextResponse.json(
+        {
+          error: voidState.revised
+            ? `Quotation ${voidState.quotation.quote_number} is void (the property is not as quoted). The revised quotation ${voidState.revised.quote_number} must be approved by the client before this inspection can be approved.`
+            : `Quotation ${voidState.quotation.quote_number} is void (the property is not as quoted). Raise a revised quotation and have the client approve it before approving this inspection.`,
+        },
+        { status: 409 },
+      );
+    }
+
+    /*
       FR-6.01 — the decision comes after the review, not instead of it.
 
       The state machine already refuses submitted -> approved; this is the
@@ -84,24 +102,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         {
           error:
             "This inspection has not been reviewed yet. The reviewer must complete their review before it can be approved.",
-        },
-        { status: 409 },
-      );
-    }
-
-    /*
-      SNG-100: the inspector found the property not as quoted, so the
-      quotation is void. The inspection waits for the revised quotation:
-      approving it now would put a report, a work order and an invoice on a
-      price the client never agreed to.
-    */
-    const voidState = await jobVoidState(admin, job.id);
-    if (voidState?.blocking) {
-      return NextResponse.json(
-        {
-          error: voidState.revised
-            ? `Quotation ${voidState.quotation.quote_number} is void (the property is not as quoted). The revised quotation ${voidState.revised.quote_number} must be approved by the client before this inspection can be approved.`
-            : `Quotation ${voidState.quotation.quote_number} is void (the property is not as quoted). Raise a revised quotation and have the client approve it before approving this inspection.`,
         },
         { status: 409 },
       );
