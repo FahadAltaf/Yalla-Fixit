@@ -41,8 +41,11 @@ Read-only, from the portal's copy of FSM; counts only.
   work orders are In Progress**. Completion happens at line level in practice.
 - **D-02 / D-03**: only **394 of 3,400** work orders link to a quotation, and 5 of 41 recent lines carry one.
   How a queue item finds its quotation (and so its completion %) needs the business's answer.
-- **D-05**: FSM's two line amounts (`Line_Item_Amount`, `Amount`) differ on **10 of 41** lines, most likely
-  discounts. Which one invoicing uses must be decided.
+- **D-05**: FSM's two line amounts differ because **`Line_Item_Amount` is `Amount` plus VAT** (seen on a live
+  item: 199.00 → 208.95, 225.00 → 236.25, 150.00 → 157.50, all 5 %). `Amount` is pre-tax and matches the
+  quotation's pre-tax `Sub_Total`, so the build uses `Amount` and `Sub_Total`. Still to confirm with Finance:
+  that invoices are reconciled on pre-tax values. (The P2 migration's comment calls `Line_Item_Amount`
+  "quantity × list price"; that comment is wrong and the file is left as applied.)
 - **D-13**: across all 1,054 quotations, statuses seen are New, Converted to Work Order, Approved and
   **Expired** (Expired was not in the recent sample).
 - **Utilization (D-08, D-17)**: FSM lists crews of up to **24 technicians** on one appointment. Whether each

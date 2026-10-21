@@ -262,7 +262,7 @@ export function FinanceQueueItemPage({ id }: { id: string }) {
 
       <PageHeading
         eyebrow={`Finance · ${itemCode(item.number)}`}
-        title={item.quotationNumber ?? item.workOrderNumber ?? itemCode(item.number)}
+        title={item.quotationNumber ? `Quotation ${item.quotationNumber}` : (item.workOrderNumber ?? itemCode(item.number))}
         description={[item.clientName, item.quotationNumber ? item.workOrderNumber : null].filter(Boolean).join(" · ")}
         actions={actions.length ? <div className="flex flex-wrap gap-2">{actions}</div> : undefined}
       />
@@ -354,7 +354,7 @@ export function FinanceQueueItemPage({ id }: { id: string }) {
           <SectionCard
             icon={<ReceiptText />}
             title="Line items in this item"
-            description="Completed in FSM and not invoiced before. Values are after discount, before tax."
+            description="Completed in FSM and not invoiced before. Values are before VAT."
             bodyClassName="border-t"
           >
             <Table>
@@ -375,7 +375,7 @@ export function FinanceQueueItemPage({ id }: { id: string }) {
                     <TableCell className="pr-5 text-right font-medium tabular-nums">
                       {aed(line.amount)}
                       {line.lineAmount !== null && line.lineAmount !== line.amount ? (
-                        <div className="text-muted-foreground text-xs font-normal">before discount {aed(line.lineAmount)}</div>
+                        <div className="text-muted-foreground text-xs font-normal">incl. VAT {aed(line.lineAmount)}</div>
                       ) : null}
                     </TableCell>
                   </TableRow>

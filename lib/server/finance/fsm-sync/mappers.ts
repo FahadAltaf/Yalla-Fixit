@@ -133,6 +133,8 @@ export function mapLineItem(l: FsmRecord, estimateId: string | null) {
     unit: text(l.Unit),
     unit_price: num(l.List_Price),
     discount: num(l.Discount),
+    /* Line_Item_Amount is Amount plus VAT (seen on live data: 199 -> 208.95
+       at 5 %); Amount is the pre-tax value. */
     line_amount: num(l.Line_Item_Amount),
     amount: num(l.Amount),
     tax_percent: tax ? num(tax.Tax_Percentage) : null,

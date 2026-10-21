@@ -4,6 +4,7 @@ import { z } from "zod";
 import { QUEUE_ACTIONS, QUEUE_STATUSES, applyQueueAction, readQueueItemSummary } from "@/lib/server/finance/queue";
 import { notifyQueryRaised, resolveAgedNotices, resolveQueryNotices } from "@/lib/server/finance/queue-notifications";
 import { UUID_PATTERN, actorOf, queueErrorResponse } from "@/lib/server/finance/route-helpers";
+import { hasResourceAction } from "@/lib/role-permissions";
 import { requireResourceAccess } from "@/lib/server/require-access";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { ActionType, ResourceType } from "@/types/types";
@@ -32,15 +33,19 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const { id } = await ctx.params;
   if (!UUID_PATTERN.test(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
+  /* Who is calling first; the body then says which permission applies. */
+  const gate = await requireResourceAccess(null, null);
+  if (!gate.ok) return gate.response;
+
   const parsed = bodySchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   const { action, expectedStatus, note } = parsed.data;
 
-  const gate =
+  const allowed =
     action === "answer_query"
-      ? await requireResourceAccess(ResourceType.FINANCE_EXCLUSIONS, ActionType.CREATE)
-      : await requireResourceAccess(ResourceType.FINANCE_QUEUE, ActionType.EDIT);
-  if (!gate.ok) return gate.response;
+      ? hasResourceAction(gate.access.accessUser, ResourceType.FINANCE_EXCLUSIONS, ActionType.CREATE)
+      : hasResourceAction(gate.access.accessUser, ResourceType.FINANCE_QUEUE, ActionType.EDIT);
+  if (!allowed) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   try {
     const admin = await createAdminServerClient();

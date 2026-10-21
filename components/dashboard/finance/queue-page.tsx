@@ -122,19 +122,19 @@ export function FinanceQueuePage() {
 
       {summary ? (
         <StatCardGrid columns={5}>
-          <StatCard label="Pending" value={summary.pending.count} caption={aed(summary.pending.value)} />
+          <StatCard label="Pending" value={summary.pending.count} headline={aed(summary.pending.value)} />
           <StatCard
             label="In progress"
             value={summary.inProgress.count + summary.queryRaised.count}
-            caption={summary.queryRaised.count ? `${summary.queryRaised.count} with a query open` : aed(summary.inProgress.value)}
+            headline={summary.queryRaised.count ? `${summary.queryRaised.count} with a query open` : aed(summary.inProgress.value)}
             tone="progress"
           />
-          <StatCard label="On hold" value={summary.onHold.count} caption={aed(summary.onHold.value)} />
-          <StatCard label="Excluded value" value={aed(summary.excluded.value)} caption={`${summary.excluded.count} item(s), verified`} />
+          <StatCard label="On hold" value={summary.onHold.count} headline={aed(summary.onHold.value)} />
+          <StatCard label="Excluded value" value={aed(summary.excluded.value)} headline={`${summary.excluded.count} item(s), verified`} />
           <StatCard
             label="Average days to invoice"
             value={summary.averageDaysToInvoice === null ? "—" : summary.averageDaysToInvoice}
-            caption={summary.averageDaysToInvoice === null ? "No invoices recorded yet" : `Over ${summary.invoiced.count} invoice(s)`}
+            headline={summary.averageDaysToInvoice === null ? "No invoices recorded yet" : `Over ${summary.invoiced.count} invoice(s)`}
           />
         </StatCardGrid>
       ) : (

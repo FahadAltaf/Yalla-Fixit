@@ -25,7 +25,7 @@ export function getFinanceQueueColumns(agedAfterDays: number): ColumnDef<QueueRo
         return (
           <div className="min-w-48">
             <IdentityCell
-              title={r.quotationNumber ?? r.workOrderNumber ?? itemCode(r.number)}
+              title={r.quotationNumber ? `Quotation ${r.quotationNumber}` : (r.workOrderNumber ?? itemCode(r.number))}
               subtitle={[itemCode(r.number), r.quotationNumber ? r.workOrderNumber : null].filter(Boolean).join(" · ")}
               icon={Building2}
               badge={r.isTest ? <TestItemBadge /> : undefined}

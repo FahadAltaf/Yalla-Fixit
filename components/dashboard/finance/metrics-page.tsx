@@ -81,18 +81,18 @@ export function FinanceMetricsPage() {
       {heading}
 
       <StatCardGrid columns={4}>
-        <StatCard label="Awaiting invoice" value={aed(metrics.openValue)} caption="Pending, in progress, query or hold" />
+        <StatCard label="Awaiting invoice" value={aed(metrics.openValue)} headline="Pending, in progress, query or hold" />
         <StatCard
           label="Average days to invoice"
           value={metrics.daysToInvoice.average === null ? "—" : metrics.daysToInvoice.average}
-          caption={`Over ${summary.invoiced.count} invoice(s)`}
+          headline={`Over ${summary.invoiced.count} invoice(s)`}
         />
         <StatCard
           label="Invoices with a variance"
           value={`${metrics.variance.withVariance} of ${metrics.variance.invoices}`}
-          caption={`Net ${aed(metrics.variance.total)}`}
+          headline={`Net ${aed(metrics.variance.total)}`}
         />
-        <StatCard label="Excluded value" value={aed(summary.excluded.value)} caption={`${summary.excluded.count} verified item(s)`} />
+        <StatCard label="Excluded value" value={aed(summary.excluded.value)} headline={`${summary.excluded.count} verified item(s)`} />
       </StatCardGrid>
 
       <div className="grid gap-6 lg:grid-cols-2">

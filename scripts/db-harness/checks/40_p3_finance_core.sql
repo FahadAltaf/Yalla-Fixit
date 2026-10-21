@@ -198,3 +198,22 @@ SELECT harness.expect(
 SELECT harness.expect(
   (SELECT completion_percent = 100.0 FROM finance.queue_list WHERE number = (SELECT number FROM finance.queue_items WHERE trigger_key = 'wq-m3')),
   'list: month 3 item reads 100 %');
+
+-- 20261021120000: a query raised while On Hold returns to On Hold with its reason.
+SELECT fsm.upsert_work_orders('[{"fsm_work_order_id":"WH","status":"In Progress","modified_time":"2026-09-01T08:00:00Z"}]');
+SELECT fsm.sync_line_items('WH', '2026-09-30T18:00:00Z',
+  '[{"fsm_line_id":"LH1","amount":50,"status":"Completed","modified_time":"2026-09-30T17:00:00Z"}]');
+SELECT finance.create_queue_item('wh-1', 'WH', ARRAY['LH1']);
+SELECT finance.apply_action((SELECT id FROM finance.queue_items WHERE trigger_key = 'wh-1'), 'put_on_hold', 'pending', NULL, 'Finance One', 'Waiting for PO');
+SELECT finance.apply_action((SELECT id FROM finance.queue_items WHERE trigger_key = 'wh-1'), 'raise_query', 'on_hold', NULL, 'Finance One', 'Which PO?');
+SELECT harness.expect(
+  finance.apply_action((SELECT id FROM finance.queue_items WHERE trigger_key = 'wh-1'), 'answer_query', 'query_raised', NULL, 'Coordinator', 'PO-1') = 'on_hold',
+  'a query raised while on hold is answered back to On Hold');
+SELECT harness.expect(
+  (SELECT hold_reason = 'Waiting for PO' AND query_text IS NULL FROM finance.queue_items WHERE trigger_key = 'wh-1'),
+  'and keeps its hold reason');
+SELECT harness.expect(
+  finance.apply_action((SELECT id FROM finance.queue_items WHERE trigger_key = 'wh-1'), 'resume', 'on_hold', NULL, 'Finance One') = 'in_progress',
+  'resumed');
+SELECT harness.expect((SELECT hold_reason IS NULL FROM finance.queue_items WHERE trigger_key = 'wh-1'),
+  'resuming clears the hold reason');
