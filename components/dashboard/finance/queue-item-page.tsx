@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
   CalendarClock,
@@ -22,6 +23,7 @@ import { ActionDialogContent, ErrorState, HeadingSkeleton, SectionSkeleton, Subm
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -71,6 +73,7 @@ type NoteDialog = {
 };
 
 export function FinanceQueueItemPage({ id }: { id: string }) {
+  const router = useRouter();
   const [data, setData] = useState<QueueItemResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -104,6 +107,17 @@ export function FinanceQueueItemPage({ id }: { id: string }) {
   }, [load]);
 
   if (error && !data) {
+    /* A wrong or old link: retrying cannot help, the queue can. */
+    if (/no such item|not found/i.test(error)) {
+      return (
+        <EmptyState
+          icon={<ReceiptText />}
+          title="This item does not exist"
+          description="The link may be wrong, or the item was removed."
+          action={{ label: "Back to the queue", onClick: () => router.push("/finance/queue") }}
+        />
+      );
+    }
     return <ErrorState title="Could not load this item" message={error} onRetry={() => void load()} />;
   }
   if (!data) {

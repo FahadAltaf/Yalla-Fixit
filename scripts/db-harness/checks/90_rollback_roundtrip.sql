@@ -32,6 +32,7 @@ SET client_min_messages = warning;
 \ir ../../../supabase/migrations/20261021100000_finance_core.sql
 \ir ../../../supabase/migrations/20261021110000_finance_queue_list.sql
 \ir ../../../supabase/migrations/20261021120000_finance_hold_query_fix.sql
+\ir ../../../supabase/migrations/20261021130000_finance_stuck_query_recovery.sql
 SET client_min_messages = notice;
 SELECT harness.expect(to_regclass('public.portal_notifications') IS NOT NULL
   AND (SELECT count(*) = 1 FROM public.reporting_settings)

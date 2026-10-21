@@ -81,6 +81,10 @@ screens have been checked in a browser.
 | DEV-438 | P3 | Built: request with reason and evidence paths, verify/reject, N3 | D-06 (AMC hidden vs excluded); evidence upload (P4) |
 | DEV-440 | P3 | Built: record invoice, mandatory variance reason, idempotent, append-only | D-21 (corrections); screens (P4) |
 | DEV-433 | P3 | **Not built**: waits on D-01, D-02, D-03. `create_queue_item` is ready for it | Decisions |
+| DEV-435 | P4 | Built and browser-tested: list, summary strip, filters, paging | Coordinator scoping (D-18) |
+| DEV-436 | P4 | Built and browser-tested: item screen and every action | Completion report link (B-01); evidence upload |
+| DEV-439 | P4 | Built and tested: digest E1/N1/N2, once a day, not sent when idle | Recipients and time to set in Reporting Settings (D-12); `CRON_SECRET` schedule at go-live |
+| DEV-441 | P4 | Built and browser-tested: metrics page | — |
 | (platform) | P2 | FSM read model in schema `fsm`, read-only sync (incremental, reconcile, backfill), freshness panel. Enables DEV-433, 434, 442, 444, 452, 453, 454 | Work-order and appointment backfills to finish; schedule at go-live; sync frequency to agree with Danish (DEV-433) |
 
 ## Coverage

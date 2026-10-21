@@ -217,3 +217,15 @@ SELECT harness.expect(
   'resumed');
 SELECT harness.expect((SELECT hold_reason IS NULL FROM finance.queue_items WHERE trigger_key = 'wh-1'),
   'resuming clears the hold reason');
+
+-- 20261021130000: an item stuck by the old bug (query raised from On Hold,
+-- reason already gone) recovers to In Progress when answered.
+SELECT fsm.sync_line_items('WH', '2026-10-30T18:00:00Z',
+  '[{"fsm_line_id":"LH1","amount":50,"status":"Completed","modified_time":"2026-09-30T17:00:00Z"},
+    {"fsm_line_id":"LH2","amount":70,"status":"Completed","modified_time":"2026-10-30T17:00:00Z"}]');
+SELECT finance.create_queue_item('wh-2', 'WH', ARRAY['LH2']);
+UPDATE finance.queue_items SET status = 'query_raised', status_before_query = 'on_hold', hold_reason = NULL,
+  query_text = 'Which PO?' WHERE trigger_key = 'wh-2';
+SELECT harness.expect(
+  finance.apply_action((SELECT id FROM finance.queue_items WHERE trigger_key = 'wh-2'), 'answer_query', 'query_raised', NULL, 'Coordinator', 'PO-2') = 'in_progress',
+  'a stuck item (no hold reason left) is answered to In Progress');

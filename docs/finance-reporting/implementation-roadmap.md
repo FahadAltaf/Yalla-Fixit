@@ -132,7 +132,17 @@ next phase).
 - **Risks**: building the trigger on an unconfirmed meaning of "completed" (mitigated by not building it
   until D-01).
 
-## P4 — Finance UI and digest · M
+## P4 — Finance UI and digest · M · **built and browser-tested on live data (21 Oct)**
+
+- **Delivered**: queue list (summary strip, filters, server paging), item screen (Step 3 content, actions by
+  role, idempotent invoice form), daily digest (E1, N1, N2; once per Dubai day; not sent when idle),
+  invoicing metrics; Finance menu; view `finance.queue_list` (migration `20261021110000`).
+- **Browser-tested** with six marked test items: pick up, hold, query and answer, exclusion request, reject and
+  verify, record invoice with a variance (TC06), metrics, digest (in-app delivered, email blocked by the safety
+  rail, second run deduplicated), N3/N4 delivered to the allowlisted user and closed when answered.
+- **Bugs found and fixed**: a query raised from On Hold lost the hold reason (migrations `20261021120000`,
+  `20261021130000`); FSM `Line_Item_Amount` is VAT-inclusive (labels, D-05).
+- **Open**: evidence file upload for exclusions; coordinator scoping and N4 recipients wait on D-18.
 
 - **Jira**: DEV-435, 436, 439, 441. **BRD**: 6.4, 6.1 E1, 6.2 N1 N2, 5.1 Step 8. **Depends on**: P3.
 - **Backend**: paginated, filtered queue API; detail API; digest run route (once a day, not sent when

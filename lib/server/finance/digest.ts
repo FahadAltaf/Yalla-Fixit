@@ -147,6 +147,12 @@ export async function runDigest(
     link: "/finance/queue",
   });
 
+  /* Every channel already had today's digest: nothing new went out. */
+  const claimed = e1.inApp.delivered + e1.inApp.suppressed + e1.email.sent + e1.email.failed + e1.email.suppressed;
+  if (claimed === 0 && e1.inApp.duplicate + e1.email.duplicate > 0) {
+    return { sent: false, reason: `already sent today (${date})` };
+  }
+
   /* N2, in-app, once per item per stretch in Pending; closes when its status changes. */
   let n2 = 0;
   for (const item of plan.aged) {
