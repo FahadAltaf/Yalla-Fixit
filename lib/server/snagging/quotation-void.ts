@@ -67,6 +67,65 @@ export async function jobVoidState(admin: Admin, jobId: string): Promise<JobVoid
   };
 }
 
+/** A job held up by a void quotation, for the jobs list's alert. */
+export interface NotAsQuotedJob {
+  jobId: string;
+  code: string;
+  place: string;
+  clientName: string | null;
+  quotation: JobVoidState["quotation"];
+  revised: JobVoidState["revised"];
+}
+
+/**
+ * Every job whose quotation is void and not yet replaced by an approved
+ * revision -- the ones that cannot be approved until it is (SNG-100). The
+ * job page says so in its own strip; the jobs list shows them all, so the
+ * office sees them without opening each job.
+ */
+export async function listNotAsQuotedJobs(admin: Admin): Promise<NotAsQuotedJob[]> {
+  if (!(await voidColumnsReady(admin))) return [];
+  const { data: voids, error } = await admin
+    .from("snagging_quotations")
+    .select("job_id")
+    .not("voided_at", "is", null)
+    .not("job_id", "is", null)
+    .neq("quote_kind", "visit")
+    .limit(500);
+  if (error) throw new Error(error.message);
+  const jobIds = [...new Set(((voids ?? []) as Row[]).map((row) => String(row.job_id)))];
+  if (jobIds.length === 0) return [];
+
+  const [states, { data: jobs, error: jobsError }] = await Promise.all([
+    Promise.all(jobIds.map(async (id) => [id, await jobVoidState(admin, id)] as const)),
+    admin
+      .from("snagging_jobs")
+      .select("id, code, status, unit_label, building_name, client:client_id(name)")
+      .in("id", jobIds),
+  ]);
+  if (jobsError) throw new Error(jobsError.message);
+  const jobById = new Map(((jobs ?? []) as Row[]).map((job) => [String(job.id), job]));
+
+  return states
+    .filter(([id, state]) => {
+      const status = String(jobById.get(id)?.status ?? "");
+      // Nothing left to hold up on a job that is finished or called off.
+      return state?.blocking && !["approved", "delivered", "cancelled"].includes(status);
+    })
+    .map(([id, state]) => {
+      const job = jobById.get(id) ?? {};
+      return {
+        jobId: id,
+        code: String(job.code ?? ""),
+        place: [job.unit_label, job.building_name].filter(Boolean).join(", "),
+        clientName: ((Array.isArray(job.client) ? job.client[0] : job.client) as { name?: string } | null)?.name ?? null,
+        quotation: state!.quotation,
+        revised: state!.revised,
+      };
+    })
+    .sort((a, b) => a.quotation.voided_at.localeCompare(b.quotation.voided_at));
+}
+
 const describe = (furnished: boolean) => (furnished ? "furnished" : "unfurnished");
 
 /**

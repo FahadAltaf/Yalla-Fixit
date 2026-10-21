@@ -282,6 +282,17 @@ export interface SnaggingQuotationFsm {
   logTotal?: number;
 }
 
+/** A job whose quotation is void because the property is not as quoted (SNG-100). */
+export interface SnaggingNotAsQuotedJob {
+  jobId: string;
+  code: string;
+  place: string;
+  clientName: string | null;
+  quotation: { id: string; quote_number: string; voided_at: string; void_reason: string | null };
+  /** The revised quotation, once raised; the job is held until it is approved. */
+  revised: { id: string; quote_number: string; status: string } | null;
+}
+
 /** One issue of an inspection's client report (GET .../report/versions). */
 export interface SnaggingReportVersion {
   id: string;
@@ -1289,6 +1300,10 @@ export const snaggingService = {
       method: "POST",
       body: input as unknown as Record<string, unknown>,
     }),
+
+  /** Jobs held up by a void quotation (property not as quoted), for the jobs list (SNG-100). */
+  listNotAsQuotedJobs: async () =>
+    executeRESTBackend<SnaggingNotAsQuotedJob[]>("/api/snagging/tasks/not-as-quoted", { method: "GET" }),
 
   /** The job's report versions, with whether each has its PDF yet. */
   listReportVersions: async (id: string) =>
