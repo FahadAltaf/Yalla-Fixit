@@ -103,7 +103,20 @@ next phase).
 - **Risks**: FSM allowance unknown (B-03); volumes unknown (B-04); line-item row shape still to confirm on a
   work order that has lines.
 
-## P3 — Finance core · L
+## P3 — Finance core · L · **built (21 Oct); trigger waits on D-01..03**
+
+- **Delivered**: schema `finance` (migration `20261021100000`): queue items and lines (`UNIQUE(fsm_line_id)`),
+  invoices, exclusions and events (both append-only), progress view; functions `create_queue_item`,
+  `apply_action`, `request_exclusion`, `decide_exclusion`, `record_invoice` (row lock, expected-status check,
+  idempotency key, one transaction each, `SECURITY DEFINER` so the server role writes only through them);
+  routes for the actions, invoice, exclusion request and decision; N3 and N4 as in-app action items that
+  resolve when answered.
+- **Tested**: Q-1042 end to end on the harness (41.7 / 75.0 / 100 %), TC03–TC06, double invoicing and stale
+  actions refused, exclusion flow, append-only history.
+- **Not built, by design**: the automatic trigger (DEV-433, D-01..03). `create_queue_item` takes explicit
+  lines, so the trigger plugs in without changing the model. Evidence upload comes with the item screen (P4).
+- **Assumptions pending D-05**: value = FSM `Amount` (after discount, before tax); completion % over the
+  quotation's `Sub_Total`.
 
 - **Jira**: DEV-434, 437, 438, 440 now; **DEV-433 trigger only after D-01, D-02, D-03**. **BRD**: 5.1
   Steps 1–5, 7; N3, N4. **Depends on**: P1, P2.

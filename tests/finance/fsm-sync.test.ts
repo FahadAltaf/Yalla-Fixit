@@ -53,6 +53,8 @@ function memoryStore() {
     crews: new Map<string, string[]>(),
   };
   const runs: { status: RunStatus; error: string | null }[] = [];
+  const linesSeen = new Map<string, string>();
+  const crewSeen = new Map<string, string>();
   const guarded = (map: Map<string, Rec>, key: string, row: Rec) => {
     const old = map.get(key);
     if (old && Date.parse(String(old.modified_time)) > Date.parse(String(row.modified_time))) return 0;
@@ -97,6 +99,7 @@ function memoryStore() {
     },
     async syncLineItems(workOrderId, seenAt, rows) {
       for (const r of rows) guarded(tables.lines, r.fsm_line_id!, { ...r, fsm_work_order_id: workOrderId, removed_at: null });
+      linesSeen.set(workOrderId, seenAt);
       const present = new Set(rows.map((r) => r.fsm_line_id));
       for (const [id, line] of tables.lines) {
         if (line.fsm_work_order_id === workOrderId && !present.has(id) && !line.removed_at) line.removed_at = seenAt;
@@ -106,7 +109,12 @@ function memoryStore() {
     async upsertAppointments(rows) {
       return { written: rows.reduce((n, r) => n + guarded(tables.appointments, r.fsm_appointment_id!, r), 0) };
     },
-    async setCrew(appointmentId, _seenAt, crew) {
+    async seenTimes(kind, ids) {
+      const source = kind === "work_order_lines" ? linesSeen : crewSeen;
+      return new Map(ids.filter((id) => source.has(id)).map((id) => [id, source.get(id) ?? null]));
+    },
+    async setCrew(appointmentId, seenAt, crew) {
+      crewSeen.set(appointmentId, seenAt);
       tables.crews.set(appointmentId, crew.map((c) => `${c.technician_fsm_id}${c.is_lead ? "*" : ""}`).sort());
     },
   };
@@ -245,7 +253,7 @@ test("a changed work order is read in full: lines stored by their own id; a drop
   const fsm = fakeFsm({ Work_Orders: [wo] }, { W1: { ...wo, Service_Line_Items: lines } });
   const mem = memoryStore();
   mem.states.get("work_orders")!.watermark = iso(20);
-  await sync("work_orders", "incremental", fsm, mem);
+  await sync("work_orders", "incremental", fsm, mem, 100, { now: () => new Date(iso(31)) });
   assert.deepEqual([...mem.tables.lines.keys()].sort(), ["L1", "L2"]);
   assert.equal(mem.tables.lines.get("L1")!.fsm_estimate_id, "E1");
 
@@ -341,4 +349,44 @@ test("a reconcile run before the backfill ends never sets the watermark", async 
   assert.equal(result.status, "succeeded");
   assert.equal(mem.tables.estimates.size, 3);
   assert.equal(mem.states.get("estimates")!.watermark, null, "incremental runs still wait for the backfill");
+});
+
+test("a rerun after the budget ran out does not pay again for details already read", async () => {
+  const wos = [1, 2, 3, 4].map((n) => ({ id: `W${n}`, Status: "In Progress", Modified_Time: iso(n) }));
+  const details = Object.fromEntries(wos.map((w) => [w.id, { ...w, Service_Line_Items: [] }]));
+  const fsm = fakeFsm({ Work_Orders: wos }, details);
+  const mem = memoryStore();
+  // perPage 4: one list call, then details; budget 3 = list + W1 + W2.
+  const first = await sync("work_orders", "backfill", fsm, mem, 3, { perPage: 4 });
+  assert.equal(first.status, "budget_exhausted");
+  const second = await sync("work_orders", "backfill", fsm, mem, 10, { perPage: 4 });
+  assert.equal(second.status, "succeeded");
+  assert.equal(second.counts.detailCalls, 2, "only W3 and W4 are read in full the second time");
+});
+
+test("an appointment re-reads its work order only when the lines are older than the appointment's change", async () => {
+  const appt = { id: "A1", Status: "Completed", Work_Order: { id: "W1" }, Lead: { id: "T1" }, Modified_Time: iso(50) };
+  const fsm = fakeFsm({ Service_Appointments: [appt] }, {
+    A1: { ...appt, $Service_Resources: [{ id: "T1" }] },
+    W1: { id: "W1", Modified_Time: iso(10), Service_Line_Items: [] },
+  });
+  const mem = memoryStore();
+  mem.states.get("appointments")!.watermark = iso(45);
+  const first = await sync("appointments", "incremental", fsm, mem);
+  assert.equal(first.counts.detailCalls, 2);
+  // Nothing changed in FSM; the overlap re-reads A1, but both details are current.
+  mem.states.get("appointments")!.watermark = iso(45);
+  const second = await sync("appointments", "incremental", fsm, mem);
+  assert.equal(second.counts.detailCalls, 0);
+});
+
+test("a read only minutes newer than a change is not trusted as current (clock drift)", async () => {
+  const wo = { id: "W1", Status: "In Progress", Modified_Time: iso(30) };
+  const fsm = fakeFsm({ Work_Orders: [wo] }, { W1: { ...wo, Service_Line_Items: [] } });
+  const mem = memoryStore();
+  mem.states.get("work_orders")!.watermark = iso(20);
+  await sync("work_orders", "incremental", fsm, mem, 100, { now: () => new Date(iso(33)) });
+  mem.states.get("work_orders")!.watermark = iso(20);
+  const again = await sync("work_orders", "incremental", fsm, mem, 100, { now: () => new Date(iso(34)) });
+  assert.equal(again.counts.detailCalls, 1, "read 3 minutes after the change: read again");
 });

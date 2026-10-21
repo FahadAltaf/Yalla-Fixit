@@ -49,6 +49,9 @@ export interface SyncStore {
   syncLineItems(workOrderId: string, seenAt: string, rows: LineItemRow[]): Promise<{ written: number }>;
   upsertAppointments(rows: AppointmentRow[]): Promise<{ written: number }>;
   setCrew(appointmentId: string, seenAt: string, crew: CrewMember[]): Promise<void>;
+  /** When each record's details were last read (lines of a work order, crew
+      of an appointment), so a detail already current is not read again. */
+  seenTimes(kind: "work_order_lines" | "appointment_crew", ids: string[]): Promise<Map<string, string | null>>;
 }
 
 async function rpc<T>(admin: SupabaseClient, fn: string, args: Record<string, unknown>): Promise<T> {
@@ -126,6 +129,25 @@ export function supabaseSyncStore(admin: SupabaseClient): SyncStore {
     syncLineItems: (workOrderId, seenAt, rows) =>
       rpc(admin, "sync_line_items", { p_work_order_id: workOrderId, p_seen_at: seenAt, p_rows: rows }),
     upsertAppointments: (rows) => rpc(admin, "upsert_appointments", { p_rows: rows }),
+    async seenTimes(kind, ids) {
+      const out = new Map<string, string | null>();
+      const unique = [...new Set(ids)];
+      const table = kind === "work_order_lines" ? "work_orders" : "appointments";
+      const idColumn = kind === "work_order_lines" ? "fsm_work_order_id" : "fsm_appointment_id";
+      const seenColumn = kind === "work_order_lines" ? "lines_seen_at" : "crew_seen_at";
+      for (let i = 0; i < unique.length; i += 200) {
+        const { data, error } = await admin
+          .schema("fsm")
+          .from(table)
+          .select(`${idColumn}, ${seenColumn}`)
+          .in(idColumn, unique.slice(i, i + 200));
+        if (error) throw new Error(`fsm.${table}: ${error.message}`);
+        for (const row of (data ?? []) as unknown as Record<string, string | null>[]) {
+          out.set(row[idColumn] as string, row[seenColumn] ?? null);
+        }
+      }
+      return out;
+    },
     async setCrew(appointmentId, seenAt, crew) {
       await rpc<boolean>(admin, "set_appointment_crew", {
         p_appointment_id: appointmentId,

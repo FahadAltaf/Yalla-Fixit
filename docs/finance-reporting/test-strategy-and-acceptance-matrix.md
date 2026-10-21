@@ -28,8 +28,9 @@ baseline before database tests touch `snagging_*` tables; finance and reports ta
 | `tests/notifications/notifier.test.ts` | P1 | 9 | pass | Sending without a successful claim → 4 fail |
 | `tests/people/people.test.ts` | P1 | 10 | pass | — |
 | `tests/permissions/finance-reports-access.test.ts` | P1 | 11 | pass | Admin exclusions removed → 1 fails |
-| `tests/finance/fsm-sync.test.ts` | P2 | 18 | pass | Reconcile allowed to set the watermark → 1 fails |
-| `scripts/db-harness/checks/*.sql` | P1, P2 | 87 | pass | `REVOKE` removed → grant check fails |
+| `tests/finance/fsm-sync.test.ts` | P2 | 21 | pass | Reconcile allowed to set the watermark → 1 fails; drift margin removed → 1 fails |
+| `tests/finance/queue.test.ts` | P3 | 6 | pass | — |
+| `scripts/db-harness/checks/*.sql` | P1–P3 | 127 | pass | `REVOKE` removed → grant check fails |
 
 ## BRD acceptance (TC01–TC15)
 

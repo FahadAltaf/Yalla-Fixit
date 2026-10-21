@@ -133,7 +133,7 @@ const EXTRA_RESOURCE_NAMES: Partial<Record<ResourceType, string>> = {
   [ResourceType.MOBILE_APP]: "Mobile application",
   [ResourceType.FINANCE]: "Finance (whole module)",
   [ResourceType.FINANCE_QUEUE]: "Ready-to-invoice queue (Approve = record invoice)",
-  [ResourceType.FINANCE_EXCLUSIONS]: "Not-invoiceable requests (Approve = verify)",
+  [ResourceType.FINANCE_EXCLUSIONS]: "Coordinator: not-invoiceable requests and Finance queries (Approve = verify)",
   [ResourceType.REPORTS]: "Reports (whole module)",
   [ResourceType.REPORTS_QUOTATIONS]: "Quotation summary",
   [ResourceType.REPORTS_UTILIZATION]: "Utilization",

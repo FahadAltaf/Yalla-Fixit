@@ -73,3 +73,20 @@ select
     or has_schema_privilege('authenticated', 'fsm', 'USAGE')                        as api_schema_usage,
   has_schema_privilege('service_role', 'fsm', 'USAGE')                              as server_schema_usage
 ) post;
+
+-- 20261021100000 (+ 20261021110000's view): expect 5, 2, 6, 0, f, t, f
+SELECT harness.expect(row(tables, views, functions, api_table_grants, api_schema_usage, server_schema_usage, server_can_write_directly)
+                      = row(5::bigint, 2::bigint, 6::bigint, 0::bigint, false, true, false),
+                      '20261021100000 post-check returns 5, 2, 6, 0, f, t, f once the list view exists')
+FROM (
+select
+  (select count(*) from pg_class where relnamespace = 'finance'::regnamespace and relkind = 'r')   as tables,
+  (select count(*) from pg_class where relnamespace = 'finance'::regnamespace and relkind = 'v')   as views,
+  (select count(*) from pg_proc where pronamespace = 'finance'::regnamespace)                      as functions,
+  (select count(*) from information_schema.role_table_grants
+     where table_schema = 'finance' and grantee in ('anon', 'authenticated'))                     as api_table_grants,
+  has_schema_privilege('anon', 'finance', 'USAGE')
+    or has_schema_privilege('authenticated', 'finance', 'USAGE')                                  as api_schema_usage,
+  has_schema_privilege('service_role', 'finance', 'USAGE')                                        as server_schema_usage,
+  has_table_privilege('service_role', 'finance.invoices', 'INSERT')                               as server_can_write_directly
+) post;

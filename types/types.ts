@@ -152,8 +152,9 @@ export enum ResourceType {
   /* View the Ready-to-Invoice queue; Edit works an item (pick up, hold,
      query); Approve records the MAHER invoice; Export. */
   FINANCE_QUEUE = "finance_queue",
-  /* Create asks for an item to be excluded as not invoiceable; Approve
-     verifies that request (Behrouz, BRD §5.1 Step 6). */
+  /* The coordinator's side of the queue. Create asks for an item to be
+     excluded as not invoiceable, and answers Finance's queries; Approve
+     verifies an exclusion (Behrouz, BRD §5.1 Step 5). */
   FINANCE_EXCLUSIONS = "finance_exclusions",
   // Reports (BRD §5.2). The group, then each report: View and Export.
   REPORTS = "reports",

@@ -5,11 +5,12 @@
   Run:
     FINANCE_FSM_READ=on node --env-file=.env --env-file=.env.local \
       --import ./tests/setup/register.mjs scripts/finance/fsm-sync-run.ts \
-      <estimates|work_orders|appointments> <incremental|reconcile|backfill> <budget> [detailDays]
+      <estimates|work_orders|appointments> <incremental|reconcile|backfill> <budget> [days]
 
-  `detailDays` (backfill only): read work-order lines and appointment crews
-  only for records modified in the last N days. Older records still get
-  their headers. Leave it out to read details for everything.
+  `days`: for a backfill, read work-order lines and appointment crews only
+  for records modified in the last N days (older records still get their
+  headers; leave it out to read details for everything). For a reconcile,
+  how many days back to re-read (default 7).
 */
 import { createFsmReader, financeFsmReadEnabled } from "@/lib/server/finance/fsm-read";
 import { runFsmSync } from "@/lib/server/finance/fsm-sync/engine";
@@ -29,7 +30,7 @@ async function main() {
   const admin = await createAdminServerClient();
   const token = await getFsmAccessToken(admin);
   const reader = createFsmReader({ token, budget: Number(budgetArg) });
-  const detailDays = detailDaysArg ? Number(detailDaysArg) : null;
+  const days = detailDaysArg ? Number(detailDaysArg) : null;
   const started = Date.now();
   const summary = await runFsmSync({
     resource: resource as SyncResource,
@@ -37,7 +38,8 @@ async function main() {
     reader,
     store: supabaseSyncStore(admin),
     options: {
-      backfillDetailSince: detailDays ? new Date(Date.now() - detailDays * 86_400_000).toISOString() : null,
+      backfillDetailSince: kind === "backfill" && days ? new Date(Date.now() - days * 86_400_000).toISOString() : null,
+      ...(kind === "reconcile" && days ? { reconcileDays: days } : {}),
     },
   });
   console.log(JSON.stringify({ ...summary, seconds: Math.round((Date.now() - started) / 1000) }, null, 2));

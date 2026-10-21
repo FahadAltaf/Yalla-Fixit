@@ -146,9 +146,20 @@ export async function runFsmSync(input: {
     return res;
   };
 
-  /* One work order in full: header and lines. */
-  const refreshWorkOrder = async (workOrderId: string) => {
-    if (refreshed.has(workOrderId)) return;
+  /* When details were last read, so a run (or a rerun after the budget ran
+     out) never pays twice for a detail that is already current. */
+  const linesSeen = new Map<string, string | null>();
+  const crewSeen = new Map<string, string | null>();
+  /* `seen` is our clock and `changedAt` FSM's, so a read counts as current
+     only when it is newer by more than the overlap: clock drift between the
+     two can never hide a change made just after a read. */
+  const isCurrent = (seen: string | null | undefined, changedAt: string | null) =>
+    Boolean(seen && changedAt && Date.parse(seen) - options.overlapMinutes * 60_000 >= Date.parse(changedAt));
+
+  /* One work order in full: header and lines. Skipped when its lines were
+     read after `changedAt` (the change that sent us here). */
+  const refreshWorkOrder = async (workOrderId: string, changedAt: string | null) => {
+    if (refreshed.has(workOrderId) || isCurrent(linesSeen.get(workOrderId), changedAt)) return;
     const seenAt = options.now().toISOString();
     const res = await get(`/Work_Orders/${encodeURIComponent(workOrderId)}`, true);
     if (res.status === 204 || res.status === 404) {
@@ -168,18 +179,23 @@ export async function runFsmSync(input: {
         (row) => row.fsm_line_id,
       );
       await store.syncLineItems(workOrderId, seenAt, lines.rows);
+      linesSeen.set(workOrderId, seenAt);
     }
     refreshed.add(workOrderId);
   };
 
-  /* One appointment's crew, from its full record. */
-  const refreshCrew = async (appointmentId: string) => {
+  /* One appointment's crew, from its full record, unless read after `changedAt`. */
+  const refreshCrew = async (appointmentId: string, changedAt: string | null) => {
+    if (isCurrent(crewSeen.get(appointmentId), changedAt)) return;
     const seenAt = options.now().toISOString();
     const res = await get(`/Service_Appointments/${encodeURIComponent(appointmentId)}`, true);
     if (res.status === 204 || res.status === 404) return;
     if (!res.ok) throw new FsmListError(messageOf(res.status, res.json));
     const record = dataOf(res.json)[0];
-    if (record) await store.setCrew(appointmentId, seenAt, crewFromDetail(record));
+    if (record) {
+      await store.setCrew(appointmentId, seenAt, crewFromDetail(record));
+      crewSeen.set(appointmentId, seenAt);
+    }
   };
 
   /**
@@ -210,10 +226,12 @@ export async function runFsmSync(input: {
       for (let i = 0; i < rows.length; i += 200) {
         counts.recordsWritten += (await store.upsertWorkOrders(rows.slice(i, i + 200))).written;
       }
+      const ids = pairs.filter(({ record }) => withDetails(record)).map(({ row }) => row.fsm_work_order_id as string);
+      for (const [id, seen] of await store.seenTimes("work_order_lines", ids)) linesSeen.set(id, seen);
       let doneThrough: string | null = null;
       for (const { record, row } of pairs) {
         try {
-          if (withDetails(record)) await refreshWorkOrder(row.fsm_work_order_id as string);
+          if (withDetails(record)) await refreshWorkOrder(row.fsm_work_order_id as string, row.modified_time);
         } catch (error) {
           if (error instanceof FsmBudgetExceededError) return { doneThrough, outOfBudget: true };
           throw error;
@@ -230,12 +248,19 @@ export async function runFsmSync(input: {
     for (let i = 0; i < rows.length; i += 200) {
       counts.recordsWritten += (await store.upsertAppointments(rows.slice(i, i + 200))).written;
     }
+    const detailed = pairs.filter(({ record }) => withDetails(record)).map(({ row }) => row);
+    const crewTimes = await store.seenTimes("appointment_crew", detailed.map((r) => r.fsm_appointment_id as string));
+    for (const [id, seen] of crewTimes) crewSeen.set(id, seen);
+    const workOrderIds = detailed.map((r) => r.fsm_work_order_id).filter((id): id is string => Boolean(id));
+    for (const [id, seen] of await store.seenTimes("work_order_lines", workOrderIds)) linesSeen.set(id, seen);
     let doneThrough: string | null = null;
     for (const { record, row } of pairs) {
       try {
         if (withDetails(record)) {
-          if (row.status !== "Cancelled") await refreshCrew(row.fsm_appointment_id as string);
-          if (row.fsm_work_order_id) await refreshWorkOrder(row.fsm_work_order_id);
+          if (row.status !== "Cancelled") await refreshCrew(row.fsm_appointment_id as string, row.modified_time);
+          /* Completing an appointment is what completes its lines, so the work
+             order is current only if its lines were read after this change. */
+          if (row.fsm_work_order_id) await refreshWorkOrder(row.fsm_work_order_id, row.modified_time);
         }
       } catch (error) {
         if (error instanceof FsmBudgetExceededError) return { doneThrough, outOfBudget: true };
