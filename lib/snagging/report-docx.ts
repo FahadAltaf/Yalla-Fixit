@@ -1389,7 +1389,9 @@ export async function generateInspectionReportDocx(
             ? ` · signed off ${fmtDate(submission.signed_at)}`
             : "",
         },
-      ]),
+      ],
+      // 12pt clear of the outline list above, which it sat flush against.
+      { spacing: { before: 240 } }),
     );
   }
   if (signature) {

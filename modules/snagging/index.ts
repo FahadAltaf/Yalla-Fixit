@@ -14,6 +14,7 @@ export type {
   SnagPageResult,
   SnaggingQuotationFsm,
   SnaggingJobFsm,
+  SnaggingReportVersion,
 } from "./services/snagging-service";
 
 export * from "./schemas";

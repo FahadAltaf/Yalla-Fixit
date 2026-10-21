@@ -578,7 +578,12 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
         return <ServicesPricingStep form={form} settings={liveSettings} />;
       case 3:
         return (
-          <ReviewStep form={form} computed={computed} />
+          <ReviewStep
+            form={form}
+            computed={computed}
+            settings={liveSettings}
+            onWordingSaved={() => void persistDraft()}
+          />
         );
       default:
         return null;

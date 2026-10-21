@@ -88,12 +88,20 @@ export async function issueReportVersion(
     reportType?: "inspection" | "round" | "cumulative";
     generatedBy?: string | null;
     reason?: string | null;
+    /*
+      An additional visit reissues the report only when it adds snags. One
+      that found nothing new leaves the client holding the current version
+      rather than an identical copy with a higher number.
+    */
+    onlyIfNewSnags?: boolean;
   },
 ): Promise<{
   id: string;
   version: number;
   snagCount: number;
   created: boolean;
+  /* Set when onlyIfNewSnags found nothing new: the version returned is the current one. */
+  unchanged?: boolean;
 } | null> {
   if (!(await versioningAvailable(admin))) return null;
 
@@ -140,7 +148,7 @@ export async function issueReportVersion(
     ),
     admin
       .from("snagging_report_versions")
-      .select("version")
+      .select("id, version, snag_count, snag_ids")
       .eq("job_id", rootId)
       .order("version", { ascending: false })
       .limit(1)
@@ -160,6 +168,19 @@ export async function issueReportVersion(
     preferredJobIds: [rootId, ...family.additionalVisitIds],
     roundOf: family.roundOf,
   }).map((s) => s.id as string);
+
+  if (input.onlyIfNewSnags && latest) {
+    const issued = new Set((latest.snag_ids as string[] | null) ?? []);
+    if (snagIds.every((id) => issued.has(id))) {
+      return {
+        id: latest.id as string,
+        version: latest.version as number,
+        snagCount: latest.snag_count as number,
+        created: false,
+        unchanged: true,
+      };
+    }
+  }
 
   const nextVersion = ((latest?.version as number | undefined) ?? 0) + 1;
 

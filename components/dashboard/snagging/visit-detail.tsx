@@ -233,12 +233,12 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
       callback, which a plain local would be narrowed away from.
     */
     const outcome: {
-      generated: { status: "pending" | "generated" | "failed"; version: number } | null;
+      generated: { status: "pending" | "generated" | "failed" | "unchanged"; version: number } | null;
     } = { generated: null };
     const ok = await confirm({
       title: `Approve visit ${visit.visit_number}?`,
       description:
-        "Its findings are added to the client's report, which is issued as a new version. The earlier version is kept.",
+        "If it found new snags, they are added to the client's report, which is issued as a new version. The earlier version is kept.",
       confirmText: "Approve visit",
       /*
         The dialog approves and stays open until the page shows the visit
@@ -259,6 +259,12 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
     });
     if (!ok) return;
 
+    if (outcome.generated?.status === "unchanged") {
+      toast.success(`Visit ${visit.visit_number} approved`, {
+        description: `It found no new snags, so the client's report stays at version ${outcome.generated.version}.`,
+      });
+      return;
+    }
     if (outcome.generated?.status === "failed" || !outcome.generated) {
       toast.warning(`Visit ${visit.visit_number} approved`, {
         description: "The new report version could not be issued.",

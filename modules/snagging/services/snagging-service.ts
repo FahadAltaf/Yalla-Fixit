@@ -282,6 +282,26 @@ export interface SnaggingQuotationFsm {
   logTotal?: number;
 }
 
+/** One issue of an inspection's client report (GET .../report/versions). */
+export interface SnaggingReportVersion {
+  id: string;
+  version: number;
+  report_type: string;
+  source_visit_id: string | null;
+  source_round_id: string | null;
+  snag_count: number;
+  /** pending | generating | generated | failed */
+  generation_status: string;
+  generation_error: string | null;
+  generated_at: string;
+  /** Why it was issued, written for a person ("Additional visit 2 approved"). */
+  reason: string | null;
+  /** Short-lived link to its stored PDF; null until the PDF is saved. */
+  pdf_url: string | null;
+  /** The newest version whose PDF exists: the one in force. */
+  is_current: boolean;
+}
+
 export interface SnaggingQuotation {
   /** Null on a preview: nothing has been written for it yet. */
   id: string | null;
@@ -1272,9 +1292,9 @@ export const snaggingService = {
 
   /** The job's report versions, with whether each has its PDF yet. */
   listReportVersions: async (id: string) =>
-    executeRESTBackend<
-      Array<{ id: string; version: number; generation_status: string; pdf_url: string | null }>
-    >(`/api/snagging/tasks/${id}/report/versions`, { method: "GET" }),
+    executeRESTBackend<SnaggingReportVersion[]>(`/api/snagging/tasks/${id}/report/versions`, {
+      method: "GET",
+    }),
 
   /** Renders a report version's PDF again, after a failed or stuck render. */
   retryReportVersion: async (id: string, versionId: string) =>
@@ -1398,7 +1418,11 @@ export const snaggingService = {
     input: { decision: "approve" } | { decision: "send_back"; reason: string },
   ): Promise<{
     status: string;
-    generation?: { status: "pending" | "generated" | "failed"; version: number; error?: string } | null;
+    generation?: {
+      status: "pending" | "generated" | "failed" | "unchanged";
+      version: number;
+      error?: string;
+    } | null;
   }> =>
     executeRESTBackend(`/api/snagging/tasks/${id}/visits/${visitId}/review`, {
       method: "POST",

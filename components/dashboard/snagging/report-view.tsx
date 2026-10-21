@@ -36,11 +36,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
 import { useAuth } from "@/context/AuthContext";
-import { snaggingService, type SnaggingQuotation } from "@/modules/snagging";
+import {
+  snaggingService,
+  type SnaggingQuotation,
+  type SnaggingReportVersion,
+} from "@/modules/snagging";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { ActionType, ResourceType, type SnaggingTask } from "@/types/types";
 
 import { InspectionReport } from "./inspection-report";
+import { ReportVersionsCard } from "./report-versions-card";
 import { approvedOnly, publishReportPdf } from "./report-publish";
 import { ActionDialogContent, ErrorState, SubmitButton } from "./shared";
 import { ReportSkeleton } from "@/components/dashboard/snagging/route-skeletons";
@@ -75,6 +80,9 @@ export function ReportView({ taskId }: { taskId: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /* The report's issued versions, newest first once sorted; empty before the first. */
+  const [versions, setVersions] = useState<SnaggingReportVersion[]>([]);
+  const [savingVersion, setSavingVersion] = useState<string | null>(null);
   const [deliverOpen, setDeliverOpen] = useState(false);
   const [channel, setChannel] =
     useState<(typeof CHANNELS)[number]["key"]>("email");
@@ -117,30 +125,56 @@ export function ReportView({ taskId }: { taskId: string }) {
   */
   const published = useRef(false);
   const canEdit = hasResourceAction(userProfile, ResourceType.SNAGGING, ActionType.EDIT);
-  useEffect(() => {
-    if (published.current || !task || !canEdit) return;
-    if (task.status !== "approved" && task.status !== "delivered") return;
-    published.current = true;
-    void (async () => {
+
+  const loadVersions = useCallback(async (): Promise<SnaggingReportVersion[]> => {
+    try {
+      const list = (await snaggingService.listReportVersions(taskId)) ?? [];
+      setVersions(list);
+      return list;
+    } catch {
+      // No versions to read (older environment): the card stays hidden.
+      return [];
+    }
+  }, [taskId]);
+
+  const saveVersionPdf = useCallback(
+    async (version: SnaggingReportVersion) => {
+      setSavingVersion(version.id);
+      const progress = toast.loading(`Saving report version ${version.version}…`);
       try {
-        const versions = await snaggingService.listReportVersions(taskId);
-        const newest = [...(versions ?? [])].sort((a, b) => b.version - a.version)[0];
-        if (!newest || newest.generation_status === "generated") return;
-        const progress = toast.loading(`Saving report version ${newest.version}…`);
-        try {
-          await publishReportPdf(taskId, { versionId: newest.id });
-          toast.success(`Report version ${newest.version} saved and sent to Zoho FSM`, { id: progress });
-        } catch (err) {
-          toast.error(`Report version ${newest.version} was not saved`, {
-            id: progress,
-            description: err instanceof Error ? err.message : undefined,
-          });
-        }
-      } catch {
-        // No versions to read (older environment): nothing to fill in.
+        await publishReportPdf(taskId, { versionId: version.id });
+        toast.success(`Report version ${version.version} saved and sent to Zoho FSM`, { id: progress });
+      } catch (err) {
+        toast.error(`Report version ${version.version} was not saved`, {
+          id: progress,
+          description: err instanceof Error ? err.message : undefined,
+        });
+      } finally {
+        setSavingVersion(null);
+        await loadVersions();
       }
+    },
+    [taskId, loadVersions],
+  );
+
+  useEffect(() => {
+    if (!task) return;
+    void (async () => {
+      const list = await loadVersions();
+      if (published.current || !canEdit) return;
+      if (task.status !== "approved" && task.status !== "delivered") return;
+      published.current = true;
+      const newest = [...list].sort((a, b) => b.version - a.version)[0];
+      if (!newest || newest.generation_status === "generated" || newest.pdf_url) return;
+      await saveVersionPdf(newest);
     })();
-  }, [task, canEdit, taskId]);
+  }, [task, canEdit, loadVersions, saveVersionPdf]);
+
+  /*
+    The version this page is: the newest issued, since the report reads the
+    job as it stands. None before the report is first issued.
+  */
+  const currentVersion = versions.length ? Math.max(...versions.map((v) => v.version)) : null;
 
   /*
     Delivering runs through the same guard as approving: the one person
@@ -171,7 +205,7 @@ export function ReportView({ taskId }: { taskId: string }) {
       const builders = await import("./report-pdf-download");
       const { blob, filename } =
         format === "pdf"
-          ? await builders.buildInspectionReportPdf(task, quotation)
+          ? await builders.buildInspectionReportPdf(task, quotation, currentVersion)
           : await builders.buildInspectionReportDocx(task, quotation);
       saveAs(blob, filename);
       toast.success(
@@ -367,14 +401,24 @@ export function ReportView({ taskId }: { taskId: string }) {
         </div>
       ) : null}
 
+      <div className="snag-report-noprint">
+        <ReportVersionsCard
+          versions={versions}
+          canSave={canEdit && (task.status === "approved" || task.status === "delivered")}
+          saving={savingVersion}
+          onSave={(version) => void saveVersionPdf(version)}
+        />
+      </div>
+
       {/*
         The report itself, on its own white sheet. The sheet is a fixed
         794px (A4 at 96dpi), so it is centred inside the scroller rather
         than left in a wide column with dead space beside it.
       */}
       <div className="overflow-x-auto">
-        <div className="snag-report-print mx-auto w-fit rounded-lg border bg-white shadow-sm">
-          <InspectionReport ref={reportRef} task={task} quotation={quotation} />
+        {/* overflow-hidden: the report's own square corners were drawn over the rounded ones. */}
+        <div className="snag-report-print mx-auto w-fit overflow-hidden rounded-xl border bg-white shadow-sm">
+          <InspectionReport ref={reportRef} task={task} quotation={quotation} version={currentVersion} />
         </div>
       </div>
 

@@ -106,7 +106,22 @@ export default async function PublicReportPage({
   // page still counts as having opened it.
   await recordReportOpen(admin, link);
 
-  const task = await loadReportTask(admin, link.job_id);
+  const [task, { data: current }] = await Promise.all([
+    loadReportTask(admin, link.job_id),
+    /*
+      The version in force, printed on the report: the page reads the job as
+      it stands, which is the newest version whose PDF was saved. Read on
+      the link's job, which is the inspection the versions belong to.
+    */
+    admin
+      .from("snagging_report_versions")
+      .select("version")
+      .eq("job_id", link.job_id)
+      .eq("generation_status", "generated")
+      .order("version", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
   if (!task) return <DenialPage reason="invalid" />;
-  return <ClientReportView task={task} />;
+  return <ClientReportView task={task} version={(current?.version as number | undefined) ?? null} />;
 }

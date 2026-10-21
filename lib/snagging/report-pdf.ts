@@ -23,13 +23,27 @@ export async function elementToPdfBlob(
     header?: NonNullable<Parameters<typeof canvasToPdfBlob>[1]>["header"];
   } = {},
 ): Promise<Blob> {
+  /*
+    As sharp as the browser can hold. The whole report is one canvas, and
+    Chrome refuses one taller than 65,535px or larger than about 268 million
+    pixels -- it draws nothing at all past that. A long report with many
+    photos is captured at the highest scale that still fits, rather than
+    failing at the one asked for.
+  */
+  const width = Math.max(1, node.scrollWidth);
+  const height = Math.max(1, node.scrollHeight);
+  const fitted = Math.min(
+    scale,
+    60_000 / height,
+    Math.sqrt(250_000_000 / (width * height)),
+  );
   const canvas = await html2canvas(node, {
     useCORS: true,
     allowTaint: true,
     background: "#ffffff",
     logging: false,
     ...({
-      scale,
+      scale: Math.max(1, fitted),
       onclone: (doc: Document) => sanitizeUnsupportedColors(doc),
       /*
         html2canvas clones the whole page before drawing the node. The
@@ -52,8 +66,11 @@ export async function elementToPdfBlob(
 
   return canvasToPdfBlob(canvas, {
     blocks: collectPdfBlocks(node, canvas),
-    /* JPEG at 0.82: no visible loss, a much smaller file. */
-    imageQuality: 0.82,
+    /*
+      JPEG at 0.92. At 0.82 the compression smudged the small text in the
+      tables, which is what made the downloaded report look soft.
+    */
+    imageQuality: 0.92,
     header,
     footer: (page, pageCount) =>
       [footerLabel, `Page ${page} of ${pageCount}`]

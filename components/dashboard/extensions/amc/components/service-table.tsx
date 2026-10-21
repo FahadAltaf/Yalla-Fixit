@@ -1,6 +1,11 @@
 "use client";
 
+import { useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
+import { Pencil, Plus, Trash2 } from "lucide-react";
+
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -28,7 +33,14 @@ import {
   isFrequencyEditable,
 } from "../amc-constants";
 import { calculateAmcTotals, computeServiceRowPrice } from "../amc-pricing";
-import { BASE_PRICE_MESSAGE, type AmcFormData } from "../amc-types";
+import {
+  BASE_PRICE_MESSAGE,
+  CUSTOM_SERVICE_PREFIX,
+  isCustomServiceRow,
+  type AmcFormData,
+  type AmcService,
+} from "../amc-types";
+import { CustomServiceDialog, type CustomServiceDraft } from "./custom-service-dialog";
 
 /* "A", "A and B", "A, B and C". */
 function listNames(names: string[]): string {
@@ -47,8 +59,26 @@ export function ServiceTable({ form }: ServiceTableProps) {
   const formValues = form.watch();
   const totals = calculateAmcTotals(formValues);
   const availableServices = getServicesForUnitType(unitType);
+  /*
+    What the table lists: the standard services for this kind of property,
+    then any added to this proposal alone (DEV-260), which are a number of
+    visits a year like a PPM service.
+  */
+  const listed: (Pick<AmcService, "id" | "label" | "frequencyType"> & { custom: boolean })[] = [
+    ...availableServices.map((service) => ({ ...service, custom: false })),
+    ...serviceRows.filter(isCustomServiceRow).map((row) => ({
+      id: row.serviceId,
+      label: row.customName?.trim() || "Custom service",
+      frequencyType: "fixed" as const,
+      custom: true,
+    })),
+  ];
+  // null: closed. "new": adding one. Otherwise the id being edited.
+  const [editing, setEditing] = useState<string | null>(null);
+  const editingRow =
+    editing && editing !== "new" ? serviceRows.find((row) => row.serviceId === editing) : undefined;
   // Ticked, not free, and no price yet: what the base price error is about.
-  const unpriced = availableServices
+  const unpriced = listed
     .filter((service) => {
       const row = serviceRows.find((r) => r.serviceId === service.id);
       return Boolean(row?.included && !row.free && row.basePrice === undefined);
@@ -64,6 +94,38 @@ export function ServiceTable({ form }: ServiceTableProps) {
       row.serviceId === serviceId ? { ...row, ...patch } : row,
     );
     form.setValue("serviceRows", nextRows, { shouldValidate: true });
+  };
+
+  const saveCustom = (draft: CustomServiceDraft) => {
+    if (editing && editing !== "new") {
+      updateRow(editing, draft);
+      return;
+    }
+    form.setValue(
+      "serviceRows",
+      [
+        ...serviceRows,
+        {
+          serviceId: `${CUSTOM_SERVICE_PREFIX}${crypto.randomUUID()}`,
+          included: true,
+          units: 1,
+          frequency: 1,
+          free: false,
+          basePrice: undefined,
+          equipment: "",
+          ...draft,
+        },
+      ],
+      { shouldValidate: true },
+    );
+  };
+
+  const removeCustom = (serviceId: string) => {
+    form.setValue(
+      "serviceRows",
+      serviceRows.filter((row) => row.serviceId !== serviceId),
+      { shouldValidate: true },
+    );
   };
 
   return (
@@ -87,7 +149,7 @@ export function ServiceTable({ form }: ServiceTableProps) {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {availableServices.map((service) => {
+                  {listed.map((service) => {
                     const rowIndex = serviceRows.findIndex(
                       (row) => row.serviceId === service.id,
                     );
@@ -112,7 +174,55 @@ export function ServiceTable({ form }: ServiceTableProps) {
                             aria-label={`Include ${service.label}`}
                           />
                         </TableCell>
-                        <TableCell className="text-xs">{service.label}</TableCell>
+                        <TableCell className="text-xs">
+                          {service.custom ? (
+                            <div className="flex items-center gap-1.5">
+                              <span>{service.label}</span>
+                              <Badge variant="outline" className="px-1.5 py-0 text-[10px] font-normal">
+                                Custom
+                              </Badge>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="size-6"
+                                aria-label={`Edit ${service.label}`}
+                                onClick={() => setEditing(service.id)}
+                              >
+                                <Pencil className="size-3.5" />
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="text-muted-foreground hover:text-destructive size-6"
+                                aria-label={`Remove ${service.label}`}
+                                onClick={() => removeCustom(service.id)}
+                              >
+                                <Trash2 className="size-3.5" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <span className="block">{service.label}</span>
+                          )}
+                          {/*
+                            DEV-261: what the service covers here, as the
+                            signed contracts name it. Only on a ticked row,
+                            since only those print.
+                          */}
+                          {row.included ? (
+                            <Input
+                              className="mt-2 block h-8 w-full max-w-[240px] text-xs md:text-xs"
+                              placeholder="Equipment, e.g. 10 FCU"
+                              maxLength={80}
+                              aria-label={`Equipment for ${service.label}`}
+                              value={row.equipment ?? ""}
+                              onChange={(event) =>
+                                updateRow(service.id, { equipment: event.target.value })
+                              }
+                            />
+                          ) : null}
+                        </TableCell>
                         <TableCell>
                           <Input
                             type="number"
@@ -263,6 +373,12 @@ export function ServiceTable({ form }: ServiceTableProps) {
                 </TableBody>
               </Table>
             </div>
+            <div>
+              <Button type="button" variant="outline" size="sm" onClick={() => setEditing("new")}>
+                <Plus className="size-4" />
+                Add custom service
+              </Button>
+            </div>
             {/*
               Names the services still waiting for a price (AMC-057). The
               bare "every selected service" sent people hunting, and a
@@ -280,6 +396,19 @@ export function ServiceTable({ form }: ServiceTableProps) {
             )}
           </FormItem>
         )}
+      />
+
+      <CustomServiceDialog
+        open={editing !== null}
+        onOpenChange={(open) => {
+          if (!open) setEditing(null);
+        }}
+        initial={
+          editingRow
+            ? { customName: editingRow.customName ?? "", customScope: editingRow.customScope ?? "" }
+            : null
+        }
+        onSave={saveCustom}
       />
 
       <div className="rounded-lg border bg-muted/30 p-4 space-y-3">

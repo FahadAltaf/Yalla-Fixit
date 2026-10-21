@@ -20,13 +20,20 @@ import type { SnaggingTask } from "@/types/types";
  * the Word file is the coordinators' to edit, so the client gets the PDF
  * only (SNG-140).
  */
-export function ClientReportView({ task }: { task: SnaggingTask }) {
+export function ClientReportView({
+  task,
+  version = null,
+}: {
+  task: SnaggingTask;
+  /* The report version in force, printed on it; null before one is issued. */
+  version?: number | null;
+}) {
   async function download() {
     const [builders, { saveAs }] = await Promise.all([
       import("@/components/dashboard/snagging/report-pdf-download"),
       import("file-saver"),
     ]);
-    const { blob, filename } = await builders.buildInspectionReportPdf(task, null);
+    const { blob, filename } = await builders.buildInspectionReportPdf(task, null, version);
     saveAs(blob, filename);
   }
 
@@ -48,11 +55,15 @@ export function ClientReportView({ task }: { task: SnaggingTask }) {
       facts={[
         { label: "Prepared for", value: property?.client_name || "—", hint: place || undefined },
         { label: "Inspected", value: inspected ?? "—", hint: inspector || undefined },
-        { label: "Snags found", value: String(snagCount), hint: "Snagging inspection report" },
+        {
+          label: "Snags found",
+          value: String(snagCount),
+          hint: version ? `Snagging inspection report · Version ${version}` : "Snagging inspection report",
+        },
       ]}
     >
       <FitToWidth>
-        <InspectionReport task={task} />
+        <InspectionReport task={task} version={version} />
       </FitToWidth>
     </ClientDocumentShell>
   );

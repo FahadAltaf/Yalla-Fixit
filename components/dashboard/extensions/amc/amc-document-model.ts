@@ -17,6 +17,7 @@ import {
   formatDesignationLabel,
   formatDisplayDate,
   formatPaymentTermsLabel,
+  withEquipment,
 } from "./amc-pricing";
 import type { AmcComputedData } from "./amc-types";
 
@@ -476,7 +477,8 @@ function contractBlocks(
       renumber.set(section.serviceId, number);
       const row = formData.serviceRows.find((r) => r.serviceId === section.serviceId);
       const units = row?.units ?? 1;
-      const title = `${section.title.replace(/:\s*$/, "")}: ${units} ${units === 1 ? "Unit" : "Units"}`;
+      // "A/C Preventive Maintenance (10 FCU): 10 Units" (DEV-261).
+      const title = `${withEquipment(section.title.replace(/:\s*$/, ""), row?.equipment)}: ${units} ${units === 1 ? "Unit" : "Units"}`;
       /* FR6.2 — the scope text comes from AMC Settings. When the built-in
          section has an intro, the first block is that intro. */
       const text = settings.serviceScopes[section.serviceId];
@@ -633,7 +635,7 @@ function contractBlocks(
               frequencyRows.map((row) => {
                 references?.set(row.serviceId, referenceFor(row));
                 return [
-                cell(row.scope),
+                cell(withEquipment(row.scope, row.equipment)),
                 // Blank, not "1": see FrequencyRow.hasUnits.
                 cell(row.hasUnits ? String(row.units) : "", { align: "center" }),
                 cell(row.frequency, { align: "center" }),
@@ -850,6 +852,13 @@ export function contractClauseNumber(data: AmcComputedData, role: string): strin
   const numbers = new Map<string, string>();
   contractBlocks({ ...data, documentType: "contract" }, undefined, numbers);
   return numbers.get(role) ?? null;
+}
+
+/** Every clause on this contract and the number it prints with, by clause id and by role. */
+export function contractClauseNumbers(data: AmcComputedData): Map<string, string> {
+  const numbers = new Map<string, string>();
+  contractBlocks({ ...data, documentType: "contract" }, undefined, numbers);
+  return numbers;
 }
 
 export function buildAmcDocumentModel(data: AmcComputedData): AmcDocumentModel {

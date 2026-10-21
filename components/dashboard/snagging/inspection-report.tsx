@@ -214,20 +214,20 @@ function BarChart({
         >
           <div
             style={{
-              width: "34%",
-              fontSize: 8.5,
-              lineHeight: "12px",
-              color: C.body,
-              whiteSpace: "nowrap",
               /*
-                Clipped with an ellipsis on screen. In the PDF the capture
-                draws text a few pixels lower than the page lays it out, and
-                a clipping box cut the bottom off every label, so there it
-                is left unclipped (the column is wide enough).
+                Wide enough for the longest category on one line
+                ("Joinery, Cabinetry & Furniture"), and allowed to wrap
+                beyond that rather than run under the bar. It used to be
+                34% and one line, unclipped in the PDF, so a long name at
+                the larger text size printed across its own bar.
               */
-              ...(forPDF
-                ? {}
-                : { overflow: "hidden", textOverflow: "ellipsis" }),
+              width: "42%",
+              flexShrink: 0,
+              fontSize: 9.5,
+              lineHeight: "13px",
+              color: C.body,
+              whiteSpace: "normal",
+              overflowWrap: "anywhere",
             }}
           >
             {row.label}
@@ -260,7 +260,7 @@ function BarChart({
             style={{
               width: 52,
               textAlign: "right",
-              fontSize: 8.5,
+              fontSize: 9.5,
               fontWeight: 700,
               color: C.ink,
             }}
@@ -387,7 +387,7 @@ function Pill({
     <span
       style={{
         display: "inline-block",
-        fontSize: 7.5,
+        fontSize: 8.5,
         fontWeight: 700,
         lineHeight: 1.4,
         color: t.fg,
@@ -436,7 +436,7 @@ function Stat({
     >
       <div
         style={{
-          fontSize: 19,
+          fontSize: 20,
           fontWeight: 800,
           lineHeight: 1.1,
           color: t ? t.fg : C.ink,
@@ -447,7 +447,7 @@ function Stat({
       </div>
       <div
         style={{
-          fontSize: 7.5,
+          fontSize: 8.5,
           fontWeight: 600,
           color: C.sub,
           marginTop: 3,
@@ -471,7 +471,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
         pad drops the rule away from the text once html2canvas has it.
       */
       style={{
-        fontSize: 11,
+        fontSize: 12,
         fontWeight: 700,
         color: C.brand,
         margin: "8px 0 5px",
@@ -642,7 +642,7 @@ function RunningHead({ subject }: { subject: string }) {
       <YallaCompanyLogo small />
       <div
         style={{
-          fontSize: 7.5,
+          fontSize: 8.5,
           color: C.orange,
           letterSpacing: 0.3,
           textTransform: "uppercase",
@@ -664,7 +664,7 @@ function Heading({ children }: { children: React.ReactNode }) {
   return (
     <div
       style={{
-        fontSize: 11,
+        fontSize: 12,
         color: C.brand,
         paddingTop: 0,
         paddingBottom: forPDF ? "10px" : "6px",
@@ -687,7 +687,7 @@ function Para({ children }: { children: React.ReactNode }) {
   return (
     <p
       style={{
-        fontSize: 10.5,
+        fontSize: 11.5,
         lineHeight: 1.7,
         color: C.body,
         margin: 0,
@@ -749,7 +749,7 @@ function PhotoTile({
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            fontSize: 8.5,
+            fontSize: 9.5,
             fontWeight: 600,
             color: C.sub,
             textAlign: "center",
@@ -766,7 +766,7 @@ function PhotoTile({
             display: "flex",
             alignItems: "center",
             gap: 5,
-            fontSize: 7.5,
+            fontSize: 8.5,
             fontWeight: 700,
             letterSpacing: 0.5,
             textTransform: "uppercase",
@@ -809,7 +809,7 @@ function Tag({
         display: "inline-block",
         background: bg,
         color: fg,
-        fontSize: 7.5,
+        fontSize: 8.5,
         fontWeight: 700,
         letterSpacing: 0.4,
         textTransform: "uppercase",
@@ -847,7 +847,7 @@ function DefectFact({
     <div style={{ paddingBottom: forPDF ? 10 : 8 }}>
       <div
         style={{
-          fontSize: 7.5,
+          fontSize: 8.5,
           fontWeight: 700,
           letterSpacing: 0.5,
           textTransform: "uppercase",
@@ -857,7 +857,7 @@ function DefectFact({
       >
         {label}
       </div>
-      <div style={{ fontSize: 10, lineHeight: 1.5, color: C.body }}>
+      <div style={{ fontSize: 11, lineHeight: 1.5, color: C.body }}>
         {children}
       </div>
     </div>
@@ -967,7 +967,7 @@ function DefectCard({
         <div style={{ minWidth: 0 }}>
           <div
             style={{
-              fontSize: 11.5,
+              fontSize: 12.5,
               fontWeight: 700,
               color: C.ink,
               lineHeight: 1.35,
@@ -981,7 +981,7 @@ function DefectCard({
           </div>
           <div
             style={{
-              fontSize: 8.5,
+              fontSize: 9.5,
               color: C.sub,
               paddingTop: 2,
               lineHeight: 1.45,
@@ -1066,7 +1066,7 @@ function DefectCard({
               {category ? (
                 <span
                   style={{
-                    fontSize: 6.5,
+                    fontSize: 7.5,
                     color: C.sub,
                     textTransform: "uppercase",
                     letterSpacing: 0.4,
@@ -1100,7 +1100,7 @@ function DefectCard({
                 border: "1px solid #f3c7c7",
                 borderRadius: 4,
                 color: C.deep,
-                fontSize: 9,
+                fontSize: 10,
                 fontWeight: 600,
                 lineHeight: 1.45,
                 ...pad(forPDF, 5, 8),
@@ -1175,9 +1175,16 @@ export const InspectionReport = forwardRef<
      * separately rather than the PDF rasterising the visible node.
      */
     forPDF?: boolean;
+    /**
+     * Which issue of the client's report this is (V1, V2 …). Each approved
+     * additional visit that adds snags reissues the report as the next
+     * version, and a client holding two printouts has to be able to tell
+     * them apart. Absent before the report is first issued.
+     */
+    version?: number | null;
   }
 >(function InspectionReport(
-  { task, generatedAt, forPDF = false },
+  { task, generatedAt, forPDF = false, version = null },
   ref,
 ) {
   const property = task.property;
@@ -1406,7 +1413,7 @@ export const InspectionReport = forwardRef<
           background: "#ffffff",
           color: C.body,
           fontFamily: FONT,
-          fontSize: "11px",
+          fontSize: "12px",
           lineHeight: 1.55,
           /*
             The app shell sets tabular figures, and Inter shapes some
@@ -1453,7 +1460,7 @@ export const InspectionReport = forwardRef<
             style={{
               display: "flex",
               justifyContent: "space-between",
-              fontSize: 13,
+              fontSize: 14,
               color: C.brand,
               textTransform: "uppercase",
               paddingBottom: "22px",
@@ -1465,9 +1472,10 @@ export const InspectionReport = forwardRef<
 
           <div
             style={{
-              fontSize: 13,
+              fontSize: 14,
               color: C.ink,
-              paddingBottom: "6px",
+              // Room between the heading and the table under it.
+              paddingBottom: "12px",
             }}
           >
             PROJECT INFORMATION
@@ -1477,7 +1485,7 @@ export const InspectionReport = forwardRef<
             style={{
               width: "100%",
               borderCollapse: "collapse",
-              fontSize: 9,
+              fontSize: 10,
               color: C.body,
             }}
           >
@@ -1524,6 +1532,14 @@ export const InspectionReport = forwardRef<
                 label2="Property type"
                 value2={upperFirst(property?.property_type) ?? "—"}
               />
+              {version ? (
+                <Fact
+                  label="Report version"
+                  value={version > 1 ? `Version ${version} (replaces version ${version - 1})` : "Version 1"}
+                  label2="Inspection reference"
+                  value2={task.code ?? "—"}
+                />
+              ) : null}
               {/* <tr>
                 <Cell label colSpan={8}>
                   Legends: (severity grade)
@@ -1538,7 +1554,7 @@ export const InspectionReport = forwardRef<
                     style={{
                       color: TONE.high.fg,
                       fontWeight: 700,
-                      fontSize: 8,
+                      fontSize: 9,
                       letterSpacing: 0.3,
                       textTransform: "uppercase",
                       whiteSpace: "nowrap",
@@ -1552,7 +1568,7 @@ export const InspectionReport = forwardRef<
                     style={{
                       color: TONE.medium.fg,
                       fontWeight: 700,
-                      fontSize: 8,
+                      fontSize: 9,
                       letterSpacing: 0.3,
                       textTransform: "uppercase",
                       whiteSpace: "nowrap",
@@ -1566,7 +1582,7 @@ export const InspectionReport = forwardRef<
                     style={{
                       color: TONE.low.fg,
                       fontWeight: 700,
-                      fontSize: 8,
+                      fontSize: 9,
                       letterSpacing: 0.3,
                       textTransform: "uppercase",
                       whiteSpace: "nowrap",
@@ -1580,7 +1596,7 @@ export const InspectionReport = forwardRef<
                     style={{
                       color: TONE.pass.fg,
                       fontWeight: 700,
-                      fontSize: 8,
+                      fontSize: 9,
                       letterSpacing: 0.3,
                       textTransform: "uppercase",
                       whiteSpace: "nowrap",
@@ -1630,7 +1646,7 @@ export const InspectionReport = forwardRef<
               <div
                 key={area.id}
                 style={{
-                  fontSize: 10,
+                  fontSize: 11,
                   color: C.ink,
                   paddingLeft: 26,
                   paddingTop: 0,
@@ -1730,7 +1746,7 @@ export const InspectionReport = forwardRef<
                 <div
                   key={group.grade}
                   style={{
-                    fontSize: 10,
+                    fontSize: 11,
                     color: C.body,
                     paddingLeft: 26,
                     paddingTop: 0,
@@ -1756,7 +1772,7 @@ export const InspectionReport = forwardRef<
                 </div>
               ))}
             {snags.length === 0 ? (
-              <div style={{ fontSize: 10, color: C.body, paddingLeft: 26 }}>
+              <div style={{ fontSize: 11, color: C.body, paddingLeft: 26 }}>
                 No defects were recorded at this inspection.
               </div>
             ) : null}
@@ -1831,7 +1847,7 @@ export const InspectionReport = forwardRef<
                 <Card style={{ ...pad(forPDF, 6, 12), flex: 1 }}>
                   <div
                     style={{
-                      fontSize: 9,
+                      fontSize: 10,
                       fontWeight: 700,
                       color: C.ink,
                       paddingTop: 0,
@@ -1847,7 +1863,7 @@ export const InspectionReport = forwardRef<
                 <Card style={{ ...pad(forPDF, 6, 12), flex: 1 }}>
                   <div
                     style={{
-                      fontSize: 9,
+                      fontSize: 10,
                       fontWeight: 700,
                       color: C.ink,
                       paddingTop: 0,
@@ -1885,7 +1901,7 @@ export const InspectionReport = forwardRef<
                       borderTop: index === 0 ? "none" : `1px solid ${C.line}`,
                     }}
                   >
-                    <span style={{ width: 12, color: C.sub, fontSize: 9 }}>
+                    <span style={{ width: 12, color: C.sub, fontSize: 10 }}>
                       {index + 1}
                     </span>
                     {/*
@@ -1900,7 +1916,7 @@ export const InspectionReport = forwardRef<
                       style={{
                         width: "38%",
                         fontWeight: 600,
-                        fontSize: 10,
+                        fontSize: 11,
                         color: C.ink,
                       }}
                     >
@@ -1932,13 +1948,13 @@ export const InspectionReport = forwardRef<
                         width: 42,
                         textAlign: "right",
                         fontWeight: 700,
-                        fontSize: 10,
+                        fontSize: 11,
                         color: C.ink,
                       }}
                     >
                       {row.count}
                       <span
-                        style={{ fontWeight: 400, color: C.sub, fontSize: 8.5 }}
+                        style={{ fontWeight: 400, color: C.sub, fontSize: 9.5 }}
                       >
                         {"  "}
                         {share}%
@@ -1972,12 +1988,12 @@ export const InspectionReport = forwardRef<
                     style={{ display: "flex", alignItems: "center", gap: 8 }}
                   >
                     <span
-                      style={{ fontWeight: 600, fontSize: 10, color: C.ink }}
+                      style={{ fontWeight: 600, fontSize: 11, color: C.ink }}
                     >
                       {area.name}
                     </span>
                     {area.access_reason ? (
-                      <span style={{ color: C.sub, fontSize: 9.5 }}>
+                      <span style={{ color: C.sub, fontSize: 10.5 }}>
                         · {area.access_reason}
                       </span>
                     ) : null}
@@ -2018,7 +2034,7 @@ export const InspectionReport = forwardRef<
                     <Heading>Floor plan</Heading>
                     <div
                       style={{
-                        fontSize: 9.5,
+                        fontSize: 10.5,
                         color: C.sub,
                         paddingBottom: forPDF ? 12 : 8,
                       }}
@@ -2032,7 +2048,7 @@ export const InspectionReport = forwardRef<
                   (task.floor_plans ?? []).length > 1 ? (
                   <div
                     style={{
-                      fontSize: 10.5,
+                      fontSize: 11.5,
                       fontWeight: 600,
                       color: C.ink,
                       paddingBottom: forPDF ? 8 : 4,
@@ -2094,19 +2110,20 @@ export const InspectionReport = forwardRef<
                       >
                         {/*
                           The number sits on its own line box, the height of
-                          the dot. The PDF capture draws text about four
-                          pixels lower than the page lays it out, so there it
-                          is lifted by that much and lands in the middle.
+                          the dot. The PDF capture draws text lower than the
+                          page lays it out, so there it is lifted. 4.75px was
+                          measured on the captured canvas (html2canvas 1.4.1)
+                          at this size; -4 left the code 0.75px low.
                         */}
                         <span
                           style={{
                             display: "block",
-                            fontSize: 8,
+                            fontSize: 9,
                             fontWeight: 700,
                             color: "#fff",
                             textAlign: "center",
                             lineHeight: "17px",
-                            marginTop: forPDF ? -4 : 0,
+                            marginTop: forPDF ? -4.75 : 0,
                           }}
                         >
                           {shortSnagId(snag.snag_code) ?? defectNumber.get(snag.id)}
@@ -2128,7 +2145,7 @@ export const InspectionReport = forwardRef<
         */}
         <div
           style={{
-            fontSize: 12,
+            fontSize: 13,
             color: C.ink,
             paddingTop: "20px",
             paddingBottom: forPDF ? "18px" : "10px",
@@ -2141,7 +2158,7 @@ export const InspectionReport = forwardRef<
         </div>
 
         {areas.length === 0 ? (
-          <div style={{ color: C.sub, fontSize: 9.5 }}>No areas recorded.</div>
+          <div style={{ color: C.sub, fontSize: 10.5 }}>No areas recorded.</div>
         ) : (
           (() => {
             /*
@@ -2162,7 +2179,7 @@ export const InspectionReport = forwardRef<
                   const heading = (
                     <div
                       style={{
-                        fontSize: 10.5,
+                        fontSize: 11.5,
                         fontWeight: 600,
                         color: C.ink,
                         ...pad(forPDF, 4, 0),
@@ -2323,7 +2340,7 @@ export const InspectionReport = forwardRef<
                   style={{
                     display: "flex",
                     gap: 8,
-                    fontSize: 10,
+                    fontSize: 11,
                     lineHeight: 1.6,
                     color: C.body,
                     paddingLeft: 20,
@@ -2351,7 +2368,7 @@ export const InspectionReport = forwardRef<
           {/* Who inspected it, and when it was signed off internally. */}
           <div
             style={{
-              fontSize: 9.5,
+              fontSize: 10.5,
               color: C.body,
               paddingTop: 0,
               paddingBottom: forPDF ? "14px" : "8px",
@@ -2383,7 +2400,7 @@ export const InspectionReport = forwardRef<
         <div
           style={{
             marginTop: 10,
-            fontSize: 7.5,
+            fontSize: 8.5,
             lineHeight: 1.4,
             color: C.faint,
             textAlign: "center",
@@ -2405,7 +2422,7 @@ export const InspectionReport = forwardRef<
             borderTop: `1px solid ${C.orange}`,
             marginTop: 10,
             textAlign: "center",
-            fontSize: 7,
+            fontSize: 8,
             letterSpacing: 0.3,
             color: C.orange,
             paddingTop: 0,

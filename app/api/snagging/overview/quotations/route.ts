@@ -6,6 +6,7 @@ import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import {
   cacheHeaders,
   myQuotations,
+  readerScope,
   resolvePeriod,
 } from "@/lib/server/snagging/overview-queries";
 import { ActionType, ResourceType } from "@/types/types";
@@ -32,7 +33,7 @@ export async function GET(req: NextRequest) {
     const admin = await createAdminServerClient();
     // Captured before base(), which is hoisted and so cannot see the
     // null check above.
-    const me = profile.id;
+    const me = readerScope(accessUser, profile.id);
     const count = async (
       refine?: (q: ReturnType<typeof base>) => ReturnType<typeof base>,
     ) => {

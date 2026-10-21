@@ -164,7 +164,7 @@ export async function POST(
       can be generated again; it never undoes the approval.
     */
     let generation:
-      | { status: "pending" | "failed"; version: number; error?: string }
+      | { status: "pending" | "failed" | "unchanged"; version: number; error?: string }
       | null = null;
     try {
       const version = await issueReportVersion(admin, {
@@ -172,8 +172,12 @@ export async function POST(
         sourceVisitId: visitId,
         generatedBy: profile.id,
         reason: `Additional visit ${visit.visit_number} approved`,
+        onlyIfNewSnags: true,
       });
-      if (version) {
+      if (version?.unchanged) {
+        // Nothing new found: the client keeps the version they have.
+        generation = { status: "unchanged", version: version.version };
+      } else if (version) {
         // Its PDF comes from the approving browser, in the report page's
         // design (see the approve route); "pending" until it arrives.
         generation = { status: "pending", version: version.version };

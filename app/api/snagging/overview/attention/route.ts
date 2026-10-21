@@ -8,6 +8,7 @@ import {
   countJobs,
   myJobs,
   myQuotations,
+  readerScope,
 } from "@/lib/server/snagging/overview-queries";
 import { APPROVAL_SLA_HOURS } from "@/lib/server/snagging/workflow";
 import { voidColumnsReady } from "@/lib/server/snagging/quotation-void";
@@ -102,7 +103,8 @@ export async function GET(req: NextRequest) {
       Date.now() - QUOTE_SLA_HOURS * 60 * 60 * 1000,
     ).toISOString();
 
-    const me = profile.id;
+    // An admin sees what the whole organisation has waiting.
+    const me = readerScope(accessUser, profile.id);
     /** Every job query on this card is the reader's own work. */
     const jobs = () => myJobs(admin.from("snagging_jobs").select(columns), me);
 
@@ -211,7 +213,7 @@ export async function GET(req: NextRequest) {
       if (voidError) throw new Error(voidError.message);
       const mine = ((voidRows ?? []) as VoidRow[]).filter((row) => {
         const job = Array.isArray(row.job) ? row.job[0] : row.job;
-        return row.created_by === me || job?.approval_manager_id === me;
+        return !me || row.created_by === me || job?.approval_manager_id === me;
       });
       // Still open: no revision yet, or one the client has not approved.
       const revisionIds = mine.map((row) => row.replaced_by_quotation_id).filter(Boolean) as string[];

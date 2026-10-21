@@ -112,7 +112,30 @@ export const amcServiceRowSchema = z.object({
   */
   free: z.boolean().default(false),
   price: z.coerce.number().min(0).optional(),
+  /*
+    What the service covers on this property, as signed contracts name it
+    ("10 FCU", "3 kitchen hoods") (DEV-261). Optional, free text, and
+    printed beside the service name in its clause heading and in the
+    service frequency table.
+  */
+  equipment: z.string().max(80, "Keep the equipment under 80 characters").optional(),
+  /*
+    A service added to this proposal alone (DEV-260): kitchen hood
+    cleaning, grease trap cleaning and the like, which vary by business
+    and are not in AMC Settings. Its id starts with CUSTOM_SERVICE_PREFIX;
+    the name heads its own clause and its frequency table row, and the
+    scope prints under it.
+  */
+  customName: z.string().max(120).optional(),
+  customScope: z.string().max(4000).optional(),
 });
+
+/* A service row's id when the service was added to the proposal itself (DEV-260). */
+export const CUSTOM_SERVICE_PREFIX = "custom-";
+
+export function isCustomServiceRow(row: { serviceId: string }): boolean {
+  return row.serviceId.startsWith(CUSTOM_SERVICE_PREFIX);
+}
 
 export const amcFormSchema = z
   .object({
@@ -130,6 +153,13 @@ export const amcFormSchema = z
       in AMC Settings. Empty means the standard rates.
     */
     fixedPriceRates: z.array(z.string().max(300)).max(20),
+    /*
+      Contract wording edited on this proposal alone (DEV-263), by clause
+      id, and each standard service's scope, by service id. Absent keys
+      print the AMC Settings text; nothing here ever changes the default.
+    */
+    clauseOverrides: z.record(z.string(), z.string().max(20000)),
+    scopeOverrides: z.record(z.string(), z.string().max(20000)),
     accountManagers: z.tuple([
       amcAccountManagerSchema,
       amcAccountManagerSchema,
@@ -164,6 +194,15 @@ export const amcFormSchema = z
     }
 
     for (const row of includedRows) {
+      // A custom service prints under its name, so it cannot go without one (DEV-260).
+      if (isCustomServiceRow(row) && !row.customName?.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Give every custom service a name",
+          path: ["serviceRows"],
+        });
+        break;
+      }
       /*
         FR2.12: every checked row needs a base price before submission.
         Checked explicitly against undefined -- 0 is a valid price (a
@@ -324,6 +363,8 @@ export interface FrequencyRow {
   frequency: string;
   price: number;
   reference: string;
+  /** The equipment entered for the service, trimmed; empty when none (DEV-261). */
+  equipment: string;
 }
 
 export interface AmcTotals {
@@ -420,6 +461,9 @@ export interface AmcSubmissionDocumentOptions {
   /* Clause 6.3's rates for this proposal; absent on older ones (AMC-057). */
   fixedPriceRates?: string[];
   accountManagers: [AmcAccountManager, AmcAccountManager];
+  /* Wording edited on this proposal; absent on older ones (DEV-263). */
+  clauseOverrides?: Record<string, string>;
+  scopeOverrides?: Record<string, string>;
 }
 
 export interface AmcSubmissionCustomer {

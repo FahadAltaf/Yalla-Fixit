@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
+import { readerScope } from "@/lib/server/snagging/overview-queries";
 import {
   average,
   inRange,
@@ -22,6 +23,7 @@ import {
   resolveRange,
   type AnalyticsJob,
   type DateRange,
+  type JobDateAnchor,
   type SnagRow,
 } from "@/lib/server/snagging/analytics";
 import { DELIVERY_SLA_HOURS } from "@/lib/server/snagging/workflow";
@@ -102,6 +104,8 @@ export async function GET(req: NextRequest) {
 
     const params = req.nextUrl.searchParams;
     const range = resolveRange(params.get("from"), params.get("to"));
+    // A non-admin's analytics cover their own jobs; an admin's, everyone's.
+    const me = readerScope(accessUser, profile.id);
 
     // One card's figures. The guard above has already run, so a section
     // is exactly as protected as the whole payload.
@@ -115,20 +119,23 @@ export async function GET(req: NextRequest) {
       }
       const admin = await createAdminServerClient();
       return NextResponse.json({
-        data: await loadSection(admin, section, range),
+        data: await loadSection(admin, section, range, me),
       });
     }
 
     const admin = await createAdminServerClient();
+    const jobsIn = (window: DateRange, dates?: readonly JobDateAnchor[]) =>
+      loadJobsTouchingRange(admin, window, dates, me);
+    const queueNow = () => loadReviewQueue(admin, me);
     // The equivalent window before this one, for the period-on-period
     // trends. Fetched rather than derived, because a job raised before the
     // range is not in `jobs` at all -- and fetched WITH this period's jobs
     // and the queue, not after them.
     const previous = previousRange(range);
     const [jobs, queue, previousJobs] = await Promise.all([
-      loadJobsTouchingRange(admin, range),
-      loadReviewQueue(admin),
-      loadJobsTouchingRange(admin, previous),
+      jobsIn(range),
+      queueNow(),
+      jobsIn(previous),
     ]);
 
     // Intake — the jobs raised in the period — is what the status split,
@@ -188,13 +195,17 @@ async function loadSection(
   admin: AdminClient,
   section: AnalyticsSection,
   range: DateRange,
+  me: string | null,
 ): Promise<unknown> {
+  const jobsIn = (window: DateRange, dates?: readonly JobDateAnchor[]) =>
+    loadJobsTouchingRange(admin, window, dates, me);
+  const queueNow = () => loadReviewQueue(admin, me);
   switch (section) {
     case "time": {
       // Time on site anchors on submission, turnaround and first-time
       // approval on approval, the SLA on delivery. Creation never enters
       // these four, and the live overdue count rides with the queue.
-      const jobs = await loadJobsTouchingRange(admin, range, [
+      const jobs = await jobsIn(range, [
         "submitted_at",
         "approved_at",
         "delivered_at",
@@ -205,7 +216,7 @@ async function loadSection(
     case "queue": {
       // Live: no dates. The overdue card is the queue's oldest band, so
       // it is answered from the same read rather than a second one.
-      const queue = await loadReviewQueue(admin);
+      const queue = await queueNow();
       return {
         ...computeReviewQueue(queue),
         overdueApprovals: countOverdueApprovals(queue),
@@ -215,8 +226,8 @@ async function loadSection(
     case "status": {
       const previous = previousRange(range);
       const [jobs, previousJobs] = await Promise.all([
-        loadJobsTouchingRange(admin, range, ["created_at"]),
-        loadJobsTouchingRange(admin, previous, ["created_at"]),
+        jobsIn(range, ["created_at"]),
+        jobsIn(previous, ["created_at"]),
       ]);
       return computeByStatus(
         jobs.filter((job) => inRange(job.created_at, range)),
@@ -226,15 +237,15 @@ async function loadSection(
 
     case "completed": {
       // Counted at approval, so approval is the only date it needs.
-      const jobs = await loadJobsTouchingRange(admin, range, ["approved_at"]);
+      const jobs = await jobsIn(range, ["approved_at"]);
       return computeCompleted(jobs, range);
     }
 
     case "developers": {
       const previous = previousRange(range);
       const [jobs, previousJobs] = await Promise.all([
-        loadJobsTouchingRange(admin, range, ["created_at"]),
-        loadJobsTouchingRange(admin, previous, ["created_at"]),
+        jobsIn(range, ["created_at"]),
+        jobsIn(previous, ["created_at"]),
       ]);
       const raised = jobs.filter((job) => inRange(job.created_at, range));
       const raisedBefore = previousJobs.filter((job) =>
@@ -249,7 +260,7 @@ async function loadSection(
     }
 
     case "inspectors": {
-      const jobs = await loadJobsTouchingRange(admin, range, ["created_at"]);
+      const jobs = await jobsIn(range, ["created_at"]);
       return computeByInspector(
         jobs.filter((job) => inRange(job.created_at, range)),
       );

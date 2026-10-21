@@ -57,6 +57,8 @@ async function loadFlattened(
 export async function buildInspectionReportPdf(
   task: SnaggingTask,
   quotation: SnaggingQuotation | null | undefined,
+  /* The report version it is issued as; printed on the report and in every page's footer. */
+  version?: number | null,
 ): Promise<{ blob: Blob; filename: string }> {
   const [logo, ...badges] = await Promise.all([
     loadFlattened("/amc/brand/logo-trimmed.png", 9),
@@ -70,11 +72,15 @@ export async function buildInspectionReportPdf(
     .join(", ");
 
   const blob = await renderReactToPdfBlob(
-    <InspectionReport task={task} quotation={quotation} forPDF />,
-    /* About 150 dpi: sharp in print, and a third of the old file size. */
-    1.6,
+    <InspectionReport task={task} quotation={quotation} forPDF version={version} />,
+    /*
+      About 240 dpi, so text stays crisp when the PDF is zoomed. 1.6 (150
+      dpi) read soft on screen. A very long report drops to whatever scale
+      still fits in one canvas (elementToPdfBlob).
+    */
+    2.5,
     {
-      footerLabel: `${task.property?.unit_label ?? "Inspection"} · Snagging inspection report`,
+      footerLabel: `${task.property?.unit_label ?? "Inspection"} · Snagging inspection report${version ? ` · Version ${version}` : ""}`,
       header: {
         text: `Property handover snagging report${place ? ` · ${place}` : ""}`,
         logo,
@@ -87,7 +93,7 @@ export async function buildInspectionReportPdf(
 
   return {
     blob,
-    filename: `${(task.property?.unit_label ?? "inspection").replace(/\s+/g, "-")}-snagging-report.pdf`,
+    filename: `${(task.property?.unit_label ?? "inspection").replace(/\s+/g, "-")}-snagging-report${version ? `-v${version}` : ""}.pdf`,
   };
 }
 

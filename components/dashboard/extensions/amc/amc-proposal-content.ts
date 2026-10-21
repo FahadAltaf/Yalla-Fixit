@@ -8,6 +8,7 @@ import { contractTermMonths } from "./amc-date-utils";
 import {
   computeServiceRowPrice,
   formatDisplayDate,
+  withEquipment,
 } from "./amc-pricing";
 import type { AmcComputedData, AmcFormData } from "./amc-types";
 
@@ -44,7 +45,8 @@ export function buildProposalServiceRows(
       );
       return {
         serviceId: service.id,
-        service: service.label.replace(/\s*\(.*?\)\s*/g, " ").trim(),
+        // The label's own bracketed note goes; the equipment entered comes in (DEV-261).
+        service: withEquipment(service.label.replace(/\s*\(.*?\)\s*/g, " ").trim(), row.equipment),
         units: row.units,
         /*
           Taken from the contract's own row so the two documents agree
@@ -54,6 +56,7 @@ export function buildProposalServiceRows(
         */
         hasUnits: fromContract ? fromContract.hasUnits : true,
         frequency:
+          fromContract?.frequency ??
           frequencyByScope.get(service.scope) ??
           `${row.frequency} per year`,
         price: computeServiceRowPrice(row),

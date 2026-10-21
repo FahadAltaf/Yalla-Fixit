@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
-import { cacheHeaders, myJobs } from "@/lib/server/snagging/overview-queries";
+import { cacheHeaders, myJobs, readerScope } from "@/lib/server/snagging/overview-queries";
 import { ActionType, ResourceType } from "@/types/types";
 
 /**
@@ -87,7 +87,7 @@ export async function GET(req: NextRequest) {
     */
     const booked = (q: any) =>
       // The reader's own diary (FR-10.01): jobs they raised or are on.
-      myJobs(q, profile.id)
+      myJobs(q, readerScope(accessUser, profile.id))
         .gte("scheduled_date", today)
         .in("status", ["assigned", "in_progress"]);
 

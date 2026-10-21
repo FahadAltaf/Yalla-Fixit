@@ -293,6 +293,8 @@ export function getDefaultFormValues(): AmcFormData {
     },
     priceListRows: [emptyPriceListRow(), emptyPriceListRow(), emptyPriceListRow()],
     fixedPriceRates: [],
+    clauseOverrides: {},
+    scopeOverrides: {},
     accountManagers: [
       { name: "", phone: "" },
       { name: "", phone: "" },

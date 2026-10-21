@@ -43,6 +43,11 @@ const serviceRowSchema = z.object({
   */
   free: z.boolean().optional().default(false),
   price: z.number().min(0).optional(),
+  // What the service covers on this property ("10 FCU") (DEV-261).
+  equipment: z.string().max(80).optional(),
+  // A service added to this proposal alone (DEV-260).
+  customName: z.string().max(120).optional(),
+  customScope: z.string().max(4000).optional(),
 });
 
 const priceListRowSchema = z.object({
@@ -87,6 +92,9 @@ const submissionPayloadSchema = z.object({
       // Clause 6.3's rates for this proposal (AMC-057).
       fixedPriceRates: z.array(z.string().max(300)).max(20).optional(),
       accountManagers: z.tuple([accountManagerSchema, accountManagerSchema]),
+      // Contract wording edited on this proposal alone (DEV-263).
+      clauseOverrides: z.record(z.string(), z.string().max(20000)).optional(),
+      scopeOverrides: z.record(z.string(), z.string().max(20000)).optional(),
     })
     .optional(),
   services: z.array(serviceRowSchema),

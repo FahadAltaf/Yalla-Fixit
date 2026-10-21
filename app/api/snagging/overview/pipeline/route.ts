@@ -8,6 +8,7 @@ import {
   cacheHeaders,
   countJobs,
   myJobs,
+  readerScope,
   resolvePeriod,
 } from "@/lib/server/snagging/overview-queries";
 import { ActionType, ResourceType } from "@/types/types";
@@ -42,7 +43,7 @@ export async function GET(req: NextRequest) {
       PIPELINE_STAGES.map((stage) =>
         // The reader's own pipeline (FR-10.01), over the chosen window.
         countJobs(admin, (q) =>
-          myJobs(q, profile.id)
+          myJobs(q, readerScope(accessUser, profile.id))
             .eq("status", stage.status)
             .gte("created_at", period.fromTs),
         ),

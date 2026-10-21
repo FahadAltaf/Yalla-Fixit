@@ -7,6 +7,7 @@ import {
   cacheHeaders,
   countSnags,
   legacyElementsFor,
+  readerScope,
 } from "@/lib/server/snagging/overview-queries";
 import { ActionType, ResourceType } from "@/types/types";
 
@@ -72,6 +73,8 @@ export async function GET(req: NextRequest) {
 
     const admin = await createAdminServerClient();
 
+    // The reader's own jobs' snags; an admin's count is everyone's.
+    const me = readerScope(accessUser, profile.id);
     const catalogue = await activeCategories(admin);
 
     const counts = await Promise.all(
@@ -85,7 +88,7 @@ export async function GET(req: NextRequest) {
             (element) => `catalogue_code.like.*-${element}-*`,
           ),
         ];
-        return countSnags(admin, (q) => q.or(patterns.join(",")));
+        return countSnags(admin, (q) => q.or(patterns.join(",")), me);
       }),
     );
 

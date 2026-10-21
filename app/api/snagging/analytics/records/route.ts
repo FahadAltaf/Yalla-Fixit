@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getRequestUserAccess } from "@/lib/server/request-user-access";
+import { readerScope } from "@/lib/server/snagging/overview-queries";
 import {
   inRange,
   inspectorIdsOf,
@@ -101,6 +102,8 @@ export async function GET(req: NextRequest) {
       "day") as SnaggingAnalyticsGranularity;
 
     const admin = await createAdminServerClient();
+    // A non-admin's records are their own jobs; an admin's, everyone's.
+    const me = readerScope(accessUser, profile.id);
 
     // The two live worklists read the queue; everything else is scoped
     // to the period, exactly as the summary computes them.
@@ -109,9 +112,9 @@ export async function GET(req: NextRequest) {
     const [jobs, queue] = await Promise.all([
       usesQueue
         ? Promise.resolve([] as AnalyticsJob[])
-        : loadJobsTouchingRange(admin, range),
+        : loadJobsTouchingRange(admin, range, undefined, me),
       usesQueue
-        ? loadReviewQueue(admin)
+        ? loadReviewQueue(admin, me)
         : Promise.resolve([] as AnalyticsJob[]),
     ]);
 

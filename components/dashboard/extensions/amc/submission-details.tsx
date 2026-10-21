@@ -407,7 +407,17 @@ export function SubmissionDetails({
   const details = useMemo(() => {
     const form = submissionToFormData(submission);
     const data = computeAmcData(form, "proposal");
-    return { form, data };
+    /* DEV-263: the clauses and scopes reworded on this proposal, so the approver knows to read them. */
+    const editedWording = [
+      ...Object.keys(form.clauseOverrides ?? {}).map(
+        (id) => data.settings.clauseList.find((clause) => clause.id === id)?.title,
+      ),
+      ...Object.keys(form.scopeOverrides ?? {}).map((id) => {
+        const service = data.settings.services.find((item) => item.id === id);
+        return service ? `Scope of ${service.label}` : undefined;
+      }),
+    ].filter((title): title is string => Boolean(title));
+    return { form, data, editedWording };
   }, [submission]);
 
   /* The audit trail, loaded with the page and after any change. */
@@ -440,7 +450,7 @@ export function SubmissionDetails({
       : buildTimeline(submission);
   }, [submission, history, historyKey]);
 
-  const { form, data } = details;
+  const { form, data, editedWording } = details;
   const { totals } = data;
   const title = submission.customer.customerName || "Unnamed customer";
   const awaiting = submission.status === "awaiting_approval";
@@ -826,6 +836,14 @@ export function SubmissionDetails({
               description="As it appears in the documents, with the total before and after 5% VAT."
             >
               <ServicesAndCost rows={data.frequencyRows} totals={totals} />
+              {editedWording.length > 0 ? (
+                <div className="rounded-lg border border-dashed p-3 text-sm">
+                  <p className="font-medium">Contract wording edited for this proposal</p>
+                  <p className="text-muted-foreground mt-0.5">
+                    {editedWording.join(", ")}. Preview the contract to read the edited text.
+                  </p>
+                </div>
+              ) : null}
             </ReviewSection>
           </Card>,
         )}
