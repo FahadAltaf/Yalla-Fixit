@@ -51,6 +51,7 @@ are in progress ([migration log](migration-log.md)). Next: finish the backfills,
 | 9 | [test-strategy-and-acceptance-matrix.md](test-strategy-and-acceptance-matrix.md) | TC01–TC15 and the expanded matrix |
 | 10 | [business-decisions-and-blockers.md](business-decisions-and-blockers.md) | D-01 … D-22 and B-01 … B-08 — who decides what, and what each blocks |
 | 11 | [performance-and-scalability-plan.md](performance-and-scalability-plan.md) | Volumes, and each optimisation with its reason |
+| 12 | [manual-test-guide.md](manual-test-guide.md) | Step-by-step checks by hand for what is built, with expected results |
 
 ## Working rules for this branch
 
