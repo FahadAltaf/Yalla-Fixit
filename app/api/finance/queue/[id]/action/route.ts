@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { QUEUE_ACTIONS, QUEUE_STATUSES, applyQueueAction, readQueueItemSummary } from "@/lib/server/finance/queue";
-import { notifyQueryRaised, resolveQueryNotices } from "@/lib/server/finance/queue-notifications";
+import { notifyQueryRaised, resolveAgedNotices, resolveQueryNotices } from "@/lib/server/finance/queue-notifications";
 import { UUID_PATTERN, actorOf, queueErrorResponse } from "@/lib/server/finance/route-helpers";
 import { requireResourceAccess } from "@/lib/server/require-access";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
@@ -63,6 +63,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     } else if (action === "answer_query") {
       await resolveQueryNotices(admin, id);
     }
+    await resolveAgedNotices(admin, id);
     return NextResponse.json({ status });
   } catch (error) {
     return queueErrorResponse(error, "Finance queue action error");

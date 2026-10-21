@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { recordInvoice } from "@/lib/server/finance/queue";
-import { resolveQueryNotices } from "@/lib/server/finance/queue-notifications";
+import { resolveAgedNotices, resolveQueryNotices } from "@/lib/server/finance/queue-notifications";
 import { UUID_PATTERN, actorOf, queueErrorResponse } from "@/lib/server/finance/route-helpers";
 import { requireResourceAccess } from "@/lib/server/require-access";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
@@ -44,6 +44,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const invoiceId = await recordInvoice(admin, { itemId: id, ...parsed.data, actor: actorOf(gate.access.profile) });
     /* An invoiced item has no open query left to answer. */
     await resolveQueryNotices(admin, id);
+    await resolveAgedNotices(admin, id);
     return NextResponse.json({ invoiceId, status: "invoiced" });
   } catch (error) {
     return queueErrorResponse(error, "Finance record invoice error");

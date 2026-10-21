@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { decideExclusion } from "@/lib/server/finance/queue";
-import { resolveExclusionNotices } from "@/lib/server/finance/queue-notifications";
+import { resolveAgedNotices, resolveExclusionNotices } from "@/lib/server/finance/queue-notifications";
 import { UUID_PATTERN, actorOf, queueErrorResponse } from "@/lib/server/finance/route-helpers";
 import { requireResourceAccess } from "@/lib/server/require-access";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
@@ -43,6 +43,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       actor: actorOf(gate.access.profile),
     });
     await resolveExclusionNotices(admin, id);
+    const { data: exclusion } = await admin.schema("finance").from("exclusions").select("queue_item_id").eq("id", id).maybeSingle();
+    if (exclusion?.queue_item_id) await resolveAgedNotices(admin, exclusion.queue_item_id as string);
     return NextResponse.json({ status });
   } catch (error) {
     return queueErrorResponse(error, "Finance exclusion decision error");

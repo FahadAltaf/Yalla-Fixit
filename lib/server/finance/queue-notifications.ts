@@ -87,6 +87,15 @@ export async function notifyQueryRaised(
   }
 }
 
+/** N2 ("pending for {d} days") stops when the item's status changes. */
+export async function resolveAgedNotices(admin: SupabaseClient, itemId: string): Promise<void> {
+  try {
+    await resolveNotifications(admin, { entityType: "finance_queue_item", entityId: itemId, event: "finance.item_aged" });
+  } catch (error) {
+    console.error("[finance:N2] resolve failed:", error);
+  }
+}
+
 export async function resolveQueryNotices(admin: SupabaseClient, itemId: string): Promise<void> {
   try {
     await resolveNotifications(admin, {

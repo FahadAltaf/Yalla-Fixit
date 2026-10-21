@@ -9,6 +9,7 @@ import {
 import {
   Bell,
   CalendarClock,
+  ReceiptText,
   ClipboardCheck,
   LayoutDashboard,
   ListTodo,
@@ -20,6 +21,15 @@ import {
 } from "lucide-react";
 
 import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
+import { hasResourceAction } from "@/lib/role-permissions";
+
+/* Who reaches the Ready-to-Invoice queue: Finance and managers (queue
+   View), and the coordinators and verifier who answer its queries and
+   exclusions (BRD §6.7). The API applies the same rule. */
+const canUseFinanceQueue = (user: User) =>
+  hasResourceAction(user, ResourceType.FINANCE_QUEUE, ActionType.VIEW) ||
+  hasResourceAction(user, ResourceType.FINANCE_EXCLUSIONS, ActionType.CREATE) ||
+  hasResourceAction(user, ResourceType.FINANCE_EXCLUSIONS, ActionType.APPROVE);
 
 // hasViewPermission and filter functions unchanged
 const hasViewPermission = (
@@ -142,6 +152,25 @@ export const baseSectionsItems: MenuItem[] = [
         url: "/extensions/amc",
         // AMC view or approve, which the resource filter cannot say.
         canSee: canUseAmc,
+      },
+    ],
+  },
+  {
+    title: "Finance",
+    url: "/finance/queue",
+    icon: <ReceiptText className="size-4 text-primary" />,
+    isActive: false,
+    canSee: canUseFinanceQueue,
+    items: [
+      {
+        title: "Ready to invoice",
+        url: "/finance/queue",
+        canSee: canUseFinanceQueue,
+      },
+      {
+        title: "Invoicing metrics",
+        url: "/finance/metrics",
+        resource: ResourceType.FINANCE_QUEUE,
       },
     ],
   },
