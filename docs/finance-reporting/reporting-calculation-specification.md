@@ -105,13 +105,23 @@ The portal's night shift (00:00–09:00) lies within one day; a shift crossing m
 bookings across two dates. Bookings come from FSM appointments only: entries in the portal's own schedule
 that have not reached FSM are not counted.
 
-## Attendance (DEV-451) — blocked, B-01
+## Attendance (DEV-451) — calculation built (`lib/reports/attendance.ts`); data blocked, B-01
 
 Per technician per day: scheduled shift and hours; shift check-in and check-out times; hours present;
 **late** when check-in is after shift start + late tolerance (default 15 min); **early** when check-out is
 before shift end; **absent** when no check-in and no leave; leave category; rest-day or holiday marker.
 
-## Compliance (DEV-447) — blocked by B-01; decisions D-09, D-11
+## Compliance (DEV-447) — calculation built (`lib/reports/compliance.ts`); data blocked by B-01; decisions D-09, D-11
+
+Assumptions in the built calculation, to confirm with D-11 and D-15:
+
+- A day wholly on leave needs nothing; **part-day leave keeps the day's events required**.
+- A cancelled appointment counts as cancelled before start (the FSM copy has no cancellation time).
+  "Reassigned before start" is the current crew: someone taken off an appointment no longer owes it.
+- A shift check-in or check-out belongs to the shift whose window (± 4 h) holds it, so a night shift's
+  check-out after midnight counts for the evening it started. The first check-in and last check-out count.
+- Disputes for a month stay open until the cut-off day of the **following** month, that day included
+  (25 November for October); from the next day the month is final.
 
 **Required events** per eligible day: shift check-in + shift check-out, plus appointment check-in +
 check-out for each appointment assigned to the technician and not cancelled or reassigned before its start.

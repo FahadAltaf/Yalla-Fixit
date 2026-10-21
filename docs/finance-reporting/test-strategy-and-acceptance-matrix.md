@@ -46,10 +46,10 @@ baseline before database tests touch `snagging_*` tables; finance and reports ta
 | TC08 | 2 days annual leave | Available hours −16; no alerts; compliance unaffected | Unit ✓ (`tests/reports/available-hours`; alerts and compliance in P7) | P5 | D-22 (8 h day) |
 | TC09 | Quotation total 0, 2-hour job | Time utilization only | Unit ✓ (`tests/reports/utilization`) | P6 | D-08 |
 | TC10 | Shift 08:00, no check-in by 08:15 | One N5 with the day's appointments | Integration | P7 | **B-01** |
-| TC11 | 200 required, 7 missed, threshold 97 % | 96.5 %; AED 350 | Unit | P7 | D-09 |
-| TC12 | 200 required, 14 missed | 700 capped to AED 500 | Unit | P7 | **D-09 — holds only at 97 %** |
-| TC13 | Waive 1 of 7 | Required and performed −1; penalty recalculated (AED 300 at 96.98 %); reportable | Unit + DB | P7 | D-09 |
-| TC14 | Dispute raised on the 26th | Rejected; window closed | Integration | P7 | D-10 |
+| TC11 | 200 required, 7 missed, threshold 97 % | 96.5 %; AED 350 | Unit ✓ (`tests/reports/compliance`) | P7 | D-09 |
+| TC12 | 200 required, 14 missed | 700 capped to AED 500 | Unit ✓ (`tests/reports/compliance`, at 97 % and 90 %) | P7 | **D-09 — holds only at 97 %** |
+| TC13 | Waive 1 of 7 | Required and performed −1; penalty recalculated (AED 300 at 96.98 %); reportable | Unit ✓ (`tests/reports/compliance`); DB with the waiver table | P7 | D-09 |
+| TC14 | Dispute raised on the 26th | Rejected; window closed | Date rule unit ✓ (`complianceMonthPhase`); dispute flow waits on D-10 | P7 | D-10 |
 | TC15 | Leaving date the 15th | 15th onward excluded everywhere; earlier days counted | Unit ✓ (`tests/reports/available-hours`) | P5 | — |
 
 ## Expanded matrix

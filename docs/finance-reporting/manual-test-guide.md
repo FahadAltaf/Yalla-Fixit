@@ -267,8 +267,8 @@ Run from the branch folder:
 npm test
 ```
 
-Expect `# pass 148`, `# fail 0` (sync engine, queue rules, metrics, digest, safety rails, available hours,
-quotation ageing, exception rules, utilization, capacity, alert planning).
+Expect `# pass 161`, `# fail 0` (sync engine, queue rules, metrics, digest, safety rails, available hours,
+quotation ageing, exception rules, utilization, capacity, alert planning, compliance and attendance).
 
 ```bash
 bash scripts/db-harness/run.sh

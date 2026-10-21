@@ -85,6 +85,10 @@ screens have been checked in a browser.
 | DEV-436 | P4 | Built and browser-tested: item screen and every action | Completion report link (B-01); evidence upload |
 | DEV-439 | P4 | Built and tested: digest E1/N1/N2, once a day, not sent when idle | Recipients and time to set in Reporting Settings (D-12); `CRON_SECRET` schedule at go-live |
 | DEV-441 | P4 | Built and browser-tested: metrics page | — |
+| DEV-447 | P7 (ahead) | Calculation built and unit-tested (`lib/reports/compliance.ts`): required events per eligible day, performed, missed, waived, unrounded threshold, penalty and cap; TC11–TC13 | Check-in data (B-01); threshold (D-09); policy scope (D-11); appointment check-in = actual start? (D-15). No tables, routes or screens yet |
+| DEV-448 | P7 (ahead) | Waiver rule and the one-action outage waiver (`missesInOutage`) built and unit-tested | Storage and screens once misses exist (B-01) |
+| DEV-450 | P7 (ahead) | Month phases built and tested: running → disputes open until the cut-off day of the next month (inclusive) → final (TC14 date rule); statement figures carry the settings used | Statement table, E2/E3 (B-01, D-11) |
+| DEV-451 | P7 (ahead) | Daily attendance and HR monthly summary built and unit-tested (`lib/reports/attendance.ts`): late beyond tolerance, early, absent, leave category, part-day leave, night shift past midnight | Check-in data (B-01); screen |
 | (platform) | P2 | FSM read model in schema `fsm`, read-only sync (incremental, reconcile, backfill), freshness panel. Enables DEV-433, 434, 442, 444, 452, 453, 454 | Work-order and appointment backfills to finish; schedule at go-live; sync frequency to agree with Danish (DEV-433) |
 
 ## Coverage

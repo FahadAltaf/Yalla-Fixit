@@ -212,7 +212,13 @@ next phase).
   excluded and reflected in completeness.
 - **Partial**: travel waits on B-01. **Waiting**: D-08, D-14, D-16.
 
-## P7 — Attendance and compliance · XL · **blocked**
+## P7 — Attendance and compliance · XL · **calculations built ahead (21 Oct); rest blocked**
+
+- **Built ahead of the blockers**: `lib/reports/compliance.ts` (required events, performed/missed/waived,
+  unrounded threshold, penalty and cap, outage waiver, month phases and dispute cut-off) and
+  `lib/reports/attendance.ts` (daily attendance and HR monthly summary); 13 unit tests covering TC08,
+  TC11–TC15. Check-ins are an input, so FSM's data plugs in once B-01 is cleared. No migration, routes or
+  screens yet: those store and show misses, and there are none to store until check-ins can be read.
 
 - **Jira**: DEV-451, 445, 446, 447, 448, 449, 450. **BRD**: 5.2 B3, B4, B5; E2, E3; N5, N6, N9–N12.
 - **Depends on**: P5, **B-01** (check-in data), **D-09, D-10, D-11, D-15, D-19**.
