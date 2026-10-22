@@ -75,10 +75,10 @@ select
 ) post;
 
 -- 20261021100000 (+ 20261021110000's view): 5, 2, 6, 0, f, t, f on its own; the harness
--- applies 20261024100000 too, which adds 4 tables and 2 functions: 9, 2, 8, 0, f, t, f.
+-- applies 20261024100000 too, which adds 6 tables and 5 functions: 11, 2, 11, 0, f, t, f.
 SELECT harness.expect(row(tables, views, functions, api_table_grants, api_schema_usage, server_schema_usage, server_can_write_directly)
-                      = row(9::bigint, 2::bigint, 8::bigint, 0::bigint, false, true, false),
-                      '20261021100000 post-check (with the line ledger) returns 9, 2, 8, 0, f, t, f')
+                      = row(11::bigint, 2::bigint, 11::bigint, 0::bigint, false, true, false),
+                      '20261021100000 post-check (with the line ledger) returns 11, 2, 11, 0, f, t, f')
 FROM (
 select
   (select count(*) from pg_class where relnamespace = 'finance'::regnamespace and relkind = 'r')   as tables,

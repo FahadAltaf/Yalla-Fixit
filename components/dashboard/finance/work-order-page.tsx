@@ -4,19 +4,20 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
-  CalendarClock,
   CheckCheck,
+  CircleHelp,
   ExternalLink,
   FileText,
   FileUp,
   History,
   Info,
   ListChecks,
+  PauseCircle,
   ReceiptText,
   RefreshCw,
-  TriangleAlert,
+  ShieldCheck,
+  Truck,
   Undo2,
-  Users,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -37,57 +38,91 @@ import { Textarea } from "@/components/ui/textarea";
 import { fsmRecordLink } from "@/lib/fsm-links";
 import { INVOICE_STATUS_LABELS } from "@/lib/finance/line-status";
 import { formatZonedDate, formatZonedDateTime, todayInZone } from "@/lib/scheduling/org-time";
-import type { WorkOrderDetail, WorkOrderLine } from "@/lib/server/finance/work-orders";
+import type { WorkOrderDetail, WorkOrderEventType, WorkOrderLine } from "@/lib/server/finance/work-orders";
 import { cn } from "@/lib/utils";
 import { financeService } from "@/modules/finance/finance-service";
 
-import { InvoiceStatusBadge, WorkOrderStatusBadge, aed } from "./shared";
+import { EvidenceLinks, ExclusionDialog, uploadEvidenceFiles } from "./exclusion-dialog";
+import { InvoiceStatusBadge, WorkOrderQueueBadge, WorkOrderStatusBadge, aed, daysSince } from "./shared";
 import { UploadInvoiceDialog } from "./upload-invoice-dialog";
 
 /**
- * One work order for invoicing (laid out like the inspection detail): the
- * header card with what it waits on, four figures, then tabs for its line
- * items, the invoices recorded against it, its history, its quotation and
- * the appointments that delivered it.
+ * One work order in Ready to invoice (laid out like the inspection
+ * detail), read live from Zoho FSM: the header card with its status, what
+ * it waits on and the actions the person may take; four figures; then
+ * tabs for its line items, invoices, history, quotation and delivery.
  *
- * Invoicing is by line (decided 22 Oct): mark the whole work order, or
- * the lines ticked, Ready to invoice; record a MAHER invoice against lines
- * in full or in part. Stored in the portal; FSM is only read.
+ * The queue's workflow, on the work order (BRD 5.1 Step 4): pick up,
+ * query, hold, resume, release; not to be invoiced with evidence, verified
+ * or rejected. Invoicing by line (22 Oct): mark the whole work order or the
+ * lines ticked Ready; record a MAHER invoice in full or in part. Stored in
+ * the portal; FSM is only read.
  *
- * Opening it reads its lines from FSM only when the copy is older than the
- * work order's last change; the answer is cached, so going back and
- * opening it again costs nothing. Refresh re-reads it from FSM.
+ * Cached in the browser and on the server for ten minutes, so going back
+ * and opening it again costs no FSM call; Refresh reads it again.
  */
 
-type Detail = WorkOrderDetail & { can: { markReady: boolean; invoice: boolean } };
+type Can = { view: boolean; work: boolean; invoice: boolean; coordinate: boolean; verify: boolean; markReady: boolean };
+type Detail = WorkOrderDetail & { can: Can };
+type Action = "pick_up" | "release" | "raise_query" | "answer_query" | "put_on_hold" | "resume";
+type NoteAsk = { action: Action | "reject_exclusion"; title: string; description: string; label: string; submit: string };
 
 const DETAIL_STALE_MS = 10 * 60_000;
 const at = (iso: string | null) => (iso ? formatZonedDateTime(iso) : "—");
 
-const EVENT_LABELS: Record<WorkOrderDetail["events"][number]["type"], string> = {
+const EVENT_LABELS: Record<WorkOrderEventType, string> = {
   marked_ready: "Marked ready to invoice",
   unmarked_ready: "Ready mark taken off",
   invoiced: "Invoiced",
+  picked_up: "Picked up",
+  released: "Released",
+  query_raised: "Query raised",
+  query_answered: "Query answered",
+  put_on_hold: "Put on hold",
+  resumed: "Resumed",
+  exclusion_requested: "Marked not to be invoiced",
+  exclusion_verified: "Exclusion verified",
+  exclusion_rejected: "Exclusion rejected",
 };
 
 export function FinanceWorkOrderPage({ id }: { id: string }) {
-  const { data, loading, error, reload } = useSection<Detail>(`/api/finance/work-orders/${encodeURIComponent(id)}`, {
-    staleMs: DETAIL_STALE_MS,
-  });
+  const url = `/api/finance/work-orders/${encodeURIComponent(id)}`;
+  const { data, loading, error, reload } = useSection<Detail>(url, { staleMs: DETAIL_STALE_MS });
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [invoiceLines, setInvoiceLines] = useState<WorkOrderLine[] | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [exclusionOpen, setExclusionOpen] = useState(false);
+  const [noteAsk, setNoteAsk] = useState<NoteAsk | null>(null);
+  const [note, setNote] = useState("");
+  const [formSession, setFormSession] = useState(0);
   const { confirm, dialog } = useConfirm();
+
+  /* Run a change; the list behind it is stale too, so every cached page is dropped. */
+  const run = async (label: string, fn: () => Promise<unknown>) => {
+    setBusy(true);
+    try {
+      await fn();
+      toast.success(label);
+      setNoteAsk(null);
+      setExclusionOpen(false);
+      setSelected(new Set());
+      refreshAll();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "That did not go through");
+      reload();
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const refresh = async () => {
     setRefreshing(true);
     try {
-      const fresh = await financeService.refreshWorkOrder(id);
-      if (fresh.fsmError) toast.error(fresh.fsmError);
-      else toast.success("Read from Zoho FSM");
-      reload();
+      await financeService.refreshWorkOrder(id);
+      toast.success("Read from Zoho FSM");
+      refreshAll();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Zoho FSM could not be read");
     } finally {
@@ -95,25 +130,11 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
     }
   };
 
-  const markReady = async (lines: string[] | undefined, ready: boolean) => {
-    setBusy(true);
-    try {
-      const { changed } = await financeService.setReady(id, { lines, ready });
-      toast.success(changed ? `${changed} ${changed === 1 ? "line" : "lines"} ${ready ? "marked ready" : "no longer ready"}` : "Nothing to change");
-      setSelected(new Set());
-      reload();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "That did not go through");
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const back = (
     <Button asChild variant="ghost" size="sm" className="-ml-2 self-start">
-      <Link href="/finance/work-orders">
+      <Link href="/finance/queue">
         <ArrowLeft className="size-4" />
-        Work orders
+        Ready to invoice
       </Link>
     </Button>
   );
@@ -142,36 +163,195 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
     );
   }
 
-  const { workOrder: wo, quotation, lines, appointments, invoicing, can } = data;
-  const completed = lines.filter((l) => l.status === "Completed");
+  const { workOrder: wo, quotation, lines, invoicing, can, workflow } = data;
   const linesValue = lines.reduce((sum, l) => sum + (l.amount ?? 0), 0);
+  const completed = lines.filter((l) => l.status === "Completed");
   const fsmLink = fsmRecordLink("Work_Orders", wo.id);
-  const canMark = can.markReady && data.ledgerReady;
-  const canInvoice = can.invoice && data.ledgerReady;
+  const openExclusion = data.exclusions.find((x) => x.decision === null) ?? null;
+  const verifiedExclusion = workflow === "excluded" ? ([...data.exclusions].reverse().find((x) => x.decision === "verified") ?? null) : null;
+  const live = data.ledgerReady && workflow !== "excluded";
+  const canMark = can.markReady && live && !openExclusion;
+  const canInvoice = can.invoice && live && !openExclusion;
+  const invoiceable = (list: WorkOrderLine[]) => list.filter((l) => l.remaining > 0);
   const selectable = canMark || canInvoice;
   const chosen = lines.filter((l) => selected.has(l.id));
-  const invoiceable = (list: WorkOrderLine[]) => list.filter((l) => l.remaining > 0);
-  const notCompletedReady = lines.filter((l) => l.status !== "Completed" && !l.ready).length;
+  const notCompleted = lines.filter((l) => l.status !== "Completed" && !l.ready).length;
 
+  const act = (action: Action, label: string, text?: string) =>
+    run(label, () => financeService.workOrderAction(id, { action, expectedStatus: workflow, note: text ?? null }));
+  const ask = (dialogAsk: NoteAsk) => {
+    setNote("");
+    setNoteAsk(dialogAsk);
+  };
+  const markReady = (lineIds: string[] | undefined, ready: boolean) =>
+    run(ready ? "Marked ready to invoice" : "Ready mark taken off", () => financeService.setReady(id, { lines: lineIds, ready }));
   const markWholeOrder = async () => {
     const ok = await confirm({
       title: "Mark the work order ready to invoice",
       description:
-        notCompletedReady > 0
-          ? `All ${lines.length} lines are marked. ${notCompletedReady} of them ${notCompletedReady === 1 ? "is" : "are"} not completed in FSM yet.`
+        notCompleted > 0
+          ? `All ${lines.length} lines are marked. ${notCompleted} of them ${notCompleted === 1 ? "is" : "are"} not completed in FSM yet.`
           : `All ${lines.length} lines are marked ready to invoice.`,
       confirmText: "Mark ready",
     });
     if (ok) await markReady(undefined, true);
   };
 
-  const band = data.fsmError ? (
-    <Band tone="warning" icon={<TriangleAlert />} title="Showing the last copy">
-      {data.fsmError}
+  /* What this person may do now, by the workflow status (BRD 5.1 Step 4, 6.8). */
+  const actions: React.ReactNode[] = [];
+  if (can.work && live && workflow === "open" && data.queueStatus !== "invoiced") {
+    actions.push(
+      <Button key="pick" onClick={() => void act("pick_up", "Picked up")} disabled={busy}>
+        Pick up
+      </Button>,
+    );
+  }
+  if (canMark && lines.some((l) => !l.ready)) {
+    actions.push(
+      <Button key="ready" variant="outline" onClick={() => void markWholeOrder()} disabled={busy}>
+        <CheckCheck className="size-4" />
+        Mark work order ready
+      </Button>,
+    );
+  }
+  if (canInvoice && invoiceable(lines).length) {
+    actions.push(
+      <Button key="upload" variant="outline" onClick={() => setUploadOpen(true)} disabled={busy}>
+        <FileUp className="size-4" />
+        Upload invoice
+      </Button>,
+      <Button
+        key="invoice"
+        variant={workflow === "in_progress" ? "default" : "outline"}
+        onClick={() => setInvoiceLines(invoiceable(lines.filter((l) => l.ready)).length ? invoiceable(lines.filter((l) => l.ready)) : invoiceable(lines))}
+        disabled={busy}
+      >
+        <ReceiptText className="size-4" />
+        Record invoice
+      </Button>,
+    );
+  }
+  if (can.work && live && ["open", "in_progress", "on_hold"].includes(workflow) && data.queueStatus !== "invoiced") {
+    actions.push(
+      <Button
+        key="query"
+        variant="outline"
+        disabled={busy}
+        onClick={() =>
+          ask({ action: "raise_query", title: "Raise a query", description: "The coordinators are notified and the work order waits for their answer.", label: "Question", submit: "Send query" })
+        }
+      >
+        <CircleHelp className="size-4" />
+        Raise query
+      </Button>,
+    );
+  }
+  if (can.work && live && ["open", "in_progress"].includes(workflow) && data.queueStatus !== "invoiced") {
+    actions.push(
+      <Button
+        key="hold"
+        variant="outline"
+        disabled={busy}
+        onClick={() =>
+          ask({ action: "put_on_hold", title: "Put on hold", description: "Say why, for example a client dispute or missing information.", label: "Reason", submit: "Put on hold" })
+        }
+      >
+        <PauseCircle className="size-4" />
+        Put on hold
+      </Button>,
+    );
+  }
+  if (can.work && live && workflow === "on_hold") {
+    actions.push(
+      <Button key="resume" onClick={() => void act("resume", "Resumed")} disabled={busy}>
+        Resume
+      </Button>,
+    );
+  }
+  if (can.work && live && workflow === "in_progress") {
+    actions.push(
+      <Button key="release" variant="ghost" onClick={() => void act("release", "Released")} disabled={busy}>
+        Release
+      </Button>,
+    );
+  }
+  if (can.coordinate && live && workflow === "query_raised") {
+    actions.push(
+      <Button
+        key="answer"
+        disabled={busy}
+        onClick={() => ask({ action: "answer_query", title: "Answer Finance's query", description: data.queryText ?? "", label: "Answer", submit: "Send answer" })}
+      >
+        Answer query
+      </Button>,
+    );
+  }
+  if (can.coordinate && live && !openExclusion && invoicing.invoicedValue === 0) {
+    actions.push(
+      <Button
+        key="exclude"
+        variant="outline"
+        disabled={busy}
+        onClick={() => {
+          setFormSession((n) => n + 1);
+          setExclusionOpen(true);
+        }}
+      >
+        Mark not invoiceable
+      </Button>,
+    );
+  }
+
+  /* What the work order waits on, in a band along the header's bottom edge. */
+  const band = !data.ledgerReady ? (
+    <Band tone="neutral" icon={<Info />} title="Ready marks, workflow and invoices are off">
+      Apply migration 20261024100000 to mark work ready, pick it up and record MAHER invoices.
     </Band>
-  ) : !data.ledgerReady ? (
-    <Band tone="neutral" icon={<Info />} title="Ready marks and invoices are off">
-      Apply migration 20261024100000 (the line ledger) to mark work ready and record MAHER invoices.
+  ) : openExclusion ? (
+    <Band tone="warning" icon={<ShieldCheck />} title="Marked not to be invoiced: waiting for verification">
+      <p>
+        {openExclusion.requestedBy ?? "A coordinator"}: {openExclusion.reason}
+        {openExclusion.notes ? ` (${openExclusion.notes})` : ""}
+      </p>
+      <EvidenceLinks urlOf={(path) => financeService.workOrderEvidenceUrl(id, path)} paths={openExclusion.evidence} />
+      {can.verify ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            disabled={busy}
+            onClick={() => void run("Exclusion verified", () => financeService.decideWorkOrderExclusion(openExclusion.id, { decision: "verified" }))}
+          >
+            Verify exclusion
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => ask({ action: "reject_exclusion", title: "Reject the exclusion", description: "The work order stays where it was, with your note.", label: "Note", submit: "Reject" })}
+          >
+            Reject
+          </Button>
+        </div>
+      ) : (
+        <p className="mt-1 text-xs">It cannot be invoiced until this is decided.</p>
+      )}
+    </Band>
+  ) : verifiedExclusion ? (
+    <Band tone="neutral" icon={<ShieldCheck />} title="Not to be invoiced">
+      <p>
+        {verifiedExclusion.reason}
+        {verifiedExclusion.notes ? ` (${verifiedExclusion.notes})` : ""}. Requested by {verifiedExclusion.requestedBy ?? "a coordinator"}, verified by{" "}
+        {verifiedExclusion.decidedBy ?? "—"}.
+      </p>
+      <EvidenceLinks urlOf={(path) => financeService.workOrderEvidenceUrl(id, path)} paths={verifiedExclusion.evidence} />
+    </Band>
+  ) : workflow === "query_raised" ? (
+    <Band tone="warning" icon={<CircleHelp />} title="Waiting for the coordinator to answer">
+      {data.queryText ?? "No question recorded."}
+    </Band>
+  ) : workflow === "on_hold" ? (
+    <Band tone="warning" icon={<PauseCircle />} title="On hold">
+      {data.holdReason ?? "No reason recorded."}
     </Band>
   ) : invoicing.status === "invoiced" ? (
     <Band tone="good" icon={<ReceiptText />} title="Invoiced in full">
@@ -196,56 +376,43 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
           <div className="min-w-0 space-y-1">
             <div className="flex flex-wrap items-center gap-2">
               {wo.type ? <Badge variant="outline">{wo.type}</Badge> : null}
-              <InvoiceStatusBadge status={invoicing.status} />
+              <WorkOrderStatusBadge status={wo.status} />
               <span className="text-muted-foreground text-xs">Raised {wo.createdAt ? formatZonedDate(wo.createdAt) : "—"}</span>
             </div>
             <div className="flex flex-row flex-wrap items-center gap-2">
-              <h2 className="text-2xl">{wo.number ?? wo.id}</h2>
-              <WorkOrderStatusBadge status={wo.status} />
+              <h2 className="text-2xl">{quotation?.number ? `Quotation ${quotation.number}` : (wo.number ?? wo.id)}</h2>
+              <WorkOrderQueueBadge status={data.queueStatus} />
             </div>
             <p className="text-muted-foreground text-sm">
-              {[wo.clientName, wo.contactName, quotation?.number ? `quotation ${quotation.number}` : "no quotation"].filter(Boolean).join(" · ")}
+              {[
+                quotation?.number ? wo.number : null,
+                wo.companyName,
+                wo.ownerName ? `coordinator ${wo.ownerName}` : null,
+                data.assigneeName ? `with ${data.assigneeName}` : null,
+                data.statusSince ? `${daysSince(data.statusSince)} day(s) in this status` : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {actions}
             {fsmLink ? (
-              <Button asChild variant="outline">
+              <Button asChild variant="ghost" size="icon" aria-label="Open in FSM" title="Open in FSM">
                 <a href={fsmLink} target="_blank" rel="noopener noreferrer">
                   <ExternalLink className="size-4" />
-                  Open in FSM
                 </a>
               </Button>
             ) : null}
-            <Button variant="outline" onClick={() => void refresh()} disabled={refreshing || busy}>
+            <Button variant="ghost" size="icon" onClick={() => void refresh()} disabled={refreshing || busy} aria-label="Refresh from Zoho FSM" title="Refresh from Zoho FSM">
               <RefreshCw className={cn("size-4", refreshing && "animate-spin")} />
-              Refresh from FSM
             </Button>
-            {canMark && lines.some((l) => !l.ready) ? (
-              <Button variant="outline" onClick={() => void markWholeOrder()} disabled={busy}>
-                <CheckCheck className="size-4" />
-                Mark work order ready
-              </Button>
-            ) : null}
-            {canInvoice && invoiceable(lines).length ? (
-              <Button variant="outline" onClick={() => setUploadOpen(true)} disabled={busy}>
-                <FileUp className="size-4" />
-                Upload invoice
-              </Button>
-            ) : null}
-            {canInvoice && invoiceable(lines).length ? (
-              <Button onClick={() => setInvoiceLines(invoiceable(lines.filter((l) => l.ready)).length ? invoiceable(lines.filter((l) => l.ready)) : invoiceable(lines))} disabled={busy}>
-                <ReceiptText className="size-4" />
-                Record invoice
-              </Button>
-            ) : null}
           </div>
         </div>
         {band}
         <div className="bg-muted/40 border-t px-5 py-2.5">
           <p className="text-muted-foreground text-xs">
-            {data.linesSeenAt
-              ? `Line items read from Zoho FSM ${timeAgo(data.linesSeenAt)} (${at(data.linesSeenAt)}). They are read again only when the work order changes, or when you press Refresh.`
-              : "Line items have not been read from Zoho FSM yet."}
+            Read from Zoho FSM {timeAgo(data.fetchedAt)} ({at(data.fetchedAt)}){data.fromCache ? ", kept for ten minutes" : ""}. Refresh reads it again.
           </p>
         </div>
       </Card>
@@ -265,15 +432,12 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
             <TabCount value={data.events.length} />
           </TabsTrigger>
           <TabsTrigger value="quotation">Quotation</TabsTrigger>
-          <TabsTrigger value="delivery">
-            Delivery evidence
-            <TabCount value={appointments.length} />
-          </TabsTrigger>
+          <TabsTrigger value="delivery">Delivery</TabsTrigger>
         </TabsList>
 
         <TabsContent value="lines" className="mt-4 flex flex-col gap-6">
           <StatCardGrid columns={4}>
-            <StatCard label="Work order value" value={aed(wo.value)} headline="Before VAT, as totalled in FSM" caption={wo.grandTotal !== null ? `${aed(wo.grandTotal)} with VAT` : undefined} />
+            <StatCard label="Work order value" value={aed(wo.subTotal)} headline="Before VAT, as totalled in FSM" caption={wo.grandTotal !== null ? `${aed(wo.grandTotal)} with VAT` : undefined} />
             <StatCard
               label="Ready to invoice"
               value={aed(invoicing.readyValue)}
@@ -300,7 +464,7 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
           <SectionCard
             icon={<ListChecks />}
             title="Line items"
-            description="As in FSM, with where each stands for invoicing. Values are before VAT; the VAT-inclusive amount is under each."
+            description="As in Zoho FSM, with where each stands for invoicing. Values are before VAT; the VAT-inclusive amount is under each."
             bodyClassName="border-t"
             action={
               selectable && chosen.length ? (
@@ -329,9 +493,7 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
             }
           >
             {lines.length === 0 ? (
-              <p className="text-muted-foreground px-5 py-4 text-sm">
-                {data.linesSeenAt ? "This work order has no line items in FSM." : "Line items have not been read from FSM yet. Press Refresh from FSM."}
-              </p>
+              <p className="text-muted-foreground px-5 py-4 text-sm">This work order has no line items in Zoho FSM.</p>
             ) : (
               <Table>
                 <TableHeader>
@@ -377,7 +539,11 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
                         {line.description && line.description !== line.name ? (
                           <p className="text-muted-foreground line-clamp-2 max-w-md text-xs">{line.description}</p>
                         ) : null}
-                        {line.isOptional ? <Badge variant="outline" className="mt-1">Optional</Badge> : null}
+                        {line.isOptional ? (
+                          <Badge variant="outline" className="mt-1">
+                            Optional
+                          </Badge>
+                        ) : null}
                       </TableCell>
                       <TableCell>
                         <WorkOrderStatusBadge status={line.status} />
@@ -453,7 +619,7 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
         </TabsContent>
 
         <TabsContent value="history" className="mt-4">
-          <SectionCard icon={<History />} title="History" description="Every Ready mark and invoice on this work order, newest first." bodyClassName="px-5 pb-5">
+          <SectionCard icon={<History />} title="History" description="Every Ready mark, invoice and status change on this work order, newest first." bodyClassName="px-5 pb-5">
             {data.events.length === 0 ? (
               <p className="text-muted-foreground text-sm">Nothing yet.</p>
             ) : (
@@ -490,52 +656,82 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
                 <Fact label="Valid until" value={quotation.expiryDate ? formatZonedDate(quotation.expiryDate) : "—"} />
               </dl>
             ) : (
-              <p className="text-muted-foreground text-sm">This work order has no quotation linked in FSM.</p>
+              <p className="text-muted-foreground text-sm">This work order has no quotation linked in Zoho FSM.</p>
             )}
           </SectionCard>
         </TabsContent>
 
         <TabsContent value="delivery" className="mt-4">
-          <SectionCard icon={<CalendarClock />} title="Delivery evidence" description="The work order's appointments in FSM: when the work was booked and done, and by whom." bodyClassName="px-5 pb-5">
-            {appointments.length === 0 ? (
-              <p className="text-muted-foreground text-sm">No appointments for this work order in the FSM copy.</p>
-            ) : (
-              <ul className="divide-y">
-                {appointments.map((a) => (
-                  <li key={a.id} className="flex flex-col gap-1 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                      <p className="text-sm font-medium">
-                        {a.number ?? "Appointment"} <span className="text-muted-foreground font-normal">· {a.status ?? "—"}</span>
-                      </p>
-                      <p className="text-muted-foreground text-xs">
-                        Scheduled {at(a.scheduledStart)}
-                        {a.actualStart ? ` · worked ${at(a.actualStart)} – ${a.actualEnd ? at(a.actualEnd) : "…"}` : ""}
-                      </p>
-                    </div>
-                    <p className="text-muted-foreground flex items-center gap-1.5 text-xs sm:max-w-[45%] sm:text-right">
-                      <Users className="size-3.5 shrink-0" />
-                      {a.technicians.length ? a.technicians.map((t) => t.name + (t.lead ? " (lead)" : "")).join(", ") : "Crew not recorded"}
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            )}
+          <SectionCard icon={<Truck />} title="Delivery" description="Where the work stands in Zoho FSM." bodyClassName="px-5 pb-5">
+            <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
+              <Fact label="Work order status" value={wo.status ?? "—"} />
+              <Fact label="Completed" value={wo.completedAt ? at(wo.completedAt) : "Not completed in FSM"} />
+              <Fact label="Lines completed" value={`${completed.length} of ${lines.length}`} />
+              <Fact label="Client contact" value={wo.contactName ?? "—"} />
+            </dl>
             <p className="text-muted-foreground mt-4 flex items-start gap-1.5 text-xs">
               <Info className="mt-0.5 size-3.5 shrink-0" />
-              The client-signed completion report cannot be linked yet: the Zoho token cannot read service reports (B-01).
+              The appointments, crew and the client-signed completion report are in FSM: Zoho&apos;s API does not list a work order&apos;s appointments in one call, and the token cannot read service reports (B-01).
+              {fsmLink ? " Open the work order in FSM to see them." : ""}
             </p>
           </SectionCard>
         </TabsContent>
       </Tabs>
 
+      <Dialog open={noteAsk !== null} onOpenChange={(open) => !open && !busy && setNoteAsk(null)}>
+        <ActionDialogContent busy={busy}>
+          <DialogHeader>
+            <DialogTitle>{noteAsk?.title}</DialogTitle>
+            {noteAsk?.description ? <DialogDescription>{noteAsk.description}</DialogDescription> : null}
+          </DialogHeader>
+          <div className="grid gap-2">
+            <Label htmlFor="wo-note">{noteAsk?.label}</Label>
+            <Textarea id="wo-note" rows={4} value={note} onChange={(e) => setNote(e.target.value)} maxLength={2000} />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setNoteAsk(null)} disabled={busy}>
+              Cancel
+            </Button>
+            <SubmitButton
+              pending={busy}
+              disabled={!note.trim()}
+              onClick={() => {
+                if (!noteAsk) return;
+                if (noteAsk.action === "reject_exclusion" && openExclusion) {
+                  void run("Exclusion rejected", () => financeService.decideWorkOrderExclusion(openExclusion.id, { decision: "rejected", note: note.trim() }));
+                } else if (noteAsk.action !== "reject_exclusion") {
+                  void act(noteAsk.action, `${noteAsk.submit}: done`, note.trim());
+                }
+              }}
+            >
+              {noteAsk?.submit}
+            </SubmitButton>
+          </DialogFooter>
+        </ActionDialogContent>
+      </Dialog>
+
+      <ExclusionDialog
+        key={`exclusion-${formSession}`}
+        open={exclusionOpen}
+        busy={busy}
+        onClose={() => !busy && setExclusionOpen(false)}
+        onSubmit={({ files, ...input }) =>
+          void run("Sent for verification", async () => {
+            const evidence = await uploadEvidenceFiles(files, (sign) => financeService.signWorkOrderEvidenceUpload(id, sign));
+            return financeService.requestWorkOrderExclusion(id, { ...input, evidence });
+          })
+        }
+      />
+
       {invoiceLines ? (
         <RecordInvoiceDialog
+          workOrderId={id}
           lines={invoiceLines}
           onClose={() => setInvoiceLines(null)}
           onRecorded={() => {
             setInvoiceLines(null);
             setSelected(new Set());
-            reload();
+            refreshAll();
           }}
         />
       ) : null}
@@ -562,7 +758,17 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-function RecordInvoiceDialog({ lines, onClose, onRecorded }: { lines: WorkOrderLine[]; onClose: () => void; onRecorded: () => void }) {
+function RecordInvoiceDialog({
+  workOrderId,
+  lines,
+  onClose,
+  onRecorded,
+}: {
+  workOrderId: string;
+  lines: WorkOrderLine[];
+  onClose: () => void;
+  onRecorded: () => void;
+}) {
   const [key] = useState(() => crypto.randomUUID());
   const [included, setIncluded] = useState<Set<string>>(() => new Set(lines.map((l) => l.id)));
   const [amounts, setAmounts] = useState<Record<string, string>>(() => Object.fromEntries(lines.map((l) => [l.id, String(l.remaining)])));
@@ -592,7 +798,7 @@ function RecordInvoiceDialog({ lines, onClose, onRecorded }: { lines: WorkOrderL
         date,
         total: round2(totalNumber),
         note: note.trim() || null,
-        allocations: allocations.map((a) => ({ line: a.line.id, amount: round2(a.amount) })),
+        allocations: allocations.map((a) => ({ line: a.line.id, workOrder: workOrderId, amount: round2(a.amount) })),
       });
       toast.success(`MAHER ${number.trim()} recorded`);
       onRecorded();
@@ -708,16 +914,7 @@ function RecordInvoiceDialog({ lines, onClose, onRecorded }: { lines: WorkOrderL
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="maher-total">Invoice total (AED)</Label>
-            <Input
-              id="maher-total"
-              type="number"
-              inputMode="decimal"
-              min={0}
-              step="0.01"
-              placeholder={String(sum)}
-              value={total}
-              onChange={(e) => setTotal(e.target.value)}
-            />
+            <Input id="maher-total" type="number" inputMode="decimal" min={0} step="0.01" placeholder={String(sum)} value={total} onChange={(e) => setTotal(e.target.value)} />
           </div>
         </div>
         <div className="grid gap-1.5">
@@ -759,7 +956,7 @@ function Band({ tone, icon, title, children }: { tone: keyof typeof BAND_TONES; 
         {icon}
         {title}
       </p>
-      <p className="text-muted-foreground mt-1 text-sm">{children}</p>
+      <div className="text-muted-foreground mt-1 text-sm">{children}</div>
     </div>
   );
 }

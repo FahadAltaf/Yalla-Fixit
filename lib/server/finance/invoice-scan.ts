@@ -6,7 +6,9 @@ import OpenAI from "openai";
 import { EVIDENCE_BUCKET, safeEvidenceName } from "@/lib/finance/evidence";
 import { matchInvoice, referenceKey, scannedReferences, type CandidateLine, type MatchResult, type ScannedInvoice } from "@/lib/finance/invoice-match";
 import { lineRemaining } from "@/lib/finance/line-status";
-import { readAllByIds } from "@/lib/server/snagging/read-all";
+import { addDaysToDateString, todayInZone, zonedTimeToUtc } from "@/lib/scheduling/org-time";
+import { fetchWorkOrderLive, fetchWorkOrdersLive } from "@/lib/server/finance/fsm-live";
+import { WORK_ORDER_MAX_DAYS } from "@/lib/server/finance/work-orders";
 
 /**
  * Reading a MAHER invoice (decided with the user, 22 Oct: AI reading with
@@ -152,13 +154,17 @@ export type ScanProposal = MatchResult & {
   scanned: ScannedInvoice;
   /** Every open line of the work orders found, for choosing a line by hand. */
   candidates: CandidateLine[];
-  /** Work order numbers on the invoice that are not in the portal's copy (older than four months, or not in FSM). */
+  /** Numbers on the invoice that match no work order or quotation in FSM's last four months. */
   notFound: string[];
 };
 
+/** Work orders read in full for one scan, at most: each costs a call when not read in the last ten minutes. */
+const MAX_SCAN_WORK_ORDERS = 8;
+
 /**
  * The work-order lines the invoice may cover: those of the work orders and
- * quotations named on it, plus the work order it was uploaded from.
+ * quotations named on it (found in FSM's last four months, read live), plus
+ * the work order it was uploaded from.
  */
 export async function proposeAllocations(
   admin: SupabaseClient,
@@ -166,74 +172,49 @@ export async function proposeAllocations(
   context: { workOrderId?: string | null } = {},
 ): Promise<ScanProposal> {
   const keys = scannedReferences(scanned);
-  const fsm = admin.schema("fsm");
-  const woNumbers = keys.map((k) => `WO${k}`);
-  const [byNumber, byQuotation] = await Promise.all([
-    woNumbers.length ? fsm.from("work_orders").select("fsm_work_order_id, number, fsm_estimate_id").in("number", woNumbers) : Promise.resolve({ data: [], error: null }),
-    keys.length ? fsm.from("estimates").select("fsm_estimate_id, number").in("number", keys) : Promise.resolve({ data: [], error: null }),
-  ]);
-  if (byNumber.error) throw new Error(byNumber.error.message);
-  if (byQuotation.error) throw new Error(byQuotation.error.message);
-
-  const estimateIds = (byQuotation.data ?? []).map((e) => String(e.fsm_estimate_id));
-  const viaQuotation = estimateIds.length
-    ? ((await fsm.from("work_orders").select("fsm_work_order_id, number, fsm_estimate_id").in("fsm_estimate_id", estimateIds)).data ?? [])
-    : [];
-  const ids = new Set<string>([...(byNumber.data ?? []), ...viaQuotation].map((w) => String(w.fsm_work_order_id)));
-  if (context.workOrderId) ids.add(context.workOrderId);
-
-  const found = new Set([...(byNumber.data ?? []), ...viaQuotation].map((w) => referenceKey(String(w.number))));
-  const foundQuotations = new Set((byQuotation.data ?? []).map((e) => referenceKey(String(e.number))));
-  const notFound = keys.filter((k) => !found.has(k) && !foundQuotations.has(k)).map((k) => k);
-
-  const candidates = await openLinesOf(admin, [...ids]);
+  const ids: string[] = context.workOrderId ? [context.workOrderId] : [];
+  const notFound: string[] = [];
+  if (keys.length) {
+    const today = todayInZone();
+    const from = zonedTimeToUtc(addDaysToDateString(today, -(WORK_ORDER_MAX_DAYS - 1))).toISOString();
+    const to = zonedTimeToUtc(addDaysToDateString(today, 1)).toISOString();
+    const { rows } = await fetchWorkOrdersLive(admin, { fromIso: from, toIso: to });
+    for (const key of keys) {
+      const hits = rows.filter((w) => referenceKey(w.number) === key || referenceKey(w.estimateNumber) === key);
+      if (!hits.length) notFound.push(key);
+      for (const w of hits) if (!ids.includes(w.id)) ids.push(w.id);
+    }
+  }
+  const candidates = await openLinesOf(admin, ids.slice(0, MAX_SCAN_WORK_ORDERS));
   return { ...matchInvoice(scanned, candidates), scanned, candidates, notFound };
 }
 
-/** The lines of these work orders with something left to invoice. */
+/** The lines of these work orders, as FSM has them now, with something left to invoice. */
 async function openLinesOf(admin: SupabaseClient, workOrderIds: string[]): Promise<CandidateLine[]> {
   if (!workOrderIds.length) return [];
-  const fsm = admin.schema("fsm");
-  const [orders, lines, states] = await Promise.all([
-    fsm.from("work_orders").select("fsm_work_order_id, number, fsm_estimate_id").in("fsm_work_order_id", workOrderIds),
-    readAllByIds<Record<string, unknown>>(
-      workOrderIds,
-      (chunk, from, to) =>
-        fsm
-          .from("line_items")
-          .select("fsm_line_id, fsm_work_order_id, name, description, amount")
-          .in("fsm_work_order_id", chunk)
-          .is("removed_at", null)
-          .order("fsm_line_id")
-          .range(from, to),
-      "invoice candidate lines",
-    ),
+  const [orders, states] = await Promise.all([
+    Promise.all(workOrderIds.map((id) => fetchWorkOrderLive(admin, id))),
     admin.schema("finance").from("line_states").select("fsm_line_id, ready, invoiced_amount").in("fsm_work_order_id", workOrderIds),
   ]);
-  if (orders.error) throw new Error(orders.error.message);
-  if (states.error) throw new Error(states.error.message);
-  const estimateIds = (orders.data ?? []).map((o) => o.fsm_estimate_id).filter(Boolean) as string[];
-  const quotations = estimateIds.length
-    ? new Map(((await fsm.from("estimates").select("fsm_estimate_id, number").in("fsm_estimate_id", estimateIds)).data ?? []).map((e) => [String(e.fsm_estimate_id), String(e.number)]))
-    : new Map<string, string>();
-  const orderOf = new Map((orders.data ?? []).map((o) => [String(o.fsm_work_order_id), o]));
+  if (states.error && !/line_states|schema cache/i.test(states.error.message)) throw new Error(states.error.message);
   const stateOf = new Map((states.data ?? []).map((s) => [String(s.fsm_line_id), s]));
-
-  return lines
-    .map((l) => {
-      const order = orderOf.get(String(l.fsm_work_order_id));
-      const state = stateOf.get(String(l.fsm_line_id));
-      const amount = Number(l.amount ?? 0);
-      return {
-        workOrderId: String(l.fsm_work_order_id),
-        workOrderNumber: order ? String(order.number ?? "") || null : null,
-        quotationNumber: order?.fsm_estimate_id ? (quotations.get(String(order.fsm_estimate_id)) ?? null) : null,
-        lineId: String(l.fsm_line_id),
-        name: (l.name as string | null) ?? null,
-        description: (l.description as string | null) ?? null,
-        amount,
-        remaining: lineRemaining({ amount, ready: Boolean(state?.ready), invoicedAmount: Number(state?.invoiced_amount ?? 0) }),
-      };
-    })
+  return orders
+    .filter((o): o is NonNullable<typeof o> => Boolean(o))
+    .flatMap((o) =>
+      o.lines.map((l) => {
+        const state = stateOf.get(String(l.fsm_line_id));
+        const amount = Number(l.amount ?? 0);
+        return {
+          workOrderId: o.workOrder.id,
+          workOrderNumber: o.workOrder.number,
+          quotationNumber: o.workOrder.estimateNumber,
+          lineId: String(l.fsm_line_id),
+          name: l.name,
+          description: l.description,
+          amount,
+          remaining: lineRemaining({ amount, ready: Boolean(state?.ready), invoicedAmount: Number(state?.invoiced_amount ?? 0) }),
+        };
+      }),
+    )
     .filter((c) => c.remaining > 0.005);
 }

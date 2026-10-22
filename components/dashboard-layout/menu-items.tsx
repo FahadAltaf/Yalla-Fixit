@@ -173,11 +173,6 @@ export const baseSectionsItems: MenuItem[] = [
     canSee: canUseFinanceQueue,
     items: [
       {
-        title: "Work orders",
-        url: "/finance/work-orders",
-        canSee: canUseFinanceQueue,
-      },
-      {
         title: "Ready to invoice",
         url: "/finance/queue",
         canSee: canUseFinanceQueue,

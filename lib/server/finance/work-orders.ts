@@ -2,62 +2,42 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 
 import {
+  AWAITING_ACTION,
   lineRemaining,
   lineStatus,
+  queueStatus,
   workOrderInvoicing,
   type InvoiceStatus,
   type LineState,
+  type QueueStatus,
+  type WorkflowStatus,
   type WorkOrderInvoicing,
 } from "@/lib/finance/line-status";
-import {
-  addDaysToDateString,
-  todayInZone,
-  zonedTimeToUtc,
-} from "@/lib/scheduling/org-time";
-import {
-  createFsmReader,
-  financeFsmReadEnabled,
-} from "@/lib/server/finance/fsm-read";
-import {
-  readWorkOrderInFull,
-  runFsmSync,
-  type SyncSummary,
-} from "@/lib/server/finance/fsm-sync/engine";
-import {
-  supabaseSyncStore,
-  type SyncResource,
-} from "@/lib/server/finance/fsm-sync/store";
-import { readAllByIds, readAllRows } from "@/lib/server/snagging/read-all";
-import { getFsmAccessToken } from "@/lib/server/zoho/fsm-client";
+import { addDaysToDateString, todayInZone, zonedTimeToUtc } from "@/lib/scheduling/org-time";
+import { fetchEstimateLive, fetchWorkOrderLive, fetchWorkOrdersLive, forgetLists, FsmLiveError, type LiveWorkOrder } from "@/lib/server/finance/fsm-live";
+import { readReportingSettings } from "@/lib/server/reporting/settings";
+import { readAllByIds } from "@/lib/server/snagging/read-all";
 
 /**
- * Work orders for invoicing, read from the portal's copy of FSM.
+ * Ready to invoice, by FSM work order (the user's direction, 22 Oct).
  *
- * How FSM is used, and what it costs (decided with the user, 22 Oct):
+ * The work orders, their line items and quotations are read live from Zoho
+ * FSM (lib/server/finance/fsm-live.ts), never from the portal's synced
+ * copy. What the portal itself decides is kept in schema finance
+ * (migration 20261024100000): lines marked Ready to invoice, MAHER invoices
+ * against lines in full or in part, and the queue's workflow on the work
+ * order (pick up, query, hold, not to be invoiced).
  *
- *  - The list is the copy's work-order headers for the chosen dates (the
- *    last 30 days by default, never more than four months back). Refresh
- *    reads FSM's work order, quotation and appointment LISTS for what
- *    changed since the last sync: a page or two of calls, no detail calls.
- *  - A work order's line items exist only on FSM's detail call, so they
- *    are read when somebody opens the work order: one call, and only when
- *    the copy's lines are older than the work order's (or one of its
- *    appointments') last change, or when the user asks for a refresh.
- *  - Everything read is kept, so going back to the list, or opening the
- *    same work order again, costs nothing.
- *
- * FSM is only read here (FINANCE_FSM_READ, GET-only reader).
+ * One status per work order, as the queue had per item: Not ready,
+ * Pending, In Progress, Query Raised, On Hold, Partially invoiced,
+ * Invoiced, Excluded. "Awaiting action" (the default) is the work Finance
+ * still has to do something with.
  */
 
-/** The furthest back the invoicing screens look: four months. */
+/** The furthest back Ready to invoice looks: four months. */
 export const WORK_ORDER_MAX_DAYS = 122;
 export const WORK_ORDER_DEFAULT_DAYS = 30;
-/** A list refresh within this long of the last one is not repeated. */
-const REFRESH_MIN_GAP_MS = 60_000;
-/** Calls a list refresh may spend per resource. */
-const REFRESH_BUDGET = 20;
-/** Clock drift between the portal and FSM: a read this close to a change is not trusted. */
-const DRIFT_MS = 10 * 60_000;
+const DAY_MS = 86_400_000;
 
 const DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
@@ -66,11 +46,16 @@ export const workOrderFiltersSchema = z.object({
   to: DATE.optional(),
   q: z.string().trim().max(200).optional(),
   client: z.string().trim().max(200).optional(),
-  status: z.string().trim().max(60).optional(),
-  /** Where invoicing stands (Not ready, Ready, Partially invoiced, Invoiced). */
-  invoice: z
-    .enum(["not_ready", "ready", "partially_invoiced", "invoiced"])
+  /** FSM's owner of the work order. */
+  coordinator: z.string().trim().max(200).optional(),
+  /** "open" (awaiting action, the default), "all", or one queue status. */
+  status: z
+    .enum(["open", "all", "not_ready", "pending", "in_progress", "query_raised", "on_hold", "partially_invoiced", "invoiced", "excluded"])
     .optional(),
+  /** "1": pending longer than the aged setting. */
+  aged: z.enum(["0", "1"]).optional(),
+  /** "1": ask FSM again rather than use the last ten minutes' answer. */
+  refresh: z.enum(["0", "1"]).optional(),
   page: z.coerce.number().int().min(0).default(0),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
 });
@@ -78,14 +63,10 @@ export const workOrderFiltersSchema = z.object({
 export type WorkOrderFilters = z.infer<typeof workOrderFiltersSchema>;
 
 /** The dates asked for, kept inside the four-month window. */
-export function workOrderPeriod(
-  filters: { from?: string; to?: string },
-  today = todayInZone(),
-) {
+export function workOrderPeriod(filters: { from?: string; to?: string }, today = todayInZone()) {
   const earliest = addDaysToDateString(today, -(WORK_ORDER_MAX_DAYS - 1));
   let to = filters.to && filters.to <= today ? filters.to : today;
-  let from =
-    filters.from ?? addDaysToDateString(to, -(WORK_ORDER_DEFAULT_DAYS - 1));
+  let from = filters.from ?? addDaysToDateString(to, -(WORK_ORDER_DEFAULT_DAYS - 1));
   if (from > to) [from, to] = [to, from];
   const clamped = from < earliest;
   if (clamped) from = earliest;
@@ -93,66 +74,150 @@ export function workOrderPeriod(
   return { from, to, earliest, today, clamped };
 }
 
-export type FsmFreshness = {
-  resource: SyncResource;
-  lastSuccessAt: string | null;
-  lastError: string | null;
-  running: boolean;
+const round2 = (n: number) => Math.round(n * 100) / 100;
+const str = (v: unknown) => (v === null || v === undefined ? null : String(v));
+
+// ---------------------------------------------------------------------
+// The portal's own records for some work orders
+// ---------------------------------------------------------------------
+
+/* The ledger tables arrive with migration 20261024100000; before it, everything reads as Not ready. */
+function ledgerMissing(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  return (
+    error.code === "PGRST205" ||
+    error.code === "42P01" ||
+    /line_states|line_invoices|line_events|work_order_states|wo_exclusions|schema cache/i.test(error.message ?? "")
+  );
+}
+
+type StateRow = {
+  lineId: string;
+  workOrderId: string;
+  name: string | null;
+  amount: number;
+  ready: boolean;
+  invoicedAmount: number;
+  readyAt: string | null;
+  readyBy: string | null;
 };
 
-export async function readFreshness(
+type WorkflowRow = {
+  status: WorkflowStatus;
+  statusChangedAt: string;
+  assigneeId: string | null;
+  assignee: string | null;
+  holdReason: string | null;
+  queryText: string | null;
+};
+
+async function loadLedger(
   admin: SupabaseClient,
-): Promise<FsmFreshness[]> {
-  const { data, error } = await admin
-    .schema("fsm")
-    .from("sync_state")
-    .select("resource, last_success_at, last_error, lease_until")
-    .order("resource");
-  if (error) throw new Error(`sync state: ${error.message}`);
-  const now = Date.now();
-  return (data ?? []).map((r) => ({
-    resource: r.resource as SyncResource,
-    lastSuccessAt: (r.last_success_at as string | null) ?? null,
-    lastError: (r.last_error as string | null) ?? null,
-    running: Boolean(
-      r.lease_until && Date.parse(r.lease_until as string) > now,
-    ),
-  }));
+  workOrderIds: string[],
+): Promise<{ states: StateRow[]; workflow: Map<string, WorkflowRow>; ready: boolean }> {
+  try {
+    const [states, flows] = await Promise.all([
+      readAllByIds<Record<string, unknown>>(
+        workOrderIds,
+        (chunk, from, to) =>
+          admin
+            .schema("finance")
+            .from("line_states")
+            .select("fsm_line_id, fsm_work_order_id, name, amount, ready, invoiced_amount, ready_at, ready_by_label")
+            .in("fsm_work_order_id", chunk)
+            .order("fsm_line_id")
+            .range(from, to),
+        "line states",
+      ),
+      readAllByIds<Record<string, unknown>>(
+        workOrderIds,
+        (chunk, from, to) =>
+          admin
+            .schema("finance")
+            .from("work_order_states")
+            .select("fsm_work_order_id, status, status_changed_at, assignee_id, assignee_label, hold_reason, query_text")
+            .in("fsm_work_order_id", chunk)
+            .order("fsm_work_order_id")
+            .range(from, to),
+        "work order states",
+      ),
+    ]);
+    return {
+      ready: true,
+      states: states.map((r) => ({
+        lineId: String(r.fsm_line_id),
+        workOrderId: String(r.fsm_work_order_id),
+        name: str(r.name),
+        amount: Number(r.amount ?? 0),
+        ready: Boolean(r.ready),
+        invoicedAmount: Number(r.invoiced_amount ?? 0),
+        readyAt: str(r.ready_at),
+        readyBy: str(r.ready_by_label),
+      })),
+      workflow: new Map(
+        flows.map((f) => [
+          String(f.fsm_work_order_id),
+          {
+            status: f.status as WorkflowStatus,
+            statusChangedAt: String(f.status_changed_at),
+            assigneeId: str(f.assignee_id),
+            assignee: str(f.assignee_label),
+            holdReason: str(f.hold_reason),
+            queryText: str(f.query_text),
+          },
+        ]),
+      ),
+    };
+  } catch (error) {
+    if (ledgerMissing({ message: error instanceof Error ? error.message : String(error) })) {
+      return { ready: false, states: [], workflow: new Map() };
+    }
+    throw error;
+  }
+}
+
+/**
+ * Where a work order's invoicing stands from the lines the portal has
+ * records for. Lines never marked do not count, so it is invoiced in full
+ * only when the invoiced amount reaches FSM's total for the work order.
+ */
+function invoicingFrom(states: StateRow[], subTotal: number | null): WorkOrderInvoicing {
+  const inv = workOrderInvoicing(states.map((s) => ({ amount: s.amount, ready: s.ready, invoicedAmount: s.invoicedAmount })));
+  if (inv.status === "invoiced" && subTotal !== null && inv.invoicedValue < subTotal - 0.01) return { ...inv, status: "partially_invoiced" };
+  return inv;
 }
 
 // ---------------------------------------------------------------------
 // The list
 // ---------------------------------------------------------------------
 
-export type WorkOrderQuotation = {
-  id: string;
-  number: string | null;
-  status: string | null;
-  subTotal: number | null;
-  postToMaher: string | null;
-};
-
 export type WorkOrderListRow = {
   id: string;
   number: string | null;
-  status: string | null;
+  fsmStatus: string | null;
   type: string | null;
   clientName: string | null;
   contactName: string | null;
+  coordinatorName: string | null;
+  quotationNumber: string | null;
   createdAt: string | null;
   completedAt: string | null;
   /** Before VAT, as FSM totals it. */
   value: number | null;
-  quotation: WorkOrderQuotation | null;
-  /** Null until the work order has been opened (its lines read from FSM). */
-  lines: {
-    count: number;
-    completed: number;
-    value: number;
-    seenAt: string;
-  } | null;
-  /** Where its invoicing stands; null until its lines are read. */
-  invoicing: WorkOrderInvoicing | null;
+  invoicing: WorkOrderInvoicing;
+  queueStatus: QueueStatus;
+  /** Since when it has been in its queue status. */
+  statusSince: string | null;
+  assigneeName: string | null;
+};
+
+export type WorkOrderQueueSummary = Record<
+  "pending" | "inProgress" | "queryRaised" | "onHold" | "partiallyInvoiced" | "excluded" | "invoiced" | "notReady",
+  { count: number; value: number }
+> & {
+  /** Mean days from a line being marked Ready to the invoice recording it. */
+  averageDaysToInvoice: number | null;
+  invoices: number;
 };
 
 export type WorkOrderList = {
@@ -162,267 +227,121 @@ export type WorkOrderList = {
   clamped: boolean;
   rows: WorkOrderListRow[];
   total: number;
-  summary: {
-    workOrders: number;
-    completed: number;
-    withQuotation: number;
-    value: number;
-    linesRead: number;
-    /** Ready lines not yet invoiced, before VAT: what Finance can invoice now. */
-    readyValue: number;
-    invoicedValue: number;
-    byStatus: Record<InvoiceStatus, number>;
-  };
-  options: { clients: string[]; statuses: string[] };
-  freshness: FsmFreshness[];
-  /** False until migration 20261024100000 is applied: no Ready marks or invoices yet. */
+  summary: WorkOrderQueueSummary;
+  options: { clients: string[]; coordinators: string[] };
+  agedAfterDays: number;
+  /** When FSM was read for this list, and what it cost. */
+  fsm: { fetchedAt: string; calls: number; cached: boolean };
+  /** False until migration 20261024100000 is applied: Ready marks, workflow and invoices are off. */
   ledgerReady: boolean;
 };
 
-const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
-const str = (v: unknown) => (v === null || v === undefined ? null : String(v));
-const round2 = (n: number) => Math.round(n * 100) / 100;
-const isCompleted = (status: string | null) =>
-  status === "Completed" || status === "Closed";
-
-/* The ledger tables arrive with migration 20261024100000; before it, everything reads as Not ready. */
-function ledgerMissing(
-  error: { code?: string; message?: string } | null,
-): boolean {
-  if (!error) return false;
-  return (
-    error.code === "PGRST205" ||
-    error.code === "42P01" ||
-    /line_states|line_invoices|line_events|schema cache/i.test(
-      error.message ?? "",
-    )
-  );
-}
-
-type StateRow = {
-  fsm_line_id: string;
-  ready: boolean;
-  invoiced_amount: number;
-  ready_at: string | null;
-  ready_by_label: string | null;
+const SUMMARY_KEY: Record<QueueStatus, keyof Omit<WorkOrderQueueSummary, "averageDaysToInvoice" | "invoices">> = {
+  pending: "pending",
+  in_progress: "inProgress",
+  query_raised: "queryRaised",
+  on_hold: "onHold",
+  partially_invoiced: "partiallyInvoiced",
+  excluded: "excluded",
+  invoiced: "invoiced",
+  not_ready: "notReady",
 };
 
-/** Each line's ledger state, keyed by line id; empty (and flagged) before the migration. */
-async function loadLineStates(
-  admin: SupabaseClient,
-  workOrderIds: string[],
-): Promise<{ states: Map<string, StateRow>; ready: boolean }> {
-  try {
-    const rows = await readAllByIds<Record<string, unknown>>(
-      workOrderIds,
-      (chunk, from, to) =>
-        admin
-          .schema("finance")
-          .from("line_states")
-          .select(
-            "fsm_line_id, ready, invoiced_amount, ready_at, ready_by_label",
-          )
-          .in("fsm_work_order_id", chunk)
-          .order("fsm_line_id")
-          .range(from, to),
-      "line states",
-    );
-    return {
-      ready: true,
-      states: new Map(
-        rows.map((r) => [
-          String(r.fsm_line_id),
-          {
-            fsm_line_id: String(r.fsm_line_id),
-            ready: Boolean(r.ready),
-            invoiced_amount: Number(r.invoiced_amount ?? 0),
-            ready_at: str(r.ready_at),
-            ready_by_label: str(r.ready_by_label),
-          },
-        ]),
-      ),
-    };
-  } catch (error) {
-    if (
-      ledgerMissing({
-        message: error instanceof Error ? error.message : String(error),
-      })
-    )
-      return { ready: false, states: new Map() };
-    throw error;
-  }
-}
-
-export async function listWorkOrders(
-  admin: SupabaseClient,
-  filters: WorkOrderFilters,
-): Promise<WorkOrderList> {
+export async function listWorkOrders(admin: SupabaseClient, filters: WorkOrderFilters): Promise<WorkOrderList> {
   const period = workOrderPeriod(filters);
-  const startIso = zonedTimeToUtc(period.from).toISOString();
-  const endIso = zonedTimeToUtc(
-    addDaysToDateString(period.to, 1),
-  ).toISOString();
+  const fromIso = zonedTimeToUtc(period.from).toISOString();
+  const toIso = zonedTimeToUtc(addDaysToDateString(period.to, 1)).toISOString();
 
-  const [all, freshness] = await Promise.all([
-    readAllRows<Record<string, unknown>>(
-      (from, to) =>
-        admin
-          .schema("fsm")
-          .from("work_orders")
-          .select(
-            "fsm_work_order_id, number, status, type, company_name, contact_name, created_in_fsm_at, completed_at, sub_total, fsm_estimate_id, lines_seen_at",
-          )
-          .gte("created_in_fsm_at", startIso)
-          .lt("created_in_fsm_at", endIso)
-          .order("created_in_fsm_at", { ascending: false })
-          .order("fsm_work_order_id")
-          .range(from, to),
-      "work orders",
-    ),
-    readFreshness(admin),
+  const [live, settings] = await Promise.all([
+    fetchWorkOrdersLive(admin, { fromIso, toIso }, { refresh: filters.refresh === "1" }),
+    readReportingSettings(admin),
   ]);
+  const agedAfterDays = settings.finance.agedAfterDays;
+  const ids = live.rows.map((w) => w.id);
+  const ledger = await loadLedger(admin, ids);
+  const statesOf = new Map<string, StateRow[]>();
+  for (const s of ledger.states) statesOf.set(s.workOrderId, [...(statesOf.get(s.workOrderId) ?? []), s]);
 
-  /* Lines and their ledger state for every work order in the dates: the
-     summary and the invoicing filter count them all, not only this page. */
-  const allIds = all.map((w) => String(w.fsm_work_order_id));
-  const [lineRows, ledger] = await Promise.all([
-    readAllByIds<Record<string, unknown>>(
-      allIds,
-      (chunk, from, to) =>
-        admin
-          .schema("fsm")
-          .from("line_items")
-          .select("fsm_line_id, fsm_work_order_id, status, amount")
-          .in("fsm_work_order_id", chunk)
-          .is("removed_at", null)
-          .order("fsm_line_id")
-          .range(from, to),
-      "line items",
-    ),
-    loadLineStates(admin, allIds),
-  ]);
-  const linesByWorkOrder = new Map<
-    string,
-    Array<LineState & { status: string | null }>
-  >();
-  for (const l of lineRows) {
-    const state = ledger.states.get(String(l.fsm_line_id));
-    const list = linesByWorkOrder.get(String(l.fsm_work_order_id)) ?? [];
-    list.push({
-      amount: num(l.amount),
-      ready: state?.ready ?? false,
-      invoicedAmount: state?.invoiced_amount ?? 0,
-      status: str(l.status),
-    });
-    linesByWorkOrder.set(String(l.fsm_work_order_id), list);
-  }
-  const invoicingOf = (w: Record<string, unknown>) =>
-    w.lines_seen_at
-      ? workOrderInvoicing(
-          linesByWorkOrder.get(String(w.fsm_work_order_id)) ?? [],
-        )
-      : null;
+  const now = Date.now();
+  const view = (w: LiveWorkOrder) => {
+    const states = statesOf.get(w.id) ?? [];
+    const invoicing = invoicingFrom(states, w.subTotal);
+    const flow = ledger.workflow.get(w.id);
+    const workflow: WorkflowStatus = flow?.status ?? "open";
+    const status = queueStatus(workflow, invoicing.status);
+    const firstReady = states.map((s) => s.readyAt).filter((v): v is string => Boolean(v)).sort()[0] ?? null;
+    const statusSince = workflow !== "open" && flow ? flow.statusChangedAt : (firstReady ?? w.createdAt);
+    return { invoicing, status, statusSince, assignee: flow?.assignee ?? null };
+  };
+  const views = new Map(live.rows.map((w) => [w.id, view(w)]));
+  const daysIn = (since: string | null) => (since ? Math.max(0, Math.floor((now - Date.parse(since)) / DAY_MS)) : 0);
 
+  const wanted: QueueStatus[] | null =
+    !filters.status || filters.status === "open" ? AWAITING_ACTION : filters.status === "all" ? null : [filters.status as QueueStatus];
   const needle = (filters.q ?? "").toLowerCase();
-  const matching = all.filter((w) => {
-    if (filters.client && w.company_name !== filters.client) return false;
-    if (filters.status && w.status !== filters.status) return false;
-    if (
-      filters.invoice &&
-      (invoicingOf(w)?.status ?? "not_ready") !== filters.invoice
-    )
+  const matching = live.rows.filter((w) => {
+    const v = views.get(w.id)!;
+    if (wanted && !wanted.includes(v.status)) return false;
+    if (filters.client && w.companyName !== filters.client) return false;
+    if (filters.coordinator && w.ownerName !== filters.coordinator) return false;
+    if (filters.aged === "1" && !(v.status === "pending" && daysIn(v.statusSince) >= agedAfterDays)) return false;
+    if (needle && !`${w.number ?? ""} ${w.estimateNumber ?? ""} ${w.companyName ?? ""} ${w.contactName ?? ""}`.toLowerCase().includes(needle)) {
       return false;
-    if (
-      needle &&
-      !`${w.number ?? ""} ${w.company_name ?? ""} ${w.contact_name ?? ""}`
-        .toLowerCase()
-        .includes(needle)
-    )
-      return false;
+    }
     return true;
   });
-  const pageRows = matching.slice(
-    filters.page * filters.pageSize,
-    (filters.page + 1) * filters.pageSize,
-  );
 
-  const estimateIds = [
-    ...new Set(
-      pageRows
-        .map((w) => str(w.fsm_estimate_id))
-        .filter((v): v is string => Boolean(v)),
-    ),
-  ];
-  const estimates = estimateIds.length
-    ? await admin
-        .schema("fsm")
-        .from("estimates")
-        .select("fsm_estimate_id, number, status, sub_total, post_to_maher")
-        .in("fsm_estimate_id", estimateIds)
-    : { data: [], error: null };
-  if (estimates.error)
-    throw new Error(`quotations: ${estimates.error.message}`);
-  const quotations = new Map<string, WorkOrderQuotation>(
-    (estimates.data ?? []).map((e): [string, WorkOrderQuotation] => [
-      String(e.fsm_estimate_id),
-      {
-        id: String(e.fsm_estimate_id),
-        number: str(e.number),
-        status: str(e.status),
-        subTotal: num(e.sub_total),
-        postToMaher: str(e.post_to_maher),
-      },
-    ]),
-  );
-
-  const rows: WorkOrderListRow[] = pageRows.map((w) => {
-    const id = String(w.fsm_work_order_id);
-    const seenAt = str(w.lines_seen_at);
-    const lines = linesByWorkOrder.get(id) ?? [];
+  const rows: WorkOrderListRow[] = matching.slice(filters.page * filters.pageSize, (filters.page + 1) * filters.pageSize).map((w) => {
+    const v = views.get(w.id)!;
     return {
-      id,
-      number: str(w.number),
-      status: str(w.status),
-      type: str(w.type),
-      clientName: str(w.company_name),
-      contactName: str(w.contact_name),
-      createdAt: str(w.created_in_fsm_at),
-      completedAt: str(w.completed_at),
-      value: num(w.sub_total),
-      quotation: w.fsm_estimate_id
-        ? (quotations.get(String(w.fsm_estimate_id)) ?? null)
-        : null,
-      lines: seenAt
-        ? {
-            count: lines.length,
-            completed: lines.filter((l) => l.status === "Completed").length,
-            value: round2(lines.reduce((s, l) => s + (l.amount ?? 0), 0)),
-            seenAt,
-          }
-        : null,
-      invoicing: invoicingOf(w),
+      id: w.id,
+      number: w.number,
+      fsmStatus: w.status,
+      type: w.type,
+      clientName: w.companyName,
+      contactName: w.contactName,
+      coordinatorName: w.ownerName,
+      quotationNumber: w.estimateNumber,
+      createdAt: w.createdAt,
+      completedAt: w.completedAt,
+      value: w.subTotal,
+      invoicing: v.invoicing,
+      queueStatus: v.status,
+      statusSince: v.statusSince,
+      assigneeName: v.assignee,
     };
   });
 
-  const byStatus: Record<InvoiceStatus, number> = {
-    not_ready: 0,
-    ready: 0,
-    partially_invoiced: 0,
-    invoiced: 0,
+  /* The summary strip counts every work order in the dates, whatever the status filter. */
+  const blank = () => ({ count: 0, value: 0 });
+  const summary: WorkOrderQueueSummary = {
+    pending: blank(),
+    inProgress: blank(),
+    queryRaised: blank(),
+    onHold: blank(),
+    partiallyInvoiced: blank(),
+    excluded: blank(),
+    invoiced: blank(),
+    notReady: blank(),
+    averageDaysToInvoice: null,
+    invoices: 0,
   };
-  let readyValue = 0;
-  let invoicedValue = 0;
-  for (const w of matching) {
-    const inv = invoicingOf(w);
-    byStatus[inv?.status ?? "not_ready"] += 1;
-    readyValue += inv?.readyValue ?? 0;
-    invoicedValue += inv?.invoicedValue ?? 0;
+  for (const w of live.rows) {
+    const v = views.get(w.id)!;
+    const b = summary[SUMMARY_KEY[v.status]];
+    b.count += 1;
+    const value =
+      v.status === "excluded" || v.status === "not_ready"
+        ? (w.subTotal ?? 0)
+        : v.status === "invoiced"
+          ? v.invoicing.invoicedValue
+          : v.invoicing.readyValue;
+    b.value = round2(b.value + value);
   }
+  Object.assign(summary, await daysToInvoice(admin, ids, ledger.ready));
 
-  const distinct = (values: unknown[]) =>
-    [...new Set(values.map(str).filter((v): v is string => Boolean(v)))].sort(
-      (a, b) => a.localeCompare(b),
-    );
+  const distinct = (values: (string | null)[]) =>
+    [...new Set(values.filter((v): v is string => Boolean(v)))].sort((a, b) => a.localeCompare(b));
 
   return {
     from: period.from,
@@ -431,93 +350,66 @@ export async function listWorkOrders(
     clamped: period.clamped,
     rows,
     total: matching.length,
-    summary: {
-      workOrders: matching.length,
-      completed: matching.filter((w) => isCompleted(str(w.status))).length,
-      withQuotation: matching.filter((w) => w.fsm_estimate_id).length,
-      value: round2(
-        matching.reduce((sum, w) => sum + (num(w.sub_total) ?? 0), 0),
-      ),
-      linesRead: matching.filter((w) => w.lines_seen_at).length,
-      readyValue: round2(readyValue),
-      invoicedValue: round2(invoicedValue),
-      byStatus,
-    },
-    options: {
-      clients: distinct(all.map((w) => w.company_name)),
-      statuses: distinct(all.map((w) => w.status)),
-    },
-    freshness,
+    summary,
+    options: { clients: distinct(live.rows.map((w) => w.companyName)), coordinators: distinct(live.rows.map((w) => w.ownerName)) },
+    agedAfterDays,
+    fsm: { fetchedAt: live.fetchedAt, calls: live.cached ? 0 : live.calls, cached: live.cached },
     ledgerReady: ledger.ready,
   };
 }
 
-// ---------------------------------------------------------------------
-// Refresh from FSM: lists only
-// ---------------------------------------------------------------------
-
-export class FsmUnavailableError extends Error {}
-
-export type RefreshResult = {
-  skipped: boolean;
-  calls: number;
-  written: number;
-  results: Array<Pick<SyncSummary, "resource" | "status" | "error">>;
-};
-
-/**
- * What changed in FSM since the last sync: work order, quotation and
- * appointment headers. No detail calls. Repeated within a minute it does
- * nothing, so several people pressing Refresh cost one refresh.
- */
-export async function refreshWorkOrderHeaders(
+/** Mean days from a line being marked Ready to the invoice that recorded it, over these work orders. */
+async function daysToInvoice(
   admin: SupabaseClient,
-): Promise<RefreshResult> {
-  if (!financeFsmReadEnabled())
-    throw new FsmUnavailableError(
-      "Reading from Zoho FSM is switched off (FINANCE_FSM_READ).",
-    );
-  const freshness = await readFreshness(admin);
-  const newest = freshness.find(
-    (f) => f.resource === "work_orders",
-  )?.lastSuccessAt;
-  if (newest && Date.now() - Date.parse(newest) < REFRESH_MIN_GAP_MS)
-    return { skipped: true, calls: 0, written: 0, results: [] };
-
-  const token = await getFsmAccessToken(admin);
-  const store = supabaseSyncStore(admin);
-  const out: RefreshResult = {
-    skipped: false,
-    calls: 0,
-    written: 0,
-    results: [],
+  workOrderIds: string[],
+  ledgerReady: boolean,
+): Promise<{ averageDaysToInvoice: number | null; invoices: number }> {
+  if (!ledgerReady || !workOrderIds.length) return { averageDaysToInvoice: null, invoices: 0 };
+  const allocations = await readAllByIds<Record<string, unknown>>(
+    workOrderIds,
+    (chunk, from, to) =>
+      admin
+        .schema("finance")
+        .from("line_invoice_allocations")
+        .select("id, invoice_id, fsm_line_id")
+        .in("fsm_work_order_id", chunk)
+        .order("id")
+        .range(from, to),
+    "allocations",
+  );
+  if (!allocations.length) return { averageDaysToInvoice: null, invoices: 0 };
+  const invoiceIds = [...new Set(allocations.map((a) => String(a.invoice_id)))];
+  const lineIds = [...new Set(allocations.map((a) => String(a.fsm_line_id)))];
+  const [invoices, states] = await Promise.all([
+    readAllByIds<Record<string, unknown>>(
+      invoiceIds,
+      (chunk, from, to) => admin.schema("finance").from("line_invoices").select("id, recorded_at").in("id", chunk).order("id").range(from, to),
+      "invoices",
+    ),
+    readAllByIds<Record<string, unknown>>(
+      lineIds,
+      (chunk, from, to) =>
+        admin.schema("finance").from("line_states").select("fsm_line_id, ready_at").in("fsm_line_id", chunk).order("fsm_line_id").range(from, to),
+      "ready times",
+    ),
+  ]);
+  const recorded = new Map(invoices.map((i) => [String(i.id), Date.parse(String(i.recorded_at))]));
+  const readyAt = new Map(states.map((s) => [String(s.fsm_line_id), s.ready_at ? Date.parse(String(s.ready_at)) : null]));
+  const spans = allocations
+    .map((a) => {
+      const r = readyAt.get(String(a.fsm_line_id));
+      const at = recorded.get(String(a.invoice_id));
+      return r && at ? Math.max(0, (at - r) / DAY_MS) : null;
+    })
+    .filter((v): v is number => v !== null);
+  return {
+    averageDaysToInvoice: spans.length ? Math.round((spans.reduce((a, b) => a + b, 0) / spans.length) * 10) / 10 : null,
+    invoices: invoiceIds.length,
   };
-  for (const resource of [
-    "work_orders",
-    "estimates",
-    "appointments",
-  ] as SyncResource[]) {
-    const reader = createFsmReader({ token, budget: REFRESH_BUDGET });
-    const summary = await runFsmSync({
-      resource,
-      kind: "incremental",
-      reader,
-      store,
-      options: { details: false },
-    });
-    out.calls += summary.counts.calls;
-    out.written += summary.counts.recordsWritten;
-    out.results.push({
-      resource,
-      status: summary.status,
-      error: summary.error,
-    });
-  }
-  return out;
 }
 
 // ---------------------------------------------------------------------
-// One work order, with its lines read from FSM when they are out of date
+// One work order
 // ---------------------------------------------------------------------
 
 export type WorkOrderLine = {
@@ -538,7 +430,6 @@ export type WorkOrderLine = {
   isOptional: boolean;
   actualStart: string | null;
   actualEnd: string | null;
-  /* Invoicing, from the ledger. */
   ready: boolean;
   readyAt: string | null;
   readyBy: string | null;
@@ -555,17 +446,26 @@ export type WorkOrderInvoice = {
   recordedBy: string | null;
   recordedAt: string;
   hasFile: boolean;
-  /** What this invoice covers on this work order. */
-  allocations: Array<{
-    lineId: string;
-    lineName: string | null;
-    amount: number;
-  }>;
+  allocations: Array<{ lineId: string; lineName: string | null; amount: number }>;
 };
+
+export type WorkOrderEventType =
+  | "marked_ready"
+  | "unmarked_ready"
+  | "invoiced"
+  | "picked_up"
+  | "released"
+  | "query_raised"
+  | "query_answered"
+  | "put_on_hold"
+  | "resumed"
+  | "exclusion_requested"
+  | "exclusion_verified"
+  | "exclusion_rejected";
 
 export type WorkOrderEvent = {
   id: number;
-  type: "marked_ready" | "unmarked_ready" | "invoiced";
+  type: WorkOrderEventType;
   lineId: string | null;
   lineName: string | null;
   amount: number | null;
@@ -574,320 +474,159 @@ export type WorkOrderEvent = {
   at: string;
 };
 
+export type WorkOrderExclusion = {
+  id: string;
+  reason: string;
+  notes: string | null;
+  evidence: string[];
+  requestedBy: string | null;
+  requestedAt: string;
+  decision: "verified" | "rejected" | null;
+  decisionNote: string | null;
+  decidedBy: string | null;
+  decidedAt: string | null;
+};
+
 export type WorkOrderDetail = {
-  workOrder: Omit<WorkOrderListRow, "invoicing"> & {
-    workType: string | null;
-    billingStatus: string | null;
-    amcContractRef: string | null;
-    grandTotal: number | null;
-    taxAmount: number | null;
-    modifiedAt: string | null;
-  };
-  quotation:
-    | (WorkOrderQuotation & {
-        grandTotal: number | null;
-        ownerName: string | null;
-        contactName: string | null;
-        expiryDate: string | null;
-      })
-    | null;
-  lines: WorkOrderLine[];
-  appointments: Array<{
+  workOrder: LiveWorkOrder;
+  quotation: {
     id: string;
     number: string | null;
     status: string | null;
-    scheduledStart: string | null;
-    scheduledEnd: string | null;
-    actualStart: string | null;
-    actualEnd: string | null;
-    technicians: Array<{ name: string; lead: boolean }>;
-  }>;
+    subTotal: number | null;
+    grandTotal: number | null;
+    postToMaher: string | null;
+    ownerName: string | null;
+    contactName: string | null;
+    expiryDate: string | null;
+  } | null;
+  lines: WorkOrderLine[];
   invoicing: WorkOrderInvoicing;
+  queueStatus: QueueStatus;
+  workflow: WorkflowStatus;
+  statusSince: string | null;
+  assigneeName: string | null;
+  holdReason: string | null;
+  queryText: string | null;
+  exclusions: WorkOrderExclusion[];
   invoices: WorkOrderInvoice[];
   events: WorkOrderEvent[];
-  /** False until migration 20261024100000 is applied: Ready marks and invoices are off. */
+  /** False until migration 20261024100000 is applied. */
   ledgerReady: boolean;
-  /** When the lines were last read from FSM; null if they could not be. */
-  linesSeenAt: string | null;
-  /** True when this request read the work order from FSM. */
-  readFromFsm: boolean;
-  /** Why FSM could not be read (the copy is shown instead). */
-  fsmError: string | null;
+  /** When FSM was read for this work order. */
+  fetchedAt: string;
+  fromCache: boolean;
 };
-
-async function loadWorkOrderRow(admin: SupabaseClient, id: string) {
-  const { data, error } = await admin
-    .schema("fsm")
-    .from("work_orders")
-    .select("*")
-    .eq("fsm_work_order_id", id)
-    .maybeSingle();
-  if (error) throw new Error(`work order: ${error.message}`);
-  return data as Record<string, unknown> | null;
-}
-
-/** The copy's lines are current when read after the work order's and its appointments' last change. */
-async function linesAreCurrent(
-  admin: SupabaseClient,
-  row: Record<string, unknown>,
-): Promise<boolean> {
-  const seen = str(row.lines_seen_at);
-  if (!seen) return false;
-  const { data, error } = await admin
-    .schema("fsm")
-    .from("appointments")
-    .select("modified_time")
-    .eq("fsm_work_order_id", String(row.fsm_work_order_id))
-    .order("modified_time", { ascending: false })
-    .limit(1);
-  if (error) throw new Error(`appointments: ${error.message}`);
-  const changes = [
-    str(row.modified_time),
-    str(data?.[0]?.modified_time),
-  ].filter((v): v is string => Boolean(v));
-  const lastChange = Math.max(...changes.map((v) => Date.parse(v)));
-  return Date.parse(seen) - DRIFT_MS >= lastChange;
-}
 
 export async function readWorkOrderDetail(
   admin: SupabaseClient,
   id: string,
   options: { refresh?: boolean } = {},
 ): Promise<WorkOrderDetail | null> {
-  let row = await loadWorkOrderRow(admin, id);
-  let readFromFsm = false;
-  let fsmError: string | null = null;
-
-  if (options.refresh || !row || !(await linesAreCurrent(admin, row))) {
-    if (!financeFsmReadEnabled()) {
-      fsmError =
-        "Reading from Zoho FSM is switched off (FINANCE_FSM_READ); showing the last copy.";
-    } else {
-      try {
-        const token = await getFsmAccessToken(admin);
-        const reader = createFsmReader({ token, budget: 2 });
-        const result = await readWorkOrderInFull({
-          workOrderId: id,
-          get: (path) => reader.get(path),
-          store: supabaseSyncStore(admin),
-          now: () => new Date(),
-        });
-        readFromFsm = result.found;
-        if (result.found) row = await loadWorkOrderRow(admin, id);
-        else if (row)
-          fsmError =
-            "This work order is no longer in Zoho FSM; showing the last copy.";
-      } catch (error) {
-        fsmError = `Zoho FSM could not be read (${error instanceof Error ? error.message : "unknown error"}); showing the last copy.`;
-      }
-    }
-  }
-  if (!row) return null;
-
-  const estimateId = str(row.fsm_estimate_id);
-  const [lineRows, estimate, appointmentRows] = await Promise.all([
-    admin
-      .schema("fsm")
-      .from("line_items")
-      .select("*")
-      .eq("fsm_work_order_id", id)
-      .is("removed_at", null)
-      .order("sequence", { ascending: true }),
-    estimateId
-      ? admin
-          .schema("fsm")
-          .from("estimates")
-          .select(
-            "fsm_estimate_id, number, status, sub_total, grand_total, post_to_maher, owner_name, contact_name, expiry_date",
-          )
-          .eq("fsm_estimate_id", estimateId)
-          .maybeSingle()
-      : Promise.resolve({ data: null, error: null }),
-    admin
-      .schema("fsm")
-      .from("appointments")
-      .select(
-        "fsm_appointment_id, number, status, scheduled_start, scheduled_end, actual_start, actual_end",
-      )
-      .eq("fsm_work_order_id", id)
-      .order("scheduled_start", { ascending: true }),
+  const live = await fetchWorkOrderLive(admin, id, { refresh: options.refresh });
+  if (!live) return null;
+  if (options.refresh) forgetLists();
+  const wo = live.workOrder;
+  const [estimate, ledger] = await Promise.all([
+    wo.estimateId ? fetchEstimateLive(admin, wo.estimateId, { refresh: options.refresh }).catch(() => null) : Promise.resolve(null),
+    loadLedger(admin, [id]),
   ]);
-  for (const result of [lineRows, estimate, appointmentRows])
-    if (result.error) throw new Error(result.error.message);
+  const stateOf = new Map(ledger.states.map((s) => [s.lineId, s]));
 
-  /* Who attended: each appointment's crew, by name from the roster. */
-  const apptIds = (appointmentRows.data ?? []).map((a) =>
-    String(a.fsm_appointment_id),
-  );
-  const crew = apptIds.length
-    ? ((
-        await admin
-          .schema("fsm")
-          .from("appointment_resources")
-          .select("fsm_appointment_id, technician_fsm_id, is_lead")
-          .in("fsm_appointment_id", apptIds)
-      ).data ?? [])
-    : [];
-  const techIds = [...new Set(crew.map((c) => String(c.technician_fsm_id)))];
-  const names = new Map<string, string>();
-  if (techIds.length) {
-    const { data } = await admin
-      .from("technician_reference")
-      .select("fsm_resource_id, display_name")
-      .in("fsm_resource_id", techIds);
-    for (const t of data ?? [])
-      names.set(
-        String(t.fsm_resource_id),
-        String(t.display_name ?? t.fsm_resource_id),
-      );
-  }
-
-  const ledger = await loadLineStates(admin, [id]);
-  const lines: WorkOrderLine[] = (lineRows.data ?? []).map((l) => {
-    const state = ledger.states.get(String(l.fsm_line_id));
-    const amount = num(l.amount);
-    const ls: LineState = {
-      amount,
-      ready: state?.ready ?? false,
-      invoicedAmount: state?.invoiced_amount ?? 0,
-    };
+  const lines: WorkOrderLine[] = live.lines.map((l) => {
+    const state = stateOf.get(String(l.fsm_line_id));
+    const ls: LineState = { amount: l.amount, ready: state?.ready ?? false, invoicedAmount: state?.invoicedAmount ?? 0 };
     return {
       id: String(l.fsm_line_id),
-      name: str(l.name),
-      description: str(l.description),
-      quantity: num(l.quantity),
-      unit: str(l.unit),
-      unitPrice: num(l.unit_price),
-      discount: num(l.discount),
-      amount: num(l.amount),
-      lineAmount: num(l.line_amount),
-      taxPercent: num(l.tax_percent),
-      status: str(l.status),
-      sequence: num(l.sequence),
+      name: l.name,
+      description: l.description,
+      quantity: l.quantity,
+      unit: l.unit,
+      unitPrice: l.unit_price,
+      discount: l.discount,
+      amount: l.amount,
+      lineAmount: l.line_amount,
+      taxPercent: l.tax_percent,
+      status: l.status,
+      sequence: l.sequence,
       isOptional: Boolean(l.is_optional),
-      actualStart: str(l.actual_start),
-      actualEnd: str(l.actual_end),
+      actualStart: l.actual_start,
+      actualEnd: l.actual_end,
       ready: ls.ready,
-      readyAt: state?.ready_at ?? null,
-      readyBy: state?.ready_by_label ?? null,
+      readyAt: state?.readyAt ?? null,
+      readyBy: state?.readyBy ?? null,
       invoicedAmount: ls.invoicedAmount,
       remaining: lineRemaining(ls),
       invoiceStatus: lineStatus(ls),
     };
   });
-  const seenAt = str(row.lines_seen_at);
-  const { invoices, events } = ledger.ready
-    ? await loadInvoicesAndEvents(admin, id, lines)
-    : { invoices: [], events: [] };
-  const e = estimate.data as Record<string, unknown> | null;
+
+  const flow = ledger.workflow.get(id);
+  const workflow: WorkflowStatus = flow?.status ?? "open";
+  const invoicing = workOrderInvoicing(lines);
+  const status = queueStatus(workflow, invoicing.status);
+  const firstReady = lines.map((l) => l.readyAt).filter((v): v is string => Boolean(v)).sort()[0] ?? null;
+  const extra = ledger.ready ? await loadInvoicesHistoryExclusions(admin, id, lines) : { invoices: [], events: [], exclusions: [] };
 
   return {
-    workOrder: {
-      id,
-      number: str(row.number),
-      status: str(row.status),
-      type: str(row.type),
-      workType: str(row.work_type),
-      billingStatus: str(row.billing_status),
-      amcContractRef: str(row.amc_contract_ref),
-      clientName: str(row.company_name),
-      contactName: str(row.contact_name),
-      createdAt: str(row.created_in_fsm_at),
-      completedAt: str(row.completed_at),
-      modifiedAt: str(row.modified_time),
-      value: num(row.sub_total),
-      grandTotal: num(row.grand_total),
-      taxAmount: num(row.tax_amount),
-      quotation: null,
-      lines: seenAt
-        ? {
-            count: lines.length,
-            completed: lines.filter((l) => l.status === "Completed").length,
-            value: round2(lines.reduce((s, l) => s + (l.amount ?? 0), 0)),
-            seenAt,
-          }
-        : null,
-    },
-    quotation: e
+    workOrder: wo,
+    quotation: estimate
       ? {
-          id: String(e.fsm_estimate_id),
-          number: str(e.number),
-          status: str(e.status),
-          subTotal: num(e.sub_total),
-          grandTotal: num(e.grand_total),
-          postToMaher: str(e.post_to_maher),
-          ownerName: str(e.owner_name),
-          contactName: str(e.contact_name),
-          expiryDate: str(e.expiry_date),
+          id: String(estimate.fsm_estimate_id),
+          number: estimate.number,
+          status: estimate.status,
+          subTotal: estimate.sub_total,
+          grandTotal: estimate.grand_total,
+          postToMaher: estimate.post_to_maher,
+          ownerName: estimate.owner_name,
+          contactName: estimate.contact_name,
+          expiryDate: estimate.expiry_date,
         }
-      : null,
+      : wo.estimateId
+        ? { id: wo.estimateId, number: wo.estimateNumber, status: null, subTotal: null, grandTotal: null, postToMaher: null, ownerName: null, contactName: null, expiryDate: null }
+        : null,
     lines,
-    appointments: (appointmentRows.data ?? []).map((a) => ({
-      id: String(a.fsm_appointment_id),
-      number: str(a.number),
-      status: str(a.status),
-      scheduledStart: str(a.scheduled_start),
-      scheduledEnd: str(a.scheduled_end),
-      actualStart: str(a.actual_start),
-      actualEnd: str(a.actual_end),
-      technicians: crew
-        .filter((c) => c.fsm_appointment_id === a.fsm_appointment_id)
-        .sort((x, y) => Number(y.is_lead) - Number(x.is_lead))
-        .map((c) => ({
-          name: names.get(String(c.technician_fsm_id)) ?? "Unknown technician",
-          lead: Boolean(c.is_lead),
-        })),
-    })),
-    invoicing: workOrderInvoicing(lines),
-    invoices,
-    events,
+    invoicing,
+    queueStatus: status,
+    workflow,
+    statusSince: workflow !== "open" && flow ? flow.statusChangedAt : (firstReady ?? wo.createdAt),
+    assigneeName: flow?.assignee ?? null,
+    holdReason: flow?.holdReason ?? null,
+    queryText: flow?.queryText ?? null,
+    ...extra,
     ledgerReady: ledger.ready,
-    linesSeenAt: seenAt,
-    readFromFsm,
-    fsmError,
+    fetchedAt: live.fetchedAt,
+    fromCache: live.cached,
   };
 }
 
-/** The invoices recorded against this work order's lines, and its invoicing history. */
-async function loadInvoicesAndEvents(
-  admin: SupabaseClient,
-  workOrderId: string,
-  lines: WorkOrderLine[],
-): Promise<{ invoices: WorkOrderInvoice[]; events: WorkOrderEvent[] }> {
+async function loadInvoicesHistoryExclusions(admin: SupabaseClient, workOrderId: string, lines: WorkOrderLine[]) {
   const names = new Map(lines.map((l) => [l.id, l.name]));
   const fin = admin.schema("finance");
-  const [allocations, events] = await Promise.all([
-    fin
-      .from("line_invoice_allocations")
-      .select("invoice_id, fsm_line_id, amount")
-      .eq("fsm_work_order_id", workOrderId)
-      .order("id"),
+  const [allocations, events, exclusions, states] = await Promise.all([
+    fin.from("line_invoice_allocations").select("invoice_id, fsm_line_id, amount").eq("fsm_work_order_id", workOrderId).order("id"),
     fin
       .from("line_events")
-      .select(
-        "id, event_type, fsm_line_id, amount, actor_label, note, created_at",
-      )
+      .select("id, event_type, fsm_line_id, amount, actor_label, note, created_at")
       .eq("fsm_work_order_id", workOrderId)
       .order("created_at", { ascending: false })
       .limit(200),
+    fin
+      .from("wo_exclusions")
+      .select("id, reason, notes, evidence, requested_by_label, requested_at, decision, decision_note, decided_by_label, decided_at")
+      .eq("fsm_work_order_id", workOrderId)
+      .order("requested_at", { ascending: true }),
+    fin.from("line_states").select("fsm_line_id, name").eq("fsm_work_order_id", workOrderId),
   ]);
-  if (allocations.error)
-    throw new Error(`allocations: ${allocations.error.message}`);
-  if (events.error)
-    throw new Error(`invoicing history: ${events.error.message}`);
+  for (const r of [allocations, events, exclusions, states]) if (r.error) throw new Error(r.error.message);
+  /* A line FSM no longer lists keeps the name it had. */
+  for (const s of states.data ?? []) if (!names.has(String(s.fsm_line_id))) names.set(String(s.fsm_line_id), str(s.name));
 
-  const invoiceIds = [
-    ...new Set((allocations.data ?? []).map((a) => String(a.invoice_id))),
-  ];
+  const invoiceIds = [...new Set((allocations.data ?? []).map((a) => String(a.invoice_id)))];
   const headers = invoiceIds.length
-    ? await fin
-        .from("line_invoices")
-        .select(
-          "id, maher_invoice_number, invoice_date, total_amount, recorded_by_label, recorded_at, file_path",
-        )
-        .in("id", invoiceIds)
+    ? await fin.from("line_invoices").select("id, maher_invoice_number, invoice_date, total_amount, recorded_by_label, recorded_at, file_path").in("id", invoiceIds)
     : { data: [], error: null };
-  if (headers.error) throw new Error(`invoices: ${headers.error.message}`);
+  if (headers.error) throw new Error(headers.error.message);
 
   const invoices: WorkOrderInvoice[] = (headers.data ?? [])
     .map((h) => ({
@@ -900,11 +639,7 @@ async function loadInvoicesAndEvents(
       hasFile: Boolean(h.file_path),
       allocations: (allocations.data ?? [])
         .filter((a) => String(a.invoice_id) === String(h.id))
-        .map((a) => ({
-          lineId: String(a.fsm_line_id),
-          lineName: names.get(String(a.fsm_line_id)) ?? null,
-          amount: Number(a.amount),
-        })),
+        .map((a) => ({ lineId: String(a.fsm_line_id), lineName: names.get(String(a.fsm_line_id)) ?? null, amount: Number(a.amount) })),
     }))
     .sort((a, b) => b.recordedAt.localeCompare(a.recordedAt));
 
@@ -912,21 +647,31 @@ async function loadInvoicesAndEvents(
     invoices,
     events: (events.data ?? []).map((e) => ({
       id: Number(e.id),
-      type: e.event_type as WorkOrderEvent["type"],
+      type: e.event_type as WorkOrderEventType,
       lineId: str(e.fsm_line_id),
-      lineName: e.fsm_line_id
-        ? (names.get(String(e.fsm_line_id)) ?? null)
-        : null,
-      amount: num(e.amount),
+      lineName: e.fsm_line_id ? (names.get(String(e.fsm_line_id)) ?? null) : null,
+      amount: e.amount === null ? null : Number(e.amount),
       actor: str(e.actor_label),
       note: str(e.note),
       at: String(e.created_at),
+    })),
+    exclusions: (exclusions.data ?? []).map((x) => ({
+      id: String(x.id),
+      reason: String(x.reason),
+      notes: str(x.notes),
+      evidence: (x.evidence as string[] | null) ?? [],
+      requestedBy: str(x.requested_by_label),
+      requestedAt: String(x.requested_at),
+      decision: (x.decision as "verified" | "rejected" | null) ?? null,
+      decisionNote: str(x.decision_note),
+      decidedBy: str(x.decided_by_label),
+      decidedAt: str(x.decided_at),
     })),
   };
 }
 
 // ---------------------------------------------------------------------
-// Actions: Ready to invoice, and recording a MAHER invoice
+// Actions
 // ---------------------------------------------------------------------
 
 export class InvoicingError extends Error {
@@ -938,24 +683,30 @@ export class InvoicingError extends Error {
   }
 }
 
-function invoicingError(
-  error: { code?: string; message: string },
-  fn: string,
-): never {
+function invoicingError(error: { code?: string; message: string }, fn: string): never {
   const message = error.message.replace(new RegExp(`^${fn}: `), "");
-  if (error.code === "23514") throw new InvoicingError(message, 409);
-  if (error.code === "23505") throw new InvoicingError(message, 409);
-  if (ledgerMissing(error))
-    throw new InvoicingError(
-      "Invoicing needs migration 20261024100000 to be applied first.",
-      409,
-    );
+  if (error.code === "23514" || error.code === "23505") throw new InvoicingError(message, 409);
+  if (error.code === "40001") throw new InvoicingError(`${message}. Reload to see the latest.`, 409);
+  if (error.code === "P0002") throw new InvoicingError(message, 404);
+  if (ledgerMissing(error)) throw new InvoicingError("Ready to invoice needs migration 20261024100000 to be applied first.", 409);
   throw new Error(error.message);
+}
+
+/** The work order as FSM has it now (from the last ten minutes' read, or a new one). */
+async function liveOrFail(admin: SupabaseClient, workOrderId: string) {
+  try {
+    const live = await fetchWorkOrderLive(admin, workOrderId);
+    if (!live) throw new InvoicingError("This work order is not in Zoho FSM any more.", 404);
+    return live;
+  } catch (error) {
+    if (error instanceof FsmLiveError) throw new InvoicingError(error.message, error.status);
+    throw error;
+  }
 }
 
 export const readyRequestSchema = z
   .object({
-    /** The lines to mark; left out, every current line of the work order. */
+    /** The lines to mark; left out, every line of the work order. */
     lines: z.array(z.string().min(1).max(40)).max(500).optional(),
     ready: z.boolean(),
     note: z.string().trim().max(1000).nullish(),
@@ -968,25 +719,15 @@ export async function setLinesReady(
   input: z.infer<typeof readyRequestSchema>,
   actor: { id: string; label: string },
 ): Promise<number> {
-  let lines = input.lines;
-  if (!lines?.length) {
-    const { data, error } = await admin
-      .schema("fsm")
-      .from("line_items")
-      .select("fsm_line_id")
-      .eq("fsm_work_order_id", workOrderId)
-      .is("removed_at", null);
-    if (error) throw new Error(error.message);
-    lines = (data ?? []).map((l) => String(l.fsm_line_id));
-    if (!lines.length)
-      throw new InvoicingError(
-        "This work order has no line items read from FSM yet.",
-        409,
-      );
-  }
+  const live = await liveOrFail(admin, workOrderId);
+  const wanted = input.lines?.length ? new Set(input.lines) : null;
+  const lines = live.lines.filter((l) => !wanted || wanted.has(String(l.fsm_line_id)));
+  if (!lines.length) throw new InvoicingError("This work order has no line items in FSM.", 409);
+  if (wanted && lines.length !== wanted.size) throw new InvoicingError("Some of these lines are not on the work order in FSM any more. Refresh.", 409);
   const { data, error } = await admin.schema("finance").rpc("set_lines_ready", {
     p_work_order_id: workOrderId,
-    p_lines: lines,
+    p_work_order_number: live.workOrder.number,
+    p_lines: lines.map((l) => ({ id: l.fsm_line_id, name: l.name, amount: Math.max(0, l.amount ?? 0) })),
     p_ready: input.ready,
     p_actor: actor.id,
     p_actor_label: actor.label,
@@ -1009,13 +750,14 @@ export const invoiceRequestSchema = z
         z
           .object({
             line: z.string().min(1).max(40),
+            workOrder: z.string().regex(/^[0-9A-Za-z_-]{1,40}$/),
             amount: z.number().positive().max(100_000_000),
           })
           .strict(),
       )
       .min(1)
       .max(500),
-    /** Set by the upload (P-C): the stored file and what the scan read. */
+    /** Set by the upload: the stored file and what the scan read. */
     filePath: z
       .string()
       .max(500)
@@ -1030,23 +772,104 @@ export async function recordLineInvoice(
   input: z.infer<typeof invoiceRequestSchema>,
   actor: { id: string; label: string },
 ): Promise<string> {
-  const { data, error } = await admin
-    .schema("finance")
-    .rpc("record_line_invoice", {
-      p_key: input.idempotencyKey,
-      p_number: input.number,
-      p_date: input.date,
-      p_total: input.total,
-      p_allocations: input.allocations.map((a) => ({
-        line: a.line,
-        amount: Math.round(a.amount * 100) / 100,
-      })),
-      p_actor: actor.id,
-      p_actor_label: actor.label,
-      p_note: input.note ?? null,
-      p_file_path: input.filePath ?? null,
-      p_scan: input.scan ?? null,
-    });
+  /* Every line as FSM has it now, so no line is invoiced beyond its current amount. */
+  const byWorkOrder = new Map<string, Awaited<ReturnType<typeof liveOrFail>>>();
+  for (const workOrder of new Set(input.allocations.map((a) => a.workOrder))) byWorkOrder.set(workOrder, await liveOrFail(admin, workOrder));
+  const allocations = input.allocations.map((a) => {
+    const live = byWorkOrder.get(a.workOrder)!;
+    const line = live.lines.find((l) => l.fsm_line_id === a.line);
+    if (!line) throw new InvoicingError(`A line is no longer on ${live.workOrder.number ?? "the work order"} in FSM. Refresh and try again.`, 409);
+    return {
+      line: a.line,
+      amount: round2(a.amount),
+      work_order: a.workOrder,
+      work_order_number: live.workOrder.number,
+      name: line.name,
+      line_amount: Math.max(0, line.amount ?? 0),
+    };
+  });
+  const { data, error } = await admin.schema("finance").rpc("record_line_invoice", {
+    p_key: input.idempotencyKey,
+    p_number: input.number,
+    p_date: input.date,
+    p_total: input.total,
+    p_allocations: allocations,
+    p_actor: actor.id,
+    p_actor_label: actor.label,
+    p_note: input.note ?? null,
+    p_file_path: input.filePath ?? null,
+    p_scan: input.scan ?? null,
+  });
   if (error) invoicingError(error, "record_line_invoice");
   return String(data);
+}
+
+export const WORKFLOW_ACTIONS = ["pick_up", "release", "raise_query", "answer_query", "put_on_hold", "resume"] as const;
+export type WorkflowAction = (typeof WORKFLOW_ACTIONS)[number];
+
+export const actionRequestSchema = z
+  .object({
+    action: z.enum(WORKFLOW_ACTIONS),
+    /** The workflow status the person was looking at. */
+    expectedStatus: z.enum(["open", "in_progress", "query_raised", "on_hold", "excluded"]),
+    note: z.string().trim().max(2000).nullish(),
+  })
+  .strict();
+
+export async function applyWorkOrderAction(
+  admin: SupabaseClient,
+  workOrderId: string,
+  input: z.infer<typeof actionRequestSchema>,
+  actor: { id: string; label: string },
+): Promise<{ status: WorkflowStatus; workOrderNumber: string | null }> {
+  const live = await liveOrFail(admin, workOrderId);
+  const { data, error } = await admin.schema("finance").rpc("wo_apply_action", {
+    p_work_order_id: workOrderId,
+    p_action: input.action,
+    p_expected: input.expectedStatus,
+    p_actor: actor.id,
+    p_actor_label: actor.label,
+    p_note: input.note ?? null,
+    p_work_order_number: live.workOrder.number,
+  });
+  if (error) invoicingError(error, "wo_apply_action");
+  return { status: data as WorkflowStatus, workOrderNumber: live.workOrder.number };
+}
+
+export async function requestWorkOrderExclusion(
+  admin: SupabaseClient,
+  workOrderId: string,
+  input: { reason: string; notes?: string | null; evidence?: string[] },
+  actor: { id: string; label: string },
+): Promise<{ exclusionId: string; workOrderNumber: string | null; value: number }> {
+  const live = await liveOrFail(admin, workOrderId);
+  const { data, error } = await admin.schema("finance").rpc("request_wo_exclusion", {
+    p_work_order_id: workOrderId,
+    p_reason: input.reason,
+    p_notes: input.notes ?? null,
+    p_evidence: input.evidence ?? [],
+    p_actor: actor.id,
+    p_actor_label: actor.label,
+    p_work_order_number: live.workOrder.number,
+  });
+  if (error) invoicingError(error, "request_wo_exclusion");
+  return { exclusionId: String(data), workOrderNumber: live.workOrder.number, value: live.workOrder.subTotal ?? 0 };
+}
+
+export async function decideWorkOrderExclusion(
+  admin: SupabaseClient,
+  exclusionId: string,
+  input: { decision: "verified" | "rejected"; note?: string | null },
+  actor: { id: string; label: string },
+): Promise<{ status: WorkflowStatus; workOrderId: string | null }> {
+  const { data, error } = await admin.schema("finance").rpc("decide_wo_exclusion", {
+    p_exclusion_id: exclusionId,
+    p_decision: input.decision,
+    p_note: input.note ?? null,
+    p_actor: actor.id,
+    p_actor_label: actor.label,
+  });
+  if (error) invoicingError(error, "decide_wo_exclusion");
+  const { data: row } = await admin.schema("finance").from("wo_exclusions").select("fsm_work_order_id").eq("id", exclusionId).maybeSingle();
+  return { status: data as WorkflowStatus, workOrderId: (row?.fsm_work_order_id as string | undefined) ?? null };
 }

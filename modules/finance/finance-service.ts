@@ -3,7 +3,7 @@ import type { PeriodMetrics, QueueMetrics, QueueSummary } from "@/lib/finance/me
 import type { QueueAction, QueueStatus } from "@/lib/server/finance/queue";
 import type { QueueItemDetail, QueueRow } from "@/lib/server/finance/queue-read";
 import type { ScanProposal } from "@/lib/server/finance/invoice-scan";
-import type { RefreshResult, WorkOrderDetail } from "@/lib/server/finance/work-orders";
+import type { WorkOrderDetail } from "@/lib/server/finance/work-orders";
 
 export type QueueListFilters = {
   statuses: QueueStatus[];
@@ -44,11 +44,7 @@ export const financeService = {
     return executeRESTBackend<QueueListResponse>("/api/finance/queue", { params, signal });
   },
 
-  /** Reads what changed in FSM (headers only); the list reloads after. */
-  refreshWorkOrders: () =>
-    executeRESTBackend<{ data: RefreshResult }>("/api/finance/work-orders/refresh", { method: "POST" }).then((r) => r.data),
-
-  /** One work order with its lines re-read from FSM (one call). */
+  /** One work order read again from Zoho FSM (one or two calls). */
   refreshWorkOrder: (id: string) =>
     executeRESTBackend<{ data: WorkOrderDetail }>(`/api/finance/work-orders/${id}`, { params: { refresh: "1" } }).then((r) => r.data),
 
@@ -63,7 +59,7 @@ export const financeService = {
     date: string;
     total: number;
     note?: string | null;
-    allocations: Array<{ line: string; amount: number }>;
+    allocations: Array<{ line: string; workOrder: string; amount: number }>;
     filePath?: string | null;
     scan?: Record<string, unknown> | null;
   }) => executeRESTBackend<{ invoiceId: string }>("/api/finance/invoices", { method: "POST", body: input }),
@@ -75,6 +71,27 @@ export const financeService = {
   /** Reads the uploaded invoice and proposes the lines it covers; records nothing. */
   scanInvoice: (input: { path: string; workOrderId?: string | null }) =>
     executeRESTBackend<ScanProposal>("/api/finance/invoices/scan", { method: "POST", body: input }),
+
+  /** Ready to invoice: pick up, release, query, hold, resume, answer a query. */
+  workOrderAction: (
+    id: string,
+    input: { action: "pick_up" | "release" | "raise_query" | "answer_query" | "put_on_hold" | "resume"; expectedStatus: string; note?: string | null },
+  ) => executeRESTBackend<{ status: string }>(`/api/finance/work-orders/${id}/action`, { method: "POST", body: input }),
+
+  /** A work order marked not to be invoiced, for verification. */
+  requestWorkOrderExclusion: (id: string, input: { reason: string; notes?: string | null; evidence?: string[] }) =>
+    executeRESTBackend<{ exclusionId: string }>(`/api/finance/work-orders/${id}/exclusion`, { method: "POST", body: input }),
+
+  decideWorkOrderExclusion: (exclusionId: string, input: { decision: "verified" | "rejected"; note?: string | null }) =>
+    executeRESTBackend<{ status: string }>(`/api/finance/work-orders/exclusions/${exclusionId}/decision`, { method: "POST", body: input }),
+
+  signWorkOrderEvidenceUpload: (id: string, input: { fileName: string; contentType: string; size: number }) =>
+    executeRESTBackend<{ path: string; signedUrl: string; contentType: string }>(`/api/finance/work-orders/${id}/evidence`, {
+      method: "POST",
+      body: input,
+    }),
+
+  workOrderEvidenceUrl: (id: string, path: string) => `/api/finance/work-orders/${id}/evidence?path=${encodeURIComponent(path)}`,
 
   getItem: (id: string) => executeRESTBackend<QueueItemResponse>(`/api/finance/queue/${id}`),
 

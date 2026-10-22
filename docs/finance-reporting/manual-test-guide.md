@@ -277,27 +277,32 @@ are not inherited by administrators, so tick them for whoever should hold them.
 | 5c.6 | Turn the setting back off | The report returns to the state in 5c.1; waivers stay on record |
 | 5c.7 | **Reports → Daily attendance** | Note that check-ins are not available; days show shift, leave (with type), holidays, rest days and *Work in FSM* (first job start to last job end); *Late* and *Absent* cards show "—". **Monthly summary** tab per technician |
 
-## 5d. Invoicing by work order (22 Oct)
+## 5d. Ready to invoice, live from Zoho FSM (22 Oct)
 
-Apply migration `20261024100000` first (migration log, row 11). Before it the screens load but say Ready
-marks and invoices are off.
+Needs `FINANCE_FSM_READ=on` in `.env.local` (restart the dev server) and migration `20261024100000` (migration
+log, row 11). Before the migration the screens load but say Ready marks, workflow and invoices are off.
 
 | # | Do | Expect |
 |---|---|---|
-| 5d.1 | **Finance → Work orders** | The last 30 days of work orders from the FSM copy; cards for value, ready to invoice, partially invoiced, invoiced; "FSM … updated" line |
+| 5d.1 | **Finance → Ready to invoice** (there is no Work orders menu) | Work orders raised in the last 30 days, read from Zoho FSM; "read from Zoho FSM … ago" line; cards Pending, In progress, On hold, Excluded value, Average days to invoice. *Awaiting action* is empty until something is marked ready; choose *All statuses* to see every work order |
 | 5d.2 | Change the dates to January | Cut back to four months, with a note |
-| 5d.3 | **Refresh** | A toast with the changes and calls used (a few); pressing again within a minute says "already up to date" |
-| 5d.4 | Open a work order, go Back, open it again | Back is instant and keeps the filters; the second opening does not reload |
-| 5d.5 | **Refresh from FSM** on the work order | "Read from Zoho FSM"; the "Line items read …" line shows now |
-| 5d.6 | Tick one line → **Mark ready** | Its Invoicing shows *Ready to invoice* by you; the History tab has a row; the list's *Ready to invoice* card grows |
+| 5d.3 | **Refresh** | A toast with the FSM calls used (2 to 4 for 30 days); the "read … ago" line resets |
+| 5d.4 | Open a work order, go Back, open it again | Back is instant and keeps the filters; the second opening does not read FSM again |
+| 5d.5 | **Refresh** (circular arrow) on the work order | "Read from Zoho FSM"; the footer shows the new time |
+| 5d.6 | Tick one line → **Mark ready** | Its Invoicing shows *Ready to invoice* by you; History has a row; the work order is *Pending* in the list |
 | 5d.7 | **Mark work order ready** | All lines ready (the confirm says how many are not completed in FSM) |
-| 5d.8 | **Record invoice**: a TEST- number, 50 % of one line | That line is *Partially invoiced* with the amount left; the work order is *Partially invoiced*; the Invoices tab lists it |
-| 5d.9 | Record the rest of that line on a second invoice; try the first number again | Line *Invoiced*; the repeated MAHER number is refused |
-| 5d.10 | Try more than the amount left | Refused before sending, and by the database if forced |
-
-| 5d.11 | Without `OPENAI_API_KEY`: **Upload invoice** | "Invoice scanning is not set up yet"; nothing is uploaded |
-| 5d.12 | With the key in `.env.local` (restart the dev server): upload a MAHER PDF | "Reading the invoice", then a review: lines matched with *Strong match / Likely / Check*, amounts editable, unmatched lines listed, any work order not in the portal named |
-| 5d.13 | Correct an amount, add a line, **Confirm and record** | Recorded like 5d.8; the Invoices tab shows "invoice file attached" |
+| 5d.8 | **Pick up**, then **Raise query** with a question | *In progress* with you as assignee, then *Query raised* with the question in the band; coordinators notified (dev redirect) |
+| 5d.9 | As a coordinator: **Answer query** | Back to where it was before the query |
+| 5d.10 | **Put on hold** with a reason, then **Resume** | *On hold* with the reason, then back |
+| 5d.11 | **Record invoice**: a TEST- number, 50 % of one line | That line is *Partially invoiced* with the amount left; the work order is *Partially invoiced*; the Invoices tab lists it |
+| 5d.12 | Record the rest on a second invoice; try the first number again | Line *Invoiced*; the repeated MAHER number is refused |
+| 5d.13 | Try more than the amount left | Refused before sending, and by the database if forced |
+| 5d.14 | On another work order: **Mark not invoiceable** with a reason and a file | Band "waiting for verification" with the file; invoicing is blocked |
+| 5d.15 | As Finance verifier: **Verify exclusion** (or **Reject** with a note) | *Excluded*, counted in Excluded value; or back as it was |
+| 5d.16 | Without `OPENAI_API_KEY`: **Upload invoice** | "Invoice scanning is not set up yet"; nothing is uploaded |
+| 5d.17 | With the key: upload a MAHER PDF | "Reading the invoice", then a review: lines matched with *Strong match / Likely / Check*, amounts editable, unmatched lines listed |
+| 5d.18 | Correct an amount, **Confirm and record** | Recorded like 5d.11; the Invoices tab shows "invoice file attached" |
+| 5d.19 | Open an old queue item from a notification or metrics link | The earlier item page still opens |
 
 Invoices and history are append-only records, like the rest of Finance: use `TEST-` numbers.
 

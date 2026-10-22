@@ -1,6 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import type { QueueStatus } from "@/lib/server/finance/queue";
-import { INVOICE_STATUS_LABELS, type InvoiceStatus } from "@/lib/finance/line-status";
+import { INVOICE_STATUS_LABELS, QUEUE_STATUS_LABELS as WORK_ORDER_QUEUE_LABELS, type InvoiceStatus, type QueueStatus as WorkOrderQueueStatus } from "@/lib/finance/line-status";
 import { CHART_COLOR } from "@/lib/snagging/chart-palette";
 import { cn } from "@/lib/utils";
 
@@ -102,6 +102,26 @@ export function InvoiceStatusBadge({ status }: { status: InvoiceStatus }) {
   return (
     <Badge variant="secondary" className={cn("border-0 font-medium whitespace-nowrap", INVOICE_STATUS_STYLES[status])}>
       {INVOICE_STATUS_LABELS[status]}
+    </Badge>
+  );
+}
+
+/* Ready to invoice by work order: the queue's tints, plus Not ready (grey) and Partially invoiced (amber). */
+const WORK_ORDER_QUEUE_STYLES: Record<WorkOrderQueueStatus, string> = {
+  not_ready: "bg-mist text-ink-soft",
+  pending: "bg-mist text-ink-soft",
+  in_progress: "bg-brand-50 text-brand",
+  query_raised: "bg-warning/10 text-warning",
+  on_hold: "bg-warning/10 text-warning",
+  partially_invoiced: "bg-warning/10 text-warning",
+  invoiced: "bg-success/10 text-success",
+  excluded: "bg-mist text-ink-soft",
+};
+
+export function WorkOrderQueueBadge({ status }: { status: WorkOrderQueueStatus }) {
+  return (
+    <Badge variant="secondary" className={cn("border-0 font-medium whitespace-nowrap", WORK_ORDER_QUEUE_STYLES[status])}>
+      {WORK_ORDER_QUEUE_LABELS[status]}
     </Badge>
   );
 }

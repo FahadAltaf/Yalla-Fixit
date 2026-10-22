@@ -242,31 +242,38 @@ next phase).
 - **Risks**: employee penalties; HR and legal confirmation outstanding (D-11). Penalties are calculated and
   reported only.
 
-## Invoicing by work order (22 Oct, the user's direction) · **A, B and C built**
+## Invoicing by work order (22 Oct, the user's direction) · **A, B and C built, live from FSM**
 
-The user redirected invoicing: Finance works from FSM work orders and their line items, marks work Ready to
-invoice in the portal (a whole work order or single lines), and records MAHER invoices against lines in full
-or in part. This replaces the queue-item model for new work (the six test items stay in the database).
+The user redirected invoicing: Ready to invoice works from FSM work orders and their line items read **live
+from Zoho FSM** (no copy in Supabase for this screen, and no separate Work orders menu). Finance marks work
+Ready to invoice in the portal (a whole work order or single lines), works it like the queue did (pick up,
+query, hold, resume, release; not to be invoiced with evidence, verified by Finance), and records MAHER
+invoices against lines in full or in part. Only the portal's own decisions are stored. The six test items of
+the earlier queue stay in the database and still open from their old links.
 
-- **A, loading and caching (built)**: Finance → Work orders lists the copy's work orders raised in the chosen
-  dates (default 30 days, at most 4 months back). Refresh reads FSM's work order, quotation and appointment
-  lists for what changed (headers only: a new `details: false` sync mode, a page or two of calls). A work
-  order's line items are read when it is opened, one call, and only if the copy is older than the work
-  order's or its appointments' last change; Refresh on the work order re-reads it. Pages are cached by URL
-  (the overview's section cache), so Back and reopening cost nothing; the list's filters live in the URL.
-  First 30 days: 379 work orders, all with lines already in the copy, so no first-load calls were needed.
+- **A, loading and caching (built)**: Finance → Ready to invoice reads `GET /Work_Orders` newest first, 200 a
+  page, until the page is older than the chosen start (default the last 30 days, at most 4 months back): about
+  2 to 4 calls for 30 days. The list holds no line items (FSM never returns them in lists). Opening a work
+  order reads `GET /Work_Orders/{id}` (its lines) and, if it has one, `GET /Estimates/{id}`: 1 or 2 calls.
+  Both are kept ten minutes on the server and in the browser by URL, so Back and reopening cost nothing; the
+  filters live in the URL; Refresh on the list or the work order reads FSM again and shows when it was read.
+  Appointments are not readable per work order (`/Work_Orders/{id}/Service_Appointments` is not a module and
+  appointment search is refused), so Delivery shows FSM's completion and a link to open the work order in FSM.
 - **B, ledger (built)**: migration `20261024100000` (`finance.line_states`, `line_invoices`,
-  `line_invoice_allocations`, `line_events`; `set_lines_ready`, `record_line_invoice`). Line status: Not ready,
-  Ready, Partially invoiced, Invoiced; work order rolls up the same. Mark ready (Finance queue Edit or a
-  coordinator), record invoice (Finance queue Approve) with amount or % per line. 19 database checks.
+  `line_invoice_allocations`, `work_order_states`, `wo_exclusions`, `line_events`; `set_lines_ready`,
+  `record_line_invoice`, `wo_apply_action`, `request_wo_exclusion`, `decide_wo_exclusion`). The line's name and
+  value are snapshotted from the live read when it is marked or invoiced; no function reads the FSM copy.
+  Line status: Not ready, Ready, Partially invoiced, Invoiced. Work order status: Excluded, Invoiced, Query
+  raised, On hold, In progress, Partially invoiced, Pending (ready), Not ready. Mark ready (Finance queue Edit
+  or a coordinator), record invoice (Finance queue Approve) with amount or % per line.
 - **C, upload and AI scan (built)**: Upload invoice (list and work order) stores the PDF or photo under
   `invoices/` in the private bucket; OpenAI (Responses API, strict JSON schema) reads number, date, totals,
-  work order and quotation numbers and lines; `lib/finance/invoice-match.ts` proposes lines and amounts (by
-  the numbers printed, the amount left, 5 % VAT taken off, description overlap; never beyond what is left; a
-  number alone is not enough); the review screen lets the person correct, add lines and confirm. The file and
-  what the scan read are kept with the invoice. Needs `OPENAI_API_KEY` (`OPENAI_INVOICE_MODEL` optional,
-  default `gpt-4.1-mini`); not yet run against a real MAHER invoice.
-- **D (after)**: metrics and the old queue pages on the new model; work-order holds, queries and exclusions.
+  work order and quotation numbers and lines; the work orders it names are found in the last four months of
+  FSM (live, up to 8 opened) and `lib/finance/invoice-match.ts` proposes lines and amounts (by the numbers
+  printed, the amount left, 5 % VAT taken off, description overlap; never beyond what is left; a number alone
+  is not enough); the review screen lets the person correct, add lines and confirm. Needs `OPENAI_API_KEY`
+  (`OPENAI_INVOICE_MODEL` optional, default `gpt-4.1-mini`); not yet run against a real MAHER invoice.
+- **D (after)**: invoicing metrics and the daily digest on the new model.
 
 ## P8 — FSM-custom reports · S–M
 

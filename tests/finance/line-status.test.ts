@@ -27,3 +27,13 @@ test("a work order is invoiced only when every line is; any invoiced amount make
   assert.equal(workOrderInvoicing([line(5000, true, 5000), line(3000, true, 3000)]).status, "invoiced");
   assert.equal(workOrderInvoicing([]).status, "not_ready", "no lines read yet");
 });
+
+test("a work order's queue status: excluded and invoiced first, then the workflow, then what the lines say", async () => {
+  const { queueStatus } = await import("@/lib/finance/line-status");
+  assert.equal(queueStatus("excluded", "ready"), "excluded");
+  assert.equal(queueStatus("in_progress", "invoiced"), "invoiced", "invoiced in full ends the work, whoever picked it up");
+  assert.equal(queueStatus("on_hold", "partially_invoiced"), "on_hold");
+  assert.equal(queueStatus("open", "partially_invoiced"), "partially_invoiced");
+  assert.equal(queueStatus("open", "ready"), "pending", "ready lines nobody has picked up");
+  assert.equal(queueStatus("open", "not_ready"), "not_ready");
+});

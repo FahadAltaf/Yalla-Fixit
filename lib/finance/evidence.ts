@@ -42,6 +42,11 @@ export function evidencePrefix(itemId: string) {
   return `queue/${itemId}/`;
 }
 
+/** Evidence for a work order's not-invoiceable request (Ready to invoice by work order). */
+export function workOrderEvidencePrefix(workOrderId: string) {
+  return `wo/${workOrderId}/`;
+}
+
 /** The file name as uploaded: the path is `queue/<item>/<uuid>-<name>`. */
 export function evidenceFileName(path: string) {
   const last = path.slice(path.lastIndexOf("/") + 1);

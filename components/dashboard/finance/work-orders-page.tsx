@@ -1,90 +1,99 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ClipboardList, FileUp, Info } from "lucide-react";
+import { BarChart3, FileUp, Info, ReceiptText } from "lucide-react";
 import { toast } from "sonner";
 
-import { DataAsOf, plural } from "@/components/dashboard/reports/shared";
-import { PageHeading, StatCard, StatCardGrid } from "@/components/dashboard/shared/kaizen";
-import { StatGridSkeleton } from "@/components/dashboard/shared/kaizen-states";
-import { InlineError } from "@/components/dashboard/snagging/overview/section-shell";
+import { PageHeading, StatCard, StatCardGrid, timeAgo } from "@/components/dashboard/shared/kaizen";
+import { ErrorState, StatGridSkeleton } from "@/components/dashboard/shared/kaizen-states";
 import { refreshAll, useSection } from "@/components/dashboard/snagging/overview/use-section";
 import { DataTable } from "@/components/data-table";
-import { FINANCE_WORK_ORDER_COLUMNS } from "@/components/data-table/columns/column-finance-work-orders";
-import { ReportToolbar, type ReportSelect } from "@/components/data-table/toolbars/report-toolbar";
+import { getWorkOrderQueueColumns } from "@/components/data-table/columns/column-finance-work-orders";
+import { FinanceQueueToolbar, type FinanceQueueToolbarFilters } from "@/components/data-table/toolbars/finance-queue-toolbar";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { useDebounce } from "@/hooks/use-debounce";
-import { INVOICE_STATUS_LABELS, type InvoiceStatus } from "@/lib/finance/line-status";
+import { QUEUE_STATUS_LABELS, type QueueStatus } from "@/lib/finance/line-status";
 import type { WorkOrderList } from "@/lib/server/finance/work-orders";
-import { financeService } from "@/modules/finance/finance-service";
 
 import { aed } from "./shared";
 import { UploadInvoiceDialog } from "./upload-invoice-dialog";
 
 /**
- * Invoicing → Work orders: every work order raised in the chosen dates
- * (the last 30 days unless changed, never more than four months back),
- * from the portal's copy of FSM.
+ * Ready to invoice (BRD 5.1, 6.4): the summary strip, then the list with
+ * its filters, one row per FSM work order read live from Zoho FSM (the
+ * user's direction, 22 Oct). The last 30 days unless the dates are
+ * changed, at most four months back. The row opens the work order.
  *
- * Loading costs no FSM calls and is cached by its URL, so opening a work
- * order and coming back is instant; the filters live in the URL so Back
- * returns to the same list. Refresh reads what changed in FSM (headers
- * only) and then reloads. A work order's lines are read when it is opened.
+ * The list is cached in the browser by its URL and on the server for ten
+ * minutes, so opening a work order and coming back costs nothing; Refresh
+ * asks Zoho FSM again. The filters live in the URL, so Back keeps them.
  */
 
-const FILTER_KEYS = ["from", "to", "q", "client", "status", "invoice"] as const;
+const STATUS_FILTERS: Array<{ value: string; label: string }> = [
+  { value: "open", label: "Awaiting action" },
+  { value: "all", label: "All statuses" },
+  ...(Object.keys(QUEUE_STATUS_LABELS) as QueueStatus[]).map((status) => ({ value: status, label: QUEUE_STATUS_LABELS[status] })),
+];
+
 const LIST_STALE_MS = 10 * 60_000;
 
 export function FinanceWorkOrdersPage() {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
-  const filters = useMemo(
-    () => Object.fromEntries(FILTER_KEYS.map((key) => [key, params.get(key) ?? ""])) as Record<(typeof FILTER_KEYS)[number], string>,
+  const filters: FinanceQueueToolbarFilters = useMemo(
+    () => ({
+      status: params.get("status") ?? "open",
+      client: params.get("client") ?? "",
+      coordinator: params.get("coordinator") ?? "",
+      from: params.get("from") ?? "",
+      to: params.get("to") ?? "",
+      aged: params.get("aged") === "1",
+    }),
     [params],
   );
   const page = Number(params.get("page") ?? 0) || 0;
   const pageSize = Number(params.get("pageSize") ?? 25) || 25;
-  const [search, setSearch] = useState(filters.q);
+  const [search, setSearch] = useState(params.get("q") ?? "");
   const debouncedSearch = useDebounce(search, 400);
   const [refreshing, setRefreshing] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
 
   /* The URL is the state: Back from a work order lands on the same filters and page. */
-  const setParams = (next: Record<string, string | number>) => {
+  const setParams = (next: Record<string, string | number | boolean>) => {
     const merged = new URLSearchParams(params.toString());
     for (const [key, value] of Object.entries(next)) {
-      if (value === "" || value === 0 || (key === "pageSize" && value === 25)) merged.delete(key);
-      else merged.set(key, String(value));
+      const text = typeof value === "boolean" ? (value ? "1" : "") : String(value);
+      if (text === "" || text === "0" || (key === "pageSize" && text === "25") || (key === "status" && text === "open")) merged.delete(key);
+      else merged.set(key, text);
     }
     router.replace(`${pathname}${merged.size ? `?${merged}` : ""}`, { scroll: false });
   };
 
   const query = new URLSearchParams();
-  for (const key of FILTER_KEYS) {
-    const value = key === "q" ? debouncedSearch : filters[key];
-    if (value) query.set(key, value);
-  }
+  if (filters.status !== "open") query.set("status", filters.status);
+  for (const key of ["client", "coordinator", "from", "to"] as const) if (filters[key]) query.set(key, filters[key]);
+  if (filters.aged) query.set("aged", "1");
+  if (debouncedSearch) query.set("q", debouncedSearch);
   query.set("page", String(page));
   query.set("pageSize", String(pageSize));
-  const { data, loading, error, reload } = useSection<WorkOrderList & { can?: { invoice: boolean } }>(`/api/finance/work-orders?${query}`, {
-    staleMs: LIST_STALE_MS,
-  });
-  const [uploadOpen, setUploadOpen] = useState(false);
+  const url = `/api/finance/work-orders?${query}`;
+  const { data, loading, error, reload } = useSection<WorkOrderList & { can?: { invoice: boolean } }>(url, { staleMs: LIST_STALE_MS });
 
+  /* Ask Zoho FSM again (the server keeps the last answer ten minutes), then show it. */
   const refresh = async () => {
     setRefreshing(true);
     try {
-      const result = await financeService.refreshWorkOrders();
-      toast.success(
-        result.skipped
-          ? "Already up to date (synced in the last minute)"
-          : `Synced from Zoho FSM: ${plural(result.written, "change")} in ${plural(result.calls, "call")}`,
-      );
-      reload();
+      const response = await fetch(`${url}&refresh=1`, { credentials: "same-origin" });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload?.error ?? "Zoho FSM could not be read");
+      toast.success(`Read from Zoho FSM (${payload.data?.fsm?.calls ?? 0} calls)`);
+      refreshAll();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Zoho FSM could not be read");
     } finally {
@@ -92,127 +101,101 @@ export function FinanceWorkOrdersPage() {
     }
   };
 
-  const selects: ReportSelect[] = [
-    { key: "client", allLabel: "All clients", options: (data?.options.clients ?? []).map((c) => ({ value: c, label: c })) },
-    { key: "status", allLabel: "All FSM statuses", options: (data?.options.statuses ?? []).map((s) => ({ value: s, label: s })), width: "w-full sm:w-48" },
-    {
-      key: "invoice",
-      allLabel: "Any invoicing",
-      options: (Object.keys(INVOICE_STATUS_LABELS) as InvoiceStatus[]).map((s) => ({ value: s, label: INVOICE_STATUS_LABELS[s] })),
-      width: "w-full sm:w-44",
-    },
-  ];
-
-  const asOf = data ? Object.fromEntries(data.freshness.map((f) => [f.resource, f.lastSuccessAt])) : null;
+  const columns = useMemo(() => getWorkOrderQueueColumns(data?.agedAfterDays ?? 7), [data?.agedAfterDays]);
   const summary = data?.summary;
+  const filtered = Boolean(filters.client || filters.coordinator || filters.from || filters.to || filters.aged || debouncedSearch);
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeading
         eyebrow="Finance"
-        title="Work orders"
-        description="Work orders from Zoho FSM with their quotation and line items: the work to be invoiced. The last 30 days unless you change the dates; up to four months back."
+        title="Ready to invoice"
+        description="FSM work orders, read live from Zoho FSM, at line-item level. Mark work ready, pick it up, raise a query, or record the MAHER invoice in full or in part."
         actions={
-          data?.can?.invoice && data.ledgerReady ? (
-            <Button onClick={() => setUploadOpen(true)}>
-              <FileUp className="size-4" />
-              Upload invoice
+          <div className="flex flex-wrap gap-2">
+            <Button asChild variant="outline">
+              <Link href="/finance/metrics">
+                <BarChart3 className="size-4" />
+                Invoicing metrics
+              </Link>
             </Button>
-          ) : undefined
+            {data?.can?.invoice && data.ledgerReady ? (
+              <Button onClick={() => setUploadOpen(true)}>
+                <FileUp className="size-4" />
+                Upload invoice
+              </Button>
+            ) : null}
+          </div>
         }
       />
 
-      <div className="flex flex-col gap-1">
-        <DataAsOf asOf={asOf} resources={["work_orders", "estimates", "appointments"]} />
-        {data ? (
-          <p className="text-muted-foreground text-xs">
-            Raised {data.from} to {data.to}. Refresh reads what changed in FSM; a work order&apos;s line items are read when you open it.
-          </p>
-        ) : null}
-      </div>
+      {data ? (
+        <p className="text-muted-foreground -mt-3 text-xs">
+          Work orders raised {data.from} to {data.to}, read from Zoho FSM {timeAgo(data.fsm.fetchedAt)}
+          {data.fsm.cached ? " (kept for ten minutes; Refresh reads again)" : ""}.
+        </p>
+      ) : null}
 
       {data && !data.ledgerReady ? (
         <Alert>
           <Info className="size-4" />
-          <AlertTitle>Ready marks and invoices are off</AlertTitle>
-          <AlertDescription>Apply migration 20261024100000 (the line ledger) to mark work Ready to invoice and record MAHER invoices.</AlertDescription>
+          <AlertTitle>Ready marks, workflow and invoices are off</AlertTitle>
+          <AlertDescription>Apply migration 20261024100000 to mark work ready, pick it up and record MAHER invoices.</AlertDescription>
         </Alert>
       ) : null}
-
       {data?.clamped ? (
         <Alert>
           <Info className="size-4" />
           <AlertTitle>Shown from {data.earliest}</AlertTitle>
-          <AlertDescription>Invoicing looks back four months at most, so earlier dates are left out.</AlertDescription>
+          <AlertDescription>Ready to invoice looks back four months at most, so earlier dates are left out.</AlertDescription>
         </Alert>
       ) : null}
 
-      {error && !data ? (
-        <InlineError message={error} onRetry={reload} />
-      ) : summary ? (
+      {summary ? (
         <StatCardGrid columns={5}>
+          <StatCard label="Pending" value={summary.pending.count} headline={`${aed(summary.pending.value)} ready`} />
           <StatCard
-            label="Work orders"
-            value={summary.workOrders.toLocaleString("en-US")}
-            headline={`${summary.withQuotation} with a quotation · ${summary.completed} completed in FSM`}
-            caption={`Raised ${data!.from} to ${data!.to}`}
+            label="In progress"
+            value={summary.inProgress.count + summary.queryRaised.count}
+            headline={summary.queryRaised.count ? `${summary.queryRaised.count} with a query open` : aed(summary.inProgress.value)}
+            tone="progress"
           />
-          <StatCard label="Value" value={aed(summary.value)} headline="Before VAT, as totalled in FSM" caption={`Line items read for ${summary.linesRead} of ${summary.workOrders}`} />
+          <StatCard label="On hold" value={summary.onHold.count} headline={aed(summary.onHold.value)} />
+          <StatCard label="Excluded value" value={aed(summary.excluded.value)} headline={`${summary.excluded.count} work order(s), verified`} />
           <StatCard
-            label="Ready to invoice"
-            value={aed(summary.readyValue)}
-            headline={plural(summary.byStatus.ready, "work order") + " ready"}
-            caption="Ready lines not invoiced yet, before VAT"
-            tone={summary.readyValue > 0 ? "progress" : "neutral"}
-            onSelect={() => setParams({ invoice: "ready", page: 0 })}
-            selectLabel="Show work orders ready to invoice"
-          />
-          <StatCard
-            label="Partially invoiced"
-            value={summary.byStatus.partially_invoiced}
-            headline="Some of the work invoiced, the rest to follow"
-            onSelect={() => setParams({ invoice: "partially_invoiced", page: 0 })}
-            selectLabel="Show partially invoiced work orders"
-          />
-          <StatCard
-            label="Invoiced"
-            value={aed(summary.invoicedValue)}
-            headline={plural(summary.byStatus.invoiced, "work order") + " fully invoiced"}
-            caption="On MAHER invoices recorded here"
-            tone={summary.invoicedValue > 0 ? "good" : "neutral"}
-            onSelect={() => setParams({ invoice: "invoiced", page: 0 })}
-            selectLabel="Show invoiced work orders"
+            label="Average days to invoice"
+            value={summary.averageDaysToInvoice === null ? "—" : summary.averageDaysToInvoice}
+            headline={summary.averageDaysToInvoice === null ? "No invoices recorded yet" : `Over ${summary.invoices} invoice(s)`}
           />
         </StatCardGrid>
-      ) : (
+      ) : error ? null : (
         <StatGridSkeleton count={5} columns={5} />
       )}
+
+      {error && !data ? <ErrorState title="Could not load Ready to invoice" message={error} onRetry={reload} retrying={loading} /> : null}
 
       <Card className="py-0">
         <DataTable
           data={data?.rows ?? []}
-          columns={FINANCE_WORK_ORDER_COLUMNS}
+          columns={columns}
           toolbar={
-            <ReportToolbar
-              idPrefix="finance-work-orders"
-              searchPlaceholder="Search by work order, client or contact…"
-              initialSearch={filters.q}
-              onSearchChange={(q) => {
-                setSearch(q);
-                setParams({ q, page: 0 });
+            <FinanceQueueToolbar
+              onSearchChange={(value) => {
+                setSearch(value);
+                setParams({ q: value, page: 0 });
               }}
+              initialSearch={params.get("q") ?? ""}
               loading={loading || refreshing}
               pageSize={pageSize}
               onPageSizeChange={(size) => setParams({ pageSize: size, page: 0 })}
               onRefresh={() => void refresh()}
+              statusOptions={STATUS_FILTERS}
+              clients={data?.options.clients ?? []}
+              coordinators={data?.options.coordinators ?? []}
               filters={filters}
-              onFiltersChange={(next) => setParams({ ...Object.fromEntries(FILTER_KEYS.map((k) => [k, next[k] ?? ""])), page: 0 })}
-              selects={selects}
+              onFiltersChange={(next) => setParams({ ...next, page: 0 })}
+              agedAfterDays={data?.agedAfterDays ?? 7}
               dateLabel="Raised"
-              clearable={["client", "status", "invoice", "from", "to"]}
-              canExport={false}
-              exporting={false}
-              onExport={() => undefined}
             />
           }
           onGlobalFilterChange={() => undefined}
@@ -223,12 +206,16 @@ export function FinanceWorkOrdersPage() {
           loading={loading && !data}
           rowCount={data?.total ?? 0}
           isPagination
-          handleRowClick={(row) => router.push(`/finance/work-orders/${row.id}`)}
+          handleRowClick={(row) => router.push(`/finance/queue/${row.id}`)}
           emptyState={
             <EmptyState
-              icon={<ClipboardList />}
-              title="No work orders"
-              description="None were raised in these dates with these filters. Widen the dates (up to four months back) or press Refresh to read what changed in FSM."
+              icon={<ReceiptText />}
+              title={filtered ? "No work orders match these filters" : "Nothing awaiting action"}
+              description={
+                filtered
+                  ? "Try clearing a filter or widening the dates (up to four months back)."
+                  : "No work order raised in these dates has lines marked ready to invoice. Choose All statuses to see every work order."
+              }
             />
           }
         />

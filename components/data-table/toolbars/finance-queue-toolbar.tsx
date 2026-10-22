@@ -38,6 +38,8 @@ export function FinanceQueueToolbar({
   filters,
   onFiltersChange,
   agedAfterDays,
+  dateLabel = "Entered",
+  initialSearch = "",
 }: {
   onSearchChange: (value: string) => void;
   loading: boolean;
@@ -50,9 +52,12 @@ export function FinanceQueueToolbar({
   filters: FinanceQueueToolbarFilters;
   onFiltersChange: (next: FinanceQueueToolbarFilters) => void;
   agedAfterDays: number;
+  /** What the date range filters on ("Entered" for queue items, "Raised" for work orders). */
+  dateLabel?: string;
+  initialSearch?: string;
 }) {
   const searchId = useId();
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(initialSearch);
   const set = (patch: Partial<FinanceQueueToolbarFilters>) => onFiltersChange({ ...filters, ...patch });
   const anyFilter = filters.client || filters.coordinator || filters.from || filters.to || filters.aged;
 
@@ -141,7 +146,7 @@ export function FinanceQueueToolbar({
         </Select>
         <div className="flex items-center gap-2">
           <Label htmlFor="finance-queue-from" className="text-muted-foreground text-xs whitespace-nowrap">
-            Entered
+            {dateLabel}
           </Label>
           <Input
             id="finance-queue-from"
@@ -150,7 +155,7 @@ export function FinanceQueueToolbar({
             value={filters.from}
             max={filters.to || undefined}
             onChange={(event) => set({ from: event.target.value })}
-            aria-label="Entered from"
+            aria-label={`${dateLabel} from`}
           />
           <span className="text-muted-foreground text-xs">to</span>
           <Input
@@ -159,7 +164,7 @@ export function FinanceQueueToolbar({
             value={filters.to}
             min={filters.from || undefined}
             onChange={(event) => set({ to: event.target.value })}
-            aria-label="Entered to"
+            aria-label={`${dateLabel} to`}
           />
         </div>
         <label className="flex items-center gap-2 text-sm whitespace-nowrap">

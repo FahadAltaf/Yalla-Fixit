@@ -106,7 +106,7 @@ export function UploadInvoiceDialog({ workOrderId, onClose, onRecorded }: { work
         number: number.trim(),
         date,
         total: round2(totalNumber),
-        allocations: included.map((r) => ({ line: r.candidate.lineId, amount: round2(Number(r.amount)) })),
+        allocations: included.map((r) => ({ line: r.candidate.lineId, workOrder: r.candidate.workOrderId, amount: round2(Number(r.amount)) })),
         filePath: path,
         scan: proposal.scanned as unknown as Record<string, unknown>,
       });

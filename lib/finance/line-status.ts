@@ -63,3 +63,43 @@ export function workOrderInvoicing(lines: LineState[]): WorkOrderInvoicing {
           : "not_ready";
   return { status, lines: lines.length, readyLines: lines.filter((l) => l.ready).length, readyValue, invoicedValue, remainingValue };
 }
+
+/* ---------------------------------------------------------------------
+   Ready to invoice: one status per work order, the queue's (BRD 5.1
+   Step 4) over what its lines say. The workflow (picked up, query, hold,
+   excluded) is stored per work order; 'open' leaves it to the lines.
+   --------------------------------------------------------------------- */
+
+export type WorkflowStatus = "open" | "in_progress" | "query_raised" | "on_hold" | "excluded";
+
+export type QueueStatus =
+  | "not_ready"
+  | "pending"
+  | "in_progress"
+  | "query_raised"
+  | "on_hold"
+  | "partially_invoiced"
+  | "invoiced"
+  | "excluded";
+
+export const QUEUE_STATUS_LABELS: Record<QueueStatus, string> = {
+  not_ready: "Not ready",
+  pending: "Pending",
+  in_progress: "In Progress",
+  query_raised: "Query Raised",
+  on_hold: "On Hold",
+  partially_invoiced: "Partially invoiced",
+  invoiced: "Invoiced",
+  excluded: "Excluded",
+};
+
+/** What "Awaiting action" shows: work Finance still has to do something with. */
+export const AWAITING_ACTION: QueueStatus[] = ["pending", "in_progress", "query_raised", "on_hold", "partially_invoiced"];
+
+export function queueStatus(workflow: WorkflowStatus, invoicing: InvoiceStatus): QueueStatus {
+  if (workflow === "excluded") return "excluded";
+  if (invoicing === "invoiced") return "invoiced";
+  if (workflow === "query_raised" || workflow === "on_hold" || workflow === "in_progress") return workflow;
+  if (invoicing === "partially_invoiced") return "partially_invoiced";
+  return invoicing === "ready" ? "pending" : "not_ready";
+}
