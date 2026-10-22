@@ -73,7 +73,7 @@ next phase).
 - **Risks**: shared-file conflicts with `amc-hardening` (permissions constants, menu, notifications, users).
   Keep hunks small and additive.
 
-## P2 — FSM read model and sync · L · **built; live backfill in progress (20 Oct)**
+## P2 — FSM read model and sync · L · **built; backfill complete (21 Oct)**
 
 - **Delivered**: schema `fsm` (migration `20261020130000`, applied by the user, schema exposed) with nine
   tables and seven guarded writer functions; the sync engine (`lib/server/finance/fsm-sync/`: incremental,
@@ -86,8 +86,10 @@ next phase).
 - **Changed from the plan**: own schema (user's decision); a lease row instead of an advisory lock; line
   changes are caught through appointment changes as well, because a line can complete without its work
   order's `Modified_Time` moving.
-- **Still to do**: finish the work-order and appointment backfills (call spend to agree, B-03); nightly
-  reconcile and the 15-minute schedule are wired at go-live only.
+- **Backfill complete (21 Oct)**: 1,054 quotations, 3,486 work orders, 4,067 appointments with 2,628 crew
+  rows; line items are read per work order as work orders change (583 so far).
+- **Still to do**: the 15-minute incremental and nightly reconcile schedules are wired at go-live; until then
+  a sync runs only when started by hand, so reports show the copy's age in amber.
 
 - **Enables**: DEV-433, 442, 444, 446, 453, 454. **Depends on**: P0.
 - **Migrations**: `fsm.sync_state`, `fsm.sync_runs`, `fsm.estimates`, `fsm.estimate_status_events`,
