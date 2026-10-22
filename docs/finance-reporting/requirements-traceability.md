@@ -85,10 +85,10 @@ screens have been checked in a browser.
 | DEV-436 | P4 | Built and browser-tested: item screen and every action | Completion report link (B-01); evidence upload |
 | DEV-439 | P4 | Built and tested: digest E1/N1/N2, once a day, not sent when idle | Recipients and time to set in Reporting Settings (D-12); `CRON_SECRET` schedule at go-live |
 | DEV-441 | P4 | Built and browser-tested: metrics page | — |
-| DEV-447 | P7 (ahead) | Calculation built and unit-tested (`lib/reports/compliance.ts`): required events per eligible day, performed, missed, waived, unrounded threshold, penalty and cap; TC11–TC13 | Check-in data (B-01); threshold (D-09); policy scope (D-11); appointment check-in = actual start? (D-15). No tables, routes or screens yet |
-| DEV-448 | P7 (ahead) | Waiver rule and the one-action outage waiver (`missesInOutage`) built and unit-tested | Storage and screens once misses exist (B-01) |
-| DEV-450 | P7 (ahead) | Month phases built and tested: running → disputes open until the cut-off day of the next month (inclusive) → final (TC14 date rule); statement figures carry the settings used | Statement table, E2/E3 (B-01, D-11) |
-| DEV-451 | P7 (ahead) | Daily attendance and HR monthly summary built and unit-tested (`lib/reports/attendance.ts`): late beyond tolerance, early, absent, leave category, part-day leave, night shift past midnight | Check-in data (B-01); screen |
+| DEV-447 | P7 (ahead) | Calculation built and unit-tested (TC11–TC13); **Reports → App compliance** built and checked on live data: per technician required, performed, missed, waived, compliance (unrounded, "below" in words), penalty before cap and payable; owed events shown while unmeasurable | Check-in data (B-01); threshold (D-09); policy scope (D-11); D-15 (provisional setting, off); migration `20261023100000` |
+| DEV-448 | P7 (ahead) | Single and bulk-outage waivers: rule, `hr.waivers` / `hr.waiver_batches` (append-only, idempotent, refused once the month is final), dialogs on the Check-ins tab | Misses to waive appear once check-ins can be read (B-01) |
+| DEV-450 | P7 (ahead) | Month phases (TC14 date rule); `hr.compliance_months` / `hr.compliance_statements` frozen with the settings used, never recalculated; "Finalise month" (Compliance Approve), refused until both check-in sources can be read; export gives the HR report's columns | E2/E3 emails (D-11); real data (B-01) |
+| DEV-451 | P7 (ahead) | **Reports → Daily attendance** built: days (shift, leave with type, holiday, rest day, work done in FSM) and monthly summary; late / early / absent worked out once check-ins can be read, never guessed | Check-in data (B-01) |
 | (platform) | P2 | FSM read model in schema `fsm`, read-only sync (incremental, reconcile, backfill), freshness panel. Enables DEV-433, 434, 442, 444, 452, 453, 454 | Work-order and appointment backfills to finish; schedule at go-live; sync frequency to agree with Danish (DEV-433) |
 
 ## Coverage

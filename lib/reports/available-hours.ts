@@ -36,7 +36,13 @@ export type AvailabilityTechnician = {
   leavingDate: string | null;
 };
 
-export type LeaveInterval = { technicianFsmId: string; startAt: string; endAt: string };
+export type LeaveInterval = {
+  technicianFsmId: string;
+  startAt: string;
+  endAt: string;
+  /** Annual, sick, public holiday or offset (DEV-456); attendance shows it. */
+  category?: string | null;
+};
 
 export type DayStatus = "working" | "holiday" | "rest_day" | "left";
 

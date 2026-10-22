@@ -43,7 +43,7 @@ next phase).
   (D-19); 5 leave records in total (D-16).
 - **Jira**: DEV-462 (security precondition), DEV-463 (matrix started).
 
-## P1 — Platform prerequisites · L · **built on the branch, 20 Oct; migrations not yet applied**
+## P1 — Platform prerequisites · L · **built; migrations applied 20 Oct**
 
 - **Delivered**: migrations `20261020100000_reporting_platform` and `20261020110000_people_reporting_fields`
   (files, checks and rollbacks in [migrations/](migrations/)); the throwaway-Postgres harness
@@ -212,13 +212,23 @@ next phase).
   excluded and reflected in completeness.
 - **Partial**: travel waits on B-01. **Waiting**: D-08, D-14, D-16.
 
-## P7 — Attendance and compliance · XL · **calculations built ahead (21 Oct); rest blocked**
+## P7 — Attendance and compliance · XL · **built ahead of the blockers (22 Oct); live data waits on B-01**
 
 - **Built ahead of the blockers**: `lib/reports/compliance.ts` (required events, performed/missed/waived,
   unrounded threshold, penalty and cap, outage waiver, month phases and dispute cut-off) and
   `lib/reports/attendance.ts` (daily attendance and HR monthly summary); 13 unit tests covering TC08,
-  TC11–TC15. Check-ins are an input, so FSM's data plugs in once B-01 is cleared. No migration, routes or
-  screens yet: those store and show misses, and there are none to store until check-ins can be read.
+  TC11–TC15. Check-ins are an input, so FSM's data plugs in once B-01 is cleared.
+- **Built on 22 Oct**: schema `hr` (migration `20261023100000`: waivers, outage batches, finalised months and
+  statements, all append-only, written only through `hr.record_waivers` and `hr.finalize_month`);
+  **Reports → App compliance** (by technician and by check-in; single and outage waivers; finalise the month
+  after the cut-off; export = the HR report's figures) and **Reports → Daily attendance** (days and monthly
+  summary); a provisional Reporting Setting reads FSM's actual times as appointment check-ins (D-15, off by
+  default); 16 database checks, 2 more unit tests; checked on live data.
+- **What it shows today**: shift check-ins are not counted (B-01), so nobody is marked missed or absent for
+  what the portal cannot see; the pages say how many events are owed and not yet measurable (October: 4,948
+  shift and 3,261 appointment events). A month is finalised only when both check-in sources can be read.
+- **Not built**: disputes and the technician's own view (D-10, D-19); live alerts N5/N6 (need real
+  check-ins; N6 also D-15); N9–N12; emails E2/E3.
 
 - **Jira**: DEV-451, 445, 446, 447, 448, 449, 450. **BRD**: 5.2 B3, B4, B5; E2, E3; N5, N6, N9–N12.
 - **Depends on**: P5, **B-01** (check-in data), **D-09, D-10, D-11, D-15, D-19**.

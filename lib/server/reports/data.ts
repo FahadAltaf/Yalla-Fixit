@@ -382,6 +382,56 @@ export async function loadCapacityAppointments(
 }
 
 // ---------------------------------------------------------------------
+// Compliance and attendance (P7)
+// ---------------------------------------------------------------------
+
+export type ComplianceAppointmentRow = CapacityAppointment & { actualStart: string | null; actualEnd: string | null };
+
+/**
+ * Every appointment scheduled in the dates, any status (the calculation
+ * drops cancelled ones), with its crew and its actual times: the times are
+ * read as check-ins only when the provisional setting says so (D-15).
+ */
+export async function loadComplianceAppointments(
+  admin: SupabaseClient,
+  range: { from: string; to: string },
+): Promise<{ appointments: ComplianceAppointmentRow[]; crewsUnknown: number }> {
+  const startIso = zonedTimeToUtc(range.from).toISOString();
+  const endIso = zonedTimeToUtc(addDaysToDateString(range.to, 1)).toISOString();
+  const rows = await readAllRows<Record<string, unknown>>(
+    (from, to) =>
+      admin
+        .schema("fsm")
+        .from("appointments")
+        .select(APPOINTMENT_COLUMNS)
+        .gte("scheduled_start", startIso)
+        .lt("scheduled_start", endIso)
+        .order("fsm_appointment_id")
+        .range(from, to),
+    "appointments for compliance",
+  );
+  const [crews, wos] = await Promise.all([loadCrews(admin, rows), loadWorkOrdersOf(admin, rows)]);
+  let crewsUnknown = 0;
+  const appointments = rows.map<ComplianceAppointmentRow>((r) => {
+    const wo = wos.get(String(r.fsm_work_order_id));
+    if (!crews.has(String(r.fsm_appointment_id))) crewsUnknown += 1;
+    return {
+      id: String(r.fsm_appointment_id),
+      number: str(r.number),
+      workOrderNumber: wo ? str(wo.number) : null,
+      clientName: wo ? str(wo.company_name) : null,
+      status: str(r.status),
+      scheduledStart: str(r.scheduled_start),
+      scheduledEnd: str(r.scheduled_end),
+      actualStart: str(r.actual_start),
+      actualEnd: str(r.actual_end),
+      technicianIds: crewOf(r, crews),
+    };
+  });
+  return { appointments, crewsUnknown };
+}
+
+// ---------------------------------------------------------------------
 // Available hours inputs (DEV-443; used by utilization and capacity)
 // ---------------------------------------------------------------------
 
@@ -399,7 +449,7 @@ export async function loadAvailabilityInput(
       (from, to) =>
         admin
           .from("leave_records")
-          .select("id, technician_fsm_id, start_at, end_at")
+          .select("id, technician_fsm_id, start_at, end_at, leave_category, leave_type")
           .eq("status", "active")
           .lt("start_at", endIso)
           .gt("end_at", startIso)
@@ -420,7 +470,12 @@ export async function loadAvailabilityInput(
   const wanted = new Set(input.technicians.map((t) => t.fsmId));
   const leave: LeaveInterval[] = leaveRows
     .filter((r) => wanted.has(String(r.technician_fsm_id)))
-    .map((r) => ({ technicianFsmId: String(r.technician_fsm_id), startAt: String(r.start_at), endAt: String(r.end_at) }));
+    .map((r) => ({
+      technicianFsmId: String(r.technician_fsm_id),
+      startAt: String(r.start_at),
+      endAt: String(r.end_at),
+      category: str(r.leave_category) ?? str(r.leave_type),
+    }));
 
   return {
     technicians: input.technicians,

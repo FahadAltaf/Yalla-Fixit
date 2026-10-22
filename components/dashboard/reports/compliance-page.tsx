@@ -1,0 +1,578 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BadgeCheck, CloudOff, Info, Lock, ShieldCheck, Users } from "lucide-react";
+import { toast } from "sonner";
+
+import { PageHeading, PillTabs, StatCard, StatCardGrid } from "@/components/dashboard/shared/kaizen";
+import { ActionDialogContent, ErrorState, StatGridSkeleton, SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
+import { DataTable } from "@/components/data-table";
+import {
+  COMPLIANCE_COLUMNS,
+  COMPLIANCE_EXPORT_COLUMNS,
+  complianceEventColumns,
+  complianceExportRow,
+  compliancePct,
+} from "@/components/data-table/columns/column-compliance";
+import { ReportToolbar, type ReportSelect } from "@/components/data-table/toolbars/report-toolbar";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { useDebounce } from "@/hooks/use-debounce";
+import { EVENT_KIND_LABELS, WAIVER_REASONS, type ComplianceEventKind } from "@/lib/reports/compliance";
+import { zonedTimeToUtc } from "@/lib/scheduling/org-time";
+import type { ComplianceReport } from "@/lib/server/reports/compliance";
+import { exportFilename, exportTable, type ExportFormat } from "@/lib/snagging/export-table";
+import { reportsService } from "@/modules/reports/reports-service";
+
+import { DataAsOf, SavedFiltersMenu, plural, useReportFilters } from "./shared";
+
+/**
+ * App usage compliance (BRD 5.2 B4; DEV-447, 448, 450): per technician,
+ * the check-ins owed, performed, missed and waived, compliance against the
+ * threshold and the penalty, which is calculated and reported only. Misses
+ * can be waived one by one or, for a confirmed outage, for everyone at
+ * once. After the dispute cut-off the month is finalised and frozen.
+ *
+ * What it can measure today is said at the top: shift check-ins wait on
+ * B-01, appointment check-ins on the provisional setting (D-15).
+ */
+
+type View = "technicians" | "events";
+type Report = ComplianceReport & { can: { view: boolean; export: boolean; waive: boolean; finalize: boolean } };
+
+const DEFAULTS = { view: "technicians", month: "", technician: "", team: "", state: "", q: "" };
+
+const MONTH_NAME = (month: string) =>
+  new Date(`${month}-01T00:00:00Z`).toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" });
+const DAY = (date: string) => new Date(`${date}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+/* "4,948 shift events": plural with a thousands separator. */
+const count = (n: number, word: string) => `${n.toLocaleString("en-US")} ${word}${n === 1 ? "" : "s"}`;
+const aed = (value: number) => `AED ${value.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+
+export function CompliancePage() {
+  const { filters, setFilters, ready, saved, saveAs, remove, apply } = useReportFilters("compliance", DEFAULTS);
+  const view: View = filters.view === "events" ? "events" : "technicians";
+  const debouncedQ = useDebounce(filters.q, 400);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(25);
+  const [data, setData] = useState<Report | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [waiveOpen, setWaiveOpen] = useState<"selected" | "outage" | null>(null);
+  const { confirm, dialog } = useConfirm();
+
+  const query = useMemo(
+    () => ({
+      view,
+      month: filters.month,
+      technician: filters.technician,
+      team: filters.team,
+      q: debouncedQ,
+      ...(view === "events" ? { state: filters.state } : {}),
+    }),
+    [view, filters, debouncedQ],
+  );
+
+  const ticket = useRef(0);
+  const viewLogged = useRef(false);
+  const load = useCallback(async () => {
+    const mine = ++ticket.current;
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await reportsService.compliance(query, { page, pageSize, logView: !viewLogged.current });
+      viewLogged.current = true;
+      if (mine !== ticket.current) return;
+      setData(response);
+      setSelected(new Set());
+    } catch (e) {
+      if (mine !== ticket.current) return;
+      setError(e instanceof Error ? e.message : "Could not load the compliance report");
+    } finally {
+      if (mine === ticket.current) setLoading(false);
+    }
+  }, [query, page, pageSize]);
+
+  useEffect(() => {
+    if (ready) void load();
+  }, [ready, load]);
+
+  const change = (next: Record<string, string>) => {
+    setFilters({ ...DEFAULTS, ...next });
+    setPage(0);
+  };
+  const switchView = (next: View, patch: Record<string, string> = {}) => change({ ...filters, view: next, q: "", ...patch });
+
+  const month = data?.month ?? filters.month;
+  const open = data ? data.phase !== "final" && !data.finalized : false;
+  const canWaive = Boolean(data?.can.waive) && open && Boolean(data?.storageReady);
+
+  const doExport = async (format: ExportFormat) => {
+    setExporting(true);
+    try {
+      const all = await reportsService.compliance({ ...query, view: "technicians" }, { exportFormat: format });
+      await exportTable({
+        columns: COMPLIANCE_EXPORT_COLUMNS,
+        rows: all.technicians.map(complianceExportRow),
+        filename: exportFilename(["compliance", all.month]),
+        format,
+        sheetName: "Compliance",
+      });
+      toast.success(`Exported ${plural(all.total, "row")}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not export");
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const finalize = async () => {
+    if (!data) return;
+    await confirm({
+      title: `Finalise ${MONTH_NAME(data.month)}`,
+      description:
+        "Every technician's figures are frozen with the settings in force and never recalculated. No waiver or dispute is possible afterwards.",
+      confirmText: "Finalise month",
+      action: async () => {
+        const result = await reportsService.finalizeMonth(data.month);
+        toast.success(`${plural(result.statements, "statement")} finalised`);
+        await load();
+      },
+    });
+  };
+
+  const selects: ReportSelect[] = [
+    {
+      key: "month",
+      allLabel: "This month",
+      options: (data?.options.months ?? []).map((m) => ({ value: m.id, label: m.name })),
+      width: "w-full sm:w-44",
+    },
+    { key: "technician", allLabel: "All technicians", options: (data?.options.technicians ?? []).map((t) => ({ value: t.id, label: t.name })) },
+    { key: "team", allLabel: "All teams", options: (data?.options.teams ?? []).map((t) => ({ value: t.id, label: t.name })) },
+    ...(view === "events"
+      ? [
+          {
+            key: "state",
+            allLabel: "Missed",
+            options: [
+              { value: "waived", label: "Waived" },
+              { value: "performed", label: "Performed" },
+              { value: "all", label: "Every check-in" },
+            ],
+            width: "w-full sm:w-40",
+          },
+        ]
+      : []),
+  ];
+
+  const toolbar = (
+    <ReportToolbar
+      key={view}
+      idPrefix={`compliance-${view}`}
+      searchPlaceholder={view === "events" ? "Search by technician or appointment…" : "Search by technician or team…"}
+      initialSearch={filters.q}
+      onSearchChange={(q) => {
+        setFilters({ ...filters, q });
+        setPage(0);
+      }}
+      loading={loading}
+      pageSize={pageSize}
+      onPageSizeChange={(size) => {
+        setPageSize(size);
+        setPage(0);
+      }}
+      onRefresh={() => void load()}
+      filters={filters}
+      onFiltersChange={change}
+      selects={selects}
+      clearable={["technician", "team", "state", "month"]}
+      canExport={Boolean(data?.can.export)}
+      exporting={exporting}
+      onExport={(format) => void doExport(format)}
+    />
+  );
+
+  const tablePaging = {
+    onGlobalFilterChange: () => undefined,
+    onPageChange: setPage,
+    onPageSizeChange: (size: number) => {
+      setPageSize(size);
+      setPage(0);
+    },
+    pageSize,
+    currentPage: page,
+    loading,
+    rowCount: data?.total ?? 0,
+    isPagination: true,
+  };
+
+  const eventColumns = useMemo(
+    () =>
+      complianceEventColumns(
+        canWaive
+          ? {
+              selected,
+              toggle: (key) =>
+                setSelected((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(key)) next.delete(key);
+                  else next.add(key);
+                  return next;
+                }),
+            }
+          : undefined,
+      ),
+    [canWaive, selected],
+  );
+
+  const overall = data?.overall;
+  const thresholdSet = data ? data.settings.thresholdPercent !== null : false;
+
+  return (
+    <div className="flex flex-col gap-6">
+      <PageHeading
+        eyebrow="Reports"
+        title="App compliance"
+        description="Check-ins owed, performed, missed and waived per technician, against the threshold. Penalties are calculated and reported only; nothing is deducted by the portal."
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            {data?.can.finalize && data.storageReady && data.phase === "final" && !data.finalized ? (
+              <Button variant="outline" onClick={() => void finalize()}>
+                <Lock className="size-4" />
+                Finalise month
+              </Button>
+            ) : null}
+            <SavedFiltersMenu
+              saved={saved}
+              current={filters}
+              onApply={(entry) => {
+                apply(entry);
+                setPage(0);
+              }}
+              onSave={saveAs}
+              onRemove={remove}
+            />
+          </div>
+        }
+      />
+
+      <PillTabs<View>
+        value={view}
+        onChange={(next) => switchView(next)}
+        tabs={[
+          { value: "technicians", label: "By technician" },
+          { value: "events", label: "Check-ins" },
+        ]}
+      />
+
+      <div className="flex flex-col gap-1">
+        <DataAsOf asOf={data?.dataAsOf ?? null} resources={["appointments"]} />
+        {data ? <p className="text-muted-foreground text-xs">{periodLine(data)}</p> : null}
+      </div>
+
+      {data ? <SourcesNotice data={data} /> : null}
+
+      {error ? <ErrorState title="Could not load the compliance report" message={error} onRetry={() => void load()} retrying={loading} /> : null}
+
+      {overall && data ? (
+        <StatCardGrid columns={5}>
+          <StatCard
+            label="Compliance"
+            value={compliancePct(overall.compliancePercent)}
+            headline={overall.required ? `${overall.performed} of ${plural(overall.required, "check-in")} performed` : "Nothing measured yet"}
+            caption={thresholdSet ? `Threshold ${data.settings.thresholdPercent}%` : "Threshold not set (D-09)"}
+          />
+          <StatCard
+            label="Missed"
+            value={overall.missed}
+            headline={overall.missed ? "Not recorded and not waived" : "None"}
+            tone={overall.missed ? "bad" : "neutral"}
+            onSelect={() => switchView("events", { state: "" })}
+            selectLabel="Show the missed check-ins"
+          />
+          <StatCard
+            label="Waived"
+            value={overall.waived}
+            headline={overall.waived ? "Left out of both counts" : "None waived"}
+            onSelect={() => switchView("events", { state: "waived" })}
+            selectLabel="Show the waived check-ins"
+          />
+          <StatCard
+            label="Below threshold"
+            value={overall.belowThreshold === null ? "—" : overall.belowThreshold}
+            headline={overall.belowThreshold === null ? "Not worked out until the threshold is set" : `Of ${plural(overall.technicians, "technician")}`}
+            tone={overall.belowThreshold ? "bad" : "neutral"}
+          />
+          <StatCard
+            label="Penalties"
+            value={overall.penaltyPayableAed === null ? "—" : aed(overall.penaltyPayableAed)}
+            headline={
+              overall.penaltyPayableAed === null
+                ? "Not calculated (D-09)"
+                : `AED ${data.settings.penaltyPerMissAed} a miss, capped at AED ${data.settings.monthlyCapAed}`
+            }
+            caption="For HR to decide; not deducted"
+          />
+        </StatCardGrid>
+      ) : (
+        <StatGridSkeleton count={5} columns={5} />
+      )}
+
+      {view === "events" ? (
+        <Card className="gap-0 py-0">
+          {canWaive ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
+              <p className="text-muted-foreground text-sm">
+                {selected.size ? `${plural(selected.size, "miss")} selected` : "Tick missed check-ins to waive them, or waive a confirmed outage for everyone."}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" onClick={() => setWaiveOpen("outage")}>
+                  <CloudOff className="size-4" />
+                  Waive an outage
+                </Button>
+                <Button disabled={!selected.size} onClick={() => setWaiveOpen("selected")}>
+                  <ShieldCheck className="size-4" />
+                  Waive selected
+                </Button>
+              </div>
+            </div>
+          ) : null}
+          <DataTable
+            data={data?.events ?? []}
+            columns={eventColumns}
+            toolbar={toolbar}
+            {...tablePaging}
+            emptyState={
+              <EmptyState
+                icon={<BadgeCheck />}
+                title={filters.state ? "Nothing here" : "No missed check-ins"}
+                description={
+                  data && !data.sources.appointment && !data.sources.shift
+                    ? "No check-ins are measured yet: see the note above."
+                    : "Nothing matches these filters in this month."
+                }
+              />
+            }
+          />
+        </Card>
+      ) : (
+        <Card className="py-0">
+          <DataTable
+            data={data?.technicians ?? []}
+            columns={COMPLIANCE_COLUMNS}
+            toolbar={toolbar}
+            {...tablePaging}
+            handleRowClick={(row) => switchView("events", { technician: row.fsmId, state: "all" })}
+            emptyState={
+              <EmptyState icon={<Users />} title="No technicians in this month" description="Nobody was rostered or booked with these filters." />
+            }
+          />
+        </Card>
+      )}
+
+      {waiveOpen && data ? (
+        <WaiveDialog
+          mode={waiveOpen}
+          month={month}
+          count={selected.size}
+          onClose={() => setWaiveOpen(null)}
+          onSubmit={async (input) => {
+            const result = await reportsService.waive({
+              month: data.month,
+              reason: input.reason,
+              note: input.note || null,
+              ...(waiveOpen === "selected" ? { eventKeys: [...selected] } : { outage: input.outage! }),
+            });
+            toast.success(result.waived ? `${plural(result.waived, "miss")} waived` : "Nothing to waive in that window");
+            setWaiveOpen(null);
+            await load();
+          }}
+        />
+      ) : null}
+      {dialog}
+    </div>
+  );
+}
+
+function periodLine(data: ComplianceReport) {
+  const measured = data.to >= data.from ? `measured ${DAY(data.from)} to ${DAY(data.to)}` : "not started";
+  const state = data.finalized
+    ? `Finalised ${new Date(data.finalized.at).toLocaleDateString("en-GB", { dateStyle: "medium" })}${data.finalized.by ? ` by ${data.finalized.by}` : ""}; read from its statements.`
+    : data.phase === "running"
+      ? `Running; disputes open until ${DAY(data.cutoffDate)}.`
+      : data.phase === "disputes_open"
+        ? `Closed; disputes open until ${DAY(data.cutoffDate)}, then it can be finalised.`
+        : `Disputes closed on ${DAY(data.cutoffDate)}; not finalised yet.`;
+  return `${MONTH_NAME(data.month)}, ${measured}, ${plural(data.overall.technicians, "technician")}. ${state}`;
+}
+
+/** What can be measured today, said before any figure. */
+function SourcesNotice({ data }: { data: ComplianceReport }) {
+  if (data.finalized) return null;
+  const lines: string[] = [];
+  if (!data.sources.shift) {
+    lines.push(
+      `Shift check-ins and check-outs are not counted: FSM's check-ins cannot be read yet (B-01). ${count(data.overall.owedShift, "shift event")} owed so far this month.`,
+    );
+  }
+  lines.push(
+    data.sources.appointment
+      ? "Appointment check-ins are read from FSM's actual start and end times. This is provisional until the business confirms it (D-15)."
+      : `Appointment check-ins are not counted until it is confirmed that FSM's actual start and end are the check-in and check-out (D-15); Reporting Settings can turn that on to preview. ${count(data.overall.owedAppointment, "appointment event")} owed so far.`,
+  );
+  if (!data.storageReady) lines.push("Waiving and finalising are off until migration 20261023100000 (schema hr) is applied and exposed.");
+  if (data.notes.noRestDays) lines.push(`${plural(data.notes.noRestDays, "technician")} with no rest days set: every day counts as a shift day (D-16).`);
+  if (data.notes.crewsUnknown) lines.push(`${plural(data.notes.crewsUnknown, "appointment")} whose crew FSM has not been read for count for the lead technician only.`);
+  return (
+    <Alert>
+      <Info className="size-4" />
+      <AlertTitle>{data.sources.shift && data.sources.appointment ? "What the figures rest on" : "Check-in data is incomplete"}</AlertTitle>
+      <AlertDescription>
+        <ul className="list-disc space-y-0.5 pl-4">
+          {lines.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+const KINDS: ComplianceEventKind[] = ["shift_check_in", "shift_check_out", "appointment_check_in", "appointment_check_out"];
+
+function WaiveDialog({
+  mode,
+  month,
+  count,
+  onClose,
+  onSubmit,
+}: {
+  mode: "selected" | "outage";
+  month: string;
+  count: number;
+  onClose: () => void;
+  onSubmit: (input: { reason: string; note: string; outage?: { from: string; to: string; kinds: string[] } }) => Promise<void>;
+}) {
+  const [reason, setReason] = useState<string>(mode === "outage" ? "App outage" : "");
+  const [note, setNote] = useState("");
+  const [day, setDay] = useState(`${month}-01`);
+  const [fromTime, setFromTime] = useState("08:00");
+  const [toTime, setToTime] = useState("10:00");
+  const [kinds, setKinds] = useState<ComplianceEventKind[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+
+  const outage = mode === "outage";
+  const valid = reason && (!outage || (day.startsWith(month) && toTime > fromTime));
+
+  const submit = async () => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      await onSubmit({
+        reason,
+        note: note.trim(),
+        outage: outage
+          ? {
+              from: zonedTimeToUtc(day, `${fromTime}:00`).toISOString(),
+              to: zonedTimeToUtc(day, `${toTime}:00`).toISOString(),
+              kinds,
+            }
+          : undefined,
+      });
+    } catch (e) {
+      setProblem(e instanceof Error ? e.message : "Nothing was waived");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(next) => !next && !busy && onClose()}>
+      <ActionDialogContent busy={busy}>
+        <DialogHeader>
+          <DialogTitle>{outage ? "Waive a confirmed outage" : `Waive ${plural(count, "missed check-in")}`}</DialogTitle>
+          <DialogDescription>
+            {outage
+              ? "Every check-in missed by anyone and due inside the window is waived in one action. Who and when are recorded; a waiver cannot be undone."
+              : "A waived miss leaves both the required and the performed count. Who and when are recorded; a waiver cannot be undone."}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4">
+          {outage ? (
+            <>
+              <div className="grid gap-2 sm:grid-cols-3">
+                <div className="grid gap-1.5">
+                  <Label htmlFor="outage-day">Day</Label>
+                  <Input id="outage-day" type="date" value={day} min={`${month}-01`} max={`${month}-31`} onChange={(e) => setDay(e.target.value)} />
+                </div>
+                <div className="grid gap-1.5">
+                  <Label htmlFor="outage-from">From</Label>
+                  <Input id="outage-from" type="time" value={fromTime} onChange={(e) => setFromTime(e.target.value)} />
+                </div>
+                <div className="grid gap-1.5">
+                  <Label htmlFor="outage-to">To</Label>
+                  <Input id="outage-to" type="time" value={toTime} onChange={(e) => setToTime(e.target.value)} />
+                </div>
+              </div>
+              <div className="grid gap-1.5">
+                <Label>Check-ins affected</Label>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {KINDS.map((kind) => (
+                    <label key={kind} className="flex items-center gap-2 text-sm">
+                      <Checkbox
+                        checked={kinds.includes(kind)}
+                        onCheckedChange={(checked) => setKinds((prev) => (checked ? [...prev, kind] : prev.filter((k) => k !== kind)))}
+                      />
+                      {EVENT_KIND_LABELS[kind]}
+                    </label>
+                  ))}
+                </div>
+                <p className="text-muted-foreground text-xs">None ticked: every kind. Times are Dubai time.</p>
+              </div>
+            </>
+          ) : null}
+          <div className="grid gap-1.5">
+            <Label htmlFor="waiver-reason">Reason</Label>
+            <Select value={reason} onValueChange={setReason}>
+              <SelectTrigger id="waiver-reason">
+                <SelectValue placeholder="Choose a reason" />
+              </SelectTrigger>
+              <SelectContent>
+                {WAIVER_REASONS.map((r) => (
+                  <SelectItem key={r} value={r}>
+                    {r}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="waiver-note">Note</Label>
+            <Textarea id="waiver-note" rows={3} maxLength={2000} value={note} onChange={(e) => setNote(e.target.value)} />
+          </div>
+          {problem ? <p className="text-destructive text-sm">{problem}</p> : null}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <SubmitButton pending={busy} disabled={!valid} onClick={() => void submit()}>
+            Waive
+          </SubmitButton>
+        </DialogFooter>
+      </ActionDialogContent>
+    </Dialog>
+  );
+}

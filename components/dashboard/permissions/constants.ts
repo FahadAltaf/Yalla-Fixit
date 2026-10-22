@@ -141,7 +141,7 @@ const EXTRA_RESOURCE_NAMES: Partial<Record<ResourceType, string>> = {
   [ResourceType.REPORTS_ATTENDANCE]: "Attendance",
   [ResourceType.REPORTS_REVENUE]: "Revenue",
   [ResourceType.REPORTS_EXCEPTIONS]: "Exception reports",
-  [ResourceType.COMPLIANCE]: "Check-in compliance (Edit = waive, Approve = decide dispute)",
+  [ResourceType.COMPLIANCE]: "Check-in compliance (Edit = waive, Approve = decide disputes and finalise the month)",
   [ResourceType.COMPLIANCE_SELF]: "My compliance (technicians)",
   [ResourceType.REPORTING_SETTINGS]: "Reporting settings",
 };

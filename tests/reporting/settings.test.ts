@@ -141,3 +141,12 @@ test("setting a field back to its default removes the override", () => {
   draft.finance.agedAfterDays = 7;
   assert.deepEqual(overridesFrom(defaults, draft), {});
 });
+
+test("FSM actual times are not read as appointment check-ins until D-15 is confirmed", () => {
+  const defaults = getReportingSettingsDefaults();
+  assert.equal(defaults.compliance.appointmentActualsAsCheckIns, false);
+  const { settings, valid } = mergeReportingSettings(defaults, { compliance: { appointmentActualsAsCheckIns: true } });
+  assert.equal(valid, true);
+  assert.equal(settings.compliance.appointmentActualsAsCheckIns, true);
+  assert.equal(settings.compliance.penaltyPerMissAed, 50, "the rest of the group is untouched");
+});

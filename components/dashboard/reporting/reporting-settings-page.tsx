@@ -31,6 +31,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import MultipleSelector, { type Option } from "@/components/ui/multiselect";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import {
   overridesFrom,
   reportingSettingsSchema,
@@ -66,7 +67,8 @@ type NumberField = {
 };
 type TimeField = { kind: "time"; path: string; label: string; hint?: string };
 type PeopleField = { kind: "people"; path: string; label: string; hint?: string };
-type Field = NumberField | TimeField | PeopleField;
+type ToggleField = { kind: "toggle"; path: string; label: string; hint?: string };
+type Field = NumberField | TimeField | PeopleField | ToggleField;
 
 const SECTIONS: Record<SectionKey, { title: string; description: string; icon: React.ReactNode; fields: Field[] }> = {
   finance: {
@@ -129,6 +131,12 @@ const SECTIONS: Record<SectionKey, { title: string; description: string; icon: R
       { kind: "number", path: "compliance.monthlyCapAed", label: "Monthly cap per technician", unit: "AED", min: 0, max: 100000, step: 0.01 },
       { kind: "number", path: "compliance.disputeCutoffDay", label: "Disputes close on day", unit: "of the month", min: 1, max: 28 },
       { kind: "people", path: "compliance.hrRecipientUserIds", label: "Monthly report recipients", hint: "HR and managers. Nobody receives the final report until this is set." },
+      {
+        kind: "toggle",
+        path: "compliance.appointmentActualsAsCheckIns",
+        label: "Count FSM actual times as appointment check-ins",
+        hint: "Provisional, to confirm (D-15). On: an appointment's actual start and end in FSM count as its check-in and check-out. Off: appointment check-ins wait for FSM's check-in data (B-01).",
+      },
     ],
   },
   planning: {
@@ -179,6 +187,7 @@ function display(value: unknown, field: Field, users: PickableUser[]): string {
     return ids.map((id) => users.find((u) => u.id === id)?.name ?? "someone").join(", ");
   }
   if (field.kind === "number") return `${value} ${field.unit}`;
+  if (field.kind === "toggle") return value ? "on" : "off";
   return String(value);
 }
 
@@ -401,7 +410,8 @@ function SettingField({
   const id = `reporting-${field.path.replace(/\./g, "-")}`;
   const changed = !same(value, defaultValue);
   /* Recipients and the threshold have no BRD value; they start empty. */
-  const hasSuggestion = !(defaultValue === null || (Array.isArray(defaultValue) && defaultValue.length === 0));
+  const hasSuggestion =
+    field.kind !== "toggle" && !(defaultValue === null || (Array.isArray(defaultValue) && defaultValue.length === 0));
 
   const userOptions: Option[] = useMemo(() => users.map((u) => ({ value: u.id, label: u.name })), [users]);
 
@@ -449,6 +459,11 @@ function SettingField({
             }}
           />
           <span className="text-muted-foreground text-sm">{field.unit}</span>
+        </div>
+      ) : field.kind === "toggle" ? (
+        <div className="flex items-center gap-2">
+          <Switch id={id} checked={Boolean(value)} disabled={disabled} onCheckedChange={(checked) => onChange(checked)} />
+          <span className="text-muted-foreground text-sm">{value ? "On" : "Off"}</span>
         </div>
       ) : field.kind === "time" ? (
         <Input

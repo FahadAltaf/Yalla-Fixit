@@ -1,9 +1,10 @@
 import { executeRESTBackend } from "@/lib/rest-server";
 import type { SavedFilter } from "@/lib/server/reports/access";
+import type { AttendanceReport, ComplianceReport } from "@/lib/server/reports/compliance";
 import type { CapacityReport, UtilizationReport } from "@/lib/server/reports/planning";
 import type { ActualTimesReport, QuotationReport, UnflaggedReport } from "@/lib/server/reports/reports";
 
-export type ReportKey = "quotations" | "exceptions" | "utilization" | "capacity";
+export type ReportKey = "quotations" | "exceptions" | "utilization" | "capacity" | "compliance" | "attendance";
 export type ReportFilters = Record<string, string>;
 export type ReportCan = { can: { view: boolean; export: boolean } };
 
@@ -50,6 +51,29 @@ export const reportsService = {
 
   capacity: (filters: ReportFilters, options: ReportRequestOptions = {}) =>
     executeRESTBackend<CapacityReport & ReportCan>("/api/reports/capacity", {
+      params: paramsOf(filters, options),
+      signal: options.signal,
+    }),
+
+  compliance: (filters: ReportFilters, options: ReportRequestOptions = {}) =>
+    executeRESTBackend<ComplianceReport & { can: ReportCan["can"] & { waive: boolean; finalize: boolean } }>("/api/reports/compliance", {
+      params: paramsOf(filters, options),
+      signal: options.signal,
+    }),
+
+  waive: (input: {
+    month: string;
+    reason: string;
+    note?: string | null;
+    eventKeys?: string[];
+    outage?: { from: string; to: string; kinds: string[] };
+  }) => executeRESTBackend<{ waived: number; matched: number }>("/api/reports/compliance/waivers", { method: "POST", body: input }),
+
+  finalizeMonth: (month: string) =>
+    executeRESTBackend<{ statements: number }>("/api/reports/compliance/finalize", { method: "POST", body: { month } }),
+
+  attendance: (filters: ReportFilters, options: ReportRequestOptions = {}) =>
+    executeRESTBackend<AttendanceReport & ReportCan>("/api/reports/attendance", {
       params: paramsOf(filters, options),
       signal: options.signal,
     }),

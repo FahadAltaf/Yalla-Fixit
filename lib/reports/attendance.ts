@@ -15,7 +15,9 @@ import { shiftDateFor, type RecordedCheckIn, type ShiftWindow } from "./complian
  *
  * Days come from the available-hours engine, so holidays, rest days, the
  * leaving date and leave are the same as everywhere else. Check-ins wait
- * on B-01. Pure: no database, no clock.
+ * on B-01: until FSM's shift check-ins can be read, `measured` is false
+ * and no day is marked late, early or absent, because a missing check-in
+ * would only mean the portal cannot see it. Pure: no database, no clock.
  */
 
 export type AttendanceLeave = { technicianFsmId: string; startAt: string; endAt: string; category: string | null };
@@ -29,6 +31,8 @@ export type AttendanceDay = {
   checkIn: string | null;
   checkOut: string | null;
   presentMinutes: number | null;
+  /** False while shift check-ins cannot be read: the flags below say nothing. */
+  measured: boolean;
   late: boolean;
   lateMinutes: number;
   early: boolean;
@@ -56,8 +60,11 @@ export function computeAttendance(input: {
   recorded: RecordedCheckIn[];
   leave: AttendanceLeave[];
   lateToleranceMinutes: number;
+  /** Whether shift check-ins can be read at all (B-01). Default true. */
+  shiftCheckInsAvailable?: boolean;
   timeZone?: string;
 }): AttendanceDay[] {
+  const measured = input.shiftCheckInsAvailable !== false;
   const windows = new Map<string, ShiftWindow[]>(
     input.availability.map((t) => [t.fsmId, t.days.map((d) => ({ date: d.date, start: d.windowStart, end: d.windowEnd }))]),
   );
@@ -95,7 +102,7 @@ export function computeAttendance(input: {
       const checkOut = outs.get(key) ?? null;
       const shiftMinutes = day.windowMinutes - day.breakMinutes;
       const wholeLeave = day.status === "working" && shiftMinutes > 0 && day.leaveMinutes >= shiftMinutes;
-      const working = day.status === "working" && !wholeLeave;
+      const working = day.status === "working" && !wholeLeave && measured;
       const lateMinutes =
         working && checkIn && day.windowStart
           ? Math.max(0, Math.floor((Date.parse(checkIn) - Date.parse(day.windowStart)) / MINUTE))
@@ -109,12 +116,13 @@ export function computeAttendance(input: {
         checkIn,
         checkOut,
         presentMinutes: checkIn && checkOut && checkOut > checkIn ? Math.round((Date.parse(checkOut) - Date.parse(checkIn)) / MINUTE) : null,
+        measured,
         late: lateMinutes > input.lateToleranceMinutes,
         lateMinutes,
         early: working && !!checkOut && !!day.windowEnd && checkOut < day.windowEnd,
         absent: working && !checkIn,
         leaveCategory: day.leaveMinutes > 0 ? leaveCategory(tech.fsmId, day.date) : null,
-        partLeave: working && day.leaveMinutes > 0,
+        partLeave: day.status === "working" && !wholeLeave && day.leaveMinutes > 0,
       });
     }
   }

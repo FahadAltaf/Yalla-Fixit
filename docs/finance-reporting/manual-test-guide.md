@@ -261,6 +261,22 @@ That prints the N7 / N8 / N13 / N14 alerts that *would* go out today, and the ba
 anything. Running it without `--plan` sends them (in-app only, through the safety rail); N7 needs recipients
 set under Settings → Reporting → Quotations.
 
+## 5c. Attendance and compliance (P7, ahead of check-in data)
+
+Apply migration `20261023100000` and expose `hr` first (migration log, row 10). Give your role
+*Daily attendance* View/Export and *Check-in compliance* View/Export; **Edit** (waive) and **Approve** (finalise)
+are not inherited by administrators, so tick them for whoever should hold them.
+
+| # | Do | Expect |
+|---|---|---|
+| 5c.1 | **Reports → App compliance** | An "incomplete data" note: shift check-ins not counted (B-01) with the number owed this month; appointment check-ins not counted (D-15). Cards show "—" rather than 0 % or penalties. Every technician listed with *Owed (shift · appointment)* |
+| 5c.2 | **Settings → Reporting → Compliance**: turn on *Count FSM actual times as appointment check-ins*, save, reload the report | Appointment check-ins now counted: performed where FSM has actual times, missed where it does not. Penalties still "—" until a threshold is set (D-09) |
+| 5c.3 | **Check-ins** tab, tick two missed rows, **Waive selected** with a reason | They move to *Waived* with your name; the technician's required and performed both drop by the number waived |
+| 5c.4 | **Waive an outage**: a day, 08:00–10:00, a reason | Every miss due in that window, for everyone, waived in one action |
+| 5c.5 | Choose September in the month filter | Disputes closed on 25 October. **Finalise month** (Approve holders) is refused: "finalised only on complete check-in data" (B-01) |
+| 5c.6 | Turn the setting back off | The report returns to the state in 5c.1; waivers stay on record |
+| 5c.7 | **Reports → Daily attendance** | Note that check-ins are not available; days show shift, leave (with type), holidays, rest days and *Work in FSM* (first job start to last job end); *Late* and *Absent* cards show "—". **Monthly summary** tab per technician |
+
 ## 6. Automated tests
 
 Run from the branch folder:
@@ -269,7 +285,7 @@ Run from the branch folder:
 npm test
 ```
 
-Expect `# pass 163`, `# fail 0` (sync engine, queue rules, metrics, digest, safety rails, available hours,
+Expect `# pass 165`, `# fail 0` (sync engine, queue rules, metrics, digest, safety rails, available hours,
 quotation ageing, exception rules, utilization, capacity, alert planning, compliance and attendance).
 
 ```bash
@@ -277,7 +293,7 @@ bash scripts/db-harness/run.sh
 ```
 
 Needs the local PostgreSQL 15 the harness uses. It builds a throwaway database, applies every migration twice,
-runs 153 checks (including Q-1042 giving 41.7 / 75.0 / 100 %, double invoicing refused, append-only history)
+runs 169 checks (including Q-1042 giving 41.7 / 75.0 / 100 %, double invoicing refused, append-only history)
 and a rollback round trip. Expect `== all checks passed`.
 
 ## What is not built yet (don't look for it)
@@ -285,4 +301,5 @@ and a rollback round trip. Expect `== all checks passed`.
 - The automatic trigger that puts completed work into the queue (DEV-433): waits on decisions D-01..D-03.
   Until then the queue holds only the six test items.
 - The completion report link on the item screen (B-01).
-- Travel time on utilization (B-01). Attendance, compliance and revenue reports: P7 onwards.
+- Travel time on utilization (B-01). Revenue report (P8: D-14, D-17).
+- Disputes and the technician's own compliance view (D-10, D-19); missed check-in alerts N5/N6; emails E2/E3.

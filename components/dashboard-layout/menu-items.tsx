@@ -37,7 +37,9 @@ const canUseReports = (user: User) =>
   hasResourceAction(user, ResourceType.REPORTS_QUOTATIONS, ActionType.VIEW) ||
   hasResourceAction(user, ResourceType.REPORTS_UTILIZATION, ActionType.VIEW) ||
   hasResourceAction(user, ResourceType.REPORTS_CAPACITY, ActionType.VIEW) ||
-  hasResourceAction(user, ResourceType.REPORTS_EXCEPTIONS, ActionType.VIEW);
+  hasResourceAction(user, ResourceType.REPORTS_EXCEPTIONS, ActionType.VIEW) ||
+  hasResourceAction(user, ResourceType.REPORTS_ATTENDANCE, ActionType.VIEW) ||
+  hasResourceAction(user, ResourceType.COMPLIANCE, ActionType.VIEW);
 
 // hasViewPermission and filter functions unchanged
 const hasViewPermission = (
@@ -208,6 +210,16 @@ export const baseSectionsItems: MenuItem[] = [
         title: "Exception reports",
         url: "/reports/exceptions",
         resource: ResourceType.REPORTS_EXCEPTIONS,
+      },
+      {
+        title: "Daily attendance",
+        url: "/reports/attendance",
+        resource: ResourceType.REPORTS_ATTENDANCE,
+      },
+      {
+        title: "App compliance",
+        url: "/reports/compliance",
+        resource: ResourceType.COMPLIANCE,
       },
     ],
   },

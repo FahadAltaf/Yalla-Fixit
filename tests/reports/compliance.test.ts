@@ -269,3 +269,17 @@ test("attendance: late beyond the tolerance, early leaving, absent, leave and re
     { shift: 4, present: 3, late: 1, early: 1, absent: 1, leave: 1 },
   );
 });
+
+test("without FSM check-ins nobody is marked absent, late or early: the portal just cannot see them (B-01)", () => {
+  const days = computeAttendance({
+    availability: availability({ from: "2026-10-05", to: "2026-10-06" }),
+    recorded: [],
+    leave: [],
+    lateToleranceMinutes: 15,
+    shiftCheckInsAvailable: false,
+    timeZone: TZ,
+  });
+  assert.equal(days.length, 2);
+  assert.ok(days.every((d) => !d.measured && !d.absent && !d.late && !d.early));
+  assert.equal(summariseAttendance(days)[0].shiftDays, 2, "the roster is still shown");
+});

@@ -67,6 +67,10 @@ export const reportingSettingsSchema = z.object({
     disputeCutoffDay: z.number().int().min(1).max(28),
     /** E3: the final monthly report. Empty = nobody until set. */
     hrRecipientUserIds: userIds,
+    /** Provisional (D-15): read an appointment's FSM actual start and end
+        as its check-in and check-out. Off until the business confirms it;
+        until then no appointment check-in is counted as performed. */
+    appointmentActualsAsCheckIns: z.boolean(),
   }),
   capacity: z.object({
     horizonDays: z.number().int().min(1).max(90),
@@ -128,6 +132,7 @@ export function getReportingSettingsDefaults(): ReportingSettings {
       monthlyCapAed: 500,
       disputeCutoffDay: 25,
       hrRecipientUserIds: [],
+      appointmentActualsAsCheckIns: false,
     },
     capacity: { horizonDays: 14, spareBelowPercent: 50, alertRecipientUserIds: [] },
     exceptions: { completedWithoutFlagAfterDays: 3 },
