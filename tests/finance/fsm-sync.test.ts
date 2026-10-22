@@ -390,3 +390,18 @@ test("a read only minutes newer than a change is not trusted as current (clock d
   const again = await sync("work_orders", "incremental", fsm, mem, 100, { now: () => new Date(iso(34)) });
   assert.equal(again.counts.detailCalls, 1, "read 3 minutes after the change: read again");
 });
+
+test("a headers-only run (details: false) reads the lists and no work order or crew in full", async () => {
+  const wo = { id: "W1", Name: "WO-1", Status: "In Progress", Modified_Time: iso(30) };
+  const appt = { id: "A1", Name: "AP-1", Status: "Completed", Work_Order: { id: "W1" }, Modified_Time: iso(31) };
+  const fsm = fakeFsm({ Work_Orders: [wo], Service_Appointments: [appt] }, { W1: { ...wo, Service_Line_Items: [{ id: "L1", Modified_Time: iso(30) }] } });
+  const mem = memoryStore();
+  mem.states.get("work_orders")!.watermark = iso(20);
+  mem.states.get("appointments")!.watermark = iso(20);
+  await sync("work_orders", "incremental", fsm, mem, 100, { details: false });
+  await sync("appointments", "incremental", fsm, mem, 100, { details: false });
+  assert.equal(fsm.paths.length, 2, "one list call each");
+  assert.ok(fsm.paths.every((p) => p.includes("?")), "no detail call");
+  assert.ok(mem.tables.work_orders.has("W1") && mem.tables.appointments.has("A1"), "headers are stored");
+  assert.equal(mem.tables.lines.size, 0, "lines wait for the work order to be opened");
+});

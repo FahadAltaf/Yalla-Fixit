@@ -1,5 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import type { QueueStatus } from "@/lib/server/finance/queue";
+import { INVOICE_STATUS_LABELS, type InvoiceStatus } from "@/lib/finance/line-status";
 import { CHART_COLOR } from "@/lib/snagging/chart-palette";
 import { cn } from "@/lib/utils";
 
@@ -67,4 +68,40 @@ export function daysSince(iso: string, now = Date.now()): number {
 
 export function itemCode(number: number): string {
   return `FQ-${number}`;
+}
+
+/* FSM's work order statuses, in the same soft tints: done is green, being worked is the brand, booked is amber, stopped is grey. */
+const WORK_ORDER_STATUS_STYLES: Record<string, string> = {
+  Completed: "bg-success/10 text-success",
+  Closed: "bg-success/10 text-success",
+  "In Progress": "bg-brand-50 text-brand",
+  "Scheduled Appointment": "bg-warning/10 text-warning",
+  Dispatched: "bg-warning/10 text-warning",
+  New: "bg-mist text-ink-soft",
+  Cancelled: "bg-mist text-ink-soft",
+  "Cannot Complete": "bg-destructive/10 text-destructive",
+};
+
+export function WorkOrderStatusBadge({ status }: { status: string | null }) {
+  return (
+    <Badge variant="secondary" className={cn("border-0 font-medium whitespace-nowrap", WORK_ORDER_STATUS_STYLES[status ?? ""] ?? "bg-mist text-ink-soft")}>
+      {status ?? "No status"}
+    </Badge>
+  );
+}
+
+/* Invoicing by line: not started is grey, ready is the brand, part-way is amber, done is green. */
+const INVOICE_STATUS_STYLES: Record<InvoiceStatus, string> = {
+  not_ready: "bg-mist text-ink-soft",
+  ready: "bg-brand-50 text-brand",
+  partially_invoiced: "bg-warning/10 text-warning",
+  invoiced: "bg-success/10 text-success",
+};
+
+export function InvoiceStatusBadge({ status }: { status: InvoiceStatus }) {
+  return (
+    <Badge variant="secondary" className={cn("border-0 font-medium whitespace-nowrap", INVOICE_STATUS_STYLES[status])}>
+      {INVOICE_STATUS_LABELS[status]}
+    </Badge>
+  );
 }

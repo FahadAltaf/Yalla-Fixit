@@ -74,10 +74,11 @@ select
   has_schema_privilege('service_role', 'fsm', 'USAGE')                              as server_schema_usage
 ) post;
 
--- 20261021100000 (+ 20261021110000's view): expect 5, 2, 6, 0, f, t, f
+-- 20261021100000 (+ 20261021110000's view): 5, 2, 6, 0, f, t, f on its own; the harness
+-- applies 20261024100000 too, which adds 4 tables and 2 functions: 9, 2, 8, 0, f, t, f.
 SELECT harness.expect(row(tables, views, functions, api_table_grants, api_schema_usage, server_schema_usage, server_can_write_directly)
-                      = row(5::bigint, 2::bigint, 6::bigint, 0::bigint, false, true, false),
-                      '20261021100000 post-check returns 5, 2, 6, 0, f, t, f once the list view exists')
+                      = row(9::bigint, 2::bigint, 8::bigint, 0::bigint, false, true, false),
+                      '20261021100000 post-check (with the line ledger) returns 9, 2, 8, 0, f, t, f')
 FROM (
 select
   (select count(*) from pg_class where relnamespace = 'finance'::regnamespace and relkind = 'r')   as tables,

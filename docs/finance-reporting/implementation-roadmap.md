@@ -242,6 +242,32 @@ next phase).
 - **Risks**: employee penalties; HR and legal confirmation outstanding (D-11). Penalties are calculated and
   reported only.
 
+## Invoicing by work order (22 Oct, the user's direction) · **A, B and C built**
+
+The user redirected invoicing: Finance works from FSM work orders and their line items, marks work Ready to
+invoice in the portal (a whole work order or single lines), and records MAHER invoices against lines in full
+or in part. This replaces the queue-item model for new work (the six test items stay in the database).
+
+- **A, loading and caching (built)**: Finance → Work orders lists the copy's work orders raised in the chosen
+  dates (default 30 days, at most 4 months back). Refresh reads FSM's work order, quotation and appointment
+  lists for what changed (headers only: a new `details: false` sync mode, a page or two of calls). A work
+  order's line items are read when it is opened, one call, and only if the copy is older than the work
+  order's or its appointments' last change; Refresh on the work order re-reads it. Pages are cached by URL
+  (the overview's section cache), so Back and reopening cost nothing; the list's filters live in the URL.
+  First 30 days: 379 work orders, all with lines already in the copy, so no first-load calls were needed.
+- **B, ledger (built)**: migration `20261024100000` (`finance.line_states`, `line_invoices`,
+  `line_invoice_allocations`, `line_events`; `set_lines_ready`, `record_line_invoice`). Line status: Not ready,
+  Ready, Partially invoiced, Invoiced; work order rolls up the same. Mark ready (Finance queue Edit or a
+  coordinator), record invoice (Finance queue Approve) with amount or % per line. 19 database checks.
+- **C, upload and AI scan (built)**: Upload invoice (list and work order) stores the PDF or photo under
+  `invoices/` in the private bucket; OpenAI (Responses API, strict JSON schema) reads number, date, totals,
+  work order and quotation numbers and lines; `lib/finance/invoice-match.ts` proposes lines and amounts (by
+  the numbers printed, the amount left, 5 % VAT taken off, description overlap; never beyond what is left; a
+  number alone is not enough); the review screen lets the person correct, add lines and confirm. The file and
+  what the scan read are kept with the invoice. Needs `OPENAI_API_KEY` (`OPENAI_INVOICE_MODEL` optional,
+  default `gpt-4.1-mini`); not yet run against a real MAHER invoice.
+- **D (after)**: metrics and the old queue pages on the new model; work-order holds, queries and exclusions.
+
 ## P8 — FSM-custom reports · S–M
 
 - **Jira**: DEV-454. **Depends on**: P2; **D-14, D-17**; ratings wait on B-01.

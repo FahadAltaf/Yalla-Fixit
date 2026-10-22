@@ -53,6 +53,14 @@ export type SyncOptions = {
   leaseSeconds: number;
   /** Backfill reads details only for records modified on or after this. */
   backfillDetailSince: string | null;
+  /**
+   * Incremental and reconcile runs read each changed record's detail (a
+   * work order's lines, an appointment's crew). False reads the lists
+   * only: the invoicing screens read a work order's lines when it is
+   * opened, so a list refresh costs a page or two of calls, not one per
+   * changed work order.
+   */
+  details: boolean;
   now: () => Date;
   newId: () => string;
 };
@@ -64,6 +72,7 @@ export const DEFAULT_SYNC_OPTIONS: SyncOptions = {
   perPage: 200,
   leaseSeconds: 900,
   backfillDetailSince: null,
+  details: true,
   now: () => new Date(),
   newId: () => randomUUID(),
 };
@@ -81,7 +90,7 @@ export type SyncSummary = {
 
 type FsmRecord = Record<string, unknown>;
 
-class FsmListError extends Error {}
+export class FsmListError extends Error {}
 
 const byModified = (a: FsmRecord, b: FsmRecord) =>
   Date.parse(modifiedTime(a) ?? "") - Date.parse(modifiedTime(b) ?? "");
@@ -97,10 +106,38 @@ function moreRecords(json: unknown): boolean {
   return Boolean((json as { info?: { more_records?: unknown } } | null)?.info?.more_records);
 }
 
-function messageOf(status: number, json: unknown): string {
+export function messageOf(status: number, json: unknown): string {
   const body = json as { code?: unknown; message?: unknown; error?: unknown } | null;
   const detail = [body?.code, body?.message, body?.error].filter((x) => typeof x === "string").join(": ");
   return `FSM ${status}${detail ? ` ${detail}` : ""}`;
+}
+
+/**
+ * One work order in full, header and lines, from its detail call. Shared by
+ * the sync and by the invoicing screens, which read a work order when it is
+ * opened. Returns false when FSM no longer has it.
+ */
+export async function readWorkOrderInFull(input: {
+  workOrderId: string;
+  get: (path: string) => Promise<{ ok: boolean; status: number; json: unknown }>;
+  store: Pick<SyncStore, "upsertWorkOrders" | "syncLineItems">;
+  now: () => Date;
+}): Promise<{ found: boolean; written: number }> {
+  const seenAt = input.now().toISOString();
+  const res = await input.get(`/Work_Orders/${encodeURIComponent(input.workOrderId)}`);
+  if (res.status === 204 || res.status === 404) return { found: false, written: 0 };
+  if (!res.ok) throw new FsmListError(messageOf(res.status, res.json));
+  const record = dataOf(res.json)[0];
+  if (!record) return { found: false, written: 0 };
+  const header = mapWorkOrder(record);
+  if (!header.fsm_work_order_id || !header.modified_time) return { found: true, written: 0 };
+  const written = (await input.store.upsertWorkOrders([header])).written;
+  const lines = storable(
+    ((record.Service_Line_Items as FsmRecord[] | undefined) ?? []).map((line) => mapLineItem(line, header.fsm_estimate_id)),
+    (row) => row.fsm_line_id,
+  );
+  await input.store.syncLineItems(input.workOrderId, seenAt, lines.rows);
+  return { found: true, written };
 }
 
 export async function runFsmSync(input: {
@@ -161,26 +198,9 @@ export async function runFsmSync(input: {
   const refreshWorkOrder = async (workOrderId: string, changedAt: string | null) => {
     if (refreshed.has(workOrderId) || isCurrent(linesSeen.get(workOrderId), changedAt)) return;
     const seenAt = options.now().toISOString();
-    const res = await get(`/Work_Orders/${encodeURIComponent(workOrderId)}`, true);
-    if (res.status === 204 || res.status === 404) {
-      refreshed.add(workOrderId);
-      return;
-    }
-    if (!res.ok) throw new FsmListError(messageOf(res.status, res.json));
-    const record = dataOf(res.json)[0];
-    if (!record) return;
-    const header = mapWorkOrder(record);
-    if (header.fsm_work_order_id && header.modified_time) {
-      counts.recordsWritten += (await store.upsertWorkOrders([header])).written;
-      const lines = storable(
-        ((record.Service_Line_Items as FsmRecord[] | undefined) ?? []).map((line) =>
-          mapLineItem(line, header.fsm_estimate_id),
-        ),
-        (row) => row.fsm_line_id,
-      );
-      await store.syncLineItems(workOrderId, seenAt, lines.rows);
-      linesSeen.set(workOrderId, seenAt);
-    }
+    const result = await readWorkOrderInFull({ workOrderId, get: (path) => get(path, true), store, now: () => new Date(seenAt) });
+    counts.recordsWritten += result.written;
+    if (result.found) linesSeen.set(workOrderId, seenAt);
     refreshed.add(workOrderId);
   };
 
@@ -364,7 +384,7 @@ export async function runFsmSync(input: {
         );
       }
 
-      const { doneThrough, outOfBudget } = await processRecords(collected, () => true);
+      const { doneThrough, outOfBudget } = await processRecords(collected, () => options.details);
       summary.status = outOfBudget ? "budget_exhausted" : "succeeded";
       if (kind === "reconcile") {
         /* A reconcile re-reads; it never sets the watermark. Before the

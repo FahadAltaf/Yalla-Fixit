@@ -277,6 +277,30 @@ are not inherited by administrators, so tick them for whoever should hold them.
 | 5c.6 | Turn the setting back off | The report returns to the state in 5c.1; waivers stay on record |
 | 5c.7 | **Reports → Daily attendance** | Note that check-ins are not available; days show shift, leave (with type), holidays, rest days and *Work in FSM* (first job start to last job end); *Late* and *Absent* cards show "—". **Monthly summary** tab per technician |
 
+## 5d. Invoicing by work order (22 Oct)
+
+Apply migration `20261024100000` first (migration log, row 11). Before it the screens load but say Ready
+marks and invoices are off.
+
+| # | Do | Expect |
+|---|---|---|
+| 5d.1 | **Finance → Work orders** | The last 30 days of work orders from the FSM copy; cards for value, ready to invoice, partially invoiced, invoiced; "FSM … updated" line |
+| 5d.2 | Change the dates to January | Cut back to four months, with a note |
+| 5d.3 | **Refresh** | A toast with the changes and calls used (a few); pressing again within a minute says "already up to date" |
+| 5d.4 | Open a work order, go Back, open it again | Back is instant and keeps the filters; the second opening does not reload |
+| 5d.5 | **Refresh from FSM** on the work order | "Read from Zoho FSM"; the "Line items read …" line shows now |
+| 5d.6 | Tick one line → **Mark ready** | Its Invoicing shows *Ready to invoice* by you; the History tab has a row; the list's *Ready to invoice* card grows |
+| 5d.7 | **Mark work order ready** | All lines ready (the confirm says how many are not completed in FSM) |
+| 5d.8 | **Record invoice**: a TEST- number, 50 % of one line | That line is *Partially invoiced* with the amount left; the work order is *Partially invoiced*; the Invoices tab lists it |
+| 5d.9 | Record the rest of that line on a second invoice; try the first number again | Line *Invoiced*; the repeated MAHER number is refused |
+| 5d.10 | Try more than the amount left | Refused before sending, and by the database if forced |
+
+| 5d.11 | Without `OPENAI_API_KEY`: **Upload invoice** | "Invoice scanning is not set up yet"; nothing is uploaded |
+| 5d.12 | With the key in `.env.local` (restart the dev server): upload a MAHER PDF | "Reading the invoice", then a review: lines matched with *Strong match / Likely / Check*, amounts editable, unmatched lines listed, any work order not in the portal named |
+| 5d.13 | Correct an amount, add a line, **Confirm and record** | Recorded like 5d.8; the Invoices tab shows "invoice file attached" |
+
+Invoices and history are append-only records, like the rest of Finance: use `TEST-` numbers.
+
 ## 6. Automated tests
 
 Run from the branch folder:
@@ -285,7 +309,7 @@ Run from the branch folder:
 npm test
 ```
 
-Expect `# pass 165`, `# fail 0` (sync engine, queue rules, metrics, digest, safety rails, available hours,
+Expect `# pass 174`, `# fail 0` (sync engine, queue rules, metrics, digest, safety rails, available hours,
 quotation ageing, exception rules, utilization, capacity, alert planning, compliance and attendance).
 
 ```bash
@@ -293,7 +317,7 @@ bash scripts/db-harness/run.sh
 ```
 
 Needs the local PostgreSQL 15 the harness uses. It builds a throwaway database, applies every migration twice,
-runs 169 checks (including Q-1042 giving 41.7 / 75.0 / 100 %, double invoicing refused, append-only history)
+runs 188 checks (including Q-1042 giving 41.7 / 75.0 / 100 %, double invoicing refused, append-only history)
 and a rollback round trip. Expect `== all checks passed`.
 
 ## What is not built yet (don't look for it)

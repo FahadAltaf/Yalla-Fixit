@@ -2,6 +2,8 @@ import { executeRESTBackend } from "@/lib/rest-server";
 import type { PeriodMetrics, QueueMetrics, QueueSummary } from "@/lib/finance/metrics";
 import type { QueueAction, QueueStatus } from "@/lib/server/finance/queue";
 import type { QueueItemDetail, QueueRow } from "@/lib/server/finance/queue-read";
+import type { ScanProposal } from "@/lib/server/finance/invoice-scan";
+import type { RefreshResult, WorkOrderDetail } from "@/lib/server/finance/work-orders";
 
 export type QueueListFilters = {
   statuses: QueueStatus[];
@@ -41,6 +43,38 @@ export const financeService = {
     if (filters.q) params.q = filters.q;
     return executeRESTBackend<QueueListResponse>("/api/finance/queue", { params, signal });
   },
+
+  /** Reads what changed in FSM (headers only); the list reloads after. */
+  refreshWorkOrders: () =>
+    executeRESTBackend<{ data: RefreshResult }>("/api/finance/work-orders/refresh", { method: "POST" }).then((r) => r.data),
+
+  /** One work order with its lines re-read from FSM (one call). */
+  refreshWorkOrder: (id: string) =>
+    executeRESTBackend<{ data: WorkOrderDetail }>(`/api/finance/work-orders/${id}`, { params: { refresh: "1" } }).then((r) => r.data),
+
+  /** Lines (or, with none given, the whole work order) Ready to invoice, or not. */
+  setReady: (workOrderId: string, input: { lines?: string[]; ready: boolean; note?: string | null }) =>
+    executeRESTBackend<{ changed: number }>(`/api/finance/work-orders/${workOrderId}/ready`, { method: "POST", body: input }),
+
+  /** A MAHER invoice against lines, in full or in part. */
+  recordLineInvoice: (input: {
+    idempotencyKey: string;
+    number: string;
+    date: string;
+    total: number;
+    note?: string | null;
+    allocations: Array<{ line: string; amount: number }>;
+    filePath?: string | null;
+    scan?: Record<string, unknown> | null;
+  }) => executeRESTBackend<{ invoiceId: string }>("/api/finance/invoices", { method: "POST", body: input }),
+
+  /** A one-time upload URL for a MAHER invoice to be read (503 when scanning is not set up). */
+  signInvoiceUpload: (input: { fileName: string; contentType: string; size: number }) =>
+    executeRESTBackend<{ path: string; signedUrl: string; contentType: string }>("/api/finance/invoices/upload", { method: "POST", body: input }),
+
+  /** Reads the uploaded invoice and proposes the lines it covers; records nothing. */
+  scanInvoice: (input: { path: string; workOrderId?: string | null }) =>
+    executeRESTBackend<ScanProposal>("/api/finance/invoices/scan", { method: "POST", body: input }),
 
   getItem: (id: string) => executeRESTBackend<QueueItemResponse>(`/api/finance/queue/${id}`),
 
