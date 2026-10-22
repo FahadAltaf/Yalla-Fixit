@@ -33,7 +33,8 @@ export type MetricExclusion = { queueItemId: string; reason: string; decision: s
 const OPEN = new Set(["pending", "in_progress", "query_raised", "on_hold", "partially_invoiced"]);
 const DAY_MS = 86_400_000;
 
-const round1 = (n: number) => Math.round(n * 10) / 10;
+/* Days to invoice keep minutes (a same-day invoice is not "0 days"); the page words them. */
+const roundDays = (n: number) => Math.round(n * 10_000) / 10_000;
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /** How many invoices: rows of one invoice (one per work order it covers) count once. */
@@ -81,7 +82,7 @@ export function summarise(items: MetricItem[], invoices: MetricInvoice[]): Queue
     partiallyInvoiced: bucket("partially_invoiced"),
     excluded: bucket("excluded"),
     invoiced: bucket("invoiced"),
-    averageDaysToInvoice: spans.length ? round1(spans.reduce((a, b) => a + b, 0) / spans.length) : null,
+    averageDaysToInvoice: spans.length ? roundDays(spans.reduce((a, b) => a + b, 0) / spans.length) : null,
   };
 }
 
@@ -142,10 +143,10 @@ export function computeQueueMetrics(
     openValue: round2(open.reduce((s, i) => s + i.value, 0)),
     ageing,
     daysToInvoice: {
-      average: spans.length ? round1(spans.reduce((a, s) => a + s.days, 0) / spans.length) : null,
+      average: spans.length ? roundDays(spans.reduce((a, s) => a + s.days, 0) / spans.length) : null,
       byUser: users.map((user) => {
         const mine = spans.filter((s) => s.user === user);
-        return { user, invoices: mine.length, averageDays: round1(mine.reduce((a, s) => a + s.days, 0) / mine.length) };
+        return { user, invoices: mine.length, averageDays: roundDays(mine.reduce((a, s) => a + s.days, 0) / mine.length) };
       }),
     },
     onHold: items
@@ -288,11 +289,11 @@ export function computePeriodMetrics(input: {
       value: invoicedValue,
       trend: previousValue > 0 ? Math.round(((invoicedValue - previousValue) / previousValue) * 100) : null,
     },
-    averageDaysToInvoice: spans.length ? round1(spans.reduce((a, s) => a + s.days, 0) / spans.length) : null,
+    averageDaysToInvoice: spans.length ? roundDays(spans.reduce((a, s) => a + s.days, 0) / spans.length) : null,
     daysToInvoiceByUser: users
       .map((user) => {
         const mine = spans.filter((s) => s.user === user);
-        return { user, invoices: mine.length, averageDays: round1(mine.reduce((a, s) => a + s.days, 0) / mine.length) };
+        return { user, invoices: mine.length, averageDays: roundDays(mine.reduce((a, s) => a + s.days, 0) / mine.length) };
       })
       .sort((a, b) => b.invoices - a.invoices || a.user.localeCompare(b.user)),
     variance: {

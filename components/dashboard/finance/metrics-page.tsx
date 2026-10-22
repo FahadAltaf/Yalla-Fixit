@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Activity,
-  ArrowLeft,
   ArrowRight,
   Ban,
   Clock,
@@ -44,7 +43,7 @@ import { QUEUE_STATUS_LABELS, type QueueStatus } from "@/lib/finance/line-status
 import { CHART_COLOR } from "@/lib/snagging/chart-palette";
 import { financeService, type FinanceMetricsResponse } from "@/modules/finance/finance-service";
 
-import { aed } from "./shared";
+import { aed, formatDuration } from "./shared";
 
 /**
  * Invoicing metrics (BRD §5.1 Step 8, §6.9; DEV-441), laid out as the
@@ -99,7 +98,13 @@ const statusConfig = Object.fromEntries(
 ) satisfies ChartConfig;
 
 const compactAed = (value: number) =>
-  value >= 1_000_000 ? `${(value / 1_000_000).toFixed(1)}M` : value >= 1_000 ? `${Math.round(value / 1_000)}k` : String(Math.round(value));
+  value >= 1_000_000
+    ? `${(value / 1_000_000).toFixed(1)}M`
+    : value >= 10_000
+      ? `${Math.round(value / 1_000)}k`
+      : value >= 1_000
+        ? `${(value / 1_000).toFixed(1).replace(/\.0$/, "")}k`
+        : String(Math.round(value));
 
 export function FinanceMetricsPage() {
   const router = useRouter();
@@ -146,20 +151,11 @@ export function FinanceMetricsPage() {
   const openCount = statusSlices.reduce((sum, slice) => sum + slice.count, 0);
   const activityTotal = (period?.activity ?? []).reduce((sum, p) => sum + p.enteredCount + p.invoicedCount, 0);
   const ageingTotal = (metrics?.ageing ?? []).reduce((sum, band) => sum + band.count, 0);
-  const slowest = Math.max(1, ...(period?.daysToInvoiceByUser ?? []).map((row) => row.averageDays));
+  const slowest = Math.max(1e-6, ...(period?.daysToInvoiceByUser ?? []).map((row) => row.averageDays));
   const widestReason = Math.max(1, ...(metrics?.excludedByReason ?? []).map((row) => row.value));
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <Button asChild variant="ghost" size="sm" className="-ml-2">
-          <Link href="/finance/queue">
-            <ArrowLeft className="size-4" />
-            Ready to invoice
-          </Link>
-        </Button>
-      </div>
-
       <PageHeading
         eyebrow="Finance"
         title="Invoicing metrics"
@@ -223,8 +219,8 @@ export function FinanceMetricsPage() {
             href="/finance/queue?status=invoiced"
           />
           <StatCard
-            label="Days to invoice"
-            value={period.averageDaysToInvoice === null ? "—" : period.averageDaysToInvoice}
+            label="Time to invoice"
+            value={formatDuration(period.averageDaysToInvoice)}
             headline={period.averageDaysToInvoice === null ? "No invoice in this period" : "Average, marked ready to invoiced"}
             caption={`Over invoices recorded in the last ${range}`}
           />
@@ -289,7 +285,7 @@ export function FinanceMetricsPage() {
         </SectionShell>
 
         <SectionShell
-          title="Days to invoice, by Finance user"
+          title="Time to invoice, by Finance user"
           description={`From the lines being marked ready to the MAHER invoice, over the last ${range}.`}
           icon={<Clock />}
           centerBody
@@ -319,16 +315,19 @@ export function FinanceMetricsPage() {
                     className="h-2 flex-1"
                     indicatorStyle={{ background: CHART_COLOR.brand }}
                   />
-                  <span className="w-24 shrink-0 text-right text-sm tabular-nums">
-                    <span className="font-medium">{row.averageDays}</span>
-                    <span className="text-muted-foreground"> d · {row.invoices}</span>
+                  <span className="w-36 shrink-0 text-right text-sm tabular-nums">
+                    <span className="font-medium">{formatDuration(row.averageDays)}</span>
+                    <span className="text-muted-foreground">
+                      {" "}
+                      · {row.invoices} {row.invoices === 1 ? "invoice" : "invoices"}
+                    </span>
                   </span>
                 </li>
               ))}
             </ul>
             <FigureTile
               label="Average"
-              value={period?.averageDaysToInvoice === null || period?.averageDaysToInvoice === undefined ? "—" : `${period.averageDaysToInvoice} d`}
+              value={formatDuration(period?.averageDaysToInvoice)}
               note={period ? `Over ${period.invoiced.count} ${period.invoiced.count === 1 ? "invoice" : "invoices"}` : ""}
             />
           </div>

@@ -40,6 +40,9 @@ export function FinanceQueueToolbar({
   agedAfterDays,
   dateLabel = "Entered",
   initialSearch = "",
+  showCoordinator = true,
+  dateBounds,
+  filtersActive,
 }: {
   onSearchChange: (value: string) => void;
   loading: boolean;
@@ -55,11 +58,16 @@ export function FinanceQueueToolbar({
   /** What the date range filters on ("Entered" for queue items, "Raised" for work orders). */
   dateLabel?: string;
   initialSearch?: string;
+  showCoordinator?: boolean;
+  /** The earliest and latest dates that may be picked. */
+  dateBounds?: { min: string; max: string };
+  /** Whether "Clear filters" shows, when the dates are filled in by default. */
+  filtersActive?: boolean;
 }) {
   const searchId = useId();
   const [search, setSearch] = useState(initialSearch);
   const set = (patch: Partial<FinanceQueueToolbarFilters>) => onFiltersChange({ ...filters, ...patch });
-  const anyFilter = filters.client || filters.coordinator || filters.from || filters.to || filters.aged;
+  const anyFilter = filtersActive ?? Boolean(filters.client || filters.coordinator || filters.from || filters.to || filters.aged);
 
   return (
     <div className="flex flex-col gap-4 px-4 py-4 sm:py-6">
@@ -128,22 +136,24 @@ export function FinanceQueueToolbar({
             ))}
           </SelectContent>
         </Select>
-        <Select
-          value={filters.coordinator || ALL}
-          onValueChange={(value) => set({ coordinator: value === ALL ? "" : value })}
-        >
-          <SelectTrigger className="w-full sm:w-52" aria-label="Filter by coordinator">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={ALL}>All coordinators</SelectItem>
-            {coordinators.map((name) => (
-              <SelectItem key={name} value={name}>
-                {name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {showCoordinator ? (
+          <Select
+            value={filters.coordinator || ALL}
+            onValueChange={(value) => set({ coordinator: value === ALL ? "" : value })}
+          >
+            <SelectTrigger className="w-full sm:w-52" aria-label="Filter by coordinator">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL}>All coordinators</SelectItem>
+              {coordinators.map((name) => (
+                <SelectItem key={name} value={name}>
+                  {name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : null}
         <div className="flex items-center gap-2">
           <Label htmlFor="finance-queue-from" className="text-muted-foreground text-xs whitespace-nowrap">
             {dateLabel}
@@ -153,7 +163,8 @@ export function FinanceQueueToolbar({
             type="date"
             className="w-36"
             value={filters.from}
-            max={filters.to || undefined}
+            min={dateBounds?.min}
+            max={filters.to || dateBounds?.max}
             onChange={(event) => set({ from: event.target.value })}
             aria-label={`${dateLabel} from`}
           />
@@ -162,7 +173,8 @@ export function FinanceQueueToolbar({
             type="date"
             className="w-36"
             value={filters.to}
-            min={filters.from || undefined}
+            min={filters.from || dateBounds?.min}
+            max={dateBounds?.max}
             onChange={(event) => set({ to: event.target.value })}
             aria-label={`${dateLabel} to`}
           />

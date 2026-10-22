@@ -1,9 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { BarChart3, FileUp, Info, ReceiptText } from "lucide-react";
+import { Info, ReceiptText } from "lucide-react";
 import { toast } from "sonner";
 
 import { PageHeading, StatCard, StatCardGrid, timeAgo } from "@/components/dashboard/shared/kaizen";
@@ -13,15 +12,18 @@ import { DataTable } from "@/components/data-table";
 import { getWorkOrderQueueColumns } from "@/components/data-table/columns/column-finance-work-orders";
 import { FinanceQueueToolbar, type FinanceQueueToolbarFilters } from "@/components/data-table/toolbars/finance-queue-toolbar";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { useDebounce } from "@/hooks/use-debounce";
 import { QUEUE_STATUS_LABELS, type QueueStatus } from "@/lib/finance/line-status";
+import { addDaysToDateString, todayInZone } from "@/lib/scheduling/org-time";
 import type { WorkOrderList } from "@/lib/server/finance/work-orders";
 
-import { aed } from "./shared";
-import { UploadInvoiceDialog } from "./upload-invoice-dialog";
+import { aed, formatDuration } from "./shared";
+
+/* The list's default dates and furthest reach, as the server works them out (lib/server/finance/work-orders.ts). */
+const DEFAULT_DAYS = 30;
+const MAX_DAYS = 122;
 
 /**
  * Ready to invoice (BRD 5.1, 6.4): the summary strip, then the list with
@@ -58,12 +60,20 @@ export function FinanceWorkOrdersPage() {
     }),
     [params],
   );
+  /* The date boxes always show the dates in use: the last 30 days until changed. */
+  const today = todayInZone();
+  const shownTo = filters.to || today;
+  const dates = {
+    from: filters.from || addDaysToDateString(shownTo, -(DEFAULT_DAYS - 1)),
+    to: shownTo,
+    min: addDaysToDateString(today, -(MAX_DAYS - 1)),
+    max: today,
+  };
   const page = Number(params.get("page") ?? 0) || 0;
   const pageSize = Number(params.get("pageSize") ?? 25) || 25;
   const [search, setSearch] = useState(params.get("q") ?? "");
   const debouncedSearch = useDebounce(search, 400);
   const [refreshing, setRefreshing] = useState(false);
-  const [uploadOpen, setUploadOpen] = useState(false);
 
   /* The URL is the state: Back from a work order lands on the same filters and page. */
   const setParams = (next: Record<string, string | number | boolean>) => {
@@ -114,22 +124,6 @@ export function FinanceWorkOrdersPage() {
         eyebrow="Finance"
         title="Ready to invoice"
         description="FSM work orders, read live from Zoho FSM, at line-item level. Mark work ready, pick it up, raise a query, or record the MAHER invoice in full or in part."
-        actions={
-          <div className="flex flex-wrap gap-2">
-            <Button asChild variant="outline">
-              <Link href="/finance/metrics">
-                <BarChart3 className="size-4" />
-                Invoicing metrics
-              </Link>
-            </Button>
-            {data?.can?.invoice && data.ledgerReady ? (
-              <Button onClick={() => setUploadOpen(true)}>
-                <FileUp className="size-4" />
-                Upload invoice
-              </Button>
-            ) : null}
-          </div>
-        }
       />
 
       {data ? (
@@ -169,8 +163,8 @@ export function FinanceWorkOrdersPage() {
           <StatCard label="On hold" value={summary.onHold.count} headline={aed(summary.onHold.value)} />
           <StatCard label="Excluded value" value={aed(summary.excluded.value)} headline={`${summary.excluded.count} work order(s), verified`} />
           <StatCard
-            label="Average days to invoice"
-            value={summary.averageDaysToInvoice === null ? "—" : summary.averageDaysToInvoice}
+            label="Average time to invoice"
+            value={formatDuration(summary.averageDaysToInvoice)}
             headline={summary.averageDaysToInvoice === null ? "No invoices recorded yet" : `Over ${summary.invoices} invoice(s)`}
           />
         </StatCardGrid>
@@ -198,8 +192,19 @@ export function FinanceWorkOrdersPage() {
               statusOptions={STATUS_FILTERS}
               clients={data?.options.clients ?? []}
               coordinators={data?.options.coordinators ?? []}
-              filters={filters}
-              onFiltersChange={(next) => setParams({ ...next, page: 0 })}
+              filters={{ ...filters, from: dates.from, to: dates.to }}
+              onFiltersChange={(next) =>
+                setParams({
+                  ...next,
+                  /* A date left at its default stays out of the URL. */
+                  from: next.from === dates.from && !filters.from ? "" : next.from,
+                  to: next.to === dates.to && !filters.to ? "" : next.to,
+                  page: 0,
+                })
+              }
+              showCoordinator={false}
+              dateBounds={{ min: dates.min, max: dates.max }}
+              filtersActive={Boolean(filters.client || filters.from || filters.to || filters.aged)}
               agedAfterDays={data?.agedAfterDays ?? 7}
               dateLabel="Raised"
             />
@@ -227,15 +232,6 @@ export function FinanceWorkOrdersPage() {
         />
       </Card>
 
-      {uploadOpen ? (
-        <UploadInvoiceDialog
-          onClose={() => setUploadOpen(false)}
-          onRecorded={() => {
-            setUploadOpen(false);
-            refreshAll();
-          }}
-        />
-      ) : null}
     </div>
   );
 }

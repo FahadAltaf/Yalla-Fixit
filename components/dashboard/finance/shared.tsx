@@ -62,6 +62,19 @@ export function aed(value: number | null | undefined): string {
   return `AED ${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+/** A span given in days, as a person reads it: "2.5 days", "6 h", "15 min", "under a minute". */
+export function formatDuration(days: number | null | undefined): string {
+  if (days === null || days === undefined) return "—";
+  if (days >= 1) {
+    const rounded = Math.round(days * 10) / 10;
+    return `${rounded} ${rounded === 1 ? "day" : "days"}`;
+  }
+  const hours = days * 24;
+  if (hours >= 1) return `${Math.round(hours * 10) / 10} h`;
+  const minutes = Math.round(hours * 60);
+  return minutes >= 1 ? `${minutes} min` : "under a minute";
+}
+
 export function daysSince(iso: string, now = Date.now()): number {
   return Math.max(0, Math.floor((now - Date.parse(iso)) / 86_400_000));
 }

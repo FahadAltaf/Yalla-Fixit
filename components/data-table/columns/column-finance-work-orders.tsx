@@ -46,12 +46,12 @@ export function getWorkOrderQueueColumns(agedAfterDays: number): ColumnDef<WorkO
     },
     {
       id: "value",
-      header: () => <div className="text-right">Value</div>,
+      header: "Value",
       cell: ({ row }) => {
         const r = row.original;
         const ready = r.invoicing.readyValue;
         return (
-          <div className="text-right text-sm font-medium tabular-nums">
+          <div className="text-sm font-medium tabular-nums">
             {aed(r.value)}
             <div className="text-muted-foreground text-xs font-normal">
               {ready > 0 ? `${aed(ready)} ready` : r.invoicing.readyLines ? "ready lines invoiced" : "before VAT"}
@@ -63,11 +63,11 @@ export function getWorkOrderQueueColumns(agedAfterDays: number): ColumnDef<WorkO
     },
     {
       id: "completion",
-      header: () => <div className="text-right">Invoiced</div>,
+      header: "Invoiced",
       cell: ({ row }) => {
         const r = row.original;
         const pct = r.value && r.value > 0 ? Math.min(100, (r.invoicing.invoicedValue / r.value) * 100) : null;
-        return <div className="text-right text-sm tabular-nums">{pct === null ? "—" : `${pct.toFixed(1)}%`}</div>;
+        return <div className="text-sm tabular-nums">{pct === null ? "—" : `${pct.toFixed(1)}%`}</div>;
       },
       enableSorting: false,
     },

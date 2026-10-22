@@ -481,7 +481,7 @@ async function daysToInvoice(
     })
     .filter((v): v is number => v !== null);
   return {
-    averageDaysToInvoice: spans.length ? Math.round((spans.reduce((a, b) => a + b, 0) / spans.length) * 10) / 10 : null,
+    averageDaysToInvoice: spans.length ? Math.round((spans.reduce((a, b) => a + b, 0) / spans.length) * 10_000) / 10_000 : null,
     invoices: invoiceIds.length,
   };
 }

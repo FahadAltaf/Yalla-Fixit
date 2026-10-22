@@ -1,9 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Link from "next/link";
 import {
-  ArrowLeft,
   CheckCheck,
   CircleHelp,
   ExternalLink,
@@ -131,19 +129,9 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
     }
   };
 
-  const back = (
-    <Button asChild variant="ghost" size="sm" className="-ml-2 self-start">
-      <Link href="/finance/queue">
-        <ArrowLeft className="size-4" />
-        Ready to invoice
-      </Link>
-    </Button>
-  );
-
   if (error && !data) {
     return (
       <div className="flex flex-col gap-4">
-        {back}
         {/no such work order/i.test(error) ? (
           <Card className="p-0">
             <EmptyState icon={<FileText />} title="This work order is not in Zoho FSM" description="The link may be wrong, or it was removed in FSM." />
@@ -157,7 +145,6 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
   if (!data) {
     return (
       <div className="flex flex-col gap-4">
-        {back}
         <HeadingSkeleton withActions />
         <SectionSkeleton />
       </div>
@@ -371,7 +358,6 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
 
   return (
     <div className="flex flex-col gap-4">
-      {back}
 
       <Card className="gap-0 overflow-hidden p-0">
         <div className="flex flex-wrap items-center justify-between gap-4 p-5">
