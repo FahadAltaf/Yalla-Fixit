@@ -124,14 +124,22 @@ function appointmentCheckIns(appointments: ComplianceAppointmentRow[]): Recorded
   return out;
 }
 
-/** Who is counted: active technicians, leavers with a date, and anyone who was booked. */
-function inScope(roster: Roster, booked: Set<string>, filters: { technician?: string; team?: string }) {
+/**
+ * Who is counted, as on Utilization: active technicians, leavers with a
+ * leaving date, and an inactive technician with no date only if they
+ * actually worked in the period (an appointment with actual times). Being
+ * booked is not enough: FSM test resources are booked and never work.
+ */
+function inScope(roster: Roster, worked: Set<string>, filters: { technician?: string; team?: string }) {
   return [...roster.values()].filter((t) => {
     if (filters.technician && t.fsmId !== filters.technician) return false;
     if (filters.team && teamKeyOf(t) !== filters.team) return false;
-    return t.isActive || Boolean(t.leavingDate) || booked.has(t.fsmId);
+    return t.isActive || Boolean(t.leavingDate) || worked.has(t.fsmId);
   });
 }
+
+const workedIn = (appointments: ComplianceAppointmentRow[]) =>
+  new Set(appointments.filter((a) => a.actualStart).flatMap((a) => a.technicianIds));
 
 // ---------------------------------------------------------------------
 // The month, worked out (shared by the report, waivers and finalising)
@@ -186,8 +194,7 @@ async function workOutMonth(
   }
 
   const loaded = await loadComplianceAppointments(admin, { from: range.from, to });
-  const booked = new Set(loaded.appointments.flatMap((a) => a.technicianIds));
-  const technicians = inScope(roster, booked, filters);
+  const technicians = inScope(roster, workedIn(loaded.appointments), filters);
   const scopeIds = new Set(technicians.map((t) => t.fsmId));
   const appointments = loaded.appointments
     .map((a) => ({ ...a, technicianIds: a.technicianIds.filter((t) => scopeIds.has(t)) }))
@@ -683,8 +690,7 @@ export async function buildAttendanceReport(
     loadComplianceAppointments(admin, { from, to }),
     dataAsOf(admin),
   ]);
-  const booked = new Set(loaded.appointments.flatMap((a) => a.technicianIds));
-  const technicians = inScope(roster, booked, filters);
+  const technicians = inScope(roster, workedIn(loaded.appointments), filters);
   const input = await loadAvailabilityInput(admin, {
     from,
     to,
