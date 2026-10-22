@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { computeQueueMetrics, daysBetween, summarise, type MetricItem } from "@/lib/finance/metrics";
+import { computePeriodMetrics, computeQueueMetrics, daysBetween, summarise, type MetricItem } from "@/lib/finance/metrics";
 
 const NOW = new Date("2026-10-21T12:00:00Z");
 const daysAgo = (n: number) => new Date(NOW.getTime() - n * 86_400_000).toISOString();
@@ -70,4 +70,29 @@ test("on hold with reasons; excluded value by reason counts verified exclusions 
 test("variance between queue value and invoiced amount", () => {
   const m = computeQueueMetrics(items, invoices, [], NOW);
   assert.deepEqual(m.variance, { invoices: 2, withVariance: 1, total: -500, absoluteTotal: 500 });
+});
+
+test("the window: what entered and was invoiced in the last 7 days, against the 7 before", () => {
+  const p = computePeriodMetrics({ items, invoices, now: NOW, days: 7, agedAfterDays: 7, timeZone: "Asia/Dubai" });
+  assert.equal(p.from, "2026-10-15");
+  assert.equal(p.to, "2026-10-21");
+  assert.equal(p.bucket, "day");
+  assert.equal(p.activity.length, 7);
+  assert.equal(p.activity[0].label, "15 Oct");
+  assert.deepEqual(p.entered, { count: 2, value: 21000 }, "a two days ago and g six days ago");
+  assert.deepEqual(p.invoiced, { count: 1, value: 19500, trend: -22 }, "g this week; f's 25,000 the week before");
+  assert.equal(p.averageDaysToInvoice, 2);
+  assert.deepEqual(p.daysToInvoiceByUser, [{ user: "Finance Two", invoices: 1, averageDays: 2 }]);
+  assert.deepEqual(p.variance, { invoices: 1, withVariance: 1, total: -500, absoluteTotal: 500 });
+  const sum = p.activity.reduce((acc, point) => acc + point.enteredValue + point.invoicedValue, 0);
+  assert.equal(sum, 21000 + 19500, "the chart adds up to the cards");
+});
+
+test("long windows are drawn by week; the aged count is Pending past the setting, now", () => {
+  const p = computePeriodMetrics({ items, invoices, now: NOW, days: 90, agedAfterDays: 1, timeZone: "Asia/Dubai" });
+  assert.equal(p.bucket, "week");
+  assert.ok(p.activity.length >= 13 && p.activity.length <= 14);
+  assert.equal(p.invoiced.count, 2);
+  assert.equal(p.invoiced.trend, null, "nothing in the window before");
+  assert.deepEqual(p.aged, { count: 1, value: 1000, afterDays: 1 });
 });

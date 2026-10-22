@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
   CalendarClock,
+  ChartNoAxesColumn,
   CircleHelp,
   FileText,
   History,
@@ -18,17 +19,26 @@ import {
   X,
   Wallet,
 } from "lucide-react";
+import { Bar, BarChart, XAxis, YAxis } from "recharts";
 import { toast } from "sonner";
 
-import { PageHeading, SectionCard, timeAgo } from "@/components/dashboard/shared/kaizen";
+import { SectionCard, StatCard, StatCardGrid, TabCount, timeAgo } from "@/components/dashboard/shared/kaizen";
 import { ActionDialogContent, ErrorState, HeadingSkeleton, SectionSkeleton, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import {
+  type ChartConfig,
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+} from "@/components/ui/chart";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import {
   EVIDENCE_ACCEPT,
@@ -38,9 +48,11 @@ import {
   evidenceFileName,
 } from "@/lib/finance/evidence";
 import type { QueueAction } from "@/lib/server/finance/queue";
+import { CHART_COLOR } from "@/lib/snagging/chart-palette";
+import { cn } from "@/lib/utils";
 import { financeService, type QueueItemResponse } from "@/modules/finance/finance-service";
 
-import { QueueStatusBadge, TestItemBadge, aed, daysSince, itemCode } from "./shared";
+import { QUEUE_STATUS_LABELS, QueueStatusBadge, TestItemBadge, aed, daysSince, itemCode } from "./shared";
 
 /**
  * One Ready-to-Invoice item (BRD §5.1 Step 3, §6.4, §6.8; DEV-436).
@@ -65,6 +77,22 @@ const EVENT_LABELS: Record<string, string> = {
   exclusion_rejected: "Exclusion rejected",
   invoiced: "Invoiced",
 };
+
+/* Already invoiced is done, this item is the brand, what remains is neutral. */
+const progressConfig = {
+  before: { label: "Invoiced before", color: CHART_COLOR.good },
+  thisItem: { label: "This item", color: CHART_COLOR.brand },
+  remaining: { label: "Remaining", color: CHART_COLOR.neutralSoft },
+} satisfies ChartConfig;
+
+function progressTooltip(value: unknown, name: unknown) {
+  return (
+    <span className="flex w-full items-center justify-between gap-4">
+      <span className="text-muted-foreground">{progressConfig[name as keyof typeof progressConfig]?.label ?? String(name)}</span>
+      <span className="font-medium tabular-nums">{aed(Number(value))}</span>
+    </span>
+  );
+}
 
 const dateTime = (iso: string | null) =>
   iso
@@ -274,122 +302,216 @@ export function FinanceQueueItemPage({ id }: { id: string }) {
     );
   }
 
+  /* What the item is waiting on, said in a band along the header card's
+     bottom edge, as the inspection header does. */
+  const band = openExclusion ? (
+    <HeaderBand tone="warning" icon={<ShieldCheck />} title="Marked not to be invoiced: waiting for verification">
+      <p>
+        {openExclusion.requestedBy ?? "A coordinator"}: {openExclusion.reason}
+        {openExclusion.notes ? ` (${openExclusion.notes})` : ""}
+      </p>
+      <EvidenceLinks itemId={id} paths={openExclusion.evidence} />
+      {can.verify ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            disabled={busy}
+            onClick={() =>
+              void run("Exclusion verified", () => financeService.decideExclusion(openExclusion.id, { decision: "verified" }))
+            }
+          >
+            Verify exclusion
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() =>
+              askNote({
+                action: "reject_exclusion",
+                title: "Reject the exclusion",
+                description: "The item returns to Pending with your note.",
+                label: "Note",
+                submit: "Reject",
+                required: true,
+              })
+            }
+          >
+            Reject
+          </Button>
+        </div>
+      ) : (
+        <p className="mt-1 text-xs">It cannot be invoiced until this is decided.</p>
+      )}
+    </HeaderBand>
+  ) : item.status === "query_raised" ? (
+    <HeaderBand tone="warning" icon={<CircleHelp />} title="Waiting for the coordinator to answer">
+      <p>{data.queryText ?? "No question recorded."}</p>
+    </HeaderBand>
+  ) : item.status === "on_hold" ? (
+    <HeaderBand tone="warning" icon={<PauseCircle />} title="On hold">
+      <p>{data.holdReason ?? "No reason recorded."}</p>
+    </HeaderBand>
+  ) : verifiedExclusion ? (
+    <HeaderBand tone="neutral" icon={<ShieldCheck />} title="Not to be invoiced">
+      <p>
+        {verifiedExclusion.reason}
+        {verifiedExclusion.notes ? ` (${verifiedExclusion.notes})` : ""}. Requested by{" "}
+        {verifiedExclusion.requestedBy ?? "a coordinator"}, verified by {verifiedExclusion.decidedBy ?? "—"}.
+      </p>
+      <EvidenceLinks itemId={id} paths={verifiedExclusion.evidence} />
+    </HeaderBand>
+  ) : data.invoice ? (
+    <HeaderBand tone="good" icon={<ReceiptText />} title={`Invoiced in MAHER as ${data.invoice.number}`}>
+      <p>
+        {aed(data.invoice.amount)} on {new Date(data.invoice.date).toLocaleDateString("en-GB", { dateStyle: "medium" })}, recorded by{" "}
+        {data.invoice.recordedBy ?? "—"}. These lines are never presented again.
+      </p>
+    </HeaderBand>
+  ) : null;
+
+  const daysInStatus = daysSince(item.statusChangedAt);
+  const progress = [
+    {
+      name: "Quotation",
+      before: value.cumulativeBefore,
+      thisItem: value.thisItem,
+      remaining: Math.max(0, value.remaining ?? 0),
+    },
+  ];
+
   return (
-    <div className="flex flex-col gap-6">
-      <div>
-        <Button asChild variant="ghost" size="sm" className="-ml-2">
-          <Link href="/finance/queue">
-            <ArrowLeft className="size-4" />
-            Ready to invoice
-          </Link>
-        </Button>
-      </div>
+    <div className="flex flex-col gap-4">
+      <Button asChild variant="ghost" size="sm" className="-ml-2 self-start">
+        <Link href="/finance/queue">
+          <ArrowLeft className="size-4" />
+          Ready to invoice
+        </Link>
+      </Button>
 
-      <PageHeading
-        eyebrow={`Finance · ${itemCode(item.number)}`}
-        title={item.quotationNumber ? `Quotation ${item.quotationNumber}` : (item.workOrderNumber ?? itemCode(item.number))}
-        description={[item.clientName, item.quotationNumber ? item.workOrderNumber : null].filter(Boolean).join(" · ")}
-        actions={actions.length ? <div className="flex flex-wrap gap-2">{actions}</div> : undefined}
-      />
-
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <QueueStatusBadge status={item.status} />
-        <span className="text-muted-foreground">
-          {daysSince(item.statusChangedAt)} day(s) in this status · entered {dateTime(item.enteredAt)}
-        </span>
-        {item.assigneeName ? <span className="text-muted-foreground">· with {item.assigneeName}</span> : null}
-        {item.isTest ? <TestItemBadge /> : null}
-      </div>
-
-      {item.status === "query_raised" && data.queryText ? (
-        <Alert>
-          <CircleHelp className="size-4" />
-          <AlertTitle>Waiting for the coordinator</AlertTitle>
-          <AlertDescription>{data.queryText}</AlertDescription>
-        </Alert>
-      ) : null}
-      {item.status === "on_hold" && data.holdReason ? (
-        <Alert>
-          <PauseCircle className="size-4" />
-          <AlertTitle>On hold</AlertTitle>
-          <AlertDescription>{data.holdReason}</AlertDescription>
-        </Alert>
-      ) : null}
-      {openExclusion ? (
-        <Alert>
-          <ShieldCheck className="size-4" />
-          <AlertTitle>Marked not to be invoiced: waiting for verification</AlertTitle>
-          <AlertDescription>
-            <p>
-              {openExclusion.requestedBy ?? "A coordinator"}: {openExclusion.reason}
-              {openExclusion.notes ? ` (${openExclusion.notes})` : ""}
+      {/* The item at a glance and what can be done with it, above the tabs, as on an inspection. */}
+      <Card className="gap-0 overflow-hidden p-0">
+        <div className="flex flex-wrap items-center justify-between gap-4 p-5">
+          <div className="min-w-0 space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline">{itemCode(item.number)}</Badge>
+              {item.isTest ? <TestItemBadge /> : null}
+              <span className="text-muted-foreground text-xs">Entered {dateTime(item.enteredAt)}</span>
+            </div>
+            <div className="flex flex-row flex-wrap items-center gap-2">
+              <h2 className="text-2xl">
+                {item.quotationNumber ? `Quotation ${item.quotationNumber}` : (item.workOrderNumber ?? itemCode(item.number))}
+              </h2>
+              <QueueStatusBadge status={item.status} />
+            </div>
+            <p className="text-muted-foreground text-sm">
+              {[
+                item.clientName,
+                item.quotationNumber ? item.workOrderNumber : null,
+                item.coordinatorName ? `coordinator ${item.coordinatorName}` : null,
+                item.assigneeName ? `with ${item.assigneeName}` : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
             </p>
-            <EvidenceLinks itemId={id} paths={openExclusion.evidence} />
-            {can.verify ? (
-              <div className="mt-3 flex flex-wrap gap-2">
-                <Button
-                  size="sm"
-                  disabled={busy}
-                  onClick={() =>
-                    void run("Exclusion verified", () =>
-                      financeService.decideExclusion(openExclusion.id, { decision: "verified" }),
-                    )
-                  }
-                >
-                  Verify exclusion
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={busy}
-                  onClick={() =>
-                    askNote({
-                      action: "reject_exclusion",
-                      title: "Reject the exclusion",
-                      description: "The item returns to Pending with your note.",
-                      label: "Note",
-                      submit: "Reject",
-                      required: true,
-                    })
-                  }
-                >
-                  Reject
-                </Button>
-              </div>
+          </div>
+          {actions.length ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
+        </div>
+        {band}
+      </Card>
+
+      <Tabs defaultValue="lines">
+        <TabsList className="h-auto w-full flex-wrap justify-start gap-1 group-data-horizontal/tabs:h-auto">
+          <TabsTrigger value="lines">
+            Line items
+            <TabCount value={data.lines.length} />
+          </TabsTrigger>
+          <TabsTrigger value="commercial">Commercial</TabsTrigger>
+          <TabsTrigger value="delivery">
+            Delivery evidence
+            <TabCount value={data.appointments.length} />
+          </TabsTrigger>
+          <TabsTrigger value="activity">
+            Activity
+            <TabCount value={data.events.length} />
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="lines" className="mt-4 flex flex-col gap-6">
+          {/* The four figures Finance invoices on, with the lines they count. */}
+          <StatCardGrid columns={4}>
+            <StatCard
+              label="This item"
+              value={aed(value.thisItem)}
+              headline={`${data.lines.length} completed ${data.lines.length === 1 ? "line" : "lines"}`}
+              caption="Before VAT, as priced in FSM"
+            />
+            <StatCard
+              label="Completion"
+              value={value.completionPercent === null ? "—" : `${value.completionPercent.toFixed(1)}%`}
+              headline={
+                value.quotationTotal === null
+                  ? "No quotation total in FSM"
+                  : `${aed(value.cumulativeWithThis)} of ${aed(value.quotationTotal)}`
+              }
+              caption="Invoiced before, plus this item"
+              tone={value.completionPercent !== null && value.completionPercent >= 100 ? "good" : "neutral"}
+            />
+            <StatCard
+              label="Remaining"
+              value={aed(value.remaining)}
+              headline={(value.remaining ?? 0) <= 0 ? "Nothing left on the quotation" : "Still to complete and invoice"}
+              caption="On the quotation after this item"
+            />
+            <StatCard
+              label="Days in status"
+              value={daysInStatus}
+              headline={`${QUEUE_STATUS_LABELS[item.status]} since ${dateTime(item.statusChangedAt)}`}
+              caption={`Entered the queue ${timeAgo(item.enteredAt)}`}
+              tone={!closed && daysInStatus >= 7 ? "progress" : "neutral"}
+            />
+          </StatCardGrid>
+
+          <SectionCard
+            icon={<ChartNoAxesColumn />}
+            title="Quotation progress"
+            description="Invoiced before, this item, and what remains of the quotation. Worked out from the lines, never typed in."
+            bodyClassName="px-5 pb-5"
+          >
+            {value.quotationTotal ? (
+              <>
+                <ChartContainer config={progressConfig} className="h-10 w-full">
+                  <BarChart data={progress} layout="vertical" margin={{ left: 0, right: 0, top: 0, bottom: 0 }} barSize={22}>
+                    <XAxis type="number" hide domain={[0, "dataMax"]} />
+                    <YAxis type="category" dataKey="name" hide />
+                    <ChartTooltip cursor={false} content={<ChartTooltipContent hideLabel formatter={progressTooltip} />} />
+                    <Bar dataKey="before" stackId="q" fill="var(--color-before)" radius={[4, 0, 0, 4]} isAnimationActive={false} />
+                    <Bar dataKey="thisItem" stackId="q" fill="var(--color-thisItem)" isAnimationActive={false} />
+                    <Bar dataKey="remaining" stackId="q" fill="var(--color-remaining)" radius={[0, 4, 4, 0]} isAnimationActive={false} />
+                  </BarChart>
+                </ChartContainer>
+                {/* The legend carries the amounts, so the bar reads without hovering. */}
+                <dl className="mt-3 grid gap-3 sm:grid-cols-3">
+                  {(
+                    [
+                      ["before", value.cumulativeBefore],
+                      ["thisItem", value.thisItem],
+                      ["remaining", Math.max(0, value.remaining ?? 0)],
+                    ] as const
+                  ).map(([key, amount]) => (
+                    <div key={key} className="flex items-start gap-2">
+                      <span className="mt-1 size-2.5 shrink-0 rounded-sm" style={{ background: progressConfig[key].color }} aria-hidden />
+                      <div>
+                        <dt className="text-muted-foreground text-xs">{progressConfig[key].label}</dt>
+                        <dd className="text-sm font-medium tabular-nums">{aed(amount)}</dd>
+                      </div>
+                    </div>
+                  ))}
+                </dl>
+              </>
             ) : (
-              <p className="text-muted-foreground mt-1 text-xs">It cannot be invoiced until this is decided.</p>
+              <p className="text-muted-foreground text-sm">The quotation has no total in FSM, so its progress cannot be drawn.</p>
             )}
-          </AlertDescription>
-        </Alert>
-      ) : null}
-
-      {verifiedExclusion ? (
-        <Alert>
-          <ShieldCheck className="size-4" />
-          <AlertTitle>Not to be invoiced</AlertTitle>
-          <AlertDescription>
-            <p>
-              {verifiedExclusion.reason}
-              {verifiedExclusion.notes ? ` (${verifiedExclusion.notes})` : ""}. Requested by{" "}
-              {verifiedExclusion.requestedBy ?? "a coordinator"}, verified by {verifiedExclusion.decidedBy ?? "—"}.
-            </p>
-            <EvidenceLinks itemId={id} paths={verifiedExclusion.evidence} />
-          </AlertDescription>
-        </Alert>
-      ) : null}
-
-      <div className="grid gap-6 lg:grid-cols-3">
-        <div className="flex flex-col gap-6 lg:col-span-2">
-          <SectionCard icon={<FileText />} title="Commercial reference" bodyClassName="px-5 pb-5">
-            <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
-              <Fact label="Quotation" value={data.quotation?.number ?? "Not linked in FSM"} />
-              <Fact label="Work order" value={item.workOrderNumber ?? item.fsmWorkOrderId} />
-              <Fact label="Quotation total (before tax)" value={aed(value.quotationTotal)} />
-              <Fact label="Quotation status in FSM" value={(data.quotation?.status as string | undefined) ?? "—"} />
-              <Fact label="Client" value={item.clientName ?? "—"} />
-              <Fact label="Client contact" value={(data.quotation?.contact_name as string | undefined) ?? "—"} />
-              <Fact label="Coordinator (quotation owner)" value={item.coordinatorName ?? "—"} />
-            </dl>
           </SectionCard>
 
           <SectionCard
@@ -421,11 +543,100 @@ export function FinanceQueueItemPage({ id }: { id: string }) {
                     </TableCell>
                   </TableRow>
                 ))}
+                <TableRow className="hover:bg-transparent">
+                  <TableCell className="pl-5 font-medium" colSpan={3}>
+                    Total
+                  </TableCell>
+                  <TableCell className="pr-5 text-right font-semibold tabular-nums">{aed(value.thisItem)}</TableCell>
+                </TableRow>
               </TableBody>
             </Table>
           </SectionCard>
+        </TabsContent>
 
-          <SectionCard icon={<CalendarClock />} title="Delivery evidence" bodyClassName="px-5 pb-5">
+        <TabsContent value="commercial" className="mt-4">
+          <div className="grid gap-6 lg:grid-cols-3">
+            <SectionCard icon={<FileText />} title="Commercial reference" className="lg:col-span-2" bodyClassName="px-5 pb-5">
+              <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
+                <Fact label="Quotation" value={data.quotation?.number ?? "Not linked in FSM"} />
+                <Fact label="Work order" value={item.workOrderNumber ?? item.fsmWorkOrderId} />
+                <Fact label="Quotation total (before tax)" value={aed(value.quotationTotal)} />
+                <Fact label="Quotation status in FSM" value={(data.quotation?.status as string | undefined) ?? "—"} />
+                <Fact label="Client" value={item.clientName ?? "—"} />
+                <Fact label="Client contact" value={(data.quotation?.contact_name as string | undefined) ?? "—"} />
+                <Fact label="Coordinator (quotation owner)" value={item.coordinatorName ?? "—"} />
+              </dl>
+            </SectionCard>
+
+            <div className="flex flex-col gap-6">
+              <SectionCard icon={<Wallet />} title="Value" bodyClassName="px-5 pb-5">
+                <dl className="space-y-3 text-sm">
+                  <Fact label="This item" value={aed(value.thisItem)} strong />
+                  <Fact label="Invoiced before this item" value={aed(value.cumulativeBefore)} />
+                  <Fact label="Cumulative with this item" value={aed(value.cumulativeWithThis)} />
+                  <Fact label="Remaining after this item" value={aed(value.remaining)} />
+                  <Fact
+                    label="Completion"
+                    value={value.completionPercent === null ? "No quotation total" : `${value.completionPercent.toFixed(1)}%`}
+                    strong
+                  />
+                </dl>
+              </SectionCard>
+
+              {data.invoice ? (
+                <SectionCard icon={<ReceiptText />} title="Invoice" bodyClassName="px-5 pb-5">
+                  <dl className="space-y-3 text-sm">
+                    <Fact label="MAHER invoice" value={data.invoice.number} strong />
+                    <Fact label="Invoice date" value={new Date(data.invoice.date).toLocaleDateString("en-GB", { dateStyle: "medium" })} />
+                    <Fact label="Amount" value={aed(data.invoice.amount)} />
+                    {data.invoice.variance !== 0 ? (
+                      <Fact label={`Variance (${aed(data.invoice.variance)})`} value={data.invoice.varianceReason ?? "—"} />
+                    ) : null}
+                    <Fact label="Recorded" value={`${data.invoice.recordedBy ?? "—"}, ${dateTime(data.invoice.recordedAt)}`} />
+                  </dl>
+                </SectionCard>
+              ) : null}
+            </div>
+          </div>
+
+          {data.exclusions.length ? (
+            <SectionCard
+              icon={<ShieldCheck />}
+              title="Not-invoiceable requests"
+              description="Every request on this item, with its decision and evidence."
+              className="mt-6"
+              bodyClassName="border-t"
+            >
+              <ul className="divide-y">
+                {[...data.exclusions].reverse().map((x) => (
+                  <li key={x.id} className="flex flex-col gap-1 px-5 py-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">{x.reason}</p>
+                      <p className="text-muted-foreground text-xs">
+                        {x.requestedBy ?? "A coordinator"} · {dateTime(x.requestedAt)}
+                        {x.notes ? ` · ${x.notes}` : ""}
+                      </p>
+                      <EvidenceLinks itemId={id} paths={x.evidence} />
+                    </div>
+                    <p className="text-muted-foreground shrink-0 text-xs sm:text-right">
+                      {x.decision === null
+                        ? "Waiting for verification"
+                        : `${x.decision === "verified" ? "Verified" : "Rejected"} by ${x.decidedBy ?? "—"}${x.decisionNote ? `: ${x.decisionNote}` : ""}`}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            </SectionCard>
+          ) : null}
+        </TabsContent>
+
+        <TabsContent value="delivery" className="mt-4">
+          <SectionCard
+            icon={<CalendarClock />}
+            title="Delivery evidence"
+            description="The work order's appointments in FSM: when the work was booked and done, and by whom."
+            bodyClassName="px-5 pb-5"
+          >
             {data.appointments.length === 0 ? (
               <p className="text-muted-foreground text-sm">No appointments found for this work order in the FSM copy.</p>
             ) : (
@@ -454,41 +665,14 @@ export function FinanceQueueItemPage({ id }: { id: string }) {
               The client-signed completion report cannot be linked yet: the Zoho token cannot read service reports (B-01).
             </p>
           </SectionCard>
-        </div>
+        </TabsContent>
 
-        <div className="flex flex-col gap-6">
-          <SectionCard icon={<Wallet />} title="Value" bodyClassName="px-5 pb-5">
-            <dl className="space-y-3 text-sm">
-              <Fact label="This item" value={aed(value.thisItem)} strong />
-              <Fact label="Invoiced before this item" value={aed(value.cumulativeBefore)} />
-              <Fact label="Cumulative with this item" value={aed(value.cumulativeWithThis)} />
-              <Fact label="Remaining after this item" value={aed(value.remaining)} />
-              <Fact
-                label="Completion"
-                value={value.completionPercent === null ? "No quotation total" : `${value.completionPercent.toFixed(1)}%`}
-                strong
-              />
-            </dl>
-          </SectionCard>
-
-          {data.invoice ? (
-            <SectionCard icon={<ReceiptText />} title="Invoice" bodyClassName="px-5 pb-5">
-              <dl className="space-y-3 text-sm">
-                <Fact label="MAHER invoice" value={data.invoice.number} strong />
-                <Fact label="Invoice date" value={new Date(data.invoice.date).toLocaleDateString("en-GB", { dateStyle: "medium" })} />
-                <Fact label="Amount" value={aed(data.invoice.amount)} />
-                {data.invoice.variance !== 0 ? (
-                  <Fact label={`Variance (${aed(data.invoice.variance)})`} value={data.invoice.varianceReason ?? "—"} />
-                ) : null}
-                <Fact label="Recorded" value={`${data.invoice.recordedBy ?? "—"}, ${dateTime(data.invoice.recordedAt)}`} />
-              </dl>
-            </SectionCard>
-          ) : null}
-
-          <SectionCard icon={<History />} title="Activity" bodyClassName="px-5 pb-5">
-            <ol className="space-y-4">
+        <TabsContent value="activity" className="mt-4">
+          <SectionCard icon={<History />} title="Activity" description="Every status change on this item, newest first." bodyClassName="px-5 pb-5">
+            <ol className="relative ml-1 space-y-5 border-l pl-5">
               {[...data.events].reverse().map((event) => (
-                <li key={event.id} className="text-sm">
+                <li key={event.id} className="relative text-sm">
+                  <span className="bg-background border-brand absolute top-1 -left-[25px] size-2.5 rounded-full border-2" aria-hidden />
                   <p className="font-medium">{EVENT_LABELS[event.type] ?? event.type}</p>
                   <p className="text-muted-foreground text-xs">
                     {event.actor ?? "System"} · <span title={dateTime(event.at)}>{timeAgo(event.at)}</span>
@@ -498,8 +682,8 @@ export function FinanceQueueItemPage({ id }: { id: string }) {
               ))}
             </ol>
           </SectionCard>
-        </div>
-      </div>
+        </TabsContent>
+      </Tabs>
 
       <Dialog open={noteDialog !== null} onOpenChange={(open) => !open && !busy && setNoteDialog(null)}>
         <ActionDialogContent busy={busy}>
@@ -803,5 +987,34 @@ function EvidenceLinks({ itemId, paths }: { itemId: string; paths: string[] }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+const BAND_TONES = {
+  warning: "border-warning/30 bg-warning/5",
+  good: "border-success/30 bg-success/5",
+  neutral: "bg-muted/40",
+} as const;
+
+/** The strip along the header card's bottom edge saying what the item waits on (the inspection header's band). */
+function HeaderBand({
+  tone,
+  icon,
+  title,
+  children,
+}: {
+  tone: keyof typeof BAND_TONES;
+  icon: React.ReactNode;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={cn("border-t px-5 py-3", BAND_TONES[tone])}>
+      <p className="flex items-center gap-2 text-sm font-medium [&_svg]:size-4 [&_svg]:shrink-0">
+        {icon}
+        {title}
+      </p>
+      <div className="text-muted-foreground mt-1 text-sm">{children}</div>
+    </div>
   );
 }

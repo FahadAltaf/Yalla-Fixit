@@ -1,5 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import type { QueueStatus } from "@/lib/server/finance/queue";
+import { CHART_COLOR } from "@/lib/snagging/chart-palette";
 import { cn } from "@/lib/utils";
 
 /** The six statuses, in BRD §5.1 Step 4's words. */
@@ -20,6 +21,22 @@ const QUEUE_STATUS_STYLES: Record<QueueStatus, string> = {
   on_hold: "bg-warning/10 text-warning",
   excluded: "bg-mist text-ink-soft",
   invoiced: "bg-success/10 text-success",
+};
+
+/**
+ * A status's colour in a chart, in the snagging palette's vocabulary:
+ * not started is neutral, being worked is the brand, waiting on somebody
+ * is amber, the two end states are green (invoiced) and neutral
+ * (excluded). On hold takes the lighter brand step so it stays distinct
+ * from a query in the same donut.
+ */
+export const QUEUE_STATUS_COLOR: Record<QueueStatus, string> = {
+  pending: CHART_COLOR.neutralSoft,
+  in_progress: CHART_COLOR.brand,
+  query_raised: CHART_COLOR.progress,
+  on_hold: CHART_COLOR.brandSofter,
+  excluded: CHART_COLOR.neutral,
+  invoiced: CHART_COLOR.good,
 };
 
 export function QueueStatusBadge({ status }: { status: QueueStatus }) {

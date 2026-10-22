@@ -8,6 +8,11 @@ export const metadata: Metadata = {
 };
 
 /* The Ready-to-Invoice queue (BRD §6.4). The API checks Finance queue View. */
-export default function FinanceQueueRoute() {
-  return <FinanceQueuePage />;
+export default async function FinanceQueueRoute({
+  searchParams,
+}: {
+  searchParams: Promise<{ status?: string; aged?: string; from?: string; to?: string }>;
+}) {
+  const params = await searchParams;
+  return <FinanceQueuePage initial={{ status: params.status, aged: params.aged === "1", from: params.from, to: params.to }} />;
 }

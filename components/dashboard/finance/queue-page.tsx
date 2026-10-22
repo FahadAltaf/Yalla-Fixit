@@ -43,9 +43,23 @@ const STATUS_FILTERS: { value: string; label: string; statuses: QueueStatus[] }[
 
 const EMPTY_FILTERS: FinanceQueueToolbarFilters = { status: "open", client: "", coordinator: "", from: "", to: "", aged: false };
 
-export function FinanceQueuePage() {
+/**
+ * A figure elsewhere (the metrics charts, the summary cards) opens the
+ * queue already filtered to what it counted: ?status=, ?aged=1, ?from=&to=.
+ */
+export type QueueInitialFilters = { status?: string; aged?: boolean; from?: string; to?: string };
+
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+export function FinanceQueuePage({ initial }: { initial?: QueueInitialFilters }) {
   const router = useRouter();
-  const [filters, setFilters] = useState<FinanceQueueToolbarFilters>(EMPTY_FILTERS);
+  const [filters, setFilters] = useState<FinanceQueueToolbarFilters>(() => ({
+    ...EMPTY_FILTERS,
+    status: STATUS_FILTERS.some((f) => f.value === initial?.status) ? initial!.status! : EMPTY_FILTERS.status,
+    aged: Boolean(initial?.aged),
+    from: initial?.from && DATE.test(initial.from) ? initial.from : "",
+    to: initial?.to && DATE.test(initial.to) ? initial.to : "",
+  }));
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 400);
   const [page, setPage] = useState(0);

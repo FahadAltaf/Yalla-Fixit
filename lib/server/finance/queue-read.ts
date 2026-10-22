@@ -119,7 +119,7 @@ export async function readQueueForMetrics(admin: SupabaseClient) {
   const [items, invoices, exclusions] = await Promise.all([
     readAllRows<Record<string, unknown>>(
       (from, to) =>
-        admin.schema("finance").from("queue_items").select("id, status, value, entered_at, hold_reason").order("id").range(from, to),
+        admin.schema("finance").from("queue_items").select("id, status, value, entered_at, status_changed_at, hold_reason").order("id").range(from, to),
       "queue items",
     ),
     readAllRows<Record<string, unknown>>(
@@ -139,6 +139,7 @@ export async function readQueueForMetrics(admin: SupabaseClient) {
       status: r.status as MetricItem["status"],
       value: Number(r.value),
       enteredAt: r.entered_at as string,
+      statusChangedAt: r.status_changed_at as string,
       holdReason: (r.hold_reason as string | null) ?? null,
     })),
     invoices: invoices.map<MetricInvoice>((r) => ({

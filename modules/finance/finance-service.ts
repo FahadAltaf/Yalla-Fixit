@@ -1,5 +1,5 @@
 import { executeRESTBackend } from "@/lib/rest-server";
-import type { QueueMetrics, QueueSummary } from "@/lib/finance/metrics";
+import type { PeriodMetrics, QueueMetrics, QueueSummary } from "@/lib/finance/metrics";
 import type { QueueAction, QueueStatus } from "@/lib/server/finance/queue";
 import type { QueueItemDetail, QueueRow } from "@/lib/server/finance/queue-read";
 
@@ -26,6 +26,8 @@ export type QueueListResponse = {
 export type QueueItemResponse = QueueItemDetail & {
   can: { view: boolean; work: boolean; recordInvoice: boolean; coordinate: boolean; verify: boolean };
 };
+
+export type FinanceMetricsResponse = { summary: QueueSummary; metrics: QueueMetrics; period: PeriodMetrics };
 
 export const financeService = {
   listQueue: (filters: QueueListFilters, signal?: AbortSignal) => {
@@ -68,5 +70,6 @@ export const financeService = {
       body: input,
     }),
 
-  metrics: () => executeRESTBackend<{ summary: QueueSummary; metrics: QueueMetrics }>("/api/finance/metrics"),
+  metrics: (days = 30, signal?: AbortSignal) =>
+    executeRESTBackend<FinanceMetricsResponse>("/api/finance/metrics", { params: { days }, signal }),
 };

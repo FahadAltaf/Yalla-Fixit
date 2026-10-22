@@ -1,3 +1,5 @@
+import { addDaysToDateString, zonedDateString } from "@/lib/scheduling/org-time";
+
 /**
  * Invoicing controls (BRD §5.1 Step 8, §6.9; DEV-441), and the queue's
  * summary strip (§6.4). Pure: the server reads the rows, this does the
@@ -9,6 +11,8 @@ export type MetricItem = {
   status: "pending" | "in_progress" | "query_raised" | "on_hold" | "excluded" | "invoiced";
   value: number;
   enteredAt: string;
+  /** When the item reached its current status; the aged rule reads it for Pending. */
+  statusChangedAt?: string;
   holdReason?: string | null;
 };
 
@@ -143,5 +147,144 @@ export function computeQueueMetrics(
       total: round2(variances.reduce((a, b) => a + b, 0)),
       absoluteTotal: round2(variances.reduce((a, b) => a + Math.abs(b), 0)),
     },
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* The metrics page's window (7, 30, 90 days or 12 months).            */
+/* ------------------------------------------------------------------ */
+
+export type ActivityPoint = {
+  /** First day of the bucket, YYYY-MM-DD in the org's zone. */
+  day: string;
+  label: string;
+  enteredValue: number;
+  enteredCount: number;
+  invoicedValue: number;
+  invoicedCount: number;
+};
+
+export type PeriodMetrics = {
+  days: number;
+  from: string;
+  to: string;
+  /** Daily buckets up to 31 days, weekly beyond. */
+  bucket: "day" | "week";
+  activity: ActivityPoint[];
+  entered: { count: number; value: number };
+  /** Invoices recorded in the window; trend is the value against the window before, in %. */
+  invoiced: { count: number; value: number; trend: number | null };
+  averageDaysToInvoice: number | null;
+  daysToInvoiceByUser: { user: string; invoices: number; averageDays: number }[];
+  variance: { invoices: number; withVariance: number; total: number; absoluteTotal: number };
+  /** Pending longer than the aged setting (BRD §6.6), now: not a measure of the window. */
+  aged: { count: number; value: number; afterDays: number };
+};
+
+const LABEL = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+const dayLabel = (date: string) => LABEL.format(new Date(`${date}T00:00:00Z`));
+
+/** Monday of the week a date falls in. */
+function weekStart(date: string): string {
+  const weekday = new Date(`${date}T00:00:00Z`).getUTCDay() || 7;
+  return addDaysToDateString(date, 1 - weekday);
+}
+
+/**
+ * The figures that measure a period: what entered the queue and what was
+ * invoiced in the last `days` days (today included, Asia/Dubai), against
+ * the same length of time before it. The aged count is current.
+ */
+export function computePeriodMetrics(input: {
+  items: MetricItem[];
+  invoices: MetricInvoice[];
+  now: Date;
+  days: number;
+  agedAfterDays: number;
+  timeZone?: string;
+}): PeriodMetrics {
+  const { items, invoices, now, days, agedAfterDays, timeZone } = input;
+  const to = zonedDateString(now, timeZone);
+  const from = addDaysToDateString(to, 1 - days);
+  const previousFrom = addDaysToDateString(from, -days);
+  const bucket: PeriodMetrics["bucket"] = days > 31 ? "week" : "day";
+  const keyOf = (date: string) => (bucket === "week" ? weekStart(date) : date);
+  const dateOf = (iso: string) => zonedDateString(iso, timeZone);
+  const inWindow = (date: string) => date >= from && date <= to;
+
+  const points = new Map<string, ActivityPoint>();
+  for (let date = from; date <= to; date = addDaysToDateString(date, 1)) {
+    const key = keyOf(date);
+    if (!points.has(key)) {
+      points.set(key, { day: key, label: dayLabel(key < from ? from : key), enteredValue: 0, enteredCount: 0, invoicedValue: 0, invoicedCount: 0 });
+    }
+  }
+
+  let enteredCount = 0;
+  let enteredValue = 0;
+  for (const item of items) {
+    const date = dateOf(item.enteredAt);
+    if (!inWindow(date)) continue;
+    enteredCount += 1;
+    enteredValue += item.value;
+    const point = points.get(keyOf(date))!;
+    point.enteredCount += 1;
+    point.enteredValue = round2(point.enteredValue + item.value);
+  }
+
+  const byId = new Map(items.map((i) => [i.id, i]));
+  const current = invoices.filter((inv) => inWindow(dateOf(inv.recordedAt)));
+  const previousValue = invoices
+    .filter((inv) => {
+      const date = dateOf(inv.recordedAt);
+      return date >= previousFrom && date < from;
+    })
+    .reduce((sum, inv) => sum + inv.amount, 0);
+  for (const inv of current) {
+    const point = points.get(keyOf(dateOf(inv.recordedAt)))!;
+    point.invoicedCount += 1;
+    point.invoicedValue = round2(point.invoicedValue + inv.amount);
+  }
+  const invoicedValue = round2(current.reduce((sum, inv) => sum + inv.amount, 0));
+
+  const spans = current
+    .filter((inv) => byId.has(inv.queueItemId))
+    .map((inv) => ({
+      user: inv.recordedByLabel ?? "Unknown",
+      days: (Date.parse(inv.recordedAt) - Date.parse(byId.get(inv.queueItemId)!.enteredAt)) / DAY_MS,
+    }));
+  const users = [...new Set(spans.map((s) => s.user))];
+  const variances = current.map((inv) => round2(inv.amount - inv.queueValue));
+
+  const aged = items.filter(
+    (i) => i.status === "pending" && daysBetween(i.statusChangedAt ?? i.enteredAt, now) >= agedAfterDays,
+  );
+
+  return {
+    days,
+    from,
+    to,
+    bucket,
+    activity: [...points.values()],
+    entered: { count: enteredCount, value: round2(enteredValue) },
+    invoiced: {
+      count: current.length,
+      value: invoicedValue,
+      trend: previousValue > 0 ? Math.round(((invoicedValue - previousValue) / previousValue) * 100) : null,
+    },
+    averageDaysToInvoice: spans.length ? round1(spans.reduce((a, s) => a + s.days, 0) / spans.length) : null,
+    daysToInvoiceByUser: users
+      .map((user) => {
+        const mine = spans.filter((s) => s.user === user);
+        return { user, invoices: mine.length, averageDays: round1(mine.reduce((a, s) => a + s.days, 0) / mine.length) };
+      })
+      .sort((a, b) => b.invoices - a.invoices || a.user.localeCompare(b.user)),
+    variance: {
+      invoices: current.length,
+      withVariance: variances.filter((v) => v !== 0).length,
+      total: round2(variances.reduce((a, b) => a + b, 0)),
+      absoluteTotal: round2(variances.reduce((a, b) => a + Math.abs(b), 0)),
+    },
+    aged: { count: aged.length, value: round2(aged.reduce((sum, i) => sum + i.value, 0)), afterDays: agedAfterDays },
   };
 }

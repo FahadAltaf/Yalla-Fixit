@@ -116,9 +116,9 @@ Use **FQ-1002**:
 
 | # | Do | Expect |
 |---|---|---|
-| 4.6 | Open it | Sections: Commercial reference (quotation, work order, client, coordinator), Value (this item, invoiced before, cumulative, remaining, completion %), Line items, Delivery evidence (appointments and crew), Activity. A *Test item* badge. |
+| 4.6 | Open it | Laid out like an inspection: a header card (item code, *Test* badge, quotation, status, client · work order · coordinator, actions on the right), then tabs. **Line items**: four figure cards (this item, completion, remaining, days in status), a *Quotation progress* bar (invoiced before / this item / remaining, with the amounts) and the lines with a total. **Commercial**: reference, value, invoice, every not-invoiceable request. **Delivery evidence**: appointments and crew. **Activity**: a timeline. |
 | 4.7 | **Pick up** | Status *In progress*, "with <your name>"; Activity gets a row |
-| 4.8 | **Put on hold** with a reason | Status *On hold*; the reason shows on the page |
+| 4.8 | **Put on hold** with a reason | Status *On hold*; the reason shows in an amber band under the header |
 | 4.9 | **Raise query** with a question | Status *Query raised*; "Waiting for the coordinator" shows the question; the allowlisted user gets a notification |
 | 4.10 | **Answer query** with an answer | Back to *On hold* **with the hold reason still shown** (this was the bug fixed on 21 Oct); the query notification closes |
 | 4.11 | **Resume** | *In progress* |
@@ -157,8 +157,10 @@ Please start MAHER numbers with `TEST-` so they are easy to remove.
 
 | # | Do | Expect |
 |---|---|---|
-| 4.23 | **Finance → Invoicing metrics** | Awaiting invoice (AED), average days to invoice, invoices with a variance (now 2 of 3), excluded value; ageing bands; days to invoice by user; on hold list; excluded by reason |
-| 4.24 | Check one number by hand | e.g. *Awaiting invoice* = the sum of the values of items not invoiced or excluded |
+| 4.23 | **Finance → Invoicing metrics** | Laid out like the Snagging overview: date range (7 / 30 / 90 days, 12 months) and Refresh; five cards (awaiting invoice, aged, invoiced with trend, days to invoice, excluded value); *Queue activity* (value entered vs invoiced over time); *Days to invoice, by Finance user*; then the queue as it is now: *Where the waiting value sits* (donut by status), *Ageing of waiting items* (columns), *On hold*; past the *Analytics* divider, excluded value by reason and invoice variance |
+| 4.24 | Check one number by hand | e.g. *Awaiting invoice* = the sum of the values of items not invoiced or excluded = the donut's centre |
+| 4.25 | Click a donut slice, a card, or a day on the activity chart | The queue opens filtered to what was counted (e.g. `/finance/queue?status=pending`) |
+| 4.26 | Change the range to 7 days | Activity, *Invoiced*, *Days to invoice* and variance change; the donut, ageing and on-hold list do not (they are the queue now) |
 
 ### Daily digest (DEV-439)
 
@@ -267,7 +269,7 @@ Run from the branch folder:
 npm test
 ```
 
-Expect `# pass 161`, `# fail 0` (sync engine, queue rules, metrics, digest, safety rails, available hours,
+Expect `# pass 163`, `# fail 0` (sync engine, queue rules, metrics, digest, safety rails, available hours,
 quotation ageing, exception rules, utilization, capacity, alert planning, compliance and attendance).
 
 ```bash
