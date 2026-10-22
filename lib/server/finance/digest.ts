@@ -7,16 +7,17 @@ import {
   digestSubject,
   dubaiClock,
   planDigest,
-  type DigestItem,
 } from "@/lib/finance/digest-plan";
 import { clientEmailHtml, escapeEmailHtml } from "@/lib/email-brand";
 import { createNotifier, supabaseNotificationStore, type NotifyResult } from "@/lib/server/notifications/notifier";
+import { digestItemsOf, readLedgerForMetrics } from "@/lib/server/finance/ledger-metrics";
 import { readReportingSettings } from "@/lib/server/reporting/settings";
 import { sendEmail } from "@/lib/server/send-email";
-import { readAllRows } from "@/lib/server/snagging/read-all";
 
 /**
- * Sends the daily digest (lib/finance/digest-plan.ts says what and when).
+ * Sends the daily digest (lib/finance/digest-plan.ts says what and when),
+ * over Ready to invoice's work orders as the portal records them
+ * (lib/server/finance/ledger-metrics.ts; no FSM call).
  *
  * At most once a day: each notification's dedupe key carries the Dubai
  * date, so a second run that day writes and sends nothing. Delivery goes
@@ -45,7 +46,7 @@ function emailBody(plan: Extract<ReturnType<typeof planDigest>, { send: true }>,
     .map((i) => {
       const link = `${appUrl}/finance/queue/${i.id}`;
       return `<tr>
-        <td style="padding:6px 8px;border-top:1px solid #e5e7eb"><a href="${escapeEmailHtml(link)}">FQ-${i.number}</a></td>
+        <td style="padding:6px 8px;border-top:1px solid #e5e7eb"><a href="${escapeEmailHtml(link)}">${escapeEmailHtml(i.workOrderNumber ?? i.label)}</a></td>
         <td style="padding:6px 8px;border-top:1px solid #e5e7eb">${escapeEmailHtml(i.quotationNumber ?? "—")}</td>
         <td style="padding:6px 8px;border-top:1px solid #e5e7eb">${escapeEmailHtml(i.clientName ?? "—")}</td>
         <td style="padding:6px 8px;border-top:1px solid #e5e7eb;text-align:right">${escapeEmailHtml(aed(i.value))}</td>
@@ -55,14 +56,14 @@ function emailBody(plan: Extract<ReturnType<typeof planDigest>, { send: true }>,
     .join("");
   const table = plan.newItems.length
     ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;border-collapse:collapse">
-        <tr style="color:#6b7280;text-align:left"><th style="padding:6px 8px">Item</th><th style="padding:6px 8px">Quotation</th>
+        <tr style="color:#6b7280;text-align:left"><th style="padding:6px 8px">Work order</th><th style="padding:6px 8px">Quotation</th>
         <th style="padding:6px 8px">Client</th><th style="padding:6px 8px;text-align:right">Value</th>
-        <th style="padding:6px 8px;text-align:right">Completion</th></tr>${rows}</table>`
-    : "<p>No new items since the last digest.</p>";
+        <th style="padding:6px 8px;text-align:right">Invoiced</th></tr>${rows}</table>`
+    : "<p>Nothing new marked ready since the last digest.</p>";
   const aged = plan.aged.length
-    ? `<p><strong>${plan.aged.length} item(s) pending longer than the agreed limit:</strong> ${plan.aged
+    ? `<p><strong>${plan.aged.length} work order(s) pending longer than the agreed limit:</strong> ${plan.aged
         .slice(0, 10)
-        .map((a) => escapeEmailHtml(`FQ-${a.number} (${a.daysPending} days)`))
+        .map((a) => escapeEmailHtml(`${a.label} (${a.daysPending} days)`))
         .join(", ")}${plan.aged.length > 10 ? "…" : ""}</p>`
     : "";
   return clientEmailHtml({
@@ -73,7 +74,7 @@ function emailBody(plan: Extract<ReturnType<typeof planDigest>, { send: true }>,
       { label: "New since the last digest", value: `${plan.newItems.length} (${aed(plan.newValue)})` },
       { label: "Awaiting action", value: `${plan.outstanding.count} (${aed(plan.outstanding.value)})` },
     ],
-    cta: { label: "Open the queue", url: `${appUrl}/finance/queue` },
+    cta: { label: "Open Ready to invoice", url: `${appUrl}/finance/queue` },
   });
 }
 
@@ -89,29 +90,10 @@ export async function runDigest(
   const recipientIds = settings.finance.digestRecipientUserIds;
   if (recipientIds.length === 0) return { sent: false, reason: "no digest recipients set (Reporting Settings)" };
 
-  const items = await readAllRows<Record<string, unknown>>(
-    (from, to) =>
-      admin
-        .schema("finance")
-        .from("queue_list")
-        .select("id, number, status, status_changed_at, entered_at, value, quotation_number, work_order_number, client_name, completion_percent")
-        .order("number")
-        .range(from, to),
-    "digest items",
-  );
+  const ledger = await readLedgerForMetrics(admin);
+  if (!ledger.ready) return { sent: false, reason: "Ready to invoice is not set up (migration 20261024100000)" };
   const plan = planDigest({
-    items: items.map<DigestItem>((r) => ({
-      id: r.id as string,
-      number: Number(r.number),
-      status: r.status as string,
-      statusChangedAt: r.status_changed_at as string,
-      enteredAt: r.entered_at as string,
-      value: Number(r.value),
-      quotationNumber: (r.quotation_number as string | null) ?? null,
-      workOrderNumber: (r.work_order_number as string | null) ?? null,
-      clientName: (r.client_name as string | null) ?? null,
-      completionPercent: r.completion_percent === null ? null : Number(r.completion_percent),
-    })),
+    items: digestItemsOf(ledger.workOrders),
     now,
     lastDigestAt: await lastDigestAt(admin),
     agedAfterDays: settings.finance.agedAfterDays,
@@ -163,8 +145,8 @@ export async function runDigest(
       dedupeKey: `aged:${item.id}:${item.statusChangedAt}`,
       recipients: recipients.map((r) => ({ userId: r.userId })),
       channels: ["in_app"],
-      title: `FQ-${item.number} pending for ${item.daysPending} days`,
-      body: `${item.quotationNumber ?? item.workOrderNumber ?? `FQ-${item.number}`} for ${item.clientName ?? "the client"} pending for ${item.daysPending} days.`,
+      title: `${item.label} pending for ${item.daysPending} days`,
+      body: `${item.label}${item.workOrderNumber && !item.label.includes(item.workOrderNumber) ? ` (${item.workOrderNumber})` : ""} for ${item.clientName ?? "the client"} pending for ${item.daysPending} days.`,
       link: `/finance/queue/${item.id}`,
     });
     n2 += result.inApp.delivered + result.inApp.suppressed;

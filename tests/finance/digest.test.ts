@@ -9,7 +9,7 @@ const hoursAgo = (h: number) => new Date(NOW.getTime() - h * 3_600_000).toISOStr
 
 const item = (n: number, over: Partial<DigestItem> = {}): DigestItem => ({
   id: `i${n}`,
-  number: 1000 + n,
+  label: `L${1000 + n}`,
   status: "pending",
   statusChangedAt: hoursAgo(1),
   enteredAt: hoursAgo(1),
@@ -58,15 +58,26 @@ test("new means entered since the last digest; a new item that is already invoic
   });
   assert.ok(plan.send);
   if (!plan.send) return;
-  assert.deepEqual(plan.newItems.map((i) => i.number), [1002, 1003]);
+  assert.deepEqual(plan.newItems.map((i) => i.label), ["L1002", "L1003"]);
   assert.equal(plan.newValue, 1500);
   assert.deepEqual(plan.outstanding, { count: 2, value: 2000 });
+});
+
+test("a partly invoiced work order is still outstanding", () => {
+  const plan = planDigest({
+    items: [item(1, { enteredAt: hoursAgo(72), status: "partially_invoiced", value: 400 })],
+    now: NOW,
+    lastDigestAt: hoursAgo(24),
+    agedAfterDays: 7,
+  });
+  assert.ok(plan.send);
+  if (plan.send) assert.deepEqual(plan.outstanding, { count: 1, value: 400 });
 });
 
 test("the first digest ever looks back 24 hours", () => {
   const plan = planDigest({ items: [item(1, { enteredAt: hoursAgo(23) }), item(2, { enteredAt: hoursAgo(25) })], now: NOW, lastDigestAt: null, agedAfterDays: 7 });
   assert.ok(plan.send);
-  if (plan.send) assert.deepEqual(plan.newItems.map((i) => i.number), [1001]);
+  if (plan.send) assert.deepEqual(plan.newItems.map((i) => i.label), ["L1001"]);
 });
 
 test("aged (N2): pending longer than the limit, oldest first; other statuses never age", () => {
@@ -82,7 +93,7 @@ test("aged (N2): pending longer than the limit, oldest first; other statuses nev
     agedAfterDays: 7,
   });
   assert.ok(plan.send);
-  if (plan.send) assert.deepEqual(plan.aged.map((a) => [a.number, a.daysPending]), [[1002, 12], [1001, 8]]);
+  if (plan.send) assert.deepEqual(plan.aged.map((a) => [a.label, a.daysPending]), [["L1002", 12], ["L1001", 8]]);
 });
 
 test("the wording follows the BRD drafts", () => {

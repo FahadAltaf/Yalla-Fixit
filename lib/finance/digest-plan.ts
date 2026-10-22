@@ -3,19 +3,20 @@
  * DEV-439), decided here and sent by lib/server/finance/digest.ts.
  *
  *  - Once a day, at the configured time (Dubai). Before that time: nothing.
- *  - New items: entered since the last digest (or the last 24 hours, for
- *    the very first one).
+ *  - New items: work orders first marked ready since the last digest (or
+ *    the last 24 hours, for the very first one).
  *  - Outstanding: everything still waiting on Finance, so a backlog shows.
  *  - Aged (N2): pending longer than the configured number of days.
  *  - Not sent when nothing is new and nothing is outstanding.
  */
 
-const OPEN = new Set(["pending", "in_progress", "query_raised", "on_hold"]);
+const OPEN = new Set(["pending", "in_progress", "query_raised", "on_hold", "partially_invoiced"]);
 const DUBAI_OFFSET_MS = 4 * 60 * 60 * 1000;
 
 export type DigestItem = {
   id: string;
-  number: number;
+  /** How the work order is named in the digest: its quotation or work order number. */
+  label: string;
   status: string;
   statusChangedAt: string;
   enteredAt: string;
@@ -60,7 +61,7 @@ export function planDigest(input: {
   const since = input.lastDigestAt ? Date.parse(input.lastDigestAt) : input.now.getTime() - 86_400_000;
   const newItems = input.items
     .filter((i) => Date.parse(i.enteredAt) > since && Date.parse(i.enteredAt) <= input.now.getTime())
-    .sort((a, b) => a.number - b.number);
+    .sort((a, b) => a.enteredAt.localeCompare(b.enteredAt) || a.label.localeCompare(b.label));
   const open = input.items.filter((i) => OPEN.has(i.status));
   if (newItems.length === 0 && open.length === 0) {
     return { send: false, reason: "nothing new and nothing outstanding" };

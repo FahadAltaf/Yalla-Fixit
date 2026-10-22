@@ -29,7 +29,7 @@ export type QueueItemResponse = QueueItemDetail & {
   can: { view: boolean; work: boolean; recordInvoice: boolean; coordinate: boolean; verify: boolean };
 };
 
-export type FinanceMetricsResponse = { summary: QueueSummary; metrics: QueueMetrics; period: PeriodMetrics };
+export type FinanceMetricsResponse = { summary: QueueSummary; metrics: QueueMetrics; period: PeriodMetrics; ledgerReady?: boolean };
 
 export const financeService = {
   listQueue: (filters: QueueListFilters, signal?: AbortSignal) => {

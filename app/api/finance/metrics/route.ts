@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { computePeriodMetrics, computeQueueMetrics, summarise } from "@/lib/finance/metrics";
-import { readQueueForMetrics } from "@/lib/server/finance/queue-read";
+import { readLedgerForMetrics } from "@/lib/server/finance/ledger-metrics";
 import { readReportingSettings } from "@/lib/server/reporting/settings";
 import { requireResourceAccess } from "@/lib/server/require-access";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
@@ -10,7 +10,8 @@ import { ActionType, ResourceType } from "@/types/types";
 /**
  * Invoicing controls (BRD §5.1 Step 8, §6.9; DEV-441): days to invoice,
  * ageing bands, holds, excluded value by reason, variance. For whoever may
- * view the queue (Finance, and managers for its ageing).
+ * view the queue (Finance, and managers for its ageing). Read from the
+ * portal's own records of Ready to invoice; never calls FSM.
  *
  * ?days=7|30|90|365 (default 30) sets the window the period figures and
  * the activity chart are read over; the rest is the queue as it is now.
@@ -24,8 +25,8 @@ export async function GET(req: NextRequest) {
   const days = WINDOWS.has(asked) ? asked : 30;
   try {
     const admin = await createAdminServerClient();
-    const [{ items, invoices, exclusions }, settings] = await Promise.all([
-      readQueueForMetrics(admin),
+    const [{ ready, items, invoices, exclusions }, settings] = await Promise.all([
+      readLedgerForMetrics(admin),
       readReportingSettings(admin),
     ]);
     const now = new Date();
@@ -34,6 +35,7 @@ export async function GET(req: NextRequest) {
         summary: summarise(items, invoices),
         metrics: computeQueueMetrics(items, invoices, exclusions, now),
         period: computePeriodMetrics({ items, invoices, now, days, agedAfterDays: settings.finance.agedAfterDays }),
+        ledgerReady: ready,
       },
       { headers: { "Cache-Control": "no-store" } },
     );

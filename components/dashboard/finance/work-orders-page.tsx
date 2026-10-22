@@ -133,6 +133,9 @@ export function FinanceWorkOrdersPage() {
         <p className="text-muted-foreground -mt-3 text-xs">
           Work orders raised {data.from} to {data.to}, read from Zoho FSM {timeAgo(data.fsm.fetchedAt)}
           {data.fsm.cached ? " (kept for ten minutes; Refresh reads again)" : ""}.
+          {data.outsideDates > 0
+            ? ` Also ${data.outsideDates} raised outside these dates that ${data.outsideDates === 1 ? "is" : "are"} still awaiting action, as last read when worked on.`
+            : ""}
         </p>
       ) : null}
 

@@ -303,6 +303,9 @@ log, row 11). Before the migration the screens load but say Ready marks, workflo
 | 5d.17 | With the key: upload a MAHER PDF | "Reading the invoice", then a review: lines matched with *Strong match / Likely / Check*, amounts editable, unmatched lines listed |
 | 5d.18 | Correct an amount, **Confirm and record** | Recorded like 5d.11; the Invoices tab shows "invoice file attached" |
 | 5d.19 | Open an old queue item from a notification or metrics link | The earlier item page still opens |
+| 5d.20 | (Migration `20261025100000` applied.) **Invoicing metrics** after 5d.6–5d.12 | Awaiting invoice and the status donut count the work orders marked ready (Partially invoiced its own slice); Days to invoice runs from the Ready mark; one invoice counts once; variance is the invoice total against its lines |
+| 5d.21 | Mark a work order ready, then set the list to an earlier month | It is still listed (awaiting action), with a note saying how many come from outside the dates |
+| 5d.22 | `node --env-file=.env --env-file=.env.local --import ./tests/setup/register.mjs scripts/finance/run-digest.ts --ignore-time` | The digest lists work orders first marked ready since the last one, named by quotation or work order number; email only to `NOTIFY_REDIRECT_TO` |
 
 Invoices and history are append-only records, like the rest of Finance: use `TEST-` numbers.
 

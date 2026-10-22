@@ -96,3 +96,25 @@ test("long windows are drawn by week; the aged count is Pending past the setting
   assert.equal(p.invoiced.trend, null, "nothing in the window before");
   assert.deepEqual(p.aged, { count: 1, value: 1000, afterDays: 1 });
 });
+
+test("by work order: partly invoiced is waiting, one invoice across two work orders counts once, days run from ready", () => {
+  const wo: MetricItem[] = [
+    { id: "w1", status: "partially_invoiced", value: 400, enteredAt: daysAgo(10) },
+    { id: "w2", status: "invoiced", value: 600, enteredAt: daysAgo(10) },
+  ];
+  const rows = [
+    // MAHER-1 covers both work orders; its total is 50 above the lines, shown on its first row.
+    { queueItemId: "w1", invoiceId: "inv1", amount: 650, queueValue: 600, recordedAt: daysAgo(2), recordedByLabel: "Finance One", startedAt: daysAgo(6) },
+    { queueItemId: "w2", invoiceId: "inv1", amount: 600, queueValue: 600, recordedAt: daysAgo(2), recordedByLabel: "Finance One", startedAt: daysAgo(4) },
+  ];
+  const s = summarise(wo, rows);
+  assert.deepEqual(s.partiallyInvoiced, { count: 1, value: 400 });
+  assert.equal(s.averageDaysToInvoice, 3, "(4 + 2) / 2, from the lines being marked ready");
+  const m = computeQueueMetrics(wo, rows, [], NOW);
+  assert.equal(m.openValue, 400, "partly invoiced still waits");
+  assert.deepEqual(m.variance, { invoices: 1, withVariance: 1, total: 50, absoluteTotal: 50 });
+  const p = computePeriodMetrics({ items: wo, invoices: rows, now: NOW, days: 7, agedAfterDays: 7, timeZone: "Asia/Dubai" });
+  assert.equal(p.invoiced.count, 1);
+  assert.equal(p.invoiced.value, 1250);
+  assert.equal(p.activity.reduce((n, point) => n + point.invoicedCount, 0), 1, "the chart counts the invoice once too");
+});

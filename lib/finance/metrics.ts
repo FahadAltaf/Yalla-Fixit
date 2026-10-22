@@ -8,7 +8,7 @@ import { addDaysToDateString, zonedDateString } from "@/lib/scheduling/org-time"
 
 export type MetricItem = {
   id: string;
-  status: "pending" | "in_progress" | "query_raised" | "on_hold" | "excluded" | "invoiced";
+  status: "pending" | "in_progress" | "query_raised" | "on_hold" | "partially_invoiced" | "excluded" | "invoiced";
   value: number;
   enteredAt: string;
   /** When the item reached its current status; the aged rule reads it for Pending. */
@@ -18,19 +18,32 @@ export type MetricItem = {
 
 export type MetricInvoice = {
   queueItemId: string;
+  /** One MAHER invoice can cover several work orders: a row per work order, counted once by this id. */
+  invoiceId?: string;
   amount: number;
   queueValue: number;
   recordedAt: string;
   recordedByLabel: string | null;
+  /** When the work it covers was marked ready; days to invoice run from here, else from the item's entry. */
+  startedAt?: string | null;
 };
 
 export type MetricExclusion = { queueItemId: string; reason: string; decision: string | null };
 
-const OPEN = new Set(["pending", "in_progress", "query_raised", "on_hold"]);
+const OPEN = new Set(["pending", "in_progress", "query_raised", "on_hold", "partially_invoiced"]);
 const DAY_MS = 86_400_000;
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
 const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/** How many invoices: rows of one invoice (one per work order it covers) count once. */
+const invoiceCount = (invoices: MetricInvoice[]) => new Set(invoices.map((inv, i) => inv.invoiceId ?? `row:${i}`)).size;
+
+/** Days from the work being ready (or entering the queue) to the invoice, null when its item is unknown. */
+function daysToInvoiceOf(inv: MetricInvoice, entered: string | undefined): number | null {
+  const start = inv.startedAt ?? entered;
+  return start ? Math.max(0, (Date.parse(inv.recordedAt) - Date.parse(start)) / DAY_MS) : null;
+}
 
 /** Whole days between two instants, never negative. */
 export function daysBetween(from: string, to: string | Date): number {
@@ -43,6 +56,7 @@ export type QueueSummary = {
   inProgress: { count: number; value: number };
   queryRaised: { count: number; value: number };
   onHold: { count: number; value: number };
+  partiallyInvoiced: { count: number; value: number };
   excluded: { count: number; value: number };
   invoiced: { count: number; value: number };
   /** Mean days from entering the queue to the invoice being recorded. Null with no invoices yet. */
@@ -57,12 +71,14 @@ export function summarise(items: MetricItem[], invoices: MetricInvoice[]): Queue
   const entered = new Map(items.map((i) => [i.id, i.enteredAt]));
   const spans = invoices
     .filter((inv) => entered.has(inv.queueItemId))
-    .map((inv) => (Date.parse(inv.recordedAt) - Date.parse(entered.get(inv.queueItemId) as string)) / DAY_MS);
+    .map((inv) => daysToInvoiceOf(inv, entered.get(inv.queueItemId)))
+    .filter((d): d is number => d !== null);
   return {
     pending: bucket("pending"),
     inProgress: bucket("in_progress"),
     queryRaised: bucket("query_raised"),
     onHold: bucket("on_hold"),
+    partiallyInvoiced: bucket("partially_invoiced"),
     excluded: bucket("excluded"),
     invoiced: bucket("invoiced"),
     averageDaysToInvoice: spans.length ? round1(spans.reduce((a, b) => a + b, 0) / spans.length) : null,
@@ -107,10 +123,7 @@ export function computeQueueMetrics(
 
   const spans = invoices
     .filter((inv) => byId.has(inv.queueItemId))
-    .map((inv) => ({
-      user: inv.recordedByLabel ?? "Unknown",
-      days: (Date.parse(inv.recordedAt) - Date.parse(byId.get(inv.queueItemId)!.enteredAt)) / DAY_MS,
-    }));
+    .map((inv) => ({ user: inv.recordedByLabel ?? "Unknown", days: daysToInvoiceOf(inv, byId.get(inv.queueItemId)!.enteredAt) as number }));
   const users = [...new Set(spans.map((s) => s.user))].sort();
 
   const excludedReasons = new Map<string, { count: number; value: number }>();
@@ -142,7 +155,7 @@ export function computeQueueMetrics(
       .map(([reason, v]) => ({ reason, ...v }))
       .sort((a, b) => b.value - a.value),
     variance: {
-      invoices: invoices.length,
+      invoices: invoiceCount(invoices),
       withVariance: variances.filter((v) => v !== 0).length,
       total: round2(variances.reduce((a, b) => a + b, 0)),
       absoluteTotal: round2(variances.reduce((a, b) => a + Math.abs(b), 0)),
@@ -240,19 +253,22 @@ export function computePeriodMetrics(input: {
       return date >= previousFrom && date < from;
     })
     .reduce((sum, inv) => sum + inv.amount, 0);
-  for (const inv of current) {
-    const point = points.get(keyOf(dateOf(inv.recordedAt)))!;
-    point.invoicedCount += 1;
+  const countedInBucket = new Set<string>();
+  current.forEach((inv, i) => {
+    const key = keyOf(dateOf(inv.recordedAt));
+    const point = points.get(key)!;
+    const once = `${key}:${inv.invoiceId ?? `row:${i}`}`;
+    if (!countedInBucket.has(once)) {
+      countedInBucket.add(once);
+      point.invoicedCount += 1;
+    }
     point.invoicedValue = round2(point.invoicedValue + inv.amount);
-  }
+  });
   const invoicedValue = round2(current.reduce((sum, inv) => sum + inv.amount, 0));
 
   const spans = current
     .filter((inv) => byId.has(inv.queueItemId))
-    .map((inv) => ({
-      user: inv.recordedByLabel ?? "Unknown",
-      days: (Date.parse(inv.recordedAt) - Date.parse(byId.get(inv.queueItemId)!.enteredAt)) / DAY_MS,
-    }));
+    .map((inv) => ({ user: inv.recordedByLabel ?? "Unknown", days: daysToInvoiceOf(inv, byId.get(inv.queueItemId)!.enteredAt) as number }));
   const users = [...new Set(spans.map((s) => s.user))];
   const variances = current.map((inv) => round2(inv.amount - inv.queueValue));
 
@@ -268,7 +284,7 @@ export function computePeriodMetrics(input: {
     activity: [...points.values()],
     entered: { count: enteredCount, value: round2(enteredValue) },
     invoiced: {
-      count: current.length,
+      count: invoiceCount(current),
       value: invoicedValue,
       trend: previousValue > 0 ? Math.round(((invoicedValue - previousValue) / previousValue) * 100) : null,
     },
@@ -280,7 +296,7 @@ export function computePeriodMetrics(input: {
       })
       .sort((a, b) => b.invoices - a.invoices || a.user.localeCompare(b.user)),
     variance: {
-      invoices: current.length,
+      invoices: invoiceCount(current),
       withVariance: variances.filter((v) => v !== 0).length,
       total: round2(variances.reduce((a, b) => a + b, 0)),
       absoluteTotal: round2(variances.reduce((a, b) => a + Math.abs(b), 0)),

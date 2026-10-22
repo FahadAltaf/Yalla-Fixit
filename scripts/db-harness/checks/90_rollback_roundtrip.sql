@@ -5,6 +5,7 @@
 \pset format unaligned
 SET client_min_messages = warning;
 
+\ir ../../../docs/finance-reporting/migrations/20261025100000_rollback.sql
 \ir ../../../docs/finance-reporting/migrations/20261024100000_rollback.sql
 \ir ../../../docs/finance-reporting/migrations/20261023100000_rollback.sql
 \ir ../../../docs/finance-reporting/migrations/20261022100000_rollback.sql
@@ -39,9 +40,11 @@ SET client_min_messages = warning;
 \ir ../../../supabase/migrations/20261022100000_reports_foundation.sql
 \ir ../../../supabase/migrations/20261023100000_hr_compliance.sql
 \ir ../../../supabase/migrations/20261024100000_finance_line_ledger.sql
+\ir ../../../supabase/migrations/20261025100000_finance_work_order_snapshot.sql
 SET client_min_messages = notice;
 SELECT harness.expect(to_regclass('public.portal_notifications') IS NOT NULL
   AND (SELECT count(*) = 1 FROM public.reporting_settings)
   AND (SELECT count(*) = 3 FROM fsm.sync_state)
   AND to_regclass('finance.queue_items') IS NOT NULL AND to_regclass('reports.access_log') IS NOT NULL
-  AND to_regclass('hr.waivers') IS NOT NULL AND to_regclass('finance.line_states') IS NOT NULL, 'migrations re-apply after rollback');
+  AND to_regclass('hr.waivers') IS NOT NULL AND to_regclass('finance.line_states') IS NOT NULL
+  AND to_regprocedure('finance.snapshot_work_order(text, jsonb, jsonb)') IS NOT NULL, 'migrations re-apply after rollback');

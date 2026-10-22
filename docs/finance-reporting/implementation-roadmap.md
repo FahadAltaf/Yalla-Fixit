@@ -273,7 +273,14 @@ the earlier queue stay in the database and still open from their old links.
   printed, the amount left, 5 % VAT taken off, description overlap; never beyond what is left; a number alone
   is not enough); the review screen lets the person correct, add lines and confirm. Needs `OPENAI_API_KEY`
   (`OPENAI_INVOICE_MODEL` optional, default `gpt-4.1-mini`); not yet run against a real MAHER invoice.
-- **D (after)**: invoicing metrics and the daily digest on the new model.
+- **D, metrics and digest (built)**: migration `20261025100000` keeps a snapshot of a work order (client,
+  quotation, coordinator, FSM status, type, raised at, value, and every line's amount) whenever someone acts
+  on it; the server has just read it live for that action, so this costs no extra FSM call, and work orders
+  nobody touches are never stored. Invoicing metrics and the daily digest (E1, N1, N2) read only the portal's
+  records (`lib/server/finance/ledger-metrics.ts`): one item per work order marked ready, entered when first
+  marked, days to invoice from the lines' Ready mark, one MAHER invoice across work orders counted once, its
+  variance against the lines it covers. Ready to invoice also lists work still awaiting action that was raised
+  outside the chosen dates, from the snapshot, so aged work never drops out of the list.
 
 ## P8 — FSM-custom reports · S–M
 

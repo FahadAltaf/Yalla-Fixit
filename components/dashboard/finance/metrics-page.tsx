@@ -40,30 +40,48 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { addDaysToDateString } from "@/lib/scheduling/org-time";
-import type { QueueStatus } from "@/lib/server/finance/queue";
+import { QUEUE_STATUS_LABELS, type QueueStatus } from "@/lib/finance/line-status";
 import { CHART_COLOR } from "@/lib/snagging/chart-palette";
 import { financeService, type FinanceMetricsResponse } from "@/modules/finance/finance-service";
 
-import { QUEUE_STATUS_COLOR, QUEUE_STATUS_LABELS, aed } from "./shared";
+import { aed } from "./shared";
 
 /**
  * Invoicing metrics (BRD §5.1 Step 8, §6.9; DEV-441), laid out as the
  * Snagging overview is: headline cards, then the period's movement beside
  * how fast it is turned into invoices, then the queue as it stands, then
- * the quieter analysis past a divider. Every figure comes from the queue's
- * own timestamps and records, and most of them open the queue filtered to
- * what they count.
+ * the quieter analysis past a divider. One item is a work order in Ready
+ * to invoice; every figure comes from the portal's own records of it
+ * (Ready marks, workflow, invoices, exclusions), never from FSM, and most
+ * of them open Ready to invoice filtered to what they count.
  *
  * One request feeds the page, so the sections share its loading and error
  * state; each still draws its own skeleton and empty state.
  */
 
-const OPEN: QueueStatus[] = ["pending", "in_progress", "query_raised", "on_hold"];
+const OPEN = ["pending", "in_progress", "query_raised", "on_hold", "partially_invoiced"] as const satisfies readonly QueueStatus[];
+
+const OPEN_COLOR: Record<(typeof OPEN)[number], string> = {
+  pending: CHART_COLOR.neutralSoft,
+  in_progress: CHART_COLOR.brand,
+  query_raised: CHART_COLOR.progress,
+  on_hold: CHART_COLOR.brandSofter,
+  partially_invoiced: CHART_COLOR.good,
+};
+
+const SUMMARY_KEY = {
+  pending: "pending",
+  in_progress: "inProgress",
+  query_raised: "queryRaised",
+  on_hold: "onHold",
+  partially_invoiced: "partiallyInvoiced",
+} as const;
+
+const workOrders = (count: number) => (count === 1 ? "1 work order" : `${count} work orders`);
 
 /* Value that arrived is neutral; value invoiced is the number Finance moves. */
 const activityConfig = {
-  enteredValue: { label: "Entered the queue", color: CHART_COLOR.neutral },
+  enteredValue: { label: "Marked ready", color: CHART_COLOR.neutral },
   invoicedValue: { label: "Invoiced", color: CHART_COLOR.good },
 } satisfies ChartConfig;
 
@@ -77,7 +95,7 @@ const AGEING_COLOR: Record<string, string> = {
 const ageingConfig = { value: { label: "Waiting value" } } satisfies ChartConfig;
 
 const statusConfig = Object.fromEntries(
-  OPEN.map((status) => [status, { label: QUEUE_STATUS_LABELS[status], color: QUEUE_STATUS_COLOR[status] }]),
+  OPEN.map((status) => [status, { label: QUEUE_STATUS_LABELS[status], color: OPEN_COLOR[status] }]),
 ) satisfies ChartConfig;
 
 const compactAed = (value: number) =>
@@ -119,13 +137,13 @@ export function FinanceMetricsPage() {
   const metrics = data?.metrics;
   const period = data?.period;
 
-  const openCount = summary ? summary.pending.count + summary.inProgress.count + summary.queryRaised.count + summary.onHold.count : 0;
   const statusSlices = summary
     ? OPEN.map((status) => {
-        const bucket = summary[status === "in_progress" ? "inProgress" : status === "query_raised" ? "queryRaised" : status === "on_hold" ? "onHold" : "pending"];
-        return { status, label: QUEUE_STATUS_LABELS[status], count: bucket.count, value: bucket.value, fill: QUEUE_STATUS_COLOR[status] };
+        const bucket = summary[SUMMARY_KEY[status]];
+        return { status, label: QUEUE_STATUS_LABELS[status], count: bucket.count, value: bucket.value, fill: OPEN_COLOR[status] };
       })
     : [];
+  const openCount = statusSlices.reduce((sum, slice) => sum + slice.count, 0);
   const activityTotal = (period?.activity ?? []).reduce((sum, p) => sum + p.enteredCount + p.invoicedCount, 0);
   const ageingTotal = (metrics?.ageing ?? []).reduce((sum, band) => sum + band.count, 0);
   const slowest = Math.max(1, ...(period?.daysToInvoiceByUser ?? []).map((row) => row.averageDays));
@@ -168,6 +186,12 @@ export function FinanceMetricsPage() {
         }
       />
 
+      {data && data.ledgerReady === false ? (
+        <p className="text-muted-foreground -mt-3 text-sm">
+          Ready to invoice is not set up yet (migration 20261024100000), so there is nothing to measure.
+        </p>
+      ) : null}
+
       {error && !data ? (
         <InlineError message={error} onRetry={reload} />
       ) : waiting || !summary || !metrics || !period ? (
@@ -177,8 +201,8 @@ export function FinanceMetricsPage() {
           <StatCard
             label="Awaiting invoice"
             value={aed(metrics.openValue)}
-            headline={openCount === 1 ? "1 item waiting" : `${openCount} items waiting`}
-            caption="Pending, in progress, query or hold"
+            headline={`${workOrders(openCount)} waiting`}
+            caption="Ready and not yet invoiced: pending, in progress, query, hold or partly invoiced"
             href="/finance/queue"
           />
           <StatCard
@@ -201,13 +225,13 @@ export function FinanceMetricsPage() {
           <StatCard
             label="Days to invoice"
             value={period.averageDaysToInvoice === null ? "—" : period.averageDaysToInvoice}
-            headline={period.averageDaysToInvoice === null ? "No invoice in this period" : "Average, entered to invoiced"}
+            headline={period.averageDaysToInvoice === null ? "No invoice in this period" : "Average, marked ready to invoiced"}
             caption={`Over invoices recorded in the last ${range}`}
           />
           <StatCard
             label="Excluded value"
             value={aed(summary.excluded.value)}
-            headline={summary.excluded.count === 1 ? "1 item verified" : `${summary.excluded.count} items verified`}
+            headline={`${workOrders(summary.excluded.count)} verified`}
             caption="Marked not invoiceable and verified"
             href="/finance/queue?status=excluded"
           />
@@ -216,8 +240,8 @@ export function FinanceMetricsPage() {
 
       <div className="grid gap-4 lg:grid-cols-2">
         <SectionShell
-          title="Queue activity"
-          description="Value entering the queue against value invoiced. Click a day to open what entered on it."
+          title="Activity"
+          description="Value marked ready to invoice against value invoiced, by the day it happened."
           icon={<Activity />}
           centerBody
           loading={waiting}
@@ -228,7 +252,7 @@ export function FinanceMetricsPage() {
             <EmptyState
               icon={<Activity />}
               title="No movement in this period"
-              description={`Nothing entered the queue and nothing was invoiced in the last ${range}. Widen the period to look further back.`}
+              description={`Nothing was marked ready and nothing was invoiced in the last ${range}. Widen the period to look further back.`}
               className="py-10"
             />
           }
@@ -238,14 +262,6 @@ export function FinanceMetricsPage() {
             <AreaChart
               data={period?.activity ?? []}
               margin={{ left: -12, right: 8, top: 8 }}
-              className="cursor-pointer"
-              onClick={(state) => {
-                const day = (state as { activePayload?: Array<{ payload?: { day?: string } }> })?.activePayload?.[0]?.payload?.day;
-                if (!day || !period) return;
-                // A weekly point opens its whole week.
-                const to = period.bucket === "week" ? addDaysToDateString(day, 6) : day;
-                router.push(`/finance/queue?status=all&from=${day}&to=${to < period.to ? to : period.to}`);
-              }}
             >
               <CartesianGrid vertical={false} />
               <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} />
@@ -274,7 +290,7 @@ export function FinanceMetricsPage() {
 
         <SectionShell
           title="Days to invoice, by Finance user"
-          description={`From entering the queue to the MAHER invoice, over the last ${range}.`}
+          description={`From the lines being marked ready to the MAHER invoice, over the last ${range}.`}
           icon={<Clock />}
           centerBody
           loading={waiting}
@@ -285,7 +301,7 @@ export function FinanceMetricsPage() {
             <EmptyState
               icon={<Clock />}
               title="No invoice recorded in this period"
-              description="The figure fills in once Finance records MAHER invoices against queue items."
+              description="The figure fills in once Finance records MAHER invoices against work orders."
               className="py-10"
             />
           }
@@ -341,7 +357,7 @@ export function FinanceMetricsPage() {
             <EmptyState
               icon={<PieChartIcon />}
               title="Nothing is waiting"
-              description="Every item in the queue is invoiced or excluded."
+              description="Every work order marked ready is invoiced or excluded."
               className="py-10"
             />
           }
@@ -396,7 +412,7 @@ export function FinanceMetricsPage() {
                     <span className="text-right text-sm tabular-nums">
                       <span className="font-medium">{aed(slice.value)}</span>
                       <span className="text-muted-foreground block text-xs">
-                        {slice.count} {slice.count === 1 ? "item" : "items"}
+                        {workOrders(slice.count)}
                       </span>
                     </span>
                   </Link>
@@ -407,8 +423,8 @@ export function FinanceMetricsPage() {
         </SectionShell>
 
         <SectionShell
-          title="Ageing of waiting items"
-          description="Value waiting, by days since it entered the queue."
+          title="Ageing of waiting work"
+          description="Value waiting, by days since the work order was first marked ready."
           icon={<Hourglass />}
           centerBody
           loading={waiting}
@@ -419,7 +435,7 @@ export function FinanceMetricsPage() {
             <EmptyState
               icon={<Hourglass />}
               title="Nothing is waiting"
-              description="Ageing fills in while items wait to be invoiced."
+              description="Ageing fills in while work orders wait to be invoiced."
               className="py-10"
             />
           }
@@ -436,7 +452,7 @@ export function FinanceMetricsPage() {
                     labelKey="label"
                     formatter={(value, _name, item) => (
                       <span className="tabular-nums">
-                        {aed(Number(value))} · {(item?.payload as { count?: number })?.count ?? 0} item(s)
+                        {aed(Number(value))} · {workOrders((item?.payload as { count?: number })?.count ?? 0)}
                       </span>
                     )}
                   />
@@ -464,7 +480,7 @@ export function FinanceMetricsPage() {
           /* A one-line answer: a full empty-state panel across the page said very little at great length. */
           <p className="text-muted-foreground flex items-center gap-2 text-sm">
             <PauseCircle className="size-4 shrink-0" aria-hidden />
-            Nothing is on hold. An item put on hold shows here with its reason until it is resumed.
+            Nothing is on hold. A work order put on hold shows here with its reason until it is resumed.
           </p>
         }
         skeleton={<LinesSkeleton rows={3} />}
@@ -480,7 +496,7 @@ export function FinanceMetricsPage() {
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-medium">{row.reason || "No reason recorded"}</span>
                     <span className="text-muted-foreground block truncate text-sm">
-                      {aed(row.value)} · {row.days} {row.days === 1 ? "day" : "days"} in the queue
+                      {aed(row.value)} · {row.days} {row.days === 1 ? "day" : "days"} since marked ready
                     </span>
                   </span>
                   <span className="text-brand mt-0.5 inline-flex shrink-0 items-center gap-1 text-sm font-medium">
@@ -532,7 +548,7 @@ export function FinanceMetricsPage() {
                     <span className="font-medium">{aed(row.value)}</span>
                     <span className="text-muted-foreground">
                       {" "}
-                      · {row.count} {row.count === 1 ? "item" : "items"}
+                      · {workOrders(row.count)}
                     </span>
                   </span>
                 </div>
@@ -548,7 +564,7 @@ export function FinanceMetricsPage() {
 
         <SectionShell
           title="Invoice variance"
-          description={`MAHER amount against queue value, for invoices in the last ${range}.`}
+          description={`MAHER invoice total against the lines it was recorded against, for invoices in the last ${range}.`}
           icon={<Scale />}
           muted
           loading={waiting}
@@ -559,7 +575,7 @@ export function FinanceMetricsPage() {
             <EmptyState
               icon={<Scale />}
               title="No invoice in this period"
-              description="Variance is worked out from each invoice recorded against the queue."
+              description="Variance is worked out from each invoice recorded against work order lines."
               className="py-10"
             />
           }
@@ -570,9 +586,9 @@ export function FinanceMetricsPage() {
               <FigureTile
                 label="Differ"
                 value={`${period.variance.withVariance} of ${period.variance.invoices}`}
-                note="Invoices not at queue value"
+                note="Invoice total differs from its lines"
               />
-              <FigureTile label="Net" value={aed(period.variance.total)} note="Below queue value is negative" />
+              <FigureTile label="Net" value={aed(period.variance.total)} note="Below the lines' value is negative" />
               <FigureTile label="Either way" value={aed(period.variance.absoluteTotal)} note="Sum of the differences" />
             </div>
           ) : null}

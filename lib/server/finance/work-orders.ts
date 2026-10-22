@@ -16,7 +16,7 @@ import {
 import { addDaysToDateString, todayInZone, zonedTimeToUtc } from "@/lib/scheduling/org-time";
 import { fetchEstimateLive, fetchWorkOrderLive, fetchWorkOrdersLive, forgetLists, FsmLiveError, type LiveWorkOrder } from "@/lib/server/finance/fsm-live";
 import { readReportingSettings } from "@/lib/server/reporting/settings";
-import { readAllByIds } from "@/lib/server/snagging/read-all";
+import { readAllByIds, readAllRows } from "@/lib/server/snagging/read-all";
 
 /**
  * Ready to invoice, by FSM work order (the user's direction, 22 Oct).
@@ -187,6 +187,77 @@ function invoicingFrom(states: StateRow[], subTotal: number | null): WorkOrderIn
   return inv;
 }
 
+/**
+ * Work orders the portal holds records for that are not among the live
+ * rows: their header as FSM gave it when someone last acted on them
+ * (migration 20261025100000), so work still waiting is listed whatever
+ * the dates, without reading FSM for it. Before that migration only the
+ * work order number is known.
+ */
+async function ledgerWorkOrdersOutside(admin: SupabaseClient, live: Set<string>): Promise<LiveWorkOrder[]> {
+  try {
+    const [flows, ready] = await Promise.all([
+      readAllRows<Record<string, unknown>>(
+        (from, to) => admin.schema("finance").from("work_order_states").select("*").order("fsm_work_order_id").range(from, to),
+        "work order states",
+      ),
+      readAllRows<Record<string, unknown>>(
+        (from, to) =>
+          admin
+            .schema("finance")
+            .from("line_states")
+            .select("fsm_line_id, fsm_work_order_id, work_order_number")
+            .eq("ready", true)
+            .order("fsm_line_id")
+            .range(from, to),
+        "ready lines",
+      ),
+    ]);
+    const blank = (id: string, number: string | null): LiveWorkOrder => ({
+      id,
+      number,
+      status: null,
+      type: null,
+      workType: null,
+      billingStatus: null,
+      companyName: null,
+      contactName: null,
+      ownerName: null,
+      estimateId: null,
+      estimateNumber: null,
+      createdAt: null,
+      completedAt: null,
+      modifiedAt: null,
+      subTotal: null,
+      grandTotal: null,
+      taxAmount: null,
+    });
+    const outside = new Map<string, LiveWorkOrder>();
+    for (const r of flows) {
+      const id = String(r.fsm_work_order_id);
+      if (live.has(id)) continue;
+      outside.set(id, {
+        ...blank(id, str(r.work_order_number)),
+        status: str(r.fsm_status),
+        type: str(r.work_order_type),
+        companyName: str(r.client_name),
+        ownerName: str(r.coordinator_name),
+        estimateNumber: str(r.quotation_number),
+        createdAt: str(r.fsm_created_at),
+        subTotal: r.sub_total === null || r.sub_total === undefined ? null : Number(r.sub_total),
+      });
+    }
+    for (const r of ready) {
+      const id = String(r.fsm_work_order_id);
+      if (!live.has(id) && !outside.has(id)) outside.set(id, blank(id, str(r.work_order_number)));
+    }
+    return [...outside.values()];
+  } catch (error) {
+    if (ledgerMissing({ message: error instanceof Error ? error.message : String(error) })) return [];
+    throw error;
+  }
+}
+
 // ---------------------------------------------------------------------
 // The list
 // ---------------------------------------------------------------------
@@ -232,6 +303,8 @@ export type WorkOrderList = {
   agedAfterDays: number;
   /** When FSM was read for this list, and what it cost. */
   fsm: { fetchedAt: string; calls: number; cached: boolean };
+  /** Work awaiting action raised outside these dates, listed anyway (from what the portal kept, not FSM). */
+  outsideDates: number;
   /** False until migration 20261024100000 is applied: Ready marks, workflow and invoices are off. */
   ledgerReady: boolean;
 };
@@ -257,8 +330,8 @@ export async function listWorkOrders(admin: SupabaseClient, filters: WorkOrderFi
     readReportingSettings(admin),
   ]);
   const agedAfterDays = settings.finance.agedAfterDays;
-  const ids = live.rows.map((w) => w.id);
-  const ledger = await loadLedger(admin, ids);
+  const outside = await ledgerWorkOrdersOutside(admin, new Set(live.rows.map((w) => w.id)));
+  const ledger = await loadLedger(admin, [...live.rows, ...outside].map((w) => w.id));
   const statesOf = new Map<string, StateRow[]>();
   for (const s of ledger.states) statesOf.set(s.workOrderId, [...(statesOf.get(s.workOrderId) ?? []), s]);
 
@@ -273,13 +346,17 @@ export async function listWorkOrders(admin: SupabaseClient, filters: WorkOrderFi
     const statusSince = workflow !== "open" && flow ? flow.statusChangedAt : (firstReady ?? w.createdAt);
     return { invoicing, status, statusSince, assignee: flow?.assignee ?? null };
   };
-  const views = new Map(live.rows.map((w) => [w.id, view(w)]));
+  const views = new Map([...live.rows, ...outside].map((w) => [w.id, view(w)]));
+  /* Work still waiting is never hidden by the dates. */
+  const earlier = outside.filter((w) => AWAITING_ACTION.includes(views.get(w.id)!.status));
+  const all = [...live.rows, ...earlier].sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
+  const ids = all.map((w) => w.id);
   const daysIn = (since: string | null) => (since ? Math.max(0, Math.floor((now - Date.parse(since)) / DAY_MS)) : 0);
 
   const wanted: QueueStatus[] | null =
     !filters.status || filters.status === "open" ? AWAITING_ACTION : filters.status === "all" ? null : [filters.status as QueueStatus];
   const needle = (filters.q ?? "").toLowerCase();
-  const matching = live.rows.filter((w) => {
+  const matching = all.filter((w) => {
     const v = views.get(w.id)!;
     if (wanted && !wanted.includes(v.status)) return false;
     if (filters.client && w.companyName !== filters.client) return false;
@@ -312,7 +389,7 @@ export async function listWorkOrders(admin: SupabaseClient, filters: WorkOrderFi
     };
   });
 
-  /* The summary strip counts every work order in the dates, whatever the status filter. */
+  /* The summary strip counts every work order listed, whatever the status filter. */
   const blank = () => ({ count: 0, value: 0 });
   const summary: WorkOrderQueueSummary = {
     pending: blank(),
@@ -326,7 +403,7 @@ export async function listWorkOrders(admin: SupabaseClient, filters: WorkOrderFi
     averageDaysToInvoice: null,
     invoices: 0,
   };
-  for (const w of live.rows) {
+  for (const w of all) {
     const v = views.get(w.id)!;
     const b = summary[SUMMARY_KEY[v.status]];
     b.count += 1;
@@ -351,9 +428,10 @@ export async function listWorkOrders(admin: SupabaseClient, filters: WorkOrderFi
     rows,
     total: matching.length,
     summary,
-    options: { clients: distinct(live.rows.map((w) => w.companyName)), coordinators: distinct(live.rows.map((w) => w.ownerName)) },
+    options: { clients: distinct(all.map((w) => w.companyName)), coordinators: distinct(all.map((w) => w.ownerName)) },
     agedAfterDays,
     fsm: { fetchedAt: live.fetchedAt, calls: live.cached ? 0 : live.calls, cached: live.cached },
+    outsideDates: earlier.length,
     ledgerReady: ledger.ready,
   };
 }
@@ -693,10 +771,41 @@ function invoicingError(error: { code?: string; message: string }, fn: string): 
 }
 
 /** The work order as FSM has it now (from the last ten minutes' read, or a new one). */
+/**
+ * Keeps what FSM says about the work order and all its lines as the
+ * portal acts on it (migration 20261025100000): the metrics, the digest
+ * and work waiting from before the list's dates read this, never FSM.
+ * Never changes a Ready mark, an invoiced amount or a status. Best effort:
+ * the action is what matters, and before the migration there is nothing
+ * to keep it in.
+ */
+async function snapshotWorkOrder(admin: SupabaseClient, live: NonNullable<Awaited<ReturnType<typeof fetchWorkOrderLive>>>) {
+  const w = live.workOrder;
+  const { error } = await admin.schema("finance").rpc("snapshot_work_order", {
+    p_work_order_id: w.id,
+    p_work_order: {
+      number: w.number,
+      client: w.companyName,
+      quotation: w.estimateNumber,
+      coordinator: w.ownerName,
+      status: w.status,
+      type: w.type,
+      created_at: w.createdAt,
+      sub_total: w.subTotal,
+    },
+    p_lines: live.lines.map((l) => ({ id: l.fsm_line_id, name: l.name, amount: Math.max(0, l.amount ?? 0) })),
+  });
+  if (error && !/PGRST202|snapshot_work_order|schema cache/i.test(`${error.code} ${error.message}`)) {
+    console.error("[finance] work order snapshot failed:", error.message);
+  }
+}
+
+/** The work order as FSM has it now, for an action on it; kept as a snapshot too. */
 async function liveOrFail(admin: SupabaseClient, workOrderId: string) {
   try {
     const live = await fetchWorkOrderLive(admin, workOrderId);
     if (!live) throw new InvoicingError("This work order is not in Zoho FSM any more.", 404);
+    await snapshotWorkOrder(admin, live);
     return live;
   } catch (error) {
     if (error instanceof FsmLiveError) throw new InvoicingError(error.message, error.status);
