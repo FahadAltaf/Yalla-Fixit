@@ -18,6 +18,7 @@ import {
   ShieldCheck,
   Truck,
   Undo2,
+  UserMinus,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -270,7 +271,8 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
   }
   if (can.work && live && workflow === "in_progress") {
     actions.push(
-      <Button key="release" variant="ghost" onClick={() => void act("release", "Released")} disabled={busy}>
+      <Button key="release" variant="outline" onClick={() => void act("release", "Released")} disabled={busy}>
+        <UserMinus className="size-4" />
         Release
       </Button>,
     );
