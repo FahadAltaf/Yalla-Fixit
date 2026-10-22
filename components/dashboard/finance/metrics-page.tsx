@@ -203,7 +203,7 @@ export function FinanceMetricsPage() {
             value={aed(metrics.openValue)}
             headline={`${workOrders(openCount)} waiting`}
             caption="Ready and not yet invoiced: pending, in progress, query, hold or partly invoiced"
-            href="/finance/queue"
+            href="/finance/queue?status=open"
           />
           <StatCard
             label="Aged"

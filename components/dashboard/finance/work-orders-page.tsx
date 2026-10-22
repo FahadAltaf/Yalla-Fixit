@@ -27,7 +27,8 @@ import { UploadInvoiceDialog } from "./upload-invoice-dialog";
  * Ready to invoice (BRD 5.1, 6.4): the summary strip, then the list with
  * its filters, one row per FSM work order read live from Zoho FSM (the
  * user's direction, 22 Oct). The last 30 days unless the dates are
- * changed, at most four months back. The row opens the work order.
+ * changed, at most four months back, every status unless one is chosen.
+ * The row opens the work order.
  *
  * The list is cached in the browser by its URL and on the server for ten
  * minutes, so opening a work order and coming back costs nothing; Refresh
@@ -35,8 +36,8 @@ import { UploadInvoiceDialog } from "./upload-invoice-dialog";
  */
 
 const STATUS_FILTERS: Array<{ value: string; label: string }> = [
-  { value: "open", label: "Awaiting action" },
   { value: "all", label: "All statuses" },
+  { value: "open", label: "Awaiting action" },
   ...(Object.keys(QUEUE_STATUS_LABELS) as QueueStatus[]).map((status) => ({ value: status, label: QUEUE_STATUS_LABELS[status] })),
 ];
 
@@ -48,7 +49,7 @@ export function FinanceWorkOrdersPage() {
   const params = useSearchParams();
   const filters: FinanceQueueToolbarFilters = useMemo(
     () => ({
-      status: params.get("status") ?? "open",
+      status: params.get("status") ?? "all",
       client: params.get("client") ?? "",
       coordinator: params.get("coordinator") ?? "",
       from: params.get("from") ?? "",
@@ -69,14 +70,14 @@ export function FinanceWorkOrdersPage() {
     const merged = new URLSearchParams(params.toString());
     for (const [key, value] of Object.entries(next)) {
       const text = typeof value === "boolean" ? (value ? "1" : "") : String(value);
-      if (text === "" || text === "0" || (key === "pageSize" && text === "25") || (key === "status" && text === "open")) merged.delete(key);
+      if (text === "" || text === "0" || (key === "pageSize" && text === "25") || (key === "status" && text === "all")) merged.delete(key);
       else merged.set(key, text);
     }
     router.replace(`${pathname}${merged.size ? `?${merged}` : ""}`, { scroll: false });
   };
 
   const query = new URLSearchParams();
-  if (filters.status !== "open") query.set("status", filters.status);
+  if (filters.status !== "all") query.set("status", filters.status);
   for (const key of ["client", "coordinator", "from", "to"] as const) if (filters[key]) query.set(key, filters[key]);
   if (filters.aged) query.set("aged", "1");
   if (debouncedSearch) query.set("q", debouncedSearch);
@@ -103,7 +104,9 @@ export function FinanceWorkOrdersPage() {
 
   const columns = useMemo(() => getWorkOrderQueueColumns(data?.agedAfterDays ?? 7), [data?.agedAfterDays]);
   const summary = data?.summary;
-  const filtered = Boolean(filters.client || filters.coordinator || filters.from || filters.to || filters.aged || debouncedSearch);
+  const filtered = Boolean(
+    filters.status !== "all" || filters.client || filters.coordinator || filters.from || filters.to || filters.aged || debouncedSearch,
+  );
 
   return (
     <div className="flex flex-col gap-6">
@@ -213,11 +216,11 @@ export function FinanceWorkOrdersPage() {
           emptyState={
             <EmptyState
               icon={<ReceiptText />}
-              title={filtered ? "No work orders match these filters" : "Nothing awaiting action"}
+              title={filtered ? "No work orders match these filters" : "No work orders in these dates"}
               description={
                 filtered
                   ? "Try clearing a filter or widening the dates (up to four months back)."
-                  : "No work order raised in these dates has lines marked ready to invoice. Choose All statuses to see every work order."
+                  : "Zoho FSM has no work order raised in these dates. Widen the dates (up to four months back)."
               }
             />
           }

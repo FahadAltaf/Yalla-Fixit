@@ -74,7 +74,7 @@ function emailBody(plan: Extract<ReturnType<typeof planDigest>, { send: true }>,
       { label: "New since the last digest", value: `${plan.newItems.length} (${aed(plan.newValue)})` },
       { label: "Awaiting action", value: `${plan.outstanding.count} (${aed(plan.outstanding.value)})` },
     ],
-    cta: { label: "Open Ready to invoice", url: `${appUrl}/finance/queue` },
+    cta: { label: "Open Ready to invoice", url: `${appUrl}/finance/queue?status=open` },
   });
 }
 
@@ -126,7 +126,7 @@ export async function runDigest(
     title: digestSubject(plan),
     body: digestInAppText(plan),
     html: emailBody(plan, appUrl),
-    link: "/finance/queue",
+    link: "/finance/queue?status=open",
   });
 
   /* Every channel already had today's digest: nothing new went out. */

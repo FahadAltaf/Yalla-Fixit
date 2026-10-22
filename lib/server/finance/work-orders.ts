@@ -48,7 +48,7 @@ export const workOrderFiltersSchema = z.object({
   client: z.string().trim().max(200).optional(),
   /** FSM's owner of the work order. */
   coordinator: z.string().trim().max(200).optional(),
-  /** "open" (awaiting action, the default), "all", or one queue status. */
+  /** "all" (the default), "open" (awaiting action), or one queue status. */
   status: z
     .enum(["open", "all", "not_ready", "pending", "in_progress", "query_raised", "on_hold", "partially_invoiced", "invoiced", "excluded"])
     .optional(),
@@ -354,7 +354,7 @@ export async function listWorkOrders(admin: SupabaseClient, filters: WorkOrderFi
   const daysIn = (since: string | null) => (since ? Math.max(0, Math.floor((now - Date.parse(since)) / DAY_MS)) : 0);
 
   const wanted: QueueStatus[] | null =
-    !filters.status || filters.status === "open" ? AWAITING_ACTION : filters.status === "all" ? null : [filters.status as QueueStatus];
+    filters.status === "open" ? AWAITING_ACTION : !filters.status || filters.status === "all" ? null : [filters.status as QueueStatus];
   const needle = (filters.q ?? "").toLowerCase();
   const matching = all.filter((w) => {
     const v = views.get(w.id)!;

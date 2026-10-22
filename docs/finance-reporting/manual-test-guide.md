@@ -284,7 +284,7 @@ log, row 11). Before the migration the screens load but say Ready marks, workflo
 
 | # | Do | Expect |
 |---|---|---|
-| 5d.1 | **Finance → Ready to invoice** (there is no Work orders menu) | Work orders raised in the last 30 days, read from Zoho FSM; "read from Zoho FSM … ago" line; cards Pending, In progress, On hold, Excluded value, Average days to invoice. *Awaiting action* is empty until something is marked ready; choose *All statuses* to see every work order |
+| 5d.1 | **Finance → Ready to invoice** (there is no Work orders menu) | Work orders raised in the last 30 days, read from Zoho FSM; "read from Zoho FSM … ago" line; cards Pending, In progress, On hold, Excluded value, Average days to invoice. every status is shown by default (most are *Not ready* until a line is marked); choose *Awaiting action* for the work Finance still has to do |
 | 5d.2 | Change the dates to January | Cut back to four months, with a note |
 | 5d.3 | **Refresh** | A toast with the FSM calls used (2 to 4 for 30 days); the "read … ago" line resets |
 | 5d.4 | Open a work order, go Back, open it again | Back is instant and keeps the filters; the second opening does not read FSM again |
