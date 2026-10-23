@@ -216,14 +216,25 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
   const actions: React.ReactNode[] = [];
   if (canInvoice && invoiceable(lines).length) {
     actions.push(
-      <Button key="upload" variant="outline" onClick={() => startInvoice("upload", invoiceable(lines), false)} disabled={busy}>
-        <FileUp className="size-4" />
-        Upload invoice
-      </Button>,
-      <Button key="invoice" onClick={() => startInvoice("record", invoiceable(lines), false)} disabled={busy}>
-        <ReceiptText className="size-4" />
-        Record invoice
-      </Button>,
+      <DropdownMenu key="invoice" modal={false}>
+        <DropdownMenuTrigger asChild>
+          <Button disabled={busy}>
+            <ReceiptText className="size-4" />
+            Record invoice
+            <ChevronDown className="size-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
+          <DropdownMenuItem onSelect={() => startInvoice("upload", invoiceable(lines), false)}>
+            <FileUp className="size-4" />
+            Upload the MAHER invoice
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => startInvoice("record", invoiceable(lines), false)}>
+            <ReceiptText className="size-4" />
+            Enter the MAHER details
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>,
     );
   }
   if (can.work && live && ["open", "in_progress", "on_hold"].includes(workflow) && data.queueStatus !== "invoiced") {
@@ -897,7 +908,7 @@ function RecordInvoiceDialog({
 
   return (
     <Dialog open onOpenChange={(next) => !next && !busy && onClose()}>
-      <ActionDialogContent busy={busy} className="sm:max-w-3xl">
+      <ActionDialogContent busy={busy} className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Record a MAHER invoice</DialogTitle>
           <DialogDescription>
@@ -906,95 +917,121 @@ function RecordInvoiceDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="max-h-[45vh] overflow-y-auto rounded-md border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-10 pl-4" />
-                <TableHead>Line item</TableHead>
-                <TableHead className="text-right">Left to invoice</TableHead>
-                <TableHead className="w-24 text-right">%</TableHead>
-                <TableHead className="w-36 pr-4 text-right">This invoice</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {lines.map((line) => {
-                const on = included.has(line.id);
-                const value = amounts[line.id] ?? "";
-                const amount = Number(value);
-                const over = on && amount > line.remaining + 0.005;
-                const percent = line.amount ? round2((amount / line.amount) * 100) : 0;
-                return (
-                  <TableRow key={line.id}>
-                    <TableCell className="pl-4">
-                      <Checkbox
-                        checked={on}
-                        onCheckedChange={(checked) =>
-                          setIncluded((prev) => {
-                            const next = new Set(prev);
-                            if (checked) next.add(line.id);
-                            else next.delete(line.id);
-                            return next;
-                          })
-                        }
-                        aria-label={`Include ${line.name ?? "line"}`}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <p className="text-sm font-medium">{line.name ?? "Line"}</p>
-                      <p className="text-muted-foreground text-xs">
-                        {aed(line.amount)}
-                        {line.invoicedAmount > 0 ? ` · ${aed(line.invoicedAmount)} invoiced before` : ""}
+        {/* One card per line: tick it, then the full amount left or a part of it, as AED or a %. */}
+        <div className="-mx-1 grid max-h-[45vh] gap-3 overflow-y-auto px-1 py-0.5">
+          {lines.map((line) => {
+            const on = included.has(line.id);
+            const value = amounts[line.id] ?? "";
+            const amount = Number(value);
+            const over = on && amount > line.remaining + 0.005;
+            const percent = line.amount ? round2((amount / line.amount) * 100) : 0;
+            const toggle = (checked: boolean) =>
+              setIncluded((prev) => {
+                const next = new Set(prev);
+                if (checked) next.add(line.id);
+                else next.delete(line.id);
+                return next;
+              });
+            return (
+              <div
+                key={line.id}
+                className={cn(
+                  "rounded-lg border p-4 transition-colors",
+                  on ? "border-brand/40 bg-brand-50/40" : "bg-muted/30",
+                  over && "border-destructive",
+                )}
+              >
+                <div className="flex items-start gap-3">
+                  <Checkbox className="mt-0.5" checked={on} onCheckedChange={(checked) => toggle(Boolean(checked))} aria-label={`Include ${line.name ?? "line"}`} />
+                  <button type="button" className="min-w-0 flex-1 text-left" onClick={() => toggle(!on)}>
+                    <p className="text-sm font-medium">{line.name ?? "Line"}</p>
+                    <p className="text-muted-foreground mt-1 text-xs tabular-nums">
+                      <span className="text-foreground font-semibold">{aed(line.remaining)}</span> left to invoice · {aed(withVat(line.remaining, line))} with VAT
+                    </p>
+                    {line.invoicedAmount > 0 ? (
+                      <p className="text-muted-foreground text-xs tabular-nums">
+                        Line value {aed(line.amount)} · {aed(line.invoicedAmount)} invoiced before
                       </p>
-                    </TableCell>
-                    <TableCell className="text-right text-sm tabular-nums">
-                      {aed(line.remaining)}
-                      <div className="text-muted-foreground text-xs">{aed(withVat(line.remaining, line))} with VAT</div>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Input
-                        type="number"
-                        inputMode="decimal"
-                        min={0}
-                        max={100}
-                        step="0.01"
-                        disabled={!on}
-                        className="h-8 w-20 text-right"
-                        aria-label={`Percent of ${line.name ?? "line"}`}
-                        value={on && line.amount ? String(percent) : ""}
-                        onChange={(e) => {
-                          const p = Number(e.target.value);
-                          if (Number.isFinite(p) && line.amount) setAmounts((prev) => ({ ...prev, [line.id]: String(round2((line.amount! * p) / 100)) }));
-                        }}
-                      />
-                    </TableCell>
-                    <TableCell className="pr-4 text-right">
-                      <Input
-                        type="number"
-                        inputMode="decimal"
-                        min={0}
-                        step="0.01"
-                        disabled={!on}
-                        aria-invalid={over || undefined}
-                        className={cn("h-8 w-32 text-right", over && "border-destructive")}
-                        aria-label={`Amount of ${line.name ?? "line"}`}
-                        value={value}
-                        onChange={(e) => setAmounts((prev) => ({ ...prev, [line.id]: e.target.value }))}
-                      />
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
+                    ) : null}
+                  </button>
+                </div>
+
+                {on ? (
+                  <div className="mt-3 grid grid-cols-[6.5rem_minmax(0,1fr)] gap-3 border-t pt-3">
+                    <div className="grid gap-1.5">
+                      <Label htmlFor={`pct-${line.id}`} className="text-muted-foreground text-xs">
+                        Percent
+                      </Label>
+                      <div className="relative">
+                        <Input
+                          id={`pct-${line.id}`}
+                          type="number"
+                          inputMode="decimal"
+                          min={0}
+                          max={100}
+                          step="0.01"
+                          className="pr-7 text-right tabular-nums"
+                          value={line.amount ? String(percent) : ""}
+                          onChange={(e) => {
+                            const p = Number(e.target.value);
+                            if (Number.isFinite(p) && line.amount) setAmounts((prev) => ({ ...prev, [line.id]: String(round2((line.amount! * p) / 100)) }));
+                          }}
+                        />
+                        <span className="text-muted-foreground pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm">%</span>
+                      </div>
+                    </div>
+                    <div className="grid gap-1.5">
+                      <Label htmlFor={`amt-${line.id}`} className="text-muted-foreground text-xs">
+                        On this invoice, before VAT
+                      </Label>
+                      <div className="relative">
+                        <span className="text-muted-foreground pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm">AED</span>
+                        <Input
+                          id={`amt-${line.id}`}
+                          type="number"
+                          inputMode="decimal"
+                          min={0}
+                          step="0.01"
+                          aria-invalid={over || undefined}
+                          className={cn("pl-12 text-right tabular-nums", over && "border-destructive")}
+                          value={value}
+                          onChange={(e) => setAmounts((prev) => ({ ...prev, [line.id]: e.target.value }))}
+                        />
+                      </div>
+                    </div>
+                    <div className="col-span-2 flex items-center justify-between gap-2">
+                      <p className={cn("text-xs", over ? "text-destructive" : "text-muted-foreground")}>
+                        {over
+                          ? `More than the ${aed(line.remaining)} left.`
+                          : amount > 0
+                            ? `${aed(withVat(amount, line))} with VAT · ${aed(Math.max(0, round2(line.remaining - amount)))} left after`
+                            : "Enter an amount or a %."}
+                      </p>
+                      {Math.abs(amount - line.remaining) >= 0.005 ? (
+                        <Button
+                          type="button"
+                          variant="link"
+                          size="sm"
+                          className="h-auto shrink-0 p-0 text-xs"
+                          onClick={() => setAmounts((prev) => ({ ...prev, [line.id]: String(line.remaining) }))}
+                        >
+                          Full amount
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
         </div>
         <p className="text-muted-foreground text-right text-sm">
           Lines on this invoice: <span className="text-foreground font-medium tabular-nums">{aed(sum)}</span> before VAT ·{" "}
           <span className="text-foreground font-medium tabular-nums">{aed(sumWithVat)}</span> with VAT
         </p>
 
-        <div className="grid gap-4 sm:grid-cols-3">
-          <div className="grid gap-1.5">
+        <div className="grid grid-cols-2 gap-4">
+          <div className="col-span-2 grid gap-1.5">
             <Label htmlFor="maher-number">MAHER invoice number</Label>
             <Input id="maher-number" value={number} maxLength={60} onChange={(e) => setNumber(e.target.value)} />
           </div>

@@ -183,7 +183,7 @@ export function UploadInvoiceDialog({
 
   return (
     <Dialog open onOpenChange={(next) => !next && !busy && step !== "reading" && onClose()}>
-      <ActionDialogContent busy={busy || step === "reading"} className="sm:max-w-4xl">
+      <ActionDialogContent busy={busy || step === "reading"} className={step === "review" ? "sm:max-w-3xl" : "sm:max-w-md"}>
         <DialogHeader>
           <DialogTitle>Upload a MAHER invoice</DialogTitle>
           <DialogDescription>
@@ -247,10 +247,10 @@ export function UploadInvoiceDialog({
                   <Upload className="size-5" />
                 </span>
                 <span className="text-sm font-medium">Click to choose the invoice, or drag it here</span>
-                <span className="text-muted-foreground text-xs">The PDF from MAHER, or a clear photo of it · PDF, JPG, PNG or WEBP · up to 10 MB</span>
+                <span className="text-muted-foreground text-xs">The MAHER PDF or a clear photo of it, up to 10 MB</span>
               </button>
             )}
-            <ol className="text-muted-foreground grid gap-1 pt-1 text-xs sm:grid-cols-3">
+            <ol className="text-muted-foreground grid gap-1.5 pt-1 text-xs">
               {["The AI reads the invoice", "It matches each line to a work-order line", "You check the amounts and confirm"].map((text, i) => (
                 <li key={text} className="flex items-center gap-2">
                   <span className="bg-muted text-foreground flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] font-medium tabular-nums">
