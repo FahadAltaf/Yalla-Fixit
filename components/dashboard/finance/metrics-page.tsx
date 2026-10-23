@@ -12,7 +12,6 @@ import {
   PauseCircle,
   PieChart as PieChartIcon,
   RefreshCw,
-  Scale,
 } from "lucide-react";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Label, Pie, PieChart, XAxis, YAxis } from "recharts";
 
@@ -26,6 +25,7 @@ import {
   SectionShell,
 } from "@/components/dashboard/snagging/overview/section-shell";
 import { RANGES, rangeLabel } from "@/components/dashboard/snagging/overview/range";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
   type ChartConfig,
@@ -237,7 +237,7 @@ export function FinanceMetricsPage() {
       <div className="grid gap-4 lg:grid-cols-2">
         <SectionShell
           title="Activity"
-          description="Value completed in FSM against value invoiced, before VAT, by the day it happened."
+          description="Value completed in FSM against value invoiced, incl. VAT, by the day it happened."
           icon={<Activity />}
           centerBody
           loading={waiting}
@@ -288,7 +288,6 @@ export function FinanceMetricsPage() {
           title="Time to invoice, by Finance user"
           description={`From the lines being completed in FSM to the MAHER invoice, over the last ${range}.`}
           icon={<Clock />}
-          centerBody
           loading={waiting}
           error={sectionError}
           onRetry={reload}
@@ -303,33 +302,47 @@ export function FinanceMetricsPage() {
           }
           skeleton={<LinesSkeleton rows={4} />}
         >
-          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_auto]">
-            <ul className="min-w-0 space-y-3">
+          {/* The overall figure on top, then a row per person: who, how long, over how many, against the slowest. */}
+          <div className="flex flex-col gap-4">
+            <div className="bg-muted/30 flex flex-wrap items-end justify-between gap-3 rounded-lg border px-4 py-3">
+              <div>
+                <p className="text-muted-foreground text-xs font-medium">Average for everyone</p>
+                <p className="text-2xl font-semibold tabular-nums">{formatDuration(period?.averageDaysToInvoice)}</p>
+              </div>
+              <p className="text-muted-foreground text-sm">
+                {period ? `${period.invoiced.count} ${period.invoiced.count === 1 ? "invoice" : "invoices"}` : ""}
+                {period?.daysToInvoiceByUser.length
+                  ? ` · ${period.daysToInvoiceByUser.length} ${period.daysToInvoiceByUser.length === 1 ? "person" : "people"}`
+                  : ""}
+              </p>
+            </div>
+            <ul className="divide-y">
               {(period?.daysToInvoiceByUser ?? []).map((row) => (
-                <li key={row.user} className="flex items-center gap-3">
-                  <span className="w-32 shrink-0 truncate text-sm" title={row.user}>
-                    {row.user}
-                  </span>
-                  <Progress
-                    value={(row.averageDays / slowest) * 100}
-                    className="h-2 flex-1"
-                    indicatorStyle={{ background: CHART_COLOR.brand }}
-                  />
-                  <span className="w-36 shrink-0 text-right text-sm tabular-nums">
-                    <span className="font-medium">{formatDuration(row.averageDays)}</span>
-                    <span className="text-muted-foreground">
-                      {" "}
-                      · {row.invoices} {row.invoices === 1 ? "invoice" : "invoices"}
-                    </span>
-                  </span>
+                <li key={row.user} className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
+                  <Avatar className="size-9">
+                    <AvatarFallback className="text-xs font-medium">{initialsOf(row.user)}</AvatarFallback>
+                  </Avatar>
+                  <div className="min-w-0 flex-1 space-y-1.5">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <p className="truncate text-sm font-medium" title={row.user}>
+                        {row.user}
+                      </p>
+                      <p className="shrink-0 text-sm font-semibold tabular-nums">{formatDuration(row.averageDays)}</p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <Progress
+                        value={(row.averageDays / slowest) * 100}
+                        className="h-1.5 flex-1"
+                        indicatorStyle={{ background: CHART_COLOR.brand }}
+                      />
+                      <span className="text-muted-foreground w-20 shrink-0 text-right text-xs tabular-nums">
+                        {row.invoices} {row.invoices === 1 ? "invoice" : "invoices"}
+                      </span>
+                    </div>
+                  </div>
                 </li>
               ))}
             </ul>
-            <FigureTile
-              label="Average"
-              value={formatDuration(period?.averageDaysToInvoice)}
-              note={period ? `Over ${period.invoiced.count} ${period.invoiced.count === 1 ? "invoice" : "invoices"}` : ""}
-            />
           </div>
         </SectionShell>
       </div>
@@ -423,7 +436,7 @@ export function FinanceMetricsPage() {
 
         <SectionShell
           title="Ageing of waiting work"
-          description="Value waiting, before VAT, by days since the work was completed in FSM."
+          description="Value waiting, incl. VAT, by days since the work was completed in FSM."
           icon={<Hourglass />}
           centerBody
           loading={waiting}
@@ -515,7 +528,8 @@ export function FinanceMetricsPage() {
         <Separator className="flex-1" />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      {/* Invoice variance is off for now (the user's direction, 23 Oct): the figures are still worked out, not shown. */}
+      <div className="grid gap-4">
         <SectionShell
           title="Excluded value by reason"
           description="Verified exclusions, largest value first."
@@ -560,52 +574,16 @@ export function FinanceMetricsPage() {
             ))}
           </ul>
         </SectionShell>
-
-        <SectionShell
-          title="Invoice variance"
-          description={`MAHER invoice total against the lines it was recorded against, for invoices in the last ${range}.`}
-          icon={<Scale />}
-          muted
-          loading={waiting}
-          error={sectionError}
-          onRetry={reload}
-          isEmpty={!waiting && (period?.variance.invoices ?? 0) === 0}
-          empty={
-            <EmptyState
-              icon={<Scale />}
-              title="No invoice in this period"
-              description="Variance is worked out from each invoice recorded against work order lines."
-              className="py-10"
-            />
-          }
-          skeleton={<LinesSkeleton rows={3} />}
-        >
-          {period ? (
-            <div className="grid gap-3 sm:grid-cols-3">
-              <FigureTile
-                label="Differ"
-                value={`${period.variance.withVariance} of ${period.variance.invoices}`}
-                note="Invoice total differs from its lines"
-              />
-              <FigureTile label="Net" value={aed(period.variance.total)} note="Below the lines' value is negative" />
-              <FigureTile label="Either way" value={aed(period.variance.absoluteTotal)} note="Sum of the differences" />
-            </div>
-          ) : null}
-        </SectionShell>
       </div>
     </div>
   );
 }
 
 /** The muted figure tile the Snagging overview uses for its approval rate. */
-function FigureTile({ label, value, note }: { label: string; value: string; note: string }) {
-  return (
-    <div className="bg-muted/50 flex flex-col justify-center rounded-lg border px-5 py-4 lg:min-w-44">
-      <p className="text-muted-foreground text-xs font-semibold tracking-wide uppercase">{label}</p>
-      <p className="mt-1 text-2xl font-semibold tabular-nums">{value}</p>
-      <p className="text-muted-foreground mt-1 text-xs">{note}</p>
-    </div>
-  );
+/** "Muhammad Danish" -> "MD", for the avatar. */
+function initialsOf(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  return ((parts[0]?.[0] ?? "") + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase() || "?";
 }
 
 function tooltipAed(value: unknown, name: unknown) {

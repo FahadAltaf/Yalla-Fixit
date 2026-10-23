@@ -520,14 +520,17 @@ async function daysToInvoice(
   ]);
   const recorded = new Map(invoices.map((i) => [String(i.id), Date.parse(String(i.recorded_at))]));
   const lineStart = new Map(states.map((s) => [String(s.fsm_line_id), str(s.fsm_completed_at) ?? str(s.ready_at)]));
-  const spans = allocations
-    .map((a) => {
-      const start = str(completedAtOf.get(String(a.fsm_work_order_id))) ?? lineStart.get(String(a.fsm_line_id)) ?? null;
-      const r = start ? Date.parse(start) : null;
-      const at = recorded.get(String(a.invoice_id));
-      return r && at ? Math.max(0, (at - r) / DAY_MS) : null;
-    })
-    .filter((v): v is number => v !== null);
+  /* One span per invoice and work order (as the metrics count it): from its earliest line's start to the invoice. */
+  const startOf = new Map<string, { start: number; at: number }>();
+  for (const a of allocations) {
+    const start = str(completedAtOf.get(String(a.fsm_work_order_id))) ?? lineStart.get(String(a.fsm_line_id)) ?? null;
+    const at = recorded.get(String(a.invoice_id));
+    if (!start || !at) continue;
+    const key = `${a.invoice_id}|${a.fsm_work_order_id}`;
+    const earliest = Math.min(Date.parse(start), startOf.get(key)?.start ?? Infinity);
+    startOf.set(key, { start: earliest, at });
+  }
+  const spans = [...startOf.values()].map((g) => Math.max(0, (g.at - g.start) / DAY_MS));
   return {
     averageDaysToInvoice: spans.length ? Math.round((spans.reduce((a, b) => a + b, 0) / spans.length) * 10_000) / 10_000 : null,
     invoices: invoiceIds.length,

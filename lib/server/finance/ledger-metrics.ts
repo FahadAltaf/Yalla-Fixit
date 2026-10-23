@@ -26,6 +26,8 @@ import { readAllRows } from "@/lib/server/snagging/read-all";
  */
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+/* The UAE's standard VAT, for a work order whose own rate the portal has not seen yet. */
+const STANDARD_VAT_RATE = 1.05;
 const str = (v: unknown) => (v === null || v === undefined ? null : String(v));
 const earliest = (values: (string | null | undefined)[]) => values.filter((v): v is string => Boolean(v)).sort()[0] ?? null;
 
@@ -116,6 +118,22 @@ export async function readLedgerForMetrics(admin: SupabaseClient): Promise<Ledge
     if (!enteredOf.has(id) || at < enteredOf.get(id)!) enteredOf.set(id, at);
   }
 
+  /*
+    Every value here is with VAT (23 Oct), at the work order's own rate as
+    last seen: FSM's Grand_Total over Sub_Total, else its lines'
+    Line_Item_Amount over Amount (both kept by 20261025100000), else the
+    standard 5 %.
+  */
+  const woRateOf = (id: string) => {
+    const flow = flowOf.get(id);
+    const sub = Number(flow?.sub_total ?? 0);
+    const grand = Number(flow?.grand_total ?? 0);
+    if (sub > 0 && grand > 0) return grand / sub;
+    const known = (linesOf.get(id) ?? []).filter((l) => l.amount_with_vat !== null && l.amount_with_vat !== undefined && Number(l.amount) > 0);
+    const base = known.reduce((sum, l) => sum + Number(l.amount), 0);
+    return base > 0 ? known.reduce((sum, l) => sum + Number(l.amount_with_vat), 0) / base : STANDARD_VAT_RATE;
+  };
+
   const workOrders: LedgerWorkOrder[] = [];
   for (const id of new Set([...linesOf.keys(), ...flowOf.keys()])) {
     const states = linesOf.get(id) ?? [];
@@ -157,7 +175,7 @@ export async function readLedgerForMetrics(admin: SupabaseClient): Promise<Ledge
       status,
       enteredAt,
       statusChangedAt,
-      value,
+      value: round2(value * woRateOf(id)),
       subTotal,
       invoicedValue: invoicing.invoicedValue,
       holdReason: str(flow?.hold_reason),
@@ -171,7 +189,7 @@ export async function readLedgerForMetrics(admin: SupabaseClient): Promise<Ledge
     lines.map((l) => {
       const amount = Number(l.amount ?? 0);
       const withVat = l.amount_with_vat === null || l.amount_with_vat === undefined ? null : Number(l.amount_with_vat);
-      return [String(l.fsm_line_id), withVat !== null && amount > 0 ? withVat / amount : 1];
+      return [String(l.fsm_line_id), withVat !== null && amount > 0 ? withVat / amount : woRateOf(String(l.fsm_work_order_id))];
     }),
   );
   const readyAtOf = new Map(
@@ -202,8 +220,8 @@ export async function readLedgerForMetrics(admin: SupabaseClient): Promise<Ledge
     invoices.push({
       queueItemId: g.workOrderId,
       invoiceId: g.invoiceId,
-      amount: round2(g.amount + variance),
-      queueValue: g.amount,
+      amount: round2(g.withVat + variance),
+      queueValue: g.withVat,
       recordedAt: String(invoice.recorded_at),
       recordedByLabel: str(invoice.recorded_by_label),
       startedAt: g.startedAt,
