@@ -166,6 +166,14 @@ export async function readLedgerForMetrics(admin: SupabaseClient): Promise<Ledge
 
   /* One row per invoice and work order; the variance on the invoice's first row. */
   /* Days to invoice run from FSM completing the line (or its work order), else the old Ready mark. */
+  /* An invoice total is with VAT (23 Oct): its lines are compared at each line's own rate, as last seen. */
+  const vatRateOf = new Map(
+    lines.map((l) => {
+      const amount = Number(l.amount ?? 0);
+      const withVat = l.amount_with_vat === null || l.amount_with_vat === undefined ? null : Number(l.amount_with_vat);
+      return [String(l.fsm_line_id), withVat !== null && amount > 0 ? withVat / amount : 1];
+    }),
+  );
   const readyAtOf = new Map(
     lines.map((l) => [
       String(l.fsm_line_id),
@@ -173,16 +181,17 @@ export async function readLedgerForMetrics(admin: SupabaseClient): Promise<Ledge
     ]),
   );
   const invoiceById = new Map(invoiceRows.map((i) => [String(i.id), i]));
-  const groups = new Map<string, { invoiceId: string; workOrderId: string; amount: number; startedAt: string | null }>();
+  const groups = new Map<string, { invoiceId: string; workOrderId: string; amount: number; withVat: number; startedAt: string | null }>();
   for (const a of allocations) {
     const key = `${a.invoice_id}|${a.fsm_work_order_id}`;
-    const group = groups.get(key) ?? { invoiceId: String(a.invoice_id), workOrderId: String(a.fsm_work_order_id), amount: 0, startedAt: null };
+    const group = groups.get(key) ?? { invoiceId: String(a.invoice_id), workOrderId: String(a.fsm_work_order_id), amount: 0, withVat: 0, startedAt: null };
     group.amount = round2(group.amount + Number(a.amount));
+    group.withVat = round2(group.withVat + Number(a.amount) * (vatRateOf.get(String(a.fsm_line_id)) ?? 1));
     group.startedAt = earliest([group.startedAt, readyAtOf.get(String(a.fsm_line_id))]);
     groups.set(key, group);
   }
   const allocatedOf = new Map<string, number>();
-  for (const g of groups.values()) allocatedOf.set(g.invoiceId, round2((allocatedOf.get(g.invoiceId) ?? 0) + g.amount));
+  for (const g of groups.values()) allocatedOf.set(g.invoiceId, round2((allocatedOf.get(g.invoiceId) ?? 0) + g.withVat));
   const varianceGiven = new Set<string>();
   const invoices: MetricInvoice[] = [];
   for (const g of groups.values()) {

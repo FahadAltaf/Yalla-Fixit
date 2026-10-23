@@ -212,6 +212,7 @@ async function openLinesOf(admin: SupabaseClient, workOrderIds: string[]): Promi
           name: l.name,
           description: l.description,
           amount,
+          amountWithVat: l.line_amount,
           remaining: lineRemaining({ amount, ready: Boolean(state?.ready), invoicedAmount: Number(state?.invoiced_amount ?? 0) }),
         };
       }),

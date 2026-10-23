@@ -20,7 +20,7 @@ CREATE TEMP TABLE before_snapshot AS
 -- WL as FSM has it now: Tile went up to 3,500 and a fourth line was added.
 SELECT finance.snapshot_work_order('WL',
   '{"number":"WO-L","client":"Driven Properties","contact":"Jesusa Jingco","quotation":"Q-18092","coordinator":"Sara","status":"In Progress","type":"Reactive","created_at":"2026-10-01T08:00:00Z","sub_total":11500,"grand_total":12075}',
-  '[{"id":"LL1","name":"Paint","amount":5000,"completed_at":"2026-10-05T12:00:00Z"},{"id":"LL2","name":"Tile","amount":3500},{"id":"LL3","name":"Grout","amount":2000},{"id":"LL4","name":"Sealant","amount":1000}]');
+  '[{"id":"LL1","name":"Paint","amount":5000,"amount_with_vat":5250,"completed_at":"2026-10-05T12:00:00Z"},{"id":"LL2","name":"Tile","amount":3500},{"id":"LL3","name":"Grout","amount":2000},{"id":"LL4","name":"Sealant","amount":1000}]');
 
 SELECT harness.expect(
   (SELECT client_name = 'Driven Properties' AND quotation_number = 'Q-18092' AND coordinator_name = 'Sara'
@@ -33,9 +33,9 @@ SELECT harness.expect(
    FROM finance.work_order_states WHERE fsm_work_order_id = 'WL'),
   'it keeps the client contact and the value with VAT; not completed in FSM');
 SELECT harness.expect(
-  (SELECT fsm_completed_at = '2026-10-05T12:00:00Z' FROM finance.line_states WHERE fsm_line_id = 'LL1')
-  AND (SELECT fsm_completed_at IS NULL FROM finance.line_states WHERE fsm_line_id = 'LL2'),
-  'a line keeps when FSM completed it');
+  (SELECT fsm_completed_at = '2026-10-05T12:00:00Z' AND amount_with_vat = 5250 FROM finance.line_states WHERE fsm_line_id = 'LL1')
+  AND (SELECT fsm_completed_at IS NULL AND amount_with_vat IS NULL FROM finance.line_states WHERE fsm_line_id = 'LL2'),
+  'a line keeps when FSM completed it and its amount with VAT');
 SELECT harness.expect(
   (SELECT status FROM finance.work_order_states WHERE fsm_work_order_id = 'WL') = coalesce((SELECT status FROM before_snapshot), 'open'),
   'its workflow status is untouched');

@@ -15,7 +15,8 @@
 --                                completed at, value before and with VAT,
 --                                and when it was read (seen_at).
 --   finance.line_states        every line of the work order, with its
---                                name, amount and when FSM completed it
+--                                name, amount (before and with VAT) and
+--                                when FSM completed it
 --                                (ready stays false for lines nobody
 --                                marked), so "invoiced in full", an
 --                                excluded work order's value and the days
@@ -28,14 +29,14 @@
 --
 -- Live-safe: nullable columns and one function in schema finance, which
 -- nothing on main reads.
--- Post-check: expect `11 | 1 | 1` from
+-- Post-check: expect `11 | 2 | 1` from
 --   select (select count(*) from information_schema.columns where table_schema = 'finance'
 --             and table_name = 'work_order_states'
 --             and column_name in ('client_name', 'contact_name', 'quotation_number', 'coordinator_name', 'fsm_status',
 --                                 'work_order_type', 'fsm_created_at', 'fsm_completed_at', 'sub_total', 'grand_total',
 --                                 'seen_at')),
 --          (select count(*) from information_schema.columns where table_schema = 'finance'
---             and table_name = 'line_states' and column_name = 'fsm_completed_at'),
+--             and table_name = 'line_states' and column_name in ('fsm_completed_at', 'amount_with_vat')),
 --          (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
 --             where n.nspname = 'finance' and p.proname = 'snapshot_work_order');
 -- Rollback: docs/finance-reporting/migrations/20261025100000_rollback.sql
@@ -54,15 +55,17 @@ ALTER TABLE finance.work_order_states
   ADD COLUMN IF NOT EXISTS grand_total numeric(14, 2),
   ADD COLUMN IF NOT EXISTS seen_at timestamptz;
 
-/* When FSM completed the line, as last seen: invoicing waits for it (23 Oct). */
+/* When FSM completed the line, as last seen: invoicing waits for it (23 Oct).
+   Its amount with VAT: invoices are recorded with VAT, the lines before. */
 ALTER TABLE finance.line_states
-  ADD COLUMN IF NOT EXISTS fsm_completed_at timestamptz;
+  ADD COLUMN IF NOT EXISTS fsm_completed_at timestamptz,
+  ADD COLUMN IF NOT EXISTS amount_with_vat numeric(14, 2);
 
 /* ---------------------------------------------------------------------
    Keep what FSM said about a work order and its lines, as the server has
    just read it. p_work_order: { number, client, contact, quotation,
    coordinator, status, type, created_at, completed_at, sub_total,
-   grand_total }; p_lines: [{ id, name, amount, completed_at }].
+   grand_total }; p_lines: [{ id, name, amount, amount_with_vat, completed_at }].
    A new work order starts Open; an existing one keeps its status,
    assignee and Ready marks.
    --------------------------------------------------------------------- */
@@ -119,14 +122,16 @@ BEGIN
     grand_total = excluded.grand_total,
     seen_at = excluded.seen_at;
 
-  INSERT INTO finance.line_states (fsm_line_id, fsm_work_order_id, work_order_number, name, amount, fsm_completed_at)
+  INSERT INTO finance.line_states (fsm_line_id, fsm_work_order_id, work_order_number, name, amount, amount_with_vat, fsm_completed_at)
   SELECT DISTINCT ON (l->>'id') l->>'id', p_work_order_id, nullif(p_work_order->>'number', ''), l->>'name',
-         coalesce((l->>'amount')::numeric(14, 2), 0), nullif(l->>'completed_at', '')::timestamptz
+         coalesce((l->>'amount')::numeric(14, 2), 0), nullif(l->>'amount_with_vat', '')::numeric(14, 2),
+         nullif(l->>'completed_at', '')::timestamptz
   FROM jsonb_array_elements(coalesce(p_lines, '[]'::jsonb)) l
   ON CONFLICT (fsm_line_id) DO UPDATE
     SET work_order_number = coalesce(excluded.work_order_number, line_states.work_order_number),
         name = excluded.name,
         amount = excluded.amount,
+        amount_with_vat = excluded.amount_with_vat,
         fsm_completed_at = excluded.fsm_completed_at;
 END;
 $$;

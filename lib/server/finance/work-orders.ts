@@ -7,6 +7,7 @@ import {
   lineCanBeInvoiced,
   lineRemaining,
   lineStatus,
+  withVat,
   queueStatus,
   workOrderInvoicing,
   type InvoiceStatus,
@@ -852,6 +853,7 @@ async function snapshotWorkOrder(admin: SupabaseClient, live: NonNullable<Awaite
       id: l.fsm_line_id,
       name: l.name,
       amount: Math.max(0, l.amount ?? 0),
+      amount_with_vat: l.line_amount === null ? null : Math.max(0, l.line_amount),
       /* When the line was completed: its actual end, else the work order's completion. */
       completed_at: lineCanBeInvoiced(l.status, w.status) ? (l.actual_end ?? w.completedAt ?? new Date().toISOString()) : null,
     })),
@@ -912,7 +914,8 @@ export const invoiceRequestSchema = z
     idempotencyKey: z.string().min(8).max(100),
     number: z.string().trim().min(1).max(60),
     date: DATE,
-    total: z.number().positive().max(100_000_000),
+    /* Ignored: the total is the lines with VAT, worked out on the server from FSM (23 Oct). */
+    total: z.number().positive().max(100_000_000).nullish(),
     note: z.string().trim().max(2000).nullish(),
     /** Before VAT; in full or part of each line. */
     allocations: z
@@ -962,13 +965,16 @@ export async function recordLineInvoice(
       work_order_number: live.workOrder.number,
       name: line.name,
       line_amount: Math.max(0, line.amount ?? 0),
+      with_vat: withVat(round2(a.amount), { amount: line.amount, lineAmount: line.line_amount, taxPercent: line.tax_percent }),
     };
   });
+  /* The invoice total: what the lines come to with VAT, at each line's FSM rate. */
+  const total = round2(allocations.reduce((sum, a) => sum + a.with_vat, 0));
   const { data, error } = await admin.schema("finance").rpc("record_line_invoice", {
     p_key: input.idempotencyKey,
     p_number: input.number,
     p_date: input.date,
-    p_total: input.total,
+    p_total: total,
     p_allocations: allocations,
     p_actor: actor.id,
     p_actor_label: actor.label,

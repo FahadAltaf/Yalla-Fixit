@@ -15,12 +15,13 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { CandidateLine, Confidence } from "@/lib/finance/invoice-match";
+import { withVat } from "@/lib/finance/line-status";
 import { todayInZone } from "@/lib/scheduling/org-time";
 import type { ScanProposal } from "@/lib/server/finance/invoice-scan";
 import { cn } from "@/lib/utils";
 import { financeService } from "@/modules/finance/finance-service";
 
-import { aed } from "./shared";
+import { InvoiceTotals, aed } from "./shared";
 
 /**
  * Upload a MAHER invoice and let the AI read it (decided with the user,
@@ -66,7 +67,6 @@ export function UploadInvoiceDialog({
   const [rows, setRows] = useState<Row[]>([]);
   const [number, setNumber] = useState("");
   const [date, setDate] = useState(() => todayInZone());
-  const [total, setTotal] = useState("");
   const [key] = useState(() => crypto.randomUUID());
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -103,7 +103,6 @@ export function UploadInvoiceDialog({
       setProposal(result);
       setNumber(result.scanned.invoiceNumber ?? "");
       if (result.scanned.invoiceDate) setDate(result.scanned.invoiceDate);
-      setTotal(result.scanned.total !== null ? String(result.scanned.total) : "");
       const proposed: Row[] = result.proposals.map((p) => ({
         key: p.candidate.lineId,
         candidate: p.candidate,
@@ -147,14 +146,19 @@ export function UploadInvoiceDialog({
   const included = rows.filter((r) => r.included);
   const sum = round2(included.reduce((s, r) => s + (Number(r.amount) || 0), 0));
   const bad = included.find((r) => !(Number(r.amount) > 0) || Number(r.amount) > r.candidate.remaining + 0.005);
-  const totalNumber = total === "" ? sum : Number(total);
-  const valid = step === "review" && included.length > 0 && !bad && number.trim() && date && totalNumber > 0;
+  /* The invoice total is the lines with VAT, worked out as the server does; what the AI read is only compared. */
+  const sumWithVat = round2(
+    included.reduce((s, r) => s + withVat(Number(r.amount) || 0, { amount: r.candidate.amount, lineAmount: r.candidate.amountWithVat, taxPercent: null }), 0),
+  );
+  const scannedTotal = proposal?.scanned.total ?? null;
+  const differs = scannedTotal !== null && included.length > 0 && Math.abs(scannedTotal - sumWithVat) > 0.01;
+  const valid = step === "review" && included.length > 0 && !bad && number.trim() && date && sumWithVat > 0;
 
   const confirm = async () => {
     if (!proposal || !path) return;
     const ok = await ask({
       title: `Record MAHER ${number.trim()}?`,
-      description: `${aed(round2(totalNumber))} invoice, against ${included.length} ${included.length === 1 ? "line" : "lines"} for ${aed(sum)} before VAT. It cannot be undone here.`,
+      description: `${aed(sumWithVat)} with VAT (${aed(sum)} before VAT), against ${included.length} ${included.length === 1 ? "line" : "lines"}.${differs ? ` The invoice itself says ${aed(scannedTotal!)}.` : ""} It cannot be undone here.`,
       confirmText: "Record invoice",
     });
     if (!ok) return;
@@ -165,7 +169,7 @@ export function UploadInvoiceDialog({
         idempotencyKey: key,
         number: number.trim(),
         date,
-        total: round2(totalNumber),
+        total: sumWithVat,
         allocations: included.map((r) => ({ line: r.candidate.lineId, workOrder: r.candidate.workOrderId, amount: round2(Number(r.amount)) })),
         filePath: path,
         scan: proposal.scanned as unknown as Record<string, unknown>,
@@ -183,7 +187,11 @@ export function UploadInvoiceDialog({
 
   return (
     <Dialog open onOpenChange={(next) => !next && !busy && step !== "reading" && onClose()}>
-      <ActionDialogContent busy={busy || step === "reading"} className={step === "review" ? "sm:max-w-3xl" : "sm:max-w-md"}>
+      {/* As high as its content, up to the screen; the middle scrolls, the title and buttons stay. */}
+      <ActionDialogContent
+        busy={busy || step === "reading"}
+        className={cn("flex max-h-[calc(100dvh-2rem)] flex-col", step === "review" ? "sm:max-w-3xl" : "sm:max-w-md")}
+      >
         <DialogHeader>
           <DialogTitle>Upload a MAHER invoice</DialogTitle>
           <DialogDescription>
@@ -191,6 +199,7 @@ export function UploadInvoiceDialog({
           </DialogDescription>
         </DialogHeader>
 
+        <div className="-mx-4 grid min-h-0 flex-1 gap-4 overflow-y-auto px-4 py-0.5">
         {step !== "review" ? (
           <div className="grid gap-2">
             <input
@@ -273,7 +282,7 @@ export function UploadInvoiceDialog({
               </Alert>
             ) : null}
 
-            <div className="max-h-[42vh] overflow-y-auto rounded-md border">
+            <div className="overflow-x-auto rounded-md border">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -378,12 +387,18 @@ export function UploadInvoiceDialog({
               </div>
             ) : null}
 
-            <p className="text-muted-foreground text-right text-sm">
-              Lines on this invoice: <span className="text-foreground font-medium tabular-nums">{aed(sum)}</span> before VAT
-              {proposal.scanned.subtotal !== null ? ` · invoice subtotal ${aed(proposal.scanned.subtotal)}` : ""}
-            </p>
+            <InvoiceTotals beforeVat={sum} withVat={sumWithVat} />
+            {differs ? (
+              <Alert>
+                <TriangleAlert className="size-4" />
+                <AlertTitle>The invoice says {aed(scannedTotal!)}</AlertTitle>
+                <AlertDescription>
+                  The lines ticked come to {aed(sumWithVat)} with VAT. Check the lines and amounts: the total recorded is what the lines come to.
+                </AlertDescription>
+              </Alert>
+            ) : null}
 
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-2">
               <div className="grid gap-1.5">
                 <Label htmlFor="scan-number">MAHER invoice number</Label>
                 <Input id="scan-number" value={number} maxLength={60} onChange={(e) => setNumber(e.target.value)} />
@@ -391,10 +406,6 @@ export function UploadInvoiceDialog({
               <div className="grid gap-1.5">
                 <Label htmlFor="scan-date">Invoice date</Label>
                 <Input id="scan-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-              </div>
-              <div className="grid gap-1.5">
-                <Label htmlFor="scan-total">Invoice total (AED)</Label>
-                <Input id="scan-total" type="number" inputMode="decimal" min={0} step="0.01" placeholder={String(sum)} value={total} onChange={(e) => setTotal(e.target.value)} />
               </div>
             </div>
             {bad ? (
@@ -411,6 +422,7 @@ export function UploadInvoiceDialog({
             {problem}
           </p>
         ) : null}
+        </div>
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={busy || step === "reading"}>

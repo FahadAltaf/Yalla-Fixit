@@ -43,7 +43,7 @@ import { cn } from "@/lib/utils";
 import { financeService } from "@/modules/finance/finance-service";
 
 import { EvidenceLinks, ExclusionDialog, uploadEvidenceFiles } from "./exclusion-dialog";
-import { InvoiceStatusBadge, WorkOrderQueueBadge, WorkOrderStatusBadge, aed, daysSince } from "./shared";
+import { InvoiceStatusBadge, InvoiceTotals, WorkOrderQueueBadge, WorkOrderStatusBadge, aed, daysSince } from "./shared";
 import { UploadInvoiceDialog } from "./upload-invoice-dialog";
 
 /**
@@ -667,6 +667,9 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
                       </div>
                       <p className="text-sm tabular-nums">
                         Invoice total <span className="font-medium">{aed(inv.total)}</span>
+                        <span className="text-muted-foreground block text-right text-xs">
+                          Lines {aed(inv.allocations.reduce((sum, a) => sum + a.amount, 0))} before VAT
+                        </span>
                       </p>
                     </div>
                     <ul className="mt-2 space-y-1">
@@ -862,7 +865,6 @@ function RecordInvoiceDialog({
   const [amounts, setAmounts] = useState<Record<string, string>>(() => Object.fromEntries(lines.map((l) => [l.id, String(l.remaining)])));
   const [number, setNumber] = useState("");
   const [date, setDate] = useState(() => todayInZone());
-  const [total, setTotal] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -874,15 +876,14 @@ function RecordInvoiceDialog({
   );
   const sum = round2(allocations.reduce((s, a) => s + (Number.isFinite(a.amount) ? a.amount : 0), 0));
   const badLine = allocations.find((a) => !(a.amount > 0) || a.amount > a.line.remaining + 0.005);
-  const totalNumber = total === "" ? sum : Number(total);
-  const valid = allocations.length > 0 && !badLine && number.trim() && date && totalNumber > 0;
-
+  /* The invoice total is the lines with VAT, never typed (23 Oct); the server works it out the same way. */
   const sumWithVat = round2(allocations.reduce((s, a) => s + (Number.isFinite(a.amount) ? withVat(a.amount, a.line) : 0), 0));
+  const valid = allocations.length > 0 && !badLine && number.trim() && date && sumWithVat > 0;
 
   const submit = async () => {
     const ok = await confirm({
       title: `Record MAHER ${number.trim()}?`,
-      description: `${aed(round2(totalNumber))} invoice, against ${allocations.length} ${allocations.length === 1 ? "line" : "lines"} for ${aed(sum)} before VAT (${aed(sumWithVat)} with VAT). It cannot be undone here.`,
+      description: `${aed(sumWithVat)} with VAT (${aed(sum)} before VAT), against ${allocations.length} ${allocations.length === 1 ? "line" : "lines"}. It cannot be undone here.`,
       confirmText: "Record invoice",
     });
     if (!ok) return;
@@ -893,7 +894,7 @@ function RecordInvoiceDialog({
         idempotencyKey: key,
         number: number.trim(),
         date,
-        total: round2(totalNumber),
+        total: sumWithVat,
         note: note.trim() || null,
         allocations: allocations.map((a) => ({ line: a.line.id, workOrder: workOrderId, amount: round2(a.amount) })),
       });
@@ -908,17 +909,19 @@ function RecordInvoiceDialog({
 
   return (
     <Dialog open onOpenChange={(next) => !next && !busy && onClose()}>
-      <ActionDialogContent busy={busy} className="sm:max-w-md">
+      {/* As high as its content, up to the screen; the middle scrolls, the title and buttons stay. */}
+      <ActionDialogContent busy={busy} className="flex max-h-[calc(100dvh-2rem)] flex-col sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Record a MAHER invoice</DialogTitle>
           <DialogDescription>
-            Tick the lines it covers and how much of each, before VAT: the full amount left, or a part of it as an amount or a %. What is not
-            invoiced stays to invoice later.
+            Tick the lines it covers and how much of each, before VAT: the full amount left, or a part of it as an amount or a %. The invoice total
+            is worked out with VAT. What is not invoiced stays to invoice later.
           </DialogDescription>
         </DialogHeader>
 
+        <div className="-mx-4 grid min-h-0 flex-1 gap-4 overflow-y-auto px-4 py-0.5">
         {/* One card per line: tick it, then the full amount left or a part of it, as AED or a %. */}
-        <div className="-mx-1 grid max-h-[45vh] gap-3 overflow-y-auto px-1 py-0.5">
+        <div className="grid gap-3">
           {lines.map((line) => {
             const on = included.has(line.id);
             const value = amounts[line.id] ?? "";
@@ -1025,23 +1028,16 @@ function RecordInvoiceDialog({
             );
           })}
         </div>
-        <p className="text-muted-foreground text-right text-sm">
-          Lines on this invoice: <span className="text-foreground font-medium tabular-nums">{aed(sum)}</span> before VAT ·{" "}
-          <span className="text-foreground font-medium tabular-nums">{aed(sumWithVat)}</span> with VAT
-        </p>
+        <InvoiceTotals beforeVat={sum} withVat={sumWithVat} />
 
         <div className="grid grid-cols-2 gap-4">
-          <div className="col-span-2 grid gap-1.5">
+          <div className="grid gap-1.5">
             <Label htmlFor="maher-number">MAHER invoice number</Label>
             <Input id="maher-number" value={number} maxLength={60} onChange={(e) => setNumber(e.target.value)} />
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="maher-date">Invoice date</Label>
             <Input id="maher-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="maher-total">Invoice total (AED)</Label>
-            <Input id="maher-total" type="number" inputMode="decimal" min={0} step="0.01" placeholder={String(sum)} value={total} onChange={(e) => setTotal(e.target.value)} />
           </div>
         </div>
         <div className="grid gap-1.5">
@@ -1054,6 +1050,7 @@ function RecordInvoiceDialog({
           </p>
         ) : null}
         {problem ? <p className="text-destructive text-sm">{problem}</p> : null}
+        </div>
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={busy}>

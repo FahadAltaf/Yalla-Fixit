@@ -11,6 +11,7 @@ const cand = (lineId: string, name: string, amount: number, remaining = amount, 
   name,
   description: null,
   amount,
+  amountWithVat: null,
   remaining,
 });
 const invoice = (lines: ScannedInvoice["lines"], references: string[] = []): ScannedInvoice => ({

@@ -138,3 +138,23 @@ export function WorkOrderQueueBadge({ status }: { status: WorkOrderQueueStatus }
     </Badge>
   );
 }
+
+/** What the lines on an invoice come to: before VAT, the VAT, and the invoice total with it (worked out, never typed). */
+export function InvoiceTotals({ beforeVat, withVat }: { beforeVat: number; withVat: number }) {
+  return (
+    <dl className="bg-muted/40 grid gap-1.5 rounded-lg border p-3 text-sm">
+      <div className="flex justify-between gap-3">
+        <dt className="text-muted-foreground">Lines, before VAT</dt>
+        <dd className="tabular-nums">{aed(beforeVat)}</dd>
+      </div>
+      <div className="flex justify-between gap-3">
+        <dt className="text-muted-foreground">VAT</dt>
+        <dd className="tabular-nums">{aed(Math.round((withVat - beforeVat) * 100) / 100)}</dd>
+      </div>
+      <div className="flex justify-between gap-3 border-t pt-1.5 font-semibold">
+        <dt>Invoice total, with VAT</dt>
+        <dd className="tabular-nums">{aed(withVat)}</dd>
+      </div>
+    </dl>
+  );
+}

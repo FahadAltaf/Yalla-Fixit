@@ -51,6 +51,8 @@ export type CandidateLine = {
   description: string | null;
   /** Before VAT. */
   amount: number;
+  /** FSM's Line_Item_Amount, VAT included. */
+  amountWithVat: number | null;
   remaining: number;
 };
 

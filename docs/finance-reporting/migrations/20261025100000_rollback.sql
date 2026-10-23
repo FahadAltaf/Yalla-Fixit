@@ -13,5 +13,5 @@ ALTER TABLE finance.work_order_states
   DROP COLUMN IF EXISTS sub_total,
   DROP COLUMN IF EXISTS grand_total,
   DROP COLUMN IF EXISTS seen_at;
-ALTER TABLE finance.line_states DROP COLUMN IF EXISTS fsm_completed_at;
+ALTER TABLE finance.line_states DROP COLUMN IF EXISTS fsm_completed_at, DROP COLUMN IF EXISTS amount_with_vat;
 NOTIFY pgrst, 'reload schema';
