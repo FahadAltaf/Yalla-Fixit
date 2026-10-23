@@ -156,7 +156,7 @@ export function FinanceWorkOrdersPage() {
           <StatCard
             label="Pending"
             value={summary.pending.count}
-            headline={`${aed(summary.pending.value)} to invoice · ${aed(summary.pending.valueWithVat)} with VAT`}
+            headline={`${aed(summary.pending.valueWithVat)} to invoice, incl. VAT`}
           />
           <StatCard
             label="In progress"
@@ -164,19 +164,19 @@ export function FinanceWorkOrdersPage() {
             headline={
               summary.queryRaised.count
                 ? `${summary.queryRaised.count} with a query open`
-                : `${aed(summary.inProgress.value)} left · ${aed(summary.inProgress.valueWithVat)} with VAT`
+                : `${aed(summary.inProgress.valueWithVat)} left, incl. VAT`
             }
             tone="progress"
           />
           <StatCard
             label="On hold"
             value={summary.onHold.count}
-            headline={`${aed(summary.onHold.value)} · ${aed(summary.onHold.valueWithVat)} with VAT`}
+            headline={`${aed(summary.onHold.valueWithVat)} incl. VAT`}
           />
           <StatCard
             label="Excluded value"
-            value={aed(summary.excluded.value)}
-            headline={`${aed(summary.excluded.valueWithVat)} with VAT · ${summary.excluded.count} verified`}
+            value={aed(summary.excluded.valueWithVat)}
+            headline={`Incl. VAT · ${summary.excluded.count} verified`}
           />
           <StatCard
             label="Average time to invoice"

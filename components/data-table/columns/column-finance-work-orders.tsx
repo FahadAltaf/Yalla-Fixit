@@ -54,15 +54,14 @@ export function getWorkOrderQueueColumns(agedAfterDays: number): ColumnDef<WorkO
       header: "Value",
       cell: ({ row }) => {
         const r = row.original;
+        /* With VAT, at the work order's own rate (FSM's Grand_Total over Sub_Total). */
+        const rate = r.value && r.valueWithVat !== null && r.value > 0 ? r.valueWithVat / r.value : 1;
+        const toInvoice = Math.round(r.invoicing.readyValue * rate * 100) / 100;
         return (
           <div className="text-sm font-medium tabular-nums">
-            {aed(r.value)} <span className="text-muted-foreground text-xs font-normal">before VAT</span>
-            {r.valueWithVat !== null ? (
-              <div className="text-muted-foreground text-xs font-normal">{aed(r.valueWithVat)} with VAT</div>
-            ) : null}
-            {r.invoicing.readyValue > 0 ? (
-              <div className="text-warning text-xs font-normal">{aed(r.invoicing.readyValue)} to invoice</div>
-            ) : null}
+            {aed(r.valueWithVat ?? r.value)}
+            <div className="text-muted-foreground text-xs font-normal">incl. VAT</div>
+            {toInvoice > 0 ? <div className="text-warning text-xs font-normal">{aed(toInvoice)} to invoice</div> : null}
           </div>
         );
       },

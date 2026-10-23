@@ -1119,8 +1119,8 @@ function HistoryCard({ events }: { events: WorkOrderEvent[] }) {
 }
 
 /* ---------------------------------------------------------------------
-   The MAHER invoices: a row per invoice (as History's rows), and under it
-   the lines it covers, before and with VAT.
+   The MAHER invoices: a card each, its total and who recorded it on top,
+   the lines it covers under it, every amount with VAT.
    --------------------------------------------------------------------- */
 
 function InvoicesCard({ invoices, lines }: { invoices: WorkOrderInvoice[]; lines: WorkOrderLine[] }) {
@@ -1134,7 +1134,7 @@ function InvoicesCard({ invoices, lines }: { invoices: WorkOrderInvoice[]; lines
     <SectionCard
       icon={<ReceiptText />}
       title="MAHER invoices"
-      description="Every invoice recorded against this work order's lines, and what each covers."
+      description="Every invoice recorded against this work order's lines, and what each covers. Amounts incl. VAT."
       bodyClassName="border-t"
     >
       {invoices.length === 0 ? (
@@ -1144,63 +1144,49 @@ function InvoicesCard({ invoices, lines }: { invoices: WorkOrderInvoice[]; lines
           description="Invoices recorded with Record invoice appear here, with the lines each covers."
         />
       ) : (
-        <ul className="divide-y">
-          {invoices.map((inv) => {
-            const before = round2(inv.allocations.reduce((sum, a) => sum + a.amount, 0));
-            const withVatTotal = round2(inv.allocations.reduce((sum, a) => sum + vatOf(a.lineId, a.amount), 0));
-            return (
-              <li key={inv.id} className="pb-4">
-                <DataRow
-                  icon={<ReceiptText aria-hidden />}
-                  title={
-                    <span className="flex items-center gap-2">
-                      MAHER {inv.number}
-                      {inv.hasFile ? (
-                        <Badge variant="outline" className="font-normal">
-                          <Paperclip className="size-3" />
-                          File attached
-                        </Badge>
-                      ) : null}
-                    </span>
-                  }
-                  subtitle={`Dated ${formatZonedDate(inv.date)} · recorded by ${inv.recordedBy ?? "—"}, ${formatWhen(inv.recordedAt)}`}
-                  trailing={
-                    <span className="text-right">
-                      <span className="block font-semibold tabular-nums">{aed(inv.total)}</span>
-                      <span className="text-muted-foreground block text-xs">Invoice total</span>
-                    </span>
-                  }
-                />
-                <div className="mx-5 overflow-hidden rounded-lg border sm:ml-[4.25rem]">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="bg-muted/40 hover:bg-muted/40">
-                        <TableHead className="pl-4">Line</TableHead>
-                        <TableHead className="text-right">Before VAT</TableHead>
-                        <TableHead className="pr-4 text-right">With VAT</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {inv.allocations.map((a) => (
-                        <TableRow key={a.lineId}>
-                          <TableCell className="max-w-64 truncate pl-4">{a.lineName ?? a.lineId}</TableCell>
-                          <TableCell className="text-right tabular-nums">{aed(a.amount)}</TableCell>
-                          <TableCell className="pr-4 text-right tabular-nums">{aed(vatOf(a.lineId, a.amount))}</TableCell>
-                        </TableRow>
-                      ))}
-                      {inv.allocations.length > 1 ? (
-                        <TableRow className="hover:bg-transparent">
-                          <TableCell className="pl-4 font-medium">Total</TableCell>
-                          <TableCell className="text-right font-medium tabular-nums">{aed(before)}</TableCell>
-                          <TableCell className="pr-4 text-right font-medium tabular-nums">{aed(withVatTotal)}</TableCell>
-                        </TableRow>
-                      ) : null}
-                    </TableBody>
-                  </Table>
+        <ul className="grid gap-3 p-4">
+          {invoices.map((inv) => (
+            <li key={inv.id} className="bg-card overflow-hidden rounded-xl border">
+              <div className="flex flex-wrap items-start gap-3 p-4">
+                <span className="border-brand/20 bg-brand-50 text-brand flex size-10 shrink-0 items-center justify-center rounded-lg border">
+                  <ReceiptText className="size-5" aria-hidden />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-semibold">MAHER {inv.number}</p>
+                    {inv.hasFile ? (
+                      <Badge variant="outline" className="font-normal">
+                        <Paperclip className="size-3" />
+                        File attached
+                      </Badge>
+                    ) : null}
+                  </div>
+                  <p className="text-muted-foreground mt-0.5 text-xs">
+                    Invoice date {formatZonedDate(inv.date)} · recorded by {inv.recordedBy ?? "—"} · {formatWhen(inv.recordedAt)}
+                  </p>
                 </div>
-              </li>
-            );
-          })}
+                <div className="text-right">
+                  <p className="text-muted-foreground text-xs">Total incl. VAT</p>
+                  <p className="text-lg font-semibold tabular-nums">{aed(inv.total)}</p>
+                </div>
+              </div>
+              <div className="bg-muted/30 border-t">
+                <p className="text-muted-foreground px-4 pt-2.5 pb-1 text-xs font-medium">
+                  Covers {inv.allocations.length} {inv.allocations.length === 1 ? "line" : "lines"}
+                </p>
+                <ul className="divide-y">
+                  {inv.allocations.map((a) => (
+                    <li key={a.lineId} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm">
+                      <span className="min-w-0 truncate" title={a.lineName ?? a.lineId}>
+                        {a.lineName ?? a.lineId}
+                      </span>
+                      <span className="shrink-0 font-medium tabular-nums">{aed(vatOf(a.lineId, a.amount))}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </li>
+          ))}
         </ul>
       )}
     </SectionCard>
