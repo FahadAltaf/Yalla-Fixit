@@ -421,12 +421,11 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
     </Band>
   ) : invoicing.status === "partially_invoiced" ? (
     <Band tone="warning" icon={<ReceiptText />} title="Partially invoiced">
-      {aed(invoicing.invoicedValue)} invoiced ({aed(invoicedWithVat)} with VAT); {aed(invoicing.remainingValue)} still to invoice ({aed(remainingWithVat)} with
-      VAT), of which {aed(invoicing.readyValue)} is completed in FSM.
+      {aed(invoicedWithVat)} invoiced; {aed(remainingWithVat)} still to invoice, of which {aed(readyWithVat)} is completed in FSM. All incl. VAT.
     </Band>
   ) : invoicing.status === "ready" ? (
     <Band tone="brand" icon={<CheckCheck />} title="Ready to invoice">
-      {aed(invoicing.readyValue)} before VAT ({aed(readyWithVat)} with VAT), across {invoicing.readyLines} of {invoicing.lines} lines completed in FSM.
+      {aed(readyWithVat)} incl. VAT, completed in FSM.
     </Band>
   ) : lines.length ? (
     <Band tone="neutral" icon={<TriangleAlert />} title="Not completed in Zoho FSM">
@@ -504,24 +503,24 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
         <TabsContent value="lines" className="mt-4 flex flex-col gap-6">
           <StatCardGrid columns={4}>
             <StatCard
-              label="Work order value, before VAT"
-              value={aed(wo.subTotal)}
-              headline={wo.grandTotal !== null ? `${aed(wo.grandTotal)} with VAT` : "As totalled in FSM"}
+              label="Work order value"
+              value={aed(wo.grandTotal ?? linesWithVat)}
+              headline="Incl. VAT, as totalled in FSM"
             />
             <StatCard
-              label="Ready to invoice, before VAT"
-              value={aed(invoicing.readyValue)}
-              headline={`${aed(readyWithVat)} with VAT · ${invoicing.readyLines} of ${invoicing.lines} lines completed`}
+              label="Ready to invoice"
+              value={aed(readyWithVat)}
+              headline={invoicing.readyValue > 0 ? "Incl. VAT, completed in FSM" : "Nothing completed to invoice"}
               tone={invoicing.readyValue > 0 ? "progress" : "neutral"}
             />
             <StatCard
-              label="Invoiced, before VAT"
-              value={aed(invoicing.invoicedValue)}
+              label="Invoiced"
+              value={aed(invoicedWithVat)}
               headline={
                 invoicing.remainingValue > 0
-                  ? `${aed(invoicedWithVat)} with VAT · ${aed(invoicing.remainingValue)} left (${aed(remainingWithVat)} with VAT)`
+                  ? `${aed(remainingWithVat)} left to invoice`
                   : lines.length
-                    ? `${aed(invoicedWithVat)} with VAT · ${INVOICE_STATUS_LABELS[invoicing.status]}`
+                    ? INVOICE_STATUS_LABELS[invoicing.status]
                     : "No line items"
               }
               tone={invoicing.status === "invoiced" ? "good" : "neutral"}
