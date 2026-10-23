@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Info, ReceiptText } from "lucide-react";
 import { toast } from "sonner";
@@ -20,6 +20,9 @@ import { addDaysToDateString, todayInZone } from "@/lib/scheduling/org-time";
 import type { WorkOrderList } from "@/lib/server/finance/work-orders";
 
 import { aed, formatDuration } from "./shared";
+
+/* How long a page turn shows the table loading: the rows are already here, but the change should be seen. */
+const PAGE_TURN_MS = 1000;
 
 /* The list's default dates and furthest reach, as the server works them out (lib/server/finance/work-orders.ts). */
 const DEFAULT_DAYS = 30;
@@ -74,6 +77,20 @@ export function FinanceWorkOrdersPage() {
   const [search, setSearch] = useState(params.get("q") ?? "");
   const debouncedSearch = useDebounce(search, 400);
   const [refreshing, setRefreshing] = useState(false);
+  const tableRef = useRef<HTMLDivElement>(null);
+  const [turning, setTurning] = useState(false);
+  const turnTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (turnTimer.current) clearTimeout(turnTimer.current);
+  }, []);
+  /* A new page or page size: back to the top of the table, loading for a moment. */
+  const turnPage = (next: Record<string, string | number | boolean>) => {
+    setParams(next);
+    setTurning(true);
+    if (turnTimer.current) clearTimeout(turnTimer.current);
+    turnTimer.current = setTimeout(() => setTurning(false), PAGE_TURN_MS);
+    tableRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   /* The URL is the state: Back from a work order lands on the same filters and page. */
   const setParams = (next: Record<string, string | number | boolean>) => {
@@ -190,6 +207,7 @@ export function FinanceWorkOrdersPage() {
 
       {error && !data ? <ErrorState title="Could not load Ready to invoice" message={error} onRetry={reload} retrying={loading} /> : null}
 
+      <div ref={tableRef} className="scroll-mt-20">
       <Card className="py-0">
         <DataTable
           data={data?.rows ?? []}
@@ -203,7 +221,7 @@ export function FinanceWorkOrdersPage() {
               initialSearch={params.get("q") ?? ""}
               loading={loading || refreshing}
               pageSize={pageSize}
-              onPageSizeChange={(size) => setParams({ pageSize: size, page: 0 })}
+              onPageSizeChange={(size) => turnPage({ pageSize: size, page: 0 })}
               onRefresh={() => void refresh()}
               statusOptions={STATUS_FILTERS}
               clients={data?.options.clients ?? []}
@@ -226,11 +244,11 @@ export function FinanceWorkOrdersPage() {
             />
           }
           onGlobalFilterChange={() => undefined}
-          onPageChange={(next) => setParams({ page: next })}
-          onPageSizeChange={(size) => setParams({ pageSize: size, page: 0 })}
+          onPageChange={(next) => turnPage({ page: next })}
+          onPageSizeChange={(size) => turnPage({ pageSize: size, page: 0 })}
           pageSize={pageSize}
           currentPage={page}
-          loading={loading && !data}
+          loading={(loading && !data) || turning}
           rowCount={data?.total ?? 0}
           isPagination
           handleRowClick={(row) => router.push(`/finance/queue/${row.id}`)}
@@ -247,6 +265,7 @@ export function FinanceWorkOrdersPage() {
           }
         />
       </Card>
+      </div>
 
     </div>
   );
