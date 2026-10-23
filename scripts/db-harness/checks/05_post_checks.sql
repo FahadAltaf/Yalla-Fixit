@@ -92,13 +92,16 @@ select
   has_table_privilege('service_role', 'finance.invoices', 'INSERT')                               as server_can_write_directly
 ) post;
 
--- 20261025100000: expect 8, 1
-SELECT harness.expect(row(snapshot_cols, snapshot_fn) = row(8::bigint, 1::bigint), '20261025100000 post-check returns 8, 1')
+-- 20261025100000: expect 11, 1, 1
+SELECT harness.expect(row(snapshot_cols, line_cols, snapshot_fn) = row(11::bigint, 1::bigint, 1::bigint), '20261025100000 post-check returns 11, 1, 1')
 FROM (
 select (select count(*) from information_schema.columns where table_schema = 'finance'
           and table_name = 'work_order_states'
-          and column_name in ('client_name', 'quotation_number', 'coordinator_name', 'fsm_status',
-                              'work_order_type', 'fsm_created_at', 'sub_total', 'seen_at')) as snapshot_cols,
+          and column_name in ('client_name', 'contact_name', 'quotation_number', 'coordinator_name', 'fsm_status',
+                              'work_order_type', 'fsm_created_at', 'fsm_completed_at', 'sub_total', 'grand_total',
+                              'seen_at')) as snapshot_cols,
+       (select count(*) from information_schema.columns where table_schema = 'finance'
+          and table_name = 'line_states' and column_name = 'fsm_completed_at') as line_cols,
        (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
           where n.nspname = 'finance' and p.proname = 'snapshot_work_order') as snapshot_fn
 ) post;

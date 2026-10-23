@@ -5,7 +5,7 @@ import OpenAI from "openai";
 
 import { EVIDENCE_BUCKET, safeEvidenceName } from "@/lib/finance/evidence";
 import { matchInvoice, referenceKey, scannedReferences, type CandidateLine, type MatchResult, type ScannedInvoice } from "@/lib/finance/invoice-match";
-import { lineRemaining } from "@/lib/finance/line-status";
+import { lineCanBeInvoiced, lineRemaining } from "@/lib/finance/line-status";
 import { addDaysToDateString, todayInZone, zonedTimeToUtc } from "@/lib/scheduling/org-time";
 import { fetchWorkOrderLive, fetchWorkOrdersLive } from "@/lib/server/finance/fsm-live";
 import { WORK_ORDER_MAX_DAYS } from "@/lib/server/finance/work-orders";
@@ -189,7 +189,7 @@ export async function proposeAllocations(
   return { ...matchInvoice(scanned, candidates), scanned, candidates, notFound };
 }
 
-/** The lines of these work orders, as FSM has them now, with something left to invoice. */
+/** The lines of these work orders, as FSM has them now, completed in FSM and with something left to invoice. */
 async function openLinesOf(admin: SupabaseClient, workOrderIds: string[]): Promise<CandidateLine[]> {
   if (!workOrderIds.length) return [];
   const [orders, states] = await Promise.all([
@@ -201,7 +201,7 @@ async function openLinesOf(admin: SupabaseClient, workOrderIds: string[]): Promi
   return orders
     .filter((o): o is NonNullable<typeof o> => Boolean(o))
     .flatMap((o) =>
-      o.lines.map((l) => {
+      o.lines.filter((l) => lineCanBeInvoiced(l.status, o.workOrder.status)).map((l) => {
         const state = stateOf.get(String(l.fsm_line_id));
         const amount = Number(l.amount ?? 0);
         return {

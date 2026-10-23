@@ -3,7 +3,7 @@
  * DEV-439), decided here and sent by lib/server/finance/digest.ts.
  *
  *  - Once a day, at the configured time (Dubai). Before that time: nothing.
- *  - New items: work orders first marked ready since the last digest (or
+ *  - New items: work orders completed in FSM since the last digest (or
  *    the last 24 hours, for the very first one).
  *  - Outstanding: everything still waiting on Finance, so a backlog shows.
  *  - Aged (N2): pending longer than the configured number of days.

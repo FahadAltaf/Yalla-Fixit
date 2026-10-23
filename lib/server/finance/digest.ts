@@ -59,7 +59,7 @@ function emailBody(plan: Extract<ReturnType<typeof planDigest>, { send: true }>,
         <tr style="color:#6b7280;text-align:left"><th style="padding:6px 8px">Work order</th><th style="padding:6px 8px">Quotation</th>
         <th style="padding:6px 8px">Client</th><th style="padding:6px 8px;text-align:right">Value</th>
         <th style="padding:6px 8px;text-align:right">Invoiced</th></tr>${rows}</table>`
-    : "<p>Nothing new marked ready since the last digest.</p>";
+    : "<p>Nothing newly completed since the last digest.</p>";
   const aged = plan.aged.length
     ? `<p><strong>${plan.aged.length} work order(s) pending longer than the agreed limit:</strong> ${plan.aged
         .slice(0, 10)

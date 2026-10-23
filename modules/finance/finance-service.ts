@@ -75,7 +75,7 @@ export const financeService = {
   /** Ready to invoice: pick up, release, query, hold, resume, answer a query. */
   workOrderAction: (
     id: string,
-    input: { action: "pick_up" | "release" | "raise_query" | "answer_query" | "put_on_hold" | "resume"; expectedStatus: string; note?: string | null },
+    input: { action: "raise_query" | "answer_query" | "put_on_hold" | "resume"; expectedStatus: string; note?: string | null },
   ) => executeRESTBackend<{ status: string }>(`/api/finance/work-orders/${id}/action`, { method: "POST", body: input }),
 
   /** A work order marked not to be invoiced, for verification. */

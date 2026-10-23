@@ -1,16 +1,34 @@
 /**
  * Where a line item, and a work order, stand for invoicing (decided with
- * the user, 22 Oct). Pure, so the list, the detail and the tests all
- * agree.
+ * the user, 22 Oct; Ready from FSM, 23 Oct). Pure, so the list, the
+ * detail and the tests all agree.
  *
- *  Line: Not ready -> Ready (marked in the portal) -> Partially invoiced
- *        (part of its amount on a MAHER invoice) -> Invoiced (all of it).
+ *  Line: Not ready -> Ready (completed in Zoho FSM, or its work order is)
+ *        -> Partially invoiced (part of its amount on a MAHER invoice) ->
+ *        Invoiced (all of it). Only a Ready line can be invoiced.
  *  Work order: Invoiced when every line is; Partially invoiced when any
  *        amount is invoiced; Ready when any line is ready; else Not ready.
  *
  * Amounts are before VAT, like FSM's line Amount (D-05). A cent either way
  * is rounding, not money left.
  */
+
+/** Completed in Zoho FSM, for a work order or a line. */
+export function isFsmCompleted(status: string | null | undefined): boolean {
+  return (status ?? "").trim().toLowerCase() === "completed";
+}
+
+/** A line can be invoiced once it, or its whole work order, is completed in FSM. */
+export function lineCanBeInvoiced(lineStatus: string | null | undefined, workOrderStatus: string | null | undefined): boolean {
+  return isFsmCompleted(lineStatus) || isFsmCompleted(workOrderStatus);
+}
+
+/** What a before-VAT amount comes to with VAT, at the line's own rate (FSM's Line_Item_Amount over Amount). */
+export function withVat(amount: number, line: { amount: number | null; lineAmount: number | null; taxPercent: number | null }): number {
+  const rate =
+    line.amount && line.lineAmount !== null && line.amount > 0 ? line.lineAmount / line.amount : 1 + Math.max(0, line.taxPercent ?? 0) / 100;
+  return Math.round(amount * rate * 100) / 100;
+}
 
 export type InvoiceStatus = "not_ready" | "ready" | "partially_invoiced" | "invoiced";
 

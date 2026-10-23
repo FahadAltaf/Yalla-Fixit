@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { FileUp, Loader2, Plus, ScanText, TriangleAlert, X } from "lucide-react";
 import { toast } from "sonner";
 
-import { ActionDialogContent, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
+import { ActionDialogContent, SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,8 +27,10 @@ import { aed } from "./shared";
  * 22 Oct). Three steps in one dialog: choose the file; it is uploaded and
  * read; the review shows which work-order lines the invoice appears to
  * cover and how much of each, which the person corrects and confirms.
- * Nothing is recorded until they do, and the file and what the scan read
- * are kept with the invoice.
+ * Nothing is recorded until they do (and confirm once more), and the file
+ * and what the scan read are kept with the invoice. Only lines completed in
+ * FSM are offered (the server reads no others); from the lines ticked on a
+ * work order, only those.
  */
 
 type Row = { key: string; candidate: CandidateLine; amount: string; included: boolean; confidence: Confidence | null; reasons: string[]; scanned: string | null };
@@ -41,7 +43,18 @@ const CONFIDENCE: Record<Confidence, { label: string; className: string }> = {
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-export function UploadInvoiceDialog({ workOrderId, onClose, onRecorded }: { workOrderId?: string; onClose: () => void; onRecorded: () => void }) {
+export function UploadInvoiceDialog({
+  workOrderId,
+  onlyLines = null,
+  onClose,
+  onRecorded,
+}: {
+  workOrderId?: string;
+  /** The lines ticked on the work order: the invoice is for these. */
+  onlyLines?: string[] | null;
+  onClose: () => void;
+  onRecorded: () => void;
+}) {
   const [step, setStep] = useState<"pick" | "reading" | "review">("pick");
   const [file, setFile] = useState<File | null>(null);
   const [path, setPath] = useState<string | null>(null);
@@ -53,6 +66,8 @@ export function UploadInvoiceDialog({ workOrderId, onClose, onRecorded }: { work
   const [key] = useState(() => crypto.randomUUID());
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const { confirm: ask, dialog } = useConfirm();
+  const only = useMemo(() => (onlyLines ? new Set(onlyLines) : null), [onlyLines]);
 
   const read = async () => {
     if (!file) return;
@@ -68,16 +83,34 @@ export function UploadInvoiceDialog({ workOrderId, onClose, onRecorded }: { work
       setNumber(result.scanned.invoiceNumber ?? "");
       if (result.scanned.invoiceDate) setDate(result.scanned.invoiceDate);
       setTotal(result.scanned.total !== null ? String(result.scanned.total) : "");
+      const proposed: Row[] = result.proposals.map((p) => ({
+        key: p.candidate.lineId,
+        candidate: p.candidate,
+        amount: String(p.amount),
+        included: p.confidence !== "low",
+        confidence: p.confidence,
+        reasons: p.reasons,
+        scanned: result.scanned.lines[p.scannedIndex]?.description ?? null,
+      }));
+      /* For the lines ticked: each of them, with what the scan matched to it or the amount left. */
       setRows(
-        result.proposals.map((p) => ({
-          key: p.candidate.lineId,
-          candidate: p.candidate,
-          amount: String(p.amount),
-          included: p.confidence !== "low",
-          confidence: p.confidence,
-          reasons: p.reasons,
-          scanned: result.scanned.lines[p.scannedIndex]?.description ?? null,
-        })),
+        only
+          ? result.candidates
+              .filter((c) => only.has(c.lineId))
+              .map(
+                (c) =>
+                  proposed.find((r) => r.candidate.lineId === c.lineId) ?? {
+                    key: c.lineId,
+                    candidate: c,
+                    amount: String(c.remaining),
+                    included: true,
+                    confidence: null,
+                    reasons: [],
+                    scanned: null,
+                  },
+              )
+              .map((r) => ({ ...r, included: true }))
+          : proposed,
       );
       setStep("review");
     } catch (e) {
@@ -87,8 +120,8 @@ export function UploadInvoiceDialog({ workOrderId, onClose, onRecorded }: { work
   };
 
   const unusedCandidates = useMemo(
-    () => (proposal?.candidates ?? []).filter((c) => !rows.some((r) => r.candidate.lineId === c.lineId)),
-    [proposal, rows],
+    () => (proposal?.candidates ?? []).filter((c) => (!only || only.has(c.lineId)) && !rows.some((r) => r.candidate.lineId === c.lineId)),
+    [proposal, rows, only],
   );
   const included = rows.filter((r) => r.included);
   const sum = round2(included.reduce((s, r) => s + (Number(r.amount) || 0), 0));
@@ -98,6 +131,12 @@ export function UploadInvoiceDialog({ workOrderId, onClose, onRecorded }: { work
 
   const confirm = async () => {
     if (!proposal || !path) return;
+    const ok = await ask({
+      title: `Record MAHER ${number.trim()}?`,
+      description: `${aed(round2(totalNumber))} invoice, against ${included.length} ${included.length === 1 ? "line" : "lines"} for ${aed(sum)} before VAT. It cannot be undone here.`,
+      confirmText: "Record invoice",
+    });
+    if (!ok) return;
     setBusy(true);
     setProblem(null);
     try {
@@ -314,6 +353,7 @@ export function UploadInvoiceDialog({ workOrderId, onClose, onRecorded }: { work
             </SubmitButton>
           )}
         </DialogFooter>
+        {dialog}
       </ActionDialogContent>
     </Dialog>
   );

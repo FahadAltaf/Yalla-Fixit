@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { DigestItem } from "@/lib/finance/digest-plan";
-import { queueStatus, workOrderInvoicing, type QueueStatus, type WorkflowStatus } from "@/lib/finance/line-status";
+import { isFsmCompleted, queueStatus, workOrderInvoicing, type QueueStatus, type WorkflowStatus } from "@/lib/finance/line-status";
 import type { MetricExclusion, MetricInvoice, MetricItem } from "@/lib/finance/metrics";
 import { readAllRows } from "@/lib/server/snagging/read-all";
 
@@ -12,16 +12,17 @@ import { readAllRows } from "@/lib/server/snagging/read-all";
  * called here: what a work order looked like is the snapshot kept when
  * someone last acted on it (migration 20261025100000).
  *
- *  - In the queue: a work order with a line marked Ready, an invoice, or a
- *    workflow status. One whose marks were all taken off, with nothing
- *    invoiced, has left it (Not ready) and is not counted.
- *  - Entered: when a line of it was first marked Ready.
+ *  - In the queue: a work order with a line completed in FSM (as last
+ *    seen), an invoice, or a workflow status. Not ready ones are not
+ *    counted.
+ *  - Entered: when FSM completed the work (else, before 20261025100000,
+ *    its first Ready mark or invoice).
  *  - Value: what is ready and not yet invoiced while it waits; what was
  *    invoiced once invoiced; its value before VAT once excluded.
  *  - Invoices: a row per work order an invoice covers, so a MAHER invoice
  *    across two work orders counts once (invoiceId) but times each. The
  *    variance (invoice total against the lines it covers) sits on its
- *    first row. Days to invoice run from the lines being marked Ready.
+ *    first row. Days to invoice run from FSM completing the lines.
  */
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -65,7 +66,8 @@ export async function readLedgerForMetrics(admin: SupabaseClient): Promise<Ledge
         (from, to) =>
           finance()
             .from("line_states")
-            .select("fsm_line_id, fsm_work_order_id, work_order_number, amount, ready, ready_at, invoiced_amount")
+            /* Every column: fsm_completed_at arrives with 20261025100000. */
+            .select("*")
             .order("fsm_line_id")
             .range(from, to),
         "line states",
@@ -106,7 +108,7 @@ export async function readLedgerForMetrics(admin: SupabaseClient): Promise<Ledge
     linesOf.set(id, [...(linesOf.get(id) ?? []), l]);
   }
   const flowOf = new Map(flows.map((f) => [String(f.fsm_work_order_id), f]));
-  /* Entered: the first Ready mark; an invoice also marks its lines Ready. */
+  /* The first Ready mark or invoice: when FSM's completion was never seen. */
   const enteredOf = new Map<string, string>();
   for (const e of events) {
     const id = String(e.fsm_work_order_id);
@@ -119,8 +121,14 @@ export async function readLedgerForMetrics(admin: SupabaseClient): Promise<Ledge
     const states = linesOf.get(id) ?? [];
     const flow = flowOf.get(id);
     const subTotal = flow?.sub_total === null || flow?.sub_total === undefined ? null : Number(flow.sub_total);
+    /* Ready once FSM completed the line or the work order (23 Oct), as last seen. */
+    const woCompleted = isFsmCompleted(str(flow?.fsm_status));
     let invoicing = workOrderInvoicing(
-      states.map((s) => ({ amount: Number(s.amount ?? 0), ready: Boolean(s.ready), invoicedAmount: Number(s.invoiced_amount ?? 0) })),
+      states.map((s) => ({
+        amount: Number(s.amount ?? 0),
+        ready: woCompleted || Boolean(s.fsm_completed_at),
+        invoicedAmount: Number(s.invoiced_amount ?? 0),
+      })),
     );
     /* Lines the portal never kept do not count: invoiced in full only when it reaches FSM's total. */
     if (invoicing.status === "invoiced" && subTotal !== null && invoicing.invoicedValue < subTotal - 0.01) {
@@ -130,8 +138,10 @@ export async function readLedgerForMetrics(admin: SupabaseClient): Promise<Ledge
     const status = queueStatus(workflow, invoicing.status);
     if (status === "not_ready") continue;
 
-    const firstReady = earliest(states.filter((s) => s.ready).map((s) => str(s.ready_at)));
-    const enteredAt = enteredOf.get(id) ?? firstReady ?? str(flow?.status_changed_at) ?? new Date().toISOString();
+    const firstReady =
+      earliest([str(flow?.fsm_completed_at), ...states.map((s) => str(s.fsm_completed_at))]) ??
+      earliest(states.filter((s) => s.ready).map((s) => str(s.ready_at)));
+    const enteredAt = firstReady ?? enteredOf.get(id) ?? str(flow?.status_changed_at) ?? new Date().toISOString();
     const statusChangedAt = workflow !== "open" && flow ? String(flow.status_changed_at) : (firstReady ?? enteredAt);
     const linesValue = round2(states.reduce((sum, s) => sum + Number(s.amount ?? 0), 0));
     const value =
@@ -155,7 +165,13 @@ export async function readLedgerForMetrics(admin: SupabaseClient): Promise<Ledge
   }
 
   /* One row per invoice and work order; the variance on the invoice's first row. */
-  const readyAtOf = new Map(lines.map((l) => [String(l.fsm_line_id), str(l.ready_at)]));
+  /* Days to invoice run from FSM completing the line (or its work order), else the old Ready mark. */
+  const readyAtOf = new Map(
+    lines.map((l) => [
+      String(l.fsm_line_id),
+      str(l.fsm_completed_at) ?? str(flowOf.get(String(l.fsm_work_order_id))?.fsm_completed_at) ?? str(l.ready_at),
+    ]),
+  );
   const invoiceById = new Map(invoiceRows.map((i) => [String(i.id), i]));
   const groups = new Map<string, { invoiceId: string; workOrderId: string; amount: number; startedAt: string | null }>();
   for (const a of allocations) {

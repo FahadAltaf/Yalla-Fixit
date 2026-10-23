@@ -1,7 +1,7 @@
 "use client";
 
 import type { ColumnDef } from "@tanstack/react-table";
-import { Building2, Clock, UserRound } from "lucide-react";
+import { Building2, Clock } from "lucide-react";
 
 import { WorkOrderQueueBadge, aed, daysSince } from "@/components/dashboard/finance/shared";
 import { IconText } from "@/components/data-table/columns/icon-text";
@@ -10,9 +10,10 @@ import type { WorkOrderListRow } from "@/lib/server/finance/work-orders";
 
 /**
  * Columns for Ready to invoice, one row per FSM work order (read live):
- * the queue's columns (quotation and work order, client, value, how much
- * is invoiced, status, days in status, assignee), built like every other
- * table here (column-user.tsx). Sorting is fixed (newest first).
+ * quotation and work order, client (the contact first, then the company),
+ * value before and with VAT, how much is invoiced, status and days in it,
+ * built like every other table here (column-user.tsx). Sorting is fixed
+ * (newest first).
  */
 export function getWorkOrderQueueColumns(agedAfterDays: number): ColumnDef<WorkOrderListRow>[] {
   return [
@@ -36,12 +37,16 @@ export function getWorkOrderQueueColumns(agedAfterDays: number): ColumnDef<WorkO
     {
       id: "client",
       header: "Client",
-      cell: ({ row }) => (
-        <div className="min-w-36">
-          <p className="text-sm">{row.original.clientName ?? "—"}</p>
-          {row.original.coordinatorName ? <p className="text-muted-foreground text-xs">{row.original.coordinatorName}</p> : null}
-        </div>
-      ),
+      cell: ({ row }) => {
+        const r = row.original;
+        const name = r.contactName ?? r.clientName;
+        return (
+          <div className="min-w-36">
+            <p className="text-sm font-medium">{name ?? "—"}</p>
+            {r.contactName && r.clientName ? <p className="text-muted-foreground text-xs">{r.clientName}</p> : null}
+          </div>
+        );
+      },
       enableSorting: false,
     },
     {
@@ -49,13 +54,15 @@ export function getWorkOrderQueueColumns(agedAfterDays: number): ColumnDef<WorkO
       header: "Value",
       cell: ({ row }) => {
         const r = row.original;
-        const ready = r.invoicing.readyValue;
         return (
           <div className="text-sm font-medium tabular-nums">
-            {aed(r.value)}
-            <div className="text-muted-foreground text-xs font-normal">
-              {ready > 0 ? `${aed(ready)} ready` : r.invoicing.readyLines ? "ready lines invoiced" : "before VAT"}
-            </div>
+            {aed(r.value)} <span className="text-muted-foreground text-xs font-normal">before VAT</span>
+            {r.valueWithVat !== null ? (
+              <div className="text-muted-foreground text-xs font-normal">{aed(r.valueWithVat)} with VAT</div>
+            ) : null}
+            {r.invoicing.readyValue > 0 ? (
+              <div className="text-warning text-xs font-normal">{aed(r.invoicing.readyValue)} to invoice</div>
+            ) : null}
           </div>
         );
       },
@@ -94,17 +101,6 @@ export function getWorkOrderQueueColumns(agedAfterDays: number): ColumnDef<WorkO
           </IconText>
         );
       },
-      enableSorting: false,
-    },
-    {
-      id: "assignee",
-      header: "Assignee",
-      cell: ({ row }) =>
-        row.original.assigneeName ? (
-          <IconText icon={UserRound}>{row.original.assigneeName}</IconText>
-        ) : (
-          <span className="text-muted-foreground text-sm">Unassigned</span>
-        ),
       enableSorting: false,
     },
   ];

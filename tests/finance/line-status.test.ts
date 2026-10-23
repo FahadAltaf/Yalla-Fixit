@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { lineRemaining, lineStatus, workOrderInvoicing } from "@/lib/finance/line-status";
+import { isFsmCompleted, lineCanBeInvoiced, lineRemaining, lineStatus, withVat, workOrderInvoicing } from "@/lib/finance/line-status";
 
 const line = (amount: number, ready = false, invoicedAmount = 0) => ({ amount, ready, invoicedAmount });
 
@@ -36,4 +36,22 @@ test("a work order's queue status: excluded and invoiced first, then the workflo
   assert.equal(queueStatus("open", "partially_invoiced"), "partially_invoiced");
   assert.equal(queueStatus("open", "ready"), "pending", "ready lines nobody has picked up");
   assert.equal(queueStatus("open", "not_ready"), "not_ready");
+});
+
+test("only work completed in FSM can be invoiced: the line, or its whole work order", () => {
+  assert.equal(isFsmCompleted("Completed"), true);
+  assert.equal(isFsmCompleted(" completed "), true);
+  assert.equal(isFsmCompleted("Scheduled Appointment"), false);
+  assert.equal(isFsmCompleted(null), false);
+  assert.equal(lineCanBeInvoiced("Completed", "In Progress"), true, "a completed line on a work order still in progress");
+  assert.equal(lineCanBeInvoiced("Scheduled", "Completed"), true, "every line of a completed work order");
+  assert.equal(lineCanBeInvoiced("Scheduled", "Scheduled Appointment"), false);
+  assert.equal(lineCanBeInvoiced("Cannot Complete", "In Progress"), false);
+});
+
+test("with VAT, at the line's own rate", () => {
+  assert.equal(withVat(997.5, { amount: 997.5, lineAmount: 1047.38, taxPercent: 5 }), 1047.38);
+  assert.equal(withVat(399, { amount: 997.5, lineAmount: 1047.38, taxPercent: 5 }), 418.95, "a part of the line, at FSM's rate");
+  assert.equal(withVat(200, { amount: null, lineAmount: null, taxPercent: 5 }), 210, "no FSM amounts: the tax %");
+  assert.equal(withVat(200, { amount: 0, lineAmount: 0, taxPercent: null }), 200, "nothing to go by: no VAT");
 });

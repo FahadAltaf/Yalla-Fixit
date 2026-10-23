@@ -80,7 +80,7 @@ const workOrders = (count: number) => (count === 1 ? "1 work order" : `${count} 
 
 /* Value that arrived is neutral; value invoiced is the number Finance moves. */
 const activityConfig = {
-  enteredValue: { label: "Marked ready", color: CHART_COLOR.neutral },
+  enteredValue: { label: "Completed", color: CHART_COLOR.neutral },
   invoicedValue: { label: "Invoiced", color: CHART_COLOR.good },
 } satisfies ChartConfig;
 
@@ -221,7 +221,7 @@ export function FinanceMetricsPage() {
           <StatCard
             label="Time to invoice"
             value={formatDuration(period.averageDaysToInvoice)}
-            headline={period.averageDaysToInvoice === null ? "No invoice in this period" : "Average, marked ready to invoiced"}
+            headline={period.averageDaysToInvoice === null ? "No invoice in this period" : "Average, completed in FSM to invoiced"}
             caption={`Over invoices recorded in the last ${range}`}
           />
           <StatCard
@@ -237,7 +237,7 @@ export function FinanceMetricsPage() {
       <div className="grid gap-4 lg:grid-cols-2">
         <SectionShell
           title="Activity"
-          description="Value marked ready to invoice against value invoiced, by the day it happened."
+          description="Value completed in FSM against value invoiced, before VAT, by the day it happened."
           icon={<Activity />}
           centerBody
           loading={waiting}
@@ -248,7 +248,7 @@ export function FinanceMetricsPage() {
             <EmptyState
               icon={<Activity />}
               title="No movement in this period"
-              description={`Nothing was marked ready and nothing was invoiced in the last ${range}. Widen the period to look further back.`}
+              description={`Nothing was completed and nothing was invoiced in the last ${range}. Widen the period to look further back.`}
               className="py-10"
             />
           }
@@ -286,7 +286,7 @@ export function FinanceMetricsPage() {
 
         <SectionShell
           title="Time to invoice, by Finance user"
-          description={`From the lines being marked ready to the MAHER invoice, over the last ${range}.`}
+          description={`From the lines being completed in FSM to the MAHER invoice, over the last ${range}.`}
           icon={<Clock />}
           centerBody
           loading={waiting}
@@ -356,7 +356,7 @@ export function FinanceMetricsPage() {
             <EmptyState
               icon={<PieChartIcon />}
               title="Nothing is waiting"
-              description="Every work order marked ready is invoiced or excluded."
+              description="Every completed work order is invoiced or excluded."
               className="py-10"
             />
           }
@@ -423,7 +423,7 @@ export function FinanceMetricsPage() {
 
         <SectionShell
           title="Ageing of waiting work"
-          description="Value waiting, by days since the work order was first marked ready."
+          description="Value waiting, before VAT, by days since the work was completed in FSM."
           icon={<Hourglass />}
           centerBody
           loading={waiting}
@@ -495,7 +495,7 @@ export function FinanceMetricsPage() {
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-medium">{row.reason || "No reason recorded"}</span>
                     <span className="text-muted-foreground block truncate text-sm">
-                      {aed(row.value)} · {row.days} {row.days === 1 ? "day" : "days"} since marked ready
+                      {aed(row.value)} · {row.days} {row.days === 1 ? "day" : "days"} since completed
                     </span>
                   </span>
                   <span className="text-brand mt-0.5 inline-flex shrink-0 items-center gap-1 text-sm font-medium">

@@ -280,21 +280,25 @@ are not inherited by administrators, so tick them for whoever should hold them.
 ## 5d. Ready to invoice, live from Zoho FSM (22 Oct)
 
 Needs `FINANCE_FSM_READ=on` in `.env.local` (restart the dev server) and migration `20261024100000` (migration
-log, row 11). Before the migration the screens load but say Ready marks, workflow and invoices are off.
+log, row 11). Before the migration the screens load but say workflow and invoices are off.
+
+From 23 Oct nobody marks work ready or picks it up: a line is ready to invoice once it, or its whole work order, is
+*Completed* in FSM, and recording an invoice moves an open work order to *In progress*. Every change asks to confirm.
 
 | # | Do | Expect |
 |---|---|---|
-| 5d.1 | **Finance → Ready to invoice** (there is no Work orders menu) | Work orders raised in the last 30 days, read from Zoho FSM; "read from Zoho FSM … ago" line; cards Pending, In progress, On hold, Excluded value, Average days to invoice. every status is shown by default (most are *Not ready* until a line is marked); choose *Awaiting action* for the work Finance still has to do |
+| 5d.1 | **Finance → Ready to invoice** (there is no Work orders menu) | Work orders raised in the last 30 days (the date boxes show them), read from Zoho FSM; cards Pending, In progress, On hold, Excluded value (each with the value with VAT), Average time to invoice. Every status by default (most are *Not ready* until FSM completes them). Columns: client contact first with the company under it; Value before and with VAT; no Assignee column |
 | 5d.2 | Change the dates to January | Cut back to four months, with a note |
 | 5d.3 | **Refresh** | A toast with the FSM calls used (2 to 4 for 30 days); the "read … ago" line resets |
 | 5d.4 | Open a work order, go Back, open it again | Back is instant and keeps the filters; the second opening does not read FSM again |
 | 5d.5 | **Refresh** (circular arrow) on the work order | "Read from Zoho FSM"; the footer shows the new time |
-| 5d.6 | Tick one line → **Mark ready** | Its Invoicing shows *Ready to invoice* by you; History has a row; the work order is *Pending* in the list |
-| 5d.7 | **Mark work order ready** | All lines ready (the confirm says how many are not completed in FSM) |
-| 5d.8 | **Pick up**, then **Raise query** with a question | *In progress* with you as assignee, then *Query raised* with the question in the band; coordinators notified (dev redirect) |
+| 5d.6 | Open a work order not completed in FSM; **Record invoice**, and tick a line → **Invoice selected** | A dialog "Not completed in Zoho FSM" says why; nothing opens. No Mark ready, Not ready, Pick up or Release buttons; no Delivery tab |
+| 5d.7 | Open a work order (or line) *Completed* in FSM | Lines show *Ready to invoice*; the cards show values before and with VAT; the work order is *Pending* in the list |
+| 5d.8 | **Raise query** with a question, confirm | *Query raised* with the question in the band; coordinators notified (dev redirect) |
 | 5d.9 | As a coordinator: **Answer query** | Back to where it was before the query |
 | 5d.10 | **Put on hold** with a reason, then **Resume** | *On hold* with the reason, then back |
-| 5d.11 | **Record invoice**: a TEST- number, 50 % of one line | That line is *Partially invoiced* with the amount left; the work order is *Partially invoiced*; the Invoices tab lists it |
+| 5d.11 | On a completed work order: **Record invoice**: a TEST- number, 50 % of one line, confirm | That line is *Partially invoiced* with the amount left; the work order moves to *In progress* by itself (History: "Moved to In progress"); the Invoices tab lists it |
+| 5d.11a | Tick completed lines → **Invoice selected** | Two choices: *Upload the MAHER invoice* (the review shows only the ticked lines) or *Enter the MAHER details* |
 | 5d.12 | Record the rest on a second invoice; try the first number again | Line *Invoiced*; the repeated MAHER number is refused |
 | 5d.13 | Try more than the amount left | Refused before sending, and by the database if forced |
 | 5d.14 | On another work order: **Mark not invoiceable** with a reason and a file | Band "waiting for verification" with the file; invoicing is blocked |
@@ -303,9 +307,9 @@ log, row 11). Before the migration the screens load but say Ready marks, workflo
 | 5d.17 | With the key: upload a MAHER PDF | "Reading the invoice", then a review: lines matched with *Strong match / Likely / Check*, amounts editable, unmatched lines listed |
 | 5d.18 | Correct an amount, **Confirm and record** | Recorded like 5d.11; the Invoices tab shows "invoice file attached" |
 | 5d.19 | Open an old queue item from a notification or metrics link | The earlier item page still opens |
-| 5d.20 | (Migration `20261025100000` applied.) **Invoicing metrics** after 5d.6–5d.12 | Awaiting invoice and the status donut count the work orders marked ready (Partially invoiced its own slice); Days to invoice runs from the Ready mark; one invoice counts once; variance is the invoice total against its lines |
-| 5d.21 | Mark a work order ready, then set the list to an earlier month | It is still listed (awaiting action), with a note saying how many come from outside the dates |
-| 5d.22 | `node --env-file=.env --env-file=.env.local --import ./tests/setup/register.mjs scripts/finance/run-digest.ts --ignore-time` | The digest lists work orders first marked ready since the last one, named by quotation or work order number; email only to `NOTIFY_REDIRECT_TO` |
+| 5d.20 | (Migration `20261025100000` applied.) **Invoicing metrics** after 5d.11–5d.12 | The invoiced work orders are counted; Time to invoice runs from FSM completing the lines; one invoice counts once; variance is the invoice total against its lines. Completed work orders nobody has acted on are not counted yet |
+| 5d.21 | Invoice part of a work order, then set the list to an earlier month | It is still listed (awaiting action), with a note saying how many come from outside the dates |
+| 5d.22 | `node --env-file=.env --env-file=.env.local --import ./tests/setup/register.mjs scripts/finance/run-digest.ts --ignore-time` | The digest lists acted-on work orders completed since the last one, named by quotation or work order number; email only to `NOTIFY_REDIRECT_TO` |
 
 Invoices and history are append-only records, like the rest of Finance: use `TEST-` numbers.
 

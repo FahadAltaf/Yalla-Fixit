@@ -123,7 +123,7 @@ export function FinanceWorkOrdersPage() {
       <PageHeading
         eyebrow="Finance"
         title="Ready to invoice"
-        description="FSM work orders, read live from Zoho FSM, at line-item level. Mark work ready, pick it up, raise a query, or record the MAHER invoice in full or in part."
+        description="FSM work orders, read live from Zoho FSM, at line-item level. Once the work is completed in FSM, record the MAHER invoice in full or in part, or raise a query."
       />
 
       {data ? (
@@ -140,7 +140,7 @@ export function FinanceWorkOrdersPage() {
         <Alert>
           <Info className="size-4" />
           <AlertTitle>Ready marks, workflow and invoices are off</AlertTitle>
-          <AlertDescription>Apply migration 20261024100000 to mark work ready, pick it up and record MAHER invoices.</AlertDescription>
+          <AlertDescription>Apply migration 20261024100000 to record MAHER invoices, queries and holds.</AlertDescription>
         </Alert>
       ) : null}
       {data?.clamped ? (
@@ -153,15 +153,31 @@ export function FinanceWorkOrdersPage() {
 
       {summary ? (
         <StatCardGrid columns={5}>
-          <StatCard label="Pending" value={summary.pending.count} headline={`${aed(summary.pending.value)} ready`} />
+          <StatCard
+            label="Pending"
+            value={summary.pending.count}
+            headline={`${aed(summary.pending.value)} to invoice · ${aed(summary.pending.valueWithVat)} with VAT`}
+          />
           <StatCard
             label="In progress"
             value={summary.inProgress.count + summary.queryRaised.count}
-            headline={summary.queryRaised.count ? `${summary.queryRaised.count} with a query open` : aed(summary.inProgress.value)}
+            headline={
+              summary.queryRaised.count
+                ? `${summary.queryRaised.count} with a query open`
+                : `${aed(summary.inProgress.value)} left · ${aed(summary.inProgress.valueWithVat)} with VAT`
+            }
             tone="progress"
           />
-          <StatCard label="On hold" value={summary.onHold.count} headline={aed(summary.onHold.value)} />
-          <StatCard label="Excluded value" value={aed(summary.excluded.value)} headline={`${summary.excluded.count} work order(s), verified`} />
+          <StatCard
+            label="On hold"
+            value={summary.onHold.count}
+            headline={`${aed(summary.onHold.value)} · ${aed(summary.onHold.valueWithVat)} with VAT`}
+          />
+          <StatCard
+            label="Excluded value"
+            value={aed(summary.excluded.value)}
+            headline={`${aed(summary.excluded.valueWithVat)} with VAT · ${summary.excluded.count} verified`}
+          />
           <StatCard
             label="Average time to invoice"
             value={formatDuration(summary.averageDaysToInvoice)}
