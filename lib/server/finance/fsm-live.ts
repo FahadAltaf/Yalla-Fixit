@@ -3,6 +3,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createFsmReader, financeFsmReadEnabled } from "@/lib/server/finance/fsm-read";
 import { lookupName, mapEstimate, mapLineItem, mapWorkOrder } from "@/lib/server/finance/fsm-sync/mappers";
 import { getFsmAccessToken } from "@/lib/server/zoho/fsm-client";
+import type { QuotationData } from "@/components/dashboard/extensions/quotation-templates/quotation-templates";
+import { mapToQuotationData } from "@/lib/quotations/estimate-quotation-data";
 
 /**
  * Ready to invoice reads Zoho FSM live (the user's direction, 22 Oct): work
@@ -62,7 +64,16 @@ export type LiveWorkOrder = {
 
 export type LiveLine = ReturnType<typeof mapLineItem>;
 
-export type LiveEstimate = ReturnType<typeof mapEstimate>;
+/** The quotation's figures, and the document as the quotation templates draw it (no extra call). */
+export type LiveEstimate = ReturnType<typeof mapEstimate> & { document: QuotationData | null };
+
+function quotationDocument(record: FsmRecord): QuotationData | null {
+  try {
+    return mapToQuotationData({ estimate: { data: [record] } });
+  } catch {
+    return null;
+  }
+}
 
 type Cached<T> = { at: number; value: T };
 const listCache = new Map<string, Cached<{ rows: LiveWorkOrder[]; fetchedAt: string; calls: number }>>();
@@ -187,7 +198,7 @@ export async function fetchEstimateLive(admin: SupabaseClient, id: string, optio
   }
   if (!res.ok) throw failure(res.status, res.json);
   const record = dataOf(res.json)[0];
-  const value = record ? mapEstimate(record) : null;
+  const value = record ? { ...mapEstimate(record), document: quotationDocument(record) } : null;
   estimateCache.set(id, { at: Date.now(), value });
   return value;
 }

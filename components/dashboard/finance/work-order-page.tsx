@@ -11,18 +11,27 @@ import {
   History,
   Info,
   ListChecks,
+  MessageSquareReply,
+  Paperclip,
   PauseCircle,
   PlayCircle,
   ReceiptText,
   RefreshCw,
+  ShieldAlert,
   ShieldCheck,
   TriangleAlert,
+  Undo2,
+  UserMinus,
+  XCircle,
+  type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { SectionCard, StatCard, StatCardGrid, TabCount, timeAgo } from "@/components/dashboard/shared/kaizen";
+import { YallaClassicTemplate } from "@/components/dashboard/extensions/quotation-templates/templates/YallaClassicTemplate";
+import { DataRow, ListPager, SectionCard, StatCard, StatCardGrid, TabCount, timeAgo } from "@/components/dashboard/shared/kaizen";
 import { ActionDialogContent, ErrorState, HeadingSkeleton, SectionSkeleton, SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { refreshAll, useSection } from "@/components/dashboard/snagging/overview/use-section";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -32,13 +41,14 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { fsmRecordLink } from "@/lib/fsm-links";
-import { INVOICE_STATUS_LABELS, lineCanBeInvoiced, withVat } from "@/lib/finance/line-status";
+import { INVOICE_STATUS_LABELS, lineCanBeInvoiced, withoutVat, withVat } from "@/lib/finance/line-status";
 import { formatZonedDate, formatZonedDateTime, todayInZone } from "@/lib/scheduling/org-time";
-import type { WorkOrderDetail, WorkOrderEventType, WorkOrderLine } from "@/lib/server/finance/work-orders";
+import type { WorkOrderDetail, WorkOrderEvent, WorkOrderEventType, WorkOrderInvoice, WorkOrderLine } from "@/lib/server/finance/work-orders";
 import { cn } from "@/lib/utils";
 import { financeService } from "@/modules/finance/finance-service";
 
@@ -80,20 +90,24 @@ type NoteAsk = {
 const DETAIL_STALE_MS = 10 * 60_000;
 const at = (iso: string | null) => (iso ? formatZonedDateTime(iso) : "—");
 
-const EVENT_LABELS: Record<WorkOrderEventType, string> = {
-  marked_ready: "Marked ready to invoice",
-  unmarked_ready: "Ready mark taken off",
-  invoiced: "Invoiced",
-  picked_up: "Moved to In progress",
-  released: "Released",
-  query_raised: "Query raised",
-  query_answered: "Query answered",
-  put_on_hold: "Put on hold",
-  resumed: "Resumed",
-  exclusion_requested: "Marked not to be invoiced",
-  exclusion_verified: "Exclusion verified",
-  exclusion_rejected: "Exclusion rejected",
+/* Each change's wording and icon, as the job page's history has them (audit-timeline.tsx). */
+const EVENT_META: Record<WorkOrderEventType, { label: string; Icon: LucideIcon }> = {
+  marked_ready: { label: "Marked ready to invoice", Icon: CheckCheck },
+  unmarked_ready: { label: "Ready mark taken off", Icon: Undo2 },
+  invoiced: { label: "Invoiced", Icon: ReceiptText },
+  picked_up: { label: "Moved to In progress", Icon: PlayCircle },
+  released: { label: "Released", Icon: UserMinus },
+  query_raised: { label: "Query raised", Icon: CircleHelp },
+  query_answered: { label: "Query answered", Icon: MessageSquareReply },
+  put_on_hold: { label: "Put on hold", Icon: PauseCircle },
+  resumed: { label: "Resumed", Icon: PlayCircle },
+  exclusion_requested: { label: "Marked not to be invoiced", Icon: ShieldAlert },
+  exclusion_verified: { label: "Exclusion verified", Icon: ShieldCheck },
+  exclusion_rejected: { label: "Exclusion rejected", Icon: XCircle },
 };
+
+const formatWhen = (value: string) =>
+  new Date(value).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
 export function FinanceWorkOrderPage({ id }: { id: string }) {
   const url = `/api/finance/work-orders/${encodeURIComponent(id)}`;
@@ -650,68 +664,17 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
         </TabsContent>
 
         <TabsContent value="invoices" className="mt-4">
-          <SectionCard icon={<ReceiptText />} title="MAHER invoices" description="Every invoice recorded against this work order's lines, and what each covers." bodyClassName="border-t">
-            {data.invoices.length === 0 ? (
-              <p className="text-muted-foreground px-5 py-4 text-sm">No invoice recorded yet.</p>
-            ) : (
-              <ul className="divide-y">
-                {data.invoices.map((inv) => (
-                  <li key={inv.id} className="px-5 py-4">
-                    <div className="flex flex-wrap items-start justify-between gap-2">
-                      <div>
-                        <p className="font-medium">MAHER {inv.number}</p>
-                        <p className="text-muted-foreground text-xs">
-                          Dated {formatZonedDate(inv.date)} · recorded by {inv.recordedBy ?? "—"}, {at(inv.recordedAt)}
-                          {inv.hasFile ? " · invoice file attached" : ""}
-                        </p>
-                      </div>
-                      <p className="text-sm tabular-nums">
-                        Invoice total <span className="font-medium">{aed(inv.total)}</span>
-                        <span className="text-muted-foreground block text-right text-xs">
-                          Lines {aed(inv.allocations.reduce((sum, a) => sum + a.amount, 0))} before VAT
-                        </span>
-                      </p>
-                    </div>
-                    <ul className="mt-2 space-y-1">
-                      {inv.allocations.map((a) => (
-                        <li key={a.lineId} className="flex justify-between gap-3 text-sm">
-                          <span className="text-muted-foreground truncate">{a.lineName ?? a.lineId}</span>
-                          <span className="tabular-nums">{aed(a.amount)}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </SectionCard>
+          <InvoicesCard invoices={data.invoices} lines={lines} />
         </TabsContent>
 
         <TabsContent value="history" className="mt-4">
-          <SectionCard icon={<History />} title="History" description="Every Ready mark, invoice and status change on this work order, newest first." bodyClassName="px-5 pb-5">
-            {data.events.length === 0 ? (
-              <p className="text-muted-foreground text-sm">Nothing yet.</p>
-            ) : (
-              <ol className="relative ml-1 space-y-5 border-l pl-5">
-                {data.events.map((event) => (
-                  <li key={event.id} className="relative text-sm">
-                    <span className="bg-background border-brand absolute top-1 -left-[25px] size-2.5 rounded-full border-2" aria-hidden />
-                    <p className="font-medium">
-                      {EVENT_LABELS[event.type]}
-                      {event.amount !== null ? <span className="tabular-nums"> · {aed(event.amount)}</span> : null}
-                    </p>
-                    <p className="text-muted-foreground text-xs">
-                      {event.lineName ?? "Work order"} · {event.actor ?? "System"} · <span title={at(event.at)}>{timeAgo(event.at)}</span>
-                    </p>
-                    {event.note ? <p className="mt-1 text-sm">{event.type === "invoiced" ? `MAHER ${event.note}` : event.note}</p> : null}
-                  </li>
-                ))}
-              </ol>
-            )}
-          </SectionCard>
+          <HistoryCard events={data.events} />
         </TabsContent>
 
         <TabsContent value="quotation" className="mt-4">
+          {quotation?.document ? (
+            <QuotationDocument quotation={quotation} document={quotation.document} />
+          ) : (
           <SectionCard icon={<FileText />} title="Quotation" bodyClassName="px-5 pb-5">
             {quotation ? (
               <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
@@ -728,6 +691,7 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
               <p className="text-muted-foreground text-sm">This work order has no quotation linked in Zoho FSM.</p>
             )}
           </SectionCard>
+          )}
         </TabsContent>
 
       </Tabs>
@@ -862,7 +826,14 @@ function RecordInvoiceDialog({
 }) {
   const [key] = useState(() => crypto.randomUUID());
   const [included, setIncluded] = useState<Set<string>>(() => new Set(lines.map((l) => l.id)));
-  const [amounts, setAmounts] = useState<Record<string, string>>(() => Object.fromEntries(lines.map((l) => [l.id, String(l.remaining)])));
+  /* Typed with VAT, as on the MAHER invoice; kept before VAT, like FSM's line amounts. */
+  const [amounts, setAmounts] = useState<Record<string, string>>(() => Object.fromEntries(lines.map((l) => [l.id, String(withVat(l.remaining, l))])));
+  const leftWithVat = (line: WorkOrderLine) => withVat(line.remaining, line);
+  /* The before-VAT part; the last cent of a line paid in full is the line's, not rounding's. */
+  const beforeVat = (line: WorkOrderLine, typed: number) => {
+    const part = withoutVat(typed, line);
+    return part > line.remaining && part - line.remaining <= 0.011 ? line.remaining : part;
+  };
   const [number, setNumber] = useState("");
   const [date, setDate] = useState(() => todayInZone());
   const [note, setNote] = useState("");
@@ -871,11 +842,16 @@ function RecordInvoiceDialog({
   const { confirm, dialog } = useConfirm();
 
   const allocations = useMemo(
-    () => lines.filter((l) => included.has(l.id)).map((l) => ({ line: l, amount: Number(amounts[l.id]) })),
+    () =>
+      lines
+        .filter((l) => included.has(l.id))
+        .map((l) => {
+          const typed = Number(amounts[l.id]);
+          return { line: l, typed, amount: Number.isFinite(typed) ? beforeVat(l, typed) : NaN };
+        }),
     [lines, included, amounts],
   );
-  const sum = round2(allocations.reduce((s, a) => s + (Number.isFinite(a.amount) ? a.amount : 0), 0));
-  const badLine = allocations.find((a) => !(a.amount > 0) || a.amount > a.line.remaining + 0.005);
+  const badLine = allocations.find((a) => !(a.typed > 0) || a.typed > leftWithVat(a.line) + 0.005);
   /* The invoice total is the lines with VAT, never typed (23 Oct); the server works it out the same way. */
   const sumWithVat = round2(allocations.reduce((s, a) => s + (Number.isFinite(a.amount) ? withVat(a.amount, a.line) : 0), 0));
   const valid = allocations.length > 0 && !badLine && number.trim() && date && sumWithVat > 0;
@@ -883,7 +859,7 @@ function RecordInvoiceDialog({
   const submit = async () => {
     const ok = await confirm({
       title: `Record MAHER ${number.trim()}?`,
-      description: `${aed(sumWithVat)} with VAT (${aed(sum)} before VAT), against ${allocations.length} ${allocations.length === 1 ? "line" : "lines"}. It cannot be undone here.`,
+      description: `${aed(sumWithVat)} incl. VAT, against ${allocations.length} ${allocations.length === 1 ? "line" : "lines"}. It cannot be undone here.`,
       confirmText: "Record invoice",
     });
     if (!ok) return;
@@ -913,10 +889,7 @@ function RecordInvoiceDialog({
       <ActionDialogContent busy={busy} className="flex max-h-[calc(100dvh-2rem)] flex-col sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Record a MAHER invoice</DialogTitle>
-          <DialogDescription>
-            Tick the lines it covers and how much of each, before VAT: the full amount left, or a part of it as an amount or a %. The invoice total
-            is worked out with VAT. What is not invoiced stays to invoice later.
-          </DialogDescription>
+          <DialogDescription>Tick the lines it covers and how much of each, incl. VAT. The rest stays to invoice later.</DialogDescription>
         </DialogHeader>
 
         <div className="-mx-4 grid min-h-0 flex-1 gap-4 overflow-y-auto px-4 py-0.5">
@@ -925,9 +898,10 @@ function RecordInvoiceDialog({
           {lines.map((line) => {
             const on = included.has(line.id);
             const value = amounts[line.id] ?? "";
-            const amount = Number(value);
-            const over = on && amount > line.remaining + 0.005;
-            const percent = line.amount ? round2((amount / line.amount) * 100) : 0;
+            const typed = Number(value);
+            const left = leftWithVat(line);
+            const over = on && typed > left + 0.005;
+            const percent = line.amount && Number.isFinite(typed) ? round2((beforeVat(line, typed) / line.amount) * 100) : 0;
             const toggle = (checked: boolean) =>
               setIncluded((prev) => {
                 const next = new Set(prev);
@@ -939,30 +913,30 @@ function RecordInvoiceDialog({
               <div
                 key={line.id}
                 className={cn(
-                  "rounded-lg border p-4 transition-colors",
+                  "rounded-lg border px-3 py-2.5 transition-colors",
                   on ? "border-brand/40 bg-brand-50/40" : "bg-muted/30",
                   over && "border-destructive",
                 )}
               >
-                <div className="flex items-start gap-3">
+                <div className="flex items-start gap-2.5">
                   <Checkbox className="mt-0.5" checked={on} onCheckedChange={(checked) => toggle(Boolean(checked))} aria-label={`Include ${line.name ?? "line"}`} />
                   <button type="button" className="min-w-0 flex-1 text-left" onClick={() => toggle(!on)}>
-                    <p className="text-sm font-medium">{line.name ?? "Line"}</p>
-                    <p className="text-muted-foreground mt-1 text-xs tabular-nums">
-                      <span className="text-foreground font-semibold">{aed(line.remaining)}</span> left to invoice · {aed(withVat(line.remaining, line))} with VAT
+                    <p className="line-clamp-2 text-sm leading-snug font-medium">{line.name ?? "Line"}</p>
+                    <p className="text-muted-foreground mt-0.5 text-xs tabular-nums">
+                      <span className="text-foreground font-semibold">{aed(left)}</span> left to invoice, incl. VAT
                     </p>
                     {line.invoicedAmount > 0 ? (
                       <p className="text-muted-foreground text-xs tabular-nums">
-                        Line value {aed(line.amount)} · {aed(line.invoicedAmount)} invoiced before
+                        Line value {aed(line.lineAmount ?? withVat(line.amount ?? 0, line))} · {aed(withVat(line.invoicedAmount, line))} invoiced before
                       </p>
                     ) : null}
                   </button>
                 </div>
 
                 {on ? (
-                  <div className="mt-3 grid grid-cols-[6.5rem_minmax(0,1fr)] gap-3 border-t pt-3">
-                    <div className="grid gap-1.5">
-                      <Label htmlFor={`pct-${line.id}`} className="text-muted-foreground text-xs">
+                  <div className="mt-2.5 grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-2.5 gap-y-1.5 border-t pt-2.5 pl-6">
+                    <div className="grid gap-1">
+                      <Label htmlFor={`pct-${line.id}`} className="text-muted-foreground text-xs font-normal">
                         Percent
                       </Label>
                       <div className="relative">
@@ -973,22 +947,22 @@ function RecordInvoiceDialog({
                           min={0}
                           max={100}
                           step="0.01"
-                          className="pr-7 text-right tabular-nums"
+                          className="h-8 pr-7 text-sm tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                           value={line.amount ? String(percent) : ""}
                           onChange={(e) => {
                             const p = Number(e.target.value);
-                            if (Number.isFinite(p) && line.amount) setAmounts((prev) => ({ ...prev, [line.id]: String(round2((line.amount! * p) / 100)) }));
+                            if (Number.isFinite(p) && line.amount) setAmounts((prev) => ({ ...prev, [line.id]: String(withVat((line.amount! * p) / 100, line)) }));
                           }}
                         />
-                        <span className="text-muted-foreground pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm">%</span>
+                        <span className="text-muted-foreground pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-xs">%</span>
                       </div>
                     </div>
-                    <div className="grid gap-1.5">
-                      <Label htmlFor={`amt-${line.id}`} className="text-muted-foreground text-xs">
-                        On this invoice, before VAT
+                    <div className="grid gap-1">
+                      <Label htmlFor={`amt-${line.id}`} className="text-muted-foreground text-xs font-normal">
+                        On this invoice, incl. VAT
                       </Label>
                       <div className="relative">
-                        <span className="text-muted-foreground pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm">AED</span>
+                        <span className="text-muted-foreground pointer-events-none absolute inset-y-0 left-2.5 flex items-center text-xs">AED</span>
                         <Input
                           id={`amt-${line.id}`}
                           type="number"
@@ -996,7 +970,7 @@ function RecordInvoiceDialog({
                           min={0}
                           step="0.01"
                           aria-invalid={over || undefined}
-                          className={cn("pl-12 text-right tabular-nums", over && "border-destructive")}
+                          className={cn("h-8 pl-11 text-sm tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none", over && "border-destructive")}
                           value={value}
                           onChange={(e) => setAmounts((prev) => ({ ...prev, [line.id]: e.target.value }))}
                         />
@@ -1005,18 +979,18 @@ function RecordInvoiceDialog({
                     <div className="col-span-2 flex items-center justify-between gap-2">
                       <p className={cn("text-xs", over ? "text-destructive" : "text-muted-foreground")}>
                         {over
-                          ? `More than the ${aed(line.remaining)} left.`
-                          : amount > 0
-                            ? `${aed(withVat(amount, line))} with VAT · ${aed(Math.max(0, round2(line.remaining - amount)))} left after`
+                          ? `More than the ${aed(left)} left.`
+                          : typed > 0
+                            ? `${aed(Math.max(0, round2(left - typed)))} left after`
                             : "Enter an amount or a %."}
                       </p>
-                      {Math.abs(amount - line.remaining) >= 0.005 ? (
+                      {Math.abs(typed - left) >= 0.005 ? (
                         <Button
                           type="button"
                           variant="link"
                           size="sm"
                           className="h-auto shrink-0 p-0 text-xs"
-                          onClick={() => setAmounts((prev) => ({ ...prev, [line.id]: String(line.remaining) }))}
+                          onClick={() => setAmounts((prev) => ({ ...prev, [line.id]: String(left) }))}
                         >
                           Full amount
                         </Button>
@@ -1028,7 +1002,7 @@ function RecordInvoiceDialog({
             );
           })}
         </div>
-        <InvoiceTotals beforeVat={sum} withVat={sumWithVat} />
+        <InvoiceTotals total={sumWithVat} />
 
         <div className="grid grid-cols-2 gap-4">
           <div className="grid gap-1.5">
@@ -1046,7 +1020,7 @@ function RecordInvoiceDialog({
         </div>
         {badLine ? (
           <p className="text-destructive text-sm">
-            {badLine.line.name ?? "A line"}: enter an amount above zero and no more than {aed(badLine.line.remaining)}.
+            {badLine.line.name ?? "A line"}: enter an amount above zero and no more than {aed(leftWithVat(badLine.line))}.
           </p>
         ) : null}
         {problem ? <p className="text-destructive text-sm">{problem}</p> : null}
@@ -1063,6 +1037,225 @@ function RecordInvoiceDialog({
         {dialog}
       </ActionDialogContent>
     </Dialog>
+  );
+}
+
+/* ---------------------------------------------------------------------
+   History, laid out as the job page's (audit-timeline.tsx): a row per
+   change with its icon, what and who, and when; newest or oldest first,
+   a page at a time.
+   --------------------------------------------------------------------- */
+
+function HistoryCard({ events }: { events: WorkOrderEvent[] }) {
+  const [order, setOrder] = useState<"desc" | "asc">("desc");
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(25);
+  const sorted = order === "desc" ? events : [...events].reverse();
+  const shown = sorted.slice(page * pageSize, (page + 1) * pageSize);
+
+  return (
+    <SectionCard
+      title="History"
+      icon={<History />}
+      description="Every invoice, query, hold and exclusion on this work order."
+      bodyClassName="border-t"
+      action={
+        <Select
+          value={order}
+          onValueChange={(value) => {
+            setOrder(value as "desc" | "asc");
+            setPage(0);
+          }}
+        >
+          <SelectTrigger size="sm" className="w-[130px]" aria-label="Sort history">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="desc">Newest first</SelectItem>
+            <SelectItem value="asc">Oldest first</SelectItem>
+          </SelectContent>
+        </Select>
+      }
+    >
+      {events.length === 0 ? (
+        <EmptyState
+          icon={<History className="size-6" />}
+          title="Nothing recorded yet"
+          description="Invoices, queries, holds and exclusions appear here as they happen."
+        />
+      ) : (
+        <>
+          <ol className="divide-y">
+            {shown.map((event) => {
+              const { label, Icon } = EVENT_META[event.type] ?? { label: event.type.replace(/_/g, " "), Icon: History };
+              return (
+                <li key={event.id}>
+                  <DataRow
+                    icon={<Icon aria-hidden />}
+                    title={event.lineName ? `${label} · ${event.lineName}` : label}
+                    subtitle={
+                      <>
+                        {event.actor ?? "System"}
+                        {event.amount !== null ? <span className="tabular-nums"> · {aed(event.amount)} before VAT</span> : null}
+                        {event.note ? (
+                          <span className="text-foreground/80"> · &quot;{event.type === "invoiced" ? `MAHER ${event.note}` : event.note}&quot;</span>
+                        ) : null}
+                      </>
+                    }
+                    trailing={
+                      <span className="text-muted-foreground text-xs" title={at(event.at)}>
+                        {formatWhen(event.at)}
+                      </span>
+                    }
+                  />
+                </li>
+              );
+            })}
+          </ol>
+          <ListPager page={page} pageSize={pageSize} total={events.length} onPageChange={setPage} onPageSizeChange={setPageSize} noun="entries" className="border-t" />
+        </>
+      )}
+    </SectionCard>
+  );
+}
+
+/* ---------------------------------------------------------------------
+   The MAHER invoices: a row per invoice (as History's rows), and under it
+   the lines it covers, before and with VAT.
+   --------------------------------------------------------------------- */
+
+function InvoicesCard({ invoices, lines }: { invoices: WorkOrderInvoice[]; lines: WorkOrderLine[] }) {
+  const lineOf = new Map(lines.map((l) => [l.id, l]));
+  const vatOf = (lineId: string, amount: number) => {
+    const line = lineOf.get(lineId);
+    return line ? withVat(amount, line) : amount;
+  };
+
+  return (
+    <SectionCard
+      icon={<ReceiptText />}
+      title="MAHER invoices"
+      description="Every invoice recorded against this work order's lines, and what each covers."
+      bodyClassName="border-t"
+    >
+      {invoices.length === 0 ? (
+        <EmptyState
+          icon={<ReceiptText className="size-6" />}
+          title="No invoice recorded yet"
+          description="Invoices recorded with Record invoice appear here, with the lines each covers."
+        />
+      ) : (
+        <ul className="divide-y">
+          {invoices.map((inv) => {
+            const before = round2(inv.allocations.reduce((sum, a) => sum + a.amount, 0));
+            const withVatTotal = round2(inv.allocations.reduce((sum, a) => sum + vatOf(a.lineId, a.amount), 0));
+            return (
+              <li key={inv.id} className="pb-4">
+                <DataRow
+                  icon={<ReceiptText aria-hidden />}
+                  title={
+                    <span className="flex items-center gap-2">
+                      MAHER {inv.number}
+                      {inv.hasFile ? (
+                        <Badge variant="outline" className="font-normal">
+                          <Paperclip className="size-3" />
+                          File attached
+                        </Badge>
+                      ) : null}
+                    </span>
+                  }
+                  subtitle={`Dated ${formatZonedDate(inv.date)} · recorded by ${inv.recordedBy ?? "—"}, ${formatWhen(inv.recordedAt)}`}
+                  trailing={
+                    <span className="text-right">
+                      <span className="block font-semibold tabular-nums">{aed(inv.total)}</span>
+                      <span className="text-muted-foreground block text-xs">Invoice total</span>
+                    </span>
+                  }
+                />
+                <div className="mx-5 overflow-hidden rounded-lg border sm:ml-[4.25rem]">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-muted/40 hover:bg-muted/40">
+                        <TableHead className="pl-4">Line</TableHead>
+                        <TableHead className="text-right">Before VAT</TableHead>
+                        <TableHead className="pr-4 text-right">With VAT</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {inv.allocations.map((a) => (
+                        <TableRow key={a.lineId}>
+                          <TableCell className="max-w-64 truncate pl-4">{a.lineName ?? a.lineId}</TableCell>
+                          <TableCell className="text-right tabular-nums">{aed(a.amount)}</TableCell>
+                          <TableCell className="pr-4 text-right tabular-nums">{aed(vatOf(a.lineId, a.amount))}</TableCell>
+                        </TableRow>
+                      ))}
+                      {inv.allocations.length > 1 ? (
+                        <TableRow className="hover:bg-transparent">
+                          <TableCell className="pl-4 font-medium">Total</TableCell>
+                          <TableCell className="text-right font-medium tabular-nums">{aed(before)}</TableCell>
+                          <TableCell className="pr-4 text-right font-medium tabular-nums">{aed(withVatTotal)}</TableCell>
+                        </TableRow>
+                      ) : null}
+                    </TableBody>
+                  </Table>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </SectionCard>
+  );
+}
+
+/* ---------------------------------------------------------------------
+   The quotation as the client received it, drawn by the same template as
+   the job page's Quotation tab and the Extensions screens, from what FSM
+   holds; where it stands in FSM above it.
+   --------------------------------------------------------------------- */
+
+function QuotationDocument({
+  quotation,
+  document,
+}: {
+  quotation: NonNullable<WorkOrderDetail["quotation"]>;
+  document: NonNullable<NonNullable<WorkOrderDetail["quotation"]>["document"]>;
+}) {
+  const link = fsmRecordLink("Estimates", quotation.id);
+  const discounted = (document.discountAmount ?? 0) > 0 || document.lineItems.some((l) => (l.discountAmount ?? 0) > 0);
+  return (
+    <div className="flex flex-col gap-4">
+      <Alert>
+        <FileText />
+        <AlertTitle>
+          Quotation {quotation.number ?? ""}
+          {quotation.status ? ` · ${quotation.status} in FSM` : ""}
+        </AlertTitle>
+        <AlertDescription>
+          {[
+            quotation.ownerName ? `Owner ${quotation.ownerName}` : null,
+            quotation.postToMaher ? `Post to MAHER: ${quotation.postToMaher}` : null,
+            quotation.expiryDate ? `valid until ${formatZonedDate(quotation.expiryDate)}` : null,
+          ]
+            .filter(Boolean)
+            .join(" · ") || "As held in Zoho FSM."}
+        </AlertDescription>
+        {link ? (
+          <AlertAction>
+            <Button asChild size="sm" variant="outline">
+              <a href={link} target="_blank" rel="noopener noreferrer">
+                <ExternalLink className="size-4" />
+                Open in FSM
+              </a>
+            </Button>
+          </AlertAction>
+        ) : null}
+      </Alert>
+      <Card className="mx-auto w-fit max-w-full overflow-x-auto p-0">
+        <YallaClassicTemplate data={document} type="review" hideDiscount={!discounted} />
+      </Card>
+      <p className="text-muted-foreground text-center text-xs">As read from Zoho FSM; edit the quotation there.</p>
+    </div>
   );
 }
 

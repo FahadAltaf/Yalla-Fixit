@@ -387,7 +387,7 @@ export function UploadInvoiceDialog({
               </div>
             ) : null}
 
-            <InvoiceTotals beforeVat={sum} withVat={sumWithVat} />
+            <InvoiceTotals total={sumWithVat} />
             {differs ? (
               <Alert>
                 <TriangleAlert className="size-4" />

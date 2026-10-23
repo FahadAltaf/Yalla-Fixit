@@ -23,11 +23,21 @@ export function lineCanBeInvoiced(lineStatus: string | null | undefined, workOrd
   return isFsmCompleted(lineStatus) || isFsmCompleted(workOrderStatus);
 }
 
-/** What a before-VAT amount comes to with VAT, at the line's own rate (FSM's Line_Item_Amount over Amount). */
-export function withVat(amount: number, line: { amount: number | null; lineAmount: number | null; taxPercent: number | null }): number {
-  const rate =
-    line.amount && line.lineAmount !== null && line.amount > 0 ? line.lineAmount / line.amount : 1 + Math.max(0, line.taxPercent ?? 0) / 100;
-  return Math.round(amount * rate * 100) / 100;
+type VatLine = { amount: number | null; lineAmount: number | null; taxPercent: number | null };
+
+/** The line's own VAT rate as a multiplier: FSM's Line_Item_Amount over Amount, else its tax %. */
+export function vatRate(line: VatLine): number {
+  return line.amount && line.lineAmount !== null && line.amount > 0 ? line.lineAmount / line.amount : 1 + Math.max(0, line.taxPercent ?? 0) / 100;
+}
+
+/** What a before-VAT amount comes to with VAT, at the line's own rate. */
+export function withVat(amount: number, line: VatLine): number {
+  return Math.round(amount * vatRate(line) * 100) / 100;
+}
+
+/** The before-VAT part of an amount with VAT in it, at the line's own rate. */
+export function withoutVat(amount: number, line: VatLine): number {
+  return Math.round((amount / vatRate(line)) * 100) / 100;
 }
 
 export type InvoiceStatus = "not_ready" | "ready" | "partially_invoiced" | "invoiced";

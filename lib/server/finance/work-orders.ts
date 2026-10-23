@@ -19,6 +19,7 @@ import {
 import { addDaysToDateString, todayInZone, zonedTimeToUtc } from "@/lib/scheduling/org-time";
 import { fetchEstimateLive, fetchWorkOrderLive, fetchWorkOrdersLive, forgetLists, FsmLiveError, type LiveWorkOrder } from "@/lib/server/finance/fsm-live";
 import { readReportingSettings } from "@/lib/server/reporting/settings";
+import type { QuotationData } from "@/components/dashboard/extensions/quotation-templates/quotation-templates";
 import { readAllByIds, readAllRows } from "@/lib/server/snagging/read-all";
 
 /**
@@ -624,6 +625,8 @@ export type WorkOrderDetail = {
     ownerName: string | null;
     contactName: string | null;
     expiryDate: string | null;
+    /** The quotation as the quotation templates draw it, when FSM gave it. */
+    document: QuotationData | null;
   } | null;
   lines: WorkOrderLine[];
   invoicing: WorkOrderInvoicing;
@@ -712,9 +715,10 @@ export async function readWorkOrderDetail(
           ownerName: estimate.owner_name,
           contactName: estimate.contact_name,
           expiryDate: estimate.expiry_date,
+          document: estimate.document ?? null,
         }
       : wo.estimateId
-        ? { id: wo.estimateId, number: wo.estimateNumber, status: null, subTotal: null, grandTotal: null, postToMaher: null, ownerName: null, contactName: null, expiryDate: null }
+        ? { id: wo.estimateId, number: wo.estimateNumber, status: null, subTotal: null, grandTotal: null, postToMaher: null, ownerName: null, contactName: null, expiryDate: null, document: null }
         : null,
     lines,
     invoicing,

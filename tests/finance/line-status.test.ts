@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { isFsmCompleted, lineCanBeInvoiced, lineRemaining, lineStatus, withVat, workOrderInvoicing } from "@/lib/finance/line-status";
+import { isFsmCompleted, lineCanBeInvoiced, lineRemaining, lineStatus, withoutVat, withVat, workOrderInvoicing } from "@/lib/finance/line-status";
 
 const line = (amount: number, ready = false, invoicedAmount = 0) => ({ amount, ready, invoicedAmount });
 
@@ -54,4 +54,6 @@ test("with VAT, at the line's own rate", () => {
   assert.equal(withVat(399, { amount: 997.5, lineAmount: 1047.38, taxPercent: 5 }), 418.95, "a part of the line, at FSM's rate");
   assert.equal(withVat(200, { amount: null, lineAmount: null, taxPercent: 5 }), 210, "no FSM amounts: the tax %");
   assert.equal(withVat(200, { amount: 0, lineAmount: 0, taxPercent: null }), 200, "nothing to go by: no VAT");
+  assert.equal(withoutVat(1176, { amount: 1120, lineAmount: 1176, taxPercent: 5 }), 1120, "back from the amount with VAT");
+  assert.equal(withoutVat(117.6, { amount: 1120, lineAmount: 1176, taxPercent: 5 }), 112);
 });
