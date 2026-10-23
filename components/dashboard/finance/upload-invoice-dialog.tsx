@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { FileUp, Loader2, Plus, ScanText, TriangleAlert, X } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { FileText, FileUp, Loader2, Plus, ScanText, TriangleAlert, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { ActionDialogContent, SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
@@ -43,6 +43,10 @@ const CONFIDENCE: Record<Confidence, { label: string; className: string }> = {
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+const ACCEPT = ".pdf,.jpg,.jpeg,.png,.webp";
+const MAX_BYTES = 10 * 1024 * 1024;
+const fileSize = (bytes: number) => (bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
+
 export function UploadInvoiceDialog({
   workOrderId,
   onlyLines = null,
@@ -67,6 +71,23 @@ export function UploadInvoiceDialog({
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const { confirm: ask, dialog } = useConfirm();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+
+  /* A PDF or an image, up to 10 MB; anything else says so here, before the upload. */
+  const take = (picked: File | undefined | null) => {
+    if (!picked) return;
+    if (!/\.(pdf|jpe?g|png|webp)$/i.test(picked.name)) {
+      setProblem(`${picked.name} is not a PDF or an image. Choose the MAHER PDF or a photo of the invoice.`);
+      return;
+    }
+    if (picked.size > MAX_BYTES) {
+      setProblem(`${picked.name} is ${fileSize(picked.size)}; the limit is 10 MB.`);
+      return;
+    }
+    setProblem(null);
+    setFile(picked);
+  };
   const only = useMemo(() => (onlyLines ? new Set(onlyLines) : null), [onlyLines]);
 
   const read = async () => {
@@ -171,22 +192,74 @@ export function UploadInvoiceDialog({
         </DialogHeader>
 
         {step !== "review" ? (
-          <div className="grid gap-3">
-            <Label htmlFor="invoice-file">Invoice file</Label>
-            <Input
+          <div className="grid gap-2">
+            <input
+              ref={fileRef}
               id="invoice-file"
               type="file"
-              accept=".pdf,.jpg,.jpeg,.png,.webp"
-              disabled={step === "reading"}
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              accept={ACCEPT}
+              className="sr-only"
+              tabIndex={-1}
+              onChange={(e) => {
+                take(e.target.files?.[0]);
+                e.target.value = "";
+              }}
             />
-            <p className="text-muted-foreground text-xs">A PDF from MAHER, or a clear photo of the invoice. Up to 10 MB.</p>
-            {step === "reading" ? (
-              <p className="text-muted-foreground flex items-center gap-2 text-sm">
-                <Loader2 className="size-4 animate-spin" />
-                Uploading and reading the invoice. This takes up to a minute.
-              </p>
-            ) : null}
+            {file ? (
+              <div className="flex items-center gap-3 rounded-lg border p-3">
+                <span className="bg-brand-50 text-brand flex size-10 shrink-0 items-center justify-center rounded-md">
+                  {step === "reading" ? <Loader2 className="size-5 animate-spin" /> : <FileText className="size-5" />}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium" title={file.name}>
+                    {file.name}
+                  </p>
+                  <p className="text-muted-foreground text-xs">
+                    {step === "reading" ? "Uploading and reading the invoice. This takes up to a minute." : `${fileSize(file.size)} · ready to read`}
+                  </p>
+                </div>
+                {step === "reading" ? null : (
+                  <Button type="button" variant="ghost" size="icon-sm" onClick={() => setFile(null)} aria-label="Remove the file">
+                    <X className="size-4" />
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragging(true);
+                }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragging(false);
+                  take(e.dataTransfer.files?.[0]);
+                }}
+                className={cn(
+                  "flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed px-4 py-10 text-center transition-colors",
+                  dragging ? "border-primary bg-primary/5" : "hover:bg-muted/50",
+                )}
+              >
+                <span className="bg-muted text-muted-foreground flex size-11 items-center justify-center rounded-full">
+                  <Upload className="size-5" />
+                </span>
+                <span className="text-sm font-medium">Click to choose the invoice, or drag it here</span>
+                <span className="text-muted-foreground text-xs">The PDF from MAHER, or a clear photo of it · PDF, JPG, PNG or WEBP · up to 10 MB</span>
+              </button>
+            )}
+            <ol className="text-muted-foreground grid gap-1 pt-1 text-xs sm:grid-cols-3">
+              {["The AI reads the invoice", "It matches each line to a work-order line", "You check the amounts and confirm"].map((text, i) => (
+                <li key={text} className="flex items-center gap-2">
+                  <span className="bg-muted text-foreground flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] font-medium tabular-nums">
+                    {i + 1}
+                  </span>
+                  {text}
+                </li>
+              ))}
+            </ol>
           </div>
         ) : proposal ? (
           <div className="grid gap-4">
