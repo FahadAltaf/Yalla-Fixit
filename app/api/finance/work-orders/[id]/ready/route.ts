@@ -1,17 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { hasResourceAction } from "@/lib/role-permissions";
-import { actorOf } from "@/lib/server/finance/route-helpers";
+import { actorOf, workOrderAbilities } from "@/lib/server/finance/route-helpers";
 import { InvoicingError, readyRequestSchema, setLinesReady } from "@/lib/server/finance/work-orders";
 import { requireResourceAccess } from "@/lib/server/require-access";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
-import { ActionType, ResourceType } from "@/types/types";
 
 /**
  * Mark a work order's lines Ready to invoice, or take the mark off: the
  * lines given, or every current line when none are. Stored in the portal
- * only (FSM is never written). Finance (queue Edit) or a coordinator
- * (Not-invoiceable Create) may do it.
+ * only (FSM is never written). Operations only (27 Oct, route-helpers);
+ * the page marks work ready as 100% done to invoice (./progress).
  *
  * Body: { lines?: string[], ready: boolean, note? }
  */
@@ -23,13 +21,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   const gate = await requireResourceAccess(null, null);
   if (!gate.ok) return gate.response;
-  const user = gate.access.accessUser;
-  if (
-    !hasResourceAction(user, ResourceType.FINANCE_QUEUE, ActionType.EDIT) &&
-    !hasResourceAction(user, ResourceType.FINANCE_EXCLUSIONS, ActionType.CREATE)
-  ) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
+  if (!workOrderAbilities(gate.access.accessUser).markReady) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const parsed = readyRequestSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Invalid request" }, { status: 400 });

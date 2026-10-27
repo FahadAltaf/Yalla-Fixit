@@ -15,7 +15,7 @@ import type { WorkOrderListRow } from "@/lib/server/finance/work-orders";
  * built like every other table here (column-user.tsx). Sorting is fixed
  * (newest first).
  */
-export function getWorkOrderQueueColumns(agedAfterDays: number): ColumnDef<WorkOrderListRow>[] {
+export function getWorkOrderQueueColumns(agedAfterDays: number, operations = false): ColumnDef<WorkOrderListRow>[] {
   return [
     {
       id: "item",
@@ -80,7 +80,23 @@ export function getWorkOrderQueueColumns(agedAfterDays: number): ColumnDef<WorkO
     {
       id: "status",
       header: "Status",
-      cell: ({ row }) => <WorkOrderQueueBadge status={row.original.queueStatus} />,
+      cell: ({ row }) => {
+        const r = row.original;
+        return (
+          <div className="flex flex-col items-start gap-1">
+            <WorkOrderQueueBadge status={r.queueStatus} />
+            {r.needsCompleting ? <span className="text-warning text-xs">Appointments done · mark Completed in FSM</span> : null}
+            {r.progressPercent !== null ? (
+              <span className="text-muted-foreground text-xs tabular-nums">
+                {r.progressPercent}% done · {r.progressPurpose === "revenue_only" ? "revenue only" : "to invoice"}
+              </span>
+            ) : null}
+            {operations && r.fsmStatus === "Completed" && r.flagged === false ? (
+              <span className="text-muted-foreground text-xs">Quotation not flagged To Be Invoiced</span>
+            ) : null}
+          </div>
+        );
+      },
       enableSorting: false,
     },
     {

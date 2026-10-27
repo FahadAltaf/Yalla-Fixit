@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { hasResourceAction } from "@/lib/role-permissions";
 import { FsmLiveError } from "@/lib/server/finance/fsm-live";
+import { workOrderAbilities } from "@/lib/server/finance/route-helpers";
 import { readWorkOrderDetail } from "@/lib/server/finance/work-orders";
 import { requireResourceAccess } from "@/lib/server/require-access";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
-import { ActionType, ResourceType } from "@/types/types";
 
 /**
  * One work order for Ready to invoice, read live from Zoho FSM: header,
@@ -25,22 +24,16 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 
   const gate = await requireResourceAccess(null, null);
   if (!gate.ok) return gate.response;
-  const user = gate.access.accessUser;
-  const can = {
-    view: hasResourceAction(user, ResourceType.FINANCE_QUEUE, ActionType.VIEW),
-    work: hasResourceAction(user, ResourceType.FINANCE_QUEUE, ActionType.EDIT),
-    invoice: hasResourceAction(user, ResourceType.FINANCE_QUEUE, ActionType.APPROVE),
-    coordinate: hasResourceAction(user, ResourceType.FINANCE_EXCLUSIONS, ActionType.CREATE),
-    verify: hasResourceAction(user, ResourceType.FINANCE_EXCLUSIONS, ActionType.APPROVE),
-  };
-  if (!can.view && !can.coordinate && !can.verify) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  /* What this person's team may do here (Finance or Operations, route-helpers). */
+  const can = workOrderAbilities(gate.access.accessUser);
+  if (!can.view && !can.verify) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   try {
     const admin = await createAdminServerClient();
     const detail = await readWorkOrderDetail(admin, id, { refresh: req.nextUrl.searchParams.get("refresh") === "1" });
     if (!detail) return NextResponse.json({ error: "No such work order in Zoho FSM" }, { status: 404 });
     return NextResponse.json(
-      { data: { ...detail, can: { ...can, markReady: can.work || can.coordinate } } },
+      { data: { ...detail, can } },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (error) {

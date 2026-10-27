@@ -21,8 +21,10 @@ import { readReportingSettings } from "@/lib/server/reporting/settings";
 import { readAllRows } from "@/lib/server/snagging/read-all";
 
 import {
+  loadAppointmentCheckIns,
   loadAvailabilityInput,
   loadComplianceAppointments,
+  loadShiftCheckIns,
   loadTechnicians,
   type ComplianceAppointmentRow,
   type ReportTechnician,
@@ -34,18 +36,17 @@ import { dataAsOf } from "./reports";
  * DEV-447, 448, 450) and daily attendance (B5; DEV-451). The rules are
  * pure, in lib/reports/compliance.ts and attendance.ts.
  *
- * Where the check-ins come from, and what is measured until they can:
+ * Where the check-ins come from (26 Oct, once the Zoho token could read
+ * them, B-01 cleared):
  *
- *  - Shift check-ins and check-outs live in FSM's time sheets, which the
- *    Zoho token cannot read (B-01). Until it can, shift events are NOT
- *    counted: counting them would mark every technician as missing every
- *    shift, which is the portal not seeing, not the technician not doing.
- *  - Appointment check-ins are counted only when the provisional setting
- *    reads FSM's actual start and end as the check-in and check-out
- *    (D-15). Off by default.
+ *  - Shift check-in and check-out: FSM Attendance, each technician's first
+ *    check-in and last check-out of the day.
+ *  - Appointment check-in and check-out: the technician's own FSM time
+ *    sheet on it; otherwise the appointment's actual start and end for
+ *    everyone on it, as FSM keeps one per appointment (D-15, provisional).
+ *  - Who was on an appointment: its crew, from the appointment itself.
  *
- * A month is finalised only on complete data, so until both sources can
- * be read nothing is frozen and no statement is issued.
+ * A month is finalised only on complete data; both sources are read now.
  */
 
 const MONTH = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
@@ -108,21 +109,8 @@ function hrMissing(error: { code?: string; message?: string } | null): boolean {
   return error.code === "PGRST106" || error.code === "42P01" || /schema|does not exist/i.test(error.message ?? "");
 }
 
-function sourcesFor(settings: ReportingSettings): CheckInSources {
-  return { shift: false, appointment: settings.compliance.appointmentActualsAsCheckIns };
-}
-
-/** FSM's actual times as appointment check-ins, for each technician on the crew (D-15, provisional). */
-function appointmentCheckIns(appointments: ComplianceAppointmentRow[]): RecordedCheckIn[] {
-  const out: RecordedCheckIn[] = [];
-  for (const a of appointments) {
-    for (const tech of new Set(a.technicianIds)) {
-      if (a.actualStart) out.push({ technicianFsmId: tech, kind: "appointment_check_in", at: a.actualStart, appointmentId: a.id });
-      if (a.actualEnd) out.push({ technicianFsmId: tech, kind: "appointment_check_out", at: a.actualEnd, appointmentId: a.id });
-    }
-  }
-  return out;
-}
+/* Both are read from FSM now: Attendance for shifts; time sheets and actual times for appointments. */
+const SOURCES: CheckInSources = { shift: true, appointment: true };
 
 /**
  * Who is counted, as on Utilization: active technicians, leavers with a
@@ -173,7 +161,7 @@ async function workOutMonth(
   const range = monthRange(month);
   const to = range.to < today ? range.to : today;
   const phase = complianceMonthPhase(month, today, settings.compliance.disputeCutoffDay);
-  const sources = sourcesFor(settings);
+  const sources = SOURCES;
   const roster = await loadTechnicians(admin);
 
   if (to < range.from) {
@@ -220,7 +208,12 @@ async function workOutMonth(
     owed.set(e.technicianFsmId, entry);
   }
   const measured = owedEvents.filter((e) => (isShiftKind(e.kind) ? sources.shift : sources.appointment));
-  const recorded = sources.appointment ? appointmentCheckIns(appointments) : [];
+  const [shiftCheckIns, appointmentCheckIns] = await Promise.all([
+    sources.shift ? loadShiftCheckIns(admin, { from: range.from, to }) : Promise.resolve([] as RecordedCheckIn[]),
+    sources.appointment ? loadAppointmentCheckIns(admin, { from: range.from, to }, appointments) : Promise.resolve([] as RecordedCheckIn[]),
+  ]);
+  const scope = new Set(technicians.map((t) => t.fsmId));
+  const recorded = [...shiftCheckIns, ...appointmentCheckIns].filter((c) => scope.has(c.technicianFsmId));
 
   const { data: waiverRows, error } = await admin
     .schema("hr")
@@ -352,10 +345,8 @@ export async function buildComplianceReport(
     .maybeSingle();
   if (monthError && !hrMissing(monthError)) throw new Error(`compliance months: ${monthError.message}`);
 
-  const [work, asOf] = await Promise.all([
-    workOutMonth(admin, month, { technician: filters.technician, team: filters.team }),
-    dataAsOf(admin),
-  ]);
+  const work = await workOutMonth(admin, month, { technician: filters.technician, team: filters.team });
+  const asOf = await dataAsOf(admin);
   const { roster } = work;
 
   let rows: ComplianceRow[];
@@ -680,16 +671,18 @@ export async function buildAttendanceReport(
 ): Promise<AttendanceReport> {
   const today = todayInZone();
   let to = filters.to ?? today;
-  let from = filters.from ?? `${to.slice(0, 8)}01`;
+  /* The last 30 days unless chosen (26 Oct). */
+  let from = filters.from ?? addDaysToDateString(to, -29);
   if (from > to) [from, to] = [to, from];
   if (datesBetween(from, to).length > MAX_RANGE_DAYS) from = addDaysToDateString(to, -(MAX_RANGE_DAYS - 1));
 
-  const [settings, roster, loaded, asOf] = await Promise.all([
+  const [settings, roster, loaded, shiftCheckIns] = await Promise.all([
     readReportingSettings(admin),
     loadTechnicians(admin),
     loadComplianceAppointments(admin, { from, to }),
-    dataAsOf(admin),
+    loadShiftCheckIns(admin, { from, to }),
   ]);
+  const asOf = await dataAsOf(admin);
   const technicians = inScope(roster, workedIn(loaded.appointments), filters);
   const input = await loadAvailabilityInput(admin, {
     from,
@@ -698,10 +691,11 @@ export async function buildAttendanceReport(
     unpaidBreakMinutes: settings.attendance.unpaidBreakMinutes,
   });
   const availability = computeAvailability(input);
-  const measured = false; // Shift check-ins: B-01.
+  /* FSM Attendance: each technician's first check-in and last check-out of the day. */
+  const measured = true;
   const days = computeAttendance({
     availability,
-    recorded: [],
+    recorded: shiftCheckIns,
     leave: input.leave.map((l) => ({ ...l, category: l.category ?? null })),
     lateToleranceMinutes: settings.attendance.lateArrivalToleranceMinutes,
     shiftCheckInsAvailable: measured,

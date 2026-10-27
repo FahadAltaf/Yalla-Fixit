@@ -28,7 +28,7 @@ import { exportFilename, exportTable, type ExportFormat } from "@/lib/snagging/e
 import { todayInZone } from "@/lib/scheduling/org-time";
 import { reportsService } from "@/modules/reports/reports-service";
 
-import { DataAsOf, SavedFiltersMenu, plural, useReportFilters } from "./shared";
+import { DataAsOf, ReportDateRange, SavedFiltersMenu, lastThirtyDays, plural, useReportFilters } from "./shared";
 
 /**
  * Exception reports (BRD 5.2 B5; DEV-453):
@@ -172,8 +172,7 @@ export function ExceptionsPage() {
           ? [{ key: "overdue", label: "Overdue only", hint: `over ${unflagged?.afterDays ?? 3} days` }]
           : []
       }
-      dateLabel={view === "unflagged" ? "Completed" : "Scheduled"}
-      clearable={view === "unflagged" ? ["client", "coordinator", "overdue", "from", "to"] : ["technician", "team", "client", "from", "to"]}
+      clearable={view === "unflagged" ? ["client", "coordinator", "overdue"] : ["technician", "team", "client"]}
       canExport={Boolean(data?.can.export)}
       exporting={exporting}
       onExport={(format) => void doExport(format)}
@@ -200,7 +199,17 @@ export function ExceptionsPage() {
         eyebrow="Reports"
         title="Exception reports"
         description="Lists that protect the invoicing queue and the utilization figures from gaps in the FSM data."
-        actions={<SavedFiltersMenu saved={saved} current={filters} onApply={(entry) => { apply(entry); setPage(0); }} onSave={saveAs} onRemove={remove} />}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <ReportDateRange
+              label={view === "unflagged" ? "Completed" : "Scheduled"}
+              from={filters.from || (data && "from" in data ? data.from : "") || lastThirtyDays().from}
+              to={filters.to || (data && "to" in data ? data.to : "") || lastThirtyDays().to}
+              onChange={(from, to) => change({ ...filters, from, to })}
+            />
+            <SavedFiltersMenu saved={saved} current={filters} onApply={(entry) => { apply(entry); setPage(0); }} onSave={saveAs} onRemove={remove} />
+          </div>
+        }
       />
 
       <PillTabs<View>
@@ -212,7 +221,7 @@ export function ExceptionsPage() {
         ]}
       />
 
-      <DataAsOf asOf={data?.dataAsOf ?? null} resources={view === "unflagged" ? ["work_orders", "estimates"] : ["appointments"]} />
+      <DataAsOf asOf={data?.dataAsOf ?? null} resources={view === "unflagged" ? ["work_orders", "estimates"] : ["appointments", "time_sheets"]} />
 
       {error ? <ErrorState title="Could not load the exception report" message={error} onRetry={() => void load()} retrying={loading} /> : null}
 

@@ -31,7 +31,7 @@ import { exportFilename, exportTable, type ExportFormat } from "@/lib/snagging/e
 import { CHART_COLOR } from "@/lib/snagging/chart-palette";
 import { reportsService } from "@/modules/reports/reports-service";
 
-import { DataAsOf, SavedFiltersMenu, plural, useReportFilters } from "./shared";
+import { DataAsOf, ReportDateRange, SavedFiltersMenu, lastThirtyDays, plural, useReportFilters } from "./shared";
 
 /**
  * Technician utilization (BRD 5.2 B2; DEV-444; screen in BRD 6.4): time
@@ -193,8 +193,7 @@ export function UtilizationPage() {
       onFiltersChange={change}
       selects={selects}
       switches={view === "appointments" ? [{ key: "missing", label: "Missing actual times only" }] : []}
-      dateLabel="Period"
-      clearable={["technician", "team", "granularity", "chargeability", "missing", "from", "to"]}
+      clearable={["technician", "team", "granularity", "chargeability", "missing"]}
       canExport={Boolean(data?.can.export) && view !== "teams"}
       exporting={exporting}
       onExport={(format) => void doExport(format)}
@@ -225,16 +224,23 @@ export function UtilizationPage() {
         title="Utilization"
         description="How busy each technician was against the hours they were available, and how much of that work could be billed."
         actions={
-          <SavedFiltersMenu
-            saved={saved}
-            current={filters}
-            onApply={(entry) => {
-              apply(entry);
-              setPage(0);
-            }}
-            onSave={saveAs}
-            onRemove={remove}
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            <ReportDateRange
+              from={filters.from || data?.from || lastThirtyDays().from}
+              to={filters.to || data?.to || lastThirtyDays().to}
+              onChange={(from, to) => change({ ...filters, from, to })}
+            />
+            <SavedFiltersMenu
+              saved={saved}
+              current={filters}
+              onApply={(entry) => {
+                apply(entry);
+                setPage(0);
+              }}
+              onSave={saveAs}
+              onRemove={remove}
+            />
+          </div>
         }
       />
 
@@ -249,7 +255,7 @@ export function UtilizationPage() {
       />
 
       <div className="flex flex-col gap-1">
-        <DataAsOf asOf={data?.dataAsOf ?? null} resources={["appointments", "work_orders", "estimates"]} />
+        <DataAsOf asOf={data?.dataAsOf ?? null} resources={["appointments", "time_sheets", "work_orders", "estimates"]} />
         {data ? <p className="text-muted-foreground text-xs">{periodLine(data)}</p> : null}
       </div>
 
@@ -280,7 +286,11 @@ export function UtilizationPage() {
             onSelect={() => switchView("appointments", { missing: "1" })}
             selectLabel="Show appointments missing actual times"
           />
-          <StatCard label="Travel" value="—" headline="Needs FSM trips, which the portal cannot read yet (B-01)" />
+          <StatCard
+            label="Travel"
+            value={data?.travel.trips ? `${Math.round((data.travel.minutes / 60) * 10) / 10} h` : "—"}
+            headline={data?.travel.trips ? `${plural(data.travel.trips, "trip")} logged in FSM` : "No trips logged in FSM in these dates"}
+          />
         </StatCardGrid>
       ) : (
         <StatGridSkeleton count={5} columns={5} />
@@ -293,11 +303,13 @@ export function UtilizationPage() {
           icon={<TrendingUp />}
           title="Trend"
           description="Utilization per period, over the summed hours of the technicians shown."
+          bodyClassName="px-5 pb-5"
         >
           <ChartContainer config={chartConfig} className="h-56 w-full">
-            <LineChart data={trend} margin={{ left: -12, right: 12, top: 8 }}>
+            <LineChart data={trend} margin={{ left: 0, right: 8, top: 8 }}>
               <CartesianGrid vertical={false} />
-              <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} />
+              {/* Room either side, so the first and last periods' labels are not cut at the card's edge. */}
+              <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} padding={{ left: 24, right: 24 }} />
               <YAxis tickLine={false} axisLine={false} width={40} unit="%" domain={[0, (max: number) => Math.max(100, Math.ceil(max / 10) * 10)]} />
               <ChartTooltip content={<ChartTooltipContent labelKey="label" formatter={(value, name) => <TooltipRow name={String(name)} value={value} />} />} />
               <ChartLegend content={<ChartLegendContent />} />

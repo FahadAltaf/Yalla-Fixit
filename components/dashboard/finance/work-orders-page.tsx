@@ -2,10 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Info, ReceiptText } from "lucide-react";
+import { Info, Loader2, ReceiptText } from "lucide-react";
 import { toast } from "sonner";
 
-import { PageHeading, StatCard, StatCardGrid, timeAgo } from "@/components/dashboard/shared/kaizen";
+import { PageHeading, PillTabs, StatCard, StatCardGrid, timeAgo } from "@/components/dashboard/shared/kaizen";
 import { ErrorState, StatGridSkeleton } from "@/components/dashboard/shared/kaizen-states";
 import { refreshAll, useSection } from "@/components/dashboard/snagging/overview/use-section";
 import { DataTable } from "@/components/data-table";
@@ -21,8 +21,9 @@ import type { WorkOrderList } from "@/lib/server/finance/work-orders";
 
 import { aed, formatDuration } from "./shared";
 
-/* How long a page turn shows the table loading: the rows are already here, but the change should be seen. */
+/* How long a page turn, or a filter, shows the table loading: the rows are already here, but the change should be seen. */
 const PAGE_TURN_MS = 1000;
+const FILTER_MS = 500;
 
 /* The list's default dates and furthest reach, as the server works them out (lib/server/finance/work-orders.ts). */
 const DEFAULT_DAYS = 30;
@@ -35,6 +36,11 @@ const MAX_DAYS = 122;
  * changed, at most four months back, every status unless one is chosen.
  * The row opens the work order.
  *
+ * Two views (26 Oct): Finance sees work ready to invoice (Completed in FSM
+ * and flagged To Be Invoiced, or X % done to invoice); Operations sees
+ * every work order, with a standing reminder of those whose appointments
+ * are all done but which nobody has marked Completed in FSM.
+ *
  * The list is cached in the browser by its URL and on the server for ten
  * minutes, so opening a work order and coming back costs nothing; Refresh
  * asks Zoho FSM again. The filters live in the URL, so Back keeps them.
@@ -43,10 +49,20 @@ const MAX_DAYS = 122;
 const STATUS_FILTERS: Array<{ value: string; label: string }> = [
   { value: "all", label: "All statuses" },
   { value: "open", label: "Awaiting action" },
-  ...(Object.keys(QUEUE_STATUS_LABELS) as QueueStatus[]).map((status) => ({ value: status, label: QUEUE_STATUS_LABELS[status] })),
+  /* Non-billable and Void are FSM's: they are under "In Zoho FSM" in the same dropdown (27 Oct). */
+  ...(Object.keys(QUEUE_STATUS_LABELS) as QueueStatus[])
+    .filter((status) => status !== "non_billable" && status !== "void")
+    .map((status) => ({ value: status, label: QUEUE_STATUS_LABELS[status] })),
 ];
 
 const LIST_STALE_MS = 10 * 60_000;
+
+/* A query string with its keys in order, to tell whether the URL is the one asked for. */
+const sortedQuery = (query: URLSearchParams | { toString(): string }) => {
+  const copy = new URLSearchParams(query.toString());
+  copy.sort();
+  return copy.toString();
+};
 
 export function FinanceWorkOrdersPage() {
   const router = useRouter();
@@ -55,14 +71,28 @@ export function FinanceWorkOrdersPage() {
   const filters: FinanceQueueToolbarFilters = useMemo(
     () => ({
       status: params.get("status") ?? "all",
-      client: params.get("client") ?? "",
-      coordinator: params.get("coordinator") ?? "",
+      fsm: params.get("fsm") ?? "",
+      /* No client filter (27 Oct): one left in an old link must not filter unseen. */
+      client: "",
+      /* The coordinator filter is hidden here (23 Oct): one left in an old link must not filter unseen. */
+      coordinator: "",
       from: params.get("from") ?? "",
       to: params.get("to") ?? "",
       aged: params.get("aged") === "1",
     }),
     [params],
   );
+  /*
+    The tab clicked, held here until the URL catches up: Next only commits the
+    new URL once the route has answered, which left the old tab lit meanwhile.
+  */
+  const [pickedView, setPickedView] = useState<"finance" | "operations" | null>(null);
+  const urlView = params.get("view");
+  useEffect(() => {
+    if (pickedView && urlView === pickedView) setPickedView(null);
+  }, [pickedView, urlView]);
+  const askedView = pickedView ?? urlView;
+  const attention = params.get("attention") === "1";
   /* The date boxes always show the dates in use: the last 30 days until changed. */
   const today = todayInZone();
   const shownTo = filters.to || today;
@@ -83,13 +113,21 @@ export function FinanceWorkOrdersPage() {
   useEffect(() => () => {
     if (turnTimer.current) clearTimeout(turnTimer.current);
   }, []);
+  const flash = (ms: number) => {
+    setTurning(true);
+    if (turnTimer.current) clearTimeout(turnTimer.current);
+    turnTimer.current = setTimeout(() => setTurning(false), ms);
+  };
   /* A new page or page size: back to the top of the table, loading for a moment. */
   const turnPage = (next: Record<string, string | number | boolean>) => {
     setParams(next);
-    setTurning(true);
-    if (turnTimer.current) clearTimeout(turnTimer.current);
-    turnTimer.current = setTimeout(() => setTurning(false), PAGE_TURN_MS);
+    flash(PAGE_TURN_MS);
     tableRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+  /* A filter or a search: loading for a moment, so the new rows read as new. */
+  const filterBy = (next: Record<string, string | number | boolean>) => {
+    setParams(next);
+    flash(FILTER_MS);
   };
 
   /* The URL is the state: Back from a work order lands on the same filters and page. */
@@ -100,18 +138,63 @@ export function FinanceWorkOrdersPage() {
       if (text === "" || text === "0" || (key === "pageSize" && text === "25") || (key === "status" && text === "all")) merged.delete(key);
       else merged.set(key, text);
     }
+    if (sortedQuery(merged) !== sortedQuery(params)) setPendingQuery(sortedQuery(merged));
     router.replace(`${pathname}${merged.size ? `?${merged}` : ""}`, { scroll: false });
   };
+  /*
+    Loading from the click until the new rows are in (27 Oct): Next changes
+    the URL only once the route answers, so until then the old rows would
+    show again. Held until the URL is the one asked for (ten seconds at most).
+  */
+  const [pendingQuery, setPendingQuery] = useState<string | null>(null);
+  const currentQuery = sortedQuery(params);
+  useEffect(() => {
+    if (pendingQuery === null) return;
+    if (currentQuery === pendingQuery) {
+      setPendingQuery(null);
+      return;
+    }
+    const give = setTimeout(() => setPendingQuery(null), 10_000);
+    return () => clearTimeout(give);
+  }, [pendingQuery, currentQuery]);
 
   const query = new URLSearchParams();
+  if (askedView === "finance" || askedView === "operations") query.set("view", askedView);
+  if (attention) query.set("attention", "1");
   if (filters.status !== "all") query.set("status", filters.status);
-  for (const key of ["client", "coordinator", "from", "to"] as const) if (filters[key]) query.set(key, filters[key]);
+  for (const key of ["fsm", "from", "to"] as const) if (filters[key]) query.set(key, filters[key]);
   if (filters.aged) query.set("aged", "1");
   if (debouncedSearch) query.set("q", debouncedSearch);
   query.set("page", String(page));
   query.set("pageSize", String(pageSize));
   const url = `/api/finance/work-orders?${query}`;
-  const { data, loading, error, reload } = useSection<WorkOrderList & { can?: { invoice: boolean } }>(url, { staleMs: LIST_STALE_MS });
+  const { data, loading, error, reload } = useSection<WorkOrderList & { can?: { invoice: boolean; finance: boolean; operations: boolean } }>(url, {
+    staleMs: LIST_STALE_MS,
+  });
+  /* Which address the rows on screen answer: rows of the last address are not this one's. */
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
+  useEffect(() => {
+    if (data) setLoadedFor(url);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- when an answer arrives
+  }, [data]);
+  const rowsLoading = loading || turning || pendingQuery !== null || (data !== null && loadedFor !== url);
+  /* A page past the end (fewer rows after a filter or new dates): back to the last page that has rows. */
+  useEffect(() => {
+    if (!data || loading || page === 0 || data.rows.length > 0 || data.total === 0) return;
+    setParams({ page: Math.max(0, Math.ceil(data.total / pageSize) - 1) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when an answer arrives
+  }, [data, loading]);
+  /*
+    The tab clicked shows at once (the URL), not when its data arrives; one
+    the person may not see falls back to what the server answered.
+  */
+  const askedAllowed =
+    (askedView === "finance" || askedView === "operations") &&
+    (!data?.can || (askedView === "finance" ? data.can.finance : data.can.operations));
+  const view: "finance" | "operations" = askedAllowed ? (askedView as "finance" | "operations") : (data?.view ?? "finance");
+  const operations = view === "operations";
+  /* The other view is still being read from FSM: its cards and rows are not shown under this tab. */
+  const switching = Boolean(data && data.view !== view);
 
   /* Ask Zoho FSM again (the server keeps the last answer ten minutes), then show it. */
   const refresh = async () => {
@@ -129,10 +212,10 @@ export function FinanceWorkOrdersPage() {
     }
   };
 
-  const columns = useMemo(() => getWorkOrderQueueColumns(data?.agedAfterDays ?? 7), [data?.agedAfterDays]);
-  const summary = data?.summary;
+  const columns = useMemo(() => getWorkOrderQueueColumns(data?.agedAfterDays ?? 7, operations), [data?.agedAfterDays, operations]);
+  const summary = switching ? undefined : data?.summary;
   const filtered = Boolean(
-    filters.status !== "all" || filters.client || filters.coordinator || filters.from || filters.to || filters.aged || debouncedSearch,
+    filters.status !== "all" || filters.fsm || filters.from || filters.to || filters.aged || attention || debouncedSearch,
   );
 
   return (
@@ -140,10 +223,33 @@ export function FinanceWorkOrdersPage() {
       <PageHeading
         eyebrow="Finance"
         title="Ready to invoice"
-        description="FSM work orders, read live from Zoho FSM, at line-item level. Once the work is completed in FSM, record the MAHER invoice in full or in part, or raise a query."
+        description={
+          operations
+            ? "Every FSM work order, read live from Zoho FSM. Mark finished work Completed in FSM, and record how far unfinished work has got so Finance can invoice it or book the revenue."
+            : "Work Completed in FSM with its quotation flagged To Be Invoiced, and work Operations has recorded as partly done to invoice. Record the MAHER invoice in full or in part, or raise a query."
+        }
       />
 
-      {data ? (
+      {data?.can?.finance && data.can.operations ? (
+        <PillTabs<"finance" | "operations">
+          value={view}
+          onChange={(next) => {
+            setPickedView(next);
+            filterBy({ view: next, attention: false, status: "all", page: 0 });
+          }}
+          tabs={[
+            { value: "finance", label: "Finance" },
+            { value: "operations", label: "Operations", count: data.view === "operations" && !switching ? data.needsCompleting : undefined },
+          ]}
+        />
+      ) : null}
+
+      {loading || refreshing ? (
+        <p className="text-muted-foreground -mt-3 flex items-center gap-1.5 text-xs">
+          <Loader2 className="size-3.5 animate-spin" />
+          {operations ? "Reading every work order and its appointments from Zoho FSM…" : "Reading Zoho FSM…"}
+        </p>
+      ) : data ? (
         <p className="text-muted-foreground -mt-3 text-xs">
           Work orders raised {data.from} to {data.to}, read from Zoho FSM {timeAgo(data.fsm.fetchedAt)}
           {data.fsm.cached ? " (kept for ten minutes; Refresh reads again)" : ""}.
@@ -168,7 +274,27 @@ export function FinanceWorkOrdersPage() {
         </Alert>
       ) : null}
 
-      {summary ? (
+      {summary && operations && data ? (
+        <StatCardGrid columns={5}>
+          <StatCard
+            label="Needs completing in FSM"
+            value={data.needsCompleting}
+            headline={attention ? "Showing only these · select to show all" : "Appointments all done, not marked Completed"}
+            tone={data.needsCompleting > 0 ? "progress" : "neutral"}
+            onSelect={() => filterBy({ attention: !attention, page: 0 })}
+            selectLabel={attention ? "Show every work order" : "Show only work orders that need completing in FSM"}
+          />
+          <StatCard label="Not ready" value={summary.notReady.count} headline={`${aed(summary.notReady.valueWithVat)} incl. VAT`} />
+          <StatCard label="Pending invoice" value={summary.pending.count} headline={`${aed(summary.pending.valueWithVat)} to invoice, incl. VAT`} />
+          <StatCard
+            label="Query raised"
+            value={summary.queryRaised.count}
+            headline={summary.queryRaised.count ? "Waiting on a coordinator's answer" : "No query open"}
+            tone={summary.queryRaised.count ? "progress" : "neutral"}
+          />
+          <StatCard label="Non-billable" value={summary.nonBillable.count} headline={`${aed(summary.nonBillable.valueWithVat)} incl. VAT, not invoiced`} />
+        </StatCardGrid>
+      ) : summary ? (
         <StatCardGrid columns={5}>
           <StatCard
             label="Pending"
@@ -191,9 +317,9 @@ export function FinanceWorkOrdersPage() {
             headline={`${aed(summary.onHold.valueWithVat)} incl. VAT`}
           />
           <StatCard
-            label="Excluded value"
-            value={aed(summary.excluded.valueWithVat)}
-            headline={`Incl. VAT · ${summary.excluded.count} verified`}
+            label="Non-billable"
+            value={summary.nonBillable.count}
+            headline={`${aed(summary.nonBillable.valueWithVat)} incl. VAT, not invoiced`}
           />
           <StatCard
             label="Average time to invoice"
@@ -210,13 +336,13 @@ export function FinanceWorkOrdersPage() {
       <div ref={tableRef} className="scroll-mt-20">
       <Card className="py-0">
         <DataTable
-          data={data?.rows ?? []}
+          data={switching ? [] : (data?.rows ?? [])}
           columns={columns}
           toolbar={
             <FinanceQueueToolbar
               onSearchChange={(value) => {
                 setSearch(value);
-                setParams({ q: value, page: 0 });
+                filterBy({ q: value, page: 0 });
               }}
               initialSearch={params.get("q") ?? ""}
               loading={loading || refreshing}
@@ -224,11 +350,10 @@ export function FinanceWorkOrdersPage() {
               onPageSizeChange={(size) => turnPage({ pageSize: size, page: 0 })}
               onRefresh={() => void refresh()}
               statusOptions={STATUS_FILTERS}
-              clients={data?.options.clients ?? []}
-              coordinators={data?.options.coordinators ?? []}
+              fsmStatuses={data?.options.fsmStatuses ?? []}
               filters={{ ...filters, from: dates.from, to: dates.to }}
               onFiltersChange={(next) =>
-                setParams({
+                filterBy({
                   ...next,
                   /* A date left at its default stays out of the URL. */
                   from: next.from === dates.from && !filters.from ? "" : next.from,
@@ -236,9 +361,8 @@ export function FinanceWorkOrdersPage() {
                   page: 0,
                 })
               }
-              showCoordinator={false}
               dateBounds={{ min: dates.min, max: dates.max }}
-              filtersActive={Boolean(filters.client || filters.from || filters.to || filters.aged)}
+              activeFilters={(filters.from || filters.to ? 1 : 0) + (filters.aged ? 1 : 0)}
               agedAfterDays={data?.agedAfterDays ?? 7}
               dateLabel="Raised"
             />
@@ -248,18 +372,21 @@ export function FinanceWorkOrdersPage() {
           onPageSizeChange={(size) => turnPage({ pageSize: size, page: 0 })}
           pageSize={pageSize}
           currentPage={page}
-          loading={(loading && !data) || turning}
+          /* Loading until the rows for the new status, filters, search or page arrive (27 Oct). */
+          loading={rowsLoading}
           rowCount={data?.total ?? 0}
           isPagination
-          handleRowClick={(row) => router.push(`/finance/queue/${row.id}`)}
+          handleRowClick={(row) => router.push(`/finance/queue/${row.id}?as=${view}`)}
           emptyState={
             <EmptyState
               icon={<ReceiptText />}
-              title={filtered ? "No work orders match these filters" : "No work orders in these dates"}
+              title={filtered ? "No work orders match these filters" : operations ? "No work orders in these dates" : "Nothing ready to invoice in these dates"}
               description={
                 filtered
                   ? "Try clearing a filter or widening the dates (up to four months back)."
-                  : "Zoho FSM has no work order raised in these dates. Widen the dates (up to four months back)."
+                  : operations
+                    ? "Zoho FSM has no work order raised in these dates. Widen the dates (up to four months back)."
+                    : "Work shows here once it is Completed in FSM with its quotation flagged To Be Invoiced, or Operations records it partly done to invoice."
               }
             />
           }

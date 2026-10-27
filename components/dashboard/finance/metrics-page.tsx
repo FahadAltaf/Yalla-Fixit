@@ -44,6 +44,7 @@ import { CHART_COLOR } from "@/lib/snagging/chart-palette";
 import { financeService, type FinanceMetricsResponse } from "@/modules/finance/finance-service";
 
 import { aed, formatDuration } from "./shared";
+import { RevenueSection } from "./revenue-section";
 
 /**
  * Invoicing metrics (BRD §5.1 Step 8, §6.9; DEV-441), laid out as the
@@ -520,6 +521,8 @@ export function FinanceMetricsPage() {
             ))}
         </ul>
       </SectionShell>
+
+      <RevenueSection />
 
       {/* Below here is analysis rather than action, as on the Snagging overview. */}
       <div className="mt-4 flex items-center gap-4" role="separator" aria-label="Analytics">

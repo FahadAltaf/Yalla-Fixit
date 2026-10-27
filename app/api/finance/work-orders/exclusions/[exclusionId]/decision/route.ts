@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { resolveAgedNotices, resolveExclusionNotices } from "@/lib/server/finance/queue-notifications";
@@ -29,8 +29,15 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ exclusionI
   try {
     const admin = await createAdminServerClient();
     const result = await decideWorkOrderExclusion(admin, exclusionId, parsed.data, actorOf(gate.access.profile));
-    await resolveExclusionNotices(admin, exclusionId);
-    if (result.workOrderId) await resolveAgedNotices(admin, result.workOrderId);
+    /* Closing N3 and the aged notices after the answer is sent (27 Oct). */
+    after(async () => {
+      try {
+        await resolveExclusionNotices(admin, exclusionId);
+        if (result.workOrderId) await resolveAgedNotices(admin, result.workOrderId);
+      } catch (error) {
+        console.error("Exclusion decision notices:", error);
+      }
+    });
     return NextResponse.json({ status: result.status });
   } catch (error) {
     if (error instanceof InvoicingError) return NextResponse.json({ error: error.message }, { status: error.status });

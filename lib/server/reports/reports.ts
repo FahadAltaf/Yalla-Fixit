@@ -17,6 +17,7 @@ import {
   type StatusSummary,
 } from "@/lib/reports/quotations";
 import { addDaysToDateString, todayInZone } from "@/lib/scheduling/org-time";
+import { readTimes } from "@/lib/server/finance/fsm-live";
 import { readReportingSettings } from "@/lib/server/reporting/settings";
 
 import { loadCompletedAppointments, loadQuotationRecords, loadTechnicians, loadUnflaggedInputs } from "./data";
@@ -34,11 +35,22 @@ export const pagingSchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
 });
 
-/** Newest FSM data in the copy, per resource, for "data as of". */
-export async function dataAsOf(admin: SupabaseClient): Promise<Record<string, string | null>> {
-  const { data, error } = await admin.schema("fsm").from("sync_state").select("resource, last_success_at");
-  if (error) throw new Error(error.message);
-  return Object.fromEntries((data ?? []).map((r) => [String(r.resource), (r.last_success_at as string | null) ?? null]));
+/**
+ * When Zoho FSM was last read for each kind of record, for "data as of"
+ * (26 Oct: the reports read FSM live, kept ten minutes). Called after the
+ * report's reads, so it says when what is shown was read.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept so every report calls it the same way
+export async function dataAsOf(_admin?: SupabaseClient): Promise<Record<string, string | null>> {
+  return readTimes(["appointments", "work_orders", "estimates", "time_sheets", "attendance"]);
+}
+
+/** The dates asked for, or the last 30 days. */
+export function lastThirtyDays(filters: { from?: string; to?: string }, today = todayInZone()) {
+  let to = filters.to ?? today;
+  let from = filters.from ?? addDaysToDateString(to, -29);
+  if (from > to) [from, to] = [to, from];
+  return { from, to };
 }
 
 function page<T>(rows: T[], p: { page: number; pageSize: number }, all: boolean): T[] {
@@ -72,6 +84,9 @@ export type QuotationReport = {
   options: { owners: string[]; clients: string[] };
   rows: QuotationRow[];
   total: number;
+  /** Created in these dates: the last 30 days unless chosen. */
+  from: string;
+  to: string;
   dataAsOf: Record<string, string | null>;
 };
 
@@ -83,11 +98,10 @@ export async function buildQuotationReport(
 ): Promise<QuotationReport> {
   /* "all" (or nothing) is every status. */
   if (filters.status === "all") filters = { ...filters, status: undefined };
-  const [settings, records, asOf] = await Promise.all([
-    readReportingSettings(admin),
-    loadQuotationRecords(admin),
-    dataAsOf(admin),
-  ]);
+  const period = lastThirtyDays(filters);
+  filters = { ...filters, ...period };
+  const [settings, records] = await Promise.all([readReportingSettings(admin), loadQuotationRecords(admin)]);
+  const asOf = await dataAsOf(admin);
   const today = todayInZone();
   const limits = settings.quotations.ageingDaysByStatus;
   const all = buildQuotationRows(records, { today, limits, expiryWarningDays: settings.quotations.expiryWarningDays });
@@ -111,6 +125,8 @@ export async function buildQuotationReport(
     options: { owners: uniqueSorted(all.map((r) => r.ownerName)), clients: uniqueSorted(all.map((r) => r.clientName)) },
     rows: page(matching, paging, Boolean(options.all)),
     total: matching.length,
+    from: period.from,
+    to: period.to,
     dataAsOf: asOf,
   };
 }
@@ -134,6 +150,9 @@ export const exceptionFiltersSchema = z.object({
 
 export type UnflaggedReport = {
   view: "unflagged";
+  /** Completed in these dates: the last 30 days unless chosen. */
+  from: string;
+  to: string;
   afterDays: number;
   totals: { count: number; overdue: number; value: number; overdueValue: number };
   options: { clients: string[]; coordinators: string[] };
@@ -165,7 +184,10 @@ export async function buildExceptionReport(
   const needle = (filters.q ?? "").toLowerCase();
 
   if (filters.view === "unflagged") {
-    const [settings, inputs, asOf] = await Promise.all([readReportingSettings(admin), loadUnflaggedInputs(admin), dataAsOf(admin)]);
+    const period = lastThirtyDays(filters, today);
+    filters = { ...filters, ...period };
+    const [settings, inputs] = await Promise.all([readReportingSettings(admin), loadUnflaggedInputs(admin, { from: period.from })]);
+    const asOf = await dataAsOf(admin);
     const afterDays = settings.exceptions.completedWithoutFlagAfterDays;
     const all = findUnflagged({ ...inputs, today, afterDays });
     const matching = all.filter((r) => {
@@ -183,6 +205,8 @@ export async function buildExceptionReport(
     const overdue = matching.filter((r) => r.overdue);
     return {
       view: "unflagged",
+      from: period.from,
+      to: period.to,
       afterDays,
       totals: { count: matching.length, overdue: overdue.length, value: sum(matching), overdueValue: sum(overdue) },
       options: { clients: uniqueSorted(all.map((r) => r.clientName)), coordinators: uniqueSorted(all.map((r) => r.coordinatorName)) },
@@ -195,11 +219,8 @@ export async function buildExceptionReport(
   /* Actual times: a period is needed; the last 30 days unless given. */
   const to = filters.to ?? today;
   const from = filters.from ?? addDaysToDateString(to, -29);
-  const [technicians, appointments, asOf] = await Promise.all([
-    loadTechnicians(admin),
-    loadCompletedAppointments(admin, { from, to }),
-    dataAsOf(admin),
-  ]);
+  const [technicians, appointments] = await Promise.all([loadTechnicians(admin), loadCompletedAppointments(admin, { from, to })]);
+  const asOf = await dataAsOf(admin);
   const inScope = appointments
     .map((a) => ({ ...a, technicianIds: a.technicianIds.filter((id) => technicians.has(id)) }))
     .filter((a) => {

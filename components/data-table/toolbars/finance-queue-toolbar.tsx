@@ -3,17 +3,21 @@
 import { useId, useState } from "react";
 import { LoaderCircleIcon, RefreshCwIcon, SearchIcon, XIcon } from "lucide-react";
 
-import { StatusSelect } from "@/components/data-table/toolbars/status-select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 
-const ALL = "__all__";
+import { DateRangePicker } from "./date-range-picker";
+
+/* An FSM status in the one status dropdown: "fsm:Completed". */
+const FSM_PREFIX = "fsm:";
 
 export type FinanceQueueToolbarFilters = {
   status: string;
+  /** The work order's status in Zoho FSM; "" for all. */
+  fsm: string;
   client: string;
   coordinator: string;
   from: string;
@@ -22,9 +26,9 @@ export type FinanceQueueToolbarFilters = {
 };
 
 /**
- * Toolbar for the Ready-to-Invoice queue: the users/jobs toolbar shape
- * (search left; page size and Refresh right), with the BRD §6.4 filters on
- * a second row: status, client, coordinator, date entered, aged only.
+ * Toolbar for Ready to invoice (27 Oct): search, one status dropdown (the
+ * portal's invoicing statuses and Zoho FSM's in one list), the date range
+ * and Aged only beside it; page size and Refresh on the right.
  */
 export function FinanceQueueToolbar({
   onSearchChange,
@@ -33,166 +37,129 @@ export function FinanceQueueToolbar({
   onPageSizeChange,
   onRefresh,
   statusOptions,
-  clients,
-  coordinators,
+  fsmStatuses,
   filters,
   onFiltersChange,
   agedAfterDays,
   dateLabel = "Entered",
   initialSearch = "",
-  showCoordinator = true,
   dateBounds,
-  filtersActive,
+  activeFilters = 0,
 }: {
   onSearchChange: (value: string) => void;
   loading: boolean;
   pageSize: number;
   onPageSizeChange: (size: number) => void;
   onRefresh: () => void;
-  statusOptions: ReadonlyArray<{ value: string; label: string; count?: number }>;
-  clients: string[];
-  coordinators: string[];
+  /** The portal's invoicing statuses ("all" first). */
+  statusOptions: ReadonlyArray<{ value: string; label: string }>;
+  /** Zoho FSM's work order statuses. */
+  fsmStatuses: string[];
   filters: FinanceQueueToolbarFilters;
   onFiltersChange: (next: FinanceQueueToolbarFilters) => void;
   agedAfterDays: number;
-  /** What the date range filters on ("Entered" for queue items, "Raised" for work orders). */
+  /** What the date range filters on ("Raised" for work orders). */
   dateLabel?: string;
   initialSearch?: string;
-  showCoordinator?: boolean;
   /** The earliest and latest dates that may be picked. */
   dateBounds?: { min: string; max: string };
-  /** Whether "Clear filters" shows, when the dates are filled in by default. */
-  filtersActive?: boolean;
+  /** How many of the dates and Aged only are in use: "Clear" shows when any is. */
+  activeFilters?: number;
 }) {
   const searchId = useId();
   const [search, setSearch] = useState(initialSearch);
   const set = (patch: Partial<FinanceQueueToolbarFilters>) => onFiltersChange({ ...filters, ...patch });
-  const anyFilter = filtersActive ?? Boolean(filters.client || filters.coordinator || filters.from || filters.to || filters.aged);
+  const statusValue = filters.fsm ? `${FSM_PREFIX}${filters.fsm}` : filters.status;
+  /* One list (27 Oct): the invoicing statuses, then FSM's not already in it ("In Progress" once, for both). */
+  const named = new Set(statusOptions.map((option) => option.label.toLowerCase()));
+  const options = [
+    ...statusOptions,
+    ...fsmStatuses.filter((status) => !named.has(status.toLowerCase())).map((status) => ({ value: `${FSM_PREFIX}${status}`, label: status })),
+  ];
 
   return (
-    <div className="flex flex-col gap-4 px-4 py-4 sm:py-6">
-      <div className="flex flex-row items-center justify-between gap-2 sm:gap-4">
-        <div className="flex flex-1 flex-wrap items-center gap-2">
-          <div className="relative w-full sm:w-80 sm:flex-none">
-            <Input
-              id={searchId}
-              type="search"
-              placeholder="Search by item, quotation, work order or client…"
-              className="peer w-full ps-9"
-              value={search}
-              onChange={(event) => {
-                setSearch(event.target.value);
-                onSearchChange(event.target.value);
-              }}
-              aria-label="Search the queue"
-            />
-            <div className="text-muted-foreground/80 pointer-events-none absolute inset-y-0 start-0 flex items-center justify-center ps-3">
-              {loading ? (
-                <LoaderCircleIcon aria-label="Loading..." className="animate-spin" role="status" size={16} />
-              ) : (
-                <SearchIcon aria-hidden="true" size={16} />
-              )}
-            </div>
+    <div className="flex flex-col gap-4 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:py-6">
+      <div className="flex flex-1 flex-wrap items-center gap-2">
+        <div className="relative w-full sm:w-64 sm:flex-none">
+          <Input
+            id={searchId}
+            type="search"
+            placeholder="Search work orders…"
+            className="peer w-full ps-9"
+            value={search}
+            onChange={(event) => {
+              setSearch(event.target.value);
+              onSearchChange(event.target.value);
+            }}
+            aria-label="Search by work order, quotation or client"
+          />
+          <div className="text-muted-foreground/80 pointer-events-none absolute inset-y-0 start-0 flex items-center justify-center ps-3">
+            {loading ? <LoaderCircleIcon aria-label="Loading..." className="animate-spin" role="status" size={16} /> : <SearchIcon aria-hidden="true" size={16} />}
           </div>
-          <StatusSelect options={statusOptions} value={filters.status} onChange={(status) => set({ status })} />
         </div>
 
-        <div className="flex gap-3 sm:flex-row sm:items-center sm:gap-4">
-          <div className="hidden w-full items-center gap-2 sm:flex sm:w-auto">
-            <Label htmlFor="finance-queue-rows" className="sr-only">
-              Show
-            </Label>
-            <Select value={pageSize.toString()} onValueChange={(value) => onPageSizeChange(Number(value))}>
-              <SelectTrigger id="finance-queue-rows" className="w-full whitespace-nowrap sm:w-fit">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {[10, 25, 50].map((size) => (
-                  <SelectItem key={size} value={size.toString()}>
-                    {size}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <Button onClick={onRefresh} variant="outline" disabled={loading}>
-            <RefreshCwIcon className="size-4 sm:mr-1" />
-            <span className="hidden sm:inline">Refresh</span>
-          </Button>
-        </div>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2">
-        <Select value={filters.client || ALL} onValueChange={(value) => set({ client: value === ALL ? "" : value })}>
-          <SelectTrigger className="w-full sm:w-52" aria-label="Filter by client">
+        {/* One status: the portal's invoicing status, or the work order's status in Zoho FSM. */}
+        <Select
+          value={statusValue}
+          onValueChange={(value) =>
+            value.startsWith(FSM_PREFIX) ? set({ status: "all", fsm: value.slice(FSM_PREFIX.length) }) : set({ status: value, fsm: "" })
+          }
+        >
+          <SelectTrigger className="w-full whitespace-nowrap sm:w-52" aria-label="Filter by status">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value={ALL}>All clients</SelectItem>
-            {clients.map((client) => (
-              <SelectItem key={client} value={client}>
-                {client}
+            {options.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
-        {showCoordinator ? (
-          <Select
-            value={filters.coordinator || ALL}
-            onValueChange={(value) => set({ coordinator: value === ALL ? "" : value })}
-          >
-            <SelectTrigger className="w-full sm:w-52" aria-label="Filter by coordinator">
+
+        {/* The dates beside the status (27 Oct): shadcn's range picker, two months. */}
+        <DateRangePicker
+          from={filters.from}
+          to={filters.to}
+          min={dateBounds?.min}
+          max={dateBounds?.max}
+          label={`${dateLabel} dates`}
+          onChange={(from, to) => set({ from, to })}
+        />
+        <label className="flex items-center gap-2 text-sm whitespace-nowrap" title={`Pending over ${agedAfterDays} days`}>
+          <Switch checked={filters.aged} onCheckedChange={(aged) => set({ aged })} aria-label="Aged only" />
+          Aged only
+        </label>
+        {activeFilters ? (
+          <Button variant="ghost" size="sm" onClick={() => set({ from: "", to: "", aged: false })}>
+            <XIcon className="size-4" />
+            Clear
+          </Button>
+        ) : null}
+      </div>
+
+      <div className="flex items-center gap-3 sm:gap-4">
+        <div className="hidden items-center gap-2 sm:flex">
+          <Label htmlFor="finance-queue-rows" className="sr-only">
+            Show
+          </Label>
+          <Select value={pageSize.toString()} onValueChange={(value) => onPageSizeChange(Number(value))}>
+            <SelectTrigger id="finance-queue-rows" className="w-fit whitespace-nowrap">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value={ALL}>All coordinators</SelectItem>
-              {coordinators.map((name) => (
-                <SelectItem key={name} value={name}>
-                  {name}
+              {[10, 25, 50].map((size) => (
+                <SelectItem key={size} value={size.toString()}>
+                  {size}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
-        ) : null}
-        <div className="flex items-center gap-2">
-          <Label htmlFor="finance-queue-from" className="text-muted-foreground text-xs whitespace-nowrap">
-            {dateLabel}
-          </Label>
-          <Input
-            id="finance-queue-from"
-            type="date"
-            className="w-36"
-            value={filters.from}
-            min={dateBounds?.min}
-            max={filters.to || dateBounds?.max}
-            onChange={(event) => set({ from: event.target.value })}
-            aria-label={`${dateLabel} from`}
-          />
-          <span className="text-muted-foreground text-xs">to</span>
-          <Input
-            type="date"
-            className="w-36"
-            value={filters.to}
-            min={filters.from || dateBounds?.min}
-            max={dateBounds?.max}
-            onChange={(event) => set({ to: event.target.value })}
-            aria-label={`${dateLabel} to`}
-          />
         </div>
-        <label className="flex items-center gap-2 text-sm whitespace-nowrap">
-          <Switch checked={filters.aged} onCheckedChange={(aged) => set({ aged })} aria-label="Aged only" />
-          Aged only <span className="text-muted-foreground text-xs">(pending over {agedAfterDays} days)</span>
-        </label>
-        {anyFilter ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => set({ client: "", coordinator: "", from: "", to: "", aged: false })}
-          >
-            <XIcon className="size-4" />
-            Clear filters
-          </Button>
-        ) : null}
+        <Button onClick={onRefresh} variant="outline" disabled={loading}>
+          <RefreshCwIcon className="size-4 sm:mr-1" />
+          <span className="hidden sm:inline">Refresh</span>
+        </Button>
       </div>
     </div>
   );

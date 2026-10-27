@@ -19,7 +19,7 @@ import type { QuotationReport } from "@/lib/server/reports/reports";
 import { exportFilename, exportTable, type ExportFormat } from "@/lib/snagging/export-table";
 import { reportsService } from "@/modules/reports/reports-service";
 
-import { DataAsOf, SavedFiltersMenu, plural, useReportFilters } from "./shared";
+import { DataAsOf, ReportDateRange, SavedFiltersMenu, lastThirtyDays, plural, useReportFilters } from "./shared";
 
 /**
  * The quotation summary (BRD 5.2 B1; DEV-442). Per status: how many, how
@@ -114,7 +114,17 @@ export function QuotationSummaryPage() {
         eyebrow="Reports"
         title="Quotation summary"
         description="The quotation pipeline from FSM: what is waiting in each status, for how long, and what is about to lapse. Values are before VAT."
-        actions={<SavedFiltersMenu saved={saved} current={filters} onApply={(entry) => { apply(entry); setPage(0); }} onSave={saveAs} onRemove={remove} />}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <ReportDateRange
+              label="Created"
+              from={filters.from || data?.from || lastThirtyDays().from}
+              to={filters.to || data?.to || lastThirtyDays().to}
+              onChange={(from, to) => change({ ...filters, from, to })}
+            />
+            <SavedFiltersMenu saved={saved} current={filters} onApply={(entry) => { apply(entry); setPage(0); }} onSave={saveAs} onRemove={remove} />
+          </div>
+        }
       />
       <DataAsOf asOf={data?.dataAsOf ?? null} resources={["estimates"]} />
 
@@ -194,8 +204,7 @@ export function QuotationSummaryPage() {
                 { key: "band", allLabel: "Any value", options: VALUE_BANDS.map((b) => ({ value: b.key, label: b.label })), width: "w-full sm:w-52" },
                 { key: "flag", allLabel: "Any flag", options: FLAG_OPTIONS },
               ]}
-              dateLabel="Created"
-              clearable={["owner", "client", "band", "flag", "from", "to"]}
+              clearable={["owner", "client", "band", "flag"]}
               canExport={Boolean(data?.can.export)}
               exporting={exporting}
               onExport={(format) => void doExport(format)}

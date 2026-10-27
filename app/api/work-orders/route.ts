@@ -24,34 +24,43 @@ export async function POST(request: NextRequest) {
     if (!profile || !accessUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    if (!hasResourceAction(accessUser, ResourceType.SCHEDULING, ActionType.VIEW)) {
+    if (
+      !hasResourceAction(accessUser, ResourceType.SCHEDULING, ActionType.VIEW)
+    ) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const body = await request.json() as { name?: string; comparator?: string };
+    const body = (await request.json()) as {
+      name?: string;
+      comparator?: string;
+    };
 
     if (!body.name?.trim()) {
-      return NextResponse.json({ error: "Missing field: name" }, { status: 400 });
+      return NextResponse.json(
+        { error: "Missing field: name" },
+        { status: 400 },
+      );
     }
 
     const edgeRes = await fetch(EDGE_FUNCTION_URL, {
       method: "POST",
       headers: {
-        "Content-Type":  "application/json",
-        "Authorization": `Bearer ${process.env.SUPABASE_ANON_KEY}`,
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.SUPABASE_ANON_KEY}`,
       },
       body: JSON.stringify({
-        name:       body.name.trim(),
+        name: body.name.trim(),
         comparator: body.comparator ?? "equal",
       }),
     });
 
     const data = await edgeRes.json();
+    console.log("🚀 ~ POST ~ data:", data);
 
     return NextResponse.json(data, { status: edgeRes.status });
-
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Something went wrong";
+    const message =
+      error instanceof Error ? error.message : "Something went wrong";
     console.error("[bulk-download route]", error);
     return NextResponse.json({ error: message }, { status: 500 });
   }

@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import type { Metadata } from "next";
 
 import { FinanceQueueItemPage } from "@/components/dashboard/finance/queue-item-page";
@@ -16,5 +17,12 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
    see and do. */
 export default async function FinanceQueueItemRoute({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  return UUID.test(id) ? <FinanceQueueItemPage id={id} /> : <FinanceWorkOrderPage id={id} />;
+  /* Suspense: the work order page reads ?as= (the team it acts as). */
+  return UUID.test(id) ? (
+    <FinanceQueueItemPage id={id} />
+  ) : (
+    <Suspense>
+      <FinanceWorkOrderPage id={id} />
+    </Suspense>
+  );
 }

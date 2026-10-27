@@ -14,8 +14,9 @@ import { ActionType, ResourceType } from "@/types/types";
  * call or two to FSM, or none within ten minutes of the last read for the
  * same dates; ?refresh=1 reads again.
  *
- * Query: from, to, q, client, coordinator, status (open | all | a queue
- * status), aged=1, refresh=1, page, pageSize. Answers { data }.
+ * Query: view (finance | operations), from, to, q, client, coordinator,
+ * status (open | all | a queue status), aged=1, attention=1, refresh=1,
+ * page, pageSize. Answers { data }.
  */
 
 export const dynamic = "force-dynamic";
@@ -37,8 +38,17 @@ export async function GET(req: NextRequest) {
 
   try {
     const admin = await createAdminServerClient();
-    const can = { invoice: hasResourceAction(user, ResourceType.FINANCE_QUEUE, ActionType.APPROVE) };
-    return NextResponse.json({ data: { ...(await listWorkOrders(admin, parsed.data)), can } }, { headers: { "Cache-Control": "no-store" } });
+    const can = {
+      invoice: hasResourceAction(user, ResourceType.FINANCE_QUEUE, ActionType.APPROVE),
+      /* Finance's view (ready to invoice), Operations' view (every work order) (26 Oct). */
+      finance: hasResourceAction(user, ResourceType.FINANCE_QUEUE, ActionType.VIEW),
+      operations: hasResourceAction(user, ResourceType.FINANCE_EXCLUSIONS, ActionType.CREATE),
+    };
+    /* The view asked for when the person may see it; else Finance's for Finance, Operations' for coordinators. */
+    const asked = parsed.data.view;
+    const view =
+      asked === "operations" && can.operations ? "operations" : asked === "finance" && can.finance ? "finance" : can.finance ? "finance" : "operations";
+    return NextResponse.json({ data: { ...(await listWorkOrders(admin, { ...parsed.data, view })), can } }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     if (error instanceof FsmLiveError) return NextResponse.json({ error: error.message }, { status: error.status });
     console.error("Ready to invoice list error:", error);

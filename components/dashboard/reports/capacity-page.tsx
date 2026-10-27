@@ -12,9 +12,9 @@ import { ReportToolbar } from "@/components/data-table/toolbars/report-toolbar";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { addDaysToDateString, todayInZone } from "@/lib/scheduling/org-time";
 import { useDebounce } from "@/hooks/use-debounce";
 import { fsmRecordLink } from "@/lib/fsm-links";
 import { isoWeekday } from "@/lib/reports/available-hours";
@@ -24,7 +24,7 @@ import { exportFilename, exportTable, type ExportFormat } from "@/lib/snagging/e
 import { cn } from "@/lib/utils";
 import { reportsService } from "@/modules/reports/reports-service";
 
-import { DataAsOf, SavedFiltersMenu, plural, useReportFilters } from "./shared";
+import { DataAsOf, ReportDateRange, SavedFiltersMenu, plural, useReportFilters } from "./shared";
 
 /**
  * Forward capacity (BRD 5.2 B5; DEV-452): booked against available hours
@@ -138,6 +138,10 @@ export function CapacityPage() {
     (filters.team && data?.options.teams.find((t) => t.id === filters.team)?.name) ||
     null;
 
+  /* The next 30 days until changed (26 Oct). */
+  const capacityFrom = filters.from || data?.from || todayInZone();
+  const capacityTo = data?.to ?? addDaysToDateString(capacityFrom, Number(filters.days || 30) - 1);
+
   return (
     <div className="flex flex-col gap-6">
       <PageHeading
@@ -145,48 +149,31 @@ export function CapacityPage() {
         title="Capacity"
         description="Booked against available hours for the days ahead, by team and technician, so over-booked and spare days show before they arrive."
         actions={
-          <SavedFiltersMenu
-            saved={saved}
-            current={filters}
-            onApply={(entry) => {
-              apply(entry);
-              setPage(0);
-            }}
-            onSave={saveAs}
-            onRemove={remove}
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            <ReportDateRange
+              from={capacityFrom}
+              to={capacityTo}
+              onChange={(from, to) => {
+                /* The board shows up to 90 days. */
+                const days = Math.min(90, Math.max(1, Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1));
+                change({ ...filters, from, days: String(days), day: "" });
+              }}
+            />
+            <SavedFiltersMenu
+              saved={saved}
+              current={filters}
+              onApply={(entry) => {
+                apply(entry);
+                setPage(0);
+              }}
+              onSave={saveAs}
+              onRemove={remove}
+            />
+          </div>
         }
       />
 
       <div className="flex flex-wrap items-end gap-3">
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="capacity-from" className="text-muted-foreground text-xs">
-            From
-          </Label>
-          <Input
-            id="capacity-from"
-            type="date"
-            className="w-40"
-            value={filters.from || data?.from || ""}
-            onChange={(e) => change({ ...filters, from: e.target.value, day: "" })}
-          />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label className="text-muted-foreground text-xs">Days</Label>
-          <Select value={filters.days || ALL} onValueChange={(v) => change({ ...filters, days: v === ALL ? "" : v, day: "" })}>
-            <SelectTrigger className="w-44" aria-label="Days shown">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL}>Horizon{data ? ` (${data.horizonDays} days)` : ""}</SelectItem>
-              {["7", "14", "28", "56"].map((d) => (
-                <SelectItem key={d} value={d}>
-                  {d} days
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
         <div className="flex flex-col gap-1.5">
           <Label className="text-muted-foreground text-xs">Team</Label>
           <Select value={filters.team || ALL} onValueChange={(v) => change({ ...filters, team: v === ALL ? "" : v, technician: "", day: "" })}>
@@ -203,8 +190,8 @@ export function CapacityPage() {
             </SelectContent>
           </Select>
         </div>
-        {filters.from || filters.days || filters.team ? (
-          <Button variant="ghost" size="sm" onClick={() => change({ ...DEFAULTS })}>
+        {filters.team ? (
+          <Button variant="ghost" size="sm" onClick={() => change({ ...filters, team: "", technician: "", day: "" })}>
             <XIcon className="size-4" />
             Reset
           </Button>

@@ -1,4 +1,5 @@
 import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { QueueStatus } from "@/lib/server/finance/queue";
 import { INVOICE_STATUS_LABELS, QUEUE_STATUS_LABELS as WORK_ORDER_QUEUE_LABELS, type InvoiceStatus, type QueueStatus as WorkOrderQueueStatus } from "@/lib/finance/line-status";
 import { CHART_COLOR } from "@/lib/snagging/chart-palette";
@@ -93,6 +94,7 @@ const WORK_ORDER_STATUS_STYLES: Record<string, string> = {
   New: "bg-mist text-ink-soft",
   Cancelled: "bg-mist text-ink-soft",
   "Cannot Complete": "bg-destructive/10 text-destructive",
+  "Non-billable": "bg-warning/10 text-warning",
 };
 
 export function WorkOrderStatusBadge({ status }: { status: string | null }) {
@@ -121,6 +123,8 @@ export function InvoiceStatusBadge({ status }: { status: InvoiceStatus }) {
 
 /* Ready to invoice by work order: the queue's tints, plus Not ready (grey) and Partially invoiced (amber). */
 const WORK_ORDER_QUEUE_STYLES: Record<WorkOrderQueueStatus, string> = {
+  non_billable: "bg-mist text-ink-soft",
+  void: "bg-mist text-ink-soft line-through",
   not_ready: "bg-mist text-ink-soft",
   pending: "bg-mist text-ink-soft",
   in_progress: "bg-brand-50 text-brand",
@@ -148,5 +152,28 @@ export function InvoiceTotals({ total }: { total: number }) {
       </span>
       <span className="font-semibold tabular-nums">{aed(total)}</span>
     </div>
+  );
+}
+
+/**
+ * A line item's name, and its description when it says more, one line each
+ * cut with "…"; the whole of both in a tooltip on hover. The parent sets the
+ * width (a fixed max, or min-w-0 in a flex row).
+ */
+export function LineName({ name, description, className }: { name: string | null; description?: string | null; className?: string }) {
+  const detail = description && description !== name ? description : null;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div className={cn("min-w-0 cursor-default", className)}>
+          <p className="truncate text-sm font-medium">{name ?? "Line"}</p>
+          {detail ? <p className="text-muted-foreground truncate text-xs">{detail}</p> : null}
+        </div>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" align="start" className="max-w-sm">
+        <p className="font-medium">{name ?? "Line"}</p>
+        {detail ? <p className="mt-0.5 opacity-80">{detail}</p> : null}
+      </TooltipContent>
+    </Tooltip>
   );
 }

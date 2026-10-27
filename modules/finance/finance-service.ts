@@ -3,7 +3,8 @@ import type { PeriodMetrics, QueueMetrics, QueueSummary } from "@/lib/finance/me
 import type { QueueAction, QueueStatus } from "@/lib/server/finance/queue";
 import type { QueueItemDetail, QueueRow } from "@/lib/server/finance/queue-read";
 import type { ScanProposal } from "@/lib/server/finance/invoice-scan";
-import type { WorkOrderDetail } from "@/lib/server/finance/work-orders";
+import type { LiveAttachment, LiveServiceReport } from "@/lib/server/finance/fsm-live";
+import type { OpenQuery, WorkOrderDetail } from "@/lib/server/finance/work-orders";
 
 export type QueueListFilters = {
   statuses: QueueStatus[];
@@ -60,12 +61,36 @@ export const financeService = {
     total: number;
     note?: string | null;
     allocations: Array<{ line: string; workOrder: string; amount: number }>;
-    filePath?: string | null;
+    filePath: string;
     scan?: Record<string, unknown> | null;
   }) => executeRESTBackend<{ invoiceId: string }>("/api/finance/invoices", { method: "POST", body: input }),
 
+  /** Operations: "X % done" against the whole work order (line: null) or some lines, to invoice or for revenue only. */
+  recordProgress: (
+    workOrderId: string,
+    input: { entries: Array<{ line: string | null; percent: number; purpose: "invoice" | "revenue_only" }>; note?: string | null },
+  ) => executeRESTBackend<{ data: { recorded: number } }>(`/api/finance/work-orders/${workOrderId}/progress`, { method: "POST", body: input }),
+
+  /** The files on a work order and its appointments (service reports), from FSM. */
+  workOrderFiles: (workOrderId: string, refresh = false) =>
+    executeRESTBackend<{ data: { serviceReports: LiveServiceReport[]; files: LiveAttachment[]; appointments: number } }>(`/api/finance/work-orders/${workOrderId}/attachments`, {
+      params: refresh ? { refresh: "1" } : undefined,
+    }).then((r) => r.data),
+
+  /** Where a recorded MAHER invoice's file opens (a short-lived link to it). */
+  invoiceFileUrl: (workOrderId: string, invoiceId: string) =>
+    `/api/finance/work-orders/${encodeURIComponent(workOrderId)}/invoices/${encodeURIComponent(invoiceId)}/file`,
+
+  /** Where a work order's FSM file opens (inline; &download=1 to save it). */
+  workOrderFileUrl: (workOrderId: string, fileId: string) =>
+    `/api/finance/work-orders/${encodeURIComponent(workOrderId)}/attachments/${encodeURIComponent(fileId)}`,
+
+  /** Work orders waiting on a coordinator's answer. */
+  openQueries: () =>
+    executeRESTBackend<{ data: { rows: OpenQuery[]; ledgerReady: boolean; canAnswer: boolean } }>("/api/finance/queries").then((r) => r.data),
+
   /** A one-time upload URL for a MAHER invoice to be read (503 when scanning is not set up). */
-  signInvoiceUpload: (input: { fileName: string; contentType: string; size: number }) =>
+  signInvoiceUpload: (input: { fileName: string; contentType: string; size: number; scan?: boolean }) =>
     executeRESTBackend<{ path: string; signedUrl: string; contentType: string }>("/api/finance/invoices/upload", { method: "POST", body: input }),
 
   /** Reads the uploaded invoice and proposes the lines it covers; records nothing. */
@@ -78,9 +103,9 @@ export const financeService = {
     input: { action: "raise_query" | "answer_query" | "put_on_hold" | "resume"; expectedStatus: string; note?: string | null },
   ) => executeRESTBackend<{ status: string }>(`/api/finance/work-orders/${id}/action`, { method: "POST", body: input }),
 
-  /** A work order marked not to be invoiced, for verification. */
-  requestWorkOrderExclusion: (id: string, input: { reason: string; notes?: string | null; evidence?: string[] }) =>
-    executeRESTBackend<{ exclusionId: string }>(`/api/finance/work-orders/${id}/exclusion`, { method: "POST", body: input }),
+  /** A work order marked not to be invoiced: for verification when Finance asks, verified at once when Operations does. */
+  requestWorkOrderExclusion: (id: string, input: { reason: string; notes?: string | null; evidence?: string[]; as?: "finance" | "operations" }) =>
+    executeRESTBackend<{ exclusionId: string; verified: boolean }>(`/api/finance/work-orders/${id}/exclusion`, { method: "POST", body: input }),
 
   decideWorkOrderExclusion: (exclusionId: string, input: { decision: "verified" | "rejected"; note?: string | null }) =>
     executeRESTBackend<{ status: string }>(`/api/finance/work-orders/exclusions/${exclusionId}/decision`, { method: "POST", body: input }),

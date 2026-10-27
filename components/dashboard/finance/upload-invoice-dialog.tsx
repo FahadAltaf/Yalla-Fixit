@@ -4,7 +4,7 @@ import { useMemo, useRef, useState } from "react";
 import { FileText, FileUp, Loader2, Plus, ScanText, TriangleAlert, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 
-import { ActionDialogContent, SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
+import { ActionDialogContent, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,36 +13,63 @@ import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } fr
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { CandidateLine, Confidence } from "@/lib/finance/invoice-match";
-import { withVat } from "@/lib/finance/line-status";
+import { withoutVat, withVat } from "@/lib/finance/line-status";
 import { todayInZone } from "@/lib/scheduling/org-time";
 import type { ScanProposal } from "@/lib/server/finance/invoice-scan";
 import { cn } from "@/lib/utils";
 import { financeService } from "@/modules/finance/finance-service";
 
-import { InvoiceTotals, aed } from "./shared";
+import { InvoiceTotals, LineName, aed } from "./shared";
 
 /**
  * Upload a MAHER invoice and let the AI read it (decided with the user,
  * 22 Oct). Three steps in one dialog: choose the file; it is uploaded and
  * read; the review shows which work-order lines the invoice appears to
  * cover and how much of each, which the person corrects and confirms.
- * Nothing is recorded until they do (and confirm once more), and the file
+ * Nothing is recorded until they do, and the file
  * and what the scan read are kept with the invoice. Only lines completed in
  * FSM are offered (the server reads no others); from the lines ticked on a
  * work order, only those.
  */
 
-type Row = { key: string; candidate: CandidateLine; amount: string; included: boolean; confidence: Confidence | null; reasons: string[]; scanned: string | null };
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+type Row = {
+  key: string;
+  candidate: CandidateLine;
+  /** This invoice's amount for the line, incl. VAT, as typed (27 Oct: as in Enter the MAHER details). */
+  amount: string;
+  /** The % as typed: of the line's whole value; unset when the amount was typed instead. */
+  pct?: string;
+  included: boolean;
+  confidence: Confidence | null;
+  reasons: string[];
+  scanned: string | null;
+};
+
+/* A candidate line's VAT, each at its own rate. */
+const vatLine = (c: CandidateLine) => ({ amount: c.amount, lineAmount: c.amountWithVat, taxPercent: null });
+const withVatOf = (c: CandidateLine, beforeVat: number) => withVat(beforeVat, vatLine(c));
+/* What is left of the line, incl. VAT. */
+const leftOf = (r: Row) => withVatOf(r.candidate, r.candidate.remaining);
+/* The amount typed, before VAT; the last cent of a line paid in full is the line's, not rounding's. */
+const beforeVatOf = (r: Row) => {
+  const part = withoutVat(Number(r.amount) || 0, vatLine(r.candidate));
+  return part > r.candidate.remaining && part - r.candidate.remaining <= 0.011 ? r.candidate.remaining : part;
+};
+/* The % of a line's whole value an amount is, as shown in the % box. */
+const percentOf = (r: Row) => {
+  const n = Number(r.amount);
+  const whole = withVatOf(r.candidate, r.candidate.amount);
+  return r.amount.trim() !== "" && Number.isFinite(n) && whole > 0 ? String(round2((n / whole) * 100)) : "";
+};
 
 const CONFIDENCE: Record<Confidence, { label: string; className: string }> = {
   high: { label: "Strong match", className: "bg-success/10 text-success" },
   medium: { label: "Likely", className: "bg-warning/10 text-warning" },
   low: { label: "Check", className: "bg-destructive/10 text-destructive" },
 };
-
-const round2 = (n: number) => Math.round(n * 100) / 100;
 
 const ACCEPT = ".pdf,.jpg,.jpeg,.png,.webp";
 const MAX_BYTES = 10 * 1024 * 1024;
@@ -70,7 +97,6 @@ export function UploadInvoiceDialog({
   const [key] = useState(() => crypto.randomUUID());
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  const { confirm: ask, dialog } = useConfirm();
   const fileRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
 
@@ -106,7 +132,7 @@ export function UploadInvoiceDialog({
       const proposed: Row[] = result.proposals.map((p) => ({
         key: p.candidate.lineId,
         candidate: p.candidate,
-        amount: String(p.amount),
+        amount: String(withVatOf(p.candidate, p.amount)),
         included: p.confidence !== "low",
         confidence: p.confidence,
         reasons: p.reasons,
@@ -122,7 +148,7 @@ export function UploadInvoiceDialog({
                   proposed.find((r) => r.candidate.lineId === c.lineId) ?? {
                     key: c.lineId,
                     candidate: c,
-                    amount: String(c.remaining),
+                    amount: String(withVatOf(c, c.remaining)),
                     included: true,
                     confidence: null,
                     reasons: [],
@@ -144,24 +170,20 @@ export function UploadInvoiceDialog({
     [proposal, rows, only],
   );
   const included = rows.filter((r) => r.included);
-  const sum = round2(included.reduce((s, r) => s + (Number(r.amount) || 0), 0));
-  const bad = included.find((r) => !(Number(r.amount) > 0) || Number(r.amount) > r.candidate.remaining + 0.005);
+  const bad = included.find((r) => !(Number(r.amount) > 0) || beforeVatOf(r) > r.candidate.remaining + 0.005);
   /* The invoice total is the lines with VAT, worked out as the server does; what the AI read is only compared. */
   const sumWithVat = round2(
-    included.reduce((s, r) => s + withVat(Number(r.amount) || 0, { amount: r.candidate.amount, lineAmount: r.candidate.amountWithVat, taxPercent: null }), 0),
+    included.reduce((s, r) => s + withVatOf(r.candidate, beforeVatOf(r)), 0),
   );
   const scannedTotal = proposal?.scanned.total ?? null;
+  /* Whether the number and date shown are what was read from the file (27 Oct). */
+  const numberRead = Boolean(proposal?.scanned.invoiceNumber) && number.trim() === proposal?.scanned.invoiceNumber;
+  const dateRead = Boolean(proposal?.scanned.invoiceDate) && date === proposal?.scanned.invoiceDate;
   const differs = scannedTotal !== null && included.length > 0 && Math.abs(scannedTotal - sumWithVat) > 0.01;
   const valid = step === "review" && included.length > 0 && !bad && number.trim() && date && sumWithVat > 0;
 
   const confirm = async () => {
     if (!proposal || !path) return;
-    const ok = await ask({
-      title: `Record MAHER ${number.trim()}?`,
-      description: `${aed(sumWithVat)} with VAT (${aed(sum)} before VAT), against ${included.length} ${included.length === 1 ? "line" : "lines"}.${differs ? ` The invoice itself says ${aed(scannedTotal!)}.` : ""} It cannot be undone here.`,
-      confirmText: "Record invoice",
-    });
-    if (!ok) return;
     setBusy(true);
     setProblem(null);
     try {
@@ -170,7 +192,7 @@ export function UploadInvoiceDialog({
         number: number.trim(),
         date,
         total: sumWithVat,
-        allocations: included.map((r) => ({ line: r.candidate.lineId, workOrder: r.candidate.workOrderId, amount: round2(Number(r.amount)) })),
+        allocations: included.map((r) => ({ line: r.candidate.lineId, workOrder: r.candidate.workOrderId, amount: round2(beforeVatOf(r)) })),
         filePath: path,
         scan: proposal.scanned as unknown as Record<string, unknown>,
       });
@@ -190,7 +212,7 @@ export function UploadInvoiceDialog({
       {/* As high as its content, up to the screen; the middle scrolls, the title and buttons stay. */}
       <ActionDialogContent
         busy={busy || step === "reading"}
-        className={cn("flex max-h-[calc(100dvh-2rem)] flex-col", step === "review" ? "sm:max-w-3xl" : "sm:max-w-md")}
+        className={cn("flex max-h-[calc(100dvh-2rem)] flex-col", step === "review" ? "sm:max-w-xl" : "sm:max-w-md")}
       >
         <DialogHeader>
           <DialogTitle>Upload a MAHER invoice</DialogTitle>
@@ -199,7 +221,7 @@ export function UploadInvoiceDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="-mx-4 grid min-h-0 flex-1 gap-4 overflow-y-auto px-4 py-0.5">
+        <div className="-mx-4 grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] gap-4 overflow-x-hidden overflow-y-auto px-4 py-0.5">
         {step !== "review" ? (
           <div className="grid gap-2">
             <input
@@ -281,69 +303,131 @@ export function UploadInvoiceDialog({
                 </AlertDescription>
               </Alert>
             ) : null}
+            {/* Named on the invoice, but nothing on them may be invoiced yet: say why their lines are not offered. */}
+            {proposal.notReady?.length ? (
+              <Alert>
+                <TriangleAlert className="size-4" />
+                <AlertTitle>Not ready to invoice yet</AlertTitle>
+                <AlertDescription>
+                  {proposal.notReady.join(", ")}: on this invoice, but nothing on {proposal.notReady.length === 1 ? "it" : "them"} is ready to invoice yet. Operations marks the work
+                  ready, or it is Completed in FSM with its quotation flagged To Be Invoiced; until then its lines cannot be invoiced.
+                </AlertDescription>
+              </Alert>
+            ) : null}
 
-            <div className="overflow-x-auto rounded-md border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-10 pl-4" />
-                    <TableHead>Work order line</TableHead>
-                    <TableHead>Read from the invoice</TableHead>
-                    <TableHead className="text-right">Left to invoice</TableHead>
-                    <TableHead className="w-36 pr-4 text-right">This invoice</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {rows.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={5} className="text-muted-foreground py-6 text-center text-sm">
-                        No line could be matched with confidence. Add the lines it covers below.
-                      </TableCell>
-                    </TableRow>
-                  ) : null}
-                  {rows.map((r) => {
-                    const over = r.included && Number(r.amount) > r.candidate.remaining + 0.005;
-                    return (
-                      <TableRow key={r.key}>
-                        <TableCell className="pl-4">
-                          <Checkbox checked={r.included} onCheckedChange={(c) => update(r.candidate.lineId, { included: Boolean(c) })} aria-label="Include this line" />
-                        </TableCell>
-                        <TableCell>
-                          <p className="text-sm font-medium">{r.candidate.name ?? "Line"}</p>
-                          <p className="text-muted-foreground text-xs">
+            {/* A card per line, as in Enter the MAHER details: tick it, then the % or the amount with VAT. */}
+            {rows.length === 0 ? (
+              <p className="text-muted-foreground rounded-lg border px-3 py-6 text-center text-sm">No line could be matched with confidence. Add the lines it covers below.</p>
+            ) : (
+              <div className="grid gap-3">
+                {rows.map((r) => {
+                  const on = r.included;
+                  const typed = Number(r.amount) || 0;
+                  const left = leftOf(r);
+                  const over = on && beforeVatOf(r) > r.candidate.remaining + 0.005;
+                  return (
+                    <div
+                      key={r.key}
+                      className={cn("min-w-0 rounded-lg border px-3 py-2 transition-colors", on ? "border-brand/40 bg-brand-50/40" : "bg-muted/30", over && "border-destructive")}
+                    >
+                      <div className="flex items-start gap-2.5">
+                        <Checkbox
+                          className="mt-0.5"
+                          checked={on}
+                          onCheckedChange={(c) => update(r.candidate.lineId, { included: Boolean(c) })}
+                          aria-label={`Include ${r.candidate.name ?? "line"}`}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <LineName name={r.candidate.name} description={r.candidate.description} />
+                          <p className="text-muted-foreground text-xs tabular-nums">
                             {r.candidate.workOrderNumber}
                             {r.candidate.quotationNumber ? ` · quotation ${r.candidate.quotationNumber}` : ""}
+                            {" · "}
+                            <span className="text-foreground font-medium">{aed(left)}</span> left, incl. VAT
                           </p>
-                        </TableCell>
-                        <TableCell>
-                          {r.scanned ? <p className="text-muted-foreground line-clamp-2 max-w-56 text-xs">{r.scanned}</p> : <span className="text-muted-foreground text-xs">Added by hand</span>}
-                          {r.confidence ? (
-                            <Badge variant="secondary" className={cn("mt-1 border-0", CONFIDENCE[r.confidence].className)} title={r.reasons.join("; ")}>
-                              {CONFIDENCE[r.confidence].label}
-                            </Badge>
-                          ) : null}
-                        </TableCell>
-                        <TableCell className="text-right text-sm tabular-nums">{aed(r.candidate.remaining)}</TableCell>
-                        <TableCell className="pr-4 text-right">
-                          <Input
-                            type="number"
-                            inputMode="decimal"
-                            min={0}
-                            step="0.01"
-                            disabled={!r.included}
-                            aria-invalid={over || undefined}
-                            className={cn("h-8 w-32 text-right", over && "border-destructive")}
-                            value={r.amount}
-                            onChange={(e) => update(r.candidate.lineId, { amount: e.target.value })}
-                            aria-label={`Amount for ${r.candidate.name ?? "line"}`}
-                          />
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
+                          <div className="mt-1 flex min-w-0 items-center gap-2">
+                            {r.confidence ? (
+                              <Badge variant="secondary" className={cn("shrink-0 border-0", CONFIDENCE[r.confidence].className)} title={r.reasons.join("; ")}>
+                                {CONFIDENCE[r.confidence].label}
+                              </Badge>
+                            ) : null}
+                            <p className="text-muted-foreground truncate text-xs" title={r.scanned ?? undefined}>
+                              {r.scanned ? `Read: ${r.scanned}` : "Added by hand"}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {on ? (
+                        <div className="mt-2 grid gap-1 pl-6">
+                          <div className="flex items-center gap-2">
+                            {/* A % of the line's whole value fills the amount; an amount typed shows its %. */}
+                            <div className="relative w-20 shrink-0">
+                              <Input
+                                type="number"
+                                inputMode="decimal"
+                                min={0}
+                                max={100}
+                                step="0.01"
+                                aria-invalid={over || undefined}
+                                className={cn(
+                                  "h-7 pr-6 text-xs tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none",
+                                  over && "border-destructive",
+                                )}
+                                value={r.pct ?? percentOf(r)}
+                                onChange={(e) => {
+                                  const text = e.target.value;
+                                  const p = Number(text);
+                                  update(r.candidate.lineId, {
+                                    pct: text,
+                                    amount: text.trim() !== "" && Number.isFinite(p) ? String(round2((withVatOf(r.candidate, r.candidate.amount) * p) / 100)) : "",
+                                  });
+                                }}
+                                aria-label={`Percent of ${r.candidate.name ?? "the line"} on this invoice`}
+                              />
+                              <span className="text-muted-foreground pointer-events-none absolute inset-y-0 right-2 flex items-center text-xs">%</span>
+                            </div>
+                            <div className="relative min-w-0 flex-1">
+                              <span className="text-muted-foreground pointer-events-none absolute inset-y-0 left-2 flex items-center text-xs">AED</span>
+                              <Input
+                                type="number"
+                                inputMode="decimal"
+                                min={0}
+                                step="0.01"
+                                aria-invalid={over || undefined}
+                                className={cn(
+                                  "h-7 pl-9 text-xs tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none",
+                                  over && "border-destructive",
+                                )}
+                                value={r.amount}
+                                onChange={(e) => update(r.candidate.lineId, { amount: e.target.value, pct: undefined })}
+                                aria-label={`Amount of ${r.candidate.name ?? "the line"} on this invoice, incl. VAT`}
+                              />
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <p className={cn("text-[11px]", over ? "text-destructive" : "text-muted-foreground")}>
+                              {over ? `More than the ${aed(left)} left.` : typed > 0 ? `${aed(Math.max(0, round2(left - typed)))} left on the line after` : "Enter an amount or a %."}
+                            </p>
+                            {Math.abs(typed - left) >= 0.005 ? (
+                              <Button
+                                type="button"
+                                variant="link"
+                                size="sm"
+                                className="h-auto shrink-0 p-0 text-[11px]"
+                                onClick={() => update(r.candidate.lineId, { amount: String(left), pct: undefined })}
+                              >
+                                Full amount
+                              </Button>
+                            ) : null}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
             {proposal.unmatched.length ? (
               <div className="grid gap-1.5">
@@ -370,7 +454,7 @@ export function UploadInvoiceDialog({
                   value=""
                   onValueChange={(lineId) => {
                     const c = unusedCandidates.find((x) => x.lineId === lineId);
-                    if (c) setRows((prev) => [...prev, { key: c.lineId, candidate: c, amount: String(c.remaining), included: true, confidence: null, reasons: [], scanned: null }]);
+                    if (c) setRows((prev) => [...prev, { key: c.lineId, candidate: c, amount: String(withVatOf(c, c.remaining)), included: true, confidence: null, reasons: [], scanned: null }]);
                   }}
                 >
                   <SelectTrigger className="w-full sm:w-96" aria-label="Add a line">
@@ -379,7 +463,7 @@ export function UploadInvoiceDialog({
                   <SelectContent>
                     {unusedCandidates.map((c) => (
                       <SelectItem key={c.lineId} value={c.lineId}>
-                        {c.workOrderNumber} · {c.name ?? "Line"} · {aed(c.remaining)} left
+                        {c.workOrderNumber} · {c.name ?? "Line"} · {aed(withVatOf(c, c.remaining))} left, incl. VAT
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -402,15 +486,26 @@ export function UploadInvoiceDialog({
               <div className="grid gap-1.5">
                 <Label htmlFor="scan-number">MAHER invoice number</Label>
                 <Input id="scan-number" value={number} maxLength={60} onChange={(e) => setNumber(e.target.value)} />
+                {/* Where the value came from: read from the file, or not on it. */}
+                <p className="text-muted-foreground text-xs">
+                  {numberRead ? "Read from the invoice." : proposal?.scanned.invoiceNumber ? "Changed from what was read." : "Not found on the file: enter it."}
+                </p>
               </div>
               <div className="grid gap-1.5">
                 <Label htmlFor="scan-date">Invoice date</Label>
                 <Input id="scan-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+                <p className={cn("text-xs", proposal?.scanned.invoiceDate ? "text-muted-foreground" : "text-warning")}>
+                  {dateRead
+                    ? "Read from the invoice."
+                    : proposal?.scanned.invoiceDate
+                      ? "Changed from what was read."
+                      : "No invoice date on the file: today's date is filled in. Check it."}
+                </p>
               </div>
             </div>
             {bad ? (
               <p className="text-destructive text-sm">
-                {bad.candidate.name ?? "A line"}: enter an amount above zero and no more than {aed(bad.candidate.remaining)}.
+                {bad.candidate.name ?? "A line"}: enter an amount above zero and no more than {aed(leftOf(bad))} incl. VAT.
               </p>
             ) : null}
           </div>
@@ -438,7 +533,6 @@ export function UploadInvoiceDialog({
             </SubmitButton>
           )}
         </DialogFooter>
-        {dialog}
       </ActionDialogContent>
     </Dialog>
   );

@@ -14,6 +14,8 @@ import { logAccess, openReport } from "@/lib/server/reports/route-helpers";
  */
 
 export const dynamic = "force-dynamic";
+/* A first read of Zoho FSM for the dates can take half a minute (26 Oct: the reports read FSM live). */
+export const maxDuration = 60;
 
 export async function GET(req: NextRequest) {
   const request = await openReport(req, "exceptions");

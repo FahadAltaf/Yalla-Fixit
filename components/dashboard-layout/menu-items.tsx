@@ -178,6 +178,11 @@ export const baseSectionsItems: MenuItem[] = [
         canSee: canUseFinanceQueue,
       },
       {
+        title: "Queries",
+        url: "/finance/queries",
+        canSee: canUseFinanceQueue,
+      },
+      {
         title: "Invoicing metrics",
         url: "/finance/metrics",
         resource: ResourceType.FINANCE_QUEUE,

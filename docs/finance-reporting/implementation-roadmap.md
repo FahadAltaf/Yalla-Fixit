@@ -267,12 +267,12 @@ the earlier queue stay in the database and still open from their old links.
   raised, On hold, In progress, Partially invoiced, Pending (ready), Not ready. Mark ready (Finance queue Edit
   or a coordinator), record invoice (Finance queue Approve) with amount or % per line.
 - **C, upload and AI scan (built)**: Upload invoice (list and work order) stores the PDF or photo under
-  `invoices/` in the private bucket; OpenAI (Responses API, strict JSON schema) reads number, date, totals,
+  `invoices/` in the private bucket; Claude (Claude Haiku 5.5 since 27 Oct, structured outputs) reads number, date, totals,
   work order and quotation numbers and lines; the work orders it names are found in the last four months of
   FSM (live, up to 8 opened) and `lib/finance/invoice-match.ts` proposes lines and amounts (by the numbers
   printed, the amount left, 5 % VAT taken off, description overlap; never beyond what is left; a number alone
-  is not enough); the review screen lets the person correct, add lines and confirm. Needs `OPENAI_API_KEY`
-  (`OPENAI_INVOICE_MODEL` optional, default `gpt-4.1-mini`); not yet run against a real MAHER invoice.
+  is not enough); the review screen lets the person correct, add lines and confirm. Needs `ANTHROPIC_API_KEY`
+  (`ANTHROPIC_INVOICE_MODEL` optional, default `claude-haiku-5-5`); not yet run against a real MAHER invoice.
 - **D, metrics and digest (built)**: migration `20261025100000` keeps a snapshot of a work order (client,
   quotation, coordinator, FSM status, type, raised at, value, and every line's amount) whenever someone acts
   on it; the server has just read it live for that action, so this costs no extra FSM call, and work orders

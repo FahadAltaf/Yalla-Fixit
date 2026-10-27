@@ -52,7 +52,13 @@ export const INVOICE_STATUS_LABELS: Record<InvoiceStatus, string> = {
 const CENT = 0.01;
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-export type LineState = { amount: number | null; ready: boolean; invoicedAmount: number };
+export type LineState = {
+  amount: number | null;
+  ready: boolean;
+  invoicedAmount: number;
+  /** What may be invoiced of it now (lib/finance/progress.ts); left out, all that is left once ready. */
+  cap?: number;
+};
 
 export function lineRemaining(line: LineState): number {
   return Math.max(0, round2((line.amount ?? 0) - line.invoicedAmount));
@@ -69,7 +75,7 @@ export type WorkOrderInvoicing = {
   status: InvoiceStatus;
   lines: number;
   readyLines: number;
-  /** Ready and not yet invoiced: what Finance can invoice now. */
+  /** What Finance can invoice now: what is left of ready lines, or as much as Operations' percentage allows. */
   readyValue: number;
   invoicedValue: number;
   /** Not yet invoiced, ready or not. */
@@ -79,7 +85,7 @@ export type WorkOrderInvoicing = {
 export function workOrderInvoicing(lines: LineState[]): WorkOrderInvoicing {
   const statuses = lines.map(lineStatus);
   const invoicedValue = round2(lines.reduce((sum, l) => sum + l.invoicedAmount, 0));
-  const readyValue = round2(lines.reduce((sum, l) => sum + (l.ready ? lineRemaining(l) : 0), 0));
+  const readyValue = round2(lines.reduce((sum, l) => sum + (l.ready ? Math.min(lineRemaining(l), l.cap ?? lineRemaining(l)) : 0), 0));
   const remainingValue = round2(lines.reduce((sum, l) => sum + lineRemaining(l), 0));
   const status: InvoiceStatus =
     lines.length > 0 && statuses.every((s) => s === "invoiced")
@@ -108,7 +114,9 @@ export type QueueStatus =
   | "on_hold"
   | "partially_invoiced"
   | "invoiced"
-  | "excluded";
+  | "excluded"
+  | "non_billable"
+  | "void";
 
 export const QUEUE_STATUS_LABELS: Record<QueueStatus, string> = {
   not_ready: "Not ready",
@@ -119,14 +127,24 @@ export const QUEUE_STATUS_LABELS: Record<QueueStatus, string> = {
   partially_invoiced: "Partially invoiced",
   invoiced: "Invoiced",
   excluded: "Excluded",
+  non_billable: "Non-billable",
+  void: "Void",
 };
 
 /** What "Awaiting action" shows: work Finance still has to do something with. */
 export const AWAITING_ACTION: QueueStatus[] = ["pending", "in_progress", "query_raised", "on_hold", "partially_invoiced"];
 
-export function queueStatus(workflow: WorkflowStatus, invoicing: InvoiceStatus): QueueStatus {
+/**
+ * FSM's own end states come next to the portal's (26 Oct): Void is never
+ * invoiced; Non-billable is completed work not to be invoiced (AMC, free
+ * service), handled apart from billable work.
+ */
+export function queueStatus(workflow: WorkflowStatus, invoicing: InvoiceStatus, fsmStatus?: string | null): QueueStatus {
   if (workflow === "excluded") return "excluded";
   if (invoicing === "invoiced") return "invoiced";
+  const fsm = (fsmStatus ?? "").trim().toLowerCase();
+  if (fsm === "void" || fsm === "voided") return "void";
+  if (/^non[\s-]?billable$/.test(fsm)) return "non_billable";
   if (workflow === "query_raised" || workflow === "on_hold" || workflow === "in_progress") return workflow;
   if (invoicing === "partially_invoiced") return "partially_invoiced";
   return invoicing === "ready" ? "pending" : "not_ready";

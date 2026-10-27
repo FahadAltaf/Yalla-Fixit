@@ -11,6 +11,7 @@ import {
   workOrderEvidencePrefix,
 } from "@/lib/finance/evidence";
 import { hasResourceAction } from "@/lib/role-permissions";
+import { workOrderAbilities } from "@/lib/server/finance/route-helpers";
 import { requireResourceAccess } from "@/lib/server/require-access";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { ActionType, ResourceType } from "@/types/types";
@@ -30,8 +31,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const { id } = await ctx.params;
   if (!ID.test(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  const gate = await requireResourceAccess(ResourceType.FINANCE_EXCLUSIONS, ActionType.CREATE);
+  /* Whoever may mark it not invoiceable: Finance or Operations (27 Oct). */
+  const gate = await requireResourceAccess(null, null);
   if (!gate.ok) return gate.response;
+  if (!workOrderAbilities(gate.access.accessUser).exclude) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   const parsed = signSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Invalid file" }, { status: 400 });
   const { fileName, size } = parsed.data;

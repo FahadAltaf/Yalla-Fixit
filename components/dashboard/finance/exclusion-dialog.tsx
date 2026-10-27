@@ -24,9 +24,12 @@ export function ExclusionDialog({
   busy,
   onClose,
   onSubmit,
+  verifiedAtOnce = false,
 }: {
   open: boolean;
   busy: boolean;
+  /** Operations marks it: excluded at once, no verification (27 Oct). */
+  verifiedAtOnce?: boolean;
   onClose: () => void;
   onSubmit: (input: { reason: string; notes: string | null; files: File[] }) => void;
 }) {
@@ -55,8 +58,10 @@ export function ExclusionDialog({
         <DialogHeader>
           <DialogTitle>Mark not to be invoiced</DialogTitle>
           <DialogDescription>
-            For example an AMC PPM visit or an in-contract call-out already paid for. It is excluded only after
-            verification, and stays visible in Ready to invoice and the reports.
+            For example an AMC PPM visit or an in-contract call-out already paid for.{" "}
+            {verifiedAtOnce
+              ? "It is excluded at once, and stays visible in Ready to invoice and the reports."
+              : "It is excluded only after verification, and stays visible in Ready to invoice and the reports."}
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">

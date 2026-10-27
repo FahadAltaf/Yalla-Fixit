@@ -75,10 +75,11 @@ select
 ) post;
 
 -- 20261021100000 (+ 20261021110000's view): 5, 2, 6, 0, f, t, f on its own; the harness
--- applies 20261024100000 too, which adds 6 tables and 5 functions, and 20261025100000 (1 function): 11, 2, 12, 0, f, t, f.
+-- applies 20261024100000 too, which adds 6 tables and 5 functions, 20261025100000 (1 function) and
+-- 20261026100000 (1 table, 1 function): 12, 2, 13, 0, f, t, f.
 SELECT harness.expect(row(tables, views, functions, api_table_grants, api_schema_usage, server_schema_usage, server_can_write_directly)
-                      = row(11::bigint, 2::bigint, 12::bigint, 0::bigint, false, true, false),
-                      '20261021100000 post-check (with the line ledger and snapshot) returns 11, 2, 12, 0, f, t, f')
+                      = row(12::bigint, 2::bigint, 13::bigint, 0::bigint, false, true, false),
+                      '20261021100000 post-check (with the line ledger, snapshot and progress) returns 12, 2, 13, 0, f, t, f')
 FROM (
 select
   (select count(*) from pg_class where relnamespace = 'finance'::regnamespace and relkind = 'r')   as tables,
@@ -104,4 +105,15 @@ select (select count(*) from information_schema.columns where table_schema = 'fi
           and table_name = 'line_states' and column_name in ('fsm_completed_at', 'amount_with_vat')) as line_cols,
        (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
           where n.nspname = 'finance' and p.proname = 'snapshot_work_order') as snapshot_fn
+) post;
+
+-- 20261026100000: expect 1, 1, t
+SELECT harness.expect(row(progress_table, progress_fn, events_check) = row(1::bigint, 1::bigint, true), '20261026100000 post-check returns 1, 1, t')
+FROM (
+select (select count(*) from information_schema.tables where table_schema = 'finance'
+          and table_name = 'progress_entries') as progress_table,
+       (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+          where n.nspname = 'finance' and p.proname = 'record_progress') as progress_fn,
+       (select pg_get_constraintdef(oid) like '%progress_recorded%' from pg_constraint
+          where conname = 'line_events_event_type_check') as events_check
 ) post;

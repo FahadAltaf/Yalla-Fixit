@@ -16,8 +16,28 @@ import {
   type WorkflowStatus,
   type WorkOrderInvoicing,
 } from "@/lib/finance/line-status";
+import {
+  effectiveEntry,
+  invoiceCap,
+  isFlaggedToInvoice,
+  isNonBillable,
+  isVoid,
+  lineBillable,
+  readyForFinance,
+  recognisedValue,
+  type ProgressEntry,
+  type ProgressPurpose,
+} from "@/lib/finance/progress";
 import { addDaysToDateString, todayInZone, zonedTimeToUtc } from "@/lib/scheduling/org-time";
-import { fetchEstimateLive, fetchWorkOrderLive, fetchWorkOrdersLive, forgetLists, FsmLiveError, type LiveWorkOrder } from "@/lib/server/finance/fsm-live";
+import {
+  fetchEstimateLive,
+  fetchQuotationFlagsLive,
+  fetchWorkOrderLive,
+  fetchWorkOrdersLive,
+  forgetLists,
+  FsmLiveError,
+  type LiveWorkOrder,
+} from "@/lib/server/finance/fsm-live";
 import { readReportingSettings } from "@/lib/server/reporting/settings";
 import type { QuotationData } from "@/components/dashboard/extensions/quotation-templates/quotation-templates";
 import { readAllByIds, readAllRows } from "@/lib/server/snagging/read-all";
@@ -32,9 +52,12 @@ import { readAllByIds, readAllRows } from "@/lib/server/snagging/read-all";
  * part, and the queue's workflow on the work order (query, hold, not to be
  * invoiced).
  *
- * A line is ready to invoice once it, or its work order, is completed in
- * FSM (23 Oct); nobody marks it. Recording an invoice moves an open work
- * order to In Progress.
+ * Two views (26 Oct): Finance sees work Completed in FSM with its
+ * quotation flagged "To Be Invoiced", and work Operations has said is X %
+ * done to invoice (lib/finance/progress.ts); Operations sees every work
+ * order, with those whose appointments are all done but which nobody has
+ * marked Completed. Non-billable and Void (FSM) are never invoiced.
+ * Recording an invoice moves an open work order to In Progress.
  *
  * One status per work order: Not ready, Pending, In Progress, Query
  * Raised, On Hold, Partially invoiced, Invoiced, Excluded. "Awaiting
@@ -55,10 +78,29 @@ export const workOrderFiltersSchema = z.object({
   client: z.string().trim().max(200).optional(),
   /** FSM's owner of the work order. */
   coordinator: z.string().trim().max(200).optional(),
+  /** The work order's status in Zoho FSM, as fsmStatusLabel words it (27 Oct). */
+  fsm: z.string().trim().max(60).optional(),
   /** "all" (the default), "open" (awaiting action), or one queue status. */
   status: z
-    .enum(["open", "all", "not_ready", "pending", "in_progress", "query_raised", "on_hold", "partially_invoiced", "invoiced", "excluded"])
+    .enum([
+      "open",
+      "all",
+      "not_ready",
+      "pending",
+      "in_progress",
+      "query_raised",
+      "on_hold",
+      "partially_invoiced",
+      "invoiced",
+      "excluded",
+      "non_billable",
+      "void",
+    ])
     .optional(),
+  /** Finance (ready to invoice) or Operations (every work order). */
+  view: z.enum(["finance", "operations"]).optional(),
+  /** "1": Operations' reminder only: appointments all done, not marked Completed in FSM. */
+  attention: z.enum(["0", "1"]).optional(),
   /** "1": pending longer than the aged setting. */
   aged: z.enum(["0", "1"]).optional(),
   /** "1": ask FSM again rather than use the last ten minutes' answer. */
@@ -82,6 +124,28 @@ export function workOrderPeriod(filters: { from?: string; to?: string }, today =
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/** A work order's status in Zoho FSM for the filter: Non-billable by its Billing Status too. */
+export function fsmStatusLabel(w: Pick<LiveWorkOrder, "status" | "invoicingStatus">): string {
+  return isNonBillable(w.invoicingStatus) ? "Non-billable" : (w.status ?? "No status");
+}
+
+/* FSM's statuses in the order work moves through them; the four Finance asked for always offered. */
+const FSM_STATUS_ORDER = ["New", "Scheduled Appointment", "Dispatched", "In Progress", "Completed", "Cannot Complete", "Cancelled", "Non-billable", "Void"];
+const FSM_STATUS_ALWAYS = ["In Progress", "Completed", "Non-billable", "Void"];
+
+function fsmStatusOptions(present: string[]): string[] {
+  const all = [...new Set([...FSM_STATUS_ALWAYS, ...present])];
+  const rank = (s: string) => (FSM_STATUS_ORDER.includes(s) ? FSM_STATUS_ORDER.indexOf(s) : FSM_STATUS_ORDER.length);
+  return all.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+}
+
+/*
+  The status a line's invoicing reads: the work order's, or Non-billable when
+  FSM's Billing Status (the line's own, else the work order's) says so.
+*/
+const lineBilling = (line: { billing_status?: string | null }, wo: LiveWorkOrder) =>
+  lineBillable(line.billing_status, wo.billingStatus) || isVoid(wo.status) ? wo.status : "Non-billable";
 const str = (v: unknown) => (v === null || v === undefined ? null : String(v));
 
 // ---------------------------------------------------------------------
@@ -110,6 +174,72 @@ type StateRow = {
   /** When FSM said the line was completed, as last seen (migration 20261025100000). */
   completedAt: string | null;
 };
+
+type ProgressRow = ProgressEntry & {
+  id: string;
+  workOrderId: string;
+  lineName: string | null;
+  valueBeforeVat: number;
+  note: string | null;
+  recordedBy: string | null;
+};
+
+/* Operations' "% done" (migration 20261026100000); before it, nobody has recorded any. */
+async function loadProgress(admin: SupabaseClient, workOrderIds: string[]): Promise<{ ready: boolean; byWorkOrder: Map<string, ProgressRow[]> }> {
+  const byWorkOrder = new Map<string, ProgressRow[]>();
+  if (!workOrderIds.length) return { ready: true, byWorkOrder };
+  try {
+    const rows = await readAllByIds<Record<string, unknown>>(
+      workOrderIds,
+      (chunk, from, to) =>
+        admin.schema("finance").from("progress_entries").select("*").in("fsm_work_order_id", chunk).order("recorded_at").range(from, to),
+      "progress",
+    );
+    for (const r of rows) {
+      const row: ProgressRow = {
+        id: String(r.id),
+        workOrderId: String(r.fsm_work_order_id),
+        lineId: str(r.fsm_line_id),
+        lineName: str(r.line_name),
+        percent: Number(r.percent),
+        purpose: r.purpose === "revenue_only" ? "revenue_only" : "invoice",
+        valueBeforeVat: Number(r.value_before_vat ?? 0),
+        note: str(r.note),
+        recordedBy: str(r.recorded_by_label),
+        recordedAt: String(r.recorded_at),
+      };
+      byWorkOrder.set(row.workOrderId, [...(byWorkOrder.get(row.workOrderId) ?? []), row]);
+    }
+    return { ready: true, byWorkOrder };
+  } catch (error) {
+    if (/progress_entries|PGRST205|42P01|schema cache/i.test(error instanceof Error ? error.message : String(error))) {
+      return { ready: false, byWorkOrder };
+    }
+    throw error;
+  }
+}
+
+/**
+ * In the list, where FSM gives no lines: what Operations' "invoice"
+ * percentages allow, over the lines the portal knows and, for a whole-work-
+ * order entry, the rest of the work order's value.
+ */
+function progressCap(entries: ProgressRow[], states: StateRow[], subTotal: number | null, workOrderStatus: string | null): number {
+  if (!entries.length) return 0;
+  const known = new Map(states.map((s) => [s.lineId, { amount: s.amount, invoiced: s.invoicedAmount }]));
+  for (const e of entries) if (e.lineId && !known.has(e.lineId)) known.set(e.lineId, { amount: e.valueBeforeVat, invoiced: 0 });
+  let cap = 0;
+  let knownValue = 0;
+  for (const [lineId, m] of known) {
+    knownValue += m.amount;
+    cap += invoiceCap({ amount: m.amount, invoicedAmount: m.invoiced }, { workOrderStatus, postToMaher: null, entry: effectiveEntry(lineId, entries) });
+  }
+  const whole = entries.filter((e) => e.lineId === null).sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0];
+  if (whole && whole.purpose === "invoice" && subTotal && !isNonBillable(workOrderStatus) && !isVoid(workOrderStatus)) {
+    cap += (Math.max(0, subTotal - knownValue) * whole.percent) / 100;
+  }
+  return round2(cap);
+}
 
 type WorkflowRow = {
   status: WorkflowStatus;
@@ -193,23 +323,25 @@ async function loadLedger(
  * when the work order is completed in FSM. Invoiced in full only when the
  * invoiced amount reaches FSM's total.
  */
-function invoicingFrom(states: StateRow[], subTotal: number | null, completed: boolean): WorkOrderInvoicing {
+function invoicingFrom(states: StateRow[], subTotal: number | null, completed: boolean, progressValue = 0): WorkOrderInvoicing {
   const invoicedValue = round2(states.reduce((sum, s) => sum + s.invoicedAmount, 0));
   const value = subTotal ?? round2(states.reduce((sum, s) => sum + s.amount, 0));
   const remainingValue = Math.max(0, round2(value - invoicedValue));
+  /* Ready for Finance: all that is left; before that, what Operations' percentages allow. */
+  const readyValue = completed ? remainingValue : Math.min(remainingValue, progressValue);
   const status: InvoiceStatus =
     invoicedValue > 0 && remainingValue <= 0.01
       ? "invoiced"
       : invoicedValue > 0
         ? "partially_invoiced"
-        : completed && remainingValue > 0.01
+        : readyValue > 0.01
           ? "ready"
           : "not_ready";
   return {
     status,
     lines: states.length,
     readyLines: completed ? states.length : states.filter((s) => s.completedAt).length,
-    readyValue: completed ? remainingValue : 0,
+    readyValue,
     invoicedValue,
     remainingValue,
   };
@@ -253,6 +385,7 @@ async function ledgerWorkOrdersOutside(admin: SupabaseClient, live: Set<string>)
       type: null,
       workType: null,
       billingStatus: null,
+      invoicingStatus: null,
       companyName: null,
       contactName: null,
       ownerName: null,
@@ -264,6 +397,7 @@ async function ledgerWorkOrdersOutside(admin: SupabaseClient, live: Set<string>)
       subTotal: null,
       grandTotal: null,
       taxAmount: null,
+      appointmentStatuses: [],
     });
     const outside = new Map<string, LiveWorkOrder>();
     for (const r of flows) {
@@ -318,10 +452,19 @@ export type WorkOrderListRow = {
   /** Since when it has been in its queue status. */
   statusSince: string | null;
   assigneeName: string | null;
+  /** The quotation's Post to MAHER is "To Be Invoiced"; null when there is no quotation. */
+  flagged: boolean | null;
+  /** Completed in FSM and flagged: Finance invoices all of it. */
+  readyForFinance: boolean;
+  /** Operations' reminder: its appointments are all done, but it is not marked Completed in FSM. */
+  needsCompleting: boolean;
+  /** Operations' latest whole-work-order "% done", if any. */
+  progressPercent: number | null;
+  progressPurpose: ProgressPurpose | null;
 };
 
 export type WorkOrderQueueSummary = Record<
-  "pending" | "inProgress" | "queryRaised" | "onHold" | "partiallyInvoiced" | "excluded" | "invoiced" | "notReady",
+  "pending" | "inProgress" | "queryRaised" | "onHold" | "partiallyInvoiced" | "excluded" | "invoiced" | "notReady" | "nonBillable" | "void",
   /** What is still to invoice (or, Not ready and Excluded, the work order's value), before and with VAT. */
   { count: number; value: number; valueWithVat: number }
 > & {
@@ -338,7 +481,7 @@ export type WorkOrderList = {
   rows: WorkOrderListRow[];
   total: number;
   summary: WorkOrderQueueSummary;
-  options: { clients: string[]; coordinators: string[] };
+  options: { clients: string[]; coordinators: string[]; fsmStatuses: string[] };
   agedAfterDays: number;
   /** When FSM was read for this list, and what it cost. */
   fsm: { fetchedAt: string; calls: number; cached: boolean };
@@ -346,6 +489,11 @@ export type WorkOrderList = {
   outsideDates: number;
   /** False until migration 20261024100000 is applied: Ready marks, workflow and invoices are off. */
   ledgerReady: boolean;
+  view: "finance" | "operations";
+  /** Operations: work orders whose appointments are all done but not marked Completed in FSM. */
+  needsCompleting: number;
+  /** False until migration 20261026100000 is applied: nobody can record "% done". */
+  progressReady: boolean;
 };
 
 const SUMMARY_KEY: Record<QueueStatus, keyof Omit<WorkOrderQueueSummary, "averageDaysToInvoice" | "invoices">> = {
@@ -357,6 +505,8 @@ const SUMMARY_KEY: Record<QueueStatus, keyof Omit<WorkOrderQueueSummary, "averag
   excluded: "excluded",
   invoiced: "invoiced",
   not_ready: "notReady",
+  non_billable: "nonBillable",
+  void: "void",
 };
 
 export async function listWorkOrders(admin: SupabaseClient, filters: WorkOrderFilters): Promise<WorkOrderList> {
@@ -364,31 +514,59 @@ export async function listWorkOrders(admin: SupabaseClient, filters: WorkOrderFi
   const fromIso = zonedTimeToUtc(period.from).toISOString();
   const toIso = zonedTimeToUtc(addDaysToDateString(period.to, 1)).toISOString();
 
-  const [live, settings] = await Promise.all([
-    fetchWorkOrdersLive(admin, { fromIso, toIso }, { refresh: filters.refresh === "1" }),
+  const refresh = filters.refresh === "1";
+  const listView = filters.view ?? "finance";
+  const [live, settings, flags] = await Promise.all([
+    fetchWorkOrdersLive(admin, { fromIso, toIso }, { refresh }),
     readReportingSettings(admin),
+    fetchQuotationFlagsLive(admin, { refresh }),
   ]);
+  /* Operations' reminder: each work order's appointment statuses come with the list (27 Oct): no separate read. */
   const agedAfterDays = settings.finance.agedAfterDays;
   const outside = await ledgerWorkOrdersOutside(admin, new Set(live.rows.map((w) => w.id)));
-  const ledger = await loadLedger(admin, [...live.rows, ...outside].map((w) => w.id));
+  const everyId = [...live.rows, ...outside].map((w) => w.id);
+  const [ledger, progress] = await Promise.all([loadLedger(admin, everyId), loadProgress(admin, everyId)]);
   const statesOf = new Map<string, StateRow[]>();
   for (const s of ledger.states) statesOf.set(s.workOrderId, [...(statesOf.get(s.workOrderId) ?? []), s]);
 
   const now = Date.now();
   const view = (w: LiveWorkOrder) => {
     const states = statesOf.get(w.id) ?? [];
-    const invoicing = invoicingFrom(states, w.subTotal, isFsmCompleted(w.status));
+    const entries = progress.byWorkOrder.get(w.id) ?? [];
+    const flag = w.estimateId ? (flags.byId.get(w.estimateId)?.postToMaher ?? null) : null;
+    /* Non Billable by FSM's Billing Status counts as Non-billable, whatever the status. */
+    const billing = w.invoicingStatus;
+    const finance = readyForFinance(billing, flag);
+    const invoicing = invoicingFrom(states, w.subTotal, finance, finance ? 0 : progressCap(entries, states, w.subTotal, billing));
     const flow = ledger.workflow.get(w.id);
     const workflow: WorkflowStatus = flow?.status ?? "open";
-    const status = queueStatus(workflow, invoicing.status);
+    const status = queueStatus(workflow, invoicing.status, billing);
     const firstReady = states.map((s) => s.readyAt).filter((v): v is string => Boolean(v)).sort()[0] ?? null;
     const statusSince = workflow !== "open" && flow ? flow.statusChangedAt : (firstReady ?? w.completedAt ?? w.createdAt);
-    return { invoicing, status, statusSince, assignee: flow?.assignee ?? null };
+    const done = w.appointmentStatuses;
+    const finished = isFsmCompleted(billing) || isNonBillable(billing) || isVoid(billing) || /^cancel/i.test(billing ?? "");
+    const whole = entries.filter((e) => e.lineId === null).sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0] ?? null;
+    return {
+      invoicing,
+      status,
+      statusSince,
+      assignee: flow?.assignee ?? null,
+      flagged: w.estimateId ? isFlaggedToInvoice(flag) : null,
+      finance,
+      /* Finance's view: ready for Finance, as far as Operations allows, or work Finance has already started. */
+      forFinance:
+        !isVoid(billing) &&
+        (finance || invoicing.readyValue > 0.01 || invoicing.invoicedValue > 0 || workflow !== "open" || isNonBillable(billing)),
+      needsCompleting: !finished && done.length > 0 && done.every((st) => isFsmCompleted(st)),
+      progressPercent: whole?.percent ?? null,
+      progressPurpose: whole?.purpose ?? null,
+    };
   };
   const views = new Map([...live.rows, ...outside].map((w) => [w.id, view(w)]));
   /* Work still waiting is never hidden by the dates. */
   const earlier = outside.filter((w) => AWAITING_ACTION.includes(views.get(w.id)!.status));
-  const all = [...live.rows, ...earlier].sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
+  const inView = (w: LiveWorkOrder) => listView === "operations" || views.get(w.id)!.forFinance;
+  const all = [...live.rows, ...earlier].filter(inView).sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
   const ids = all.map((w) => w.id);
   const daysIn = (since: string | null) => (since ? Math.max(0, Math.floor((now - Date.parse(since)) / DAY_MS)) : 0);
 
@@ -397,9 +575,12 @@ export async function listWorkOrders(admin: SupabaseClient, filters: WorkOrderFi
   const needle = (filters.q ?? "").toLowerCase();
   const matching = all.filter((w) => {
     const v = views.get(w.id)!;
-    if (wanted && !wanted.includes(v.status)) return false;
+    /* "In Progress" is one choice in the one status filter (27 Oct): in progress in the portal or in Zoho FSM. */
+    if (wanted && !wanted.includes(v.status) && !(filters.status === "in_progress" && fsmStatusLabel(w) === "In Progress")) return false;
+    if (filters.attention === "1" && !v.needsCompleting) return false;
     if (filters.client && (w.contactName ?? w.companyName) !== filters.client) return false;
     if (filters.coordinator && w.ownerName !== filters.coordinator) return false;
+    if (filters.fsm && fsmStatusLabel(w) !== filters.fsm) return false;
     if (filters.aged === "1" && !(v.status === "pending" && daysIn(v.statusSince) >= agedAfterDays)) return false;
     if (needle && !`${w.number ?? ""} ${w.estimateNumber ?? ""} ${w.companyName ?? ""} ${w.contactName ?? ""}`.toLowerCase().includes(needle)) {
       return false;
@@ -426,6 +607,11 @@ export async function listWorkOrders(admin: SupabaseClient, filters: WorkOrderFi
       queueStatus: v.status,
       statusSince: v.statusSince,
       assigneeName: v.assignee,
+      flagged: v.flagged,
+      readyForFinance: v.finance,
+      needsCompleting: v.needsCompleting,
+      progressPercent: v.progressPercent,
+      progressPurpose: v.progressPurpose,
     };
   });
 
@@ -440,6 +626,8 @@ export async function listWorkOrders(admin: SupabaseClient, filters: WorkOrderFi
     excluded: blank(),
     invoiced: blank(),
     notReady: blank(),
+    nonBillable: blank(),
+    void: blank(),
     averageDaysToInvoice: null,
     invoices: 0,
   };
@@ -448,7 +636,7 @@ export async function listWorkOrders(admin: SupabaseClient, filters: WorkOrderFi
     const b = summary[SUMMARY_KEY[v.status]];
     b.count += 1;
     const value =
-      v.status === "excluded" || v.status === "not_ready"
+      v.status === "excluded" || v.status === "not_ready" || v.status === "non_billable" || v.status === "void"
         ? (w.subTotal ?? 0)
         : v.status === "invoiced"
           ? v.invoicing.invoicedValue
@@ -470,11 +658,22 @@ export async function listWorkOrders(admin: SupabaseClient, filters: WorkOrderFi
     rows,
     total: matching.length,
     summary,
-    options: { clients: distinct(all.map((w) => w.contactName ?? w.companyName)), coordinators: distinct(all.map((w) => w.ownerName)) },
+    options: {
+      clients: distinct(all.map((w) => w.contactName ?? w.companyName)),
+      coordinators: distinct(all.map((w) => w.ownerName)),
+      fsmStatuses: fsmStatusOptions(all.map(fsmStatusLabel)),
+    },
     agedAfterDays,
-    fsm: { fetchedAt: live.fetchedAt, calls: live.cached ? 0 : live.calls, cached: live.cached },
+    fsm: {
+      fetchedAt: live.fetchedAt,
+      calls: (live.cached ? 0 : live.calls) + (flags.cached ? 0 : flags.calls),
+      cached: live.cached,
+    },
     outsideDates: earlier.length,
     ledgerReady: ledger.ready,
+    view: listView,
+    needsCompleting: all.filter((w) => views.get(w.id)!.needsCompleting).length,
+    progressReady: progress.ready,
   };
 }
 
@@ -554,6 +753,10 @@ export type WorkOrderLine = {
   /** FSM's Line_Item_Amount, VAT included. */
   lineAmount: number | null;
   taxPercent: number | null;
+  /** FSM's Billing Status of the line ("Non Billable" is never invoiced). */
+  billingStatus: string | null;
+  /** May be invoiced: by its Billing Status, else the work order's. Not: no cap, nothing remaining. */
+  billable: boolean;
   status: string | null;
   sequence: number | null;
   isOptional: boolean;
@@ -565,6 +768,12 @@ export type WorkOrderLine = {
   invoicedAmount: number;
   remaining: number;
   invoiceStatus: InvoiceStatus;
+  /** What Finance may invoice of it now, before VAT (lib/finance/progress.ts). */
+  cap: number;
+  /** Recognised as revenue, before VAT. */
+  recognised: number;
+  /** Operations' latest "% done" that counts for this line (its own or the whole work order's). */
+  progress: { percent: number; purpose: ProgressPurpose; recordedAt: string; recordedBy: string | null; wholeWorkOrder: boolean } | null;
 };
 
 export type WorkOrderInvoice = {
@@ -590,7 +799,8 @@ export type WorkOrderEventType =
   | "resumed"
   | "exclusion_requested"
   | "exclusion_verified"
-  | "exclusion_rejected";
+  | "exclusion_rejected"
+  | "progress_recorded";
 
 export type WorkOrderEvent = {
   id: number;
@@ -647,6 +857,16 @@ export type WorkOrderDetail = {
   /** When FSM was read for this work order. */
   fetchedAt: string;
   fromCache: boolean;
+  /** The quotation's Post to MAHER is "To Be Invoiced"; null when there is no quotation. */
+  flagged: boolean | null;
+  /** Completed in FSM and flagged: Finance invoices all of it. */
+  readyForFinance: boolean;
+  /** Recognised, invoiced and still to invoice, before VAT (change 7). */
+  revenue: { recognised: number; invoiced: number; remaining: number };
+  /** Its appointments, for their service reports. */
+  appointmentIds: string[];
+  /** False until migration 20261026100000 is applied. */
+  progressReady: boolean;
 };
 
 export async function readWorkOrderDetail(
@@ -658,15 +878,26 @@ export async function readWorkOrderDetail(
   if (!live) return null;
   if (options.refresh) forgetLists();
   const wo = live.workOrder;
-  const [estimate, ledger] = await Promise.all([
+  /* One round (27 Oct): the quotation, the ledger, % done and the history together. */
+  const [estimate, ledger, progress, history] = await Promise.all([
     wo.estimateId ? fetchEstimateLive(admin, wo.estimateId, { refresh: options.refresh }).catch(() => null) : Promise.resolve(null),
     loadLedger(admin, [id]),
+    loadProgress(admin, [id]),
+    readHistoryRows(admin, id).catch(() => null),
   ]);
   const stateOf = new Map(ledger.states.map((s) => [s.lineId, s]));
+  const entries = progress.byWorkOrder.get(id) ?? [];
+  const postToMaher = estimate?.post_to_maher ?? null;
 
   const lines: WorkOrderLine[] = live.lines.map((l) => {
-    const state = stateOf.get(String(l.fsm_line_id));
-    const ls: LineState = { amount: l.amount, ready: lineCanBeInvoiced(l.status, wo.status), invoicedAmount: state?.invoicedAmount ?? 0 };
+    const lineId = String(l.fsm_line_id);
+    const state = stateOf.get(lineId);
+    const invoicedAmount = state?.invoicedAmount ?? 0;
+    const entry = effectiveEntry(lineId, entries) as ProgressRow | null;
+    const billable = !isNonBillable(lineBilling(l, wo));
+    const cap = invoiceCap({ amount: l.amount, invoicedAmount }, { workOrderStatus: lineBilling(l, wo), postToMaher, entry });
+    /* A non-billable line leaves nothing to invoice beyond what already was. */
+    const ls: LineState = { amount: billable ? l.amount : invoicedAmount, ready: cap > 0.005, invoicedAmount, cap };
     return {
       id: String(l.fsm_line_id),
       name: l.name,
@@ -678,6 +909,8 @@ export async function readWorkOrderDetail(
       amount: l.amount,
       lineAmount: l.line_amount,
       taxPercent: l.tax_percent,
+      billingStatus: l.billing_status ?? null,
+      billable,
       status: l.status,
       sequence: l.sequence,
       isOptional: Boolean(l.is_optional),
@@ -689,21 +922,29 @@ export async function readWorkOrderDetail(
       invoicedAmount: ls.invoicedAmount,
       remaining: lineRemaining(ls),
       invoiceStatus: lineStatus(ls),
+      cap,
+      recognised: recognisedValue({ amount: l.amount, invoicedAmount }, { workOrderStatus: lineBilling(l, wo), entry }),
+      progress: entry
+        ? { percent: entry.percent, purpose: entry.purpose, recordedAt: entry.recordedAt, recordedBy: entry.recordedBy, wholeWorkOrder: entry.lineId === null }
+        : null,
     };
   });
 
   const flow = ledger.workflow.get(id);
   const workflow: WorkflowStatus = flow?.status ?? "open";
-  let invoicing = workOrderInvoicing(lines);
+  /* Only billable lines are owed; FSM's total counts the non-billable ones too. */
+  const billableLines = lines.filter((l) => l.billable);
+  let invoicing = workOrderInvoicing(billableLines);
+  const owed = billableLines.length === lines.length ? wo.subTotal : round2(billableLines.reduce((sum, l) => sum + (l.amount ?? 0), 0));
   /* As in the list: invoiced in full only when the invoiced amount reaches FSM's total. */
-  if (invoicing.status === "invoiced" && wo.subTotal !== null && invoicing.invoicedValue < wo.subTotal - 0.01) {
+  if (invoicing.status === "invoiced" && owed !== null && invoicing.invoicedValue < owed - 0.01) {
     invoicing = { ...invoicing, status: "partially_invoiced" };
   }
-  const status = queueStatus(workflow, invoicing.status);
+  const status = queueStatus(workflow, invoicing.status, wo.invoicingStatus);
   const firstReady = lines.map((l) => l.readyAt).filter((v): v is string => Boolean(v)).sort()[0] ?? null;
   const completedAt =
     wo.completedAt ?? lines.filter((l) => isFsmCompleted(l.status)).map((l) => l.actualEnd).filter((v): v is string => Boolean(v)).sort()[0] ?? null;
-  const extra = ledger.ready ? await loadInvoicesHistoryExclusions(admin, id, lines) : { invoices: [], events: [], exclusions: [] };
+  const extra = ledger.ready && history ? shapeHistory(history, lines) : { invoices: [], events: [], exclusions: [] };
 
   return {
     workOrder: wo,
@@ -735,14 +976,27 @@ export async function readWorkOrderDetail(
     ledgerReady: ledger.ready,
     fetchedAt: live.fetchedAt,
     fromCache: live.cached,
+    flagged: wo.estimateId ? isFlaggedToInvoice(postToMaher) : null,
+    readyForFinance: readyForFinance(wo.invoicingStatus, postToMaher),
+    revenue: {
+      recognised: round2(lines.reduce((sum, l) => sum + l.recognised, 0)),
+      invoiced: invoicing.invoicedValue,
+      remaining: invoicing.remainingValue,
+    },
+    appointmentIds: live.appointmentIds,
+    progressReady: progress.ready,
   };
 }
 
-async function loadInvoicesHistoryExclusions(admin: SupabaseClient, workOrderId: string, lines: WorkOrderLine[]) {
-  const names = new Map(lines.map((l) => [l.id, l.name]));
+/* A work order's invoices (each allocation with its invoice, one query), history and exclusions: one round. */
+async function readHistoryRows(admin: SupabaseClient, workOrderId: string) {
   const fin = admin.schema("finance");
   const [allocations, events, exclusions, states] = await Promise.all([
-    fin.from("line_invoice_allocations").select("invoice_id, fsm_line_id, amount").eq("fsm_work_order_id", workOrderId).order("id"),
+    fin
+      .from("line_invoice_allocations")
+      .select("invoice_id, fsm_line_id, amount, line_invoices(id, maher_invoice_number, invoice_date, total_amount, recorded_by_label, recorded_at, file_path)")
+      .eq("fsm_work_order_id", workOrderId)
+      .order("id"),
     fin
       .from("line_events")
       .select("id, event_type, fsm_line_id, amount, actor_label, note, created_at")
@@ -757,16 +1011,33 @@ async function loadInvoicesHistoryExclusions(admin: SupabaseClient, workOrderId:
     fin.from("line_states").select("fsm_line_id, name").eq("fsm_work_order_id", workOrderId),
   ]);
   for (const r of [allocations, events, exclusions, states]) if (r.error) throw new Error(r.error.message);
+  return { allocations: allocations.data ?? [], events: events.data ?? [], exclusions: exclusions.data ?? [], states: states.data ?? [] };
+}
+
+type InvoiceHeaderRow = {
+  id: string;
+  maher_invoice_number: string;
+  invoice_date: string;
+  total_amount: number;
+  recorded_by_label: string | null;
+  recorded_at: string;
+  file_path: string | null;
+};
+
+function shapeHistory(rows: NonNullable<Awaited<ReturnType<typeof readHistoryRows>>>, lines: WorkOrderLine[]) {
+  const names = new Map(lines.map((l) => [l.id, l.name]));
   /* A line FSM no longer lists keeps the name it had. */
-  for (const s of states.data ?? []) if (!names.has(String(s.fsm_line_id))) names.set(String(s.fsm_line_id), str(s.name));
+  for (const s of rows.states) if (!names.has(String(s.fsm_line_id))) names.set(String(s.fsm_line_id), str(s.name));
+  const allocations = rows.allocations;
+  const headerOf = new Map<string, InvoiceHeaderRow>();
+  for (const a of allocations) {
+    const h = (Array.isArray(a.line_invoices) ? a.line_invoices[0] : a.line_invoices) as InvoiceHeaderRow | null | undefined;
+    if (h) headerOf.set(String(h.id), h);
+  }
+  const events = { data: rows.events };
+  const exclusions = { data: rows.exclusions };
 
-  const invoiceIds = [...new Set((allocations.data ?? []).map((a) => String(a.invoice_id)))];
-  const headers = invoiceIds.length
-    ? await fin.from("line_invoices").select("id, maher_invoice_number, invoice_date, total_amount, recorded_by_label, recorded_at, file_path").in("id", invoiceIds)
-    : { data: [], error: null };
-  if (headers.error) throw new Error(headers.error.message);
-
-  const invoices: WorkOrderInvoice[] = (headers.data ?? [])
+  const invoices: WorkOrderInvoice[] = [...headerOf.values()]
     .map((h) => ({
       id: String(h.id),
       number: String(h.maher_invoice_number),
@@ -775,7 +1046,7 @@ async function loadInvoicesHistoryExclusions(admin: SupabaseClient, workOrderId:
       recordedBy: str(h.recorded_by_label),
       recordedAt: String(h.recorded_at),
       hasFile: Boolean(h.file_path),
-      allocations: (allocations.data ?? [])
+      allocations: allocations
         .filter((a) => String(a.invoice_id) === String(h.id))
         .map((a) => ({ lineId: String(a.fsm_line_id), lineName: names.get(String(a.fsm_line_id)) ?? null, amount: Number(a.amount) })),
     }))
@@ -871,16 +1142,60 @@ async function snapshotWorkOrder(admin: SupabaseClient, live: NonNullable<Awaite
 }
 
 /** The work order as FSM has it now, for an action on it; kept as a snapshot too. */
-async function liveOrFail(admin: SupabaseClient, workOrderId: string) {
+/*
+  The work order from FSM for an action. Invoicing and % done need the
+  latest read (their limits come from it); a query, hold, resume or
+  not-invoiceable request does not, and takes the last read whatever its
+  age (27 Oct: no FSM wait on those). The snapshot is written only when
+  this read has not been written already.
+*/
+const snapshotted = new Map<string, string>();
+
+async function liveOrFail(admin: SupabaseClient, workOrderId: string, options: { anyAge?: boolean } = {}) {
   try {
-    const live = await fetchWorkOrderLive(admin, workOrderId);
+    const live = await fetchWorkOrderLive(admin, workOrderId, { anyAge: options.anyAge });
     if (!live) throw new InvoicingError("This work order is not in Zoho FSM any more.", 404);
-    await snapshotWorkOrder(admin, live);
+    if (snapshotted.get(workOrderId) !== live.fetchedAt) {
+      await snapshotWorkOrder(admin, live);
+      snapshotted.set(workOrderId, live.fetchedAt);
+      if (snapshotted.size > 5000) snapshotted.clear();
+    }
     return live;
   } catch (error) {
     if (error instanceof FsmLiveError) throw new InvoicingError(error.message, error.status);
     throw error;
   }
+}
+
+/**
+ * What Finance may invoice of each line of a work order now, before VAT
+ * (lib/finance/progress.ts): all of what is left once it is Completed and
+ * flagged, else what Operations' "invoice" percentage allows.
+ */
+export async function invoiceCapsFor(
+  admin: SupabaseClient,
+  live: NonNullable<Awaited<ReturnType<typeof fetchWorkOrderLive>>>,
+): Promise<Map<string, number>> {
+  const wo = live.workOrder;
+  const [estimate, ledger, progress] = await Promise.all([
+    wo.estimateId ? fetchEstimateLive(admin, wo.estimateId).catch(() => null) : Promise.resolve(null),
+    loadLedger(admin, [wo.id]),
+    loadProgress(admin, [wo.id]),
+  ]);
+  const invoicedOf = new Map(ledger.states.map((s) => [s.lineId, s.invoicedAmount]));
+  const entries = progress.byWorkOrder.get(wo.id) ?? [];
+  return new Map(
+    live.lines.map((l) => {
+      const lineId = String(l.fsm_line_id);
+      return [
+        lineId,
+        invoiceCap(
+          { amount: l.amount, invoicedAmount: invoicedOf.get(lineId) ?? 0 },
+          { workOrderStatus: lineBilling(l, wo), postToMaher: estimate?.post_to_maher ?? null, entry: effectiveEntry(lineId, entries) },
+        ),
+      ];
+    }),
+  );
 }
 
 export const readyRequestSchema = z
@@ -937,12 +1252,11 @@ export const invoiceRequestSchema = z
       )
       .min(1)
       .max(500),
-    /** Set by the upload: the stored file and what the scan read. */
+    /** The MAHER invoice PDF, uploaded first (26 Oct: required). */
     filePath: z
       .string()
       .max(500)
-      .refine((v) => v.startsWith("invoices/") && !v.includes(".."), "Not an uploaded invoice")
-      .nullish(),
+      .refine((v) => v.startsWith("invoices/") && !v.includes(".."), "Not an uploaded invoice"),
     scan: z.record(z.string(), z.unknown()).nullish(),
   })
   .strict();
@@ -955,13 +1269,26 @@ export async function recordLineInvoice(
   /* Every line as FSM has it now, so no line is invoiced beyond its current amount. */
   const byWorkOrder = new Map<string, Awaited<ReturnType<typeof liveOrFail>>>();
   for (const workOrder of new Set(input.allocations.map((a) => a.workOrder))) byWorkOrder.set(workOrder, await liveOrFail(admin, workOrder));
+  /* A work order on hold is paused: nothing is invoiced on it until it is resumed (23 Oct). */
+  const held = await loadLedger(admin, [...byWorkOrder.keys()]);
+  for (const [workOrderId, live] of byWorkOrder) {
+    if (held.workflow.get(workOrderId)?.status === "on_hold") {
+      throw new InvoicingError(`${live.workOrder.number ?? "This work order"} is on hold. Resume it before recording an invoice.`, 409);
+    }
+  }
+  const capsOf = new Map<string, Map<string, number>>();
+  for (const [workOrderId, live] of byWorkOrder) capsOf.set(workOrderId, await invoiceCapsFor(admin, live));
   const allocations = input.allocations.map((a) => {
     const live = byWorkOrder.get(a.workOrder)!;
     const line = live.lines.find((l) => l.fsm_line_id === a.line);
     if (!line) throw new InvoicingError(`A line is no longer on ${live.workOrder.number ?? "the work order"} in FSM. Refresh and try again.`, 409);
-    if (!lineCanBeInvoiced(line.status, live.workOrder.status)) {
+    /* No more than may be invoiced now: all of it once Completed and flagged, else Operations' percentage. */
+    const cap = capsOf.get(a.workOrder)?.get(String(line.fsm_line_id)) ?? 0;
+    if (round2(a.amount) > cap + 0.005) {
       throw new InvoicingError(
-        `${line.name ?? "A line"} on ${live.workOrder.number ?? "the work order"} is not completed in Zoho FSM yet (${line.status ?? "no status"}), so it cannot be invoiced.`,
+        cap > 0
+          ? `${line.name ?? "A line"} on ${live.workOrder.number ?? "the work order"} can be invoiced up to ${cap.toFixed(2)} before VAT now, as far as Operations has recorded it done.`
+          : `${line.name ?? "A line"} on ${live.workOrder.number ?? "the work order"} cannot be invoiced yet: it needs to be Completed in Zoho FSM with its quotation flagged "To Be Invoiced", or Operations must record how much of it is done to invoice.`,
         409,
       );
     }
@@ -986,7 +1313,7 @@ export async function recordLineInvoice(
     p_actor: actor.id,
     p_actor_label: actor.label,
     p_note: input.note ?? null,
-    p_file_path: input.filePath ?? null,
+    p_file_path: input.filePath,
     p_scan: input.scan ?? null,
   });
   if (error) invoicingError(error, "record_line_invoice");
@@ -1035,7 +1362,7 @@ export async function applyWorkOrderAction(
   input: z.infer<typeof actionRequestSchema>,
   actor: { id: string; label: string },
 ): Promise<{ status: WorkflowStatus; workOrderNumber: string | null }> {
-  const live = await liveOrFail(admin, workOrderId);
+  const live = await liveOrFail(admin, workOrderId, { anyAge: true });
   const { data, error } = await admin.schema("finance").rpc("wo_apply_action", {
     p_work_order_id: workOrderId,
     p_action: input.action,
@@ -1055,7 +1382,7 @@ export async function requestWorkOrderExclusion(
   input: { reason: string; notes?: string | null; evidence?: string[] },
   actor: { id: string; label: string },
 ): Promise<{ exclusionId: string; workOrderNumber: string | null; value: number }> {
-  const live = await liveOrFail(admin, workOrderId);
+  const live = await liveOrFail(admin, workOrderId, { anyAge: true });
   const { data, error } = await admin.schema("finance").rpc("request_wo_exclusion", {
     p_work_order_id: workOrderId,
     p_reason: input.reason,
@@ -1085,4 +1412,329 @@ export async function decideWorkOrderExclusion(
   if (error) invoicingError(error, "decide_wo_exclusion");
   const { data: row } = await admin.schema("finance").from("wo_exclusions").select("fsm_work_order_id").eq("id", exclusionId).maybeSingle();
   return { status: data as WorkflowStatus, workOrderId: (row?.fsm_work_order_id as string | undefined) ?? null };
+}
+
+// ---------------------------------------------------------------------
+// Operations: "X % done" (26 Oct, changes 4 and 5)
+// ---------------------------------------------------------------------
+
+export const progressRequestSchema = z
+  .object({
+    entries: z
+      .array(
+        z
+          .object({
+            /** Null: the whole work order. */
+            line: z.string().min(1).max(40).nullable(),
+            percent: z.number().min(0).max(100),
+            purpose: z.enum(["invoice", "revenue_only"]),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(500),
+    note: z.string().trim().max(2000).nullish(),
+  })
+  .strict();
+
+export async function recordProgress(
+  admin: SupabaseClient,
+  workOrderId: string,
+  input: z.infer<typeof progressRequestSchema>,
+  actor: { id: string; label: string },
+): Promise<number> {
+  const live = await liveOrFail(admin, workOrderId);
+  const wo = live.workOrder;
+  if (isVoid(wo.invoicingStatus) || isNonBillable(wo.invoicingStatus)) {
+    throw new InvoicingError(`${wo.number ?? "This work order"} is ${wo.invoicingStatus} in FSM: there is nothing to invoice or recognise.`, 409);
+  }
+  const lineOf = new Map(live.lines.map((l) => [String(l.fsm_line_id), l]));
+  const total = wo.subTotal ?? round2(live.lines.reduce((sum, l) => sum + Math.max(0, l.amount ?? 0), 0));
+  const entries = input.entries.map((e) => {
+    if (e.line === null) return { line: null, name: null, percent: round2(e.percent), purpose: e.purpose, value: Math.max(0, total) };
+    const line = lineOf.get(e.line);
+    if (!line) throw new InvoicingError(`A line is no longer on ${wo.number ?? "the work order"} in FSM. Refresh and try again.`, 409);
+    if (!lineBillable(line.billing_status, wo.billingStatus)) {
+      throw new InvoicingError(`${line.name ?? "A line"} is Non Billable in FSM: there is nothing to invoice or recognise on it.`, 409);
+    }
+    return { line: e.line, name: line.name, percent: round2(e.percent), purpose: e.purpose, value: Math.max(0, line.amount ?? 0) };
+  });
+  const { data, error } = await admin.schema("finance").rpc("record_progress", {
+    p_work_order_id: workOrderId,
+    p_work_order_number: wo.number,
+    p_entries: entries,
+    p_actor: actor.id,
+    p_actor_label: actor.label,
+    p_note: input.note ?? null,
+  });
+  if (error) {
+    if (/record_progress|progress_entries|PGRST202/.test(`${error.code} ${error.message}`) && /schema cache|PGRST202|does not exist/i.test(error.message)) {
+      throw new InvoicingError("Recording progress needs migration 20261026100000 to be applied first.", 409);
+    }
+    invoicingError(error, "record_progress");
+  }
+  forgetLists();
+  return Number(data ?? 0);
+}
+
+// ---------------------------------------------------------------------
+// Coordinators' queries (26 Oct, change 9)
+// ---------------------------------------------------------------------
+
+export type OpenQuery = {
+  workOrderId: string;
+  number: string | null;
+  quotationNumber: string | null;
+  clientName: string | null;
+  coordinatorName: string | null;
+  question: string | null;
+  raisedAt: string;
+  raisedBy: string | null;
+};
+
+// ---------------------------------------------------------------------
+// The Queries page (27 Oct): every query and not-invoiceable request,
+// answered or not, one page at a time from the server.
+// ---------------------------------------------------------------------
+
+export type FinanceRequestStatus = "waiting" | "answered" | "verified" | "rejected";
+
+export type FinanceRequest = {
+  /** "query-<event id>" or "exclusion-<request id>". */
+  id: string;
+  kind: "query" | "exclusion";
+  workOrderId: string;
+  number: string | null;
+  quotationNumber: string | null;
+  clientName: string | null;
+  /** The question, or the reason it is not to be invoiced. */
+  text: string | null;
+  notes: string | null;
+  evidence: string[];
+  askedBy: string | null;
+  askedAt: string;
+  status: FinanceRequestStatus;
+  /** The answer, or the verifier's note. */
+  response: string | null;
+  respondedBy: string | null;
+  respondedAt: string | null;
+  /** For Verify / Reject. */
+  exclusionId: string | null;
+};
+
+export const requestFiltersSchema = z.object({
+  /** waiting: not answered or decided yet; done: answered, verified or rejected. */
+  status: z.enum(["waiting", "done", "all"]).default("waiting"),
+  kind: z.enum(["all", "query", "exclusion"]).default("all"),
+  page: z.coerce.number().int().min(0).default(0),
+  pageSize: z.coerce.number().int().min(1).max(100).default(25),
+});
+
+export type FinanceRequestList = {
+  rows: FinanceRequest[];
+  total: number;
+  counts: { waitingQueries: number; waitingExclusions: number; done: number; oldestWaitingAt: string | null; overWeek: number };
+  ledgerReady: boolean;
+};
+
+/**
+ * Every query (each question paired with the answer that closed it) and
+ * every not-invoiceable request (with its decision), from the portal's
+ * records only (no FSM call). Waiting ones oldest first; done ones newest
+ * first. Filtered and paged here, so the page gets one page.
+ */
+export async function listFinanceRequests(admin: SupabaseClient, filters: z.infer<typeof requestFiltersSchema>): Promise<FinanceRequestList> {
+  const fin = admin.schema("finance");
+  const [events, exclusions] = await Promise.all([
+    fin
+      .from("line_events")
+      .select("id, fsm_work_order_id, event_type, actor_label, note, created_at")
+      .in("event_type", ["query_raised", "query_answered"])
+      .order("created_at")
+      .order("id")
+      .range(0, 9999),
+    fin
+      .from("wo_exclusions")
+      .select("id, fsm_work_order_id, work_order_number, reason, notes, evidence, requested_by_label, requested_at, decision, decision_note, decided_by_label, decided_at")
+      .order("requested_at")
+      .range(0, 9999),
+  ]);
+  for (const r of [events, exclusions]) {
+    if (r.error) {
+      if (ledgerMissing(r.error)) return { rows: [], total: 0, counts: { waitingQueries: 0, waitingExclusions: 0, done: 0, oldestWaitingAt: null, overWeek: 0 }, ledgerReady: false };
+      throw new Error(r.error.message);
+    }
+  }
+
+  /* Each question, and the answer that closed it (the next answer on the same work order). */
+  const queries: FinanceRequest[] = [];
+  const openOf = new Map<string, FinanceRequest>();
+  for (const e of events.data ?? []) {
+    const wo = String(e.fsm_work_order_id);
+    if (e.event_type === "query_raised") {
+      const q: FinanceRequest = {
+        id: `query-${e.id}`,
+        kind: "query",
+        workOrderId: wo,
+        number: null,
+        quotationNumber: null,
+        clientName: null,
+        text: str(e.note),
+        notes: null,
+        evidence: [],
+        askedBy: str(e.actor_label),
+        askedAt: String(e.created_at),
+        status: "waiting",
+        response: null,
+        respondedBy: null,
+        respondedAt: null,
+        exclusionId: null,
+      };
+      queries.push(q);
+      openOf.set(wo, q);
+    } else {
+      const q = openOf.get(wo);
+      if (q) {
+        q.status = "answered";
+        q.response = str(e.note);
+        q.respondedBy = str(e.actor_label);
+        q.respondedAt = String(e.created_at);
+        openOf.delete(wo);
+      }
+    }
+  }
+  const requests: FinanceRequest[] = (exclusions.data ?? []).map((x) => ({
+    id: `exclusion-${x.id}`,
+    kind: "exclusion",
+    workOrderId: String(x.fsm_work_order_id),
+    number: str(x.work_order_number),
+    quotationNumber: null,
+    clientName: null,
+    text: String(x.reason),
+    notes: str(x.notes),
+    evidence: Array.isArray(x.evidence) ? x.evidence.map(String) : [],
+    askedBy: str(x.requested_by_label),
+    askedAt: String(x.requested_at),
+    status: x.decision === "verified" ? "verified" : x.decision === "rejected" ? "rejected" : "waiting",
+    response: str(x.decision_note),
+    respondedBy: str(x.decided_by_label),
+    respondedAt: str(x.decided_at),
+    exclusionId: String(x.id),
+  }));
+
+  const all = [...queries, ...requests];
+  const waiting = all.filter((r) => r.status === "waiting").sort((a, b) => a.askedAt.localeCompare(b.askedAt));
+  const done = all.filter((r) => r.status !== "waiting").sort((a, b) => (b.respondedAt ?? b.askedAt).localeCompare(a.respondedAt ?? a.askedAt));
+  const now = Date.now();
+  const counts = {
+    waitingQueries: waiting.filter((r) => r.kind === "query").length,
+    waitingExclusions: waiting.filter((r) => r.kind === "exclusion").length,
+    done: done.length,
+    oldestWaitingAt: waiting[0]?.askedAt ?? null,
+    overWeek: waiting.filter((r) => now - Date.parse(r.askedAt) >= 7 * DAY_MS).length,
+  };
+
+  const listed = (filters.status === "waiting" ? waiting : filters.status === "done" ? done : [...waiting, ...done]).filter(
+    (r) => filters.kind === "all" || r.kind === filters.kind,
+  );
+  const rows = listed.slice(filters.page * filters.pageSize, (filters.page + 1) * filters.pageSize);
+
+  /* The work order's number, quotation and client, as the portal last saw them, for this page's rows. */
+  const ids = [...new Set(rows.map((r) => r.workOrderId))];
+  const states = ids.length
+    ? await fin.from("work_order_states").select("fsm_work_order_id, work_order_number, quotation_number, contact_name, client_name").in("fsm_work_order_id", ids)
+    : { data: [], error: null };
+  const stateOf = new Map((states.error ? [] : (states.data ?? [])).map((s) => [String(s.fsm_work_order_id), s]));
+  for (const r of rows) {
+    const s = stateOf.get(r.workOrderId);
+    if (!s) continue;
+    r.number = r.number ?? str(s.work_order_number);
+    r.quotationNumber = str(s.quotation_number);
+    r.clientName = str(s.contact_name) ?? str(s.client_name);
+  }
+  return { rows, total: listed.length, counts, ledgerReady: true };
+}
+
+/** A request to mark a work order not invoiceable, waiting to be verified (27 Oct: on the Queries page). */
+export type OpenExclusion = {
+  id: string;
+  workOrderId: string;
+  number: string | null;
+  quotationNumber: string | null;
+  clientName: string | null;
+  reason: string;
+  notes: string | null;
+  evidence: string[];
+  requestedBy: string | null;
+  requestedAt: string;
+};
+
+/** Not-invoiceable requests nobody has verified or rejected yet, oldest first; portal records only (no FSM call). */
+export async function listOpenExclusions(admin: SupabaseClient): Promise<OpenExclusion[]> {
+  const fin = admin.schema("finance");
+  const open = await fin
+    .from("wo_exclusions")
+    .select("id, fsm_work_order_id, work_order_number, reason, notes, evidence, requested_by_label, requested_at")
+    .is("decision", null)
+    .order("requested_at");
+  if (open.error) {
+    if (ledgerMissing(open.error)) return [];
+    throw new Error(open.error.message);
+  }
+  const ids = [...new Set((open.data ?? []).map((x) => String(x.fsm_work_order_id)))];
+  /* Its quotation and client, as the portal last saw them (the snapshot), when there is one. */
+  const states = ids.length
+    ? await fin.from("work_order_states").select("fsm_work_order_id, quotation_number, contact_name, client_name").in("fsm_work_order_id", ids)
+    : { data: [], error: null };
+  const stateOf = new Map((states.error ? [] : (states.data ?? [])).map((s) => [String(s.fsm_work_order_id), s]));
+  return (open.data ?? []).map((x) => {
+    const s = stateOf.get(String(x.fsm_work_order_id));
+    return {
+      id: String(x.id),
+      workOrderId: String(x.fsm_work_order_id),
+      number: str(x.work_order_number),
+      quotationNumber: s ? str(s.quotation_number) : null,
+      clientName: s ? (str(s.contact_name) ?? str(s.client_name)) : null,
+      reason: String(x.reason),
+      notes: str(x.notes),
+      evidence: Array.isArray(x.evidence) ? x.evidence.map(String) : [],
+      requestedBy: str(x.requested_by_label),
+      requestedAt: String(x.requested_at),
+    };
+  });
+}
+
+/** Work orders waiting on a coordinator's answer, oldest first, from the portal's records only (no FSM call). */
+export async function listOpenQueries(admin: SupabaseClient): Promise<{ rows: OpenQuery[]; ledgerReady: boolean }> {
+  const fin = admin.schema("finance");
+  const flows = await fin.from("work_order_states").select("*").eq("status", "query_raised").order("status_changed_at");
+  if (flows.error) {
+    if (ledgerMissing(flows.error)) return { rows: [], ledgerReady: false };
+    throw new Error(flows.error.message);
+  }
+  const ids = (flows.data ?? []).map((f) => String(f.fsm_work_order_id));
+  const raised = ids.length
+    ? await fin
+        .from("line_events")
+        .select("fsm_work_order_id, actor_label, created_at")
+        .in("fsm_work_order_id", ids)
+        .eq("event_type", "query_raised")
+        .order("created_at", { ascending: false })
+    : { data: [], error: null };
+  if (raised.error) throw new Error(raised.error.message);
+  const raisedBy = new Map<string, string | null>();
+  for (const e of raised.data ?? []) if (!raisedBy.has(String(e.fsm_work_order_id))) raisedBy.set(String(e.fsm_work_order_id), str(e.actor_label));
+  return {
+    ledgerReady: true,
+    rows: (flows.data ?? []).map((f) => ({
+      workOrderId: String(f.fsm_work_order_id),
+      number: str(f.work_order_number),
+      quotationNumber: str(f.quotation_number),
+      clientName: str(f.contact_name) ?? str(f.client_name),
+      coordinatorName: str(f.coordinator_name),
+      question: str(f.query_text),
+      raisedAt: String(f.status_changed_at),
+      raisedBy: raisedBy.get(String(f.fsm_work_order_id)) ?? null,
+    })),
+  };
 }

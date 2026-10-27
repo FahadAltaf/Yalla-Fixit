@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { addDaysToDateString, todayInZone } from "@/lib/scheduling/org-time";
 import type { SavedFilter } from "@/lib/server/reports/access";
 import { cn } from "@/lib/utils";
 import { reportsService, type ReportFilters, type ReportKey } from "@/modules/reports/reports-service";
@@ -44,6 +45,55 @@ import { reportsService, type ReportFilters, type ReportKey } from "@/modules/re
  * (a notification opens the report on what it is about); otherwise the
  * person's last-used selection. Every change is remembered, quietly.
  */
+const DATE_KEYS = ["from", "to", "month", "days", "day"];
+
+/** The last 30 days, today included, in the organisation's time zone. */
+export function lastThirtyDays(today = todayInZone()) {
+  return { from: addDaysToDateString(today, -29), to: today };
+}
+
+/**
+ * A report's dates, at the top right of the page (26 Oct): the last 30
+ * days until changed; every change reads the report again.
+ */
+export function ReportDateRange({
+  from,
+  to,
+  onChange,
+  label,
+  max,
+}: {
+  from: string;
+  to: string;
+  onChange: (from: string, to: string) => void;
+  label?: string;
+  max?: string;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {label ? <span className="text-muted-foreground text-xs whitespace-nowrap">{label}</span> : null}
+      <Input
+        type="date"
+        aria-label={`${label ?? "Dates"} from`}
+        className="h-9 w-[150px]"
+        value={from}
+        max={to || max}
+        onChange={(e) => e.target.value && onChange(e.target.value, to < e.target.value ? e.target.value : to)}
+      />
+      <span className="text-muted-foreground text-xs">to</span>
+      <Input
+        type="date"
+        aria-label={`${label ?? "Dates"} to`}
+        className="h-9 w-[150px]"
+        value={to}
+        min={from}
+        max={max}
+        onChange={(e) => e.target.value && onChange(from > e.target.value ? e.target.value : from, e.target.value)}
+      />
+    </div>
+  );
+}
+
 export function useReportFilters<F extends ReportFilters>(report: ReportKey, defaults: F) {
   const searchParams = useSearchParams();
   const fromLink = useMemo(() => {
@@ -78,7 +128,12 @@ export function useReportFilters<F extends ReportFilters>(report: ReportKey, def
         const response = await reportsService.savedFilters(report);
         if (cancelled) return;
         setSaved(response.saved);
-        if (!fromLink && response.lastUsed) setFiltersState({ ...defaults, ...known(response.lastUsed) });
+        /* The person's last selection, except its dates: a report opens on the last 30 days (26 Oct). */
+        if (!fromLink && response.lastUsed) {
+          const last = known(response.lastUsed) as Record<string, string>;
+          for (const key of DATE_KEYS) delete last[key];
+          setFiltersState({ ...defaults, ...(last as Partial<F>) });
+        }
       } catch {
         /* Saved filters are a convenience: the report still opens without them. */
       } finally {

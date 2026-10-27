@@ -152,12 +152,6 @@ export function CompliancePage() {
   };
 
   const selects: ReportSelect[] = [
-    {
-      key: "month",
-      allLabel: "This month",
-      options: (data?.options.months ?? []).map((m) => ({ value: m.id, label: m.name })),
-      width: "w-full sm:w-44",
-    },
     { key: "technician", allLabel: "All technicians", options: (data?.options.technicians ?? []).map((t) => ({ value: t.id, label: t.name })) },
     { key: "team", allLabel: "All teams", options: (data?.options.teams ?? []).map((t) => ({ value: t.id, label: t.name })) },
     ...(view === "events"
@@ -196,7 +190,7 @@ export function CompliancePage() {
       filters={filters}
       onFiltersChange={change}
       selects={selects}
-      clearable={["technician", "team", "state", "month"]}
+      clearable={["technician", "team", "state"]}
       canExport={Boolean(data?.can.export)}
       exporting={exporting}
       onExport={(format) => void doExport(format)}
@@ -247,6 +241,19 @@ export function CompliancePage() {
         description="Check-ins owed, performed, missed and waived per technician, against the threshold. Penalties are calculated and reported only; nothing is deducted by the portal."
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            {/* Compliance is worked out a month at a time (it is finalised and frozen by month). */}
+            <Select value={filters.month || data?.month || ""} onValueChange={(month) => change({ ...filters, month })}>
+              <SelectTrigger className="h-9 w-44" aria-label="Month">
+                <SelectValue placeholder="This month" />
+              </SelectTrigger>
+              <SelectContent>
+                {(data?.options.months ?? []).map((m) => (
+                  <SelectItem key={m.id} value={m.id}>
+                    {m.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             {data?.can.finalize && data.storageReady && data.phase === "final" && !data.finalized ? (
               <Button variant="outline" onClick={() => void finalize()}>
                 <Lock className="size-4" />
@@ -277,7 +284,7 @@ export function CompliancePage() {
       />
 
       <div className="flex flex-col gap-1">
-        <DataAsOf asOf={data?.dataAsOf ?? null} resources={["appointments"]} />
+        <DataAsOf asOf={data?.dataAsOf ?? null} resources={["attendance", "time_sheets", "appointments"]} />
         {data ? <p className="text-muted-foreground text-xs">{periodLine(data)}</p> : null}
       </div>
 
@@ -426,10 +433,11 @@ function SourcesNotice({ data }: { data: ComplianceReport }) {
       `Shift check-ins and check-outs are not counted: FSM's check-ins cannot be read yet (B-01). ${count(data.overall.owedShift, "shift event")} owed so far this month.`,
     );
   }
+  if (data.sources.shift) lines.push("Shift check-ins and check-outs are each technician's first check-in and last check-out of the day in FSM Attendance.");
   lines.push(
     data.sources.appointment
-      ? "Appointment check-ins are read from FSM's actual start and end times. This is provisional until the business confirms it (D-15)."
-      : `Appointment check-ins are not counted until it is confirmed that FSM's actual start and end are the check-in and check-out (D-15); Reporting Settings can turn that on to preview. ${count(data.overall.owedAppointment, "appointment event")} owed so far.`,
+      ? "Appointment check-ins are each technician's own FSM time sheet; FSM keeps one per appointment, so the others on it are taken from the appointment's actual start and end (provisional, D-15)."
+      : `Appointment check-ins are not counted yet. ${count(data.overall.owedAppointment, "appointment event")} owed so far.`,
   );
   if (!data.storageReady) lines.push("Waiving and finalising are off until migration 20261023100000 (schema hr) is applied and exposed.");
   if (data.notes.noRestDays) lines.push(`${plural(data.notes.noRestDays, "technician")} with no rest days set: every day counts as a shift day (D-16).`);

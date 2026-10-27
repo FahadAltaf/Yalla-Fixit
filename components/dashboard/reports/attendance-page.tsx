@@ -24,7 +24,7 @@ import type { AttendanceReport } from "@/lib/server/reports/compliance";
 import { exportFilename, exportTable, type ExportFormat } from "@/lib/snagging/export-table";
 import { reportsService } from "@/modules/reports/reports-service";
 
-import { DataAsOf, SavedFiltersMenu, plural, useReportFilters } from "./shared";
+import { DataAsOf, ReportDateRange, SavedFiltersMenu, lastThirtyDays, plural, useReportFilters } from "./shared";
 
 /**
  * Daily attendance (BRD 5.2 B5; DEV-451): per technician per day, the
@@ -166,8 +166,7 @@ export function AttendancePage() {
       filters={filters}
       onFiltersChange={change}
       selects={selects}
-      dateLabel="Period"
-      clearable={["technician", "team", "status", "from", "to"]}
+      clearable={["technician", "team", "status"]}
       canExport={Boolean(data?.can.export)}
       exporting={exporting}
       onExport={(format) => void doExport(format)}
@@ -195,18 +194,25 @@ export function AttendancePage() {
       <PageHeading
         eyebrow="Reports"
         title="Daily attendance"
-        description="Per technician per day: the shift, check-in and check-out, late, early and absent, and leave. The monthly summary is the one HR asked for."
+        description="Per technician per day: the shift, check-in and check-out (FSM Attendance), late, early and absent, and leave. The monthly summary is the one HR asked for."
         actions={
-          <SavedFiltersMenu
-            saved={saved}
-            current={filters}
-            onApply={(entry) => {
-              apply(entry);
-              setPage(0);
-            }}
-            onSave={saveAs}
-            onRemove={remove}
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            <ReportDateRange
+              from={filters.from || data?.from || lastThirtyDays().from}
+              to={filters.to || data?.to || lastThirtyDays().to}
+              onChange={(from, to) => change({ ...filters, from, to })}
+            />
+            <SavedFiltersMenu
+              saved={saved}
+              current={filters}
+              onApply={(entry) => {
+                apply(entry);
+                setPage(0);
+              }}
+              onSave={saveAs}
+              onRemove={remove}
+            />
+          </div>
         }
       />
 
@@ -220,7 +226,7 @@ export function AttendancePage() {
       />
 
       <div className="flex flex-col gap-1">
-        <DataAsOf asOf={data?.dataAsOf ?? null} resources={["appointments"]} />
+        <DataAsOf asOf={data?.dataAsOf ?? null} resources={["attendance", "appointments"]} />
         {data ? (
           <p className="text-muted-foreground text-xs">
             {data.from} to {data.to}, {plural(data.overall.technicians, "technician")}. Late means checked in more than {data.lateToleranceMinutes} minutes after the shift began.

@@ -16,7 +16,7 @@ import {
 import { addDaysToDateString, todayInZone, zonedDateString } from "@/lib/scheduling/org-time";
 import { readReportingSettings } from "@/lib/server/reporting/settings";
 
-import { loadAvailabilityInput, loadCapacityAppointments, loadTechnicians, loadUtilizationAppointments, type ReportTechnician } from "./data";
+import { loadAvailabilityInput, loadCapacityAppointments, loadTechnicians, loadTravel, loadUtilizationAppointments, type ReportTechnician } from "./data";
 import { dataAsOf } from "./reports";
 
 /**
@@ -85,6 +85,8 @@ export type UtilizationReport = {
   appointments: AppointmentDetail[];
   total: number;
   jobMinutesBy: Record<Chargeability, number>;
+  /** Travel logged in FSM Trips by the technicians shown (rarely logged). */
+  travel: { trips: number; minutes: number };
   notes: {
     unpaidBreakMinutes: number;
     leaveRecords: number;
@@ -102,11 +104,11 @@ export type UtilizationReport = {
   dataAsOf: Record<string, string | null>;
 };
 
-/** The default period: this month to today. Weekly trend unless the range is short. */
+/** The default period: the last 30 days (26 Oct). Weekly trend unless the range is short. */
 function utilizationPeriod(filters: z.infer<typeof utilizationFiltersSchema>) {
   const today = todayInZone();
   let to = filters.to ?? today;
-  let from = filters.from ?? `${to.slice(0, 8)}01`;
+  let from = filters.from ?? addDaysToDateString(to, -29);
   if (from > to) [from, to] = [to, from];
   /* Capped like the engine; a longer range is cut from its start. */
   if (datesBetweenCount(from, to) > MAX_RANGE_DAYS) from = addDaysToDateString(to, -(MAX_RANGE_DAYS - 1));
@@ -126,12 +128,13 @@ export async function buildUtilizationReport(
   options: { all?: boolean } = {},
 ): Promise<UtilizationReport> {
   const { from, to, granularity } = utilizationPeriod(filters);
-  const [settings, roster, loaded, asOf] = await Promise.all([
+  const [settings, roster, loaded, travelBy] = await Promise.all([
     readReportingSettings(admin),
     loadTechnicians(admin),
     loadUtilizationAppointments(admin, { from, to }),
-    dataAsOf(admin),
+    loadTravel(admin, { from, to }),
   ]);
+  const asOf = await dataAsOf(admin);
 
   /* Who is in scope: the filter's technician or team, and of those, the
      active ones plus anyone who worked in the period (leavers keep their
@@ -201,6 +204,10 @@ export async function buildUtilizationReport(
     appointments: details,
     total,
     jobMinutesBy: result.jobMinutesBy,
+    travel: [...travelBy].reduce(
+      (sum, [who, t]) => (scopeIds.has(who) ? { trips: sum.trips + t.trips, minutes: Math.round(sum.minutes + t.minutes) } : sum),
+      { trips: 0, minutes: 0 },
+    ),
     notes: {
       unpaidBreakMinutes: settings.attendance.unpaidBreakMinutes,
       ...counts,
@@ -218,10 +225,13 @@ export async function buildUtilizationReport(
 // Capacity (DEV-452)
 // ---------------------------------------------------------------------
 
+/* The board opens on the next 30 days, like every report's 30 (26 Oct). */
+const CAPACITY_DEFAULT_DAYS = 30;
+
 export const capacityFiltersSchema = z.object({
   /** First day shown; today when not given. */
   from: DATE.optional(),
-  /** Days shown; the setting's horizon when not given. */
+  /** Days shown; 30 when not given (26 Oct). */
   days: z.coerce.number().int().min(1).max(90).optional(),
   team: id.optional(),
   technician: id.optional(),
@@ -297,11 +307,9 @@ export async function buildCapacityReport(
 ): Promise<CapacityReport> {
   const settings = await readReportingSettings(admin);
   const from = filters.from ?? todayInZone();
-  const days = filters.days ?? settings.capacity.horizonDays;
-  const [{ to, roster, loaded, availabilityInput, availability, result }, asOf] = await Promise.all([
-    computeCapacityFor(admin, settings, { from, days }, { team: filters.team }),
-    dataAsOf(admin),
-  ]);
+  const days = filters.days ?? CAPACITY_DEFAULT_DAYS;
+  const { to, roster, loaded, availabilityInput, availability, result } = await computeCapacityFor(admin, settings, { from, days }, { team: filters.team });
+  const asOf = await dataAsOf(admin);
 
   /* Bookings below the board: of the day picked (or the whole range), the team's or technician's. */
   const teamMembers = new Set(result.technicians.map((t) => t.key));

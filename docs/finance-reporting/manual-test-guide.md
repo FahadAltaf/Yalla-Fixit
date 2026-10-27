@@ -303,7 +303,7 @@ From 23 Oct nobody marks work ready or picks it up: a line is ready to invoice o
 | 5d.13 | Try more than the amount left | Refused before sending, and by the database if forced |
 | 5d.14 | On another work order: **Mark not invoiceable** with a reason and a file | Band "waiting for verification" with the file; invoicing is blocked |
 | 5d.15 | As Finance verifier: **Verify exclusion** (or **Reject** with a note) | *Excluded*, counted in Excluded value; or back as it was |
-| 5d.16 | Without `OPENAI_API_KEY`: **Upload invoice** | "Invoice scanning is not set up yet"; nothing is uploaded |
+| 5d.16 | Without `ANTHROPIC_API_KEY`: **Upload invoice** | "Invoice scanning is not set up yet"; nothing is uploaded |
 | 5d.17 | With the key: upload a MAHER PDF | "Reading the invoice", then a review: lines matched with *Strong match / Likely / Check*, amounts editable, unmatched lines listed |
 | 5d.18 | Correct an amount, **Confirm and record** | Recorded like 5d.11; the Invoices tab shows "invoice file attached" |
 | 5d.19 | Open an old queue item from a notification or metrics link | The earlier item page still opens |
@@ -312,6 +312,24 @@ From 23 Oct nobody marks work ready or picks it up: a line is ready to invoice o
 | 5d.22 | `node --env-file=.env --env-file=.env.local --import ./tests/setup/register.mjs scripts/finance/run-digest.ts --ignore-time` | The digest lists acted-on work orders completed since the last one, named by quotation or work order number; email only to `NOTIFY_REDIRECT_TO` |
 
 Invoices and history are append-only records, like the rest of Finance: use `TEST-` numbers.
+
+## 5e. Invoicing changes (26 Oct)
+
+Needs migration `20261026100000` (migration log, row 13) for Record % done and the month-end revenue's percentages.
+
+| # | Do | Expect |
+|---|---|---|
+| 5e.1 | As Finance: **Ready to invoice** | The **Finance** view: only work Completed in FSM with its quotation's Post to MAHER set to "To Be Invoiced", work Operations recorded as done to invoice, and work Finance has already started. Cards: Pending, In progress, On hold, Non-billable, Average time to invoice |
+| 5e.2 | As a coordinator (or the **Operations** tab) | Every work order. "Needs completing in FSM" counts those whose appointments are all done but which are not Completed in FSM; select the card to list only them; each says "Appointments done · mark Completed in FSM" |
+| 5e.3 | In FSM, set a work order to Non-billable (or Void), Refresh | It shows as *Non-billable* (or *Void*); nothing can be invoiced or recorded done on it; Void is not in the Finance view |
+| 5e.4 | As a coordinator, open an in-progress work order → **Record % done**: whole work order, 40 %, "Done, invoice this" | The % done column shows 40 % · To invoice on every line; History has "Progress recorded"; no Record invoice button for the coordinator |
+| 5e.5 | As Finance, open it → **Record invoice** | Each line is filled with 40 % of its value incl. VAT and cannot go higher ("allowed now"); recording needs the MAHER number and the **PDF** |
+| 5e.6 | Record % done again: 70 %, "Done, recognise revenue only" | Nothing more can be invoiced; the Recognised revenue card rises to 70 % |
+| 5e.7 | Record % done below what is invoiced on a line | Refused: the line is already invoiced beyond it |
+| 5e.8 | Work order **Reports** tab | The files FSM holds on the work order and each appointment, as Service reports, Inspection reports and Other files; Open shows the file. Service reports need the Service Reports scope (asked of Sami) |
+| 5e.9 | As Finance raise a query; as a coordinator open **Finance → Queries** | The query is listed with who asked and when; **Answer** sends it back, and the work order returns to where it was |
+| 5e.10 | **Invoicing metrics → Revenue at month end**, choose a month | Per work order: recognised in the month and to date, invoiced and still to invoice, incl. VAT, with the before-VAT totals under the table for booking |
+
 
 ## 6. Automated tests
 
@@ -339,3 +357,17 @@ and a rollback round trip. Expect `== all checks passed`.
 - The completion report link on the item screen (B-01).
 - Travel time on utilization (B-01). Revenue report (P8: D-14, D-17).
 - Disputes and the technician's own compliance view (D-10, D-19); missed check-in alerts N5/N6; emails E2/E3.
+
+## 5f. Reports read live from Zoho FSM (26 Oct)
+
+Every report reads Zoho FSM directly (read-only), opens on the last 30 days (Capacity: the next 30; Compliance: this month), and reads again when the dates at the top right change. What is read is kept ten minutes and shared by the reports, so a second report, or dates inside what was read, opens in about a second. A first read can take 10 to 40 seconds.
+
+| # | Do | Expect |
+|---|---|---|
+| 5f.1 | Open each report | Dates at the top right filled with the last 30 days (Capacity the next 30; Compliance this month); "Data as of" says when FSM was read |
+| 5f.2 | Change the From date to earlier, then back | The report reads again for the new dates; going back is immediate |
+| 5f.3 | **Utilization** | Crews counted in full (no "crew not read" note); Travel shows the trips logged in FSM, usually none |
+| 5f.4 | **Daily attendance** | Check-in and check-out from FSM Attendance; late, early and absent marked. Technicians who never check in to FSM show absent on every working day |
+| 5f.5 | **App compliance** | The notice says shift check-ins come from FSM Attendance and appointment check-ins from time sheets, else the appointment's actual times (D-15) |
+| 5f.6 | **Exception reports → Completed, not flagged** | Work orders completed in the dates whose quotation is not flagged To Be Invoiced and that Finance has not invoiced or worked on |
+| 5f.7 | Work order → **Reports** tab | FSM's service report for each appointment, with its status, who signed and the rating; Open shows the PDF |
